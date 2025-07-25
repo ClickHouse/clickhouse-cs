@@ -93,7 +93,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - uses: Vampire/setup-wsl@v5
+      - uses: Vampire/setup-wsl@v6
 
       - name: Checkout
         uses: actions/checkout@v4
