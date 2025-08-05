@@ -6,7 +6,7 @@ using NUnit.Framework;
 namespace ClickHouse.Driver.Tests;
 
 [TestFixture]
-public class AbstractConnectionTestFixture : IDisposable
+public abstract class AbstractConnectionTestFixture : IDisposable
 {
     protected readonly ClickHouseConnection connection;
 
@@ -27,7 +27,29 @@ public class AbstractConnectionTestFixture : IDisposable
                 builder.Append(c);
         }
 
+        // When running in parallel, we need to avoid false failures due to running against the same tables
+        var frameworkSuffix = GetFrameworkSuffix();
+        if (!string.IsNullOrEmpty(frameworkSuffix))
+            builder.Append('_').Append(frameworkSuffix);
+
         return builder.ToString();
+    }
+
+    private static string GetFrameworkSuffix()
+    {
+#if NET462
+        return "net462";
+#elif NET48
+        return "net48";
+#elif NET6_0
+        return "net6";
+#elif NET8_0
+        return "net8";
+#elif NET9_0
+        return "net9";
+#else
+        return "";
+#endif
     }
 
     [OneTimeTearDown]

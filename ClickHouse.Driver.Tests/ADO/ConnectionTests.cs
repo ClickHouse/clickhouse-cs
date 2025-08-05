@@ -106,7 +106,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
     
     [Test]
-    public async Task ClientShouldSetUserAgent()
+    public void ClientShouldSetUserAgent()
     {
         var headers = new HttpRequestMessage().Headers;
         connection.AddDefaultHttpHeaders(headers);
@@ -218,7 +218,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldPostDynamicallyGeneratedRawStream()
     {
-        var targetTable = "test.raw_stream";
+        var targetTable = $"test.{SanitizeTableName("raw_stream")}";
 
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value Int32) ENGINE Null");

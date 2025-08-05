@@ -30,7 +30,7 @@ public class BulkCopyWithDefaultsTests : AbstractConnectionTestFixture
     [TestCaseSource(typeof(BulkCopyWithDefaultsTests), nameof(Get))]
     public async Task ShouldExecuteSingleValueInsertViaBulkCopyWithDefaults(string clickhouseType, object insertValue, object expectedValue, string tableName)
     {
-        var targetTable = "test." + SanitizeTableName($"bulk_single_default_{tableName}");
+        var targetTable = $"test.{SanitizeTableName($"bulk_single_default_{tableName}")}";
 
         await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync(
