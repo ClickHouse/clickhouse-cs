@@ -52,6 +52,12 @@ public abstract class AbstractConnectionTestFixture : IDisposable
 #endif
     }
 
+    protected static string GetUniqueQueryId(string baseId)
+    {
+        var suffix = GetFrameworkSuffix();
+        return !string.IsNullOrEmpty(suffix) ? $"{baseId}_{suffix}" : baseId;
+    }
+
     [OneTimeTearDown]
     public void Dispose() => connection?.Dispose();
 }
