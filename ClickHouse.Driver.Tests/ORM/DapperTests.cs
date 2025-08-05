@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Numerics;
+using ClickHouse.Driver.Tests.Extensions;
 using ClickHouse.Driver.Utility;
 using Dapper;
 using NUnit.Framework;
@@ -130,7 +131,7 @@ public class DapperTests : AbstractConnectionTestFixture
         }
         var parameters = new Dictionary<string, object> { { "value", value } };
         var results = await connection.QueryAsync<string>(sql, parameters);
-        Assert.That(results.Single(), Is.EqualTo(Convert.ToString(value, CultureInfo.InvariantCulture)));
+        results.Single().AssertFloatingPointEquals(value);
     }
 
     [Test]
