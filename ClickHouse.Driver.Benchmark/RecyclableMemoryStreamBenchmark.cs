@@ -11,6 +11,7 @@ namespace ClickHouse.Driver.Benchmark;
 
 [MemoryDiagnoser]
 [SimpleJob(warmupCount: 3, iterationCount: 10)]
+[MarkdownExporter]
 public class RecyclableMemoryStreamBenchmark
 {
     private byte[] smallResponseData;   // 10 KB
