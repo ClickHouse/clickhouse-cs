@@ -79,6 +79,12 @@ public class ConnectionTests : AbstractConnectionTestFixture
             _ = await task;
             Assert.Fail("The task should have been cancelled before completion");
         }
+#if NETFRAMEWORK
+        catch (WebException ex) when (ex.Status == WebExceptionStatus.RequestCanceled)
+        {
+            /* Expected: request cancelled */
+        }
+#endif
         catch (TaskCanceledException)
         {
             /* Expected: task cancelled */
