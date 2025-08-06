@@ -36,6 +36,10 @@ public class BulkCopyWithDefaultsTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $"CREATE TABLE IF NOT EXISTS {targetTable} (`value` {clickhouseType}) ENGINE Memory");
 
+        // Use server time, otherwise a mismatch between the backing instance and the running client can cause false test failures
+        if (clickhouseType.Contains("toDate(now())") && insertValue == DBDefault.Value && expectedValue is DateTime time && time == DateTime.Today)
+            expectedValue = await connection.ExecuteScalarAsync("SELECT toDate(now())");
+
         using var bulkCopyWithDefaults = new ClickHouseBulkCopy(connection, RowBinaryFormat.RowBinaryWithDefaults)
         {
             DestinationTableName = targetTable,
