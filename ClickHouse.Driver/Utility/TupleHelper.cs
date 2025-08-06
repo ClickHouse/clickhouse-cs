@@ -164,13 +164,14 @@ internal static class TupleHelper
             }
         }
 
-        if (count == 8) // Tuple<T8>
-        {
-            var wrapped = new object[8];
-            Array.Copy(typedValues, 0, wrapped, 0, 7);
-            wrapped[7] = Activator.CreateInstance(arguments[7], typedValues[7]);
-            return Activator.CreateInstance(frameworkType, wrapped);
-        }
+        if (count != 8)
+            return Activator.CreateInstance(frameworkType, typedValues);
+
+        // Tuple<T8>
+        var wrapped = new object[8];
+        Array.Copy(typedValues, 0, wrapped, 0, 7);
+        wrapped[7] = Activator.CreateInstance(arguments[7], typedValues[7]);
+        typedValues = wrapped;
 
         return Activator.CreateInstance(frameworkType, typedValues);
     }
@@ -184,17 +185,14 @@ internal static class TupleHelper
             values[i] = value is DBNull ? null : value;
         }
 
-        if (length > 0 && values[0] != null)
-        {
-            var typedArray = Array.CreateInstance(values[0].GetType(), length);
-            for (var i = 0; i < length; i++)
-            {
-                typedArray.SetValue(values[i], i);
-            }
-            return typedArray;
-        }
+        if (length == 0 || values[0] == null) 
+            return values;
 
-        return values;
+        var typedArray = Array.CreateInstance(values[0].GetType(), length);
+        for (var i = 0; i < length; i++)
+            typedArray.SetValue(values[i], i);
+
+        return typedArray;
     }
 
     public static Array ReadNestedArrayWithRuntimeType(ExtendedBinaryReader reader, int length, TupleType tupleType)
@@ -202,21 +200,25 @@ internal static class TupleHelper
         var values = new object[length];
         for (var i = 0; i < length; i++)
         {
-            var value = tupleType.Read(reader);
-            values[i] = value is DBNull ? null : value;
-        }
-
-        if (length > 0 && values[0] != null)
-        {
-            var typedArray = Array.CreateInstance(values[0].GetType(), length);
-            for (var i = 0; i < length; i++)
+            var count = tupleType.UnderlyingTypes.Length;
+            var contents = new object[count];
+            for (var j = 0; j < count; j++)
             {
-                typedArray.SetValue(values[i], i);
+                var value = tupleType.UnderlyingTypes[j].Read(reader);
+                contents[j] = value is DBNull ? null : value;
             }
-            return typedArray;
+            var type = tupleType.FrameworkType.IsArray ? tupleType.FrameworkType.GetElementType() : tupleType.FrameworkType;
+            values[i] = CreateTuple(contents, type, tupleType.UnderlyingTypes);
         }
 
-        return values;
+        if (length == 0 || values[0] == null)
+            return values;
+
+        var typedArray = Array.CreateInstance(values[0].GetType(), length);
+        for (var i = 0; i < length; i++)
+            typedArray.SetValue(values[i], i);
+
+        return typedArray;
     }
 }
 #endif
