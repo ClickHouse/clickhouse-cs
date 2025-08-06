@@ -1,7 +1,10 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
@@ -38,6 +41,12 @@ internal class TupleType : ParameterizedType
         {
             typeArgs[i] = underlyingTypes[i].FrameworkType;
         }
+
+#if NET462
+        if (count == 8) // Tuple<T8>
+            typeArgs[7] = typeof(Tuple<>).MakeGenericType(typeArgs[7]);
+#endif
+
         var genericType = Type.GetType("System.Tuple`" + typeArgs.Length);
         return genericType.MakeGenericType(typeArgs);
     }
@@ -90,7 +99,7 @@ internal class TupleType : ParameterizedType
 #if !NET462
         return MakeTuple(contents);
 #else
-        return contents;
+        return TupleHelper.CreateTuple(contents, frameworkType, UnderlyingTypes);
 #endif
     }
 
@@ -105,6 +114,12 @@ internal class TupleType : ParameterizedType
             {
                 UnderlyingTypes[i].Write(writer, tuple[i]);
             }
+            return;
+        }
+#else
+        if (value != null && TupleHelper.IsTupleType(value.GetType()))
+        {
+            writer.WriteTuple(value, UnderlyingTypes);
             return;
         }
 #endif

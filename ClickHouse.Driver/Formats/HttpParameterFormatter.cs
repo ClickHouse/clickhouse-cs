@@ -85,6 +85,9 @@ internal static class HttpParameterFormatter
 #if !NET462
             case TupleType tupleType when value is ITuple tuple:
                 return $"({string.Join(",", tupleType.UnderlyingTypes.Select((x, i) => Format(x, tuple[i], true)))})";
+#else
+            case TupleType tupleType when TupleHelper.IsTupleType(value?.GetType()):
+                return TupleHelper.FormatTuple(value, tupleType.UnderlyingTypes, Format, NullValueString);
 #endif
 
             case TupleType tupleType when value is IList list:

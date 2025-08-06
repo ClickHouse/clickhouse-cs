@@ -2,6 +2,7 @@
 using System.Collections;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
+using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Types;
 
@@ -26,6 +27,12 @@ internal class ArrayType : ParameterizedType
     public override object Read(ExtendedBinaryReader reader)
     {
         var length = reader.Read7BitEncodedInt();
+
+#if NET462
+        if (UnderlyingType is TupleType or PointType)
+            return TupleHelper.ReadArrayWithRuntimeType(reader, length, UnderlyingType, UnderlyingType.FrameworkType);
+#endif
+
         var data = Array.CreateInstance(UnderlyingType.FrameworkType, length);
         for (var i = 0; i < length; i++)
         {
