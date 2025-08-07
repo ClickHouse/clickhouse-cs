@@ -1,11 +1,9 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Data;
 using System.Data.Common;
 using System.Globalization;
-using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Numerics;
@@ -26,7 +24,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 #if NET6_0_OR_GREATER
     private static readonly RecyclableMemoryStreamManager StreamManager = new(new RecyclableMemoryStreamManager.Options
     {
-        BlockSize = 128 * 1024,                         // 128KiB blocks
+        BlockSize = 128 * 1024,                         // 128KiB
         LargeBufferMultiple = 1024 * 1024,              // 1MiB
         MaximumBufferSize = 128 * 1024 * 1024,          // 128MiB
         GenerateCallStacks = false,
@@ -59,7 +57,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         RecyclableMemoryStream recyclableStream = null;
         try
         {
-            recyclableStream = StreamManager.GetStream("ClickHouseDataReader");
+            recyclableStream = StreamManager.GetStream(nameof(ClickHouseDataReader));
             httpResponse.Content.CopyToAsync(recyclableStream).GetAwaiter().GetResult();
             recyclableStream.Position = 0;
             
