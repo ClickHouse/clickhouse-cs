@@ -63,7 +63,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             httpResponse.Content.CopyToAsync(recyclableStream).GetAwaiter().GetResult();
             recyclableStream.Position = 0;
             
-            reader = new ExtendedBinaryReader(recyclableStream); // will dispose of stream
+            reader = new ExtendedBinaryReader(recyclableStream); // recyclableStream is disposed separately
             var (names, types) = ReadHeaders(reader, settings);
             return new ClickHouseDataReader(httpResponse, reader, recyclableStream, names, types);
         }
