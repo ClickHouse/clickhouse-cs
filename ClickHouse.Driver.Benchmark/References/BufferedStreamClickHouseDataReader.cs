@@ -1,83 +1,55 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Globalization;
-using System.Net;
+using System.IO;
 using System.Net.Http;
-using System.Numerics;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types;
-using ClickHouse.Driver.Utility;
-using Microsoft.IO;
 
-namespace ClickHouse.Driver.ADO.Readers;
+namespace ClickHouse.Driver.Benchmark.References;
 
-// TODO: implement IDbColumnSchemaGenerator
-public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnumerable<IDataReader>, IDataRecord
+/// <summary>
+/// Original ClickHouseDataReader implementation using BufferedStream for benchmarking comparison
+/// </summary>
+internal class BufferedStreamClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnumerable<IDataReader>, IDataRecord
 {
-#if NET6_0_OR_GREATER
-    private static readonly RecyclableMemoryStreamManager StreamManager = new(new RecyclableMemoryStreamManager.Options
-    {
-        BlockSize = 128 * 1024,                         // 128KiB
-        LargeBufferMultiple = 1024 * 1024,              // 1MiB
-        MaximumBufferSize = 128 * 1024 * 1024,          // 128MiB
-        GenerateCallStacks = false,
-        AggressiveBufferReturn = true,
-        MaximumLargePoolFreeBytes = 256 * 1024 * 1024,  // 256MiB
-        MaximumSmallPoolFreeBytes = 128 * 1024 * 1024,  // 128MiB
-    });
-#else
-    private static readonly RecyclableMemoryStreamManager StreamManager = new RecyclableMemoryStreamManager();
-#endif
+    private const int BufferSize = 512 * 1024;
 
-    private readonly HttpResponseMessage httpResponse; // Used to dispose at the end of reader
+    private readonly HttpResponseMessage httpResponse;
     private readonly ExtendedBinaryReader reader;
-    private readonly RecyclableMemoryStream recyclableStream;
 
-    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, RecyclableMemoryStream recyclableStream, string[] names, ClickHouseType[] types)
+    private BufferedStreamClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types)
     {
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
-        this.recyclableStream = recyclableStream;
         RawTypes = types;
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
     }
 
-    internal static ClickHouseDataReader FromHttpResponse(HttpResponseMessage httpResponse, TypeSettings settings)
+    internal static BufferedStreamClickHouseDataReader FromHttpResponse(HttpResponseMessage httpResponse, TypeSettings settings)
     {
         if (httpResponse is null) throw new ArgumentNullException(nameof(httpResponse));
         ExtendedBinaryReader reader = null;
-        RecyclableMemoryStream recyclableStream = null;
         try
         {
-            recyclableStream = StreamManager.GetStream(nameof(ClickHouseDataReader));
-            httpResponse.Content.CopyToAsync(recyclableStream).GetAwaiter().GetResult();
-            recyclableStream.Position = 0;
-            
-            reader = new ExtendedBinaryReader(recyclableStream); // recyclableStream is disposed separately
+            var stream = new BufferedStream(httpResponse.Content.ReadAsStreamAsync().GetAwaiter().GetResult(), BufferSize);
+            reader = new ExtendedBinaryReader(stream);
             var (names, types) = ReadHeaders(reader, settings);
-            return new ClickHouseDataReader(httpResponse, reader, recyclableStream, names, types);
+            return new BufferedStreamClickHouseDataReader(httpResponse, reader, names, types);
         }
         catch (Exception)
         {
             httpResponse?.Dispose();
             reader?.Dispose();
-            recyclableStream?.Dispose();
             throw;
         }
-    }
-
-    internal ClickHouseType GetEffectiveClickHouseType(int ordinal)
-    {
-        var type = RawTypes[ordinal];
-        return type is NullableType nt ? nt.UnderlyingType : type;
     }
 
     internal ClickHouseType GetClickHouseType(int ordinal) => RawTypes[ordinal];
@@ -115,9 +87,6 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     public override string GetDataTypeName(int ordinal) => GetClickHouseType(ordinal).ToString();
 
     public override DateTime GetDateTime(int ordinal) => (DateTime)GetValue(ordinal);
-
-    public virtual DateTimeOffset GetDateTimeOffset(int ordinal) => GetEffectiveClickHouseType(ordinal) is AbstractDateTimeType adt ?
-        adt.CoerceToDateTimeOffset(GetDateTime(ordinal)) : throw new InvalidCastException();
 
     public override decimal GetDecimal(int ordinal)
     {
@@ -183,37 +152,14 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override T GetFieldValue<T>(int ordinal) => (T)GetValue(ordinal);
 
-    public override DataTable GetSchemaTable() => SchemaDescriber.DescribeSchema(this);
+    public override DataTable GetSchemaTable() => throw new NotImplementedException();
 
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken) => Task.FromResult(false);
-
-    // Custom extension
-    public ushort GetUInt16(int ordinal) => (ushort)GetValue(ordinal);
-
-    // Custom extension
-    public uint GetUInt32(int ordinal) => (uint)GetValue(ordinal);
-
-    // Custom extension
-    public ulong GetUInt64(int ordinal) => (ulong)GetValue(ordinal);
-
-    // Custom extension
-    public IPAddress GetIPAddress(int ordinal) => (IPAddress)GetValue(ordinal);
-
-#if !NET462
-    // Custom extension
-    public ITuple GetTuple(int ordinal) => (ITuple)GetValue(ordinal);
-#endif
-
-    // Custom extension
-    public sbyte GetSByte(int ordinal) => (sbyte)GetValue(ordinal);
-
-    // Custom extension
-    public BigInteger GetBigInteger(int ordinal) => (BigInteger)GetValue(ordinal);
 
     public override bool Read()
     {
         if (reader.PeekChar() == -1)
-            return false; // End of stream reached
+            return false;
 
         var count = RawTypes.Length;
         var data = CurrentRow;
@@ -225,17 +171,14 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         return true;
     }
 
-#pragma warning disable CA2215 // Dispose methods should call base class dispose
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             httpResponse?.Dispose();
             reader?.Dispose();
-            recyclableStream?.Dispose();
         }
     }
-#pragma warning restore CA2215 // Dispose methods should call base class dispose
 
     private static (string[], ClickHouseType[]) ReadHeaders(ExtendedBinaryReader reader, TypeSettings settings)
     {
