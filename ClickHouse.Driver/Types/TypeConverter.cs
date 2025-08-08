@@ -172,9 +172,8 @@ internal static class TypeConverter
         RegisterPlainType<PolygonType>();
         RegisterPlainType<MultiPolygonType>();
 
-        // JSON/Object
-        RegisterPlainType<JsonType>();
         RegisterParameterizedType<ObjectType>();
+        RegisterParameterizedType<JsonType>();
 
         RegisterParameterizedType<AggregateFunctionType>();
 
