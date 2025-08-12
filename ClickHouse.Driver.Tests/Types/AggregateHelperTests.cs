@@ -9,7 +9,7 @@ public class AggregateHelperTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldThrowCorrectExceptionWhenSelectingAggregateFunction()
     {
-        var targetTable = "test.aggregate_test";
+        var targetTable = $"test.{SanitizeTableName("aggregate_test")}";
 
         await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value AggregateFunction(uniq, UInt8)) ENGINE Memory");

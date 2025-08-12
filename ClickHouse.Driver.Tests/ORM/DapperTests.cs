@@ -5,12 +5,11 @@ using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Numerics;
+using ClickHouse.Driver.Tests.Extensions;
 using ClickHouse.Driver.Utility;
 using Dapper;
-using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.ORM;
 
@@ -22,15 +21,31 @@ public class DapperTests : AbstractConnectionTestFixture
         .Where(s => !s.ClickHouseType.StartsWith("Array")) // Dapper issue, see ShouldExecuteSelectWithParameters test
         .Select(sample => new TestCaseData($"SELECT {{value:{sample.ClickHouseType}}}", sample.ExampleValue));
 
-    static DapperTests()
+    private static readonly object TypeHandlerLock = new();
+    private static volatile bool _typeHandlersRegistered;
+
+    public DapperTests()
     {
-        SqlMapper.AddTypeHandler(new ClickHouseDecimalHandler());
-        SqlMapper.AddTypeHandler(new DateTimeOffsetHandler());
+        lock (TypeHandlerLock)
+        {
+            if (_typeHandlersRegistered)
+                return;
+
+            try
+            {
+                SqlMapper.AddTypeHandler(new ClickHouseDecimalHandler());
+                SqlMapper.AddTypeHandler(new DateTimeOffsetHandler());
 #if NET48 || NET5_0_OR_GREATER
-        SqlMapper.AddTypeHandler(new ITupleHandler());
+                SqlMapper.AddTypeHandler(new ITupleHandler());
 #endif
-        SqlMapper.AddTypeMap(typeof(DateTime), DbType.DateTime2);
-        SqlMapper.AddTypeMap(typeof(DateTimeOffset), DbType.DateTime2);
+                SqlMapper.AddTypeMap(typeof(DateTime), DbType.DateTime2);
+                SqlMapper.AddTypeMap(typeof(DateTimeOffset), DbType.DateTime2);
+            }
+            finally
+            {
+                _typeHandlersRegistered = true;
+            }
+        }
     }
 
     // "The member value of type <xxxxxxxx> cannot be used as a parameter value"
@@ -109,7 +124,7 @@ public class DapperTests : AbstractConnectionTestFixture
             _ => throw new ArgumentException(nameof(value))
         };
     }
-
+    
     [Test]
     public async Task ShouldExecuteSimpleSelect()
     {
@@ -130,7 +145,7 @@ public class DapperTests : AbstractConnectionTestFixture
         }
         var parameters = new Dictionary<string, object> { { "value", value } };
         var results = await connection.QueryAsync<string>(sql, parameters);
-        Assert.That(results.Single(), Is.EqualTo(Convert.ToString(value, CultureInfo.InvariantCulture)));
+        results.Single().AssertFloatingPointEquals(value);
     }
 
     [Test]
@@ -193,14 +208,15 @@ public class DapperTests : AbstractConnectionTestFixture
     [TestCase(0.0001)]
     public async Task ShouldWriteDecimalWithTypeInference(decimal expected)
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_decimal");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_decimal (balance Decimal64(4)) ENGINE Memory");
+        var tableName = SanitizeTableName("test.dapper_decimal");
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {tableName}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {tableName} (balance Decimal64(4)) ENGINE Memory");
 
 
-        var sql = @"INSERT INTO test.dapper_decimal (balance) VALUES (@balance)";
+        var sql = $"INSERT INTO {tableName} (balance) VALUES (@balance)";
         await connection.ExecuteAsync(sql, new { balance = expected });
 
-        var actual = (ClickHouseDecimal) await connection.ExecuteScalarAsync("SELECT * FROM test.dapper_decimal");
+        var actual = (ClickHouseDecimal) await connection.ExecuteScalarAsync($"SELECT * FROM {tableName}");
         Assert.That(actual.ToDecimal(CultureInfo.InvariantCulture), Is.EqualTo(expected));
     }
 
@@ -219,13 +235,14 @@ public class DapperTests : AbstractConnectionTestFixture
     [TestCase(null)]
     public async Task ShouldWriteNullableDoubleWithTypeInference(double? expected)
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_nullable_double");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_nullable_double (balance Nullable(Float64)) ENGINE Memory");
+        var tableName = SanitizeTableName("test.dapper_nullable_double");
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {tableName}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {tableName} (balance Nullable(Float64)) ENGINE Memory");
 
-        var sql = @"INSERT INTO test.dapper_nullable_double (balance) VALUES (@balance)";
+        var sql = $"INSERT INTO {tableName} (balance) VALUES (@balance)";
         await connection.ExecuteAsync(sql, new { balance = expected });
 
-        var actual = await connection.ExecuteScalarAsync("SELECT * FROM test.dapper_nullable_double");
+        var actual = await connection.ExecuteScalarAsync($"SELECT * FROM {tableName}");
         if (expected is null)
             Assert.That(actual, Is.InstanceOf<DBNull>());
         else
