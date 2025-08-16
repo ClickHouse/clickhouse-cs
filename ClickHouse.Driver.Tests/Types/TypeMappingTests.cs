@@ -83,6 +83,7 @@ public class TypeMappingTests
     [TestCase(typeof(DateOnly), ExpectedResult = "Date")]
 #endif
     [TestCase(typeof(Tuple<int, byte, float?, string[]>), ExpectedResult = "Tuple(Int32,UInt8,Nullable(Float32),Array(String))")]
+    [TestCase(typeof(ValueTuple<int, byte, float?, string[]>), ExpectedResult = "Tuple(Int32,UInt8,Nullable(Float32),Array(String))")]
     public string ShouldConvertToClickHouseType(Type type) => TypeConverter.ToClickHouseType(type).ToString();
 
     [Test, Explicit]

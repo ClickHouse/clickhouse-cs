@@ -115,7 +115,7 @@ public class SqlParameterizedSelectTests : IDisposable
                 FROM (SELECT tuple(1, 'a', NULL) AS res)
                 WHERE res.1 = tupleElement({var:Tuple(Int32, String, Nullable(Int32))}, 1)
                   AND res.2 = tupleElement({var:Tuple(Int32, String, Nullable(Int32))}, 2)
-                  AND res.3 is NULL 
+                  AND res.3 is NULL
                   AND tupleElement({var:Tuple(Int32, String, Nullable(Int32))}, 3) is NULL";
         using var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -140,6 +140,44 @@ public class SqlParameterizedSelectTests : IDisposable
         command.CommandText = sql;
 
         command.AddParameter("var", Tuple.Create(123, Tuple.Create((byte)5, "a", 7)));
+
+        var result = await command.ExecuteReaderAsync();
+        result.GetEnsureSingleRow();
+    }
+
+    [Test]
+    public async Task ShouldExecuteSelectWithValueTupleParameter()
+    {
+        var sql = @"
+                SELECT 1
+                FROM (SELECT tuple(1, 'a', NULL) AS res)
+                WHERE res.1 = tupleElement({var:Tuple(Int32, String, Nullable(Int32))}, 1)
+                  AND res.2 = tupleElement({var:Tuple(Int32, String, Nullable(Int32))}, 2)
+                  AND res.3 is NULL
+                  AND tupleElement({var:Tuple(Int32, String, Nullable(Int32))}, 3) is NULL";
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+
+        command.AddParameter("var", ValueTuple.Create<int, string, int?>(1, "a", null));
+
+        var result = await command.ExecuteReaderAsync();
+        result.GetEnsureSingleRow();
+    }
+
+    [Test]
+    public async Task ShouldExecuteSelectWithUnderlyingValueTupleParameter()
+    {
+        var sql = @"
+                SELECT 1
+                FROM (SELECT tuple(123, tuple(5, 'a', 7)) AS res)
+                WHERE res.1 = tupleElement({var:Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))}, 1)
+                  AND res.2.1 = tupleElement(tupleElement({var:Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))}, 2), 1)
+                  AND res.2.2 = tupleElement(tupleElement({var:Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))}, 2), 2)
+                  AND res.2.3 = tupleElement(tupleElement({var:Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))}, 2), 3)";
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+
+        command.AddParameter("var", ValueTuple.Create(123, ValueTuple.Create((byte)5, "a", 7)));
 
         var result = await command.ExecuteReaderAsync();
         result.GetEnsureSingleRow();
