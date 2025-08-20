@@ -274,6 +274,11 @@ internal static class TypeConverter
             return new ArrayType() { UnderlyingType = ToClickHouseType(type.GetElementType()) };
         }
 
+        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName.StartsWith("System.Collections.Generic.List", StringComparison.InvariantCulture))
+        {
+            return new ArrayType() { UnderlyingType = ToClickHouseType(type.GetGenericArguments()[0]) };
+        }
+
         var underlyingType = Nullable.GetUnderlyingType(type);
         if (underlyingType != null)
         {

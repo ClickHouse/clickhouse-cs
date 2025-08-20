@@ -79,6 +79,7 @@ public class TypeMappingTests
     [TestCase(typeof(uint?), ExpectedResult = "Nullable(UInt32)")]
     [TestCase(typeof(uint?[]), ExpectedResult = "Array(Nullable(UInt32))")]
     [TestCase(typeof(string[][]), ExpectedResult = "Array(Array(String))")]
+    [TestCase(typeof(List<string>), ExpectedResult = "Array(String)")]
 #if NET6_0_OR_GREATER
     [TestCase(typeof(DateOnly), ExpectedResult = "Date")]
 #endif
