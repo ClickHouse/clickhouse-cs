@@ -35,26 +35,24 @@ internal static class ActivitySourceHelper
         if (connection is null) throw new ArgumentNullException(nameof(connection));
         if (string.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
 
-        var activity = ActivitySource.StartActivity(name, ActivityKind.Client, default(ActivityContext));
+        var activity = ActivitySource.StartActivity(name, ActivityKind.Client);
 
-        if (activity is null)
-            return null;
-
-        if (activity.IsAllDataRequested)
+        if (activity is { IsAllDataRequested: true })
         {
             activity.SetTag(TagThreadId, Environment.CurrentManagedThreadId.ToString(CultureInfo.InvariantCulture));
             activity.SetTag(TagDbSystem, "clickhouse");
+            activity.SetTag(TagDbConnectionString, connection.RedactedConnectionString);
+            activity.SetTag(TagDbName, connection.Database);
+            activity.SetTag(TagUser, connection.Username);
+            activity.SetTag(TagService, $"{connection.ServerUri.Host}:{connection.ServerUri.Port}{connection.ServerUri.AbsolutePath}");
         }
-        activity.SetTag(TagDbConnectionString, connection.RedactedConnectionString);
-        activity.SetTag(TagDbName, connection.Database);
-        activity.SetTag(TagUser, connection.Username);
-        activity.SetTag(TagService, $"{connection.ServerUri.Host}:{connection.ServerUri.Port}{connection.ServerUri.AbsolutePath}");
+
         return activity;
     }
 
     internal static void SetQuery(this Activity activity, string sql)
     {
-        if (activity is null || sql is null)
+        if (activity is null || !activity.IsAllDataRequested || sql is null)
             return;
         if (sql.Length > StatementMaxLen)
         {
@@ -65,7 +63,7 @@ internal static class ActivitySourceHelper
 
     internal static void SetQueryStats(this Activity activity, QueryStats stats)
     {
-        if (activity is null || stats is null)
+        if (activity is null || !activity.IsAllDataRequested || stats is null)
             return;
         activity.SetTag(TagReadRows, stats.ReadRows);
         activity.SetTag(TagReadBytes, stats.ReadBytes);
@@ -78,29 +76,47 @@ internal static class ActivitySourceHelper
 
     internal static void SetSuccess(this Activity activity)
     {
+        if (activity == null)
+        {
+            return;
+        }
+
+        if (activity.IsAllDataRequested)
+        {
 #if NET6_0_OR_GREATER
-        activity?.SetStatus(ActivityStatusCode.Ok);
+            activity.SetStatus(ActivityStatusCode.Ok);
 #endif
-        activity?.SetTag(TagStatusCode, "OK");
-        activity?.Stop();
+            activity.SetTag(TagStatusCode, "OK");
+        }
+
+        activity.Stop();
     }
 
     internal static void SetException(this Activity activity, Exception exception)
     {
         if (exception is null) throw new ArgumentNullException(nameof(exception));
 
-        var description = exception.Message;
-#if NET6_0_OR_GREATER
-        activity?.SetStatus(ActivityStatusCode.Error, description);
-#endif
-        activity?.SetTag(TagStatusCode, "ERROR");
-        activity?.SetTag("otel.status_description", description);
-        activity?.AddEvent(new ActivityEvent("exception", tags: new ActivityTagsCollection
+        if (activity == null)
         {
-            { "exception.type", exception?.GetType().FullName },
-            { "exception.message", exception?.Message },
-        }));
-        activity?.Stop();
+            return;
+        }
+
+        if (activity.IsAllDataRequested)
+        {
+            var description = exception.Message;
+#if NET6_0_OR_GREATER
+            activity.SetStatus(ActivityStatusCode.Error, description);
+#endif
+            activity.SetTag(TagStatusCode, "ERROR");
+            activity.SetTag("otel.status_description", description);
+            activity.AddEvent(new ActivityEvent("exception", tags: new ActivityTagsCollection
+            {
+                { "exception.type", exception.GetType().FullName },
+                { "exception.message", exception.Message },
+            }));
+        }
+
+        activity.Stop();
     }
 
     private static ActivitySource CreateActivitySource()
