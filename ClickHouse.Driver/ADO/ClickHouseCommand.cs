@@ -259,11 +259,9 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         try
         {
             const string summaryHeader = "X-ClickHouse-Summary";
-            if (response.Headers.Contains(summaryHeader))
+            if (response.Headers.TryGetValues(summaryHeader, out var values))
             {
-                var value = response.Headers.GetValues(summaryHeader).FirstOrDefault();
-                var jsonDoc = JsonDocument.Parse(value);
-                return JsonSerializer.Deserialize<QueryStats>(value, SummarySerializerOptions);
+                return JsonSerializer.Deserialize<QueryStats>(values.First(), SummarySerializerOptions);
             }
         }
         catch
