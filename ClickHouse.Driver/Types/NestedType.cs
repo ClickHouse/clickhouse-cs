@@ -3,6 +3,7 @@ using System.Collections;
 using System.Linq;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
+using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Types;
 
@@ -37,12 +38,17 @@ internal class NestedType : TupleType
     public override object Read(ExtendedBinaryReader reader)
     {
         var length = reader.Read7BitEncodedInt();
+
+#if NET462
+        return TupleHelper.ReadNestedArrayWithRuntimeType(reader, length, this);
+#else
         var data = Array.CreateInstance(base.FrameworkType, length);
         for (var i = 0; i < length; i++)
         {
             data.SetValue(ClearDBNull(base.Read(reader)), i);
         }
         return data;
+#endif
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)

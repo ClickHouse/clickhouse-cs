@@ -30,11 +30,15 @@ public class BulkCopyWithDefaultsTests : AbstractConnectionTestFixture
     [TestCaseSource(typeof(BulkCopyWithDefaultsTests), nameof(Get))]
     public async Task ShouldExecuteSingleValueInsertViaBulkCopyWithDefaults(string clickhouseType, object insertValue, object expectedValue, string tableName)
     {
-        var targetTable = "test." + SanitizeTableName($"bulk_single_default_{tableName}");
+        var targetTable = $"test.{SanitizeTableName($"bulk_single_default_{tableName}")}";
 
         await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync(
             $"CREATE TABLE IF NOT EXISTS {targetTable} (`value` {clickhouseType}) ENGINE Memory");
+
+        // Use server time, otherwise a mismatch between the backing instance and the running client can cause false test failures
+        if (clickhouseType.Contains("toDate(now())") && insertValue == DBDefault.Value && expectedValue is DateTime time && time == DateTime.Today)
+            expectedValue = await connection.ExecuteScalarAsync("SELECT toDate(now())");
 
         using var bulkCopyWithDefaults = new ClickHouseBulkCopy(connection, RowBinaryFormat.RowBinaryWithDefaults)
         {
