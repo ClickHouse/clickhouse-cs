@@ -9,6 +9,7 @@ using ClickHouse.Driver.Types.Grammar;
 using NodaTime;
 
 [assembly: InternalsVisibleTo("ClickHouse.Driver.Tests")] // assembly-level tag to expose below classes to tests
+[assembly: InternalsVisibleTo("ClickHouse.Driver.Benchmark")] // allow benchmarks to access internal types
 
 namespace ClickHouse.Driver.Types;
 
