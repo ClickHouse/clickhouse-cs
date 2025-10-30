@@ -1,9 +1,3 @@
-<<<<<<< Updated upstream
-﻿static ClickHouse.Driver.Utility.DictionaryExtensions.SetOrRemove(this System.Collections.Generic.IDictionary<string, string> dictionary, string key, string value) -> void
-ClickHouse.Driver.ADO.Feature.Json = 65536 -> ClickHouse.Driver.ADO.Feature
-=======
-﻿ClickHouse.Driver.ADO.Feature.Json = 65536 -> ClickHouse.Driver.ADO.Feature
->>>>>>> Stashed changes
 static Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouseDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, string connectionString, System.Net.Http.IHttpClientFactory httpClientFactory, string httpClientName = "", Microsoft.Extensions.DependencyInjection.ServiceLifetime connectionLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Transient, Microsoft.Extensions.DependencyInjection.ServiceLifetime dataSourceLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
 static Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouseDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, string connectionString, System.Net.Http.HttpClient httpClient = null, Microsoft.Extensions.DependencyInjection.ServiceLifetime connectionLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Transient, Microsoft.Extensions.DependencyInjection.ServiceLifetime dataSourceLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
 static Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouseDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Func<System.IServiceProvider, object, ClickHouse.Driver.ADO.ClickHouseDataSource> dataSourceFactory, Microsoft.Extensions.DependencyInjection.ServiceLifetime connectionLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Transient, Microsoft.Extensions.DependencyInjection.ServiceLifetime dataSourceLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
@@ -16,6 +10,5 @@ ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.SingleChild.get -> ClickHouse.Dri
 ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.ChildNodes.get -> System.Collections.Generic.IList<ClickHouse.Driver.Types.Grammar.SyntaxTreeNode>
 ClickHouse.Driver.Types.Grammar.SyntaxTreeNode
 ClickHouse.Driver.Types.Grammar.Parser
-ClickHouse.Driver.Types.DateTimeConversions
 ClickHouse.Driver.ADO.ClickHouseConnection.PostStreamAsync(string sql, System.IO.Stream data, bool isCompressed, System.Threading.CancellationToken token) -> System.Threading.Tasks.Task
 ClickHouse.Driver.ADO.ClickHouseConnection.PostStreamAsync(string sql, System.Func<System.IO.Stream, System.Threading.CancellationToken, System.Threading.Tasks.Task> callback, bool isCompressed, System.Threading.CancellationToken token) -> System.Threading.Tasks.Task
