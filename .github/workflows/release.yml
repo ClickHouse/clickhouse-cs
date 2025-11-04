@@ -25,7 +25,7 @@ jobs:
       run: dotnet build ClickHouse.Driver\ClickHouse.Driver.csproj --configuration Release /p:Version=${{ inputs.version }}
 
     - name: Upload unsigned package
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: package-unsigned-${{ inputs.version }}
         path: ClickHouse.Driver/bin/Release/ClickHouse.Driver.*nupkg
@@ -117,7 +117,7 @@ jobs:
         dotnet nuget verify --all "${{ github.workspace }}\package\*.nupkg"
 
     - name: Upload signed package
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: package
         path: ${{ github.workspace }}/package/ClickHouse.Driver.*nupkg
