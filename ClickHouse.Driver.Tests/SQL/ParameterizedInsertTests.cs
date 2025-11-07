@@ -99,14 +99,14 @@ public class ParameterizedInsertTests : AbstractConnectionTestFixture
         command.AddParameter("id", 42);
         command.AddParameter("name", "test-except");
         command.AddParameter("value", 99.99);
-        command.CommandText = "INSERT INTO test.insert_except (* EXCEPT (created, updated)) VALUES ({id:Int32}, {name:String}, {value:Float64})";
+        command.CommandText = $"INSERT INTO {targetTable} (* EXCEPT (created, updated)) VALUES " + "({id:Int32}, {name:String}, {value:Float64})";
         await command.ExecuteNonQueryAsync();
 
-        var count = await connection.ExecuteScalarAsync("SELECT COUNT(*) FROM test.insert_except");
+        var count = await connection.ExecuteScalarAsync($"SELECT COUNT(*) FROM {targetTable}");
         Assert.That(count, Is.EqualTo(1));
 
         // Verify all columns including defaults using SELECT *
-        using var reader = await connection.ExecuteReaderAsync("SELECT * FROM test.insert_except");
+        using var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {targetTable}");
         Assert.That(reader.Read(), Is.True);
         Assert.That(reader.FieldCount, Is.EqualTo(5));
         Assert.That(reader.GetInt32(0), Is.EqualTo(42));
