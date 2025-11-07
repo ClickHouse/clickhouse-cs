@@ -13,8 +13,8 @@ public class ParameterizedInsertTests : AbstractConnectionTestFixture
     public async Task ShouldInsertParameterizedFloat64Array()
     {
         var targetTable = $"test.{SanitizeTableName("float_array")}";
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.float_array");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.float_array (arr Array(Float64)) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (arr Array(Float64)) ENGINE Memory");
 
         var command = connection.CreateCommand();
         command.AddParameter("values", new[] { 1.0, 2.0, 3.0 });
@@ -29,8 +29,8 @@ public class ParameterizedInsertTests : AbstractConnectionTestFixture
     public async Task ShouldInsertEnum8()
     {
         var targetTable = $"test.{SanitizeTableName("insert_enum8")}";
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.insert_enum8");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.insert_enum8 (enum Enum8('a' = -1, 'b' = 127)) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (enum Enum8('a' = -1, 'b' = 127)) ENGINE Memory");
 
         var command = connection.CreateCommand();
         command.AddParameter("value", "a");
@@ -63,7 +63,7 @@ public class ParameterizedInsertTests : AbstractConnectionTestFixture
     public async Task ShouldInsertStringWithNewline()
     {
         var targetTable = $"test.{SanitizeTableName("string_with_newline")}";
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.string_with_newline");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync(
             $"CREATE TABLE IF NOT EXISTS {targetTable} (str_value String) ENGINE Memory");
 
@@ -82,9 +82,10 @@ public class ParameterizedInsertTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldInsertWithExceptSyntax()
     {
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.insert_except");
-        await connection.ExecuteStatementAsync(@"
-            CREATE TABLE IF NOT EXISTS test.insert_except (
+        var targetTable = $"test.{SanitizeTableName("insert_except")}";
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($@"
+            CREATE TABLE IF NOT EXISTS {targetTable} (
                 id Int32,
                 name String,
                 value Float64,
