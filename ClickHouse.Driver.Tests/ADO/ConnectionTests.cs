@@ -8,10 +8,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
+using Dapper;
 using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.ADO;
 
+[Category("Cloud")]
 public class ConnectionTests : AbstractConnectionTestFixture
 {
     [Test]

@@ -496,5 +496,38 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             Assert.That(reader.GetValue(0), Is.EqualTo(jsonObject).UsingPropertiesComparer());
         }
     }
+
+
+    [Test]
+    public async Task ShouldInsertTupleWithEnum()
+    {
+        // Reproduces issue https://github.com/DarkWanderer/ClickHouse.Client/issues/538: Enum inside named tuple field causes exception
+        var targetTable = "test." + SanitizeTableName($"bulk_tuple_with_enum");
+        
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($@"
+            CREATE TABLE IF NOT EXISTS {targetTable} 
+            (
+                id Int32,
+                data Tuple(name String, status Enum8('Active' = 0, 'Inactive' = 1))
+            ) 
+            ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable
+        };
+
+        var data = new[]
+        {
+            new object[] { 1, Tuple.Create("Item A", "Active") },
+            new object[] { 2, Tuple.Create("Item B", "Inactive") }
+        };
+
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync(data);
+
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(2));
+    }
 }
 

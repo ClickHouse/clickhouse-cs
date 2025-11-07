@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       framework:
-        default: net8.0
+        default: net9.0
         required: false
         type: string
       clickhouse-version:
@@ -51,7 +51,9 @@ jobs:
           dotnet-version: |
             3.1.x
             5.x
+            6.x
             8.x
+            9.x
 
       - name: Test
         run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework ${{ inputs.framework }} --configuration Release --verbosity normal --logger GitHubActions  /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
@@ -61,6 +63,8 @@ jobs:
 
       - uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
           disable_search: true
+          verbose: true
           files: ./ClickHouse.Driver.Tests/coverage.${{ inputs.framework }}.opencover.xml

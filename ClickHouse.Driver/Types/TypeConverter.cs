@@ -8,7 +8,7 @@ using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types.Grammar;
 using NodaTime;
 
-[assembly: InternalsVisibleTo("ClickHouse.Driver.Tests")] // assembly-level tag to expose below classes to tests
+[assembly: InternalsVisibleTo("ClickHouse.Driver.Tests, PublicKey=00240000048000009400000006020000002400005253413100040000010001000968a6468f9d0397a051f167a25dcee773c674cf7a67629f78e884d232df23ff773fbfaba602e03eede6056b39bd6a4cddcd7e5b3ca9484bd83401d14a5e9ac5c98cbe676a1e89149816f5304f617b658440b2bd775e5ece71b5a38ceeb88e844869a376ceea71cbb6393b2ac14e506b92267a3cbcd6e7dc93ff6c750d53a5c7")] // assembly-level tag to expose below classes to tests
 
 namespace ClickHouse.Driver.Types;
 
@@ -172,9 +172,8 @@ internal static class TypeConverter
         RegisterPlainType<PolygonType>();
         RegisterPlainType<MultiPolygonType>();
 
-        // JSON/Object
-        RegisterPlainType<JsonType>();
         RegisterParameterizedType<ObjectType>();
+        RegisterParameterizedType<JsonType>();
 
         RegisterParameterizedType<AggregateFunctionType>();
 
@@ -217,7 +216,7 @@ internal static class TypeConverter
         return ParseClickHouseType(node, settings);
     }
 
-    internal static ClickHouseType ParseClickHouseType(SyntaxTreeNode node, TypeSettings settings)
+    internal static string ExtractTypeName(SyntaxTreeNode node)
     {
         var typeName = node.Value.Trim().Trim('\'');
 
@@ -236,6 +235,13 @@ internal static class TypeConverter
                 throw new ArgumentException($"Cannot parse {node.Value} as type", nameof(node));
             }
         }
+
+        return typeName;
+    }
+
+    internal static ClickHouseType ParseClickHouseType(SyntaxTreeNode node, TypeSettings settings)
+    {
+        var typeName = ExtractTypeName(node);
 
         if (node.ChildNodes.Count == 0 && SimpleTypes.TryGetValue(typeName, out var typeInfo))
         {

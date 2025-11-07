@@ -7,6 +7,7 @@ using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.ADO;
 
+[Category("Cloud")]
 public class DataReaderTests : AbstractConnectionTestFixture
 {
     [Test]

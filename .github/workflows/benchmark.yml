@@ -41,9 +41,10 @@ jobs:
         dotnet-version: |
           6.x
           8.x
+          9.x
 
     - name: Run
-      run: dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj --framework net8.0 --configuration Release -- --join --filter "*" --artifacts . --job Short
+      run: dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj --framework net9.0 --configuration Release -- --join --filter "*" --artifacts . --job Short
       env:
         CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
 

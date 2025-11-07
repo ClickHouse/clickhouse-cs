@@ -36,7 +36,7 @@ public class SqlSimpleSelectTests : IDisposable
         using var reader = await connection.ExecuteReaderAsync(sql);
         reader.AssertHasFieldCount(1);
         var result = reader.GetEnsureSingleRow().Single();
-        Assert.That(result, Is.EqualTo(expected).UsingPropertiesComparer());
+        TestUtilities.AssertEqual(expected, result);
     }
 
     [Test]

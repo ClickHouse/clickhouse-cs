@@ -58,6 +58,12 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         ConnectionString = connectionString;
     }
 
+    public ClickHouseConnection(string connectionString, bool skipServerCertificateValidation)
+    {
+        SkipServerCertificateValidation = skipServerCertificateValidation;
+        ConnectionString = connectionString;
+    }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseConnection"/> class using provided HttpClient.
     /// Note that HttpClient must have AutomaticDecompression enabled if compression is not disabled in connection string
@@ -152,10 +158,11 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public bool UseCompression { get; private set; }
 
+    public bool SkipServerCertificateValidation { get; private set; }
+
     public bool UseFormDataParameters { get; private set; }
 
-    public void SetFormDataParameters(
-        bool sendParametersAsFormData)
+    public void SetFormDataParameters(bool sendParametersAsFormData)
     {
         this.UseFormDataParameters = sendParametersAsFormData;
     }
@@ -194,7 +201,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         // If sessions are enabled, always use single connection
         else if (!string.IsNullOrEmpty(session))
         {
-            var factory = new SingleConnectionHttpClientFactory() { Timeout = timeout };
+            var factory = new SingleConnectionHttpClientFactory(SkipServerCertificateValidation) { Timeout = timeout };
             disposables.Add(factory);
             httpClientFactory = factory;
         }
@@ -202,7 +209,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         // Default case - use default connection pool
         else
         {
-            httpClientFactory = new DefaultPoolHttpClientFactory() { Timeout = timeout };
+            httpClientFactory = new DefaultPoolHttpClientFactory(SkipServerCertificateValidation) { Timeout = timeout };
         }
     }
 

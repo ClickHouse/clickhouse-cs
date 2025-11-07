@@ -7,15 +7,28 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClickHouse.Driver.Formats;
+using ClickHouse.Driver.Types.Grammar;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Types;
 
-internal class JsonType : ClickHouseType
+internal class JsonType : ParameterizedType
 {
     public override Type FrameworkType => typeof(JsonObject);
 
-    public override string ToString() => "Json";
+    public override string Name => "Json";
+
+    public Dictionary<string, ClickHouseType> HintedTypes { get; }
+
+    public JsonType()
+        : this(new Dictionary<string, ClickHouseType>())
+    {
+    }
+
+    private JsonType(Dictionary<string, ClickHouseType> hintedTypes)
+    {
+        HintedTypes = hintedTypes;
+    }
 
 #if NET6_0
     private static bool IsJsonNull(JsonNode node) => node == null || node.ToJsonString() == "null";
@@ -62,6 +75,12 @@ internal class JsonType : ClickHouseType
             var current = root;
             var name = reader.ReadString();
 
+            HintedTypes.TryGetValue(name, out var hintedType);
+            if (ReadJsonNode(reader, hintedType) is not { } jsonNode)
+            {
+                continue;
+            }
+
             var pathParts = name.Split('.');
             foreach (var part in pathParts.SkipLast1(1))
             {
@@ -76,10 +95,37 @@ internal class JsonType : ClickHouseType
                     current = newCurrent;
                 }
             }
-            current[pathParts.Last()] = ReadJsonNode(reader);
+
+            current[pathParts.Last()] = jsonNode;
         }
+
         return root;
     }
+
+    public override ParameterizedType Parse(
+        SyntaxTreeNode node,
+        Func<SyntaxTreeNode, ClickHouseType> parseClickHouseType,
+        TypeSettings settings) =>
+        new JsonType(
+            node.ChildNodes
+                .Select(childNode =>
+                {
+                    var hintParts = childNode.Value.Split(' ');
+                    var hintTypeSyntaxTreeNode = new SyntaxTreeNode { Value = hintParts[1] };
+                    foreach (var childNodeChildNode in childNode.ChildNodes)
+                    {
+                        hintTypeSyntaxTreeNode.ChildNodes.Add(childNodeChildNode);
+                    }
+
+                    return (
+                        path: hintParts[0].Trim('`'),
+                        type: parseClickHouseType(hintTypeSyntaxTreeNode));
+                })
+                .ToDictionary(
+                    hint => hint.path,
+                    hint => hint.type));
+
+    public override string ToString() => Name;
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
@@ -96,7 +142,6 @@ internal class JsonType : ClickHouseType
         {
             rootObject = (JsonObject)JsonSerializer.SerializeToNode(value);
         }
-
 
         // Simple depth-first search to flatten the JSON object into a dictionary
         WriteJsonObject(writer, rootObject);
@@ -137,6 +182,7 @@ internal class JsonType : ClickHouseType
             {
                 fields[currentPath.ToString()] = property.Value;
             }
+
             currentPath.Length = pathLengthBefore;
         }
     }
@@ -168,9 +214,9 @@ internal class JsonType : ClickHouseType
         }
     }
 
-    internal static JsonNode ReadJsonNode(ExtendedBinaryReader reader)
+    internal static JsonNode ReadJsonNode(ExtendedBinaryReader reader, ClickHouseType hintedType)
     {
-        var type = TypeConverter.FromByteCode(reader);
+        var type = hintedType ?? TypeConverter.FromByteCode(reader);
         if (type is ArrayType at)
         {
             var count = reader.Read7BitEncodedInt();
@@ -179,6 +225,7 @@ internal class JsonType : ClickHouseType
             {
                 array.Add(at.UnderlyingType.Read(reader));
             }
+
             return array;
         }
         else
