@@ -8,8 +8,6 @@ namespace ClickHouse.Driver.Diagnostic;
 
 internal static class ActivitySourceHelper
 {
-    internal const string ActivitySourceName = "ClickHouse.Driver";
-
     private const string TagDbConnectionString = "db.connection_string";
     private const string TagDbName = "db.name";
     private const string TagDbStatement = "db.statement";
@@ -25,8 +23,6 @@ internal static class ActivitySourceHelper
     private const string TagResultRows = "db.clickhouse.result_rows";
     private const string TagResultBytes = "db.clickhouse.result_bytes";
     private const string TagElapsedNs = "db.clickhouse.elapsed_ns";
-
-    internal const int StatementMaxLen = 300;
 
     internal static ActivitySource ActivitySource { get; } = CreateActivitySource();
 
@@ -56,9 +52,13 @@ internal static class ActivitySourceHelper
     {
         if (activity is null || sql is null)
             return;
-        if (sql.Length > StatementMaxLen)
+
+        if (!ClickHouseDiagnosticsOptions.IncludeSqlInActivityTags)
+            return;
+
+        if (sql.Length > ClickHouseDiagnosticsOptions.StatementMaxLength)
         {
-            sql = sql.Substring(0, StatementMaxLen);
+            sql = sql.Substring(0, ClickHouseDiagnosticsOptions.StatementMaxLength);
         }
         activity.SetTag(TagDbStatement, sql);
     }
@@ -107,6 +107,6 @@ internal static class ActivitySourceHelper
     {
         var assembly = typeof(ActivitySourceHelper).Assembly;
         var version = assembly.GetCustomAttribute<AssemblyFileVersionAttribute>().Version;
-        return new ActivitySource(ActivitySourceName, version);
+        return new ActivitySource(ClickHouseDiagnosticsOptions.ActivitySourceName, version);
     }
 }
