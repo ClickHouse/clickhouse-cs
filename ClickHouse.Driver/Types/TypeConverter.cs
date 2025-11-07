@@ -274,7 +274,7 @@ internal static class TypeConverter
             return new ArrayType() { UnderlyingType = ToClickHouseType(type.GetElementType()) };
         }
 
-        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName.StartsWith("System.Collections.Generic.List", StringComparison.InvariantCulture))
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
         {
             return new ArrayType() { UnderlyingType = ToClickHouseType(type.GetGenericArguments()[0]) };
         }
@@ -290,7 +290,7 @@ internal static class TypeConverter
             return new TupleType { UnderlyingTypes = type.GetGenericArguments().Select(ToClickHouseType).ToArray() };
         }
 
-        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName.StartsWith("System.Collections.Generic.Dictionary", StringComparison.InvariantCulture))
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
         {
             var types = type.GetGenericArguments().Select(ToClickHouseType).ToArray();
             return new MapType { UnderlyingTypes = Tuple.Create(types[0], types[1]) };
