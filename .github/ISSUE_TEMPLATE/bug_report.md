@@ -25,6 +25,7 @@ assignees: ''
 #### Environment
 * Client version:
 * Language version:
+* .NET version:
 * OS:
 
 #### ClickHouse server
