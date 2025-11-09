@@ -9,6 +9,7 @@ using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Utility;
 using System.Text.Json.Nodes;
+using ClickHouse.Driver.Tests.Infrastructure;
 using NUnit.Framework.Constraints;
 
 namespace ClickHouse.Driver.Tests;
@@ -89,7 +90,8 @@ public static class TestUtilities
         {
             builder["set_allow_experimental_dynamic_type"] = 1;
         }
-        var connection = new ClickHouseConnection(builder.ConnectionString);
+        
+        var connection = new ClickHouseConnection(builder.ConnectionString, new TestPoolHttpClientFactory());
         connection.Open();
         return connection;
     }

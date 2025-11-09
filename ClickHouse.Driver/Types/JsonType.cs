@@ -30,6 +30,41 @@ internal class JsonType : ParameterizedType
         HintedTypes = hintedTypes;
     }
 
+#if NET6_0
+    private static bool IsJsonNull(JsonNode node) => node == null || node.ToJsonString() == "null";
+    
+    private static bool IsJsonObject(JsonNode node) => node is JsonObject;
+    
+    private static JsonValueKind GetJsonValueKind(JsonNode node)
+    {
+        if (node == null) return JsonValueKind.Null;
+        if (node is JsonObject) return JsonValueKind.Object;
+        if (node is JsonArray) return JsonValueKind.Array;
+        if (node is JsonValue val)
+        {
+            var str = val.ToJsonString();
+            if (str == "null") return JsonValueKind.Null;
+            if (str == "true") return JsonValueKind.True;
+            if (str == "false") return JsonValueKind.False;
+            if (str.StartsWith("\"")) return JsonValueKind.String;
+            return JsonValueKind.Number;
+        }
+        return JsonValueKind.Undefined;
+    }
+    
+    private static JsonValueKind GetJsonValueKind(JsonValue val) => GetJsonValueKind((JsonNode)val);
+#else
+
+    private static bool IsJsonNull(JsonNode node) => node == null || node.GetValueKind() == JsonValueKind.Null;
+    
+    private static bool IsJsonObject(JsonNode node) => node.GetValueKind() == JsonValueKind.Object;
+    
+    private static JsonValueKind GetJsonValueKind(JsonNode node) => node?.GetValueKind() ?? JsonValueKind.Null;
+
+    private static JsonValueKind GetJsonValueKind(JsonValue val) => val.GetValueKind();
+
+#endif
+
     public override object Read(ExtendedBinaryReader reader)
     {
         JsonObject root = new();
@@ -139,7 +174,7 @@ internal class JsonType : ParameterizedType
             {
                 FlattenJson(jObject, ref currentPath, ref fields);
             }
-            else if (property.Value is null || property.Value.GetValueKind() == JsonValueKind.Null)
+            else if (property.Value is null || IsJsonNull(property.Value))
             {
                 fields[currentPath.ToString()] = null;
             }
@@ -224,7 +259,7 @@ internal class JsonType : ParameterizedType
     {
         writer.Write((byte)0x1E);
 
-        var kind = array.Count > 0 ? array[0].GetValueKind() : JsonValueKind.Null;
+        var kind = array.Count > 0 ? GetJsonValueKind(array[0]) : JsonValueKind.Null;
 
         // Step 1: Write binary tag for array element type
         switch (kind)
@@ -259,7 +294,7 @@ internal class JsonType : ParameterizedType
         // Step 3: Write array elements
         foreach (var value in array)
         {
-            if (value.GetValueKind() != kind)
+            if (GetJsonValueKind(value) != kind)
             {
                 throw new SerializationException("Array contains mixed value types");
             }
@@ -284,14 +319,14 @@ internal class JsonType : ParameterizedType
                     WriteJsonObject(writer, (JsonObject)value);
                     break;
                 default:
-                    throw new SerializationException($"Unsupported JSON value kind: {value.GetValueKind()}");
+                    throw new SerializationException($"Unsupported JSON value kind: {GetJsonValueKind(value)}");
             }
         }
     }
 
     internal static void WriteJsonValue(ExtendedBinaryWriter writer, JsonValue value)
     {
-        switch (value.GetValueKind())
+        switch (GetJsonValueKind(value))
         {
             case JsonValueKind.Undefined:
             case JsonValueKind.String:
@@ -311,7 +346,7 @@ internal class JsonType : ParameterizedType
                 writer.Write((byte)0x00);
                 break;
             default:
-                throw new SerializationException($"Unsupported JSON value kind: {value.GetValueKind()}");
+                throw new SerializationException($"Unsupported JSON value kind: {GetJsonValueKind(value)}");
         }
     }
 }

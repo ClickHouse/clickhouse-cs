@@ -81,6 +81,12 @@ public class ConnectionTests : AbstractConnectionTestFixture
             _ = await task;
             Assert.Fail("The task should have been cancelled before completion");
         }
+#if NETFRAMEWORK
+        catch (WebException ex) when (ex.Status == WebExceptionStatus.RequestCanceled)
+        {
+            /* Expected: request cancelled */
+        }
+#endif
         catch (TaskCanceledException)
         {
             /* Expected: task cancelled */
@@ -99,7 +105,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
     [Test]
     public async Task ClientShouldSetQueryId()
     {
-        string queryId = "MyQueryId123456";
+        string queryId = GetUniqueQueryId("MyQueryId123456");
         var command = connection.CreateCommand();
         command.CommandText = "SELECT 1";
         command.QueryId = queryId;
@@ -108,7 +114,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
     
     [Test]
-    public async Task ClientShouldSetUserAgent()
+    public void ClientShouldSetUserAgent()
     {
         var headers = new HttpRequestMessage().Headers;
         connection.AddDefaultHttpHeaders(headers);
@@ -121,7 +127,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
     public async Task ReplaceRunningQuerySettingShouldReplace()
     {
         connection.CustomSettings.Add("replace_running_query", 1);
-        string queryId = "MyQueryId123456";
+        string queryId = GetUniqueQueryId("MyQueryId123456");
 
         var command1 = connection.CreateCommand();
         var command2 = connection.CreateCommand();
@@ -220,7 +226,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldPostDynamicallyGeneratedRawStream()
     {
-        var targetTable = "test.raw_stream";
+        var targetTable = $"test.{SanitizeTableName("raw_stream")}";
 
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value Int32) ENGINE Null");
