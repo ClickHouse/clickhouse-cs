@@ -8,7 +8,7 @@
 <img alt="NuGet Version" src="https://img.shields.io/nuget/v/ClickHouse.Driver">
 </a>
 
-<a href="https://www.npmjs.com/package/@clickhouse/client">
+<a href="https://www.nuget.org/packages/ClickHouse.Driver">
 <img alt="NuGet Downloads" src="https://img.shields.io/nuget/dt/ClickHouse.Driver">
 </a>
 
