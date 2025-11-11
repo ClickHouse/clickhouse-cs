@@ -4,6 +4,9 @@ class Program
 {
     static async Task Main(string[] args)
     {
+        // Check if running in CI or non-interactive mode
+        bool isInteractive = Environment.UserInteractive && !Console.IsInputRedirected;
+
         Console.WriteLine("ClickHouse C# Driver Examples");
         Console.WriteLine("==============================\n");
 
@@ -16,13 +19,11 @@ class Program
 
             Console.WriteLine($"Running: {nameof(BasicUsage)}");
             await BasicUsage.Run();
-            Console.WriteLine("\nPress any key to continue...");
-            Console.ReadKey();
+            WaitForUser(isInteractive);
 
             Console.WriteLine($"\n\nRunning: {nameof(ConnectionStringConfiguration)}");
             await ConnectionStringConfiguration.Run();
-            Console.WriteLine("\nPress any key to continue...");
-            Console.ReadKey();
+            WaitForUser(isInteractive);
 
             // Creating Tables
             Console.WriteLine("\n\n" + new string('=', 70));
@@ -31,8 +32,7 @@ class Program
 
             Console.WriteLine($"Running: {nameof(CreateTableSingleNode)}");
             await CreateTableSingleNode.Run();
-            Console.WriteLine("\nPress any key to continue...");
-            Console.ReadKey();
+            WaitForUser(isInteractive);
 
             // Inserting Data
             Console.WriteLine("\n\n" + new string('=', 70));
@@ -41,13 +41,11 @@ class Program
 
             Console.WriteLine($"Running: {nameof(SimpleDataInsert)}");
             await SimpleDataInsert.Run();
-            Console.WriteLine("\nPress any key to continue...");
-            Console.ReadKey();
+            WaitForUser(isInteractive);
 
             Console.WriteLine($"\n\nRunning: {nameof(BulkInsert)}");
             await BulkInsert.Run();
-            Console.WriteLine("\nPress any key to continue...");
-            Console.ReadKey();
+            WaitForUser(isInteractive);
 
             // Selecting Data
             Console.WriteLine("\n\n" + new string('=', 70));
@@ -56,13 +54,11 @@ class Program
 
             Console.WriteLine($"Running: {nameof(BasicSelect)}");
             await BasicSelect.Run();
-            Console.WriteLine("\nPress any key to continue...");
-            Console.ReadKey();
+            WaitForUser(isInteractive);
 
             Console.WriteLine($"\n\nRunning: {nameof(SelectMetadata)}");
             await SelectMetadata.Run();
-            Console.WriteLine("\nPress any key to continue...");
-            Console.ReadKey();
+            WaitForUser(isInteractive);
 
             Console.WriteLine($"\n\nRunning: {nameof(SelectWithParameterBinding)}");
             await SelectWithParameterBinding.Run();
@@ -76,6 +72,19 @@ class Program
             Console.WriteLine($"\n\nERROR: {ex.Message}");
             Console.WriteLine($"Stack trace: {ex.StackTrace}");
             Environment.Exit(1);
+        }
+    }
+
+    private static void WaitForUser(bool isInteractive)
+    {
+        if (isInteractive)
+        {
+            Console.WriteLine("\nPress any key to continue...");
+            Console.ReadKey();
+        }
+        else
+        {
+            Console.WriteLine(); // Just add a blank line in non-interactive mode
         }
     }
 }
