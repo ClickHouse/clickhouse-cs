@@ -37,9 +37,7 @@ See the [ClickHouse website](https://clickhouse.com/docs/integrations/csharp) fo
 
 ## Usage examples
 
-Coming soon
-
-<!--- We have a wide range of [examples](./examples), aiming to cover various scenarios of client usage. The overview is available in the [examples README](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/README.md#overview). -->
+We have a wide range of [examples](./examples), aiming to cover typical scenarios of client usage.
 
 ## ClickHouse Versions
 
