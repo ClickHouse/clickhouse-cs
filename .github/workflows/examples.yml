@@ -37,7 +37,7 @@ jobs:
         name: Cache NuGet
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-examples-${{ hashFiles('**/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
@@ -48,7 +48,7 @@ jobs:
             9.x
 
       - name: Build examples
-        run: dotnet build examples/ClickHouse.Driver.Examples.csproj --configuration Release --verbosity normal --logger GitHubActions
+        run: dotnet build examples/ClickHouse.Driver.Examples.csproj --configuration Release
 
       - name: Run examples
         run: dotnet run --project examples/ClickHouse.Driver.Examples.csproj --configuration Release --no-build
