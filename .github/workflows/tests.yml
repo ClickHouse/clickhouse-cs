@@ -80,7 +80,7 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Setup .NET Core
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: |
             10.x
@@ -109,7 +109,7 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Setup .NET Core
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: |
             10.x
@@ -147,6 +147,12 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            10.x
 
       - name: Test
         run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj
