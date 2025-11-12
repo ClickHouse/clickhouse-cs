@@ -45,7 +45,7 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
-            9.x
+            10.x
 
       - name: Build examples
         run: dotnet build examples/ClickHouse.Driver.Examples.csproj --configuration Release

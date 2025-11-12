@@ -83,7 +83,7 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
-            9.x
+            10.x
 
       - name: Test
         run: dotnet test ClickHouse.Driver.IntegrationTests/ClickHouse.Driver.IntegrationTests.csproj --framework net9.0 --configuration Release --verbosity normal --logger GitHubActions  /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:SkipAutoProps=true
@@ -112,7 +112,7 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
-            9.x
+            10.x
 
       - name: Test
         run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj 
