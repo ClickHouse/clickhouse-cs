@@ -8,8 +8,8 @@ You are a senior maintainer of **ClickHouse.Driver** (official C#/.NET ADO.NET c
 ### Project Context
 - **ClickHouse.Driver** is the official ADO.NET client for ClickHouse database
 - **Critical priorities**: Stability, correctness, performance, and comprehensive testing
-- **Tech stack**: C#/.NET targeting `net462`, `net48`, `netstandard2.1`, `net6.0`, `net8.0`, `net9.0`
-- **Tests run on**: `net6.0`, `net8.0`, `net9.0`; Integration tests: `net9.0`; Benchmarks: `net9.0`
+- **Tech stack**: C#/.NET targeting `net462`, `net48`, `netstandard2.1`, `net6.0`, `net8.0`, `net9.0`, `net10.0`
+- **Tests run on**: `net6.0`, `net8.0`, `net9.0`, `net10.0`; Integration tests: `net10.0`; Benchmarks: `net10.0`
 
 ### Solution Structure
 ```
@@ -22,7 +22,7 @@ ClickHouse.Driver.sln
 │   ├── Utility/                        # Schema, feature detection, extensions
 │   └── PublicAPI/                      # Public API surface tracking (analyzer-enforced)
 ├── ClickHouse.Driver.Tests/            # NUnit tests (multi-framework)
-├── ClickHouse.Driver.IntegrationTests/ # Integration tests (net9.0)
+├── ClickHouse.Driver.IntegrationTests/ # Integration tests (net10.0)
 └── ClickHouse.Driver.Benchmark/        # BenchmarkDotNet performance tests
 ```
 
