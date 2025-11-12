@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace ClickHouse.Driver.Utility;
 
-public static class StringExtensions
+internal static class StringExtensions
 {
     public static string Escape(this string str) => str.Replace("\\", "\\\\").Replace("\'", "\\\'").Replace("\n", "\\n").Replace("\t", "\\t");
 

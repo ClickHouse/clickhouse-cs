@@ -4,7 +4,7 @@ using System.Collections.Generic;
 
 namespace ClickHouse.Driver.Utility;
 
-public static class EnumerableExtensions
+internal static class EnumerableExtensions
 {
     public static void Deconstruct<T>(this IList<T> list, out T first, out T second)
     {
