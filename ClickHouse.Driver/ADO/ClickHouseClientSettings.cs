@@ -11,6 +11,7 @@ namespace ClickHouse.Driver.ADO;
 /// </summary>
 public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 {
+    private readonly object sessionIdLock = new object();
     private string sessionId;
 
     /// <summary>
@@ -89,7 +90,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets the database name.
-    /// Default: "default"
+    /// Default: "" (if empty, will use the user's default database if it has been configured).
     /// </summary>
     public string Database { get; init; } = ClickHouseDefaults.Database;
 
@@ -145,7 +146,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         get
         {
             if (!UseSession) return sessionId;
-            sessionId ??= Guid.NewGuid().ToString();
+
+            if (sessionId == null)
+            {
+                lock (sessionIdLock)
+                {
+                    sessionId ??= Guid.NewGuid().ToString();
+                }
+            }
+
             return sessionId;
         }
         init => sessionId = value;
@@ -285,7 +294,10 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                SessionId == other.SessionId &&
                SkipServerCertificateValidation == other.SkipServerCertificateValidation &&
                UseFormDataParameters == other.UseFormDataParameters &&
-               Timeout == other.Timeout;
+               Timeout == other.Timeout &&
+               HttpClient == other.HttpClient &&
+               HttpClientFactory == other.HttpClientFactory &&
+               HttpClientName == other.HttpClientName;
     }
 
     /// <summary>

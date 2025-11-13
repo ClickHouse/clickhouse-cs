@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Tests.Utilities;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 
@@ -648,14 +649,6 @@ public class ClickHouseClientSettingsTests
                 Assert.That(copyValue, Is.SameAs(originalValue),
                     $"Property {property.Name} should reference the same object");
             }
-        }
-    }
-
-    private class TestHttpClientFactory : IHttpClientFactory
-    {
-        public HttpClient CreateClient(string name)
-        {
-            return new HttpClient();
         }
     }
 

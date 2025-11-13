@@ -167,25 +167,10 @@ public static class ClickHouseServiceCollectionExtensions
 
     private static ClickHouseDataSource CreateDataSourceFromSettings(ClickHouseClientSettings settings)
     {
-        var connectionString = ClickHouseConnectionStringBuilder.FromSettings(settings).ToString();
-
-        ClickHouseDataSource dataSource;
-
-        if (settings.HttpClientFactory != null)
+        return new ClickHouseDataSource(settings)
         {
-            dataSource = new ClickHouseDataSource(connectionString, settings.HttpClientFactory, settings.HttpClientName ?? string.Empty);
-        }
-        else if (settings.HttpClient != null)
-        {
-            dataSource = new ClickHouseDataSource(connectionString, settings.HttpClient);
-        }
-        else
-        {
-            dataSource = new ClickHouseDataSource(connectionString);
-        }
-
-        dataSource.LoggerFactory = settings.LoggerFactory;
-        return dataSource;
+            LoggerFactory = settings.LoggerFactory,
+        };
     }
 
     /// <summary>

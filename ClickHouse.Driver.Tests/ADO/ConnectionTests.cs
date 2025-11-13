@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Tests.Utilities;
 using ClickHouse.Driver.Utility;
 using Dapper;
 using NSubstitute;
@@ -555,25 +556,5 @@ public class ConnectionTests : AbstractConnectionTestFixture
 
         // Verify the path was used in the request
         Assert.That(capturedUri.AbsolutePath, Does.StartWith("/custom/reverse/proxy/path"), "Path was not applied to request");
-    }
-
-    private class TestHttpClientFactory : IHttpClientFactory
-    {
-        private int createClientCallCount;
-
-        public int CreateClientCallCount => createClientCallCount;
-        public string LastRequestedClientName { get; private set; }
-
-        public HttpClient CreateClient(string name)
-        {
-            Interlocked.Increment(ref createClientCallCount);
-            LastRequestedClientName = name;
-
-            var handler = new HttpClientHandler()
-            {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
-            };
-            return new HttpClient(handler);
-        }
     }
 }

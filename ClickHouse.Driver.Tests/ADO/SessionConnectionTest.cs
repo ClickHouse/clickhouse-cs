@@ -63,7 +63,7 @@ public class SessionConnectionTest
             await connection.ExecuteScalarAsync("SELECT COUNT(*) from test_temp_table");
             Assert.Fail("ClickHouse should not be able to use temp table if session is disabled");
         }
-        catch (ClickHouseServerException e) when (e.ErrorCode == 60)
+        catch (ClickHouseServerException e) when (e.ErrorCode == 60) // Error 60 means the table does not exist
         {
         }
     }
@@ -78,7 +78,7 @@ public class SessionConnectionTest
             await connection.ExecuteScalarAsync("SELECT COUNT(*) from test_temp_table");
             Assert.Fail("ClickHouse should not be able to use temp table if session is disabled");
         }
-        catch (ClickHouseServerException e) when (e.ErrorCode == 60)
+        catch (ClickHouseServerException e) when (e.ErrorCode == 60) // Error 60 means the table does not exist
         {
         }
     }
