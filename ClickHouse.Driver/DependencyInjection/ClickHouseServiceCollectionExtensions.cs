@@ -56,7 +56,7 @@ public static class ClickHouseServiceCollectionExtensions
 
                 return new ClickHouseDataSource(connectionString, httpClient)
                 {
-                    Logger = sp.GetService<ILogger<ClickHouseConnection>>()
+                    LoggerFactory = sp.GetService<ILoggerFactory>(),
                 };
             },
             connectionLifetime,
@@ -93,8 +93,85 @@ public static class ClickHouseServiceCollectionExtensions
         object serviceKey = null) =>
         AddClickHouseDataSource(services, (sp, _) => new ClickHouseDataSource(connectionString, httpClientFactory, httpClientName)
         {
-            Logger = sp.GetService<ILogger<ClickHouseConnection>>()
+            LoggerFactory = sp.GetService<ILoggerFactory>(),
         }, connectionLifetime, dataSourceLifetime, serviceKey);
+
+    /// <summary>
+    /// Registers a <see cref="ClickHouseDataSource" /> and a <see cref="ClickHouseConnection" /> in the <see cref="IServiceCollection" /> using <see cref="ClickHouseClientSettings"/>.
+    /// </summary>
+    /// <param name="services">The <see cref="IServiceCollection" /> to add services to.</param>
+    /// <param name="settings">The settings to use for creating connections.</param>
+    /// <param name="connectionLifetime">
+    /// The lifetime with which to register the <see cref="ClickHouseConnection" /> in the container.
+    /// Defaults to <see cref="ServiceLifetime.Transient" />.
+    /// </param>
+    /// <param name="dataSourceLifetime">
+    /// The lifetime with which to register the <see cref="ClickHouseDataSource" /> service in the container.
+    /// Defaults to <see cref="ServiceLifetime.Singleton" />.
+    /// </param>
+    /// <param name="serviceKey">The <see cref="ServiceDescriptor.ServiceKey"/> of the data source.</param>
+    /// <returns>The same service collection so that multiple calls can be chained.</returns>
+    public static IServiceCollection AddClickHouseDataSource(
+        this IServiceCollection services,
+        ClickHouseClientSettings settings,
+        ServiceLifetime connectionLifetime = ServiceLifetime.Transient,
+        ServiceLifetime dataSourceLifetime = ServiceLifetime.Singleton,
+        object serviceKey = null) =>
+        AddClickHouseDataSource(
+            services,
+            sp => ApplyLoggerFactory(settings, sp),
+            connectionLifetime,
+            dataSourceLifetime,
+            serviceKey);
+
+    /// <summary>
+    /// Registers a <see cref="ClickHouseDataSource" /> and a <see cref="ClickHouseConnection" /> in the <see cref="IServiceCollection" /> using a settings factory.
+    /// </summary>
+    /// <param name="services">The <see cref="IServiceCollection" /> to add services to.</param>
+    /// <param name="settingsFactory">A factory function that creates settings, with access to the service provider.</param>
+    /// <param name="connectionLifetime">
+    /// The lifetime with which to register the <see cref="ClickHouseConnection" /> in the container.
+    /// Defaults to <see cref="ServiceLifetime.Transient" />.
+    /// </param>
+    /// <param name="dataSourceLifetime">
+    /// The lifetime with which to register the <see cref="ClickHouseDataSource" /> service in the container.
+    /// Defaults to <see cref="ServiceLifetime.Singleton" />.
+    /// </param>
+    /// <param name="serviceKey">The <see cref="ServiceDescriptor.ServiceKey"/> of the data source.</param>
+    /// <returns>The same service collection so that multiple calls can be chained.</returns>
+    public static IServiceCollection AddClickHouseDataSource(
+        this IServiceCollection services,
+        Func<IServiceProvider, ClickHouseClientSettings> settingsFactory,
+        ServiceLifetime connectionLifetime = ServiceLifetime.Transient,
+        ServiceLifetime dataSourceLifetime = ServiceLifetime.Singleton,
+        object serviceKey = null)
+    {
+        ArgumentNullException.ThrowIfNull(settingsFactory);
+
+        return AddClickHouseDataSource(
+            services,
+            (sp, _) => CreateDataSourceFromSettings(settingsFactory(sp)),
+            connectionLifetime,
+            dataSourceLifetime,
+            serviceKey);
+    }
+
+    private static ClickHouseClientSettings ApplyLoggerFactory(ClickHouseClientSettings settings, IServiceProvider sp)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        return settings.LoggerFactory == null
+            ? new ClickHouseClientSettings(settings) { LoggerFactory = sp.GetService<ILoggerFactory>() }
+            : settings;
+    }
+
+    private static ClickHouseDataSource CreateDataSourceFromSettings(ClickHouseClientSettings settings)
+    {
+        return new ClickHouseDataSource(settings)
+        {
+            LoggerFactory = settings.LoggerFactory,
+        };
+    }
 
     /// <summary>
     /// Registers a <see cref="ClickHouseDataSource" /> and a <see cref="ClickHouseConnection" /> in the <see cref="IServiceCollection" />.

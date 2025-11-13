@@ -36,33 +36,49 @@ public class SessionConnectionTest
         await connection.ExecuteStatementAsync("CREATE TEMPORARY TABLE test_temp_table (value UInt8)");
         await connection.ExecuteScalarAsync("SELECT COUNT(*) from test_temp_table");
     }
+    
+    [Test]
+    public async Task QueryWithTempTable_SessionIdSetInClickHouseClientSettings_TableShouldBeCreatedSuccessfully()
+    {
+        var sessionId = "TEST-" + Guid.NewGuid().ToString();
+        var builder = TestUtilities.GetConnectionStringBuilder();
+        var settings = new ClickHouseClientSettings(builder)
+        {
+            SessionId = sessionId,
+            UseSession = true,
+        };
+
+        var connection = new ClickHouseConnection(settings);
+        await connection.ExecuteStatementAsync("CREATE TEMPORARY TABLE test_temp_table (value UInt8)");
+        await connection.ExecuteScalarAsync("SELECT COUNT(*) from test_temp_table");
+    }
 
     [Test]
-    [Ignore("Broken in v23")]
     public async Task TempTableShouldFailIfSessionDisabled()
     {
         using var connection = CreateConnection(false);
         try
         {
             await connection.ExecuteStatementAsync("CREATE TEMPORARY TABLE test_temp_table (value UInt8)");
-            Assert.Fail("ClickHouse should not be able to create temp table if session is disabled");
+            await connection.ExecuteScalarAsync("SELECT COUNT(*) from test_temp_table");
+            Assert.Fail("ClickHouse should not be able to use temp table if session is disabled");
         }
-        catch (ClickHouseServerException e) when (e.ErrorCode == 113)
+        catch (ClickHouseServerException e) when (e.ErrorCode == 60) // Error 60 means the table does not exist
         {
         }
     }
 
     [Test]
-    [Ignore("Broken in v23")]
     public async Task TempTableShouldFailIfSessionDisabledAndSessionIdPassed()
     {
         using var connection = CreateConnection(false, "ASD");
         try
         {
             await connection.ExecuteStatementAsync("CREATE TEMPORARY TABLE test_temp_table (value UInt8)");
-            Assert.Fail("ClickHouse should not be able to create temp table if session is disabled");
+            await connection.ExecuteScalarAsync("SELECT COUNT(*) from test_temp_table");
+            Assert.Fail("ClickHouse should not be able to use temp table if session is disabled");
         }
-        catch (ClickHouseServerException e) when (e.ErrorCode == 113)
+        catch (ClickHouseServerException e) when (e.ErrorCode == 60) // Error 60 means the table does not exist
         {
         }
     }
