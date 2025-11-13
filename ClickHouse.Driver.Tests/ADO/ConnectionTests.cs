@@ -36,6 +36,17 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task ShouldCreateConnectionWithSkipServerCertificateValidation()
+    {
+        var connectionString = TestUtilities.GetConnectionStringBuilder().ToString();
+        using var conn = new ClickHouseConnection(connectionString, skipServerCertificateValidation: true);
+        await conn.OpenAsync();
+
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
+        Assert.That(conn.SkipServerCertificateValidation, Is.True);
+    }
+
+    [Test]
     public void ShouldParseCustomParameter()
     {
         using var conn = new ClickHouseConnection("set_my_parameter=aaa");

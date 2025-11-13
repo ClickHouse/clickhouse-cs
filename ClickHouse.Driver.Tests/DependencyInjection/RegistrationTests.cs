@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http;
 using ClickHouse.Driver.ADO;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -87,6 +89,43 @@ public class RegistrationTests
 
         var dataSource = services.GetRequiredService<ClickHouseDataSource>();
         Assert.That(dataSource.LoggerFactory, Is.Not.Null);
+    }
+
+    [Test]
+    public void CanAddClickHouseDataSourceWithHttpClientFactory()
+    {
+        const string connectionString = "Host=localhost;Port=5555;Database=factory_db";
+        const string clientName = "test-clickhouse-client";
+
+        var serviceCollection = new ServiceCollection()
+                             .AddHttpClient(clientName)
+                             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+                             {
+                                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                             })
+                             .Services;
+
+        // Build a temporary service provider to get the IHttpClientFactory
+        var tempProvider = serviceCollection.BuildServiceProvider();
+        var httpClientFactory = tempProvider.GetRequiredService<IHttpClientFactory>();
+
+        using var services = serviceCollection
+                             .AddSingleton(httpClientFactory)
+                             .AddSingleton<ILoggerFactory, LoggerFactory>()
+                             .AddClickHouseDataSource(
+                                 connectionString,
+                                 httpClientFactory,
+                                 clientName)
+                             .BuildServiceProvider();
+
+        var dataSource = services.GetRequiredService<ClickHouseDataSource>();
+        Assert.That(dataSource.ConnectionString, Does.Contain("Host=localhost"));
+        Assert.That(dataSource.ConnectionString, Does.Contain("Port=5555"));
+        Assert.That(dataSource.ConnectionString, Does.Contain("Database=factory_db"));
+        Assert.That(dataSource.LoggerFactory, Is.Not.Null, "LoggerFactory should be injected from DI");
+        
+        using var connection = services.GetRequiredService<IClickHouseConnection>();
+        Assert.That(connection.Database, Is.EqualTo("factory_db"));
     }
 #endif
 }
