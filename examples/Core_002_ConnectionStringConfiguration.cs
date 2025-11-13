@@ -21,9 +21,9 @@ public static class ConnectionStringConfiguration
             Console.WriteLine($"   Connected to ClickHouse version: {version}");
         }
 
-        // 2: Using ClickHouseConnectionStringBuilder
-        Console.WriteLine("\n2. Using ClickHouseConnectionStringBuilder:");
-        var builder = new ClickHouseConnectionStringBuilder
+        // 2: Using ClickHouseClientSettings
+        Console.WriteLine("\n2. Using ClickHouseClientSettings:");
+        var settings = new ClickHouseClientSettings
         {
             Host = "localhost",
             Port = 8123,
@@ -32,16 +32,16 @@ public static class ConnectionStringConfiguration
             Database = "default",
             Protocol = "http"
         };
-        using (var connection = new ClickHouseConnection(builder.ToString()))
+        using (var connection = new ClickHouseConnection(settings))
         {
             await connection.OpenAsync();
             var version = await connection.ExecuteScalarAsync("SELECT version()");
             Console.WriteLine($"   Connected to ClickHouse version: {version}");
         }
-        
+
         // 3: HTTPS connection (for ClickHouse Cloud or secure deployments)
         Console.WriteLine("\n3. HTTPS connection configuration:");
-        var secureBuilder = new ClickHouseConnectionStringBuilder
+        var secureSettings = new ClickHouseClientSettings
         {
             Host = "your-clickhouse-instance.cloud",
             Port = 8443,
@@ -50,16 +50,17 @@ public static class ConnectionStringConfiguration
             Password = "your_password",
             Database = "default"
         };
-        Console.WriteLine($"   Connection string: {secureBuilder}");
+        Console.WriteLine($"   Settings: Host={secureSettings.Host}, Port={secureSettings.Port}, Protocol={secureSettings.Protocol}");
         
+
         // 4: Connection with custom settings
         Console.WriteLine("\n4. Connection with custom ClickHouse settings:");
-        using (var connection = new ClickHouseConnection("Host=localhost"))
+        var settingsWithCustom = new ClickHouseClientSettings("Host=localhost");
+        settingsWithCustom.CustomSettings.Add("max_execution_time", 10);
+        settingsWithCustom.CustomSettings.Add("max_memory_usage", 10000000000);
+        
+        using (var connection = new ClickHouseConnection(settingsWithCustom))
         {
-            // Add custom settings for this connection
-            connection.CustomSettings.Add("max_execution_time", 10);
-            connection.CustomSettings.Add("max_memory_usage", 10000000000);
-            
             await connection.OpenAsync();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT 1";
