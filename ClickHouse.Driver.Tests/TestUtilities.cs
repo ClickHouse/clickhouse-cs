@@ -63,12 +63,17 @@ public static class TestUtilities
     /// Utility method to allow to redirect ClickHouse connections to different machine, in case of Windows development environment
     /// </summary>
     /// <returns></returns>
-    public static ClickHouseConnection GetTestClickHouseConnection(bool compression = true, bool session = false, bool customDecimals = true)
+    public static ClickHouseConnection GetTestClickHouseConnection(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false)
     {
         var builder = GetConnectionStringBuilder();
         builder.Compression = compression;
         builder.UseSession = session;
         builder.UseCustomDecimals = customDecimals;
+        
+        if (password is not null)
+        {
+            builder.Password = password;
+        }
         builder["set_session_timeout"] = 1; // Expire sessions quickly after test
         builder["set_allow_experimental_geo_types"] = 1; // Allow support for geo types
         builder["set_flatten_nested"] = 0; // Nested should be a single column, see https://clickhouse.com/docs/en/operations/settings/settings#flatten-nested
@@ -89,7 +94,13 @@ public static class TestUtilities
         {
             builder["set_allow_experimental_dynamic_type"] = 1;
         }
-        var connection = new ClickHouseConnection(builder.ConnectionString);
+
+        var settings = new ClickHouseClientSettings(builder)
+        {
+            UseFormDataParameters = useFormDataParameters
+        };
+        
+        var connection = new ClickHouseConnection(settings);
         connection.Open();
         return connection;
     }
