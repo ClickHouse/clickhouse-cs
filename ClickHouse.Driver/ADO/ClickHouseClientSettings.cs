@@ -386,6 +386,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         if (UseSession && HttpClient != null)
             throw new InvalidOperationException("UseSession cannot be combined with a custom HttpClient (sessions require a single persistent connection)");
 
+        if (UseSession && HttpClientFactory != null)
+            throw new InvalidOperationException("UseSession cannot be combined with a custom HttpClientFactory (sessions require a single persistent connection)");
+
         if (HttpClient != null && HttpClientFactory != null)
             throw new InvalidOperationException("Cannot specify both HttpClient and HttpClientFactory");
     }
