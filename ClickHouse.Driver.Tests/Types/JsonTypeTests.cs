@@ -20,7 +20,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             $@"
             CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(level1_int Int32, nested.level2_string String)
+                data JSON(max_dynamic_paths=10, level1_int Int32, nested.level2_string String, SKIP path.to.skip, skip path.to.ignore)
             ) ENGINE = Memory;");
 
         var json = "{\"level1_int\": 789, \"nested\": {\"level2_string\": \"nested_value\"}, \"unhinted_float\": 99.9}";

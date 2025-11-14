@@ -73,19 +73,29 @@ internal class JsonType : ParameterizedType
         TypeSettings settings) =>
         new JsonType(
             node.ChildNodes
-                .Select(childNode =>
-                {
-                    var hintParts = childNode.Value.Split(' ');
-                    var hintTypeSyntaxTreeNode = new SyntaxTreeNode { Value = hintParts[1] };
-                    foreach (var childNodeChildNode in childNode.ChildNodes)
+                .Where(
+                    childNode =>
+                        !childNode.Value.StartsWith("max_dynamic_", StringComparison.OrdinalIgnoreCase) && 
+                        !childNode.Value.StartsWith("SKIP", StringComparison.OrdinalIgnoreCase))
+                .Select(
+                    childNode =>
                     {
-                        hintTypeSyntaxTreeNode.ChildNodes.Add(childNodeChildNode);
-                    }
+                        var hintParts = childNode.Value.Split(' ');
+                        if (hintParts.Length != 2)
+                        {
+                            throw new SerializationException($"Unsupported path in JSON hint: {childNode.Value}");
+                        }
 
-                    return (
-                        path: hintParts[0].Trim('`'),
-                        type: parseClickHouseType(hintTypeSyntaxTreeNode));
-                })
+                        var hintTypeSyntaxTreeNode = new SyntaxTreeNode { Value = hintParts[1] };
+                        foreach (var childNodeChildNode in childNode.ChildNodes)
+                        {
+                            hintTypeSyntaxTreeNode.ChildNodes.Add(childNodeChildNode);
+                        }
+
+                        return (
+                            path: hintParts[0].Trim('`'),
+                            type: parseClickHouseType(hintTypeSyntaxTreeNode));
+                    })
                 .ToDictionary(
                     hint => hint.path,
                     hint => hint.type));
