@@ -290,7 +290,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     public override async Task OpenAsync(CancellationToken cancellationToken)
     {
         const string versionQuery = "SELECT version(), timezone() FORMAT TSV";
-        
+
         GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Opening ClickHouse connection to {Endpoint}.", serverUri);
         LoggingHelpers.LogHttpClientConfiguration(GetLogger(ClickHouseLogCategories.Connection), httpClientFactory);
 
@@ -329,7 +329,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
             GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Connection to {Endpoint} opened (ServerVersion: {ServerVersion}).", serverUri, serverVersion);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             state = ConnectionState.Broken;
             GetLogger(ClickHouseLogCategories.Connection)?.LogError("Failed to open ClickHouse connection to {Endpoint}.", serverUri);

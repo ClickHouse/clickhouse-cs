@@ -24,11 +24,11 @@ namespace ClickHouse.Driver.ADO;
 
 public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 {
+    private readonly ILoggerFactory loggerFactory;
     private readonly CancellationTokenSource cts = new CancellationTokenSource();
     private readonly ClickHouseParameterCollection commandParameters = new ClickHouseParameterCollection();
     private Dictionary<string, object> customSettings;
     private ClickHouseConnection connection;
-    private readonly ILoggerFactory loggerFactory;
 
     public ClickHouseCommand()
     {
@@ -207,13 +207,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
             if (isDebugLoggingEnabled)
             {
-                stopwatch.Stop();
-                var effectiveQueryId = QueryId ?? initialQueryId;
-                logger.LogDebug(
-                    "Query (QueryId: {QueryId}) succeeded in {ElapsedMilliseconds:F2} ms. Query Stats: {QueryStats}",
-                    effectiveQueryId,
-                    stopwatch.Elapsed.TotalMilliseconds,
-                    QueryStats);
+                LogQuerySuccess(stopwatch, initialQueryId, logger);
             }
 
             return handled;
@@ -224,6 +218,18 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             activity?.SetException(ex);
             throw;
         }
+    }
+
+    private void LogQuerySuccess(Stopwatch stopwatch, string initialQueryId, ILogger logger)
+    {
+
+        stopwatch.Stop();
+        var effectiveQueryId = QueryId ?? initialQueryId;
+        logger.LogDebug(
+            "Query (QueryId: {QueryId}) succeeded in {ElapsedMilliseconds:F2} ms. Query Stats: {QueryStats}",
+            effectiveQueryId,
+            stopwatch.Elapsed.TotalMilliseconds,
+            QueryStats);
     }
 
     private HttpRequestMessage BuildHttpRequestMessageWithQueryParams(string sqlQuery, ClickHouseUriBuilder uriBuilder)
