@@ -7,6 +7,8 @@ using Microsoft.Extensions.Logging;
 using System.Linq;
 using System.Net.Security;
 using System.Security.Authentication;
+using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.Logging;
@@ -259,6 +261,47 @@ public class HttpClientLoggingTests
         Assert.That(handlerConfigLog.Message, Does.Contain("RemoteCertificateValidationCallback: Null"));
     }
 #endif
+
+    [Test]
+    public void ConnectionOpen_UnknownHandlerType_LogsUnknownHandlerTypeAtDebugLevel()
+    {
+        var factory = new CapturingLoggerFactory();
+
+        // Create a custom handler that is neither HttpClientHandler nor SocketsHttpHandler
+        var customHandler = new CustomMessageHandler();
+        using var httpClient = new HttpClient(customHandler, disposeHandler: true);
+
+        var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder())
+        {
+            HttpClient = httpClient,
+            LoggerFactory = factory,
+        };
+        var connection = new ClickHouseConnection(settings);
+
+        try
+        {
+            connection.Open();
+        }
+        catch
+        {
+            // Ignore connection errors
+        }
+
+        var logger = factory.Loggers[ClickHouseLogCategories.Connection];
+        var unknownHandlerLog = logger.Logs.Find(l =>
+            l.LogLevel == LogLevel.Debug &&
+            l.Message.Contains("Failed to get http client handler"));
+
+        Assert.That(unknownHandlerLog, Is.Not.Null, "Should log error when encountering unknown handler type at Debug level");
+    }
+
+    private class CustomMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
+    }
 
     private class CustomHttpClientFactory : IHttpClientFactory
     {

@@ -2,6 +2,7 @@
 
 using System.Net.Http;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Tests.Logging;
 

@@ -28,14 +28,18 @@ internal static class LoggingHelpers
             "  SslOptions: {SslSettings}");
 
     internal static void HttpClientFactoryConfigured(
-        this ILogger logger, string factoryType) =>
+        this ILogger logger,
+        string factoryType) =>
         LogHttpClientConfig(logger, factoryType, null);
 
     internal static void HttpClientHandlerConfigured(
-        this ILogger logger, string handlerType, string connectionPoolSettings, string timeoutSettings,
-        string automaticDecompression, string sslSettings) =>
-        LogHttpClientHandlerConfig(logger, handlerType, connectionPoolSettings, timeoutSettings,
-            automaticDecompression, sslSettings, null);
+        this ILogger logger,
+        string handlerType,
+        string connectionPoolSettings,
+        string timeoutSettings,
+        string automaticDecompression,
+        string sslSettings) =>
+        LogHttpClientHandlerConfig(logger, handlerType, connectionPoolSettings, timeoutSettings, automaticDecompression, sslSettings, null);
 
     internal static void LogHttpClientConfiguration(ILogger logger, IHttpClientFactory clientFactory)
     {
