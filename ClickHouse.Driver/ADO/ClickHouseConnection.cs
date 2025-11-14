@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
@@ -15,6 +15,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Diagnostic;
 using ClickHouse.Driver.Http;
+using ClickHouse.Driver.Logging;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 
@@ -135,7 +136,9 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         ApplySettings(settings);
     }
 
-    public ILoggerFactory LoggerFactory { get; private set; }
+    internal ILoggerFactory LoggerFactory { get; private set; }
+
+    private ILogger GetLogger(string categoryName) => LoggerFactory?.CreateLogger(categoryName);
 
     /// <summary>
     /// Gets the string defining connection settings for ClickHouse server
@@ -205,10 +208,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         httpClientName = settings.HttpClientName;
 
         // Logging
-        if (settings.LoggerFactory != null)
-        {
-            LoggerFactory = settings.LoggerFactory;
-        }
+        LoggerFactory = settings.LoggerFactory;
 
         ResetHttpClientFactory();
     }
@@ -218,6 +218,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         // If current httpClientFactory is owned by this connection, dispose of it
         if (httpClientFactory is IDisposable d && disposables.Contains(d))
         {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Disposing HTTP client factory owned by connection.");
             d.Dispose();
             disposables.Remove(d);
         }
@@ -225,18 +226,21 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         // If we have a HttpClient provided, use it
         if (providedHttpClient != null)
         {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Using provided HttpClient instance.");
             httpClientFactory = new CannedHttpClientFactory(providedHttpClient);
         }
 
         // If we have a provided client factory, use that
         else if (providedHttpClientFactory != null)
         {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Using provided IHttpClientFactory instance.");
             httpClientFactory = providedHttpClientFactory;
         }
 
         // If sessions are enabled, always use single connection
         else if (Settings.UseSession && !string.IsNullOrEmpty(Settings.SessionId))
         {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Creating single-connection HttpClientFactory for session {SessionId}.", Settings.SessionId);
             var factory = new SingleConnectionHttpClientFactory(SkipServerCertificateValidation) { Timeout = Settings.Timeout };
             disposables.Add(factory);
             httpClientFactory = factory;
@@ -245,6 +249,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         // Default case - use default connection pool
         else
         {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Using default pooled HttpClientFactory.");
             httpClientFactory = new DefaultPoolHttpClientFactory(SkipServerCertificateValidation) { Timeout = Settings.Timeout };
         }
     }
@@ -285,6 +290,9 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     public override async Task OpenAsync(CancellationToken cancellationToken)
     {
         const string versionQuery = "SELECT version(), timezone() FORMAT TSV";
+        
+        GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Opening ClickHouse connection to {Endpoint}.", serverUri);
+        LoggingHelpers.LogHttpClientConfiguration(GetLogger(ClickHouseLogCategories.Connection), httpClientFactory);
 
         if (State == ConnectionState.Open)
             return;
@@ -318,10 +326,13 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             serverTimezone = serverVersionAndTimezone[1];
             SupportedFeatures = ClickHouseFeatureMap.GetFeatureFlags(serverVersion);
             state = ConnectionState.Open;
+
+            GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Connection to {Endpoint} opened (ServerVersion: {ServerVersion}).", serverUri, serverVersion);
         }
         catch (Exception)
         {
             state = ConnectionState.Broken;
+            GetLogger(ClickHouseLogCategories.Connection)?.LogError("Failed to open ClickHouse connection to {Endpoint}.", serverUri);
             throw;
         }
     }
@@ -371,8 +382,26 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         {
             postMessage.Content.Headers.Add("Content-Encoding", "gzip");
         }
-        using var response = await HttpClient.SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
-        await HandleError(response, sql, activity).ConfigureAwait(false);
+
+        GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Sending streamed request to {Endpoint} (Compressed: {Compressed}).", serverUri, isCompressed);
+
+        HttpResponseMessage response = null;
+        try
+        {
+            response = await HttpClient.SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
+            GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Streamed request to {Endpoint} received response {StatusCode}.", serverUri, response.StatusCode);
+
+            await HandleError(response, sql, activity).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            GetLogger(ClickHouseLogCategories.Transport)?.LogError(ex, "Streamed request to {Endpoint} failed.", serverUri);
+            throw;
+        }
+        finally
+        {
+            response?.Dispose();
+        }
     }
 
     public new ClickHouseCommand CreateCommand() => new ClickHouseCommand(this);
