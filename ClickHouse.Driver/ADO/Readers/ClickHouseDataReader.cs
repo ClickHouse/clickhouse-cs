@@ -191,6 +191,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     // Custom extension
     public BigInteger GetBigInteger(int ordinal) => (BigInteger)GetValue(ordinal);
 
+    // Custom extension
+    public virtual TimeSpan GetTimeSpan(int ordinal) => (TimeSpan)GetValue(ordinal);
+
     public override bool Read()
     {
         if (reader.PeekChar() == -1)
