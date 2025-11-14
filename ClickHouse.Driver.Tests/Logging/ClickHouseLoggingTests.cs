@@ -8,7 +8,7 @@ namespace ClickHouse.Driver.Tests.Logging;
 public class ClickHouseLoggingTests
 {
     [Test]
-    public void DataSource_PropagatesLoggerFactoryToConnecction()
+    public void DataSource_PropagatesLoggerFactoryToConnection()
     {
         var factory = new CapturingLoggerFactory();
         using var httpClient = new HttpClient();
