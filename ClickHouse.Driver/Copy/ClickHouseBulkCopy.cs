@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
@@ -8,8 +8,10 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Copy.Serializer;
+using ClickHouse.Driver.Logging;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
+using Microsoft.Extensions.Logging;
 using Microsoft.IO;
 
 namespace ClickHouse.Driver.Copy;
@@ -115,7 +117,16 @@ public class ClickHouseBulkCopy : IDisposable
     {
         if (DestinationTableName is null)
             throw new InvalidOperationException($"{nameof(DestinationTableName)} is null");
+
+        var logger = GetLogger();
+        logger?.LogDebug("Loading metadata for table {Table}.", DestinationTableName);
+
         columnNamesAndTypes = await LoadNamesAndTypesAsync(DestinationTableName, ColumnNames).ConfigureAwait(false);
+
+        if (logger?.IsEnabled(LogLevel.Debug) ?? false)
+        {
+            logger.LogDebug("Metadata loaded for table {Table}. Columns: {Columns}.", DestinationTableName, string.Join(", ", columnNamesAndTypes.names ?? Array.Empty<string>()));
+        }
     }
 
     public Task WriteToServerAsync(IDataReader reader) => WriteToServerAsync(reader, CancellationToken.None);
@@ -144,6 +155,8 @@ public class ClickHouseBulkCopy : IDisposable
         if (rows is null)
             throw new ArgumentNullException(nameof(rows));
 
+        var logger = GetLogger();
+
         if (string.IsNullOrWhiteSpace(DestinationTableName))
             throw new InvalidOperationException("Destination table not set");
 
@@ -152,6 +165,8 @@ public class ClickHouseBulkCopy : IDisposable
             throw new InvalidOperationException("Column names not initialized. Call InitAsync once to load column data");
 
         var query = $"INSERT INTO {DestinationTableName} ({string.Join(", ", columnNames)}) FORMAT {rowBinaryFormat.ToString()}";
+
+        logger?.LogDebug("Starting bulk copy into {Table} with batch size {BatchSize} and degree {Degree}.", DestinationTableName, BatchSize, MaxDegreeOfParallelism);
 
         var tasks = new Task[MaxDegreeOfParallelism];
         for (var i = 0; i < tasks.Length; i++)
@@ -178,6 +193,8 @@ public class ClickHouseBulkCopy : IDisposable
         }
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        logger?.LogDebug("Bulk copy into {Table} completed. Total rows: {Rows}.", DestinationTableName, RowsWritten);
     }
 
     private async Task<(string[] names, ClickHouseType[] types)> LoadNamesAndTypesAsync(string destinationTableName, IReadOnlyCollection<string> columns = null)
@@ -190,19 +207,28 @@ public class ClickHouseBulkCopy : IDisposable
 
     private async Task SendBatchAsync(Batch batch, CancellationToken token)
     {
+        var logger = GetLogger();
+
         using (batch) // Dispose object regardless whether sending succeeds
         {
             using var stream = MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
             // Async serialization
             await Task.Run(() => batchSerializer.Serialize(batch, stream), token).ConfigureAwait(false);
+
             // Seek to beginning as after writing it's at end
             stream.Seek(0, SeekOrigin.Begin);
+
             // Async sending
+            logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, DestinationTableName);
             await connection.PostStreamAsync(null, stream, true, token).ConfigureAwait(false);
+
             // Increase counter
             var batchRowsWritten = Interlocked.Add(ref rowsWritten, batch.Size);
+
             // Raise BatchSent event
             BatchSent?.Invoke(this, new BatchSentEventArgs(batchRowsWritten));
+
+            logger?.LogDebug("Batch sent to {Table}. Total rows written: {TotalRows}.", DestinationTableName, batchRowsWritten);
         }
     }
 
@@ -213,6 +239,11 @@ public class ClickHouseBulkCopy : IDisposable
             connection?.Dispose();
         }
         GC.SuppressFinalize(this);
+    }
+
+    private ILogger GetLogger()
+    {
+        return connection?.LoggerFactory?.CreateLogger(ClickHouseLogCategories.BulkCopy);
     }
 
     private static string GetColumnsExpression(IReadOnlyCollection<string> columns) => columns == null || columns.Count == 0 ? "*" : string.Join(",", columns);

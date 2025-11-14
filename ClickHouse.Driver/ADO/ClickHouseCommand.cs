@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -15,7 +16,9 @@ using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Diagnostic;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Json;
+using ClickHouse.Driver.Logging;
 using ClickHouse.Driver.Utility;
+using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -25,6 +28,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     private readonly ClickHouseParameterCollection commandParameters = new ClickHouseParameterCollection();
     private Dictionary<string, object> customSettings;
     private ClickHouseConnection connection;
+    private readonly ILoggerFactory loggerFactory;
 
     public ClickHouseCommand()
     {
@@ -33,6 +37,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public ClickHouseCommand(ClickHouseConnection connection)
     {
         this.connection = connection;
+        loggerFactory = connection.LoggerFactory;
     }
 
     public override string CommandText { get; set; }
@@ -159,6 +164,16 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     {
         if (connection == null)
             throw new InvalidOperationException("Connection not set");
+        var logger = loggerFactory?.CreateLogger(ClickHouseLogCategories.Command);
+        var initialQueryId = QueryId ?? "(auto)";
+        var isDebugLoggingEnabled = logger?.IsEnabled(LogLevel.Debug) ?? false;
+        Stopwatch stopwatch = null;
+        if (isDebugLoggingEnabled)
+        {
+            stopwatch = Stopwatch.StartNew();
+            logger.LogDebug("Executing SQL query. QueryId: {QueryId}", initialQueryId);
+        }
+
         using var activity = connection.StartActivity("PostSqlQueryAsync");
 
         var uriBuilder = connection.CreateUriBuilder();
@@ -177,14 +192,38 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
         activity.SetQuery(sqlQuery);
 
-        var response = await connection.HttpClient
-            .SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, token)
-            .ConfigureAwait(false);
+        HttpResponseMessage response = null;
+        try
+        {
+            response = await connection.HttpClient
+                .SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, token)
+                .ConfigureAwait(false);
 
-        QueryId = ExtractQueryId(response);
-        QueryStats = ExtractQueryStats(response);
-        activity.SetQueryStats(QueryStats);
-        return await ClickHouseConnection.HandleError(response, sqlQuery, activity).ConfigureAwait(false);
+            QueryId = ExtractQueryId(response);
+            QueryStats = ExtractQueryStats(response);
+            activity.SetQueryStats(QueryStats);
+
+            var handled = await ClickHouseConnection.HandleError(response, sqlQuery, activity).ConfigureAwait(false);
+
+            if (isDebugLoggingEnabled)
+            {
+                stopwatch.Stop();
+                var effectiveQueryId = QueryId ?? initialQueryId;
+                logger.LogDebug(
+                    "Query (QueryId: {QueryId}) succeeded in {ElapsedMilliseconds:F2} ms. Query Stats: {QueryStats}",
+                    effectiveQueryId,
+                    stopwatch.Elapsed.TotalMilliseconds,
+                    QueryStats);
+            }
+
+            return handled;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "Query (QueryId: {QueryId}) failed.", initialQueryId);
+            activity?.SetException(ex);
+            throw;
+        }
     }
 
     private HttpRequestMessage BuildHttpRequestMessageWithQueryParams(string sqlQuery, ClickHouseUriBuilder uriBuilder)
