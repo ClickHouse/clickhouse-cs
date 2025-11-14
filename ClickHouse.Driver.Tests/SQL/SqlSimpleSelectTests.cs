@@ -116,6 +116,7 @@ public class SqlSimpleSelectTests : IDisposable
             .Where(dt => dt.Contains("Int") || dt.Contains("Float"))
             .Where(dt => !dt.Contains("128") || TestUtilities.SupportedFeatures.HasFlag(Feature.WideTypes))
             .Where(dt => !dt.Contains("256") || TestUtilities.SupportedFeatures.HasFlag(Feature.WideTypes))
+            .Where(dt => !dt.StartsWith("Interval"))
             .Select(dt => $"to{dt}(55)")
             .ToArray();
 
@@ -244,7 +245,7 @@ public class SqlSimpleSelectTests : IDisposable
     [TestCaseSource(typeof(SqlSimpleSelectTests), nameof(SimpleSelectTypes))]
     public async Task ShouldExecuteRandomDataSelectQuery(string type)
     {
-        if (type.StartsWith("Nested") || type == "Nothing" || type.StartsWith("Variant") || type.StartsWith("Json"))
+        if (type.StartsWith("Nested") || type == "Nothing" || type.StartsWith("Variant") || type.StartsWith("Json") || type.StartsWith("Interval"))
             Assert.Ignore($"Type {type} not supported by generateRandom");
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT * FROM generateRandom('value {type.Replace("'", "\\'")}', 10, 10, 10) LIMIT 100");

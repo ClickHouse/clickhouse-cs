@@ -1,4 +1,5 @@
-﻿using System.Data;
+﻿using System;
+using System.Data;
 using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Readers;
@@ -198,6 +199,15 @@ public class DataReaderTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync("SELECT * FROM system.numbers LIMIT 100");
         var rows = reader.Cast<IDataRecord>().Select(row => row[0]).ToList();
         Assert.That(rows, Is.EqualTo(Enumerable.Range(0, 100)).AsCollection);
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    public async Task ShouldReadTimeSpanWhenIntervalNanosecond()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync("SELECT toIntervalNanosecond(100) as value");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetTimeSpan(0), Is.EqualTo(TimeSpan.FromTicks(1)));
         ClassicAssert.IsFalse(reader.Read());
     }
 }

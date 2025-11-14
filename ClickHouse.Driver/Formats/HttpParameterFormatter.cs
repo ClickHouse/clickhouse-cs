@@ -48,6 +48,9 @@ internal static class HttpParameterFormatter
             case DateType dt:
                 return Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
+            case IntervalNanosecondType dt:
+                return (((TimeSpan)value).Ticks * IntervalNanosecondType.NanosecondsPerTick).ToString(CultureInfo.InvariantCulture);
+
             case StringType st:
             case FixedStringType tt:
             case Enum8Type e8t:
