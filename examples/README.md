@@ -32,7 +32,7 @@ If something is missing, or you found a mistake in one of these examples, please
 
 ### Troubleshooting
 
-- [Troubleshooting_001_LoggingConfiguration.cs](Core_003_LoggingConfiguration.cs) - Setting up logging with Microsoft.Extensions.Logging to view diagnostic information
+- [Troubleshooting_001_LoggingConfiguration.cs](Troubleshooting_001_LoggingConfiguration.cs) - Setting up logging with Microsoft.Extensions.Logging to view diagnostic information
 
 ## How to run
 
