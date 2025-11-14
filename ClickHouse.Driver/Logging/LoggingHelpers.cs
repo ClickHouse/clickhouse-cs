@@ -91,11 +91,11 @@ internal static class LoggingHelpers
                     socketsHandler.AutomaticDecompression.ToString(),
                     sslSettings);
             }
+#endif
             else
             {
                 logger.LogDebug("Unknown handler type {HandlerType}", handler.GetType().Name);
             }
-#endif
         }
         catch (Exception ex)
         {
