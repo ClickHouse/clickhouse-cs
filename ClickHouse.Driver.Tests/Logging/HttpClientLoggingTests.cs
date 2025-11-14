@@ -290,9 +290,10 @@ public class HttpClientLoggingTests
         var logger = factory.Loggers[ClickHouseLogCategories.Connection];
         var unknownHandlerLog = logger.Logs.Find(l =>
             l.LogLevel == LogLevel.Debug &&
-            l.Message.Contains("Failed to get http client handler"));
+            l.Message.Contains("Unknown handler type") &&
+            l.Message.Contains("CustomMessageHandler"));
 
-        Assert.That(unknownHandlerLog, Is.Not.Null, "Should log error when encountering unknown handler type at Debug level");
+        Assert.That(unknownHandlerLog, Is.Not.Null, "Should log unknown handler type at Debug level");
     }
 
     private class CustomMessageHandler : HttpMessageHandler

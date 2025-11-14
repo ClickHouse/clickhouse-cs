@@ -33,14 +33,6 @@ internal static class HttpClientExtensions
                 return underlyingHandler;
             }
         }
-
-        Debug.Assert(
-            handler is HttpClientHandler || handler is SocketsHttpHandler,
-            $"Expected HttpClientHandler or SocketsHttpHandler but got {handler.GetType().Name}");
-#else
-        Debug.Assert(
-            handler is HttpClientHandler,
-            $"Expected HttpClientHandler but got {handler.GetType().Name}");
 #endif
 
         return handler;
