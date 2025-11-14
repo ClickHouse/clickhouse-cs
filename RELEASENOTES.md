@@ -10,6 +10,8 @@ New Features:
  * The NuGet package is now signed.
  * Enabled strong naming for the library.
  * Added a new way to configure ClickHouseConnection: the ClickHouseClientSettings class. You can initialize it from a connection string by calling ClickHouseClientSettings.FromConnectionString(), or simply by setting its properties.
+ * Added settings validation to prevent incorrect configurations.
+ * Added logging in the library, enable it by passing a LoggerFactory through the settings. Logging level configuration is configured through the factory.
  * Added new AddClickHouseDataSource extension methods that accept ClickHouseClientSettings for strongly-typed configuration in DI scenarios.
  * Added new AddClickHouseDataSource extension method that accepts IHttpClientFactory for better DI integration.
  * AddClickHouseDataSource now automatically injects ILoggerFactory from the service provider when not explicitly provided.

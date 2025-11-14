@@ -529,5 +529,49 @@ public class BulkCopyTests : AbstractConnectionTestFixture
 
         Assert.That(bulkCopy.RowsWritten, Is.EqualTo(2));
     }
+    
+    [Test]
+    public void InitAsync_WithNullDestinationTableName_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder());
+
+        using var connection = new ClickHouseConnection(settings);
+        var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = null,  // Not set
+        };
+
+        // Act & Assert
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await bulkCopy.InitAsync();
+        });
+
+        Assert.That(ex.Message, Does.Contain("DestinationTableName"));
+    }
+
+    [Test]
+    public void WriteToServerAsync_WithNullDestinationTableName_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder());
+
+        using var connection = new ClickHouseConnection(settings);
+        var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = null,  // Not set
+        };
+
+        var rows = new List<object[]> { new object[] { 1, "test" } };
+
+        // Act & Assert
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await bulkCopy.WriteToServerAsync(rows);
+        });
+
+        Assert.That(ex.Message, Does.Contain("Destination table not set"));
+    }
 }
 

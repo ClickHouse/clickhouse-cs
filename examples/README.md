@@ -30,6 +30,10 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Select_002_SelectMetadata.cs](Select_002_SelectMetadata.cs) - Column metadata overview
 - [Select_003_SelectWithParameterBinding.cs](Select_003_SelectWithParameterBinding.cs) - Parameterized queries for safe and dynamic SQL construction
 
+### Troubleshooting
+
+- [Troubleshooting_001_LoggingConfiguration.cs](Troubleshooting_001_LoggingConfiguration.cs) - Setting up logging with Microsoft.Extensions.Logging to view diagnostic information
+
 ## How to run
 
 ### Prerequisites

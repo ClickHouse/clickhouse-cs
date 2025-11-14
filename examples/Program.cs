@@ -62,6 +62,11 @@ class Program
 
             Console.WriteLine($"\n\nRunning: {nameof(SelectWithParameterBinding)}");
             await SelectWithParameterBinding.Run();
+            WaitForUser(isInteractive);
+            
+            Console.WriteLine($"\n\nRunning: {nameof(LoggingConfiguration)}");
+            await LoggingConfiguration.Run();
+            WaitForUser(isInteractive);
 
             Console.WriteLine("\n\n" + new string('=', 70));
             Console.WriteLine("ALL EXAMPLES COMPLETED SUCCESSFULLY!");
