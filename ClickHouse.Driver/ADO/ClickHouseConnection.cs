@@ -332,7 +332,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         catch (Exception ex)
         {
             state = ConnectionState.Broken;
-            GetLogger(ClickHouseLogCategories.Connection)?.LogError("Failed to open ClickHouse connection to {Endpoint}.", serverUri);
+            GetLogger(ClickHouseLogCategories.Connection)?.LogError(ex, "Failed to open ClickHouse connection to {Endpoint}.", serverUri);
             throw;
         }
     }
