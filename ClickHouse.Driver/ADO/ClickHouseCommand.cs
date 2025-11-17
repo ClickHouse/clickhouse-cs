@@ -152,7 +152,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
                 break;
         }
         var result = await PostSqlQueryAsync(sqlBuilder.ToString(), lcts.Token).ConfigureAwait(false);
-        return ClickHouseDataReader.FromHttpResponse(result, connection.TypeSettings);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.TypeSettings).ConfigureAwait(false);
     }
 
     private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token)
@@ -259,11 +259,9 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         try
         {
             const string summaryHeader = "X-ClickHouse-Summary";
-            if (response.Headers.Contains(summaryHeader))
+            if (response.Headers.TryGetValues(summaryHeader, out var values))
             {
-                var value = response.Headers.GetValues(summaryHeader).FirstOrDefault();
-                var jsonDoc = JsonDocument.Parse(value);
-                return JsonSerializer.Deserialize<QueryStats>(value, SummarySerializerOptions);
+                return JsonSerializer.Deserialize<QueryStats>(values.First(), SummarySerializerOptions);
             }
         }
         catch

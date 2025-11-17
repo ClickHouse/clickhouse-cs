@@ -17,19 +17,19 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
 
     public string Database
     {
-        get => GetStringOrDefault("Database", ClickHouseEnvironment.Database);
+        get => GetStringOrDefault("Database", ClickHouseDefaults.Database);
         set => this["Database"] = value;
     }
 
     public string Username
     {
-        get => GetStringOrDefault("Username", ClickHouseEnvironment.Username);
+        get => GetStringOrDefault("Username", ClickHouseDefaults.Username);
         set => this["Username"] = value;
     }
 
     public string Password
     {
-        get => GetStringOrDefault("Password", ClickHouseEnvironment.Password);
+        get => GetStringOrDefault("Password", ClickHouseDefaults.Password);
         set => this["Password"] = value;
     }
 
@@ -120,5 +120,51 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             return @int;
         else
             return @default;
+    }
+
+    /// <summary>
+    /// Converts this connection string builder to a ClickHouseClientSettings object.
+    /// </summary>
+    /// <returns>A ClickHouseClientSettings instance with values from this builder</returns>
+    public ClickHouseClientSettings ToSettings()
+    {
+        return ClickHouseClientSettings.FromConnectionStringBuilder(this);
+    }
+
+    /// <summary>
+    /// Creates a connection string builder from a ClickHouseClientSettings object.
+    /// </summary>
+    /// <param name="settings">The settings to convert</param>
+    /// <returns>A ClickHouseConnectionStringBuilder instance</returns>
+    public static ClickHouseConnectionStringBuilder FromSettings(ClickHouseClientSettings settings)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+
+        var builder = new ClickHouseConnectionStringBuilder
+        {
+            Host = settings.Host,
+            Port = settings.Port,
+            Protocol = settings.Protocol,
+            Database = settings.Database,
+            Username = settings.Username,
+            Password = settings.Password,
+            Path = settings.Path,
+            Compression = settings.UseCompression,
+            UseSession = settings.UseSession,
+            SessionId = settings.SessionId,
+            Timeout = settings.Timeout,
+            UseServerTimezone = settings.UseServerTimezone,
+            UseCustomDecimals = settings.UseCustomDecimals,
+        };
+
+        // Add custom settings with the set_ prefix
+        const string customSettingPrefix = "set_";
+        foreach (var kvp in settings.CustomSettings)
+        {
+            builder[customSettingPrefix + kvp.Key] = kvp.Value;
+        }
+
+        return builder;
     }
 }

@@ -7,6 +7,7 @@ using System.Linq;
 
 namespace ClickHouse.Driver.Tests.ADO;
 
+[Category("Cloud")]
 public class SqlSchemaTests : AbstractConnectionTestFixture
 {
 #if NET5_0_OR_GREATER

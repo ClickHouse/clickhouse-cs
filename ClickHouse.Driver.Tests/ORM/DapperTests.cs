@@ -146,7 +146,7 @@ public class DapperTests : AbstractConnectionTestFixture
         if (expected is DateTime dt)
             expected = dt.AddTicks(-dt.Ticks % TimeSpan.TicksPerSecond);
 
-        Assert.That(row.Single().Value, Is.EqualTo(expected).UsingPropertiesComparer());
+        TestUtilities.AssertEqual(expected, row.Single().Value);
     }
 
     [Test]
@@ -230,5 +230,40 @@ public class DapperTests : AbstractConnectionTestFixture
             Assert.That(actual, Is.InstanceOf<DBNull>());
         else
             Assert.That(actual, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task ShouldInsertWithExceptSyntax()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_except");
+        await connection.ExecuteStatementAsync(@"
+            CREATE TABLE IF NOT EXISTS test.dapper_except (
+                id UInt32,
+                name String,
+                value Float64,
+                created DateTime DEFAULT now(),
+                updated DateTime DEFAULT now()
+            ) ENGINE Memory
+        ");
+
+        // Insert using Dapper with EXCEPT syntax
+        var sql = "INSERT INTO test.dapper_except (* EXCEPT (created, updated)) VALUES (@id, @name, @value)";
+        await connection.ExecuteAsync(sql, new { id = 100, name = "dapper-test", value = 123.45 });
+
+        // Verify the insert worked and defaults were applied
+        var result = await connection.QueryAsync("SELECT * FROM test.dapper_except");
+        var row = result.Single() as IDictionary<string, object>;
+        
+        Assert.That(row, Is.Not.Null);
+        Assert.That(row.Count, Is.EqualTo(5)); // All 5 columns should be present
+        Assert.That(row["id"], Is.EqualTo(100));
+        Assert.That(row["name"], Is.EqualTo("dapper-test"));
+        Assert.That(row["value"], Is.EqualTo(123.45));
+        
+        // Verify default timestamps were set
+        var created = (DateTime)row["created"];
+        var updated = (DateTime)row["updated"];
+        Assert.That(created, Is.GreaterThan(DateTime.UtcNow.AddMinutes(-1)));
+        Assert.That(updated, Is.GreaterThan(DateTime.UtcNow.AddMinutes(-1)));
     }
 }

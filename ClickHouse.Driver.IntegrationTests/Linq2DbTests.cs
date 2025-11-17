@@ -3,6 +3,7 @@ using System.Numerics;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Tests;
 using LinqToDB;
+using LinqToDB.Async;
 using LinqToDB.Data;
 using LinqToDB.DataProvider.ClickHouse;
 
@@ -48,13 +49,13 @@ public class Tests
         ];
     }
 
-    // [Test]
+    [Test]
     public async Task Linq2DbBulkCopy()
     {
         var connectionString = TestUtilities.GetConnectionStringBuilder().ConnectionString;
 
         // Covers: ClickHouseConnection::..ctor(string)
-        await using var db = new DataConnection(new DataOptions().UseClickHouse(ClickHouseProvider.ClickHouseClient, connectionString));
+        await using var db = new DataConnection(new DataOptions().UseClickHouse(connectionString, ClickHouseProvider.ClickHouseDriver));
 
         // cannot use temp table as we need to test WithoutSession option, incompatible with session tables
         var tb = await db.CreateTableAsync<Linq2DbTestTable>();

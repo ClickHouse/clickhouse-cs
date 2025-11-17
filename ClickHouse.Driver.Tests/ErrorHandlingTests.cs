@@ -4,6 +4,7 @@ using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests;
 
+[Category("Cloud")]
 public static class ErrorHandlingTests
 {
     [Test]

@@ -36,13 +36,13 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         CurrentRow = new object[FieldNames.Length];
     }
 
-    internal static ClickHouseDataReader FromHttpResponse(HttpResponseMessage httpResponse, TypeSettings settings)
+    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
     {
         if (httpResponse is null) throw new ArgumentNullException(nameof(httpResponse));
         ExtendedBinaryReader reader = null;
         try
         {
-            var stream = new BufferedStream(httpResponse.Content.ReadAsStreamAsync().GetAwaiter().GetResult(), BufferSize);
+            var stream = new BufferedStream(await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false), BufferSize);
             reader = new ExtendedBinaryReader(stream); // will dispose of stream
             var (names, types) = ReadHeaders(reader, settings);
             return new ClickHouseDataReader(httpResponse, reader, names, types);

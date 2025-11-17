@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -9,7 +9,24 @@ namespace ClickHouse.Driver.Types;
 
 internal class EnumType : ParameterizedType
 {
-    private Dictionary<string, int> values = new Dictionary<string, int>();
+    private readonly Dictionary<string, int> values;
+    private readonly Dictionary<int, string> reverseValues;
+
+    public EnumType()
+    {
+        values = new();
+        reverseValues = new();
+    }
+
+    protected EnumType(Dictionary<string, int> values)
+    {
+        this.values = values;
+        reverseValues = new Dictionary<int, string>(values.Count);
+        foreach (var kvp in values)
+        {
+            reverseValues[kvp.Value] = kvp.Key;
+        }
+    }
 
     public override string Name => "Enum";
 
@@ -22,20 +39,22 @@ internal class EnumType : ParameterizedType
             .Select(p => p.Split('='))
             .ToDictionary(kvp => kvp[0].Trim().Trim('\''), kvp => Convert.ToInt32(kvp[1].Trim(), CultureInfo.InvariantCulture));
 
-        switch (node.Value)
+        string typeName = TypeConverter.ExtractTypeName(node);
+
+        switch (typeName)
         {
             case "Enum":
             case "Enum8":
-                return new Enum8Type { values = parameters };
+                return new Enum8Type(parameters);
             case "Enum16":
-                return new Enum16Type { values = parameters };
+                return new Enum16Type(parameters);
             default: throw new ArgumentOutOfRangeException($"Unsupported Enum type: {node.Value}");
         }
     }
 
     public int Lookup(string key) => values[key];
 
-    public string Lookup(int value) => values.SingleOrDefault(kvp => kvp.Value == value).Key ?? throw new KeyNotFoundException();
+    public string Lookup(int value) => reverseValues.TryGetValue(value, out var key) ? key : throw new KeyNotFoundException($"Enum value {value} not found");
 
     public override string ToString() => $"{Name}({string.Join(",", values.Select(kvp => kvp.Key + "=" + kvp.Value))}";
 

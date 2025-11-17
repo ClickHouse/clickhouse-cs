@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data.Common;
 using System.Linq;
@@ -9,6 +9,7 @@ using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Utility;
 using System.Text.Json.Nodes;
+using NUnit.Framework.Constraints;
 
 namespace ClickHouse.Driver.Tests;
 
@@ -20,7 +21,7 @@ public static class TestUtilities
     static TestUtilities()
     {
         var versionString = Environment.GetEnvironmentVariable("CLICKHOUSE_VERSION");
-        if (versionString is not null and not "latest")
+        if (versionString is not null and not "latest" and not "head")
         {
             ServerVersion = Version.Parse(versionString.Split(':').Last().Trim());
             SupportedFeatures = ClickHouseFeatureMap.GetFeatureFlags(ServerVersion);
@@ -29,6 +30,24 @@ public static class TestUtilities
         {
             SupportedFeatures = Feature.All;
             ServerVersion = null;
+        }
+    }
+    
+    /// <summary>
+    /// Equality assertion with special handling for certain object types
+    /// </summary>
+    /// <param name="expected"></param>
+    /// <param name="result"></param>
+    public static void AssertEqual(object expected, object result)
+    {
+        if (expected is JsonNode)
+        {
+            // Necessary because the ordering of the fields is not guaranteed to be the same
+            Assert.That(result, Is.EqualTo(expected).Using<JsonObject,JsonObject>(JsonNode.DeepEquals));
+        }
+        else
+        {
+            Assert.That(result, Is.EqualTo(expected).UsingPropertiesComparer());
         }
     }
 
@@ -44,12 +63,17 @@ public static class TestUtilities
     /// Utility method to allow to redirect ClickHouse connections to different machine, in case of Windows development environment
     /// </summary>
     /// <returns></returns>
-    public static ClickHouseConnection GetTestClickHouseConnection(bool compression = true, bool session = false, bool customDecimals = true)
+    public static ClickHouseConnection GetTestClickHouseConnection(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false)
     {
         var builder = GetConnectionStringBuilder();
         builder.Compression = compression;
         builder.UseSession = session;
         builder.UseCustomDecimals = customDecimals;
+        
+        if (password is not null)
+        {
+            builder.Password = password;
+        }
         builder["set_session_timeout"] = 1; // Expire sessions quickly after test
         builder["set_allow_experimental_geo_types"] = 1; // Allow support for geo types
         builder["set_flatten_nested"] = 0; // Nested should be a single column, see https://clickhouse.com/docs/en/operations/settings/settings#flatten-nested
@@ -70,7 +94,13 @@ public static class TestUtilities
         {
             builder["set_allow_experimental_dynamic_type"] = 1;
         }
-        var connection = new ClickHouseConnection(builder.ConnectionString);
+
+        var settings = new ClickHouseClientSettings(builder)
+        {
+            UseFormDataParameters = useFormDataParameters
+        };
+        
+        var connection = new ClickHouseConnection(settings);
         connection.Open();
         return connection;
     }
@@ -255,7 +285,7 @@ public static class TestUtilities
                 "{\"val\": 1}",
                 "{\"val\": 1.5}",
                 "{\"val\": [1,2]}",
-                "{ \"nested\": { \"double\": 1.25, \"int\": 123456, \"string\": \"stringValue\" } }",
+                "{ \"nested\": { \"double\": 1.25, \"int\": 123456, \"string\": \"stringValue\", \"int2\": 54321 } }",
                 "{ \"nestedArray\": [{\"val\": 1}, {\"val\": 2}] }",
             };
 

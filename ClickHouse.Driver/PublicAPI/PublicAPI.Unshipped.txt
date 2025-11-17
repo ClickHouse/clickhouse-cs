@@ -1,21 +1,125 @@
-<<<<<<< Updated upstream
-﻿static ClickHouse.Driver.Utility.DictionaryExtensions.SetOrRemove(this System.Collections.Generic.IDictionary<string, string> dictionary, string key, string value) -> void
-ClickHouse.Driver.ADO.Feature.Json = 65536 -> ClickHouse.Driver.ADO.Feature
-=======
-﻿ClickHouse.Driver.ADO.Feature.Json = 65536 -> ClickHouse.Driver.ADO.Feature
->>>>>>> Stashed changes
-static Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouseDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, string connectionString, System.Net.Http.IHttpClientFactory httpClientFactory, string httpClientName = "", Microsoft.Extensions.DependencyInjection.ServiceLifetime connectionLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Transient, Microsoft.Extensions.DependencyInjection.ServiceLifetime dataSourceLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
-static Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouseDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, string connectionString, System.Net.Http.HttpClient httpClient = null, Microsoft.Extensions.DependencyInjection.ServiceLifetime connectionLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Transient, Microsoft.Extensions.DependencyInjection.ServiceLifetime dataSourceLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
-static Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouseDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Func<System.IServiceProvider, object, ClickHouse.Driver.ADO.ClickHouseDataSource> dataSourceFactory, Microsoft.Extensions.DependencyInjection.ServiceLifetime connectionLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Transient, Microsoft.Extensions.DependencyInjection.ServiceLifetime dataSourceLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
-Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions
-ClickHouse.Driver.Types.Grammar.Tokenizer
-ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.Value.set -> void
-ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.Value.get -> string
-ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.SyntaxTreeNode() -> void
-ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.SingleChild.get -> ClickHouse.Driver.Types.Grammar.SyntaxTreeNode
-ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.ChildNodes.get -> System.Collections.Generic.IList<ClickHouse.Driver.Types.Grammar.SyntaxTreeNode>
-ClickHouse.Driver.Types.Grammar.SyntaxTreeNode
-ClickHouse.Driver.Types.Grammar.Parser
-ClickHouse.Driver.Types.DateTimeConversions
-ClickHouse.Driver.ADO.ClickHouseConnection.PostStreamAsync(string sql, System.IO.Stream data, bool isCompressed, System.Threading.CancellationToken token) -> System.Threading.Tasks.Task
+ClickHouse.Driver.ADO.ClickHouseClientSettings
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings() -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(ClickHouse.Driver.ADO.ClickHouseClientSettings other) -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder builder) -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(string connectionString) -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CustomSettings.get -> System.Collections.Generic.IDictionary<string, object>
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CustomSettings.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Database.get -> string
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Database.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Equals(ClickHouse.Driver.ADO.ClickHouseClientSettings other) -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Host.get -> string
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Host.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.HttpClient.get -> System.Net.Http.HttpClient
+ClickHouse.Driver.ADO.ClickHouseClientSettings.HttpClient.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.HttpClientFactory.get -> System.Net.Http.IHttpClientFactory
+ClickHouse.Driver.ADO.ClickHouseClientSettings.HttpClientFactory.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.HttpClientName.get -> string
+ClickHouse.Driver.ADO.ClickHouseClientSettings.HttpClientName.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory
+ClickHouse.Driver.ADO.ClickHouseClientSettings.LoggerFactory.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Password.get -> string
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Password.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Path.get -> string
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Path.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Port.get -> ushort
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Port.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Protocol.get -> string
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Protocol.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.SessionId.get -> string
+ClickHouse.Driver.ADO.ClickHouseClientSettings.SessionId.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.SkipServerCertificateValidation.get -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.SkipServerCertificateValidation.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Timeout.get -> System.TimeSpan
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Timeout.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseCompression.get -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseCompression.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseCustomDecimals.get -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseCustomDecimals.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseFormDataParameters.get -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseFormDataParameters.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Username.get -> string
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Username.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseServerTimezone.get -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseServerTimezone.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseSession.get -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.UseSession.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Validate() -> void
+ClickHouse.Driver.ADO.ClickHouseConnection.ClickHouseConnection(ClickHouse.Driver.ADO.ClickHouseClientSettings settings) -> void
+ClickHouse.Driver.ADO.ClickHouseConnection.ClickHouseConnection(string connectionString, bool skipServerCertificateValidation) -> void
+ClickHouse.Driver.ADO.ClickHouseConnection.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory
 ClickHouse.Driver.ADO.ClickHouseConnection.PostStreamAsync(string sql, System.Func<System.IO.Stream, System.Threading.CancellationToken, System.Threading.Tasks.Task> callback, bool isCompressed, System.Threading.CancellationToken token) -> System.Threading.Tasks.Task
+ClickHouse.Driver.ADO.ClickHouseConnection.PostStreamAsync(string sql, System.IO.Stream data, bool isCompressed, System.Threading.CancellationToken token) -> System.Threading.Tasks.Task
+ClickHouse.Driver.ADO.ClickHouseConnection.Settings.get -> ClickHouse.Driver.ADO.ClickHouseClientSettings
+ClickHouse.Driver.ADO.ClickHouseConnection.SkipServerCertificateValidation.get -> bool
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.ToSettings() -> ClickHouse.Driver.ADO.ClickHouseClientSettings
+ClickHouse.Driver.ADO.ClickHouseDataSource.ClickHouseDataSource(ClickHouse.Driver.ADO.ClickHouseClientSettings settings) -> void
+ClickHouse.Driver.ADO.ClickHouseDataSource.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory
+ClickHouse.Driver.ADO.ClickHouseDataSource.LoggerFactory.set -> void
+ClickHouse.Driver.ADO.ClickHouseDataSource.Settings.get -> ClickHouse.Driver.ADO.ClickHouseClientSettings
+ClickHouse.Driver.ADO.ClickHouseDefaults
+ClickHouse.Driver.ADO.Feature.AsyncInsert = 128 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.Bool = 4 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.Date32 = 8 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.Dynamic = 2048 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.Geo = 32 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.Json = 1024 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.Map = 2 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.ParamsInMultipartFormData = 512 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.Stats = 64 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.UUIDParameters = 1 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.Variant = 256 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.Feature.WideTypes = 16 -> ClickHouse.Driver.ADO.Feature
+ClickHouse.Driver.ADO.QueryStats.Deconstruct(out long ReadRows, out long ReadBytes, out long WrittenRows, out long WrittenBytes, out long TotalRowsToRead, out long ResultRows, out long ResultBytes, out long ElapsedNs) -> void
+ClickHouse.Driver.ADO.QueryStats.QueryStats(ClickHouse.Driver.ADO.QueryStats original) -> void
+ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.get -> Microsoft.IO.RecyclableMemoryStreamManager
+ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.init -> void
+ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions
+ClickHouse.Driver.Types.DateTimeConversions
+ClickHouse.Driver.Types.Grammar.Parser
+ClickHouse.Driver.Types.Grammar.SyntaxTreeNode
+ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.ChildNodes.get -> System.Collections.Generic.IList<ClickHouse.Driver.Types.Grammar.SyntaxTreeNode>
+ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.SingleChild.get -> ClickHouse.Driver.Types.Grammar.SyntaxTreeNode
+ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.SyntaxTreeNode() -> void
+ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.Value.get -> string
+ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.Value.set -> void
+ClickHouse.Driver.Types.Grammar.Tokenizer
+const ClickHouse.Driver.ADO.ClickHouseDefaults.Compression = true -> bool
+const ClickHouse.Driver.ADO.ClickHouseDefaults.Database = "" -> string
+const ClickHouse.Driver.ADO.ClickHouseDefaults.Host = "localhost" -> string
+const ClickHouse.Driver.ADO.ClickHouseDefaults.HttpPort = 8123 -> ushort
+const ClickHouse.Driver.ADO.ClickHouseDefaults.HttpsPort = 8443 -> ushort
+const ClickHouse.Driver.ADO.ClickHouseDefaults.Password = "" -> string
+const ClickHouse.Driver.ADO.ClickHouseDefaults.Path = null -> string
+const ClickHouse.Driver.ADO.ClickHouseDefaults.Protocol = "http" -> string
+const ClickHouse.Driver.ADO.ClickHouseDefaults.SkipServerCertificateValidation = false -> bool
+const ClickHouse.Driver.ADO.ClickHouseDefaults.UseCustomDecimals = true -> bool
+const ClickHouse.Driver.ADO.ClickHouseDefaults.UseFormDataParameters = false -> bool
+const ClickHouse.Driver.ADO.ClickHouseDefaults.Username = "default" -> string
+const ClickHouse.Driver.ADO.ClickHouseDefaults.UseServerTimezone = true -> bool
+const ClickHouse.Driver.ADO.ClickHouseDefaults.UseSession = false -> bool
+const ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.ActivitySourceName = "ClickHouse.Driver" -> string
+Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions
+override ClickHouse.Driver.ADO.ClickHouseClientSettings.Equals(object obj) -> bool
+override ClickHouse.Driver.ADO.ClickHouseClientSettings.GetHashCode() -> int
+override ClickHouse.Driver.ADO.ClickHouseClientSettings.ToString() -> string
+override ClickHouse.Driver.ADO.QueryStats.Equals(object obj) -> bool
+override ClickHouse.Driver.ADO.QueryStats.GetHashCode() -> int
+override ClickHouse.Driver.ADO.QueryStats.ToString() -> string
+static ClickHouse.Driver.ADO.ClickHouseClientSettings.operator !=(ClickHouse.Driver.ADO.ClickHouseClientSettings left, ClickHouse.Driver.ADO.ClickHouseClientSettings right) -> bool
+static ClickHouse.Driver.ADO.ClickHouseClientSettings.operator ==(ClickHouse.Driver.ADO.ClickHouseClientSettings left, ClickHouse.Driver.ADO.ClickHouseClientSettings right) -> bool
+static ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.FromSettings(ClickHouse.Driver.ADO.ClickHouseClientSettings settings) -> ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder
+static ClickHouse.Driver.ADO.QueryStats.operator !=(ClickHouse.Driver.ADO.QueryStats left, ClickHouse.Driver.ADO.QueryStats right) -> bool
+static ClickHouse.Driver.ADO.QueryStats.operator ==(ClickHouse.Driver.ADO.QueryStats left, ClickHouse.Driver.ADO.QueryStats right) -> bool
+static ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.IncludeSqlInActivityTags.get -> bool
+static ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.IncludeSqlInActivityTags.set -> void
+static ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.StatementMaxLength.get -> int
+static ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.StatementMaxLength.set -> void
+static ClickHouse.Driver.Utility.DictionaryExtensions.SetOrRemove(this System.Collections.Generic.IDictionary<string, string> dictionary, string key, string value) -> void
+static Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouseDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, ClickHouse.Driver.ADO.ClickHouseClientSettings settings, Microsoft.Extensions.DependencyInjection.ServiceLifetime connectionLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Transient, Microsoft.Extensions.DependencyInjection.ServiceLifetime dataSourceLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
+static Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouseDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Func<System.IServiceProvider, ClickHouse.Driver.ADO.ClickHouseClientSettings> settingsFactory, Microsoft.Extensions.DependencyInjection.ServiceLifetime connectionLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Transient, Microsoft.Extensions.DependencyInjection.ServiceLifetime dataSourceLifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
+static readonly ClickHouse.Driver.ADO.ClickHouseDefaults.Timeout -> System.TimeSpan
+virtual ClickHouse.Driver.ADO.QueryStats.<Clone>$() -> ClickHouse.Driver.ADO.QueryStats
+virtual ClickHouse.Driver.ADO.QueryStats.EqualityContract.get -> System.Type
+virtual ClickHouse.Driver.ADO.QueryStats.Equals(ClickHouse.Driver.ADO.QueryStats other) -> bool
+virtual ClickHouse.Driver.ADO.QueryStats.PrintMembers(System.Text.StringBuilder builder) -> bool

@@ -14,7 +14,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldSelectDataWithComplexHintedJsonType()
     {
-        var targetTable = "test.aggregate_test";
+        var targetTable = "test.select_data_complex_hinted_json";
 
         await connection.ExecuteStatementAsync(
             $@"

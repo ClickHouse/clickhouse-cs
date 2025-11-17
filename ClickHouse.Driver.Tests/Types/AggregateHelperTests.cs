@@ -11,7 +11,7 @@ public class AggregateHelperTests : AbstractConnectionTestFixture
     {
         var targetTable = "test.aggregate_test";
 
-        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value AggregateFunction(uniq, UInt8)) ENGINE Memory");
         await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} SELECT uniqState(1)");
 

@@ -36,15 +36,13 @@ jobs:
           ${{ runner.os }}-nuget-
 
     - name: Setup .NET Core
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v5
       with:
         dotnet-version: |
-          6.x
-          8.x
-          9.x
+          10.x
 
     - name: Run
-      run: dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj --framework net9.0 --configuration Release -- --join --filter "*" --artifacts . --job Short
+      run: dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj --framework net10.0 --configuration Release -- --join --filter "*" --artifacts . --job Short
       env:
         CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
 

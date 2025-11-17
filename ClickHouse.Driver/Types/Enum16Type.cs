@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Globalization;
 using ClickHouse.Driver.Formats;
 
@@ -6,6 +7,11 @@ namespace ClickHouse.Driver.Types;
 
 internal class Enum16Type : EnumType
 {
+    public Enum16Type() { }
+
+    public Enum16Type(Dictionary<string, int> values)
+        : base(values) { }
+
     public override string Name => "Enum16";
 
     public override string ToString() => "Enum16";

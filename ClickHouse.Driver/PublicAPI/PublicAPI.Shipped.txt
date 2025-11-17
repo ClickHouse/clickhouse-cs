@@ -17,10 +17,7 @@ ClickHouse.Driver.ADO.ClickHouseConnection.ClickHouseConnection(string connectio
 ClickHouse.Driver.ADO.ClickHouseConnection.Clone() -> object
 ClickHouse.Driver.ADO.ClickHouseConnection.CreateCommand() -> ClickHouse.Driver.ADO.ClickHouseCommand
 ClickHouse.Driver.ADO.ClickHouseConnection.CustomSettings.get -> System.Collections.Generic.IDictionary<string, object>
-ClickHouse.Driver.ADO.ClickHouseConnection.Logger.get -> Microsoft.Extensions.Logging.ILogger
-ClickHouse.Driver.ADO.ClickHouseConnection.Logger.set -> void
 ClickHouse.Driver.ADO.ClickHouseConnection.ServerTimezone.get -> string
-ClickHouse.Driver.ADO.ClickHouseConnection.SetFormDataParameters(bool sendParametersAsFormData) -> void
 ClickHouse.Driver.ADO.ClickHouseConnection.UseCompression.get -> bool
 ClickHouse.Driver.ADO.ClickHouseConnection.UseFormDataParameters.get -> bool
 ClickHouse.Driver.ADO.ClickHouseConnectionFactory
@@ -188,7 +185,6 @@ ClickHouse.Driver.Utility.DataReaderExtensions
 ClickHouse.Driver.Utility.DictionaryExtensions
 ClickHouse.Driver.Utility.EnumerableExtensions
 ClickHouse.Driver.Utility.MathUtils
-ClickHouse.Driver.Utility.NameValueCollectionExtensions
 ClickHouse.Driver.Utility.StringExtensions
 override ClickHouse.Driver.ADO.ClickHouseCommand.Cancel() -> void
 override ClickHouse.Driver.ADO.ClickHouseCommand.CommandText.get -> string
@@ -352,8 +348,7 @@ static readonly ClickHouse.Driver.Constraints.DBDefault.Value -> ClickHouse.Driv
 static readonly ClickHouse.Driver.Types.DateTimeConversions.DateTimeEpochStart -> System.DateTime
 virtual ClickHouse.Driver.ADO.ClickHouseConnection.SupportedFeatures.get -> ClickHouse.Driver.ADO.Feature
 virtual ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetDateTimeOffset(int ordinal) -> System.DateTimeOffset
-﻿ClickHouse.Driver.ADO.Adapters.ClickHouseDataAdapter
+ClickHouse.Driver.ADO.Adapters.ClickHouseDataAdapter
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.BatchSent -> System.EventHandler<ClickHouse.Driver.Copy.ClickHouseBulkCopy.BatchSentEventArgs>
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.BatchSentEventArgs
-ClickHouse.Driver.Copy.ClickHouseBulkCopy.BatchSentEventArgs.BatchSentEventArgs(long rowsWritten) -> void
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.BatchSentEventArgs.RowsWritten.get -> long

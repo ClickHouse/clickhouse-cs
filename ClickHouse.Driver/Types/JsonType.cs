@@ -51,7 +51,7 @@ internal class JsonType : ParameterizedType
             {
                 if (current.ContainsKey(part))
                 {
-                    current = (JsonObject) current[part];
+                    current = (JsonObject)current[part];
                 }
                 else
                 {
@@ -107,7 +107,6 @@ internal class JsonType : ParameterizedType
         {
             rootObject = (JsonObject)JsonSerializer.SerializeToNode(value);
         }
-
 
         // Simple depth-first search to flatten the JSON object into a dictionary
         WriteJsonObject(writer, rootObject);
