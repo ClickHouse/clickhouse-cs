@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text;
@@ -19,33 +21,49 @@ internal static class UserAgentProvider
     {
         public CachedUserAgentInfo()
         {
-            // Get assembly version
-            string versionAndHash = Assembly
-                .GetExecutingAssembly()
-                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-                .InformationalVersion ?? "unknown";
-            var version = versionAndHash.Split('+')[0];
+            try
+            {
+                // Get assembly version
+                string versionAndHash = Assembly
+                    .GetExecutingAssembly()
+                    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                    .InformationalVersion ?? "unknown";
+                var version = versionAndHash.Split('+')[0];
+                DriverProductInfo = new ProductInfoHeaderValue("ClickHouse.Driver", version);
 
-            // Get OS information
-            var osPlatform = Environment.OSVersion.Platform.ToString();
-            var osDescription = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
-            var architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString();
+                // Get OS information
+                var osPlatform = Environment.OSVersion.Platform.ToString();
+                var osDescription = ContainsNonAscii(System.Runtime.InteropServices.RuntimeInformation.OSDescription) // Some OSs have weird characters in here, which are not allowed in headers!
+                    ? WebUtility.UrlEncode(System.Runtime.InteropServices.RuntimeInformation.OSDescription)
+                    : System.Runtime.InteropServices.RuntimeInformation.OSDescription;
+                var architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString();
 
-            // Get runtime information
-            var runtime = Environment.Version.ToString();
+                // Get runtime information
+                var runtime = Environment.Version.ToString();
 
-            // Pre-build ProductInfoHeaderValue objects
-            DriverProductInfo = new ProductInfoHeaderValue("ClickHouse.Driver", version);
-            SystemProductInfo = new ProductInfoHeaderValue($"(platform:{osPlatform}; os:{osDescription}; runtime:{runtime}; arch:{architecture})");
+                // Pre-build ProductInfoHeaderValue objects
+                SystemProductInfo = new ProductInfoHeaderValue($"(platform:{osPlatform}; os:{osDescription}; runtime:{runtime}; arch:{architecture})");
+            }
+            catch
+            {
+                // If anything fails during initialization, create fallback values
+                DriverProductInfo ??= new ProductInfoHeaderValue("ClickHouse.Driver", "unknown");
+                SystemProductInfo = new ProductInfoHeaderValue("(platform:unknown; os:unknown; runtime:unknown; arch:unknown)");
+            }
+        }
+
+        private static bool ContainsNonAscii(string value)
+        {
+            return value.Any(c => (int)c > 0x7f);
         }
 
         /// <summary>
-        /// Gets the driver ProductInfoHeaderValue (e.g., "ClickHouse.Driver/1.0.0")
+        /// Gets the driver ProductInfoHeaderValue (e.g., "ClickHouse.Driver/1.0.0").
         /// </summary>
         public ProductInfoHeaderValue DriverProductInfo { get; }
 
         /// <summary>
-        /// Gets the system ProductInfoHeaderValue with platform, OS, runtime, and architecture information
+        /// Gets the system ProductInfoHeaderValue with platform, OS, runtime, and architecture information.
         /// </summary>
         public ProductInfoHeaderValue SystemProductInfo { get; }
     }
