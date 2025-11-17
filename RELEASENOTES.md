@@ -15,6 +15,7 @@ New Features:
  * Added new AddClickHouseDataSource extension methods that accept ClickHouseClientSettings for strongly-typed configuration in DI scenarios.
  * Added new AddClickHouseDataSource extension method that accepts IHttpClientFactory for better DI integration.
  * AddClickHouseDataSource now automatically injects ILoggerFactory from the service provider when not explicitly provided.
+ * Added EnableDebugMode setting to ClickHouseClientSettings for low-level .NET network tracing (.NET 5+). When enabled, traces System.Net events (HTTP, Sockets, DNS, TLS) to help diagnose network issues. Requires ILoggerFactory with Trace-level logging enabled. WARNING: Significant performance impact - not recommended for production use.
  * Optimized response header parsing.
  * Added list type conversion, so List<T> can now be passed to the library (converts to Array() in ClickHouse). Thanks to @jorgeparavicini.
  * Improvements to ActivitySource for tracing: stopped adding tags when it was not necessary, and made it configurable through ClickHouseDiagnosticsOptions.

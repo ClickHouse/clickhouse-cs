@@ -225,6 +225,14 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         // Logging
         loggerFactory = settings.LoggerFactory;
 
+#if NET5_0_OR_GREATER
+        // Debug mode
+        if (settings.EnableDebugMode)
+        {
+            TraceHelper.Activate(settings.LoggerFactory);
+        }
+#endif
+
         ResetHttpClientFactory();
     }
 
