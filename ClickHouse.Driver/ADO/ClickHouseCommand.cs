@@ -181,7 +181,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             .SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, token)
             .ConfigureAwait(false);
 
-        QueryId = ExtractQueryId(response);
+        QueryId = ClickHouseConnection.ExtractQueryId(response);
         QueryStats = ExtractQueryStats(response);
         activity.SetQueryStats(QueryStats);
         return await ClickHouseConnection.HandleError(response, sqlQuery, activity).ConfigureAwait(false);
@@ -268,14 +268,5 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         {
         }
         return null;
-    }
-
-    private static string ExtractQueryId(HttpResponseMessage response)
-    {
-        const string queryIdHeader = "X-ClickHouse-Query-Id";
-        if (response.Headers.Contains(queryIdHeader))
-            return response.Headers.GetValues(queryIdHeader).FirstOrDefault();
-        else
-            return null;
     }
 }

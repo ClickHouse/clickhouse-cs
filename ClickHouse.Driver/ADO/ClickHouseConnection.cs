@@ -262,6 +262,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             activity.SetSuccess();
             return response;
         }
+
         var error = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
         var ex = ClickHouseServerException.FromServerResponse(error, query);
         activity.SetException(ex);
@@ -434,6 +435,15 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
             headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("deflate"));
         }
+    }
+
+    internal static string ExtractQueryId(HttpResponseMessage response)
+    {
+        const string queryIdHeader = "X-ClickHouse-Query-Id";
+        if (response.Headers.Contains(queryIdHeader))
+            return response.Headers.GetValues(queryIdHeader).FirstOrDefault();
+        else
+            return null;
     }
 
     internal ClickHouseConnectionStringBuilder ConnectionStringBuilder => ClickHouseConnectionStringBuilder.FromSettings(Settings);

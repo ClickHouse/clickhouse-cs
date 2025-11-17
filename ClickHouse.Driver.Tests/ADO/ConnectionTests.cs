@@ -119,14 +119,14 @@ public class ConnectionTests : AbstractConnectionTestFixture
         await command.ExecuteScalarAsync();
         Assert.That(command.QueryId, Is.EqualTo(queryId));
     }
-    
+
     [Test]
     public async Task ClientShouldSetUserAgent()
     {
         var headers = new HttpRequestMessage().Headers;
         connection.AddDefaultHttpHeaders(headers);
         // Build assembly version defaults to 1.0.0
-        Assert.That( headers.UserAgent.ToString().Contains("ClickHouse.Driver/1.0.0"), Is.True);
+        Assert.That(headers.UserAgent.ToString().Contains("ClickHouse.Driver/1.0.0"), Is.True);
     }
 
     [Test]
@@ -250,6 +250,15 @@ public class ConnectionTests : AbstractConnectionTestFixture
         }, false, CancellationToken.None);
     }
 
+    [Test]
+    public async Task ShouldUseQueryIdForRawStream()
+    {
+        var queryId = Guid.NewGuid().ToString();
+        var httpResponseMessage = await connection.PostStreamAsync("SELECT version()", (_, _) => Task.CompletedTask, false, CancellationToken.None, queryId);
+        
+        Assert.That(ClickHouseConnection.ExtractQueryId(httpResponseMessage), Is.EqualTo(queryId));
+    }
+
     private static string[] GetColumnNames(DataTable table) => table.Columns.Cast<DataColumn>().Select(dc => dc.ColumnName).ToArray();
 
     [Test]
@@ -369,10 +378,10 @@ public class ConnectionTests : AbstractConnectionTestFixture
         };
 
         using var conn = new ClickHouseConnection(settings);
-        
+
         // Open connection - should use the provided HttpClient
         await conn.OpenAsync();
-        
+
         mockHttpClient.Received().SendAsync(Arg.Any<HttpRequestMessage>(), Arg.Any<CancellationToken>());
 
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
