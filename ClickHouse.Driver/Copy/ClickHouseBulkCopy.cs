@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -166,7 +167,13 @@ public class ClickHouseBulkCopy : IDisposable
 
         var query = $"INSERT INTO {DestinationTableName} ({string.Join(", ", columnNames)}) FORMAT {rowBinaryFormat.ToString()}";
 
-        logger?.LogDebug("Starting bulk copy into {Table} with batch size {BatchSize} and degree {Degree}.", DestinationTableName, BatchSize, MaxDegreeOfParallelism);
+        var isDebugLoggingEnabled = logger?.IsEnabled(LogLevel.Debug) ?? false;
+        Stopwatch stopwatch = null;
+        if (isDebugLoggingEnabled)
+        {
+            stopwatch = Stopwatch.StartNew();
+            logger.LogDebug("Starting bulk copy into {Table} with batch size {BatchSize} and degree {Degree}.", DestinationTableName, BatchSize, MaxDegreeOfParallelism);
+        }
 
         var tasks = new Task[MaxDegreeOfParallelism];
         for (var i = 0; i < tasks.Length; i++)
@@ -194,7 +201,11 @@ public class ClickHouseBulkCopy : IDisposable
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
 
-        logger?.LogDebug("Bulk copy into {Table} completed. Total rows: {Rows}.", DestinationTableName, RowsWritten);
+        if (isDebugLoggingEnabled)
+        {
+            stopwatch.Stop();
+            logger.LogDebug("Bulk copy into {Table} completed in {ElapsedMilliseconds:F2} ms. Total rows: {Rows}.", DestinationTableName, stopwatch.Elapsed.TotalMilliseconds, RowsWritten);
+        }
     }
 
     private async Task<(string[] names, ClickHouseType[] types)> LoadNamesAndTypesAsync(string destinationTableName, IReadOnlyCollection<string> columns = null)
