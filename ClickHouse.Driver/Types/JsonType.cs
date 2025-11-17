@@ -14,6 +14,13 @@ namespace ClickHouse.Driver.Types;
 
 internal class JsonType : ParameterizedType
 {
+    private readonly string[] jsonSettingNames =
+    [
+        "max_dynamic_paths",
+        "max_dynamic_types",
+        "skip "
+    ];
+
     public override Type FrameworkType => typeof(JsonObject);
 
     public override string Name => "Json";
@@ -73,10 +80,7 @@ internal class JsonType : ParameterizedType
         TypeSettings settings) =>
         new JsonType(
             node.ChildNodes
-                .Where(
-                    childNode =>
-                        !childNode.Value.StartsWith("max_dynamic_", StringComparison.OrdinalIgnoreCase) && 
-                        !childNode.Value.StartsWith("SKIP", StringComparison.OrdinalIgnoreCase))
+                .Where(childNode => !jsonSettingNames.Any(jsonSettingName => childNode.Value.StartsWith(jsonSettingName,  StringComparison.OrdinalIgnoreCase)))
                 .Select(
                     childNode =>
                     {
