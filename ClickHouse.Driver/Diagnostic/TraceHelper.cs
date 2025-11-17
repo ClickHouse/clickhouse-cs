@@ -8,9 +8,9 @@ namespace ClickHouse.Driver.Diagnostic;
 /// <summary>
 /// Helper class for enabling low-level .NET network tracing via EventSource (.NET 5+).
 /// This class uses a singleton EventListener to monitor System.Net events including HTTP, Sockets, DNS, and TLS.
-/// WARNING: Enabling network tracing can significantly impact performance and generate large amounts of log data.
+/// WARNING: Enabling network tracing can significantly impact performance and generate very large amounts of log data.
 /// Only use for debugging purposes - not recommended for production environments.
-/// Requires the ILogger to be configured with Trace-level logging enabled to see output.
+/// Requires the logger to be configured with Trace-level logging enabled to see output.
 /// </summary>
 public static class TraceHelper
 {
@@ -45,7 +45,7 @@ public static class TraceHelper
     {
         lock (ListenerLock)
         {
-            listener.Dispose();
+            listener?.Dispose();
             listener = null;
         }
     }

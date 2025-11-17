@@ -33,6 +33,7 @@ If something is missing, or you found a mistake in one of these examples, please
 ### Troubleshooting
 
 - [Troubleshooting_001_LoggingConfiguration.cs](Troubleshooting_001_LoggingConfiguration.cs) - Setting up logging with Microsoft.Extensions.Logging to view diagnostic information
+- [Troubleshooting_002_NetworkTracing.cs](Troubleshooting_002_NetworkTracing.cs) - Enabling low-level .NET network tracing for debugging connection issues (HTTP, Sockets, DNS, TLS)
 
 ## How to run
 
