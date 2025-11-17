@@ -336,10 +336,10 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <param name="token">Cancellation token</param>
     /// <param name="queryId">Query id</param>
     /// <returns>Task-wrapped HttpResponseMessage object</returns>
-    public async Task PostStreamAsync(string sql, Stream data, bool isCompressed, CancellationToken token, string queryId = null)
+    public async Task<HttpResponseMessage> PostStreamAsync(string sql, Stream data, bool isCompressed, CancellationToken token, string queryId = null)
     {
         var content = new StreamContent(data);
-        await PostStreamAsync(sql, content, isCompressed, queryId, token).ConfigureAwait(false);
+        return await PostStreamAsync(sql, content, isCompressed, queryId, token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -352,13 +352,13 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <param name="token">Cancellation token</param>
     /// <param name="queryId">Query id</param>
     /// <returns>Task-wrapped HttpResponseMessage object</returns>
-    public async Task PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, bool isCompressed, CancellationToken token, string queryId = null)
+    public async Task<HttpResponseMessage> PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, bool isCompressed, CancellationToken token, string queryId = null)
     {
         var content = new StreamCallbackContent(callback, token);
-        await PostStreamAsync(sql, content, isCompressed, queryId, token).ConfigureAwait(false);
+        return await PostStreamAsync(sql, content, isCompressed, queryId, token).ConfigureAwait(false);
     }
 
-    private async Task PostStreamAsync(string sql, HttpContent content, bool isCompressed, string queryId, CancellationToken token)
+    private async Task<HttpResponseMessage> PostStreamAsync(string sql, HttpContent content, bool isCompressed, string queryId, CancellationToken token)
     {
         using var activity = this.StartActivity("PostStreamAsync");
         activity.SetQuery(sql);
@@ -376,7 +376,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             postMessage.Content.Headers.Add("Content-Encoding", "gzip");
         }
         using var response = await HttpClient.SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
-        await HandleError(response, sql, activity).ConfigureAwait(false);
+        return await HandleError(response, sql, activity).ConfigureAwait(false);
     }
 
     public new ClickHouseCommand CreateCommand() => new ClickHouseCommand(this);
