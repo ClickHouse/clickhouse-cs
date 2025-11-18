@@ -21,7 +21,7 @@ public class ClickHouseLoggingTests
         try
         {
             using var connection = dataSource.CreateConnection();
-            Assert.That(connection.LoggerFactory, Is.SameAs(factory));
+            Assert.That(connection.GetLogger("test"), Is.Not.Null);
         }
         finally
         {

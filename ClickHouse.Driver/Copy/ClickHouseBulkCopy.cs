@@ -119,7 +119,7 @@ public class ClickHouseBulkCopy : IDisposable
         if (DestinationTableName is null)
             throw new InvalidOperationException($"{nameof(DestinationTableName)} is null");
 
-        var logger = GetLogger();
+        var logger = connection.GetLogger(ClickHouseLogCategories.BulkCopy);
         logger?.LogDebug("Loading metadata for table {Table}.", DestinationTableName);
 
         columnNamesAndTypes = await LoadNamesAndTypesAsync(DestinationTableName, ColumnNames).ConfigureAwait(false);
@@ -156,7 +156,7 @@ public class ClickHouseBulkCopy : IDisposable
         if (rows is null)
             throw new ArgumentNullException(nameof(rows));
 
-        var logger = GetLogger();
+        var logger = connection.GetLogger(ClickHouseLogCategories.BulkCopy);
 
         if (string.IsNullOrWhiteSpace(DestinationTableName))
             throw new InvalidOperationException("Destination table not set");
@@ -218,7 +218,7 @@ public class ClickHouseBulkCopy : IDisposable
 
     private async Task SendBatchAsync(Batch batch, CancellationToken token)
     {
-        var logger = GetLogger();
+        var logger = connection.GetLogger(ClickHouseLogCategories.BulkCopy);
 
         using (batch) // Dispose object regardless whether sending succeeds
         {
@@ -250,11 +250,6 @@ public class ClickHouseBulkCopy : IDisposable
             connection?.Dispose();
         }
         GC.SuppressFinalize(this);
-    }
-
-    private ILogger GetLogger()
-    {
-        return connection?.LoggerFactory?.CreateLogger(ClickHouseLogCategories.BulkCopy);
     }
 
     private static string GetColumnsExpression(IReadOnlyCollection<string> columns) => columns == null || columns.Count == 0 ? "*" : string.Join(",", columns);

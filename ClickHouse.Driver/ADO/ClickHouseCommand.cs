@@ -24,7 +24,6 @@ namespace ClickHouse.Driver.ADO;
 
 public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 {
-    private readonly ILoggerFactory loggerFactory;
     private readonly CancellationTokenSource cts = new CancellationTokenSource();
     private readonly ClickHouseParameterCollection commandParameters = new ClickHouseParameterCollection();
     private Dictionary<string, object> customSettings;
@@ -37,7 +36,6 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public ClickHouseCommand(ClickHouseConnection connection)
     {
         this.connection = connection;
-        loggerFactory = connection.LoggerFactory;
     }
 
     public override string CommandText { get; set; }
@@ -164,7 +162,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     {
         if (connection == null)
             throw new InvalidOperationException("Connection not set");
-        var logger = loggerFactory?.CreateLogger(ClickHouseLogCategories.Command);
+        var logger = connection.GetLogger(ClickHouseLogCategories.Command);
         var initialQueryId = QueryId ?? "(auto)";
         var isDebugLoggingEnabled = logger?.IsEnabled(LogLevel.Debug) ?? false;
         Stopwatch stopwatch = null;

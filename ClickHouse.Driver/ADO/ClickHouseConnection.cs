@@ -26,6 +26,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     private const string CustomSettingPrefix = "set_";
 
     private readonly List<IDisposable> disposables = new();
+    private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
     private volatile ConnectionState state = ConnectionState.Closed; // Not an autoproperty because of interface implementation
 
     // HTTP client management
@@ -136,9 +137,24 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         ApplySettings(settings);
     }
 
-    internal ILoggerFactory LoggerFactory { get; private set; }
+    private ILoggerFactory loggerFactory;
 
-    private ILogger GetLogger(string categoryName) => LoggerFactory?.CreateLogger(categoryName);
+    /// <summary>
+    /// Gets a logger for the specified category name.
+    /// Loggers are lazily instantiated and cached for performance.
+    /// </summary>
+    /// <param name="categoryName">The category name for the logger.</param>
+    /// <returns>An ILogger instance, or null if no LoggerFactory is configured.</returns>
+    internal ILogger GetLogger(string categoryName)
+    {
+        if (loggerFactory == null)
+            return null;
+
+        // Cache is used here in case the logger factory implementation provided does not do caching on its own
+        return loggerCache.GetOrAdd(
+            categoryName,
+            key => new Lazy<ILogger>(() => loggerFactory.CreateLogger(key))).Value;
+    }
 
     /// <summary>
     /// Gets the string defining connection settings for ClickHouse server
@@ -208,7 +224,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         httpClientName = settings.HttpClientName;
 
         // Logging
-        LoggerFactory = settings.LoggerFactory;
+        loggerFactory = settings.LoggerFactory;
 
         ResetHttpClientFactory();
     }
