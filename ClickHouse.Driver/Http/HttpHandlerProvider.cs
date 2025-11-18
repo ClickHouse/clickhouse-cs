@@ -10,10 +10,9 @@ internal static class HttpHandlerProvider
     public static HttpMessageHandler CreateHandler(bool skipServerCertificateValidation, int? maxConnectionsPerServer = null)
     {
 #if NETCOREAPP2_1_OR_GREATER
-        var socketsHandler = new SocketsHttpHandler()
+        var socketsHandler = new SocketsHttpHandler
         {
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            SslOptions = new SslClientAuthenticationOptions(),
             PooledConnectionIdleTimeout = TimeSpan.FromSeconds(5),
         };
 
@@ -24,7 +23,10 @@ internal static class HttpHandlerProvider
 
         if (skipServerCertificateValidation)
         {
-            socketsHandler.SslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+            socketsHandler.SslOptions = new SslClientAuthenticationOptions
+            {
+                RemoteCertificateValidationCallback = (_, _, _, _) => true,
+            };
         }
         return socketsHandler;
 #else
