@@ -232,15 +232,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task ShouldUseQueryIdForRawStream()
-    {
-        var queryId = Guid.NewGuid().ToString();
-        var httpResponseMessage = await connection.PostStreamAsync("SELECT version()", (_, _) => Task.CompletedTask, false, CancellationToken.None, queryId);
-        
-        Assert.That(ClickHouseConnection.ExtractQueryId(httpResponseMessage), Is.EqualTo(queryId));
-    }
-
-    [Test]
     public async Task ShouldPostDynamicallyGeneratedRawStream()
     {
         var targetTable = "test.raw_stream";

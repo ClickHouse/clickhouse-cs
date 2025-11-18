@@ -482,15 +482,6 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         }
     }
 
-    internal static string ExtractQueryId(HttpResponseMessage response)
-    {
-        const string queryIdHeader = "X-ClickHouse-Query-Id";
-        if (response.Headers.Contains(queryIdHeader))
-            return response.Headers.GetValues(queryIdHeader).FirstOrDefault();
-        else
-            return null;
-    }
-
     internal ClickHouseConnectionStringBuilder ConnectionStringBuilder => ClickHouseConnectionStringBuilder.FromSettings(Settings);
 
     private static readonly char[] DotSeparator = ['.'];

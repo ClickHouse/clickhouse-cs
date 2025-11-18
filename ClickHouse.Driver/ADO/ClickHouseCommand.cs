@@ -220,10 +220,13 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
     private void LogQuerySuccess(Stopwatch stopwatch, string initialQueryId, ILogger logger)
     {
-        QueryId = ClickHouseConnection.ExtractQueryId(response);
-        QueryStats = ExtractQueryStats(response);
-        activity.SetQueryStats(QueryStats);
-        return await ClickHouseConnection.HandleError(response, sqlQuery, activity).ConfigureAwait(false);
+        stopwatch.Stop();
+        var effectiveQueryId = QueryId ?? initialQueryId;
+        logger.LogDebug(
+            "Query (QueryId: {QueryId}) succeeded in {ElapsedMilliseconds:F2} ms. Query Stats: {QueryStats}",
+            effectiveQueryId,
+            stopwatch.Elapsed.TotalMilliseconds,
+            QueryStats);
     }
 
     private HttpRequestMessage BuildHttpRequestMessageWithQueryParams(string sqlQuery, ClickHouseUriBuilder uriBuilder)
