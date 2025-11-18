@@ -17,17 +17,18 @@ public static class NetworkTracing
 {
     public static async Task Run()
     {
-        Console.WriteLine("Debug Mode Network Tracing Example");
-        Console.WriteLine("===================================");
-        Console.WriteLine("This example demonstrates low-level .NET network tracing.");
-        Console.WriteLine("You will see detailed HTTP, Socket, DNS, and TLS events.\n");
-
 #if !NET5_0_OR_GREATER
         Console.WriteLine("WARNING: This feature requires .NET 5.0 or later.");
         Console.WriteLine("Current runtime does not support EnableDebugMode.");
         Console.WriteLine("Skipping this example.\n");
         return;
-#endif
+#else
+        Console.WriteLine("Debug Mode Network Tracing Example");
+        Console.WriteLine("===================================");
+        Console.WriteLine("This example demonstrates low-level .NET network tracing.");
+        Console.WriteLine("You will see detailed HTTP, Socket, DNS, and TLS events.\n");
+
+
 
         // Step 1: Configure a logger factory with Trace level enabled
         var loggerFactory = LoggerFactory.Create(builder =>
@@ -79,4 +80,5 @@ public static class NetworkTracing
         Console.WriteLine("\n\nDebug mode example completed!");
         Console.WriteLine("\nRemember: Disable this in production due to performance impact!");
     }
+#endif
 }
