@@ -404,5 +404,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         if (HttpClient != null && HttpClientFactory != null)
             throw new InvalidOperationException("Cannot specify both HttpClient and HttpClientFactory");
+
+        if (EnableDebugMode && LoggerFactory == null)
+            throw new InvalidOperationException("LoggerFactory must be provided when EnableDebugMode is true.");
     }
 }
