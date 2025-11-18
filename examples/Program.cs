@@ -12,10 +12,6 @@ class Program
 
         try
         {
-            Console.WriteLine($"\n\nRunning: {nameof(NetworkTracing)}");
-            await NetworkTracing.Run();
-            
-            
             // Core Usage & Configuration
             Console.WriteLine("\n" + new string('=', 70));
             Console.WriteLine("CORE USAGE & CONFIGURATION");
