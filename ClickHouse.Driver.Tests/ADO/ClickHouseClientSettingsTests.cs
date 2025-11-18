@@ -292,6 +292,19 @@ public class ClickHouseClientSettingsTests
     }
 
     [Test]
+    public void Validate_WithEnableDebugModeButNoLoggerFactory_ShouldThrow()
+    {
+        var settings = new ClickHouseClientSettings
+        {
+            EnableDebugMode = true,
+            LoggerFactory = null
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => settings.Validate());
+        Assert.That(ex.Message, Does.Contain("LoggerFactory must be provided when EnableDebugMode is true"));
+    }
+
+    [Test]
     public void Equals_WithSameValues_ShouldReturnTrue()
     {
         var settings1 = new ClickHouseClientSettings
