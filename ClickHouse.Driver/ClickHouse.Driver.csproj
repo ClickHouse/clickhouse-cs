@@ -11,7 +11,7 @@
     <Authors>ClickHouse</Authors>
     <Description>Fast binary-over-HTTP ADO.NET provider for ClickHouse</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReadmeFile>README.nuget.md</PackageReadmeFile>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -29,7 +29,7 @@
   </Target>
 
   <ItemGroup>
-    <None Include="..\README.md" Link="README.md" Pack="true" PackagePath="" />
+    <None Include="..\README.nuget.md" Link="README.nuget.md" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <ItemGroup>
