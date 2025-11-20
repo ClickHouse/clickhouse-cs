@@ -9,7 +9,7 @@
     <PackageIcon>icon.png</PackageIcon>
     <PackageTags>clickhouse;click;house;database;ado;ado.net;http;client</PackageTags>
     <Authors>ClickHouse</Authors>
-    <Description>Fast binary-over-HTTP ADO.NET provider for ClickHouse</Description>
+    <Description>Official .NET driver for ClickHouse with high-performance binary transport</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.nuget.md</PackageReadmeFile>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
