@@ -125,6 +125,7 @@ internal static class TypeConverter
         // Floating point types
         RegisterPlainType<Float32Type>();
         RegisterPlainType<Float64Type>();
+        RegisterPlainType<BFloat16Type>();
 
         // Special types
         RegisterPlainType<DynamicType>();
