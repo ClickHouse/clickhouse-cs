@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
 using System.Linq;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -31,6 +32,7 @@ public class DapperTests : AbstractConnectionTestFixture
 #endif
         SqlMapper.AddTypeMap(typeof(DateTime), DbType.DateTime2);
         SqlMapper.AddTypeMap(typeof(DateTimeOffset), DbType.DateTime2);
+        SqlMapper.AddTypeHandler(new ClickHouseIpHandler());
     }
 
     // "The member value of type <xxxxxxxx> cannot be used as a parameter value"
@@ -52,10 +54,9 @@ public class DapperTests : AbstractConnectionTestFixture
             case "Date":
             case "Date32":
             case "Nothing":
-            case "IPv4":
-            case "IPv6":
             case "Point":
             case "Ring":
+            case "Time":
                 return false;
             default:
                 return true;
@@ -110,6 +111,19 @@ public class DapperTests : AbstractConnectionTestFixture
         };
     }
 
+    private class ClickHouseIpHandler : SqlMapper.TypeHandler<IPAddress>
+    {
+        public override void SetValue(IDbDataParameter parameter, IPAddress value)
+        {
+            parameter.Value = value;
+        }
+
+        public override IPAddress Parse(object value)
+        {
+            return IPAddress.Parse((string)value);
+        }
+    }
+
     [Test]
     public async Task ShouldExecuteSimpleSelect()
     {
@@ -124,10 +138,11 @@ public class DapperTests : AbstractConnectionTestFixture
     [TestCaseSource(typeof(DapperTests), nameof(SimpleSelectQueries))]
     public async Task ShouldExecuteSelectStringWithSingleParameterValue(string sql, object value)
     {
-        if (value is JsonObject)
+        if (value is JsonObject or IPAddress or Guid or TimeSpan)
         {
-            Assert.Ignore("Dapper does not support selecting JsonObject as string");
+            Assert.Ignore("Dapper does not support selecting this type as string");
         }
+
         var parameters = new Dictionary<string, object> { { "value", value } };
         var results = await connection.QueryAsync<string>(sql, parameters);
         Assert.That(results.Single(), Is.EqualTo(Convert.ToString(value, CultureInfo.InvariantCulture)));

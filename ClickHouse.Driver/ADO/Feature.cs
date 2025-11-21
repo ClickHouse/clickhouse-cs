@@ -45,5 +45,8 @@ public enum Feature
     [SinceVersion("25.1")]
     Dynamic = 1 << 11,
 
+    [SinceVersion("25.6")]
+    Time = 1 << 12,
+
     All = ~None, // Special value
 }

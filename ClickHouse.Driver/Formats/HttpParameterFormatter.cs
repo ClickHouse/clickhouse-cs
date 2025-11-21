@@ -72,6 +72,15 @@ internal static class HttpParameterFormatter
             case DateTime64Type dtt when value is DateTimeOffset dto:
                 return $"{dto:yyyy-MM-dd HH:mm:ss.fffffff}";
 
+            case TimeType tt when value is TimeSpan ts:
+                return TimeType.FormatTimeString(ts);
+
+            case TimeType tt:
+                return TimeType.FormatTimeString(Convert.ToInt32(value, CultureInfo.InvariantCulture));
+
+            case Time64Type t64 when value is TimeSpan ts:
+                return t64.FormatTime64String(ts);
+
             case NullableType nt:
                 return value is null || value is DBNull ? quote ? "null" : NullValueString : Format(nt.UnderlyingType, value, quote);
 

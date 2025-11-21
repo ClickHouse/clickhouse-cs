@@ -94,6 +94,10 @@ public static class TestUtilities
         {
             builder["set_allow_experimental_dynamic_type"] = 1;
         }
+        if (SupportedFeatures.HasFlag(Feature.Time))
+        {
+            builder["set_enable_time_time64_type"] = 1;
+        }
 
         var settings = new ClickHouseClientSettings(builder)
         {
