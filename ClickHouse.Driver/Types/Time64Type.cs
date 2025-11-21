@@ -27,8 +27,8 @@ namespace ClickHouse.Driver.Types;
 internal class Time64Type : ParameterizedType
 {
     // Range: [-999:59:59.xxx, 999:59:59.xxx] in seconds with fractional part
-    private const decimal MinSeconds = -3599999.999999999m; // -999:59:59.999999999
-    private const decimal MaxSeconds = 3599999.999999999m; // 999:59:59.999999999
+    internal const decimal MinSeconds = -3599999.999999999m; // -999:59:59.999999999
+    internal const decimal MaxSeconds = 3599999.999999999m; // 999:59:59.999999999
     private Decimal64Type decimalType;
 
     /// <summary>

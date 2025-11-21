@@ -19,8 +19,8 @@ namespace ClickHouse.Driver.Types;
 internal class TimeType : ClickHouseType
 {
     // Range: [-999:59:59, 999:59:59] in seconds
-    private const int MinSeconds = -3599999; // -999:59:59
-    private const int MaxSeconds = 3599999;  // 999:59:59
+    internal const int MinSeconds = -3599999; // -999:59:59
+    internal const int MaxSeconds = 3599999;  // 999:59:59
 
     public override Type FrameworkType => typeof(TimeSpan);
 
@@ -48,7 +48,6 @@ internal class TimeType : ClickHouseType
         {
             TimeSpan ts => (int)Math.Round(ts.TotalSeconds),
             int i => i,
-            long l => (int)l,
             _ => throw new NotSupportedException($"Cannot convert {value?.GetType().Name ?? "null"} to Time")
         };
     }
