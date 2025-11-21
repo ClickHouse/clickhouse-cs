@@ -9,9 +9,9 @@
     <PackageIcon>icon.png</PackageIcon>
     <PackageTags>clickhouse;click;house;database;ado;ado.net;http;client</PackageTags>
     <Authors>ClickHouse</Authors>
-    <Description>Fast binary-over-HTTP ADO.NET provider for ClickHouse</Description>
+    <Description>Official .NET driver for ClickHouse with high-performance binary transport</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReadmeFile>README.nuget.md</PackageReadmeFile>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -29,7 +29,7 @@
   </Target>
 
   <ItemGroup>
-    <None Include="..\README.md" Link="README.md" Pack="true" PackagePath="" />
+    <None Include="..\README.nuget.md" Link="README.nuget.md" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,8 +37,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.10" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
     <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" Version="3.0.1" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
     <PackageReference Include="NodaTime" Version="3.2.2" />

@@ -65,6 +65,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         HttpClientFactory = other.HttpClientFactory;
         HttpClientName = other.HttpClientName;
         LoggerFactory = other.LoggerFactory;
+        EnableDebugMode = other.EnableDebugMode;
 
         // Deep copy the CustomSettings dictionary
         CustomSettings = new Dictionary<string, object>(other.CustomSettings);
@@ -205,6 +206,16 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public ILoggerFactory LoggerFactory { get; init; }
 
     /// <summary>
+    /// Gets or sets whether to enable debug mode for low-level .NET network tracing (.NET 5+).
+    /// When enabled, traces System.Net events including HTTP, Sockets, DNS, and TLS operations.
+    /// Requires LoggerFactory to be set and configured with Trace-level logging enabled.
+    /// WARNING: This can significantly impact performance and generate large amounts of log data.
+    /// Not recommended for production use.
+    /// Default: false
+    /// </summary>
+    public bool EnableDebugMode { get; init; } = false;
+
+    /// <summary>
     /// Gets or sets custom ClickHouse settings to pass with queries.
     /// Default: empty dictionary
     /// </summary>
@@ -297,7 +308,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                Timeout == other.Timeout &&
                HttpClient == other.HttpClient &&
                HttpClientFactory == other.HttpClientFactory &&
-               HttpClientName == other.HttpClientName;
+               HttpClientName == other.HttpClientName &&
+               EnableDebugMode == other.EnableDebugMode;
     }
 
     /// <summary>
@@ -329,6 +341,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(SkipServerCertificateValidation);
         hash.Add(UseFormDataParameters);
         hash.Add(Timeout);
+        hash.Add(EnableDebugMode);
         foreach (var kvp in CustomSettings)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
@@ -386,7 +399,13 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         if (UseSession && HttpClient != null)
             throw new InvalidOperationException("UseSession cannot be combined with a custom HttpClient (sessions require a single persistent connection)");
 
+        if (UseSession && HttpClientFactory != null)
+            throw new InvalidOperationException("UseSession cannot be combined with a custom HttpClientFactory (sessions require a single persistent connection)");
+
         if (HttpClient != null && HttpClientFactory != null)
             throw new InvalidOperationException("Cannot specify both HttpClient and HttpClientFactory");
+
+        if (EnableDebugMode && LoggerFactory == null)
+            throw new InvalidOperationException("LoggerFactory must be provided when EnableDebugMode is true.");
     }
 }

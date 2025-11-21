@@ -147,6 +147,9 @@ public static class TestUtilities
         yield return new DataTypeSample("Float64", typeof(double), "toFloat64(64e6)", 64e6);
         yield return new DataTypeSample("Float64", typeof(double), "toFloat64(-64e6)", -64e6);
 
+        yield return new DataTypeSample("BFloat16", typeof(float), "toBFloat16(3.14)", 3.125f);
+        yield return new DataTypeSample("BFloat16", typeof(float), "toBFloat16(-2.5)", -2.5f);
+
         yield return new DataTypeSample("String", typeof(string), "'TestString'", "TestString");
         yield return new DataTypeSample("String", typeof(string), "'\t\r\n'", "\t\r\n");
 
