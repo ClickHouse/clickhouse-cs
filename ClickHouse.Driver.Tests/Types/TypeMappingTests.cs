@@ -78,7 +78,7 @@ public class TypeMappingTests
     [TestCase(typeof(string), ExpectedResult = "String")]
 
     [TestCase(typeof(DateTime), ExpectedResult = "DateTime")]
-    [TestCase(typeof(TimeSpan), ExpectedResult = "Time64")]
+    [TestCase(typeof(TimeSpan), ExpectedResult = "Time64(7)")]
 
     [TestCase(typeof(IPAddress), ExpectedResult = "IPv4")]
     [TestCase(typeof(Guid), ExpectedResult = "UUID")]
