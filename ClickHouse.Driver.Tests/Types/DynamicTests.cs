@@ -47,6 +47,11 @@ public class DynamicTests : AbstractConnectionTestFixture
             return new TestCaseData(exampleExpression, typeof(string));
         }
 
+        if (clickHouseType.StartsWith("Time"))
+        {
+            return new TestCaseData(exampleExpression, typeof(TimeSpan));
+        }
+        
         if (clickHouseType.StartsWith("Float"))
         {
             var floatRemainder =
@@ -91,6 +96,12 @@ public class DynamicTests : AbstractConnectionTestFixture
             clickHouseType.Contains("Tuple") ||
             clickHouseType.Contains("Variant") ||
             clickHouseType.Contains("BFloat16"))
+        {
+            return false;
+        }
+
+        // Time and Time64 are not currently supported
+        if (clickHouseType.StartsWith("Time"))
         {
             return false;
         }

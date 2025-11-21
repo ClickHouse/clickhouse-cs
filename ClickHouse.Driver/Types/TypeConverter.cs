@@ -367,6 +367,10 @@ internal static class TypeConverter
                 return new JsonType(); // TODO JSON settings
             case 0x31:
                 return new BFloat16Type();
+            case 0x32:
+                return new TimeType();
+            case 0x34:
+                return new Time64Type { Scale = reader.Read7BitEncodedInt() };
             default:
                 break;
         }
