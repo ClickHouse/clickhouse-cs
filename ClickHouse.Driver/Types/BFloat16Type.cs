@@ -5,6 +5,16 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
+/// <summary>
+/// Represents the ClickHouse BFloat16 (Brain Floating Point) type.
+/// BFloat16 is a 16-bit floating point format with 1 sign bit, 8 exponent bits, and 7 mantissa bits.
+/// It preserves the range of Float32 while reducing precision, making it useful for machine learning workloads.
+/// </summary>
+/// <remarks>
+/// This type converts between ClickHouse's 16-bit BFloat16 wire format and .NET's System.Single (float).
+/// Conversion is performed by truncating/extending the bit representation. The top 16 bits of a Float32
+/// are equivalent to a BFloat16.
+/// </remarks>
 internal class BFloat16Type : FloatType
 {
     public override Type FrameworkType => typeof(float);
