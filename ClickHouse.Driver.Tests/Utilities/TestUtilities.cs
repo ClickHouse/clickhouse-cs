@@ -299,15 +299,18 @@ public static class TestUtilities
             foreach (var example in jsonExamples)
                 yield return new DataTypeSample("Json", typeof(string), $"'{example}'::Json", (JsonObject)JsonNode.Parse(example));
         }
-        
-        yield return new DataTypeSample("Time", typeof(TimeSpan), "'5:25:05'::Time", new TimeSpan(5,25,5));
-        yield return new DataTypeSample("Time", typeof(TimeSpan), "'-5:25:05'::Time", new TimeSpan(5,25,5).Negate());
-        yield return new DataTypeSample("Time", typeof(TimeSpan), "'55:25:05'::Time", new TimeSpan(55,25,5));
-        
-        yield return new DataTypeSample("Time64(1)", typeof(TimeSpan), "'5:25:05.0'::Time64(1)", new TimeSpan(5,25,5));
-        yield return new DataTypeSample("Time64(3)", typeof(TimeSpan), "'55:25:05.123'::Time64(3)", new TimeSpan(55,25,5).Add(TimeSpan.FromMilliseconds(123)));
-        yield return new DataTypeSample("Time64(6)", typeof(TimeSpan), "'5:25:05.123456'::Time64(6)", new TimeSpan(5,25,5).Add(TimeSpan.FromMilliseconds(123.456)));
-        yield return new DataTypeSample("Time64(6)", typeof(TimeSpan), "'-5:25:05.123456'::Time64(6)", (new TimeSpan(5,25,5).Add(TimeSpan.FromMilliseconds(123.456)).Negate()));
+
+        if (SupportedFeatures.HasFlag(Feature.Time))
+        {
+            yield return new DataTypeSample("Time", typeof(TimeSpan), "'5:25:05'::Time", new TimeSpan(5, 25, 5));
+            yield return new DataTypeSample("Time", typeof(TimeSpan), "'-5:25:05'::Time", new TimeSpan(5, 25, 5).Negate());
+            yield return new DataTypeSample("Time", typeof(TimeSpan), "'55:25:05'::Time", new TimeSpan(55, 25, 5));
+
+            yield return new DataTypeSample("Time64(1)", typeof(TimeSpan), "'5:25:05.0'::Time64(1)", new TimeSpan(5, 25, 5));
+            yield return new DataTypeSample("Time64(3)", typeof(TimeSpan), "'55:25:05.123'::Time64(3)", new TimeSpan(55, 25, 5).Add(TimeSpan.FromMilliseconds(123)));
+            yield return new DataTypeSample("Time64(6)", typeof(TimeSpan), "'5:25:05.123456'::Time64(6)", new TimeSpan(5, 25, 5).Add(TimeSpan.FromMilliseconds(123.456)));
+            yield return new DataTypeSample("Time64(6)", typeof(TimeSpan), "'-5:25:05.123456'::Time64(6)", (new TimeSpan(5, 25, 5).Add(TimeSpan.FromMilliseconds(123.456)).Negate()));
+        }
     }
 
     public static object[] GetEnsureSingleRow(this DbDataReader reader)
