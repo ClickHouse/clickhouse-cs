@@ -47,6 +47,8 @@ public class TypeMappingTests
     [TestCase("DateTime64(3)", ExpectedResult = typeof(DateTime))]
     [TestCase("DateTime64(3, 'Etc/UTC')", ExpectedResult = typeof(DateTime))]
 
+    [TestCase("IntervalNanosecond", ExpectedResult = typeof(TimeSpan))]
+
     [TestCase("Map(String, Int32)", ExpectedResult = typeof(Dictionary<string, int>))]
     [TestCase("Map(Tuple(Int32, Int32), Int32)", ExpectedResult = typeof(Dictionary<Tuple<int,int>, int>))]
     
@@ -76,6 +78,9 @@ public class TypeMappingTests
     [TestCase(typeof(string), ExpectedResult = "String")]
 
     [TestCase(typeof(DateTime), ExpectedResult = "DateTime")]
+
+    // TODO: What if we map all intervals to TimeSpan?
+    [TestCase(typeof(TimeSpan), ExpectedResult = "IntervalNanosecond")]
 
     [TestCase(typeof(IPAddress), ExpectedResult = "IPv4")]
     [TestCase(typeof(Guid), ExpectedResult = "UUID")]

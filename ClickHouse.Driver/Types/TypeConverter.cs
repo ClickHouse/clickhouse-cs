@@ -143,6 +143,9 @@ internal static class TypeConverter
         RegisterParameterizedType<DateTime32Type>();
         RegisterParameterizedType<DateTime64Type>();
 
+        // Interval types
+        RegisterPlainType<IntervalNanosecondType>();
+
         // Special 'nothing' type
         RegisterPlainType<NothingType>();
 

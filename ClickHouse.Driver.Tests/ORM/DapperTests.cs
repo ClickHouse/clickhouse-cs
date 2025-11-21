@@ -46,6 +46,8 @@ public class DapperTests : AbstractConnectionTestFixture
             return false;
         if (clickHouseType.Contains("Nested"))
             return false;
+        if (clickHouseType.StartsWith("Interval")) // TimeSpan does not implement IConvertible
+            return false;
         switch (clickHouseType)
         {
             case "UUID":
@@ -253,13 +255,13 @@ public class DapperTests : AbstractConnectionTestFixture
         // Verify the insert worked and defaults were applied
         var result = await connection.QueryAsync("SELECT * FROM test.dapper_except");
         var row = result.Single() as IDictionary<string, object>;
-        
+
         Assert.That(row, Is.Not.Null);
         Assert.That(row.Count, Is.EqualTo(5)); // All 5 columns should be present
         Assert.That(row["id"], Is.EqualTo(100));
         Assert.That(row["name"], Is.EqualTo("dapper-test"));
         Assert.That(row["value"], Is.EqualTo(123.45));
-        
+
         // Verify default timestamps were set
         var created = (DateTime)row["created"];
         var updated = (DateTime)row["updated"];
