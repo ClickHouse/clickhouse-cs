@@ -150,6 +150,7 @@ internal static class TypeConverter
         RegisterParameterizedType<ArrayType>();
         RegisterParameterizedType<NullableType>();
         RegisterParameterizedType<TupleType>();
+        RegisterParameterizedType<NamedTupleType>();
         RegisterParameterizedType<NestedType>();
         RegisterParameterizedType<LowCardinalityType>();
 
@@ -262,11 +263,11 @@ internal static class TypeConverter
     /// </summary>
     /// <param name="type">framework type to map</param>
     /// <returns>Corresponding ClickHouse type</returns>
-    public static ClickHouseType ToClickHouseType(Type type)
+    public static ClickHouseType ToClickHouseType(Type type, object value = null)
     {
-        if (ReverseMapping.TryGetValue(type, out var value))
+        if (ReverseMapping.TryGetValue(type, out var reverseMappedValue))
         {
-            return value;
+            return reverseMappedValue;
         }
 
         if (type.IsArray)
@@ -287,12 +288,46 @@ internal static class TypeConverter
 
         if (type.IsGenericType && type.GetGenericTypeDefinition().FullName.StartsWith("System.Tuple", StringComparison.InvariantCulture))
         {
-            return new TupleType { UnderlyingTypes = type.GetGenericArguments().Select(ToClickHouseType).ToArray() };
+            return new TupleType { UnderlyingTypes = type.GetGenericArguments().Select(x => ToClickHouseType(x)).ToArray() };
+        }
+
+        if (type == typeof(NamedTuple))
+        {
+            if (((NamedTuple)value)?.UnderlyingTypes?.Length > 0)
+            {
+                return new NamedTupleType
+                {
+                    UnderlyingTypes = ((NamedTuple)value).UnderlyingTypes,
+                };
+            }
+            else
+            {
+                var namedTuple = value as NamedTuple;
+                if (namedTuple == null)
+                {
+                    return new NamedTupleType();
+                }
+
+                var underlyingTypes = new ClickHouseType[namedTuple.Length];
+                var fieldNames = new string[namedTuple.Length];
+                for (int i = 0; i < namedTuple.Length; i++)
+                {
+                    underlyingTypes[i] = ToClickHouseType(namedTuple[i].GetType());
+                    fieldNames[i] = namedTuple.Names[i];
+                }
+
+                return new NamedTupleType
+                {
+                    UnderlyingTypes = underlyingTypes,
+                    FieldNames = fieldNames,
+                };
+            }
+
         }
 
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
         {
-            var types = type.GetGenericArguments().Select(ToClickHouseType).ToArray();
+            var types = type.GetGenericArguments().Select(x => ToClickHouseType(x)).ToArray();
             return new MapType { UnderlyingTypes = Tuple.Create(types[0], types[1]) };
         }
 

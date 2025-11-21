@@ -70,6 +70,13 @@ internal class TupleType : ParameterizedType
 
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)
     {
+        if (node.ChildNodes[0].Value.Contains(' '))
+        {
+            // This is a named tuple
+            return NamedTupleType.ParseType(node, parseClickHouseTypeFunc, settings);
+        }
+
+        // Otherwise it's a plain tuple
         return new TupleType
         {
             UnderlyingTypes = node.ChildNodes.Select(parseClickHouseTypeFunc).ToArray(),

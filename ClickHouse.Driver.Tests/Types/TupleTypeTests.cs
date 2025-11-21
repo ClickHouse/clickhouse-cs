@@ -31,11 +31,18 @@ public class TupleTypeTests : AbstractConnectionTestFixture
 
     [Test]
     [TestCase("Tuple(String, Int32)")]
+    public void ShouldParseUnnamedTupleFields(string typeString)
+    {
+        var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+        ClassicAssert.IsInstanceOf<TupleType>(type);
+    }
+    
+    [Test]
     [TestCase("Tuple(name String, age Int32)")]
     public void ShouldParseNamedTupleFields(string typeString)
     {
         var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
-        ClassicAssert.IsInstanceOf<TupleType>(type);
+        ClassicAssert.IsInstanceOf<NamedTupleType>(type);
     }
 
     [Test]
@@ -52,8 +59,8 @@ public class TupleTypeTests : AbstractConnectionTestFixture
         Assert.DoesNotThrow(() =>
         {
             var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
-            ClassicAssert.IsInstanceOf<TupleType>(type);
-            var tupleType = (TupleType)type;
+            ClassicAssert.IsInstanceOf<NamedTupleType>(type);
+            var tupleType = (NamedTupleType)type;
             Assert.That(tupleType.UnderlyingTypes.Length, Is.EqualTo(2));
         });
     }

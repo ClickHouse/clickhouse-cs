@@ -18,7 +18,7 @@ internal static class HttpParameterFormatter
     public static string Format(ClickHouseDbParameter parameter, TypeSettings settings)
     {
         var type = string.IsNullOrWhiteSpace(parameter.ClickHouseType)
-            ? TypeConverter.ToClickHouseType(parameter.Value.GetType())
+            ? TypeConverter.ToClickHouseType(parameter.Value.GetType(), parameter.Value)
             : TypeConverter.ParseClickHouseType(parameter.ClickHouseType, settings);
         return Format(type, parameter.Value, false);
     }
@@ -89,6 +89,20 @@ internal static class HttpParameterFormatter
 
             case TupleType tupleType when value is IList list:
                 return $"({string.Join(",", tupleType.UnderlyingTypes.Select((x, i) => Format(x, list[i], true)))})";
+
+            case NamedTupleType namedTupleType when value is NamedTuple namedTuple:
+                return $"({string.Join(",", namedTupleType.UnderlyingTypes.Select((x, i) => Format(x, namedTuple[i], true)))})";
+
+#if !NET462
+            case NamedTupleType namedTupleType when value is ITuple tuple:
+                return $"({string.Join(",", namedTupleType.UnderlyingTypes.Select((x, i) => Format(x, tuple[i], true)))})";
+#endif
+
+            case NamedTupleType namedTupleType when value is IList list:
+                return $"({string.Join(",", namedTupleType.UnderlyingTypes.Select((x, i) => Format(x, list[i], true)))})";
+
+            case NamedTupleType namedTupleType when value is System.Collections.Generic.Dictionary<string, object> dict:
+                return $"({string.Join(",", namedTupleType.FieldNames.Select((fieldName, i) => Format(namedTupleType.UnderlyingTypes[i], dict[fieldName], true)))})";
 
             case MapType mapType when value is IDictionary dict:
                 var strings = string.Join(",", dict.Keys.Cast<object>().Select(k => $"{Format(mapType.KeyType, k, true)} : {Format(mapType.ValueType, dict[k], true)}"));
