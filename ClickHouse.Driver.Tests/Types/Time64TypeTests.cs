@@ -172,7 +172,9 @@ public class Time64TypeTests
     [Test]
     [TestCase("01:05:06", 6956)]
     [TestCase("-01:05:06", -6956)]
-    public void CoerceToTimeSpan_String_ConvertsCorrectly(string time, int seconds)
+    [TestCase("01:05:06.123456", 6956.123456)]
+    [TestCase("-01:05:06.123456", -6956.123456)]
+    public void CoerceToTimeSpan_String_ConvertsCorrectly(string time, double seconds)
     {
         var type = new Time64Type { Scale = 6 };
 
