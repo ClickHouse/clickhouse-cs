@@ -43,7 +43,7 @@ internal class Time64Type : ParameterizedType
             field = value;
             decimalType = new Decimal64Type
             {
-                Scale = Scale,
+                Scale = value,
             };
         }
     }
@@ -114,7 +114,6 @@ internal class Time64Type : ParameterizedType
 
         // Write as Decimal64
         ClickHouseDecimal clickHouseDecimal = fractionalSeconds;
-        var decimalType = new Decimal64Type { Scale = Scale };
         decimalType.Write(writer, clickHouseDecimal);
     }
 

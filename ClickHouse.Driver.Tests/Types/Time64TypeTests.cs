@@ -170,6 +170,26 @@ public class Time64TypeTests
     }
 
     [Test]
+    [TestCase("01:05:06", 6956)]
+    [TestCase("-01:05:06", -6956)]
+    public void CoerceToTimeSpan_String_ConvertsCorrectly(string time, int seconds)
+    {
+        var type = new Time64Type { Scale = 6 };
+
+        using var stream = new MemoryStream();
+        using var writer = new ExtendedBinaryWriter(stream);
+
+        type.Write(writer, seconds);
+
+        stream.Position = 0;
+        using var reader = new ExtendedBinaryReader(stream);
+        var result = (TimeSpan)type.Read(reader);
+
+        var expected = TimeSpan.FromSeconds((double)seconds);
+        Assert.That(result, Is.EqualTo(expected).Within(TimeSpan.FromTicks(10)));
+    }
+    
+    [Test]
     public void CoerceToTimeSpan_DecimalSeconds_ConvertsCorrectly()
     {
         var type = new Time64Type { Scale = 6 };

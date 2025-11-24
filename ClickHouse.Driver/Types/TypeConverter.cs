@@ -187,9 +187,9 @@ internal static class TypeConverter
 #endif
         ReverseMapping[typeof(DateTime)] = new DateTimeType();
         ReverseMapping[typeof(DateTimeOffset)] = new DateTimeType();
-        ReverseMapping[typeof(TimeSpan)] = new Time64Type // Matches precision of TimeSpan
+        ReverseMapping[typeof(TimeSpan)] = new Time64Type
         {
-            Scale = 7,
+            Scale = 7, // Matches precision of TimeSpan
         };
 
         ReverseMapping[typeof(DBNull)] = new NullableType() { UnderlyingType = new NothingType() };
