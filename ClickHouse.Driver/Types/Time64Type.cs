@@ -29,6 +29,22 @@ internal class Time64Type : ParameterizedType
     // Range: [-999:59:59.xxx, 999:59:59.xxx] in seconds with fractional part
     internal const decimal MinSeconds = -3599999.999999999m; // -999:59:59.999999999
     internal const decimal MaxSeconds = 3599999.999999999m; // 999:59:59.999999999
+
+    // Cached format strings for each scale (0-9) to avoid allocation on every format call
+    private static readonly string[] CachedFormatStrings =
+    [
+        "{0:00}",           // Scale 0
+        "{0:00.0}",         // Scale 1
+        "{0:00.00}",        // Scale 2
+        "{0:00.000}",       // Scale 3
+        "{0:00.0000}",      // Scale 4
+        "{0:00.00000}",     // Scale 5
+        "{0:00.000000}",    // Scale 6
+        "{0:00.0000000}",   // Scale 7
+        "{0:00.00000000}",  // Scale 8
+        "{0:00.000000000}", // Scale 9
+    ];
+
     private Decimal64Type decimalType;
 
     /// <summary>
@@ -56,12 +72,12 @@ internal class Time64Type : ParameterizedType
 
     /// <summary>
     /// Converts ClickHouse fractional seconds (with given scale) to TimeSpan.
+    /// Note: This will round values when Scale > 7 (TimeSpan is 100ns precision)
     /// </summary>
-    public TimeSpan FromClickHouseDecimal(decimal fractionalSeconds)
+    internal static TimeSpan FromClickHouseDecimal(decimal fractionalSeconds)
     {
         // ClickHouse stores as fractional seconds with Scale decimal places
         // TimeSpan.FromSeconds handles the conversion to ticks (100ns precision)
-        // Note: This will round values when Scale > 7 (TimeSpan is 100ns precision)
         var seconds = (double)fractionalSeconds;
         return TimeSpan.FromSeconds(seconds);
     }
@@ -69,7 +85,7 @@ internal class Time64Type : ParameterizedType
     /// <summary>
     /// Converts TimeSpan to ClickHouse fractional seconds (with given scale).
     /// </summary>
-    public decimal ToClickHouseDecimal(TimeSpan timeSpan)
+    internal decimal ToClickHouseDecimal(TimeSpan timeSpan)
     {
         // Convert TimeSpan to decimal seconds
         var seconds = (decimal)timeSpan.TotalSeconds;
@@ -101,7 +117,7 @@ internal class Time64Type : ParameterizedType
         // Time64 is stored as Decimal64(Scale) internally
         var fractionalSeconds = (decimal)decimalType.Read(reader);
 
-        return FromClickHouseDecimal(fractionalSeconds);
+        return Time64Type.FromClickHouseDecimal(fractionalSeconds);
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
@@ -174,7 +190,7 @@ internal class Time64Type : ParameterizedType
     /// <summary>
     /// Formats a decimal seconds value as a time string in the format [-]HHH:MM:SS.fraction
     /// </summary>
-    public string FormatTime64String(decimal totalSeconds)
+    private string FormatTime64String(decimal totalSeconds)
     {
         var isNegative = totalSeconds < 0;
         var absSeconds = Math.Abs(totalSeconds);
@@ -184,9 +200,8 @@ internal class Time64Type : ParameterizedType
         var minutes = (int)(remainder / 60m);
         var seconds = remainder % 60m;
 
-        // Format with the appropriate number of decimal places based on Scale
-        var secondsFormat = Scale > 0 ? $"{{0:00.{new string('0', Scale)}}}" : "{0:00}";
-        var secondsStr = string.Format(CultureInfo.InvariantCulture, secondsFormat, seconds);
+        // Use cached format string for the current scale (avoids string allocation)
+        var secondsStr = string.Format(CultureInfo.InvariantCulture, CachedFormatStrings[Scale], seconds);
 
         return isNegative
             ? $"-{hours}:{minutes:D2}:{secondsStr}"

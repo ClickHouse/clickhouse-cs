@@ -101,7 +101,7 @@ public class Time64TypeTests
     {
         var type = new Time64Type { Scale = 6 };
         
-        var result = type.FromClickHouseDecimal(fractionalSeconds);
+        var result = Time64Type.FromClickHouseDecimal(fractionalSeconds);
 
         var expected = TimeSpan.FromSeconds((double)fractionalSeconds);
         Assert.That(result, Is.EqualTo(expected).Within(TimeSpan.FromTicks(1)));
@@ -114,7 +114,7 @@ public class Time64TypeTests
         var original = new TimeSpan(5, 25, 17) + TimeSpan.FromMilliseconds(123.456);
 
         var decimalValue = type.ToClickHouseDecimal(original);
-        var result = type.FromClickHouseDecimal(decimalValue);
+        var result = Time64Type.FromClickHouseDecimal(decimalValue);
 
         Assert.That(result, Is.EqualTo(original).Within(TimeSpan.FromTicks(10)));
     }
