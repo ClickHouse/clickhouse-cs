@@ -97,7 +97,7 @@ public class Time64TypeTests
     [Test]
     [TestCase(3661.123456)]
     [TestCase(-3661.123456)]
-    public void FromClickHouseDecimal_PositiveValue_ConvertsToTimeSpan(decimal fractionalSeconds)
+    public void FromClickHouseDecimal_ConvertsToTimeSpan(decimal fractionalSeconds)
     {
         var type = new Time64Type { Scale = 6 };
         
