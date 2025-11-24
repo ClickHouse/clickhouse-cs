@@ -5,5 +5,5 @@ namespace ClickHouse.Driver;
 
 public interface IClickHouseConnection : IDbConnection
 {
-    new ClickHouseCommand CreateCommand();
+    new ClickHouseCommand CreateCommand(string commandText = null);
 }
