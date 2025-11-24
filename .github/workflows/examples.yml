@@ -1,0 +1,54 @@
+name: Examples
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/**"
+      - "ClickHouse.Driver/**"
+      - ".github/workflows/examples.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "examples/**"
+      - "ClickHouse.Driver/**"
+      - ".github/workflows/examples.yml"
+
+jobs:
+  build-and-run-examples:
+    name: Build & Run Examples
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:latest
+        ports:
+          - 8123:8123
+        env:
+          CLICKHOUSE_DB: test
+          CLICKHOUSE_SKIP_USER_SETUP: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        name: Cache NuGet
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-examples-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            10.x
+
+      - name: Build examples
+        run: dotnet build examples/ClickHouse.Driver.Examples.csproj --configuration Release
+
+      - name: Run examples
+        run: dotnet run --project examples/ClickHouse.Driver.Examples.csproj --configuration Release --no-build

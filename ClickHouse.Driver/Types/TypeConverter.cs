@@ -125,6 +125,7 @@ internal static class TypeConverter
         // Floating point types
         RegisterPlainType<Float32Type>();
         RegisterPlainType<Float64Type>();
+        RegisterPlainType<BFloat16Type>();
 
         // Special types
         RegisterPlainType<DynamicType>();
@@ -359,6 +360,8 @@ internal static class TypeConverter
                 var _maxDynamicPaths = reader.Read7BitEncodedInt(); // <var_int_max_dynamic_paths>
                 var _maxDynamicTypes = reader.ReadInt32(); // <uint8_max_dynamic_types>
                 return new JsonType(); // TODO JSON settings
+            case 0x31:
+                return new BFloat16Type();
             default:
                 break;
         }
