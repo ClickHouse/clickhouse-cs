@@ -28,7 +28,15 @@ public static class SelectMetadata
         ");
 
         Console.WriteLine($"Created table '{tableName}'\n");
-        
+
+        // Insert sample data
+        await connection.ExecuteStatementAsync($@"
+            INSERT INTO {tableName} (id, name, values)
+            VALUES (1, 'Example', [10, 20, 30])
+        ");
+
+        Console.WriteLine("Inserted sample data\n");
+
         // Example 1: Reading data field by field
         Console.WriteLine("\n1. Column metadata:");
         using (var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {tableName} LIMIT 1"))

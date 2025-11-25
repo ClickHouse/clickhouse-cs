@@ -30,7 +30,7 @@ public static class ConnectionStringConfiguration
             Username = "default",
             Password = "",
             Database = "default",
-            Protocol = "http"
+            Protocol = "http",
         };
         using (var connection = new ClickHouseConnection(settings))
         {
@@ -48,7 +48,7 @@ public static class ConnectionStringConfiguration
             Protocol = "https",
             Username = "default",
             Password = "your_password",
-            Database = "default"
+            Database = "default",
         };
         Console.WriteLine($"   Settings: Host={secureSettings.Host}, Port={secureSettings.Port}, Protocol={secureSettings.Protocol}");
         

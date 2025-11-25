@@ -40,7 +40,7 @@ public static class BulkInsert
         {
             DestinationTableName = tableName,
             BatchSize = 1000, // Number of rows per batch. Due to the way the MergeTree table works, it is recommended to insert data in large batches.
-            MaxDegreeOfParallelism = 4 // Use parallel processing for better performance
+            MaxDegreeOfParallelism = 4, // Use parallel processing for better performance
         })
         {
             // Track progress with BatchSent event
@@ -76,7 +76,7 @@ public static class BulkInsert
         using (var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = partialTableName,
-            ColumnNames = new[] { "id", "name" } // Only specify these columns, others use defaults
+            ColumnNames = new[] { "id", "name" }, // Only specify these columns, others use defaults
         })
         {
             await bulkCopy.InitAsync();
@@ -85,7 +85,7 @@ public static class BulkInsert
             {
                 new object[] { 1UL, "Item 1" },
                 new object[] { 2UL, "Item 2" },
-                new object[] { 3UL, "Item 3" }
+                new object[] { 3UL, "Item 3" },
             };
 
             await bulkCopy.WriteToServerAsync(partialData);

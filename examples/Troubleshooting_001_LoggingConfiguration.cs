@@ -26,7 +26,7 @@ public static class LoggingConfiguration
         // Create connection settings with logger factory
         var settings = new ClickHouseClientSettings("Host=localhost;Port=8123;Username=default;Database=default")
         {
-            LoggerFactory = loggerFactory
+            LoggerFactory = loggerFactory,
         };
 
         using var connection = new ClickHouseConnection(settings);

@@ -12,8 +12,10 @@ If something is missing, or you found a mistake in one of these examples, please
 
 ### Core Usage & Configuration
 
-- [Core_001_BasicUsage.cs](Core_001_BasicUsage.cs) - Creating a client, tables, and performing basic insert/select operations
+- [Core_001_BasicUsage.cs](Core_001_BasicUsage.cs) - Creating a client, tables, and performing basic insert/select operations (using ClickHouseClientSettings)
 - [Core_002_ConnectionStringConfiguration.cs](Core_002_ConnectionStringConfiguration.cs) - Various connection string formats and configuration options
+- [Core_003_DependencyInjection.cs](Core_003_DependencyInjection.cs) - Using ClickHouse with dependency injection and config binding
+- [Core_004_HttpClientConfiguration.cs](Core_004_HttpClientConfiguration.cs) - Providing custom HttpClient or IHttpClientFactory for SSL/TLS, proxy, timeouts, and more control over connection settings
 
 ### Creating Tables
 
@@ -29,6 +31,20 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Select_001_BasicSelect.cs](Select_001_BasicSelect.cs) - Basic SELECT queries and reading the results
 - [Select_002_SelectMetadata.cs](Select_002_SelectMetadata.cs) - Column metadata overview
 - [Select_003_SelectWithParameterBinding.cs](Select_003_SelectWithParameterBinding.cs) - Parameterized queries for safe and dynamic SQL construction
+
+### Data Types
+
+- DataTypes_001_SimpleTypes.cs
+- DataTypes_002_DatesAndTimes.cs
+- [DataTypes_003_ComplexTypes.cs](DataTypes_001_ComplexTypes.cs) - Working with complex data types: Arrays, Maps, Tuples, IP addresses, and Nested structures
+
+### Advanced Features
+
+- [Advanced_001_QueryIdUsage.cs](Advanced_001_QueryIdUsage.cs) - Using Query IDs to track and monitor query execution
+- [Advanced_002_SessionIdUsage.cs](Advanced_002_SessionIdUsage.cs) - Using Session IDs for temporary tables and session state (with important limitations)
+- [Advanced_003_LongRunningQueries.cs](Advanced_003_LongRunningQueries.cs) - Strategies for handling long-running queries (progress headers and fire-and-forget patterns)
+- [Advanced_004_CustomSettings.cs](Advanced_004_CustomSettings.cs) - Using custom ClickHouse server settings for resource limits and query optimization
+- [Advanced_005_QueryStatistics.cs](Advanced_005_QueryStatistics.cs) - Accessing and using query statistics for performance monitoring and optimization decisions
 
 ### Troubleshooting
 

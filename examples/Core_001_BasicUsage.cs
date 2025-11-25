@@ -15,9 +15,10 @@ public static class BasicUsage
 {
     public static async Task Run()
     {
-        // Create a connection to ClickHouse
+        // Create a connection to ClickHouse using ClickHouseClientSettings
         // By default, connects to localhost:8123 with user 'default' and no password
-        using var connection = new ClickHouseConnection("Host=localhost;Port=8123;Protocol=http;Username=default;Password=;Database=default");
+        var settings = new ClickHouseClientSettings("Host=localhost;Port=8123;Protocol=http;Username=default;Password=;Database=default");
+        using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync();
 
         Console.WriteLine($"Connection state: {connection.State}");

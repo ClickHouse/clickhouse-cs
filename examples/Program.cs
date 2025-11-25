@@ -25,6 +25,16 @@ class Program
             await ConnectionStringConfiguration.Run();
             WaitForUser(isInteractive);
 
+#if NET7_0_OR_GREATER
+            Console.WriteLine($"\n\nRunning: {nameof(DependencyInjection)}");
+            await DependencyInjection.Run();
+            WaitForUser(isInteractive);
+#endif
+
+            Console.WriteLine($"\n\nRunning: {nameof(HttpClientConfiguration)}");
+            await HttpClientConfiguration.Run();
+            WaitForUser(isInteractive);
+
             // Creating Tables
             Console.WriteLine("\n\n" + new string('=', 70));
             Console.WriteLine("CREATING TABLES");
@@ -62,6 +72,40 @@ class Program
 
             Console.WriteLine($"\n\nRunning: {nameof(SelectWithParameterBinding)}");
             await SelectWithParameterBinding.Run();
+            WaitForUser(isInteractive);
+
+            // Data Types
+            Console.WriteLine("\n\n" + new string('=', 70));
+            Console.WriteLine("DATA TYPES");
+            Console.WriteLine(new string('=', 70) + "\n");
+
+            Console.WriteLine($"Running: {nameof(ComplexTypes)}");
+            await ComplexTypes.Run();
+            WaitForUser(isInteractive);
+
+            // Advanced
+            Console.WriteLine("\n\n" + new string('=', 70));
+            Console.WriteLine("ADVANCED FEATURES");
+            Console.WriteLine(new string('=', 70) + "\n");
+
+            Console.WriteLine($"Running: {nameof(QueryIdUsage)}");
+            await QueryIdUsage.Run();
+            WaitForUser(isInteractive);
+
+            Console.WriteLine($"\n\nRunning: {nameof(SessionIdUsage)}");
+            await SessionIdUsage.Run();
+            WaitForUser(isInteractive);
+
+            Console.WriteLine($"\n\nRunning: {nameof(LongRunningQueries)}");
+            await LongRunningQueries.Run();
+            WaitForUser(isInteractive);
+
+            Console.WriteLine($"\n\nRunning: {nameof(CustomSettings)}");
+            await CustomSettings.Run();
+            WaitForUser(isInteractive);
+
+            Console.WriteLine($"\n\nRunning: {nameof(QueryStatistics)}");
+            await QueryStatistics.Run();
             WaitForUser(isInteractive);
 
             // Troubleshooting

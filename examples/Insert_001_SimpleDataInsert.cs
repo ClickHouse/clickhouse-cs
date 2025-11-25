@@ -64,7 +64,7 @@ public static class SimpleDataInsert
             {
                 new { Id = 2UL, Name = "Bob Johnson", Email = "bob@example.com", Age = (byte)35, Score = 87.3f },
                 new { Id = 3UL, Name = "Carol White", Email = "carol@example.com", Age = (byte)42, Score = 92.1f },
-                new { Id = 4UL, Name = "David Brown", Email = "david@example.com", Age = (byte)29, Score = 88.9f }
+                new { Id = 4UL, Name = "David Brown", Email = "david@example.com", Age = (byte)29, Score = 88.9f },
             };
 
             foreach (var user in users)
