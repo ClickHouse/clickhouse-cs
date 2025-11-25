@@ -61,8 +61,9 @@ public static class DependencyInjection
     private static async Task Example2_SettingsRegistration()
     {
         // Build configuration from appsettings.example.json
+        // Use AppContext.BaseDirectory to get the directory where the assembly is located
         var configuration = new ConfigurationBuilder()
-            .SetBasePath(Directory.GetCurrentDirectory())
+            .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.example.json", optional: false, reloadOnChange: false)
             .Build();
 
