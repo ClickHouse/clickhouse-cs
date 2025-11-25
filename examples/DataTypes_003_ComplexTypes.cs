@@ -36,11 +36,11 @@ public static class ComplexTypes
         await Example3_Tuples(connection);
         
         // Example 4: IP Addresses
-        Console.WriteLine("\n5. Working with IP Addresses:");
+        Console.WriteLine("\n4. Working with IP Addresses:");
         await Example4_IPAddresses(connection);
 
         // Example 5: Nested structures
-        Console.WriteLine("\n6. Working with Nested structures:");
+        Console.WriteLine("\n5. Working with Nested structures:");
         await Example5_Nested(connection);
 
         Console.WriteLine("\nAll complex data types examples completed!");

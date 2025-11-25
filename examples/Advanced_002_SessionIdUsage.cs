@@ -12,7 +12,7 @@ namespace ClickHouse.Driver.Examples;
 /// IMPORTANT LIMITATION: When UseSession is enabled with a SessionId, the driver creates
 /// a single-connection HttpClientFactory instead of using a pooled connection. This means
 /// all queries in the session will use the same underlying HTTP connection, which is not
-/// be suitable for high-performance or high-concurrency scenarios.
+/// suitable for high-performance or high-concurrency scenarios.
 ///
 /// Making queries using the same id from multiple connections simultaneously will cause errors.
 /// 

@@ -7,7 +7,7 @@ namespace ClickHouse.Driver.Examples;
 /// Demonstrates strategies for handling long-running queries that might be terminated
 /// by load balancers or proxies due to idle connections. Typical idle timeouts are ~30s.
 ///
-/// These are typicall INSERT .. FROM SELECT type queries that move large amounts of data. 
+/// These are typically INSERT .. FROM SELECT type queries that move large amounts of data. 
 ///
 /// Two main approaches are shown:
 /// 1. Progress Headers: Keep the connection alive by having ClickHouse send periodic progress updates
@@ -62,7 +62,7 @@ public static class LongRunningQueries
 
             Console.WriteLine("   Custom Settings configured:");
             Console.WriteLine("     send_progress_in_http_headers = 1");
-            Console.WriteLine("     http_headers_progress_interval_ms = 9000");
+            Console.WriteLine("     http_headers_progress_interval_ms = 1000");
             Console.WriteLine();
             Console.WriteLine("   Executing query (this may take a moment)...");
 
