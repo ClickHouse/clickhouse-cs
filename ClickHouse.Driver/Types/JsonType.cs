@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Numerics;
@@ -299,6 +300,21 @@ internal class JsonType : ParameterizedType
 
         var kind = array.Count > 0 ? array[0].GetValueKind() : JsonValueKind.Null;
 
+        // For numbers, detect the specific type from the first element
+        byte numericTypeIndex = BinaryTypeIndex.Float64;
+        if (kind == JsonValueKind.Number)
+        {
+            var firstVal = (JsonValue)array[0];
+            if (firstVal.TryGetValue<int>(out _))
+                numericTypeIndex = BinaryTypeIndex.Int32;
+            else if (firstVal.TryGetValue<long>(out _))
+                numericTypeIndex = BinaryTypeIndex.Int64;
+            else if (firstVal.TryGetValue<decimal>(out _))
+                numericTypeIndex = BinaryTypeIndex.Float64;
+            else if (firstVal.TryGetValue<double>(out _))
+                numericTypeIndex = BinaryTypeIndex.Float64;
+        }
+
         // Step 1: Write binary tag for array element type
         switch (kind)
         {
@@ -307,7 +323,7 @@ internal class JsonType : ParameterizedType
                 writer.Write(BinaryTypeIndex.String);
                 break;
             case JsonValueKind.Number:
-                writer.Write(BinaryTypeIndex.Float64);
+                writer.Write(numericTypeIndex);
                 break;
             case JsonValueKind.False:
             case JsonValueKind.True:
@@ -344,7 +360,7 @@ internal class JsonType : ParameterizedType
                     writer.Write(value.ToString());
                     break;
                 case JsonValueKind.Number:
-                    writer.Write(value.GetValue<double>());
+                    WriteJsonArrayNumber(writer, (JsonValue)value, numericTypeIndex);
                     break;
                 case JsonValueKind.False:
                 case JsonValueKind.True:
@@ -362,6 +378,37 @@ internal class JsonType : ParameterizedType
         }
     }
 
+    private static void WriteJsonArrayNumber(ExtendedBinaryWriter writer, JsonValue value, byte typeIndex)
+    {
+        switch (typeIndex)
+        {
+            case BinaryTypeIndex.Int32:
+                if (value.TryGetValue<int>(out var i))
+                {
+                    writer.Write(i);
+                    break;
+                }
+                throw new ArgumentException($"Expected json array element to be Int32: {value}. Arrays must contain only one type of element.");
+            case BinaryTypeIndex.Int64:
+                if (value.TryGetValue<long>(out var l))
+                {
+                    writer.Write(l);
+                    break;
+                }
+                throw new ArgumentException($"Expected json array element to be Int64: {value}. Arrays must contain only one type of element.");
+            default: // Float64
+                if (value.TryGetValue<double>(out var d))
+                {
+                    writer.Write(d);
+                }
+                else
+                {
+                    writer.Write(double.Parse(value.ToString(), CultureInfo.InvariantCulture));
+                }
+                break;
+        }
+    }
+
     internal static void WriteJsonValue(ExtendedBinaryWriter writer, JsonValue value)
     {
         switch (value.GetValueKind())
@@ -372,8 +419,7 @@ internal class JsonType : ParameterizedType
                 writer.Write(value.ToString());
                 break;
             case JsonValueKind.Number:
-                writer.Write(BinaryTypeIndex.Float64);
-                writer.Write(value.GetValue<double>());
+                WriteJsonNumber(writer, value);
                 break;
             case JsonValueKind.False:
             case JsonValueKind.True:
@@ -385,6 +431,36 @@ internal class JsonType : ParameterizedType
                 break;
             default:
                 throw new SerializationException($"Unsupported JSON value kind: {value.GetValueKind()}");
+        }
+    }
+
+    internal static void WriteJsonNumber(ExtendedBinaryWriter writer, JsonValue value)
+    {
+        if (value.TryGetValue<long>(out var l))
+        {
+            writer.Write(BinaryTypeIndex.Int64);
+            writer.Write(l);
+        }
+        else if (value.TryGetValue<int>(out var i))
+        {
+            writer.Write(BinaryTypeIndex.Int32);
+            writer.Write(i);
+        }
+        else if (value.TryGetValue<decimal>(out var dec))
+        {
+            writer.Write(BinaryTypeIndex.Float64);
+            writer.Write((double)dec);
+        }
+        else if (value.TryGetValue<double>(out var d))
+        {
+            writer.Write(BinaryTypeIndex.Float64);
+            writer.Write(d);
+        }
+        else
+        {
+            // Fallback: parse from string representation
+            writer.Write(BinaryTypeIndex.Float64);
+            writer.Write(double.Parse(value.ToString(), CultureInfo.InvariantCulture));
         }
     }
 }

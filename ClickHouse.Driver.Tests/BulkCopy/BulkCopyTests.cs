@@ -497,6 +497,113 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         }
     }
 
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldInsertJsonWithComplexTypes()
+    {
+        var targetTable = "test." + SanitizeTableName($"bulk_json_complex");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var jsonObject = new JsonObject
+        {
+            ["boolValue"] = true,
+            ["numberValue"] = 42.5,
+            ["stringValue"] = "hello",
+            ["nullValue"] = null,
+            ["arrayValueDouble"] = new JsonArray(1.5, 2.5, 3.5),
+            ["arrayValueInt"] = new JsonArray(1, 2, 3),
+            ["nestedObject"] = new JsonObject
+            {
+                ["innerString"] = "nested",
+                ["innerNumber"] = 123,
+                ["innerLong"] = 124L,
+            },
+        };
+
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([[jsonObject]]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((bool)result["boolValue"], Is.EqualTo(true));
+        Assert.That((double)result["numberValue"], Is.EqualTo(42.5));
+        Assert.That((string)result["stringValue"], Is.EqualTo("hello"));
+        Assert.That(result["nullValue"], Is.Null);
+        Assert.That(JsonNode.DeepEquals(result["arrayValueDouble"], new JsonArray(1.5, 2.5, 3.5)), Is.True);
+        Assert.That(JsonNode.DeepEquals(result["arrayValueInt"], new JsonArray(1, 2, 3)), Is.True);
+        Assert.That(JsonNode.DeepEquals(result["nestedObject"], new JsonObject { ["innerString"] = "nested", ["innerNumber"] = 123, ["innerLong"] = 124L }), Is.True);
+
+        Assert.That(reader.Read(), Is.False);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldInsertJsonFromString()
+    {
+        var targetTable = "test." + SanitizeTableName($"bulk_json_string");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var jsonString = "{\"name\": \"test\", \"count\": 42, \"active\": true}";
+
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([[jsonString]]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((string)result["name"], Is.EqualTo("test"));
+        Assert.That((long)result["count"], Is.EqualTo(42));
+        Assert.That((bool)result["active"], Is.EqualTo(true));
+
+        Assert.That(reader.Read(), Is.False);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldInsertJsonFromAnonymousObject()
+    {
+        var targetTable = "test." + SanitizeTableName($"bulk_json_anon");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var obj = new { name = "test", count = 42, active = true };
+
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([[obj]]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((string)result["name"], Is.EqualTo("test"));
+        Assert.That((long)result["count"], Is.EqualTo(42));
+        Assert.That((bool)result["active"], Is.EqualTo(true));
+
+        Assert.That(reader.Read(), Is.False);
+    }
 
     [Test]
     public async Task ShouldInsertTupleWithEnum()
