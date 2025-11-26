@@ -177,7 +177,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    [Ignore("Needs support for named tuple parameters")]
     public void ShouldFetchSchemaDatabaseColumns()
     {
         var schema = connection.GetSchema("Columns", ["system"]);
