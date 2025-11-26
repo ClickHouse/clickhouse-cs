@@ -7,7 +7,7 @@ namespace ClickHouse.Driver.Types;
 
 internal class AggregateFunctionType : ParameterizedType
 {
-    public string Function { get; private set; }
+    public string Function { get; internal set; }
 
     public override string Name => "AggregateFunction";
 
