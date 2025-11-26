@@ -126,6 +126,98 @@ public static class TestUtilities
         public readonly object ExampleValue = exampleValue;
     }
 
+    /// <summary>
+    /// Helper to generate composite type test cases from base type samples
+    /// </summary>
+    private static IEnumerable<DataTypeSample> GenerateCompositeTypeSamples(DataTypeSample baseSample)
+    {
+        var baseType = baseSample.ClickHouseType;
+        var baseExpr = baseSample.ExampleExpression;
+        var baseValue = baseSample.ExampleValue;
+
+        // Array
+        var arrayValue = Array.CreateInstance(baseSample.FrameworkType, 2);
+
+        arrayValue.SetValue(baseValue, 0);
+        arrayValue.SetValue(baseValue, 1);
+        yield return new DataTypeSample(
+            $"Array({baseType})",
+            arrayValue.GetType(),
+            $"array({baseExpr}, {baseExpr})",
+            arrayValue
+        );
+
+        // Nullable (skip if value is already DBNull or if type is not a value type)
+        if (baseValue is not DBNull && baseSample.FrameworkType.IsValueType)
+        {
+            var nullableType = typeof(Nullable<>).MakeGenericType(baseSample.FrameworkType);
+            var nullableValue = Activator.CreateInstance(nullableType, baseValue);
+
+            yield return new DataTypeSample(
+                $"Nullable({baseType})",
+                nullableType,
+                baseExpr,
+                nullableValue
+            );
+        }
+
+        // Tuple with base type and String
+        var tupleType = typeof(Tuple<,>).MakeGenericType(baseSample.FrameworkType, typeof(string));
+        var tupleValue = Activator.CreateInstance(tupleType, baseValue, "test");
+        yield return new DataTypeSample(
+            $"Tuple({baseType}, String)",
+            tupleType,
+            $"tuple({baseExpr}, 'test')",
+            tupleValue
+        );
+
+        // Map(String, baseType) - String as key
+        var mapType = typeof(Dictionary<,>).MakeGenericType(typeof(string), baseSample.FrameworkType);
+        var mapValue = Activator.CreateInstance(mapType);
+        var addMethod = mapType.GetMethod("Add");
+        addMethod.Invoke(mapValue, new object[] { "key", baseValue });
+        yield return new DataTypeSample(
+            $"Map(String, {baseType})",
+            mapType,
+            $"map('key', {baseExpr})",
+            mapValue
+        );
+
+        // Variant
+        // Some types have problems with parsing on the server side when it comes to variants
+        // This should be fixed with https://github.com/ClickHouse/ClickHouse/pull/90430
+        string[] noVariantTests = new[]
+        {
+            "Int32",
+            "UInt32",
+            "Int64",
+            "UInt64",
+            "Date",
+            "Date32",
+            "DateTime",
+            "DateTime64",
+            "Float32",
+            "Bool",
+            "BFloat16",
+        };
+        if (!noVariantTests.Contains(baseType) && !baseType.StartsWith("Enum"))
+        {
+            var variantSecondType = "String";
+            // Some types can cause a database error due to suspicious variant types/wrong type inference, avoid that
+            if (baseType.StartsWith("Enum") || baseType.StartsWith("FixedString") || baseType == "BFloat16" || baseType.StartsWith("Time"))
+            {
+                variantSecondType = "Date";
+            }
+
+            yield return new DataTypeSample(
+                $"Variant({baseType}, {variantSecondType})",
+                typeof(object),
+                $"{baseExpr}::Variant({baseType}, {variantSecondType})",
+                baseValue
+            );
+        }
+    }
+
     public static IEnumerable<DataTypeSample> GetDataTypeSamples()
     {
         yield return new DataTypeSample("Nothing", typeof(DBNull), "NULL", DBNull.Value);
@@ -310,6 +402,102 @@ public static class TestUtilities
             yield return new DataTypeSample("Time64(3)", typeof(TimeSpan), "'55:25:05.123'::Time64(3)", new TimeSpan(55, 25, 5).Add(TimeSpan.FromMilliseconds(123)));
             yield return new DataTypeSample("Time64(6)", typeof(TimeSpan), "'5:25:05.123456'::Time64(6)", new TimeSpan(5, 25, 5).Add(TimeSpan.FromMilliseconds(123.456)));
             yield return new DataTypeSample("Time64(6)", typeof(TimeSpan), "'-5:25:05.123456'::Time64(6)", (new TimeSpan(5, 25, 5).Add(TimeSpan.FromMilliseconds(123.456)).Negate()));
+        }
+
+        // Generate composite type tests for ALL base types that FromByteCode supports
+        // This ensures that all type decoders work correctly in composite contexts (Array, Nullable, Tuple, Map, Variant)
+        var baseTypesToTest = new List<DataTypeSample>
+        {
+            // 0x01: UInt8
+            new DataTypeSample("UInt8", typeof(byte), "toUInt8(42)", (byte)42),
+            // 0x02: UInt16
+            new DataTypeSample("UInt16", typeof(ushort), "toUInt16(1234)", (ushort)1234),
+            // 0x03: UInt32
+            new DataTypeSample("UInt32", typeof(uint), "toUInt32(12345)", (uint)12345),
+            // 0x04: UInt64
+            new DataTypeSample("UInt64", typeof(ulong), "toUInt64(123456)", (ulong)123456),
+            // 0x07: Int8
+            new DataTypeSample("Int8", typeof(sbyte), "toInt8(-42)", (sbyte)-42),
+            // 0x08: Int16
+            new DataTypeSample("Int16", typeof(short), "toInt16(-1234)", (short)-1234),
+            // 0x09: Int32
+            new DataTypeSample("Int32", typeof(int), "toInt32(-12345)", -12345),
+            // 0x0A: Int64
+            new DataTypeSample("Int64", typeof(long), "toInt64(-123456)", (long)-123456),
+            // 0x0D: Float32
+            new DataTypeSample("Float32", typeof(float), "toFloat32(3.14)", 3.14f),
+            // 0x0E: Float64
+            new DataTypeSample("Float64", typeof(double), "toFloat64(3.14159)", 3.14159),
+            // 0x31: BFloat16
+            new DataTypeSample("BFloat16", typeof(float), "toBFloat16(1.25)", 1.25f),
+            // 0x0F: Date
+            // 0x10: Date32
+            // 0x11: DateTime (UTC)
+            //new DataTypeSample("Date", typeof(DateTime), "toDate('2024-01-15')", new DateTime(2024, 1, 15)),
+            //new DataTypeSample("DateTime('UTC')", typeof(DateTime), "toDateTime('2024-01-15 10:30:00', 'UTC')", new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Unspecified)),
+            //baseTypesToTest.Add(new DataTypeSample("Date32", typeof(DateTime), "toDate32('2024-01-15')", new DateTime(2024, 1, 15)));
+            // No dates or datetimes here because automatic type mapping tests are problematic
+            // 0x15: String
+            new DataTypeSample("String", typeof(string), "'test'", "test"),
+            // 0x16: FixedString
+            new DataTypeSample("FixedString(4)", typeof(string), "toFixedString('test', 4)", "test"),
+            // 0x17: Enum8
+            new DataTypeSample("Enum8('a' = 1, 'b' = 2)", typeof(string), "CAST('a', 'Enum8(\\'a\\' = 1, \\'b\\' = 2)')", "a"),
+            // 0x18: Enum16
+            new DataTypeSample("Enum16('x' = 100, 'y' = 200)", typeof(string), "CAST('x', 'Enum16(\\'x\\' = 100, \\'y\\' = 200)')", "x"),
+            // 0x19: Decimal32
+            new DataTypeSample("Decimal32(3)", typeof(ClickHouseDecimal), "toDecimal32(123.45, 3)", new ClickHouseDecimal(123.450m)),
+            // 0x1A: Decimal64
+            new DataTypeSample("Decimal64(5)", typeof(ClickHouseDecimal), "toDecimal64(12.345, 5)", new ClickHouseDecimal(12.34500m)),
+            // 0x1B: Decimal128
+            new DataTypeSample("Decimal128(5)", typeof(ClickHouseDecimal), "toDecimal128(12.34, 5)", new ClickHouseDecimal(12.34000m)),
+            // 0x1D: UUID
+            new DataTypeSample("UUID", typeof(Guid), "toUUID('12345678-1234-1234-1234-123456789abc')", Guid.Parse("12345678-1234-1234-1234-123456789abc")),
+            // 0x28: IPv4
+            new DataTypeSample("IPv4", typeof(IPAddress), "toIPv4('192.168.1.1')", IPAddress.Parse("192.168.1.1")),
+            // 0x29: IPv6
+            new DataTypeSample("IPv6", typeof(IPAddress), "toIPv6('::1')", IPAddress.Parse("::1")),
+            
+            // After https://github.com/ClickHouse/ClickHouse/pull/90430 is released, change to Int32,Int32. Issue is parameter inferred to be wrong type.
+            // Unnamed tuple
+            new DataTypeSample("Tuple(Int32, Int32)", typeof(Tuple<int,int>), "tuple(35455,35456)::Tuple(Int32, Int32)", new Tuple<int, int>(35455, 35456)),
+            // Named tuple - the type inference for this as a parameter doesn't work, breaks a lot of tests
+            //new DataTypeSample("Tuple(a Int32, b Int32)", typeof(Tuple<int,int>), "tuple(35455,35456)::Tuple(a Int32, b Int32)", new Tuple<int, int>(35455, 35456)),
+        };
+
+        // Feature-gated types
+        if (SupportedFeatures.HasFlag(Feature.Bool))
+        {
+            // 0x2D: Bool
+            baseTypesToTest.Add(new DataTypeSample("Bool", typeof(bool), "CAST(1, 'Bool')", true));
+        }
+
+
+        if (SupportedFeatures.HasFlag(Feature.WideTypes))
+        {
+            // 0x05: UInt128
+            baseTypesToTest.Add(new DataTypeSample("UInt128", typeof(BigInteger), "toUInt128(123456)", BigInteger.Parse("123456")));
+            // 0x06: UInt256
+            baseTypesToTest.Add(new DataTypeSample("UInt256", typeof(BigInteger), "toUInt256(42)", new BigInteger(42)));
+            // 0x0B: Int128
+            baseTypesToTest.Add(new DataTypeSample("Int128", typeof(BigInteger), "toInt128(123456)", BigInteger.Parse("123456")));
+            // 0x0C: Int256
+            baseTypesToTest.Add(new DataTypeSample("Int256", typeof(BigInteger), "toInt256(42)", new BigInteger(42)));
+        }
+
+        if (SupportedFeatures.HasFlag(Feature.Time))
+        {
+            // Similarly to Date items above, the parsing is problematic on the server side for these atm
+            //baseTypesToTest.Add(new DataTypeSample("Time", typeof(TimeSpan), "'5:25:05'::Time", new TimeSpan(5, 25, 5)));
+            //baseTypesToTest.Add(new DataTypeSample("Time64(3)", typeof(TimeSpan), "'5:25:05.123'::Time64(3)", new TimeSpan(5, 25, 5).Add(TimeSpan.FromMilliseconds(123))));
+        }
+
+        foreach (var baseType in baseTypesToTest)
+        {
+            foreach (var composite in GenerateCompositeTypeSamples(baseType))
+            {
+                yield return composite;
+            }
         }
     }
 
