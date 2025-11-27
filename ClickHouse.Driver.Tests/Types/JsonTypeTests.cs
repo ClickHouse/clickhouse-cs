@@ -103,12 +103,21 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         ).SetName("Decimal64(4)");
 
         // Decimal128(8) - Larger precision decimal
+        // There are limits to parsing large decimals from json fields unless enclosed in quotes
         yield return new TestCaseData(
-            "bigDecimal Decimal128(8)",
-            "{\"bigDecimal\": 12345678.12345678}",
+            "bigDecimal Decimal128(7)",
+            "{\"bigDecimal\": \"11212212312368.1234567\"}",
             "bigDecimal",
-            new ClickHouseDecimal(12345678.12345678m)
-        ).SetName("Decimal128(8)");
+            new ClickHouseDecimal(11212212312368.1234567m)
+        ).SetName("Decimal128(7)");
+
+        // Decimal256(8) - Larger precision decimal
+        yield return new TestCaseData(
+            "bigDecimal Decimal256(8)",
+            "{\"bigDecimal\": \"11221233412168.12345678\"}",
+            "bigDecimal",
+            new ClickHouseDecimal(11221233412168.12345678m)
+        ).SetName("Decimal256(8)");
 
         // Date - Date type (as string in JSON)
         yield return new TestCaseData(
@@ -238,17 +247,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [TestCaseSource(nameof(JsonTypeTestCases))]
     public async Task ShouldParseJsonWithTypedPath(string typeDefinition, string jsonData, string pathName, object expectedValue)
     {
-        var targetTable = "test.json_typed_path_test";
-
-        await connection.ExecuteStatementAsync(
-            $@"
-            CREATE OR REPLACE TABLE {targetTable} (
-                data JSON({typeDefinition})
-            ) ENGINE = Memory;");
-
-        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{jsonData}')");
-
-        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        using var reader = await connection.ExecuteReaderAsync($"SELECT '{jsonData}'::Json({typeDefinition})");
         ClassicAssert.IsTrue(reader.Read());
 
         var result = (JsonObject)reader.GetValue(0);
@@ -272,8 +271,8 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         }
         else if (expectedValue is Guid expectedGuid && actualNode is JsonValue jv4)
         {
-            var actulalGuid = Guid.Parse(jv4.GetValue<string>());
-            Assert.That(actulalGuid, Is.EqualTo(expectedGuid));
+            var actualGuid = Guid.Parse(jv4.GetValue<string>());
+            Assert.That(actualGuid, Is.EqualTo(expectedGuid));
         }
         else if (expectedValue is JsonObject expectedObj && actualNode is JsonObject actualObj)
         {

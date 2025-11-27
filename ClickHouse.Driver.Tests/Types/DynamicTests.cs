@@ -38,14 +38,6 @@ public class DynamicTests : AbstractConnectionTestFixture
 
     private static bool ShouldBeSupportedInDynamic(string clickHouseType)
     {
-        // Dynamic supports most types directly
-        if (clickHouseType.Contains("Nested") ||
-            clickHouseType.Contains("Variant") ||
-            clickHouseType.Contains("Json"))
-        {
-            return false;
-        }
-
         // Geo types not supported
         if (clickHouseType is "Point" or "Ring" or "Polygon" or "MultiPolygon" or "Nothing")
         {

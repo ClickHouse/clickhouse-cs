@@ -588,7 +588,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = targetTable,
         };
 
-        var obj = new { name = "test", count = 42, active = true };
+        var obj = new { name = "test", count = 42, active = true, arrayBool = new bool[] { true, false} };
 
         await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[obj]]);
@@ -601,6 +601,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         Assert.That((string)result["name"], Is.EqualTo("test"));
         Assert.That((long)result["count"], Is.EqualTo(42));
         Assert.That((bool)result["active"], Is.EqualTo(true));
+        Assert.That(JsonNode.DeepEquals(result["arrayBool"], new JsonArray(true, false)), Is.True);
 
         Assert.That(reader.Read(), Is.False);
     }

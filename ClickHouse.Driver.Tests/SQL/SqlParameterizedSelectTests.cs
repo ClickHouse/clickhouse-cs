@@ -4,6 +4,7 @@ using System.Data;
 using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 
@@ -40,7 +41,7 @@ public class SqlParameterizedSelectTests : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {exampleExpression} as expected, {{var:{clickHouseType}}} as actual, expected = actual as equals";
         command.AddParameter("var", value);
-
+//TODO step through this test and see exactly what happens with HttpParameterFormatter and ClickHouseDbParameter, they seem to be doing duplicate work
         var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
         TestUtilities.AssertEqual(result[0], result[1]);
 
@@ -74,6 +75,7 @@ public class SqlParameterizedSelectTests : IDisposable
     {
         if (clickHouseType.StartsWith("Enum"))
             clickHouseType = "String";
+
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {exampleExpression} as expected, {{var:{clickHouseType}}} as actual, expected = actual as equals";
         command.AddParameter("var", clickHouseType, value);
