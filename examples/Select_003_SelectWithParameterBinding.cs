@@ -45,30 +45,9 @@ public static class SelectWithParameterBinding
         ");
 
         Console.WriteLine($"Created and populated table '{tableName}'\n");
-        
-        // Example 1: Simple parameter binding with WHERE clause
-        Console.WriteLine("\n1. Simple parameter binding with WHERE clause:");
-        using (var command = connection.CreateCommand())
-        {
-            command.CommandText = $@"
-                SELECT username, age, score
-                FROM {tableName}
-                WHERE age >= {{minAge:UInt8}} AND score >= {{minScore:Float32}}
-                ORDER BY score DESC";
 
-            command.AddParameter("minAge", (byte)30);
-            command.AddParameter("minScore", 90.0f);
-
-            using var reader = await command.ExecuteReaderAsync();
-            Console.WriteLine("   Users aged 30+ with score >= 90:");
-            while (reader.Read())
-            {
-                Console.WriteLine($"   - {reader.GetString(0)}, Age: {reader.GetByte(1)}, Score: {reader.GetFloat(2):F1}");
-            }
-        }
-
-        // Example 2: Parameters with explicit ClickHouse type specification - if the type is not specified, it will be inferred automatically 
-        Console.WriteLine("\n2. Parameters with explicit types:");
+        // Example 1: Parameters with explicit ClickHouse type specification. This is the recommended approach.
+        Console.WriteLine("\n1. Parameters with explicit types:");
         using (var command = connection.CreateCommand())
         {
             command.CommandText = $@"
@@ -77,13 +56,37 @@ public static class SelectWithParameterBinding
                 WHERE registration_date >= {{startDate:Date}}
                 ORDER BY registration_date";
 
-            command.AddParameter("startDate", "Date", new DateTime(2020, 1, 1));
+            command.AddParameter("startDate", "Date", new DateTime(2020, 1, 1)); // "Date" here specifies the ClickHouse type
 
             using var reader = await command.ExecuteReaderAsync();
             Console.WriteLine("   Users registered since 2020:");
             while (reader.Read())
             {
                 Console.WriteLine($"   - {reader.GetString(0)}: {reader.GetDateTime(1):yyyy-MM-dd}");
+            }
+        }
+
+        // Example 2: Simple parameter binding with type inference
+        // WARNING: Type inference can result in unexpected issues, especially with numeric types
+        // and complex data types. It is strongly recommended to always specify the type explicitly.
+        Console.WriteLine("\n2. Simple parameter binding with type inference:");
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = $@"
+                SELECT username, age, score
+                FROM {tableName}
+                WHERE age >= {{minAge:UInt8}} AND score >= {{minScore:Float32}}
+                ORDER BY score DESC";
+
+            // Type will be inferred - may lead to unexpected behavior
+            command.AddParameter("minAge", (byte)30);
+            command.AddParameter("minScore", 90.0f);
+
+            using var reader = await command.ExecuteReaderAsync();
+            Console.WriteLine("   Users aged 30+ with score >= 90:");
+            while (reader.Read())
+            {
+                Console.WriteLine($"   - {reader.GetString(0)}, Age: {reader.GetByte(1)}, Score: {reader.GetFloat(2):F1}");
             }
         }
 
@@ -103,7 +106,7 @@ public static class SelectWithParameterBinding
             foreach (var country in countries)
             {
                 command.Parameters.Clear();
-                command.AddParameter("country", country);
+                command.AddParameter("country", "String", country);
 
                 var topUser = await command.ExecuteScalarAsync();
                 Console.WriteLine($"   Top user in {country}: {topUser}");
@@ -120,11 +123,11 @@ public static class SelectWithParameterBinding
                 FROM {tableName}
                 WHERE country IN ({{countries:Array(String)}})
                 ORDER BY age DESC";
-            
-            command.AddParameter("countries", new [] {"USA", "UK"});
+
+            command.AddParameter("countries", "Array(String)", new[] { "USA", "UK" });
 
             using var reader = await command.ExecuteReaderAsync();
-            
+
             Console.WriteLine("   Users from USA or UK:");
             while (reader.Read())
             {
@@ -143,7 +146,7 @@ public static class SelectWithParameterBinding
                 ORDER BY age, score
                 LIMIT 3";
 
-            command.AddParameter("comparison", Tuple.Create((byte)30, 85.0f));
+            command.AddParameter("comparison", "Tuple(UInt8, Float32)", Tuple.Create((byte)30, 85.0f));
 
             using var reader = await command.ExecuteReaderAsync();
             Console.WriteLine("   Users with (age, score) > (30, 85.0):");
