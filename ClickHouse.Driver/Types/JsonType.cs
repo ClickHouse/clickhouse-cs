@@ -309,10 +309,6 @@ internal class JsonType : ParameterizedType
                 numericTypeIndex = BinaryTypeIndex.Int32;
             else if (firstVal.TryGetValue<long>(out _))
                 numericTypeIndex = BinaryTypeIndex.Int64;
-            else if (firstVal.TryGetValue<decimal>(out _))
-                numericTypeIndex = BinaryTypeIndex.Float64;
-            else if (firstVal.TryGetValue<double>(out _))
-                numericTypeIndex = BinaryTypeIndex.Float64;
         }
 
         // Step 1: Write binary tag for array element type
@@ -327,7 +323,7 @@ internal class JsonType : ParameterizedType
                 break;
             case JsonValueKind.False:
             case JsonValueKind.True:
-                writer.Write(BinaryTypeIndex.UInt8);
+                writer.Write(BinaryTypeIndex.Bool);
                 break;
             case JsonValueKind.Null:
                 writer.Write(BinaryTypeIndex.Nothing);
@@ -348,7 +344,8 @@ internal class JsonType : ParameterizedType
         // Step 3: Write array elements
         foreach (var value in array)
         {
-            if (value.GetValueKind() != kind)
+            var elementKind = value.GetValueKind();
+            if (elementKind != kind && !(IsBoolKind(kind) && IsBoolKind(elementKind))) // True and False are different kinds, so we need a special check for them
             {
                 throw new SerializationException("Array contains mixed value types");
             }
@@ -378,6 +375,56 @@ internal class JsonType : ParameterizedType
         }
     }
 
+    internal static void WriteJsonValue(ExtendedBinaryWriter writer, JsonValue value)
+    {
+        switch (value.GetValueKind())
+        {
+            case JsonValueKind.Undefined:
+            case JsonValueKind.String:
+                writer.Write(BinaryTypeIndex.String);
+                writer.Write(value.ToString());
+                break;
+            case JsonValueKind.Number:
+                WriteJsonNumber(writer, value);
+                break;
+            case JsonValueKind.False:
+            case JsonValueKind.True:
+                writer.Write(BinaryTypeIndex.Bool);
+                writer.Write(value.GetValue<bool>());
+                break;
+            case JsonValueKind.Null:
+                writer.Write(BinaryTypeIndex.Nothing);
+                break;
+            default:
+                throw new SerializationException($"Unsupported JSON value kind: {value.GetValueKind()}");
+        }
+    }
+
+    private static void WriteJsonNumber(ExtendedBinaryWriter writer, JsonValue value)
+    {
+        if (value.TryGetValue<long>(out var l))
+        {
+            writer.Write(BinaryTypeIndex.Int64);
+            writer.Write(l);
+        }
+        else if (value.TryGetValue<int>(out var i))
+        {
+            writer.Write(BinaryTypeIndex.Int32);
+            writer.Write(i);
+        }
+        else if (value.TryGetValue<double>(out var d))
+        {
+            writer.Write(BinaryTypeIndex.Float64);
+            writer.Write(d);
+        }
+        else
+        {
+            // Fallback: parse from string representation
+            writer.Write(BinaryTypeIndex.Float64);
+            writer.Write(double.Parse(value.ToString(), CultureInfo.InvariantCulture));
+        }
+    }
+    
     private static void WriteJsonArrayNumber(ExtendedBinaryWriter writer, JsonValue value, byte typeIndex)
     {
         switch (typeIndex)
@@ -409,58 +456,5 @@ internal class JsonType : ParameterizedType
         }
     }
 
-    internal static void WriteJsonValue(ExtendedBinaryWriter writer, JsonValue value)
-    {
-        switch (value.GetValueKind())
-        {
-            case JsonValueKind.Undefined:
-            case JsonValueKind.String:
-                writer.Write(BinaryTypeIndex.String);
-                writer.Write(value.ToString());
-                break;
-            case JsonValueKind.Number:
-                WriteJsonNumber(writer, value);
-                break;
-            case JsonValueKind.False:
-            case JsonValueKind.True:
-                writer.Write(BinaryTypeIndex.Bool);
-                writer.Write(value.GetValue<bool>());
-                break;
-            case JsonValueKind.Null:
-                writer.Write(BinaryTypeIndex.Nothing);
-                break;
-            default:
-                throw new SerializationException($"Unsupported JSON value kind: {value.GetValueKind()}");
-        }
-    }
-
-    internal static void WriteJsonNumber(ExtendedBinaryWriter writer, JsonValue value)
-    {
-        if (value.TryGetValue<long>(out var l))
-        {
-            writer.Write(BinaryTypeIndex.Int64);
-            writer.Write(l);
-        }
-        else if (value.TryGetValue<int>(out var i))
-        {
-            writer.Write(BinaryTypeIndex.Int32);
-            writer.Write(i);
-        }
-        else if (value.TryGetValue<decimal>(out var dec))
-        {
-            writer.Write(BinaryTypeIndex.Float64);
-            writer.Write((double)dec);
-        }
-        else if (value.TryGetValue<double>(out var d))
-        {
-            writer.Write(BinaryTypeIndex.Float64);
-            writer.Write(d);
-        }
-        else
-        {
-            // Fallback: parse from string representation
-            writer.Write(BinaryTypeIndex.Float64);
-            writer.Write(double.Parse(value.ToString(), CultureInfo.InvariantCulture));
-        }
-    }
+    private static bool IsBoolKind(JsonValueKind kind) => kind is JsonValueKind.True or JsonValueKind.False;
 }
