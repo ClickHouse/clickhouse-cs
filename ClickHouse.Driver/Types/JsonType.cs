@@ -424,7 +424,7 @@ internal class JsonType : ParameterizedType
             writer.Write(double.Parse(value.ToString(), CultureInfo.InvariantCulture));
         }
     }
-    
+
     private static void WriteJsonArrayNumber(ExtendedBinaryWriter writer, JsonValue value, byte typeIndex)
     {
         switch (typeIndex)
