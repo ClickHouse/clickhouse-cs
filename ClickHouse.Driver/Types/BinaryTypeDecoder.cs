@@ -128,7 +128,10 @@ internal static class BinaryTypeDecoder
 
             case BinaryTypeIndex.Dynamic:
                 reader.ReadByte(); // max_dynamic_types, ignored
-                return new DynamicType();
+                return new DynamicType
+                {
+                    TypeSettings = typeSettings,
+                };
 
             case BinaryTypeIndex.Custom:
                 return DecodeCustomType(reader); // "Ring, Polygon, etc"
@@ -258,7 +261,7 @@ internal static class BinaryTypeDecoder
 
     private static SimpleAggregateFunctionType DecodeSimpleAggregateFunction(ExtendedBinaryReader reader)
     {
-        throw new NotImplementedException("SimpleAggregateFunctionAggregateFunction decoding not implemented.");
+        throw new NotImplementedException("SimpleAggregateFunction decoding not implemented.");
     }
 
     private static VariantType DecodeVariant(ExtendedBinaryReader reader, TypeSettings typeSettings)
@@ -329,6 +332,6 @@ internal static class BinaryTypeDecoder
             reader.ReadString();
         }
 
-        return new JsonType(typedPaths);
+        return new JsonType(typedPaths) { TypeSettings = typeSettings };
     }
 }
