@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Numerics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Readers;
@@ -15,10 +17,31 @@ namespace ClickHouse.Driver.Tests.Types;
 
 public class DynamicTests : AbstractConnectionTestFixture
 {
-    public static IEnumerable<TestCaseData> DirectDynamicCastQueries => TestUtilities.GetDataTypeSamples()
-        .Where(s => ShouldBeSupportedInDynamic(s.ClickHouseType))
-        .Select(sample => new TestCaseData(sample.ExampleExpression, sample.ClickHouseType, sample.ExampleValue)
-            .SetName($"Direct_{sample.ClickHouseType}_{sample.ExampleValue}"));
+    public static IEnumerable<TestCaseData> DirectDynamicCastQueries
+    {
+        get
+        {
+            foreach (var sample in TestUtilities.GetDataTypeSamples().Where(s => ShouldBeSupportedInDynamic(s.ClickHouseType)))
+            {
+                yield return new TestCaseData(sample.ExampleExpression, sample.ClickHouseType, sample.ExampleValue)
+                    .SetName($"Direct_{sample.ClickHouseType}_{sample.ExampleValue}");
+            }
+
+            // Some additional test cases for dynamic specifically
+            // JSON with complex type hints
+            yield return new TestCaseData(
+                "'{\"a\": 1}'",
+                "Json(max_dynamic_paths=10, max_dynamic_types=3, a Int64, SKIP path.to.skip, SKIP REGEXP 'regex.path.*')",
+                new JsonObject { ["a"] = 1L }
+            ).SetName("Direct_Json_Complex");
+            
+            yield return new TestCaseData(
+                "1::Int32",
+                "Dynamic",
+                1
+            ).SetName("Nested_Dynamic");
+        }
+    }
 
     [Test]
     [RequiredFeature(Feature.Dynamic)]
