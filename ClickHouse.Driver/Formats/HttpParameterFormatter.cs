@@ -17,10 +17,24 @@ internal static class HttpParameterFormatter
 
     public static string Format(ClickHouseDbParameter parameter, TypeSettings settings)
     {
-        var type = string.IsNullOrWhiteSpace(parameter.ClickHouseType)
-            ? TypeConverter.ToClickHouseType(parameter.Value.GetType())
-            : TypeConverter.ParseClickHouseType(parameter.ClickHouseType, settings);
-        return Format(type, parameter.Value, false);
+        if (string.IsNullOrWhiteSpace(parameter.ClickHouseType))
+        {
+            if (parameter.Value is null or DBNull)
+            {
+                // Type unknown and value is null so we can't infer it
+                return NullValueString;
+            }
+            
+            // Infer type and format accordingly
+            var type = TypeConverter.ToClickHouseType(parameter.Value.GetType());
+            return Format(type, parameter.Value, false);
+        }
+        else
+        {
+            // Type has been provided
+            var type = TypeConverter.ParseClickHouseType(parameter.ClickHouseType, settings);
+            return Format(type, parameter.Value, false);
+        }
     }
 
     internal static string Format(ClickHouseType type, object value, bool quote)

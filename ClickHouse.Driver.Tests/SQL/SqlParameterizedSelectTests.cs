@@ -37,11 +37,12 @@ public class SqlParameterizedSelectTests : IDisposable
             Assert.Pass("Automatic type detection does not work for " + clickHouseType);
         if (clickHouseType.StartsWith("Enum"))
             clickHouseType = "String";
+        
 
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {exampleExpression} as expected, {{var:{clickHouseType}}} as actual, expected = actual as equals";
         command.AddParameter("var", value);
-//TODO step through this test and see exactly what happens with HttpParameterFormatter and ClickHouseDbParameter, they seem to be doing duplicate work
+
         var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
         TestUtilities.AssertEqual(result[0], result[1]);
 
@@ -93,6 +94,28 @@ public class SqlParameterizedSelectTests : IDisposable
         // }
     }
 
+
+    [Test]
+    [TestCase("String")]
+    [TestCase("Int32")]
+    [TestCase("Int64")]
+    [TestCase("Float64")]
+    [TestCase("UUID")]
+    [TestCase("Date")]
+    [TestCase("DateTime")]
+    [TestCase("Bool")]
+    public async Task ShouldExecuteSelectWithNullParameterWithoutExplicitType(string underlyingType)
+    {
+        // Regression test: When adding a parameter with null value and not specifying the type,
+        // HttpParameterFormatter.Format would throw NullReferenceException
+        // trying to call parameter.Value.GetType() on null
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {{SomeField:Nullable({underlyingType})}} as res";
+        command.AddParameter("SomeField", null);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.InstanceOf<DBNull>());
+    }
 
     [Test]
     public async Task ShouldExecuteSelectWithTupleParameter()

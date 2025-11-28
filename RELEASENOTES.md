@@ -17,6 +17,7 @@ v0.8.2
    * Parsing null values in arrays is now handled properly.
  * ClickHouseConnection.ConnectionString can now be set after creating the connection, to support cases where passing the connection string to the constructor is not possible.
  * ClickHouseConnection.CreateCommand() now has an optional argument for the command text.
+ * Fixed a NullReferenceException when adding a parameter with null value and no provided type. The driver now simply sends '\N' (null value special character) when encountering this scenario. 
 
 **Bug Fixes:**
  * Fixed a bug where serializing to json with an array of bools with both true and false elements would fail.
