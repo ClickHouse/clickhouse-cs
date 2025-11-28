@@ -307,10 +307,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override void ChangeDatabase(string databaseName)
     {
-        Settings = new ClickHouseClientSettings(Settings)
-        {
-            Database = databaseName,
-        };
+        Settings.Database = databaseName;
     }
 
     public object Clone() => new ClickHouseConnection(ConnectionString);

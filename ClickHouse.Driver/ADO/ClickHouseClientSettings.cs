@@ -93,7 +93,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Gets or sets the database name.
     /// Default: "" (if empty, will use the user's default database if it has been configured).
     /// </summary>
-    public string Database { get; init; } = ClickHouseDefaults.Database;
+    public string Database { get; set; } = ClickHouseDefaults.Database;
 
     /// <summary>
     /// Gets or sets the path component of the URL (for reverse proxy scenarios).
