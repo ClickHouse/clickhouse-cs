@@ -59,7 +59,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             SkipServerCertificateValidation = skipServerCertificateValidation,
         };
 
-        ApplySettings(settings);
+        Settings = settings;
     }
 
     /// <summary>
@@ -75,7 +75,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             HttpClient = httpClient,
         };
 
-        ApplySettings(settings);
+        Settings = settings;
     }
 
     /// <summary>
@@ -121,7 +121,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             HttpClientName = httpClientName,
         };
 
-        ApplySettings(settings);
+        Settings = settings;
     }
 
     /// <summary>
@@ -132,8 +132,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     {
         if (settings == null)
             throw new ArgumentNullException(nameof(settings));
-
-        ApplySettings(settings);
+        Settings = settings;
     }
 
     private ILoggerFactory loggerFactory;
@@ -158,15 +157,24 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <summary>
     /// Gets the string defining connection settings for ClickHouse server
     /// Example: Host=localhost;Port=8123;Username=default;Password=123;Compression=true
-    /// Setting the connection string is not supported; create a new connection with the desired settings instead.
+    /// It is generally recommended create a new connection instead of modifying the settings of an existing one.
     /// </summary>
     public sealed override string ConnectionString
     {
         get => ConnectionStringBuilder.ToString();
-        set => throw new NotSupportedException("Connection string cannot be changed after construction. Create a new connection with the desired settings.");
+        set => Settings = new ClickHouseClientSettings(value);
     }
 
-    public ClickHouseClientSettings Settings { get; private set; }
+    public ClickHouseClientSettings Settings { get;
+        set
+        {
+            if (State == ConnectionState.Open)
+                throw new InvalidOperationException("Cannot change settings while connection is open.");
+            
+            field = value;
+            ApplySettings();
+        }
+    }
 
     public IDictionary<string, object> CustomSettings => Settings?.CustomSettings;
 
@@ -210,26 +218,26 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         private set => supportedFeatures = value;
     }
 
-    private void ApplySettings(ClickHouseClientSettings settings)
+    private void ApplySettings()
     {
-        settings.Validate();
-        Settings = settings;
+        Settings.Validate();
 
-        serverUri = new UriBuilder(settings.Protocol, settings.Host, settings.Port, settings.Path ?? string.Empty).Uri;
+        serverUri = new UriBuilder(Settings.Protocol, Settings.Host, Settings.Port, Settings.Path ?? string.Empty).Uri;
 
         // HttpClientFactory/HttpClient
-        providedHttpClient = settings.HttpClient;
-        providedHttpClientFactory = settings.HttpClientFactory;
-        httpClientName = settings.HttpClientName;
+        providedHttpClient = Settings.HttpClient;
+        providedHttpClientFactory = Settings.HttpClientFactory;
+        httpClientName = Settings.HttpClientName;
 
         // Logging
-        loggerFactory = settings.LoggerFactory;
+        loggerCache.Clear();
+        loggerFactory = Settings.LoggerFactory;
 
 #if NET5_0_OR_GREATER
         // Debug mode
-        if (settings.EnableDebugMode)
+        if (Settings.EnableDebugMode)
         {
-            TraceHelper.Activate(settings.LoggerFactory);
+            TraceHelper.Activate(Settings.LoggerFactory);
         }
 #endif
 

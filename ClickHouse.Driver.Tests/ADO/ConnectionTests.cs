@@ -48,6 +48,26 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task ShouldBeAbleToSetConnectionStringAfterCreation() // Necessary to support this for some scenarios involving ClickHouseConnectionFactory
+    {
+        var conn = new ClickHouseConnection();
+        conn.ConnectionString = TestUtilities.GetConnectionStringBuilder().ToString();
+        await conn.OpenAsync();
+
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
+    }
+
+    [Test]
+    public async Task ShouldNotBeAbleToSetConnectionStringWhileOpen()
+    {
+        using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString());
+        await conn.OpenAsync();
+
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
+        Assert.Throws<InvalidOperationException>(() => conn.ConnectionString = "Host=otherhost");
+    }
+
+    [Test]
     public void ShouldParseCustomParameter()
     {
         using var conn = new ClickHouseConnection("set_my_parameter=aaa");
