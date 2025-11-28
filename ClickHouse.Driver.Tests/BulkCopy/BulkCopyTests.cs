@@ -683,6 +683,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [RequiredFeature(Feature.QBit)]
     public async Task ShouldInsertQBitFloat32()
     {
         var targetTable = "test." + SanitizeTableName("bulk_qbit_float32");
@@ -709,6 +710,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [RequiredFeature(Feature.QBit)]
     public async Task ShouldInsertQBitFloat64()
     {
         var targetTable = "test." + SanitizeTableName("bulk_qbit_float64");
@@ -735,6 +737,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [RequiredFeature(Feature.QBit)]
     public async Task ShouldInsertQBitBFloat16()
     {
         var targetTable = "test." + SanitizeTableName("bulk_qbit_bfloat16");
