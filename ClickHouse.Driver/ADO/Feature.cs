@@ -48,5 +48,8 @@ public enum Feature
     [SinceVersion("25.6")]
     Time = 1 << 12,
 
+    [SinceVersion("25.10")]
+    QBit = 1 << 13,
+
     All = ~None, // Special value
 }
