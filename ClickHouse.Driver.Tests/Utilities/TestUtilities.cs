@@ -152,6 +152,10 @@ public static class TestUtilities
             // it could cause problems by hiding other issues
             builder["set_allow_suspicious_variant_types"] = 1; 
         }
+        if (SupportedFeatures.HasFlag(Feature.QBit))
+        {
+            builder["set_allow_experimental_qbit_type"] = 1;
+        }
 
         var settings = new ClickHouseClientSettings(builder)
         {
@@ -509,6 +513,13 @@ public static class TestUtilities
             yield return new DataTypeSample("Time64(3)", typeof(TimeSpan), "'55:25:05.123'::Time64(3)", new TimeSpan(55, 25, 5).Add(TimeSpan.FromMilliseconds(123)));
             yield return new DataTypeSample("Time64(6)", typeof(TimeSpan), "'5:25:05.123456'::Time64(6)", new TimeSpan(5, 25, 5).Add(TimeSpan.FromMilliseconds(123.456)));
             yield return new DataTypeSample("Time64(6)", typeof(TimeSpan), "'-5:25:05.123456'::Time64(6)", (new TimeSpan(5, 25, 5).Add(TimeSpan.FromMilliseconds(123.456)).Negate()));
+        }
+
+        if (SupportedFeatures.HasFlag(Feature.QBit))
+        {
+            yield return new DataTypeSample("QBit(Float32, 4)", typeof(float[]), "[1.0, 2.0, 3.0, 4.0]::QBit(Float32, 4)", new float[] { 1f, 2f, 3f, 4f });
+            yield return new DataTypeSample("QBit(Float64, 5)", typeof(double[]), "[1.0, 2.0, 3.0, 4.0, 5.0]::QBit(Float64, 5)", new double[] { 1.0, 2.0, 3.0, 4.0, 5.0 });
+            yield return new DataTypeSample("QBit(BFloat16, 6)", typeof(float[]), "[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]::QBit(BFloat16, 6)", new float[] { 1f, 2f, 3f, 4f, 5f, 6f });
         }
 
         // Generate composite type tests for ALL base types that FromByteCode supports

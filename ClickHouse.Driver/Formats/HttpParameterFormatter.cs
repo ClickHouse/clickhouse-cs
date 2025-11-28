@@ -105,6 +105,9 @@ internal static class HttpParameterFormatter
             case ArrayType arrayType when value is IEnumerable enumerable:
                 return $"[{string.Join(",", enumerable.Cast<object>().Select(obj => Format(arrayType.UnderlyingType, obj, true)))}]";
 
+            case QBitType qbitType when value is IEnumerable enumerable:
+                return $"[{string.Join(",", enumerable.Cast<object>().Select(obj => Format(qbitType.ElementType, obj, true)))}]";
+
             case NestedType nestedType when value is IEnumerable enumerable:
                 var values = enumerable.Cast<object>().Select(x => Format(nestedType, x, false));
                 return $"[{string.Join(",", values)}]";

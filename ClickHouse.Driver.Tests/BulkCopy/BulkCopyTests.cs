@@ -683,5 +683,88 @@ public class BulkCopyTests : AbstractConnectionTestFixture
 
         Assert.That(ex.Message, Does.Contain("Destination table not set"));
     }
+
+    [Test]
+    public async Task ShouldInsertQBitFloat32()
+    {
+        var targetTable = "test." + SanitizeTableName("bulk_qbit_float32");
+
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (vec QBit(Float32, 9)) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var testData = new float[] { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f };
+
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([[(object)testData]]);
+
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT vec FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var result = (float[])reader.GetValue(0);
+        Assert.That(result, Is.EqualTo(testData));
+    }
+
+    [Test]
+    public async Task ShouldInsertQBitFloat64()
+    {
+        var targetTable = "test." + SanitizeTableName("bulk_qbit_float64");
+
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (vec QBit(Float64, 8)) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var testData = new double[] { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([[(object)testData]]);
+
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT vec FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var result = (double[])reader.GetValue(0);
+        Assert.That(result, Is.EqualTo(testData));
+    }
+
+    [Test]
+    public async Task ShouldInsertQBitBFloat16()
+    {
+        var targetTable = "test." + SanitizeTableName("bulk_qbit_bfloat16");
+
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (vec QBit(BFloat16, 6)) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var testData = new float[] { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
+
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([[(object)testData]]);
+
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT vec FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var result = (float[])reader.GetValue(0);
+        // BFloat16 has reduced precision, check approximate equality
+        Assert.That(result.Length, Is.EqualTo(testData.Length));
+        for (int i = 0; i < result.Length; i++)
+        {
+            Assert.That(result[i], Is.EqualTo(testData[i]).Within(0.01f));
+        }
+    }
 }
 
