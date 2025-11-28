@@ -244,8 +244,17 @@ public class SqlSimpleSelectTests : IDisposable
     [TestCaseSource(typeof(SqlSimpleSelectTests), nameof(SimpleSelectTypes))]
     public async Task ShouldExecuteRandomDataSelectQuery(string type)
     {
-        if (type.StartsWith("Nested") || type == "Nothing" || type.StartsWith("Variant") || type.StartsWith("Json") || type.Contains("BFloat16") || type.StartsWith("Time"))
+        if (type.StartsWith("Nested") ||
+            type == "Nothing" ||
+            type.StartsWith("Variant") ||
+            type.StartsWith("Json") ||
+            type.Contains("BFloat16") ||
+            type.StartsWith("Time") ||
+            type.StartsWith("QBit") ||
+            type.StartsWith("Geometry"))
+        {
             Assert.Ignore($"Type {type} not supported by generateRandom");
+        }
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT * FROM generateRandom('value {type.Replace("'", "\\'")}', 10, 10, 10) LIMIT 100");
         reader.AssertHasFieldCount(1);

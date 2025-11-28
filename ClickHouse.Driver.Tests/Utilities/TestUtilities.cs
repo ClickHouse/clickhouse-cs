@@ -98,6 +98,12 @@ public static class TestUtilities
         {
             builder["set_enable_time_time64_type"] = 1;
         }
+        if (SupportedFeatures.HasFlag(Feature.Geometry))
+        {
+            // Revisit this if the Geometry type is updated to not require this setting in the future 
+            // it could cause problems by hiding other issues
+            builder["set_allow_suspicious_variant_types"] = 1; 
+        }
 
         var settings = new ClickHouseClientSettings(builder)
         {
@@ -357,12 +363,47 @@ public static class TestUtilities
             yield return new DataTypeSample("UInt256", typeof(BigInteger), "toInt256(concat('1', repeat('0', 50)))", BigInteger.Pow(new BigInteger(10), 50));
         }
 
-        yield return new DataTypeSample("Point", typeof(Tuple<double, double>), "(10,20)", Tuple.Create(10.0, 20.0));
-        yield return new DataTypeSample("Ring", typeof(Tuple<double, double>[]), "[(0.1,0.2), (0.2,0.3), (0.3,0.4)]", new[] {
-            Tuple.Create(.1, .2),
-            Tuple.Create(.2, .3),
-            Tuple.Create(.3, .4)
-        });
+        // Geo types - define all subtypes with their samples
+        var geoSamples = new[]
+        {
+            new DataTypeSample("Point", typeof(Tuple<double, double>), "(10,20)", Tuple.Create(10.0, 20.0)),
+            new DataTypeSample("Ring", typeof(Tuple<double, double>[]), "[(0.1,0.2), (0.2,0.3), (0.3,0.4)]", new[] {
+                Tuple.Create(.1, .2),
+                Tuple.Create(.2, .3),
+                Tuple.Create(.3, .4)
+            }),
+            new DataTypeSample("LineString", typeof(Tuple<double, double>[]), "[(0.1,0.2), (0.2,0.3), (0.3,0.4)]", new[] {
+                Tuple.Create(.1, .2),
+                Tuple.Create(.2, .3),
+                Tuple.Create(.3, .4)
+            }),
+            new DataTypeSample("Polygon", typeof(Tuple<double, double>[][]), "[[(20,20), (50,20), (50,50), (20,50)], [(30,30), (50,50), (50,30)]]", new[] {
+                new[] { Tuple.Create(20.0, 20.0), Tuple.Create(50.0, 20.0), Tuple.Create(50.0, 50.0), Tuple.Create(20.0, 50.0) },
+                new[] { Tuple.Create(30.0, 30.0), Tuple.Create(50.0, 50.0), Tuple.Create(50.0, 30.0) }
+            }),
+            new DataTypeSample("MultiLineString", typeof(Tuple<double, double>[][]), "[[(0.1,0.2), (0.2,0.3)], [(0.4,0.5), (0.5,0.6)]]", new[] {
+                new[] { Tuple.Create(.1, .2), Tuple.Create(.2, .3) },
+                new[] { Tuple.Create(.4, .5), Tuple.Create(.5, .6) }
+            }),
+            new DataTypeSample("MultiPolygon", typeof(Tuple<double, double>[][][]), "[[[(0,0), (10,0), (10,10), (0,10)]], [[(20,20), (50,20), (50,50), (20,50)], [(30,30), (50,50), (50,30)]]]", new[] {
+                new[] { new[] { Tuple.Create(0.0, 0.0), Tuple.Create(10.0, 0.0), Tuple.Create(10.0, 10.0), Tuple.Create(0.0, 10.0) } },
+                new[] {
+                    new[] { Tuple.Create(20.0, 20.0), Tuple.Create(50.0, 20.0), Tuple.Create(50.0, 50.0), Tuple.Create(20.0, 50.0) },
+                    new[] { Tuple.Create(30.0, 30.0), Tuple.Create(50.0, 50.0), Tuple.Create(50.0, 30.0) }
+                }
+            }),
+        };
+
+        // Yield each geo type as-is
+        foreach (var sample in geoSamples)
+            yield return sample;
+
+        // Yield each geo type wrapped in Geometry (requires feature flag)
+        if (SupportedFeatures.HasFlag(Feature.Geometry))
+        {
+            foreach (var sample in geoSamples)
+                yield return new DataTypeSample("Geometry", typeof(object), $"({sample.ExampleExpression}::{sample.ClickHouseType})::Geometry", sample.ExampleValue);
+        }
 
         if (SupportedFeatures.HasFlag(Feature.Variant))
         {

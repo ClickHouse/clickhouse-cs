@@ -62,7 +62,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     private static bool ShouldBeSupportedInDynamic(string clickHouseType)
     {
         // Geo types not supported
-        if (clickHouseType is "Point" or "Ring" or "Polygon" or "MultiPolygon" or "Nothing")
+        if (clickHouseType is "Point" or "Ring" or "LineString" or "Polygon" or "MultiLineString" or "MultiPolygon" or "Geometry" or "Nothing")
         {
             return false;
         }
@@ -179,10 +179,15 @@ public class DynamicTests : AbstractConnectionTestFixture
             case "Int128":
             case "Int256":
             case "Json":
-            case "Point":
-            case "Ring":
             case "UInt128":
             case "UInt256":
+            case "Point":
+            case "Ring":
+            case "Geometry":
+            case "LineString":
+            case "MultiLineString":
+            case "Polygon":
+            case "MultiPolygon":
                 return false;
             default:
                 return true;

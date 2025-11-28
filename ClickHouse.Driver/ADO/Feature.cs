@@ -48,5 +48,8 @@ public enum Feature
     [SinceVersion("25.6")]
     Time = 1 << 12,
 
+    [SinceVersion("25.11")]
+    Geometry = 1 << 14,
+
     All = ~None, // Special value
 }
