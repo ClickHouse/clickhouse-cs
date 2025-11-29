@@ -1,14 +1,17 @@
-v0.8.2
+v0.9.0
 ---
 
 **Breaking Changes:**
  * Removed obsolete MySQL compatibility mapping TIME -> Int64.
  * Json serialization of bool arrays now uses the Boolean type instead of UInt8 (it is now consistent with how bool values outside arrays were handled).
+ * GEOMETRY is no longer an alias for String.
 
 **New Features/Improvements:**
  * Added support for BFloat16. It is converted to and from a 32-bit float.
  * Added support for Time and Time64, which are converted to and from TimeSpan. The types are available since ClickHouse 25.6 and using them requires the enable_time_time64_type flag to be set.
  * The Dynamic type now offers full support for all underlying types.
+ * Added support for LineString and MultiLineString geo types.
+ * Added support for the Geometry type, which can hold any geo subtype (Point, Ring, LineString, Polygon, MultiLineString, MultiPolygon). Available since ClickHouse 25.11. Requires allow_suspicious_variant_types to be set to 1.
  * Json support has been improved in many ways:
    * Now supports parsing Json that includes Maps; they are read into JsonObjects.
    * Added support for decoding BigInteger types, UUID, IPv4, IPv6, and ClickHouseDecimal types (they are handled as strings).

@@ -41,7 +41,7 @@ internal static class TypeConverter
         { "ENUM", "Enum" },
         { "FIXED", "Decimal" },
         { "FLOAT", "Float32" },
-        { "GEOMETRY", "String" },
+        { "GEOMETRY", "Geometry" },
         { "INET4", "IPv4" },
         { "INET6", "IPv6" },
         { "INT", "Int32" },
@@ -169,8 +169,11 @@ internal static class TypeConverter
         // Geo types
         RegisterPlainType<PointType>();
         RegisterPlainType<RingType>();
+        RegisterPlainType<LineStringType>();
         RegisterPlainType<PolygonType>();
+        RegisterPlainType<MultiLineStringType>();
         RegisterPlainType<MultiPolygonType>();
+        RegisterPlainType<GeometryType>();
 
         RegisterParameterizedType<ObjectType>();
         RegisterParameterizedType<JsonType>();

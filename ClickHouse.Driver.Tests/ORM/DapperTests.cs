@@ -56,6 +56,11 @@ public class DapperTests : AbstractConnectionTestFixture
             case "Nothing":
             case "Point":
             case "Ring":
+            case "Geometry":
+            case "LineString":
+            case "MultiLineString":
+            case "Polygon":
+            case "MultiPolygon":
             case "Time":
                 return false;
             default:
