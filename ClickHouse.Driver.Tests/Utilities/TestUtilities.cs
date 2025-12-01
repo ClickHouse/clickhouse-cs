@@ -21,15 +21,23 @@ public static class TestUtilities
     static TestUtilities()
     {
         var versionString = Environment.GetEnvironmentVariable("CLICKHOUSE_VERSION");
-        if (versionString is not null and not "latest" and not "head")
+        if (string.IsNullOrEmpty(versionString) || versionString == "latest" || versionString == "head")
+        {
+            // If there's no version string in the env, get it from the server
+            var conn = TestUtilities.GetTestClickHouseConnection();
+            var reader = conn.ExecuteReaderAsync("SELECT version()").Result;
+            reader.Read();
+            versionString = reader.GetString(0);
+        }
+
+        try
         {
             ServerVersion = Version.Parse(versionString.Split(':').Last().Trim());
             SupportedFeatures = ClickHouseFeatureMap.GetFeatureFlags(ServerVersion);
         }
-        else
+        catch
         {
             SupportedFeatures = Feature.All;
-            ServerVersion = null;
         }
     }
     
@@ -399,7 +407,9 @@ public static class TestUtilities
             yield return sample;
 
         // Yield each geo type wrapped in Geometry (requires feature flag)
-        if (SupportedFeatures.HasFlag(Feature.Geometry))
+        // Geometry is technically available since 25.11, but the casts from the various
+        // Geo types to Geometry only work from 25.12 on, and that's necessary for the tests to work.
+        if (ServerVersion >= Version.Parse("25.12"))
         {
             foreach (var sample in geoSamples)
                 yield return new DataTypeSample("Geometry", typeof(object), $"({sample.ExampleExpression}::{sample.ClickHouseType})::Geometry", sample.ExampleValue);
