@@ -7,6 +7,7 @@ v0.9.0
  * GEOMETRY is no longer an alias for String.
 
 **New Features/Improvements:**
+ * Sessions can now be used with custom HttpClient or HttpClientFactory. Previously this combination was not allowed. Note that when sessions are enabled, ClickHouseConnection will allow only one request at a time, and responses are fully buffered before returning to ensure proper request serialization.
  * Added support for BFloat16. It is converted to and from a 32-bit float.
  * Added support for Time and Time64, which are converted to and from TimeSpan. The types are available since ClickHouse 25.6 and using them requires the enable_time_time64_type flag to be set.
  * The Dynamic type now offers full support for all underlying types.

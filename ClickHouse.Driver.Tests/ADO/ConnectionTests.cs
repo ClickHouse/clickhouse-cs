@@ -378,22 +378,17 @@ public class ConnectionTests : AbstractConnectionTestFixture
     [Test]
     public async Task Constructor_WithSettingsWithHttpClient_ShouldUseProvidedHttpClient()
     {
-        // Create a substitute for HttpClient
-        var mockHttpClient = Substitute.ForPartsOf<HttpClient>();
-
-        // Configure it to forward to a real client for actual functionality
-        var realHandler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate };
-        using var realHttpClient = new HttpClient(realHandler);
-
-        mockHttpClient.SendAsync(Arg.Any<HttpRequestMessage>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo => realHttpClient.SendAsync(
-                callInfo.Arg<HttpRequestMessage>(),
-                callInfo.Arg<CancellationToken>()));
+        // Use a tracking handler to verify our HttpClient is actually used
+        var trackingHandler = new TrackingHandler(new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+        });
+        using var httpClient = new HttpClient(trackingHandler);
 
         var builder = TestUtilities.GetConnectionStringBuilder();
         var settings = new ClickHouseClientSettings(builder)
         {
-            HttpClient = mockHttpClient,
+            HttpClient = httpClient,
         };
 
         using var conn = new ClickHouseConnection(settings);
@@ -401,8 +396,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
         // Open connection - should use the provided HttpClient
         await conn.OpenAsync();
 
-        mockHttpClient.Received().SendAsync(Arg.Any<HttpRequestMessage>(), Arg.Any<CancellationToken>());
-
+        Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0), "HttpClient should have been used");
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
     }
 
@@ -446,21 +440,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
             Host = "localhost",
             HttpClient = httpClient,
             HttpClientFactory = factory
-        };
-
-        Assert.Throws<InvalidOperationException>(() => new ClickHouseConnection(settings));
-    }
-
-    [Test]
-    public void Constructor_WithSettingsWithUseSessionAndHttpClient_ShouldThrow()
-    {
-        using var httpClient = new HttpClient();
-
-        var settings = new ClickHouseClientSettings
-        {
-            Host = "localhost",
-            UseSession = true,
-            HttpClient = httpClient
         };
 
         Assert.Throws<InvalidOperationException>(() => new ClickHouseConnection(settings));
@@ -551,30 +530,19 @@ public class ConnectionTests : AbstractConnectionTestFixture
     [Test]
     public async Task Constructor_WithSettingsWithPath_ShouldApplyPath()
     {
-        var capturedUri = (Uri)null;
-
-        // Create a substitute HttpClient to capture the request
-        var mockHttpClient = Substitute.ForPartsOf<HttpClient>();
-
-        // Create a fake successful response
+        // Use a fake response so we don't need a real server at the custom path
         var fakeResponse = new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("25.10\tUTC")
         };
-
-        mockHttpClient.SendAsync(Arg.Any<HttpRequestMessage>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                var request = callInfo.Arg<HttpRequestMessage>();
-                capturedUri = request.RequestUri;
-                return Task.FromResult(fakeResponse);
-            });
+        var trackingHandler = new TrackingHandler(fakeResponse);
+        using var httpClient = new HttpClient(trackingHandler);
 
         var builder = TestUtilities.GetConnectionStringBuilder();
         var settings = new ClickHouseClientSettings(builder)
         {
             Path = "/custom/reverse/proxy/path",
-            HttpClient = mockHttpClient,
+            HttpClient = httpClient,
         };
 
         using var conn = new ClickHouseConnection(settings);
@@ -583,6 +551,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
         await conn.OpenAsync();
 
         // Verify the path was used in the request
-        Assert.That(capturedUri.AbsolutePath, Does.StartWith("/custom/reverse/proxy/path"), "Path was not applied to request");
+        Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0), "HttpClient should have been used");
+        Assert.That(trackingHandler.Requests[0].RequestUri.AbsolutePath, Does.StartWith("/custom/reverse/proxy/path"), "Path was not applied to request");
     }
 }

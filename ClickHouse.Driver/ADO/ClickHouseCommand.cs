@@ -193,7 +193,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         HttpResponseMessage response = null;
         try
         {
-            response = await connection.HttpClient
+            response = await connection
                 .SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, token)
                 .ConfigureAwait(false);
 

@@ -253,32 +253,6 @@ public class ClickHouseClientSettingsTests
     }
 
     [Test]
-    public void Validate_WithUseSessionAndHttpClient_ShouldThrow()
-    {
-        var settings = new ClickHouseClientSettings
-        {
-            UseSession = true,
-            HttpClient = new HttpClient()
-        };
-
-        var ex = Assert.Throws<InvalidOperationException>(() => settings.Validate());
-        Assert.That(ex.Message, Does.Contain("UseSession cannot be combined with a custom HttpClient"));
-    }
-
-    [Test]
-    public void Validate_WithUseSessionAndHttpClientFactory_ShouldThrow()
-    {
-        var settings = new ClickHouseClientSettings
-        {
-            UseSession = true,
-            HttpClientFactory = new TestHttpClientFactory()
-        };
-
-        var ex = Assert.Throws<InvalidOperationException>(() => settings.Validate());
-        Assert.That(ex.Message, Does.Contain("UseSession cannot be combined with a custom HttpClientFactory"));
-    }
-
-    [Test]
     public void Validate_WithBothHttpClientAndFactory_ShouldThrow()
     {
         var settings = new ClickHouseClientSettings

@@ -34,6 +34,12 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     private string httpClientName;
     private IHttpClientFactory httpClientFactory;
 
+    /// <summary>
+    /// This lock is used to serialize requests when using sessions,
+    /// because ClickHouse does not support using the same session from multiple connections.
+    /// </summary>
+    private SemaphoreSlim sessionRequestLock;
+
     // Server state (populated after connection)
     private Version serverVersion;
     private string serverTimezone;
@@ -254,6 +260,10 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             disposables.Remove(d);
         }
 
+        // Dispose and reset the session lock if it exists
+        sessionRequestLock?.Dispose();
+        sessionRequestLock = null;
+
         // If we have a HttpClient provided, use it
         if (providedHttpClient != null)
         {
@@ -268,7 +278,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             httpClientFactory = providedHttpClientFactory;
         }
 
-        // If sessions are enabled, always use single connection
+        // If sessions are enabled without a provided client/factory, use single connection factory
         else if (Settings.UseSession && !string.IsNullOrEmpty(Settings.SessionId))
         {
             GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Creating single-connection HttpClientFactory for session {SessionId}.", Settings.SessionId);
@@ -282,6 +292,13 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         {
             GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Using default pooled HttpClientFactory.");
             httpClientFactory = new DefaultPoolHttpClientFactory(SkipServerCertificateValidation) { Timeout = Settings.Timeout };
+        }
+
+        // Initialize session lock if sessions are enabled (regardless of how HttpClient is configured)
+        if (Settings.UseSession && !string.IsNullOrEmpty(Settings.SessionId))
+        {
+            sessionRequestLock = new SemaphoreSlim(1, 1);
+            GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Session request serialization enabled for session {SessionId}.", Settings.SessionId);
         }
     }
 
@@ -336,7 +353,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
                 Content = new StringContent(versionQuery, Encoding.UTF8),
             };
             AddDefaultHttpHeaders(request.Headers);
-            var response = await HandleError(await HttpClient.SendAsync(request, cancellationToken).ConfigureAwait(false), versionQuery, activity).ConfigureAwait(false);
+            using var response = await HandleError(await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false), versionQuery, activity).ConfigureAwait(false);
 #if NET5_0_OR_GREATER
             var data = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
 #else
@@ -420,7 +437,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
         try
         {
-            using var response = await HttpClient.SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
+            using var response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
             GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Streamed request to {Endpoint} received response {StatusCode}.", serverUri, response.StatusCode);
 
             return await HandleError(response, sql, activity).ConfigureAwait(false);
@@ -439,6 +456,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         GC.SuppressFinalize(this);
         foreach (var d in disposables)
             d.Dispose();
+        sessionRequestLock?.Dispose();
     }
 
     internal static Version ParseVersion(string versionString)
@@ -463,6 +481,30 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     }
 
     internal HttpClient HttpClient => httpClientFactory.CreateClient(httpClientName);
+
+    /// <summary>
+    /// Sends an HTTP request, serializing requests when sessions are enabled to prevent concurrent session access.
+    /// </summary>
+    internal async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationToken cancellationToken)
+    {
+        // This will only have a value when sessions are enabled
+        var lockRef = sessionRequestLock;
+        if (lockRef != null)
+        {
+            await lockRef.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                // Force ResponseContentRead to ensure response is fully buffered before releasing lock
+                return await HttpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                lockRef.Release();
+            }
+        }
+
+        return await HttpClient.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
+    }
 
     internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, Settings.UseServerTimezone ? serverTimezone : TypeSettings.DefaultTimezone);
 
