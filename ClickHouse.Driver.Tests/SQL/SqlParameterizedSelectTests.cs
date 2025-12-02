@@ -33,7 +33,7 @@ public class SqlParameterizedSelectTests : IDisposable
     [TestCaseSource(typeof(SqlParameterizedSelectTests), nameof(TypedQueryParameters))]
     public async Task ShouldExecuteParameterizedCompareWithTypeDetection(string exampleExpression, string clickHouseType, object value)
     {
-        if (clickHouseType.StartsWith("DateTime64") || clickHouseType == "Date" || clickHouseType == "Date32" || clickHouseType == "Time")
+        if (clickHouseType.StartsWith("DateTime64") || clickHouseType == "Date" || clickHouseType == "Date32" || clickHouseType == "Time" || clickHouseType.Contains("FixedString"))
             Assert.Pass("Automatic type detection does not work for " + clickHouseType);
         if (clickHouseType.StartsWith("Enum"))
             clickHouseType = "String";
@@ -58,6 +58,8 @@ public class SqlParameterizedSelectTests : IDisposable
 
     [Test]
     [TestCaseSource(typeof(SqlParameterizedSelectTests), nameof(TypedQueryParameters))]
+    [TestCase(null, "FixedString(4)", "asdf", TestName = "Parametrized select with string for FixedString")]
+    [TestCase(null, "FixedString(4)", new byte[] { 91, 92, 93, 94}, TestName = "Parametrized select with byte array for FixedString")]
     public async Task ShouldExecuteParameterizedSelectWithExplicitType(string _, string clickHouseType, object value)
     {
         if (clickHouseType.StartsWith("Enum"))

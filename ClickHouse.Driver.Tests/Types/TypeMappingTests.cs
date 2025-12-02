@@ -32,7 +32,7 @@ public class TypeMappingTests
     [TestCase("Decimal128(3)", ExpectedResult = typeof(ClickHouseDecimal))]
 
     [TestCase("String", ExpectedResult = typeof(string))]
-    [TestCase("FixedString(5)", ExpectedResult = typeof(string))]
+    [TestCase("FixedString(5)", ExpectedResult = typeof(byte[]))]
 
     [TestCase("UUID", ExpectedResult = typeof(Guid))]
 

@@ -2,6 +2,7 @@ v0.9.0
 ---
 
 **Breaking Changes:**
+ * FixedString is now returned as byte[] rather than String. FixedStrings are not necessarily valid UTF-8 strings, and the string transformation caused loss of information in some cases. Use Encoding.UTF8.GetString() on the resulting byte[] array to emulate the old behavior. String can still be used as a parameter or when inserting using BulkCopy into a FixedString column. When part of a json object, FixedString is still returned as a string.
  * Removed obsolete MySQL compatibility mapping TIME -> Int64.
  * Json serialization of bool arrays now uses the Boolean type instead of UInt8 (it is now consistent with how bool values outside arrays were handled).
  * GEOMETRY is no longer an alias for String.

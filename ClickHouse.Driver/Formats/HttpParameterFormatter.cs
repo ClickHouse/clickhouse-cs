@@ -3,6 +3,7 @@ using System.Collections;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Numerics;
@@ -24,7 +25,7 @@ internal static class HttpParameterFormatter
                 // Type unknown and value is null so we can't infer it
                 return NullValueString;
             }
-            
+
             // Infer type and format accordingly
             var type = TypeConverter.ToClickHouseType(parameter.Value.GetType());
             return Format(type, parameter.Value, false);
@@ -63,13 +64,16 @@ internal static class HttpParameterFormatter
                 return Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
             case StringType st:
-            case FixedStringType tt:
+            case FixedStringType tt when value is string:
             case Enum8Type e8t:
             case Enum16Type e16t:
             case IPv4Type ip4:
             case IPv6Type ip6:
             case UuidType uuidType:
                 return quote ? value.ToString().Escape().QuoteSingle() : value.ToString().Escape();
+
+            case FixedStringType tt when value is byte[] fsb:
+                return quote ? Encoding.UTF8.GetString(fsb).Escape().QuoteSingle() : Encoding.UTF8.GetString(fsb).Escape();
 
             case LowCardinalityType lt:
                 return Format(lt.UnderlyingType, value, quote);

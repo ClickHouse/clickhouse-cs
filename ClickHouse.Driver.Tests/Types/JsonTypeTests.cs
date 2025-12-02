@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Numerics;
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -202,7 +203,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             "code FixedString(10)",
             "{\"code\": \"ABC1234567\"}",
             "code",
-            "ABC1234567"
+            Encoding.UTF8.GetBytes("ABC1234567")
         ).SetName("FixedString(10)");
     }
     

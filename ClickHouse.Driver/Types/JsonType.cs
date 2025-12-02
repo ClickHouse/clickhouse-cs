@@ -211,69 +211,85 @@ internal class JsonType : ParameterizedType
     internal JsonNode ReadJsonNode(ExtendedBinaryReader reader, ClickHouseType hintedType)
     {
         var type = hintedType ?? BinaryTypeDecoder.FromByteCode(reader, TypeSettings);
-        if (type is ArrayType at)
+        return type switch
         {
-            var count = reader.Read7BitEncodedInt();
-            var array = new JsonArray();
-            for (int i = 0; i < count; i++)
-            {
-                array.Add(ReadJsonNode(reader, at.UnderlyingType));
-            }
+            ArrayType at => ReadJsonArray(reader, at),
+            MapType mt => ReadJsonMap(reader, mt),
+            FixedStringType => ReadJsonFixedString(reader, type),
+            _ => ReadJsonValue(reader, type),
+        };
+    }
 
-            return array;
-        }
-        if (type is MapType mt)
+    private JsonArray ReadJsonArray(ExtendedBinaryReader reader, ArrayType arrayType)
+    {
+        var count = reader.Read7BitEncodedInt();
+        var array = new JsonArray();
+        for (int i = 0; i < count; i++)
         {
-            if (mt.KeyType is not StringType)
-            {
-                throw new NotSupportedException($"JSON Map keys must be strings, got {mt.KeyType}");
-            }
-
-            var count = reader.Read7BitEncodedInt();
-            var obj = new JsonObject();
-            for (int i = 0; i < count; i++)
-            {
-                var key = (string)mt.KeyType.Read(reader);
-                var value = ReadJsonNode(reader, mt.ValueType);
-                obj[key] = value;
-            }
-            return obj;
+            array.Add(ReadJsonNode(reader, arrayType.UnderlyingType));
         }
-        else
+
+        return array;
+    }
+
+    private JsonObject ReadJsonMap(ExtendedBinaryReader reader, MapType mapType)
+    {
+        if (mapType.KeyType is not StringType)
         {
-            var value = type.Read(reader);
-            if (value is DBNull)
-                value = null;
-
-            // Handle specific types that need special serialization to JSON
-            // For types that don't have a direct JsonValue representation, convert to string
-            return value switch
-            {
-                null => null,
-                JsonObject jo => jo,
-                string s => JsonValue.Create(s),
-                bool b => JsonValue.Create(b),
-                byte by => JsonValue.Create(by),
-                sbyte sb => JsonValue.Create(sb),
-                short sh => JsonValue.Create(sh),
-                ushort us => JsonValue.Create(us),
-                int i => JsonValue.Create(i),
-                uint ui => JsonValue.Create(ui),
-                long l => JsonValue.Create(l),
-                ulong ul => JsonValue.Create(ul),
-                float f => JsonValue.Create(f),
-                double d => JsonValue.Create(d),
-                decimal dec => JsonValue.Create(dec),
-                DateTime dt => JsonValue.Create(dt),
-                // Types that need string representation
-                BigInteger bi => JsonValue.Create(bi.ToString()),
-                Guid guid => JsonValue.Create(guid.ToString()),
-                IPAddress ip => JsonValue.Create(ip.ToString()),
-                ClickHouseDecimal dec => JsonValue.Create(dec.ToString()),
-                // Default: try JsonSerializer for complex types
-                _ => JsonValue.Create(JsonSerializer.SerializeToElement(value))
-            };
+            throw new NotSupportedException($"JSON Map keys must be strings, got {mapType.KeyType}");
         }
+
+        var count = reader.Read7BitEncodedInt();
+        var obj = new JsonObject();
+        for (int i = 0; i < count; i++)
+        {
+            var key = (string)mapType.KeyType.Read(reader);
+            var value = ReadJsonNode(reader, mapType.ValueType);
+            obj[key] = value;
+        }
+        return obj;
+    }
+
+    private static JsonNode ReadJsonFixedString(ExtendedBinaryReader reader, ClickHouseType type)
+    {
+        var value = type.Read(reader);
+        return JsonValue.Create(Encoding.UTF8.GetString((byte[])value));
+    }
+
+    private static JsonNode ReadJsonValue(ExtendedBinaryReader reader, ClickHouseType type)
+    {
+        var value = type.Read(reader);
+        if (value is DBNull)
+            value = null;
+
+        // Handle specific types that need special serialization to JSON
+        // For types that don't have a direct JsonValue representation, convert to string
+        return value switch
+        {
+            null => null,
+            JsonObject jo => jo,
+            string s => JsonValue.Create(s),
+            bool b => JsonValue.Create(b),
+            byte by => JsonValue.Create(by),
+            sbyte sb => JsonValue.Create(sb),
+            short sh => JsonValue.Create(sh),
+            ushort us => JsonValue.Create(us),
+            int i => JsonValue.Create(i),
+            uint ui => JsonValue.Create(ui),
+            long l => JsonValue.Create(l),
+            ulong ul => JsonValue.Create(ul),
+            float f => JsonValue.Create(f),
+            double d => JsonValue.Create(d),
+            decimal dec => JsonValue.Create(dec),
+            DateTime dt => JsonValue.Create(dt),
+            // Types that need string representation
+            BigInteger bi => JsonValue.Create(bi.ToString()),
+            Guid guid => JsonValue.Create(guid.ToString()),
+            IPAddress ip => JsonValue.Create(ip.ToString()),
+            ClickHouseDecimal chDec => JsonValue.Create(chDec.ToString()),
+            // Default: try JsonSerializer for complex types
+            _ => JsonValue.Create(JsonSerializer.SerializeToElement(value))
+        };
     }
 
     internal static void WriteJsonNode(ExtendedBinaryWriter writer, JsonNode node)

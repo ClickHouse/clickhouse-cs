@@ -4,6 +4,7 @@ using System.Data.Common;
 using System.Linq;
 using System.Net;
 using System.Numerics;
+using System.Text;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Numerics;
@@ -272,8 +273,8 @@ public static class TestUtilities
         yield return new DataTypeSample("String", typeof(string), "'お茶'", "お茶");
 
         // yield return new DataTypeSample("String", typeof(string), "'1\t2\n3'", "1\t2\n3");
-        yield return new DataTypeSample("FixedString(3)", typeof(string), "toFixedString('ASD',3)", "ASD");
-        yield return new DataTypeSample("FixedString(5)", typeof(string), "toFixedString('ASD',5)", "ASD\0\0");
+        yield return new DataTypeSample("FixedString(3)", typeof(byte[]), "toFixedString('ASD',3)", Encoding.UTF8.GetBytes("ASD"));
+        yield return new DataTypeSample("FixedString(5)", typeof(byte[]), "toFixedString('ASD',5)", Encoding.UTF8.GetBytes("ASD\0\0"));
 
         yield return new DataTypeSample("UUID", typeof(Guid), "toUUID('00000000-0000-0000-0000-000000000000')", new Guid("00000000-0000-0000-0000-000000000000"));
         yield return new DataTypeSample("UUID", typeof(Guid), "toUUID('61f0c404-5cb3-11e7-907b-a6006ad3dba0')", new Guid("61f0c404-5cb3-11e7-907b-a6006ad3dba0"));
@@ -488,7 +489,7 @@ public static class TestUtilities
             // 0x15: String
             new DataTypeSample("String", typeof(string), "'test'", "test"),
             // 0x16: FixedString
-            new DataTypeSample("FixedString(4)", typeof(string), "toFixedString('test', 4)", "test"),
+            new DataTypeSample("FixedString(4)", typeof(byte[]), "toFixedString('test', 4)", Encoding.UTF8.GetBytes("test")),
             // 0x17: Enum8
             new DataTypeSample("Enum8('a' = 1, 'b' = 2)", typeof(string), "CAST('a', 'Enum8(\\'a\\' = 1, \\'b\\' = 2)')", "a"),
             // 0x18: Enum16

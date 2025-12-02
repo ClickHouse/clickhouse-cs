@@ -23,12 +23,14 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     {
         foreach (var sample in TestUtilities.GetDataTypeSamples())
         {
-            if (new[] { "Enum8", "Nothing", "Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))" }.Contains(sample.ClickHouseType))
+            if (new[] { "Enum8", "Nothing" }.Contains(sample.ClickHouseType))
                 continue;
             yield return new TestCaseData(sample.ClickHouseType, sample.ExampleValue);
         }
         yield return new TestCaseData("String", "1\t2\n3");
         yield return new TestCaseData("DateTime('Asia/Ashkhabad')", new DateTime(2020, 2, 20, 20, 20, 20, DateTimeKind.Unspecified));
+        yield return new TestCaseData("FixedString(4)", "asdf");
+        yield return new TestCaseData("FixedString(4)", new byte[] { 121, 122, 123, 124 }); // Test both formats for FixedString
     }
 
     [Test]

@@ -48,6 +48,8 @@ public class DapperTests : AbstractConnectionTestFixture
             return false;
         if (clickHouseType.Contains("Nested"))
             return false;
+        if (clickHouseType.Contains("FixedString"))
+            return false;
         switch (clickHouseType)
         {
             case "UUID":

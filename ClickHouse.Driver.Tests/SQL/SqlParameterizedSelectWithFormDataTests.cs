@@ -33,7 +33,7 @@ public class SqlParameterizedSelectWithFormDataTests
     [TestCaseSource(typeof(SqlParameterizedSelectTests), nameof(TypedQueryParameters))]
     public async Task ShouldExecuteParameterizedCompareWithTypeDetection(string exampleExpression, string clickHouseType, object value)
     {
-        if (clickHouseType.StartsWith("DateTime64") || clickHouseType == "Date" || clickHouseType == "Date32" || clickHouseType == "Time")
+        if (clickHouseType.StartsWith("DateTime64") || clickHouseType == "Date" || clickHouseType == "Date32" || clickHouseType == "Time" || clickHouseType.Contains("FixedString"))
             Assert.Pass("Automatic type detection does not work for " + clickHouseType);
         if (clickHouseType.StartsWith("Enum"))
             clickHouseType = "String";
