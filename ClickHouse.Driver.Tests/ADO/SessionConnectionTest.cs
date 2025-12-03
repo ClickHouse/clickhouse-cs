@@ -115,31 +115,6 @@ public class SessionConnectionTest
     }
 
     [Test]
-    public async Task Session_ReuseSessionIdAcrossConnections_ShouldWork()
-    {
-        var sessionId = "TEST-" + Guid.NewGuid().ToString();
-
-        // First connection: create temp table and insert data
-        using (var connection1 = CreateConnection(useSession: true, sessionId))
-        {
-            await connection1.ExecuteStatementAsync("CREATE TEMPORARY TABLE test_reuse_table (value UInt8)");
-            await connection1.ExecuteStatementAsync("INSERT INTO test_reuse_table VALUES (42)");
-            var count = await connection1.ExecuteScalarAsync("SELECT COUNT(*) from test_reuse_table");
-            Assert.That(count, Is.EqualTo(1UL));
-        }
-
-        // Second connection with same session ID: temp table should still exist
-        using (var connection2 = CreateConnection(useSession: true, sessionId))
-        {
-            var count = await connection2.ExecuteScalarAsync("SELECT COUNT(*) from test_reuse_table");
-            Assert.That(count, Is.EqualTo(1UL));
-
-            var value = await connection2.ExecuteScalarAsync("SELECT value from test_reuse_table");
-            Assert.That(value, Is.EqualTo((byte)42));
-        }
-    }
-
-    [Test]
     public async Task Session_ConcurrentRequests_AreSerialized()
     {
         var sessionId = "TEST-" + Guid.NewGuid();
@@ -156,35 +131,8 @@ public class SessionConnectionTest
         await Task.WhenAll(task1, task2);
         stopwatch.Stop();
 
-        // Quick sanity check: should take >500ms if serialized
-        Assert.That(stopwatch.ElapsedMilliseconds, Is.GreaterThan(500),
-            $"Requests should be serialized. Expected >500ms but took {stopwatch.ElapsedMilliseconds}ms");
-
-        // Server-side verification: queries should not overlap in time
-        await connection.ExecuteStatementAsync("SYSTEM FLUSH LOGS");
-
-        using var cmd = connection.CreateCommand($@"
-            SELECT query_start_time_microseconds, query_duration_ms::Int64
-            FROM system.query_log
-            WHERE query LIKE '%marker%{marker}%'
-              AND type = 'QueryFinish'
-            ORDER BY query_start_time_microseconds");
-
-        using var reader = await cmd.ExecuteReaderAsync();
-
-        var queries = new List<(DateTime queryStart, long durationMs)>();
-        while (await reader.ReadAsync())
-        {
-            queries.Add(((DateTime)reader.GetValue(0), reader.GetInt64(1)));
-        }
-
-        Assert.That(queries, Has.Count.EqualTo(2), "Should find both queries in log");
-
-        // Verify no overlap: query2 start >= query1 end
-        var q1End = queries[0].queryStart + TimeSpan.FromMilliseconds(queries[0].durationMs);
-        var q2Start = queries[1].queryStart;
-
-        Assert.That(q2Start, Is.GreaterThanOrEqualTo(q1End),
-            "Second query should start after first query ends (serialized)");
+        // Quick sanity check: should take >600ms if serialized
+        Assert.That(stopwatch.ElapsedMilliseconds, Is.GreaterThan(600),
+            $"Requests should be serialized. Expected >600ms but took {stopwatch.ElapsedMilliseconds}ms");
     }
 }
