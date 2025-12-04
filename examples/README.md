@@ -64,18 +64,28 @@ If something is missing, or you found a mistake in one of these examples, please
 
 ### Running examples
 
-Navigate to the examples directory and run the example program (which will execute all examples):
-   ```bash
-   cd examples
-   dotnet run
-   ```
+Navigate to the examples directory and run the example program:
 
-Alternatively, you can modify `Program.cs` to run specific examples:
-   ```csharp
-   // Run only specific examples
-   await Core_001_BasicUsage.Run();
-   await Insert_002_BulkInsert.Run();
-   ```
+```bash
+cd examples
+
+# Run all examples
+dotnet run
+
+# List available examples
+dotnet run -- --list
+
+# Run specific example(s) using a filter
+dotnet run -- --filter basicusage
+dotnet run -- --filter core001
+dotnet run -- --filter core_001
+dotnet run -- --filter bulk
+
+# Shorthand (positional argument)
+dotnet run -- basicusage
+```
+
+The filter uses fuzzy matching - it matches against any substring of the example filename, ignoring case and underscores. For example, `core001`, `core_001`, `basicusage`, and `Basic` would all match `Core_001_BasicUsage`.
 
 ### Connection configuration
 
