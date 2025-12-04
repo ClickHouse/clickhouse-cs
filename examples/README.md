@@ -17,6 +17,10 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Core_003_DependencyInjection.cs](Core_003_DependencyInjection.cs) - Using ClickHouse with dependency injection and config binding
 - [Core_004_HttpClientConfiguration.cs](Core_004_HttpClientConfiguration.cs) - Providing custom HttpClient or IHttpClientFactory for SSL/TLS, proxy, timeouts, and more control over connection settings
 
+### Authentication
+
+- [Auth_001_JwtAuthentication.cs](Auth_001_JwtAuthentication.cs) - Using JWT/Bearer token authentication with ClickHouse.
+
 ### Creating Tables
 
 - [Tables_001_CreateTableSingleNode.cs](Tables_001_CreateTableSingleNode.cs) - Creating tables with different engines and data types on a single-node deployment
