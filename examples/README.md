@@ -77,9 +77,6 @@ dotnet run -- --list
 
 # Run specific example(s) using a filter
 dotnet run -- --filter basicusage
-dotnet run -- --filter core001
-dotnet run -- --filter core_001
-dotnet run -- --filter bulk
 
 # Shorthand (positional argument)
 dotnet run -- basicusage
