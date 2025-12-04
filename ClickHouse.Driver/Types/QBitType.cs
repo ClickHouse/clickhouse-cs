@@ -35,7 +35,7 @@ internal class QBitType : ParameterizedType
 
     public override object Read(ExtendedBinaryReader reader)
     {
-        // QBit wire format is Array(UnderlyingType), but the length is padded to the nearest 8
+        // QBit wire format is Array(UnderlyingType)
         var length = reader.Read7BitEncodedInt();
         var data = Array.CreateInstance(ElementType.FrameworkType, Dimension); // Could use a pool here
         for (var i = 0; i < length; i++)
