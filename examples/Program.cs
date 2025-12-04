@@ -45,7 +45,7 @@ class Program
         {
             ExampleRunner.PrintNoMatchError(filter);
             Environment.Exit(1);
-            return;
+
         }
 
         Console.WriteLine($"Found {matches.Count} matching example(s):\n");

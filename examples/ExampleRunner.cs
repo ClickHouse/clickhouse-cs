@@ -34,7 +34,7 @@ public static class ExampleRunner
     {
         var normalizedFilter = Normalize(filter);
         return _examples
-            .Where(e => e.NormalizedName.Contains(normalizedFilter, StringComparison.Ordinal))
+            .Where(e => e.NormalizedName.Contains(normalizedFilter))
             .ToList();
     }
 
