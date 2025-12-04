@@ -64,6 +64,13 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public IDictionary<string, object> CustomSettings => customSettings ??= new Dictionary<string, object>();
 
     /// <summary>
+    /// Gets or sets a bearer token for this command, overriding the connection-level token.
+    /// When set, this token is used for Bearer authentication instead of the connection's
+    /// BearerToken or Username/Password credentials.
+    /// </summary>
+    public string BearerToken { get; set; }
+
+    /// <summary>
     /// Gets the roles to use for this command.
     /// When set, these roles replace any connection-level roles.
     /// </summary>
@@ -253,7 +260,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
         var postMessage = new HttpRequestMessage(HttpMethod.Post, uri);
 
-        connection.AddDefaultHttpHeaders(postMessage.Headers);
+        connection.AddDefaultHttpHeaders(postMessage.Headers, bearerTokenOverride: BearerToken);
         HttpContent content = new StringContent(sqlQuery);
         content.Headers.ContentType = new MediaTypeHeaderValue("text/sql");
         if (connection.UseCompression)
@@ -290,7 +297,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
         var postMessage = new HttpRequestMessage(HttpMethod.Post, uri);
 
-        connection.AddDefaultHttpHeaders(postMessage.Headers);
+        connection.AddDefaultHttpHeaders(postMessage.Headers, bearerTokenOverride: BearerToken);
 
         postMessage.Content = content;
 

@@ -54,6 +54,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         Path = other.Path;
         Username = other.Username;
         Password = other.Password;
+        BearerToken = other.BearerToken;
         UseCompression = other.UseCompression;
         UseServerTimezone = other.UseServerTimezone;
         UseCustomDecimals = other.UseCustomDecimals;
@@ -116,6 +117,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Default: "" (empty string)
     /// </summary>
     public string Password { get; init; } = ClickHouseDefaults.Password;
+
+    /// <summary>
+    /// Gets or sets the bearer token for JWT authentication.
+    /// When set, Bearer authentication is used instead of Basic authentication
+    /// (Username and Password are ignored for the Authorization header).
+    /// The token should be provided as-is (already encoded if required by your auth provider).
+    /// Default: null
+    /// </summary>
+    public string BearerToken { get; init; }
 
     /// <summary>
     /// Gets or sets whether to use compression for data transfer.
@@ -310,6 +320,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                Path == other.Path &&
                Username == other.Username &&
                Password == other.Password &&
+               BearerToken == other.BearerToken &&
                UseCompression == other.UseCompression &&
                UseServerTimezone == other.UseServerTimezone &&
                UseCustomDecimals == other.UseCustomDecimals &&
@@ -346,6 +357,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(Path);
         hash.Add(Username);
         hash.Add(Password);
+        hash.Add(BearerToken);
         hash.Add(UseCompression);
         hash.Add(UseServerTimezone);
         hash.Add(UseCustomDecimals);

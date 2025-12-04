@@ -521,11 +521,21 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     internal Task EnsureOpenAsync() => state != ConnectionState.Open ? OpenAsync() : Task.CompletedTask;
 
-    internal void AddDefaultHttpHeaders(HttpRequestHeaders headers)
+    internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, string bearerTokenOverride = null)
     {
         var userAgentInfo = UserAgentProvider.Info;
 
-        headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Settings.Username}:{Settings.Password}")));
+        // Priority: command-level bearer token > connection-level bearer token > basic auth
+        var bearerToken = bearerTokenOverride ?? Settings.BearerToken;
+        if (!string.IsNullOrEmpty(bearerToken))
+        {
+            headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        }
+        else
+        {
+            headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Settings.Username}:{Settings.Password}")));
+        }
+
         headers.UserAgent.Add(userAgentInfo.DriverProductInfo);
         headers.UserAgent.Add(userAgentInfo.SystemProductInfo);
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));

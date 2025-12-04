@@ -178,6 +178,105 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task Request_WithoutBearerToken_ShouldUseBasicAuth()
+    {
+        var fakeResponse = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("25.10\tUTC")
+        };
+        var trackingHandler = new TrackingHandler(fakeResponse);
+        using var httpClient = new HttpClient(trackingHandler);
+
+        var settings = new ClickHouseClientSettings
+        {
+            Host = "localhost",
+            Username = "testuser",
+            Password = "testpass",
+            HttpClient = httpClient
+        };
+        using var conn = new ClickHouseConnection(settings);
+        await conn.OpenAsync();
+
+        Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0));
+        var request = trackingHandler.Requests[0];
+        Assert.That(request.Headers.Authorization, Is.Not.Null);
+        Assert.That(request.Headers.Authorization.Scheme, Is.EqualTo("Basic"));
+        var expectedCredentials = Convert.ToBase64String(Encoding.UTF8.GetBytes("testuser:testpass"));
+        Assert.That(request.Headers.Authorization.Parameter, Is.EqualTo(expectedCredentials));
+    }
+
+    [Test]
+    public async Task Request_WithBearerToken_ShouldUseBearerAuth()
+    {
+        var fakeResponse = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("25.10\tUTC")
+        };
+        var trackingHandler = new TrackingHandler(fakeResponse);
+        using var httpClient = new HttpClient(trackingHandler);
+
+        var settings = new ClickHouseClientSettings
+        {
+            Host = "localhost",
+            Username = "testuser",
+            Password = "testpass",
+            BearerToken = "my-jwt-token-here",
+            HttpClient = httpClient
+        };
+        using var conn = new ClickHouseConnection(settings);
+        await conn.OpenAsync();
+
+        Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0));
+        var request = trackingHandler.Requests[0];
+        Assert.That(request.Headers.Authorization, Is.Not.Null);
+        Assert.That(request.Headers.Authorization.Scheme, Is.EqualTo("Bearer"));
+        Assert.That(request.Headers.Authorization.Parameter, Is.EqualTo("my-jwt-token-here"));
+    }
+
+    [Test]
+    public async Task Command_WithBearerTokenOverride_ShouldUseCommandToken()
+    {
+        var fakeResponse = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("25.10\tUTC")
+        };
+        var trackingHandler = new TrackingHandler(fakeResponse);
+        using var httpClient = new HttpClient(trackingHandler);
+
+        var settings = new ClickHouseClientSettings
+        {
+            Host = "localhost",
+            BearerToken = "connection-level-token",
+            HttpClient = httpClient
+        };
+        using var conn = new ClickHouseConnection(settings);
+        await conn.OpenAsync();
+
+        // Remember the count from OpenAsync
+        var requestCountAfterOpen = trackingHandler.RequestCount;
+
+        // Execute a command with a different bearer token
+        var command = conn.CreateCommand();
+        command.CommandText = "SELECT 1";
+        command.BearerToken = "command-level-token";
+
+        try
+        {
+            await command.ExecuteScalarAsync();
+        }
+        catch
+        {
+            // Ignore errors from fake response - we just want to check the request
+        }
+
+        Assert.That(trackingHandler.RequestCount, Is.GreaterThan(requestCountAfterOpen));
+        var request = trackingHandler.Requests[requestCountAfterOpen]; // Get the first request after OpenAsync
+        Assert.That(request.Headers.Authorization, Is.Not.Null);
+        Assert.That(request.Headers.Authorization.Scheme, Is.EqualTo("Bearer"));
+        Assert.That(request.Headers.Authorization.Parameter, Is.EqualTo("command-level-token"));
+    }
+
+    [Test]
     [Explicit("This test takes 3s, and can be flaky on loaded server")]
     public async Task ReplaceRunningQuerySettingShouldReplace()
     {
