@@ -29,13 +29,18 @@ public class ComparisonConfig : ManualConfig
         // Comparison mode: both baseline and PR versions are set
         if (!string.IsNullOrEmpty(baselineVersion) && !string.IsNullOrEmpty(prVersion))
         {
+            var nugetSource = Environment.GetEnvironmentVariable("NUGET_SOURCE") ?? "";
+            var sourceArg = !string.IsNullOrEmpty(nugetSource)
+                ? $"/p:RestoreAdditionalProjectSources={nugetSource}"
+                : "";
+
             AddJob(job
-                .WithNuGet("ClickHouse.Driver", baselineVersion)
+                .WithMsBuildArguments($"/p:ClickHouseDriverVersion={baselineVersion}", sourceArg)
                 .WithId("baseline")
                 .WithBaseline(true));
 
             AddJob(job
-                .WithNuGet("ClickHouse.Driver", prVersion)
+                .WithMsBuildArguments($"/p:ClickHouseDriverVersion={prVersion}", sourceArg)
                 .WithId("pr"));
 
             SummaryStyle = SummaryStyle.Default

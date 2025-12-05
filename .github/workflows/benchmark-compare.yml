@@ -82,14 +82,22 @@ jobs:
             /p:Version=0.0.0-pr.${{ steps.pr.outputs.number }}
           cp pr/ClickHouse.Driver/bin/Release/*.nupkg pr/.nupkg/
 
+      - name: Restore benchmark project
+        run: |
+          dotnet restore \
+            pr/ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
+            --source $PWD/pr/.nupkg/ \
+            --source https://api.nuget.org/v3/index.json \
+            -p:BenchmarkComparisonMode=true
+
       - name: Run comparison benchmarks
         run: |
           dotnet run \
             --project pr/ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
             --framework net10.0 \
             --configuration Release \
+            --no-restore \
             -p:BenchmarkComparisonMode=true \
-            --source ../.nupkg/ \
             -- --join --filter "*" --artifacts ./results --job Short
         env:
           CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
