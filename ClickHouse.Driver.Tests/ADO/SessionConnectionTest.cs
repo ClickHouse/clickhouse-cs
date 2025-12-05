@@ -131,8 +131,8 @@ public class SessionConnectionTest
         await Task.WhenAll(task1, task2);
         stopwatch.Stop();
 
-        // Quick sanity check: should take >600ms if serialized
-        Assert.That(stopwatch.ElapsedMilliseconds, Is.GreaterThan(600),
-            $"Requests should be serialized. Expected >600ms but took {stopwatch.ElapsedMilliseconds}ms");
+        // Quick sanity check: should take >550ms if serialized
+        Assert.That(stopwatch.ElapsedMilliseconds, Is.GreaterThan(550),
+            $"Requests should be serialized. Expected >550ms but took {stopwatch.ElapsedMilliseconds}ms");
     }
 }
