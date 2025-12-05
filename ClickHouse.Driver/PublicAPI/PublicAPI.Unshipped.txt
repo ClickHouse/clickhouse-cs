@@ -7,6 +7,8 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.CustomSettings.get -> System.Coll
 ClickHouse.Driver.ADO.ClickHouseClientSettings.CustomSettings.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Database.get -> string
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Database.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Roles.get -> System.Collections.Generic.IReadOnlyList<string>
+ClickHouse.Driver.ADO.ClickHouseClientSettings.Roles.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Equals(ClickHouse.Driver.ADO.ClickHouseClientSettings other) -> bool
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Host.get -> string
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Host.init -> void
@@ -50,8 +52,12 @@ ClickHouse.Driver.ADO.ClickHouseConnection.ClickHouseConnection(string connectio
 ClickHouse.Driver.ADO.ClickHouseConnection.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory
 ClickHouse.Driver.ADO.ClickHouseConnection.PostStreamAsync(string sql, System.Func<System.IO.Stream, System.Threading.CancellationToken, System.Threading.Tasks.Task> callback, bool isCompressed, System.Threading.CancellationToken token) -> System.Threading.Tasks.Task
 ClickHouse.Driver.ADO.ClickHouseConnection.PostStreamAsync(string sql, System.IO.Stream data, bool isCompressed, System.Threading.CancellationToken token) -> System.Threading.Tasks.Task
+ClickHouse.Driver.ADO.ClickHouseCommand.Roles.get -> System.Collections.Generic.IList<string>
+ClickHouse.Driver.ADO.ClickHouseConnection.Roles.get -> System.Collections.Generic.IReadOnlyList<string>
 ClickHouse.Driver.ADO.ClickHouseConnection.Settings.get -> ClickHouse.Driver.ADO.ClickHouseClientSettings
 ClickHouse.Driver.ADO.ClickHouseConnection.SkipServerCertificateValidation.get -> bool
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.Roles.get -> System.Collections.Generic.IReadOnlyList<string>
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.Roles.set -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.ToSettings() -> ClickHouse.Driver.ADO.ClickHouseClientSettings
 ClickHouse.Driver.ADO.ClickHouseDataSource.ClickHouseDataSource(ClickHouse.Driver.ADO.ClickHouseClientSettings settings) -> void
 ClickHouse.Driver.ADO.ClickHouseDataSource.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory

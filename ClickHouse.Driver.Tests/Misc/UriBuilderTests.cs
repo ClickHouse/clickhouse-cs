@@ -181,5 +181,32 @@ public class UriBuilderTests
 
         Assert.That(builder.ToString(), Contains.Substring(expected));
     }
+    
+    [Test]
+    public void UriBuilder_ShouldIncludeSingleRole()
+    {
+        var uriBuilder = new ClickHouseUriBuilder(new Uri("http://localhost:8123"))
+        {
+            ConnectionRoles = new[] { "admin" }
+        };
+
+        var uri = uriBuilder.ToString();
+
+        Assert.That(uri, Does.Contain("role=admin"));
+    }
+
+    [Test]
+    public void UriBuilder_ShouldIncludeMultipleRoles()
+    {
+        var uriBuilder = new ClickHouseUriBuilder(new Uri("http://localhost:8123"))
+        {
+            ConnectionRoles = new[] { "admin", "reader" }
+        };
+
+        var uri = uriBuilder.ToString();
+
+        Assert.That(uri, Does.Contain("role=admin"));
+        Assert.That(uri, Does.Contain("role=reader"));
+    }
 #endif
 }

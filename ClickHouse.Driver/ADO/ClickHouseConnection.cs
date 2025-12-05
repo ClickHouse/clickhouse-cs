@@ -515,6 +515,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         UseCompression = UseCompression,
         ConnectionQueryStringParameters = CustomSettings
             .ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+        ConnectionRoles = Settings.Roles,
         Sql = sql,
     };
 

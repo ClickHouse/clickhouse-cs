@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using Microsoft.Extensions.Logging;
 
@@ -69,6 +70,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Deep copy the CustomSettings dictionary
         CustomSettings = new Dictionary<string, object>(other.CustomSettings);
+
+        // Copy roles list
+        Roles = other.Roles.ToArray();
     }
 
     /// <summary>
@@ -222,6 +226,13 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public IDictionary<string, object> CustomSettings { get; init; } = new Dictionary<string, object>();
 
     /// <summary>
+    /// Gets or sets the ClickHouse roles to use for queries.
+    /// Multiple roles can be specified and will be sent as separate role= query parameters.
+    /// Default: empty list
+    /// </summary>
+    public IReadOnlyList<string> Roles { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
     /// Values not specified in the connection string will use default values.
     /// </summary>
@@ -266,6 +277,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Timeout = builder.Timeout,
             UseServerTimezone = builder.UseServerTimezone,
             UseCustomDecimals = builder.UseCustomDecimals,
+            Roles = builder.Roles,
         };
 
         // Extract custom settings from connection string builder
@@ -309,7 +321,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                HttpClient == other.HttpClient &&
                HttpClientFactory == other.HttpClientFactory &&
                HttpClientName == other.HttpClientName &&
-               EnableDebugMode == other.EnableDebugMode;
+               EnableDebugMode == other.EnableDebugMode &&
+               Roles.SequenceEqual(other.Roles);
     }
 
     /// <summary>
@@ -346,6 +359,10 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
         }
+        foreach (var role in Roles)
+        {
+            hash.Add(role);
+        }
         return hash.ToHashCode();
     }
 
@@ -370,10 +387,17 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// </summary>
     public override string ToString()
     {
-        return $"Host={Host};Port={Port};Protocol={Protocol};Database={Database};" +
+        var result = $"Host={Host};Port={Port};Protocol={Protocol};Database={Database};" +
                $"Username={Username};Password=****;Compression={UseCompression};" +
                $"UseServerTimezone={UseServerTimezone};UseCustomDecimals={UseCustomDecimals};" +
                $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s";
+
+        if (Roles.Count > 0)
+        {
+            result += $";Roles={string.Join(",", Roles)}";
+        }
+
+        return result;
     }
 
     /// <summary>

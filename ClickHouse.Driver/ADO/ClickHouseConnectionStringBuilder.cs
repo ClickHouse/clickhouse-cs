@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data.Common;
 using System.Globalization;
+using System.Linq;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -87,6 +89,33 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["UseCustomDecimals"] = value;
     }
 
+    /// <summary>
+    /// Gets or sets the ClickHouse roles to use for queries.
+    /// Multiple roles can be specified as a comma-separated string.
+    /// </summary>
+    public IReadOnlyList<string> Roles
+    {
+        get
+        {
+            var rolesString = GetStringOrDefault("Roles", null);
+            if (string.IsNullOrEmpty(rolesString))
+                return Array.Empty<string>();
+
+            return rolesString
+                .Split(',')
+                .Select(r => r.Trim())
+                .Where(r => !string.IsNullOrEmpty(r))
+                .ToArray();
+        }
+        set
+        {
+            if (value == null || value.Count == 0)
+                Remove("Roles");
+            else
+                this["Roles"] = string.Join(",", value);
+        }
+    }
+
     public TimeSpan Timeout
     {
         get
@@ -156,6 +185,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Timeout = settings.Timeout,
             UseServerTimezone = settings.UseServerTimezone,
             UseCustomDecimals = settings.UseCustomDecimals,
+            Roles = settings.Roles,
         };
 
         // Add custom settings with the set_ prefix

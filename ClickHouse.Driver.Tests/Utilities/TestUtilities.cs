@@ -14,13 +14,44 @@ using NUnit.Framework.Constraints;
 
 namespace ClickHouse.Driver.Tests;
 
+/// <summary>
+/// Represents the test environment type.
+/// </summary>
+public enum TestEnv
+{
+    /// <summary>
+    /// Local single-node ClickHouse instance (default).
+    /// </summary>
+    LocalSingleNode,
+
+    /// <summary>
+    /// Local ClickHouse cluster.
+    /// </summary>
+    LocalCluster,
+
+    /// <summary>
+    /// ClickHouse Cloud.
+    /// </summary>
+    Cloud
+}
+
 public static class TestUtilities
 {
     public static readonly Feature SupportedFeatures;
     public static readonly Version ServerVersion;
 
+    /// <summary>
+    /// Gets the test environment type.
+    /// Set via CLICKHOUSE_TEST_ENVIRONMENT environment variable.
+    /// Possible values: "local_single_node" (default), "local_cluster", "cloud".
+    /// </summary>
+    public static readonly TestEnv TestEnvironment;
+
     static TestUtilities()
     {
+        // Initialize test environment
+        TestEnvironment = GetClickHouseTestEnvironment();
+
         var versionString = Environment.GetEnvironmentVariable("CLICKHOUSE_VERSION");
         if (string.IsNullOrEmpty(versionString) || versionString == "latest" || versionString == "head")
         {
@@ -131,6 +162,24 @@ public static class TestUtilities
             throw new InvalidOperationException("Must set CLICKHOUSE_CONNECTION environment variable pointing at ClickHouse server");
 
         return new ClickHouseConnectionStringBuilder(devConnectionString);
+    }
+
+    /// <summary>
+    /// Parses the CLICKHOUSE_TEST_ENVIRONMENT environment variable to determine the test environment.
+    /// </summary>
+    public static TestEnv GetClickHouseTestEnvironment()
+    {
+        var value = Environment.GetEnvironmentVariable("CLICKHOUSE_TEST_ENVIRONMENT");
+        return value switch
+        {
+            "cloud" => TestEnv.Cloud,
+            "local_cluster" => TestEnv.LocalCluster,
+            "local_single_node" or null or "" => TestEnv.LocalSingleNode,
+            _ => throw new InvalidOperationException(
+                $"Unexpected CLICKHOUSE_TEST_ENVIRONMENT value: '{value}'. " +
+                "Possible options: 'local_single_node', 'local_cluster', 'cloud'. " +
+                "You can keep it unset to fall back to 'local_single_node'.")
+        };
     }
 
     public readonly struct DataTypeSample(string clickHouseType, Type frameworkType, string exampleExpression, object exampleValue)

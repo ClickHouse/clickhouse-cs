@@ -34,6 +34,10 @@ internal class ClickHouseUriBuilder
 
     public IDictionary<string, object> CommandQueryStringParameters { get; set; }
 
+    public IReadOnlyList<string> ConnectionRoles { get; set; }
+
+    public IReadOnlyList<string> CommandRoles { get; set; }
+
     public bool AddSqlQueryParameter(string name, string value) =>
         DictionaryExtensions.TryAdd(sqlQueryParameters, name, value);
 
@@ -65,6 +69,14 @@ internal class ClickHouseUriBuilder
         }
 
         var queryString = string.Join("&", parameters.Select(kvp => $"{kvp.Key}={HttpUtility.UrlEncode(kvp.Value)}"));
+
+        // Append role parameters - command roles replace connection roles
+        var activeRoles = CommandRoles?.Count > 0 ? CommandRoles : ConnectionRoles;
+        if (activeRoles?.Count > 0)
+        {
+            var roleParams = string.Join("&", activeRoles.Select(role => $"role={HttpUtility.UrlEncode(role)}"));
+            queryString = string.IsNullOrEmpty(queryString) ? roleParams : $"{queryString}&{roleParams}";
+        }
 
         var uriBuilder = new UriBuilder(BaseUri) { Query = queryString };
         return uriBuilder.ToString();

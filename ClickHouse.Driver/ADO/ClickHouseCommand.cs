@@ -27,6 +27,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     private readonly CancellationTokenSource cts = new CancellationTokenSource();
     private readonly ClickHouseParameterCollection commandParameters = new ClickHouseParameterCollection();
     private Dictionary<string, object> customSettings;
+    private List<string> roles;
     private ClickHouseConnection connection;
 
     public ClickHouseCommand()
@@ -62,6 +63,13 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     /// </summary>
     /// <remarks>Not thread-safe.</remarks>
     public IDictionary<string, object> CustomSettings => customSettings ??= new Dictionary<string, object>();
+
+    /// <summary>
+    /// Gets the roles to use for this command.
+    /// When set, these roles replace any connection-level roles.
+    /// </summary>
+    /// <remarks>Not thread-safe.</remarks>
+    public IList<string> Roles => roles ??= new List<string>();
 
     protected override DbConnection DbConnection
     {
@@ -179,6 +187,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
         uriBuilder.QueryId = QueryId;
         uriBuilder.CommandQueryStringParameters = customSettings;
+        uriBuilder.CommandRoles = roles;
 
         using var postMessage = connection.UseFormDataParameters
             ? BuildHttpRequestMessageWithFormData(

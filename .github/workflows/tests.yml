@@ -90,6 +90,7 @@ jobs:
         env:
           CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
           CLICKHOUSE_VERSION: latest
+          CLICKHOUSE_TEST_ENVIRONMENT: local_single_node
 
   cloud:
     name: Cloud Tests - AWS
@@ -115,12 +116,13 @@ jobs:
             10.x
 
       - name: Test
-        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj 
-              --framework net10.0 --configuration Release --verbosity normal --logger GitHubActions 
+        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj
+              --framework net10.0 --configuration Release --verbosity normal --logger GitHubActions
               /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
               --filter "Category=Cloud"
         env:
           CLICKHOUSE_CONNECTION: Host=${{ secrets.CLICKHOUSE_CLOUD_HOST }};Port=8443;User=${{ secrets.CLICKHOUSE_CLOUD_USER }};Password=${{ secrets.CLICKHOUSE_CLOUD_PASSWORD }};Protocol=https
+          CLICKHOUSE_TEST_ENVIRONMENT: cloud
 
   windows:
     name: Windows Tests
@@ -156,10 +158,11 @@ jobs:
 
       - name: Test
         run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj
-              --framework net10.0 --configuration Release --verbosity normal --logger GitHubActions 
+              --framework net10.0 --configuration Release --verbosity normal --logger GitHubActions
               /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
         env:
           CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=default
+          CLICKHOUSE_TEST_ENVIRONMENT: local_single_node
 
   macos:
     name: macOS Tests
@@ -193,8 +196,9 @@ jobs:
             10.x
 
       - name: Test
-        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj 
-              --framework net10.0 --configuration Release --verbosity normal --logger GitHubActions 
+        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj
+              --framework net10.0 --configuration Release --verbosity normal --logger GitHubActions
               /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
         env:
           CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=default
+          CLICKHOUSE_TEST_ENVIRONMENT: local_single_node

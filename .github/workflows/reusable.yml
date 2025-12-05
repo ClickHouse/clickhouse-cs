@@ -61,6 +61,7 @@ jobs:
         env:
           CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
           CLICKHOUSE_VERSION: ${{ inputs.clickhouse-version }}
+          CLICKHOUSE_TEST_ENVIRONMENT: local_single_node
 
       - uses: codecov/codecov-action@v5
         with:

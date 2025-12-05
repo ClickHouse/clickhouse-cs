@@ -651,6 +651,100 @@ public class ClickHouseClientSettingsTests
             }
         }
     }
+    
+    [Test]
+    public void Settings_Roles_ShouldBeEmptyByDefault()
+    {
+        var settings = new ClickHouseClientSettings();
+
+        Assert.That(settings.Roles, Is.Not.Null);
+        Assert.That(settings.Roles, Is.Empty);
+    }
+
+    [Test]
+    public void Settings_Roles_ShouldBeSettable()
+    {
+        var roles = new[] { "admin", "reader" };
+        var settings = new ClickHouseClientSettings { Roles = roles };
+
+        Assert.That(settings.Roles, Has.Count.EqualTo(2));
+        Assert.That(settings.Roles, Contains.Item("admin"));
+        Assert.That(settings.Roles, Contains.Item("reader"));
+    }
+
+    [Test]
+    public void Settings_CopyConstructor_ShouldCopyRoles()
+    {
+        var original = new ClickHouseClientSettings { Roles = new[] { "admin", "writer" } };
+        var copy = new ClickHouseClientSettings(original);
+
+        Assert.That(copy.Roles, Has.Count.EqualTo(2));
+        Assert.That(copy.Roles, Contains.Item("admin"));
+        Assert.That(copy.Roles, Contains.Item("writer"));
+        // Verify it's a copy, not the same reference
+        Assert.That(copy.Roles, Is.Not.SameAs(original.Roles));
+    }
+
+    [Test]
+    public void Settings_Equals_ShouldReturnTrue_WhenRolesMatch()
+    {
+        var settings1 = new ClickHouseClientSettings { Roles = new[] { "admin", "reader" } };
+        var settings2 = new ClickHouseClientSettings { Roles = new[] { "admin", "reader" } };
+
+        Assert.That(settings1.Equals(settings2), Is.True);
+    }
+
+    [Test]
+    public void Settings_Equals_ShouldReturnFalse_WhenRolesDiffer()
+    {
+        var settings1 = new ClickHouseClientSettings { Roles = new[] { "admin" } };
+        var settings2 = new ClickHouseClientSettings { Roles = new[] { "reader" } };
+
+        Assert.That(settings1.Equals(settings2), Is.False);
+    }
+
+    [Test]
+    public void Settings_GetHashCode_ShouldIncludeRoles()
+    {
+        var settings1 = new ClickHouseClientSettings { Roles = new[] { "admin" } };
+        var settings2 = new ClickHouseClientSettings { Roles = new[] { "reader" } };
+
+        Assert.That(settings1.GetHashCode(), Is.Not.EqualTo(settings2.GetHashCode()));
+    }
+
+    [Test]
+    public void Settings_ToString_ShouldIncludeRoles()
+    {
+        var settings = new ClickHouseClientSettings { Roles = new[] { "admin", "reader" } };
+        var str = settings.ToString();
+
+        Assert.That(str, Does.Contain("Roles=admin,reader"));
+    }
+
+    [Test]
+    public void Settings_ToString_ShouldNotIncludeRoles_WhenEmpty()
+    {
+        var settings = new ClickHouseClientSettings();
+        var str = settings.ToString();
+
+        Assert.That(str, Does.Not.Contain("Roles="));
+    }
+
+    [Test]
+    public void Settings_ConstructorFromConnectionString_ShouldParseSingleRole()
+    {
+        var settings = new ClickHouseClientSettings("Host=localhost;Roles=admin");
+        Assert.That(settings.Roles, Contains.Item("admin"));
+    }
+
+    [Test]
+    public void Settings_ConstructorFromConnectionString_ShouldParseMultipleRoles()
+    {
+        var settings = new ClickHouseClientSettings("Host=localhost;Roles=admin,janitor");
+        Assert.That(settings.Roles.Count, Is.EqualTo(2));
+        Assert.That(settings.Roles, Contains.Item("admin"));
+        Assert.That(settings.Roles, Contains.Item("janitor"));
+    }
 
     private class TestLoggerFactory : ILoggerFactory
     {

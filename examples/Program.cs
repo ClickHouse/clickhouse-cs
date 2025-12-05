@@ -155,6 +155,10 @@ class Program
         Console.WriteLine($"\n\nRunning: {nameof(QueryStatistics)}");
         await QueryStatistics.Run();
         WaitForUser(isInteractive);
+        
+        Console.WriteLine($"\n\nRunning: {nameof(Roles)}");
+        await QueryStatistics.Run();
+        WaitForUser(isInteractive);
 
         // Troubleshooting
         Console.WriteLine("\n\n" + new string('=', 70));
