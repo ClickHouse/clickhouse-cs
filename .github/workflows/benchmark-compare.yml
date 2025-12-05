@@ -1,8 +1,6 @@
 name: Benchmark Comparison
 
 on:
-  push:
-    branches: [benchmarking-comparisons]  # TODO: Remove before merging
   workflow_dispatch:
     inputs:
       pr_number:

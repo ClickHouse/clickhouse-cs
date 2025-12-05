@@ -16,7 +16,7 @@ public class BulkInsertColumn
     private readonly ClickHouseConnection connection;
     private readonly ClickHouseBulkCopy bulkCopy;
 
-    [Params(1000000)]
+    [Params(500000)]
     public int Count { get; set; }
 
     private IEnumerable<object[]> Rows

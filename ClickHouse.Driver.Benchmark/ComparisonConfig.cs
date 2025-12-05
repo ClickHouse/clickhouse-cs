@@ -24,7 +24,7 @@ public class ComparisonConfig : ManualConfig
         var job = Job.Default
             .WithStrategy(RunStrategy.Monitoring)
             .WithWarmupCount(3)
-            .WithIterationCount(15)
+            .WithIterationCount(30)
             .WithLaunchCount(2)
             .WithOutlierMode(OutlierMode.RemoveAll);
 
