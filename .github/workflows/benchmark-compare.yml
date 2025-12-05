@@ -102,9 +102,9 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const glob = require('@actions/glob');
+            const actionsGlob = require('@actions/glob');
 
-            const globber = await glob.create('results/*-report-github.md');
+            const globber = await actionsGlob.create('results/*-report-github.md');
             const files = await globber.glob();
 
             const prNumber = parseInt('${{ steps.pr.outputs.number }}');
