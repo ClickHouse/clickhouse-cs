@@ -5,8 +5,7 @@ on:
     branches: [ main ]
     paths-ignore:
     - '**/*.md'
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   benchmark:
@@ -42,7 +41,7 @@ jobs:
           10.x
 
     - name: Run
-      run: dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj --framework net10.0 --configuration Release -- --join --filter "*" --artifacts . --job Short
+      run: dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj --framework net10.0 --configuration Release -- --join --filter "*" --artifacts .
       env:
         CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
 

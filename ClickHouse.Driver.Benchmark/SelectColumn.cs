@@ -6,12 +6,13 @@ using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Benchmark;
 
+[Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class SelectColumn
 {
     private readonly ClickHouseConnection connection;
 
-    [Params(100000)]
+    [Params(500000)]
     public int Count { get; set; }
 
     public SelectColumn()
@@ -26,7 +27,7 @@ public class SelectColumn
         while (reader.Read()) ;
     }
 
-    [Benchmark(Baseline = true)]
+    [Benchmark]
     public async Task SelectInt32() => await RunNumericBenchmark("toInt32(number)");
 
     [Benchmark]

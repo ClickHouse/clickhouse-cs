@@ -15,8 +15,19 @@
   </ItemGroup>
 
 
-  <ItemGroup>
+  <!--
+    Local development: Use ProjectReference for immediate feedback
+    CI comparison mode: Use PackageReference with version controlled by ClickHouseDriverVersion property
+    Set BenchmarkComparisonMode=true in CI to enable comparison mode
+  -->
+  <PropertyGroup>
+    <ClickHouseDriverVersion Condition="'$(ClickHouseDriverVersion)' == ''">0.9.0</ClickHouseDriverVersion>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(BenchmarkComparisonMode)' != 'true'">
     <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BenchmarkComparisonMode)' == 'true'">
+    <PackageReference Include="ClickHouse.Driver" Version="$(ClickHouseDriverVersion)" />
   </ItemGroup>
 
 </Project>
