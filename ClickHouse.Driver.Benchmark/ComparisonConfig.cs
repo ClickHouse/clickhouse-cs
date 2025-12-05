@@ -4,6 +4,7 @@ using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Engines;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Reports;
+using Perfolizer.Mathematics.OutlierDetection;
 
 namespace ClickHouse.Driver.Benchmark;
 
@@ -23,8 +24,9 @@ public class ComparisonConfig : ManualConfig
         var job = Job.Default
             .WithStrategy(RunStrategy.Monitoring)
             .WithWarmupCount(3)
-            .WithIterationCount(5)
-            .WithLaunchCount(1);
+            .WithIterationCount(15)
+            .WithLaunchCount(2)
+            .WithOutlierMode(OutlierMode.RemoveAll);
 
         // Comparison mode: both baseline and PR versions are set
         if (!string.IsNullOrEmpty(baselineVersion) && !string.IsNullOrEmpty(prVersion))
@@ -47,6 +49,7 @@ public class ComparisonConfig : ManualConfig
                 .WithRatioStyle(RatioStyle.Percentage);
 
             HideColumns(Column.Arguments);
+            AddColumn(StatisticColumn.P95);
         }
         // Local mode: use project reference (no NuGet override)
         else
