@@ -157,7 +157,7 @@ class Program
         WaitForUser(isInteractive);
         
         Console.WriteLine($"\n\nRunning: {nameof(Roles)}");
-        await QueryStatistics.Run();
+        await Roles.Run();
         WaitForUser(isInteractive);
 
         // Troubleshooting

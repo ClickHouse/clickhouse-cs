@@ -51,7 +51,7 @@ public static class TestUtilities
     /// <summary>
     /// Gets the test environment type.
     /// Set via CLICKHOUSE_TEST_ENVIRONMENT environment variable.
-    /// Possible values: "local_single_node" (default), "local_cluster", "cloud".
+    /// Possible values: "local_single_node" (default), "local_cluster", "cloud", "local_quick_setup".
     /// </summary>
     public static readonly TestEnv TestEnvironment;
 
