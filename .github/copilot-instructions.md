@@ -248,7 +248,11 @@ Bullet list of critical information you lacked.
 - Any surprising behavior users wouldn't expect?
 - Errors/logs actionable for developers and operators?
 
-### 8) Final Verdict
+### 8) Extras
+- If an example has been added, does it have a corresponding entry in the examples README.md and Program.cs?
+- For changes in functionality, has there been a change in RELEASENOTES.md?
+
+### 9) Final Verdict
 - **Status**: ☐ Approve ☐ Request Changes ☐ Block
 - **Minimum required actions** (if not Approve):
   - Bulleted list of must-fix items
