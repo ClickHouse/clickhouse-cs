@@ -45,6 +45,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Advanced_003_LongRunningQueries.cs](Advanced_003_LongRunningQueries.cs) - Strategies for handling long-running queries (progress headers and fire-and-forget patterns)
 - [Advanced_004_CustomSettings.cs](Advanced_004_CustomSettings.cs) - Using custom ClickHouse server settings for resource limits and query optimization
 - [Advanced_005_QueryStatistics.cs](Advanced_005_QueryStatistics.cs) - Accessing and using query statistics for performance monitoring and optimization decisions
+- [Advanced_006_Roles.cs](Advanced_006_Roles.cs) - Using ClickHouse roles to control permissions at connection and command levels
 
 ### Troubleshooting
 
