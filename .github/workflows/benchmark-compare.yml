@@ -102,10 +102,12 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const actionsGlob = require('@actions/glob');
+            const path = require('path');
 
-            const globber = await actionsGlob.create('results/*-report-github.md');
-            const files = await globber.glob();
+            const resultsDir = 'results';
+            const files = fs.readdirSync(resultsDir)
+              .filter(f => f.endsWith('-report-github.md'))
+              .map(f => path.join(resultsDir, f));
 
             const prNumber = parseInt('${{ steps.pr.outputs.number }}');
 
