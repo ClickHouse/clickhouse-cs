@@ -82,27 +82,20 @@ jobs:
             /p:Version=0.0.0-pr.${{ steps.pr.outputs.number }}
           cp pr/ClickHouse.Driver/bin/Release/*.nupkg pr/.nupkg/
 
-      - name: Restore benchmark project
-        run: |
-          dotnet restore \
-            pr/ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
-            --source $PWD/pr/.nupkg/ \
-            --source https://api.nuget.org/v3/index.json \
-            -p:BenchmarkComparisonMode=true
-
       - name: Run comparison benchmarks
+        working-directory: pr
         run: |
           dotnet run \
-            --project pr/ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
+            --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
             --framework net10.0 \
             --configuration Release \
-            --no-restore \
             -p:BenchmarkComparisonMode=true \
             -- --join --filter "*" --artifacts ./results --job Short
         env:
           CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
           BASELINE_VERSION: 0.0.0-main
           PR_VERSION: 0.0.0-pr.${{ steps.pr.outputs.number }}
+          NUGET_SOURCE: ${{ github.workspace }}/pr/.nupkg
 
       - name: Post results to PR
         if: steps.pr.outputs.number != 'local'
@@ -112,7 +105,7 @@ jobs:
             const fs = require('fs');
             const path = require('path');
 
-            const resultsDir = 'results';
+            const resultsDir = 'pr/results';
             const files = fs.readdirSync(resultsDir)
               .filter(f => f.endsWith('-report-github.md'))
               .map(f => path.join(resultsDir, f));
@@ -159,4 +152,4 @@ jobs:
             }
 
       - name: Post results to summary
-        run: cat results/*-report-github.md >> $GITHUB_STEP_SUMMARY
+        run: cat pr/results/*-report-github.md >> $GITHUB_STEP_SUMMARY
