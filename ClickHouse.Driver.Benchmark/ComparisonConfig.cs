@@ -1,0 +1,50 @@
+using System;
+using BenchmarkDotNet.Columns;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Engines;
+using BenchmarkDotNet.Jobs;
+using BenchmarkDotNet.Reports;
+
+namespace ClickHouse.Driver.Benchmark;
+
+/// <summary>
+/// Benchmark configuration that supports two modes:
+/// 1. Local mode (default): No env vars needed, uses the project reference
+/// 2. Comparison mode: When BASELINE_VERSION and PR_VERSION are set,
+///    compares two NuGet package versions with percentage ratios
+/// </summary>
+public class ComparisonConfig : ManualConfig
+{
+    public ComparisonConfig()
+    {
+        var baselineVersion = Environment.GetEnvironmentVariable("BASELINE_VERSION");
+        var prVersion = Environment.GetEnvironmentVariable("PR_VERSION");
+
+        var job = Job.Default
+            .WithStrategy(RunStrategy.Monitoring)
+            .WithWarmupCount(3)
+            .WithIterationCount(10)
+            .WithLaunchCount(1);
+
+        // Comparison mode: both baseline and PR versions are set
+        if (!string.IsNullOrEmpty(baselineVersion) && !string.IsNullOrEmpty(prVersion))
+        {
+            AddJob(job
+                .WithNuGet("ClickHouse.Driver", baselineVersion)
+                .WithId("baseline")
+                .WithBaseline(true));
+
+            AddJob(job
+                .WithNuGet("ClickHouse.Driver", prVersion)
+                .WithId("pr"));
+
+            SummaryStyle = SummaryStyle.Default
+                .WithRatioStyle(RatioStyle.Percentage);
+        }
+        // Local mode: use project reference (no NuGet override)
+        else
+        {
+            AddJob(job.WithId("current"));
+        }
+    }
+}

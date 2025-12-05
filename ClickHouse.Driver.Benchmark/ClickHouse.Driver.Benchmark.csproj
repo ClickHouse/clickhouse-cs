@@ -15,8 +15,16 @@
   </ItemGroup>
 
 
-  <ItemGroup>
+  <!--
+    Local development: Use ProjectReference for immediate feedback
+    CI comparison mode: Use PackageReference so WithNuGet() can swap versions at runtime
+    Set BenchmarkComparisonMode=true in CI to enable comparison mode
+  -->
+  <ItemGroup Condition="'$(BenchmarkComparisonMode)' != 'true'">
     <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BenchmarkComparisonMode)' == 'true'">
+    <PackageReference Include="ClickHouse.Driver" Version="0.9.0" />
   </ItemGroup>
 
 </Project>

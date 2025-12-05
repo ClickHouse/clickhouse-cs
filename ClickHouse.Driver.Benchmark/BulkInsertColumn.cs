@@ -9,6 +9,7 @@ using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Benchmark;
 
+[Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class BulkInsertColumn
 {
