@@ -17,10 +17,11 @@ public class RolesTests
     [OneTimeSetUp]
     public async Task Setup()
     {
-        // These tests can't run on cloud due to permissions
+        // These tests require a full ClickHouse installation with access storage enabled
+        // (for user/role management). They can't run on cloud or quick-setup environments.
         if (TestUtilities.TestEnvironment != TestEnv.LocalSingleNode)
         {
-            Assert.Ignore("Skipping roles integration tests (only runs on local_single_node environment)");
+            Assert.Ignore("Skipping roles integration tests (requires local_single_node environment with access storage)");
         }
 
         defaultConnection = TestUtilities.GetTestClickHouseConnection();

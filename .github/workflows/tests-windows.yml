@@ -1,0 +1,45 @@
+name: Windows Tests
+
+on:
+  workflow_call:
+
+jobs:
+  windows:
+    name: Windows Tests
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: Vampire/setup-wsl@v6
+        with:
+          distribution: Ubuntu-24.04
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup ClickHouse in WSL
+        shell: wsl-bash -u root {0}
+        run: |
+          curl https://clickhouse.com/ | sh
+          ./clickhouse server --daemon
+
+      - uses: actions/cache@v4
+        name: Cache NuGet
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            10.x
+
+      - name: Test
+        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj
+              --framework net10.0 --configuration Release --verbosity normal --logger GitHubActions
+              /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
+        env:
+          CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=default
+          CLICKHOUSE_TEST_ENVIRONMENT: local_quick_setup

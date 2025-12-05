@@ -1,0 +1,46 @@
+name: Integration Tests
+
+on:
+  workflow_call:
+
+jobs:
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:latest
+        ports:
+          - 8123:8123
+        env:
+          CLICKHOUSE_DB: test
+          CLICKHOUSE_USER: test
+          CLICKHOUSE_PASSWORD: test1234
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - uses: actions/cache@v4
+        name: Cache NuGet
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            10.x
+
+      - name: Test
+        run: dotnet test ClickHouse.Driver.IntegrationTests/ClickHouse.Driver.IntegrationTests.csproj --framework net10.0 --configuration Release --verbosity normal --logger GitHubActions  /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:SkipAutoProps=true
+        env:
+          CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
+          CLICKHOUSE_VERSION: latest
+          CLICKHOUSE_TEST_ENVIRONMENT: local_single_node

@@ -20,7 +20,8 @@ namespace ClickHouse.Driver.Tests;
 public enum TestEnv
 {
     /// <summary>
-    /// Local single-node ClickHouse instance (default).
+    /// Local single-node ClickHouse instance with full capabilities (default).
+    /// Typically a Docker-based setup with access storage enabled.
     /// </summary>
     LocalSingleNode,
 
@@ -32,7 +33,14 @@ public enum TestEnv
     /// <summary>
     /// ClickHouse Cloud.
     /// </summary>
-    Cloud
+    Cloud,
+
+    /// <summary>
+    /// Local quick-setup ClickHouse instance with limited capabilities.
+    /// Uses "curl https://clickhouse.com/ | sh" style installation.
+    /// Does not support user/role management (no access storage).
+    /// </summary>
+    LocalQuickSetup
 }
 
 public static class TestUtilities
@@ -174,10 +182,11 @@ public static class TestUtilities
         {
             "cloud" => TestEnv.Cloud,
             "local_cluster" => TestEnv.LocalCluster,
+            "local_quick_setup" => TestEnv.LocalQuickSetup,
             "local_single_node" or null or "" => TestEnv.LocalSingleNode,
             _ => throw new InvalidOperationException(
                 $"Unexpected CLICKHOUSE_TEST_ENVIRONMENT value: '{value}'. " +
-                "Possible options: 'local_single_node', 'local_cluster', 'cloud'. " +
+                "Possible options: 'local_single_node', 'local_cluster', 'local_quick_setup', 'cloud'. " +
                 "You can keep it unset to fall back to 'local_single_node'.")
         };
     }
