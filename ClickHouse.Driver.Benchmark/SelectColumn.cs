@@ -12,7 +12,7 @@ public class SelectColumn
 {
     private readonly ClickHouseConnection connection;
 
-    [Params(100000)]
+    [Params(1000000)]
     public int Count { get; set; }
 
     public SelectColumn()

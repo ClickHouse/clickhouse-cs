@@ -23,7 +23,7 @@ public class ComparisonConfig : ManualConfig
         var job = Job.Default
             .WithStrategy(RunStrategy.Monitoring)
             .WithWarmupCount(3)
-            .WithIterationCount(10)
+            .WithIterationCount(5)
             .WithLaunchCount(1);
 
         // Comparison mode: both baseline and PR versions are set
@@ -45,6 +45,8 @@ public class ComparisonConfig : ManualConfig
 
             SummaryStyle = SummaryStyle.Default
                 .WithRatioStyle(RatioStyle.Percentage);
+
+            HideColumns(Column.Arguments);
         }
         // Local mode: use project reference (no NuGet override)
         else
