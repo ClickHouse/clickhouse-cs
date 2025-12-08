@@ -121,12 +121,39 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task ServerShouldSetQueryId()
+    public async Task ShouldAutoGenerateQueryIdWhenNull()
     {
         var command = connection.CreateCommand();
         command.CommandText = "SELECT 1";
+        ClassicAssert.IsNull(command.QueryId);
         await command.ExecuteScalarAsync();
         ClassicAssert.IsFalse(string.IsNullOrWhiteSpace(command.QueryId));
+        Assert.That(Guid.TryParse(command.QueryId, out _), Is.True, "Auto-generated QueryId should be a valid GUID");
+    }
+
+    [Test]
+    public async Task ShouldAutoGenerateQueryIdWhenEmpty()
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1";
+        command.QueryId = string.Empty;
+        await command.ExecuteScalarAsync();
+        ClassicAssert.IsFalse(string.IsNullOrWhiteSpace(command.QueryId));
+        Assert.That(Guid.TryParse(command.QueryId, out _), Is.True, "Auto-generated QueryId should be a valid GUID");
+    }
+
+    [Test]
+    public async Task ShouldGenerateUniqueQueryIdsForDifferentCommands()
+    {
+        var command1 = connection.CreateCommand();
+        command1.CommandText = "SELECT 1";
+        await command1.ExecuteScalarAsync();
+
+        var command2 = connection.CreateCommand();
+        command2.CommandText = "SELECT 2";
+        await command2.ExecuteScalarAsync();
+
+        Assert.That(command1.QueryId, Is.Not.EqualTo(command2.QueryId), "Different commands should have different auto-generated QueryIds");
     }
 
     [Test]
@@ -134,10 +161,11 @@ public class ConnectionTests : AbstractConnectionTestFixture
     {
         string queryId = "MyQueryId123456";
         var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1";
+        command.CommandText = "SELECT query_id()";
         command.QueryId = queryId;
-        await command.ExecuteScalarAsync();
+        string returnedQueryId = (string)await command.ExecuteScalarAsync();
         Assert.That(command.QueryId, Is.EqualTo(queryId));
+        Assert.That(returnedQueryId, Is.EqualTo(queryId));
     }
 
     [Test]

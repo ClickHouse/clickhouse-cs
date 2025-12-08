@@ -41,7 +41,7 @@ public static class QueryIdUsage
 
     private static async Task Example1_AutomaticQueryId(ClickHouseConnection connection)
     {
-        // When you don't set a QueryId, ClickHouse automatically generates one
+        // When you don't set a QueryId, the client automatically generates a GUID
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 'Hello from ClickHouse' AS message";
 
@@ -49,7 +49,7 @@ public static class QueryIdUsage
 
         var result = await command.ExecuteScalarAsync();
 
-        // After execution, the QueryId is populated from the response headers
+        // After execution, the QueryId contains the auto-generated GUID
         Console.WriteLine($"   QueryId after execution: {command.QueryId}");
         Console.WriteLine($"   Result: {result}");
     }

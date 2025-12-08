@@ -10,6 +10,7 @@ namespace ClickHouse.Driver;
 internal class ClickHouseUriBuilder
 {
     private readonly IDictionary<string, string> sqlQueryParameters = new Dictionary<string, string>();
+    private string effectiveQueryId;
 
     public ClickHouseUriBuilder(Uri baseUri)
     {
@@ -26,7 +27,17 @@ internal class ClickHouseUriBuilder
 
     public string SessionId { get; set; }
 
-    public string QueryId { get; set; }
+    private string queryId;
+
+    public string QueryId
+    {
+        get => queryId;
+        set
+        {
+            queryId = value;
+            effectiveQueryId = null; // Clear cache so GetEffectiveQueryId() re-evaluates
+        }
+    }
 
     public static string DefaultFormat => "RowBinaryWithNamesAndTypes";
 
@@ -37,6 +48,15 @@ internal class ClickHouseUriBuilder
     public IReadOnlyList<string> ConnectionRoles { get; set; }
 
     public IReadOnlyList<string> CommandRoles { get; set; }
+
+    /// <summary>
+    /// Gets the effective query ID that will be used in the request.
+    /// If QueryId is not set, generates and caches a new GUID.
+    /// </summary>
+    public string GetEffectiveQueryId()
+    {
+        return effectiveQueryId ??= string.IsNullOrEmpty(QueryId) ? Guid.NewGuid().ToString() : QueryId;
+    }
 
     public bool AddSqlQueryParameter(string name, string value) =>
         DictionaryExtensions.TryAdd(sqlQueryParameters, name, value);
@@ -51,7 +71,7 @@ internal class ClickHouseUriBuilder
         parameters.SetOrRemove("database", Database);
         parameters.SetOrRemove("session_id", SessionId);
         parameters.SetOrRemove("query", Sql);
-        parameters.SetOrRemove("query_id", QueryId);
+        parameters.Set("query_id", GetEffectiveQueryId());
 
         foreach (var parameter in sqlQueryParameters)
             parameters.Set("param_" + parameter.Key, parameter.Value.ToString(CultureInfo.InvariantCulture));
