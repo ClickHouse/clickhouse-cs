@@ -57,13 +57,14 @@ jobs:
             10.x
 
       - name: Test
-        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework ${{ inputs.framework }} --configuration Release --verbosity normal --logger GitHubActions  /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
+        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework ${{ inputs.framework }} --configuration Release --verbosity normal --logger GitHubActions /clp:ErrorsOnly ${{ inputs.coverage && '/p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true' || '' }}
         env:
           CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
           CLICKHOUSE_VERSION: ${{ inputs.clickhouse-version }}
           CLICKHOUSE_TEST_ENVIRONMENT: local_single_node
 
       - uses: codecov/codecov-action@v5
+        if: inputs.coverage
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
