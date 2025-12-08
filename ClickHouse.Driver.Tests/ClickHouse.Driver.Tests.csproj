@@ -30,7 +30,7 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="NUnit.Console" Version="3.20.1" />
-    <PackageReference Include="NUnit.ConsoleRunner" Version="3.20.1">
+    <PackageReference Include="NUnit.ConsoleRunner" Version="3.20.2">
       <IncludeAssets>all</IncludeAssets>
     </PackageReference>
     <PackageReference Include="NUnit3TestAdapter" Version="5.0.0">
