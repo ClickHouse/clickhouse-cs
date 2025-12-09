@@ -89,6 +89,12 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["UseCustomDecimals"] = value;
     }
 
+    public bool MapAsListOfTuples
+    {
+        get => GetBooleanOrDefault("MapAsListOfTuples", false);
+        set => this["MapAsListOfTuples"] = value;
+    }
+
     /// <summary>
     /// Gets or sets the ClickHouse roles to use for queries.
     /// Multiple roles can be specified as a comma-separated string.
@@ -185,6 +191,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Timeout = settings.Timeout,
             UseServerTimezone = settings.UseServerTimezone,
             UseCustomDecimals = settings.UseCustomDecimals,
+            MapAsListOfTuples = settings.MapAsListOfTuples,
             Roles = settings.Roles,
         };
 

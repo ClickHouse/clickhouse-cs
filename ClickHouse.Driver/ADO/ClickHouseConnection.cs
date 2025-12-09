@@ -506,7 +506,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         return await HttpClient.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
     }
 
-    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, Settings.UseServerTimezone ? serverTimezone : TypeSettings.DefaultTimezone);
+    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, Settings.UseServerTimezone ? serverTimezone : TypeSettings.DefaultTimezone, Settings.MapAsListOfTuples);
 
     internal ClickHouseUriBuilder CreateUriBuilder(string sql = null) => new ClickHouseUriBuilder(serverUri)
     {

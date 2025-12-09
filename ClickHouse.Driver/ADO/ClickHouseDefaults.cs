@@ -81,4 +81,9 @@ public static class ClickHouseDefaults
     /// Default timeout for operations (2 minutes)
     /// </summary>
     public static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Default setting for Map type representation (false = Dictionary, true = List of tuples)
+    /// </summary>
+    public const bool MapAsListOfTuples = false;
 }

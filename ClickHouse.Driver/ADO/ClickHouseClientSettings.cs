@@ -57,6 +57,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         UseCompression = other.UseCompression;
         UseServerTimezone = other.UseServerTimezone;
         UseCustomDecimals = other.UseCustomDecimals;
+        MapAsListOfTuples = other.MapAsListOfTuples;
         UseSession = other.UseSession;
         SessionId = other.SessionId;
         SkipServerCertificateValidation = other.SkipServerCertificateValidation;
@@ -134,6 +135,14 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Default: true
     /// </summary>
     public bool UseCustomDecimals { get; init; } = ClickHouseDefaults.UseCustomDecimals;
+
+    /// <summary>
+    /// Gets or sets whether to return Map types as List of tuples instead of Dictionary.
+    /// When true, Map columns are returned as List&lt;(TKey, TValue)&gt; preserving duplicate keys.
+    /// When false (default), Map columns are returned as Dictionary&lt;TKey, TValue&gt; with last value winning for duplicates.
+    /// Default: false
+    /// </summary>
+    public bool MapAsListOfTuples { get; init; } = ClickHouseDefaults.MapAsListOfTuples;
 
     /// <summary>
     /// Gets or sets whether to use sessions for the connection.
@@ -277,6 +286,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Timeout = builder.Timeout,
             UseServerTimezone = builder.UseServerTimezone,
             UseCustomDecimals = builder.UseCustomDecimals,
+            MapAsListOfTuples = builder.MapAsListOfTuples,
             Roles = builder.Roles,
         };
 
@@ -313,6 +323,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                UseCompression == other.UseCompression &&
                UseServerTimezone == other.UseServerTimezone &&
                UseCustomDecimals == other.UseCustomDecimals &&
+               MapAsListOfTuples == other.MapAsListOfTuples &&
                UseSession == other.UseSession &&
                SessionId == other.SessionId &&
                SkipServerCertificateValidation == other.SkipServerCertificateValidation &&
@@ -349,6 +360,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(UseCompression);
         hash.Add(UseServerTimezone);
         hash.Add(UseCustomDecimals);
+        hash.Add(MapAsListOfTuples);
         hash.Add(UseSession);
         hash.Add(SessionId);
         hash.Add(SkipServerCertificateValidation);
@@ -390,7 +402,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         var result = $"Host={Host};Port={Port};Protocol={Protocol};Database={Database};" +
                $"Username={Username};Password=****;Compression={UseCompression};" +
                $"UseServerTimezone={UseServerTimezone};UseCustomDecimals={UseCustomDecimals};" +
-               $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s";
+               $"MapAsListOfTuples={MapAsListOfTuples};UseSession={UseSession};Timeout={Timeout.TotalSeconds}s";
 
         if (Roles.Count > 0)
         {
