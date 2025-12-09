@@ -405,6 +405,9 @@ public static class TestUtilities
                     { "five", 5 },
                     { "null", null },
                 });
+            
+            // Maps in ClickHouse are actually Array(Tuple(...)) and duplicate keys are valid
+            yield return new DataTypeSample("Map(String, UInt8)", typeof(Dictionary<string, byte>), "map('A',1,'A',2)", new Dictionary<string, byte> { { "A", 2 } });
         }
 
         if (SupportedFeatures.HasFlag(Feature.Bool))
