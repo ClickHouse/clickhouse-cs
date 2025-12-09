@@ -10,3 +10,4 @@ v?
  * Added support for writing `byte[]` values to String type columns via BulkCopy.
 
 **Bug Fixes:**
+ * Fixed a crash when reading a Map with duplicate keys. The current behavior is to return only the last value for a given key.
