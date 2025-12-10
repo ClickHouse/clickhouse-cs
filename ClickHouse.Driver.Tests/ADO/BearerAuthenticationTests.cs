@@ -16,30 +16,27 @@ namespace ClickHouse.Driver.Tests.ADO;
 [Category("JWT")]
 public class BearerAuthenticationTests
 {
-    private string cloudHost;
+    private string connectionString;
     private string bearerToken;
 
     [SetUp]
     public void Setup()
     {
-        cloudHost = Environment.GetEnvironmentVariable("CLICKHOUSE_CLOUD_HOST");
+        connectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION");
         bearerToken = Environment.GetEnvironmentVariable("CLICKHOUSE_CLOUD_JWT");
 
-        if (string.IsNullOrEmpty(cloudHost) || string.IsNullOrEmpty(bearerToken))
+        if (string.IsNullOrEmpty(bearerToken))
         {
-            Assert.Ignore("Skipping JWT tests: CLICKHOUSE_CLOUD_HOST and CLICKHOUSE_CLOUD_JWT environment variables must be set");
+            Assert.Ignore("Skipping JWT tests: CLICKHOUSE_CLOUD_JWT environment variable must be set");
         }
     }
 
     [Test]
     public async Task Connection_WithBearerToken_ShouldExecuteQuery()
     {
-        var settings = new ClickHouseClientSettings
+        var settings = new ClickHouseClientSettings(connectionString)
         {
-            Host = cloudHost,
-            Port = 8443,
-            Protocol = "https",
-            BearerToken = bearerToken
+            BearerToken = bearerToken,
         };
 
         using var connection = new ClickHouseConnection(settings);
@@ -53,14 +50,11 @@ public class BearerAuthenticationTests
     [Test]
     public async Task Command_WithBearerTokenOverride_ShouldUseCommandToken()
     {
-        var settings = new ClickHouseClientSettings
+        var settings = new ClickHouseClientSettings(connectionString)
         {
-            Host = cloudHost,
-            Port = 8443,
-            Protocol = "https",
             Username = "invalid_user", // This would fail with basic auth
             Password = "invalid_pass",
-            BearerToken = "invalid_token" // But bearer token should be used instead
+            BearerToken = "invalid_token", // But bearer token should be used instead
         };
 
         using var connection = new ClickHouseConnection(settings);
