@@ -20,12 +20,6 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v6
 
-    - name: Setup .NET Core
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: |
-          10.x
-
     - name: Build & pack
       id: build_pack
       run: dotnet build ClickHouse.Driver\ClickHouse.Driver.csproj --configuration Release /p:Version=${{ inputs.version }}
