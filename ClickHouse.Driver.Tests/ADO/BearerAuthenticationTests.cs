@@ -52,14 +52,13 @@ public class BearerAuthenticationTests
     {
         var settings = new ClickHouseClientSettings(connectionString)
         {
-            Username = "invalid_user", // This would fail with basic auth
-            Password = "invalid_pass",
-            BearerToken = "invalid_token", // But bearer token should be used instead
+            BearerToken = bearerToken,
         };
 
         using var connection = new ClickHouseConnection(settings);
-        await connection.OpenAsync();
+        await connection.OpenAsync(); // A bit problematic: this will make a query, so you need to set a valid token at the connection level. Hence the test below.
 
+        // Execute command with the same valid token via command-level override
         var command = connection.CreateCommand();
         command.BearerToken = bearerToken;
         command.CommandText = "SELECT 1";
@@ -67,5 +66,25 @@ public class BearerAuthenticationTests
         var result = await command.ExecuteScalarAsync();
 
         Assert.That(result, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Command_WithInvalidBearerToken_ShouldFail()
+    {
+        // Open connection with valid bearer token
+        var settings = new ClickHouseClientSettings(connectionString)
+        {
+            BearerToken = bearerToken,
+        };
+
+        using var connection = new ClickHouseConnection(settings);
+        await connection.OpenAsync();
+
+        // Execute command with invalid token - should fail, proving command-level token is used
+        var command = connection.CreateCommand();
+        command.BearerToken = "invalid_token";
+        command.CommandText = "SELECT 1";
+
+        Assert.ThrowsAsync<ClickHouseServerException>(async () => await command.ExecuteScalarAsync());
     }
 }
