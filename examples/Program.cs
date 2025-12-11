@@ -160,6 +160,10 @@ class Program
         await Roles.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(CustomHeaders)}");
+        await CustomHeaders.Run();
+        WaitForUser(isInteractive);
+
         // Troubleshooting
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("TROUBLESHOOTING");

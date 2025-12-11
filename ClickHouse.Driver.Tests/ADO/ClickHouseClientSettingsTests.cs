@@ -626,7 +626,7 @@ public class ClickHouseClientSettingsTests
             var originalValue = property.GetValue(original);
             var copyValue = property.GetValue(copy);
 
-            if (property.Name == "CustomSettings")
+            if (property.Name == nameof(ClickHouseClientSettings.CustomSettings))
             {
                 // CustomSettings should be a different instance (deep copy)
                 Assert.That(copyValue, Is.Not.SameAs(originalValue),
@@ -635,7 +635,13 @@ public class ClickHouseClientSettingsTests
                 var originalDict = originalValue as IDictionary<string, object>;
                 var copyDict = copyValue as IDictionary<string, object>;
                 Assert.That(copyDict, Is.EquivalentTo(originalDict),
-                    $"CustomSettings values should be copied");
+                    $"Dictionary values should be copied");
+            }
+            else if (property.Name == nameof(ClickHouseClientSettings.CustomHeaders))
+            {
+                var originalDict = originalValue as IDictionary<string, string>;
+                var copyDict = copyValue as IDictionary<string, string>;
+                Assert.That(copyDict, Is.EquivalentTo(originalDict), "Custom headers should be copied");
             }
             else if (property.PropertyType.IsValueType || property.PropertyType == typeof(string))
             {
@@ -744,6 +750,117 @@ public class ClickHouseClientSettingsTests
         Assert.That(settings.Roles.Count, Is.EqualTo(2));
         Assert.That(settings.Roles, Contains.Item("admin"));
         Assert.That(settings.Roles, Contains.Item("janitor"));
+    }
+
+    [Test]
+    public void Settings_CustomHeaders_ShouldBeEmptyByDefault()
+    {
+        var settings = new ClickHouseClientSettings();
+
+        Assert.That(settings.CustomHeaders, Is.Not.Null);
+        Assert.That(settings.CustomHeaders, Is.Empty);
+    }
+
+    [Test]
+    public void Settings_CustomHeaders_ShouldBeSettable()
+    {
+        var headers = new Dictionary<string, string>
+        {
+            { "X-Custom-Header", "value1" },
+            { "X-Another-Header", "value2" }
+        };
+        var settings = new ClickHouseClientSettings { CustomHeaders = headers };
+
+        Assert.That(settings.CustomHeaders, Has.Count.EqualTo(2));
+        Assert.That(settings.CustomHeaders["X-Custom-Header"], Is.EqualTo("value1"));
+        Assert.That(settings.CustomHeaders["X-Another-Header"], Is.EqualTo("value2"));
+    }
+
+    [Test]
+    public void Settings_CopyConstructor_ShouldCopyCustomHeaders()
+    {
+        var original = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string>
+            {
+                { "X-Custom-Header", "value1" }
+            }
+        };
+        var copy = new ClickHouseClientSettings(original);
+
+        Assert.That(copy.CustomHeaders, Has.Count.EqualTo(1));
+        Assert.That(copy.CustomHeaders["X-Custom-Header"], Is.EqualTo("value1"));
+        // Verify it's a copy, not the same reference
+        Assert.That(copy.CustomHeaders, Is.Not.SameAs(original.CustomHeaders));
+    }
+
+    [Test]
+    public void Settings_Equals_ShouldReturnTrue_WhenCustomHeadersMatch()
+    {
+        var settings1 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value" } }
+        };
+        var settings2 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value" } }
+        };
+
+        Assert.That(settings1.Equals(settings2), Is.True);
+    }
+
+    [Test]
+    public void Settings_Equals_ShouldReturnFalse_WhenCustomHeadersDiffer()
+    {
+        var settings1 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value1" } }
+        };
+        var settings2 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value2" } }
+        };
+
+        Assert.That(settings1.Equals(settings2), Is.False);
+    }
+
+    [Test]
+    public void Settings_GetHashCode_ShouldIncludeCustomHeaders()
+    {
+        var settings1 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value1" } }
+        };
+        var settings2 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value2" } }
+        };
+
+        Assert.That(settings1.GetHashCode(), Is.Not.EqualTo(settings2.GetHashCode()));
+    }
+    
+    [Test]
+    public void Settings_ToString_ShouldNotIncludeCustomHeaders_WhenEmpty()
+    {
+        var settings = new ClickHouseClientSettings();
+        var str = settings.ToString();
+
+        Assert.That(str, Does.Not.Contain("CustomHeaders="));
+    }
+
+    [Test]
+    public void Settings_ToString_ShouldNotExposeCustomHeaderValues()
+    {
+        var settings = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string>
+            {
+                { "X-Secret-Header", "secret-value" }
+            }
+        };
+        var str = settings.ToString();
+
+        Assert.That(str, Does.Not.Contain("secret-value"));
     }
 
     private class TestLoggerFactory : ILoggerFactory

@@ -9,6 +9,8 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.Database.get -> string
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Database.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Roles.get -> System.Collections.Generic.IReadOnlyList<string>
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Roles.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CustomHeaders.get -> System.Collections.Generic.IReadOnlyDictionary<string, string>
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CustomHeaders.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Equals(ClickHouse.Driver.ADO.ClickHouseClientSettings other) -> bool
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Host.get -> string
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Host.init -> void

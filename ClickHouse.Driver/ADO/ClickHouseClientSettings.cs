@@ -74,6 +74,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Copy roles list
         Roles = other.Roles.ToArray();
+
+        // Deep copy the CustomHeaders dictionary
+        CustomHeaders = new Dictionary<string, string>(other.CustomHeaders.ToDictionary(x => x.Key, x => x.Value));
     }
 
     /// <summary>
@@ -243,6 +246,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public IReadOnlyList<string> Roles { get; init; } = Array.Empty<string>();
 
     /// <summary>
+    /// Gets or sets custom HTTP headers to send with each request.
+    /// These headers are applied after the default headers, allowing you to override most headers.
+    /// The following headers cannot be overridden and will be silently ignored:
+    /// Connection, Authorization, User-Agent
+    /// Default: empty dictionary
+    /// </summary>
+    public IReadOnlyDictionary<string, string> CustomHeaders { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
     /// Values not specified in the connection string will use default values.
     /// </summary>
@@ -333,7 +345,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                HttpClientFactory == other.HttpClientFactory &&
                HttpClientName == other.HttpClientName &&
                EnableDebugMode == other.EnableDebugMode &&
-               Roles.SequenceEqual(other.Roles);
+               Roles.SequenceEqual(other.Roles) &&
+               CustomHeaders.Count == other.CustomHeaders.Count &&
+               CustomHeaders.All(kvp => other.CustomHeaders.TryGetValue(kvp.Key, out var value) && kvp.Value == value);
     }
 
     /// <summary>
@@ -375,6 +389,10 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         {
             hash.Add(role);
         }
+        foreach (var kvp in CustomHeaders)
+        {
+            hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
+        }
         return hash.ToHashCode();
     }
 
@@ -407,6 +425,11 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         if (Roles.Count > 0)
         {
             result += $";Roles={string.Join(",", Roles)}";
+        }
+
+        if (CustomHeaders.Count > 0)
+        {
+            result += $";CustomHeaders={string.Join(",", CustomHeaders.Select(x => $"{x.Key}:***"))}";
         }
 
         return result;

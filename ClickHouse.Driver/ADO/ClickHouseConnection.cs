@@ -546,6 +546,22 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
             headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("deflate"));
         }
+
+        // Apply custom headers (blocked headers are silently ignored for security)
+        foreach (var kvp in Settings.CustomHeaders)
+        {
+            if (!IsBlockedHeader(kvp.Key))
+            {
+                headers.TryAddWithoutValidation(kvp.Key, kvp.Value);
+            }
+        }
+    }
+
+    private static bool IsBlockedHeader(string headerName)
+    {
+        return string.Equals(headerName, "Connection", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "Authorization", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "User-Agent", StringComparison.OrdinalIgnoreCase);
     }
 
     internal ClickHouseConnectionStringBuilder ConnectionStringBuilder => ClickHouseConnectionStringBuilder.FromSettings(Settings);
