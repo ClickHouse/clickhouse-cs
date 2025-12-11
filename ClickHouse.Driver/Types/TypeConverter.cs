@@ -180,6 +180,8 @@ internal static class TypeConverter
 
         RegisterParameterizedType<AggregateFunctionType>();
 
+        RegisterParameterizedType<QBitType>();
+
         // Mapping fixups
         ReverseMapping.Add(typeof(ClickHouseDecimal), new Decimal128Type());
         ReverseMapping.Add(typeof(decimal), new Decimal128Type());
