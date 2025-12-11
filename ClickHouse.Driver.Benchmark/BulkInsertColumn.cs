@@ -13,13 +13,14 @@ namespace ClickHouse.Driver.Benchmark;
 [MemoryDiagnoser(true)]
 public class BulkInsertColumn
 {
-    private readonly ClickHouseConnection connection;
-    private readonly ClickHouseBulkCopy bulkCopy;
+    private ClickHouseConnection connection;
+    private ClickHouseBulkCopy bulkCopyInt64;
+    private ClickHouseBulkCopy bulkCopyFixedString;
 
     [Params(500000)]
     public int Count { get; set; }
 
-    private IEnumerable<object[]> Rows
+    private IEnumerable<object[]> Int64Rows
     {
         get
         {
@@ -29,27 +30,53 @@ public class BulkInsertColumn
         }
     }
 
-    public BulkInsertColumn()
+    private IEnumerable<object[]> FixedStringRows
+    {
+        get
+        {
+            int counter = 0;
+            while (counter < int.MaxValue)
+                yield return new object[] { $"val{counter++:D12}" }; // 16-char string for FixedString(16)
+        }
+    }
+
+    [GlobalSetup]
+    public void Setup()
     {
         var connectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION");
         connection = new ClickHouseConnection(connectionString);
 
-        var targetTable = $"test.benchmark_bulk_insert_int64";
+        // Create database
+        connection.ExecuteStatementAsync("CREATE DATABASE IF NOT EXISTS test").Wait();
 
-        // Create database and table for benchmark
-        connection.ExecuteStatementAsync($"CREATE DATABASE IF NOT EXISTS test").Wait();
-        connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (col1 Int64) ENGINE Null").Wait();
-
-        bulkCopy = new ClickHouseBulkCopy(connection)
+        // Setup Int64 benchmark
+        var int64Table = "test.benchmark_bulk_insert_int64";
+        connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {int64Table} (col1 Int64) ENGINE Null").Wait();
+        bulkCopyInt64 = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = targetTable,
+            DestinationTableName = int64Table,
             BatchSize = 10000,
             MaxDegreeOfParallelism = 1,
             ColumnNames = new[] { "col1" }
         };
-        bulkCopy.InitAsync().Wait();
+        bulkCopyInt64.InitAsync().Wait();
+
+        // Setup FixedString benchmark
+        var fixedStringTable = "test.benchmark_bulk_insert_fixedstring";
+        connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {fixedStringTable} (col1 FixedString(16)) ENGINE Null").Wait();
+        bulkCopyFixedString = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = fixedStringTable,
+            BatchSize = 10000,
+            MaxDegreeOfParallelism = 1,
+            ColumnNames = new[] { "col1" }
+        };
+        bulkCopyFixedString.InitAsync().Wait();
     }
 
     [Benchmark]
-    public async Task BulkInsertInt32() => await bulkCopy.WriteToServerAsync(Rows.Take(Count));
+    public async Task BulkInsertInt64() => await bulkCopyInt64.WriteToServerAsync(Int64Rows.Take(Count));
+
+    [Benchmark]
+    public async Task BulkInsertFixedString() => await bulkCopyFixedString.WriteToServerAsync(FixedStringRows.Take(Count));
 }
