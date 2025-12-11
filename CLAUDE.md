@@ -44,10 +44,8 @@ ClickHouse.Driver.sln
 
 ### Stability & Backward Compatibility
 - **ClickHouse version support**: Respect `FeatureSwitch`, `ClickHouseFeatureMap` for multi-version compatibility
-- **Breaking API changes**: Public API analyzer enforces `PublicAPI/*.txt` - update these files for any API changes
 - **Client-server protocol**: Changes must maintain protocol compatibility
 - **Connection string**: Preserve backward compatibility with existing connection string formats
-- **Feature detection**: Use `ClickHouseFeatureMap` for version-specific behavior
 - **Type system changes**: Type parsing/serialization changes require extensive test coverage
 
 ### Performance Characteristics
@@ -66,8 +64,7 @@ ClickHouse.Driver.sln
 - **Analyzers**: Respect `.editorconfig`, StyleCop suppressions, nullable contexts
 
 ### Configuration & Settings
-- **Connection string**: Changes must preserve backward compatibility
-- **Settings are also configured in ClickHouseClientSettings**
+- **Configuration**: happens through connection string and ClickHouseClientSettings
 - **Feature flags**: Consider adding optional behavior behind connection string settings
 
 ### Observability & Diagnostics
