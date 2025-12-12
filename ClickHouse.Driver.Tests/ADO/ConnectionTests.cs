@@ -1,5 +1,6 @@
 using System;
 using System.Data;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -680,5 +681,49 @@ public class ConnectionTests : AbstractConnectionTestFixture
         // Verify the path was used in the request
         Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0), "HttpClient should have been used");
         Assert.That(trackingHandler.Requests[0].RequestUri.AbsolutePath, Does.StartWith("/custom/reverse/proxy/path"), "Path was not applied to request");
+    }
+
+    [Test]
+    public void InsertRawStreamAsync_WithNullTable_ShouldThrowArgumentException()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("1,2,3"));
+        var ex = Assert.ThrowsAsync<ArgumentException>(async () =>
+            await connection.InsertRawStreamAsync(table: null, stream: stream, format: "CSV"));
+        Assert.That(ex.ParamName, Is.EqualTo("table"));
+    }
+
+    [Test]
+    public void InsertRawStreamAsync_WithEmptyTable_ShouldThrowArgumentException()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("1,2,3"));
+        var ex = Assert.ThrowsAsync<ArgumentException>(async () =>
+            await connection.InsertRawStreamAsync(table: "", stream: stream, format: "CSV"));
+        Assert.That(ex.ParamName, Is.EqualTo("table"));
+    }
+
+    [Test]
+    public void InsertRawStreamAsync_WithNullStream_ShouldThrowArgumentNullException()
+    {
+        var ex = Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await connection.InsertRawStreamAsync(table: "test", stream: null, format: "CSV"));
+        Assert.That(ex.ParamName, Is.EqualTo("stream"));
+    }
+
+    [Test]
+    public void InsertRawStreamAsync_WithNullFormat_ShouldThrowArgumentException()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("1,2,3"));
+        var ex = Assert.ThrowsAsync<ArgumentException>(async () =>
+            await connection.InsertRawStreamAsync(table: "test", stream: stream, format: null));
+        Assert.That(ex.ParamName, Is.EqualTo("format"));
+    }
+
+    [Test]
+    public void InsertRawStreamAsync_WithEmptyFormat_ShouldThrowArgumentException()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("1,2,3"));
+        var ex = Assert.ThrowsAsync<ArgumentException>(async () =>
+            await connection.InsertRawStreamAsync(table: "test", stream: stream, format: ""));
+        Assert.That(ex.ParamName, Is.EqualTo("format"));
     }
 }
