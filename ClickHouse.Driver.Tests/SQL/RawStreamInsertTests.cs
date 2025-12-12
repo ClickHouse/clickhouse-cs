@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
+using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 
@@ -128,13 +129,9 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
 
         Assert.That(response.IsSuccessStatusCode, Is.True);
 
-        // Verify the query ID was used by checking system.query_log
-        // Note: query_log is async, so we flush it first
-        await connection.ExecuteStatementAsync("SYSTEM FLUSH LOGS");
-
-        var foundQueryId = await connection.ExecuteScalarAsync(
-            $"SELECT query_id FROM system.query_log WHERE query_id = '{queryId}' LIMIT 1");
-        Assert.That(foundQueryId, Is.EqualTo(queryId));
+        // Verify query ID from response header
+        var returnedQueryId = ClickHouseConnection.ExtractQueryId(response);
+        Assert.That(returnedQueryId, Is.EqualTo(queryId));
     }
 
     [Test]
