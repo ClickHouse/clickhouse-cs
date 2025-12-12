@@ -384,6 +384,58 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     }
 
     /// <summary>
+    /// Inserts raw data from a stream into a ClickHouse table.
+    /// This can be used for inserting data in formats like CSV, JSON, Parquet, etc. directly from files or other streams.
+    /// </summary>
+    /// <param name="table">The destination table name</param>
+    /// <param name="stream">The stream containing the data to insert</param>
+    /// <param name="format">The ClickHouse format of the data (e.g., "CSV", "JSONEachRow", "Parquet"). See <see href="https://clickhouse.com/docs/interfaces/formats">ClickHouse Formats</see> for the full list.</param>
+    /// <param name="columns">Optional list of column names. If null, all columns are assumed in table order</param>
+    /// <param name="useCompression">Whether to compress the stream before sending (default: true)</param>
+    /// <param name="queryId">Optional query ID for tracking. A query id will be generated if left null or empty</param>
+    /// <param name="token">Cancellation token</param>
+    /// <returns>Task-wrapped HttpResponseMessage object</returns>
+    public async Task<HttpResponseMessage> InsertRawStreamAsync(
+        string table,
+        Stream stream,
+        string format,
+        IEnumerable<string> columns = null,
+        bool useCompression = true,
+        string queryId = null,
+        CancellationToken token = default)
+    {
+        if (string.IsNullOrEmpty(table))
+            throw new ArgumentException("Table name cannot be null or empty", nameof(table));
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+        if (string.IsNullOrEmpty(format))
+            throw new ArgumentException("Format cannot be null or empty", nameof(format));
+
+        await EnsureOpenAsync().ConfigureAwait(false);
+
+        var columnList = columns != null ? $"({string.Join(", ", columns)})" : string.Empty;
+        var query = $"INSERT INTO {table} {columnList} FORMAT {format}";
+
+        HttpContent content = new StreamContent(stream);
+        if (useCompression)
+        {
+            // CompressedContent handles compression and adds Content-Encoding header
+            content = new CompressedContent(content, System.Net.DecompressionMethods.GZip);
+        }
+
+        // Pass isCompressed=false since CompressedContent already adds the Content-Encoding header
+        try
+        {
+            return await PostStreamAsync(query, content, isCompressed: false, queryId, token).ConfigureAwait(false);
+        }
+        catch
+        {
+            content.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Warning: implementation-specific API. Exposed to allow custom optimizations
     /// May change in future versions
     /// </summary>
