@@ -3,7 +3,7 @@ using NodaTime;
 
 namespace ClickHouse.Driver.Types;
 
-public static class DateTimeConversions
+internal static class DateTimeConversions
 {
     public static readonly DateTime DateTimeEpochStart = DateTimeOffset.FromUnixTimeSeconds(0).UtcDateTime;
 

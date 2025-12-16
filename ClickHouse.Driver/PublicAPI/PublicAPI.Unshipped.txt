@@ -83,7 +83,6 @@ ClickHouse.Driver.ADO.QueryStats.QueryStats(ClickHouse.Driver.ADO.QueryStats ori
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.get -> Microsoft.IO.RecyclableMemoryStreamManager
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.init -> void
 ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions
-ClickHouse.Driver.Types.DateTimeConversions
 ClickHouse.Driver.Types.Grammar.Parser
 ClickHouse.Driver.Types.Grammar.SyntaxTreeNode
 ClickHouse.Driver.Types.Grammar.SyntaxTreeNode.ChildNodes.get -> System.Collections.Generic.IList<ClickHouse.Driver.Types.Grammar.SyntaxTreeNode>
