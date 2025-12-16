@@ -28,23 +28,36 @@ internal class FixedStringType : ParameterizedType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
+        ReadOnlySpan<byte> span;
+
         if (value is string s)
         {
-            var stringBytes = new byte[Length];
-            Encoding.UTF8.GetBytes(s, 0, s.Length, stringBytes, 0);
-            writer.Write(stringBytes);
+            span = Encoding.UTF8.GetBytes(s).AsSpan();
         }
-        else if (value is byte[] b)
+        else if (value is byte[] bytes)
         {
-            if (b.Length != Length)
-            {
-                throw new ArgumentException($"Byte array length {b.Length} does not match FixedString({Length}). Byte arrays must be exactly {Length} bytes.");
-            }
-            writer.Write(b);
+            span = bytes;
+        }
+        else if (value is ReadOnlyMemory<byte> memory)
+        {
+            span = memory.Span;
         }
         else
         {
-            throw new ArgumentException($"FixedString requires string or byte[], got {value?.GetType().Name ?? "null"}");
+            throw new ArgumentException(
+                $"FixedString({Length}) expects string, byte[], or ReadOnlyMemory<byte>, but got {value?.GetType().Name ?? "null"}");
+        }
+
+        if (span.Length > Length)
+        {
+            span = span.Slice(0, Length);
+        }
+
+        writer.Write(span);
+
+        if (span.Length < Length)
+        {
+            writer.Write(new byte[Length - span.Length]);
         }
     }
 }

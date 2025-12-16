@@ -13,18 +13,22 @@ internal class StringType : ClickHouseType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-        if (value is string s)
+        switch (value)
         {
-            writer.Write(s);
-        }
-        else if (value is byte[] b)
-        {
-            writer.Write7BitEncodedInt(b.Length);
-            writer.Write(b);
-        }
-        else
-        {
-            throw new ArgumentException($"String requires string or byte[], got {value?.GetType().Name ?? "null"}");
+            case  string str:
+                writer.Write(str.Length);
+                break;
+            case  byte[] bytes:
+                writer.Write7BitEncodedInt(bytes.Length);
+                writer.Write(bytes);
+                break;
+            case ReadOnlyMemory<byte> memory:
+                var span = memory.Span;
+                writer.Write(span.Length);
+                writer.Write(span);
+                break;
+            default:
+                throw new ArgumentException($"String type expects string, byte[], or ReadOnlyMemory<byte>, but got {value?.GetType().Name ?? "null"}");
         }
     }
 }
