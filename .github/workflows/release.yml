@@ -42,7 +42,7 @@ jobs:
         New-Item ${{ github.workspace }}\package -ItemType directory
 
     - name: Download unsigned package
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v7
       with:
         name: package-unsigned-${{ inputs.version }}
         path: ${{ github.workspace }}/package
@@ -127,7 +127,7 @@ jobs:
     name: Upload to NuGet.org
     steps:
     - name: Download Artifact
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v7
       with:
         name: package
       
@@ -144,7 +144,7 @@ jobs:
       contents: write
     steps:
     - name: Download Artifact
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v7
       with:
         name: package
     - name: Create Release
