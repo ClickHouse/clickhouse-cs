@@ -50,7 +50,8 @@ internal class FixedStringType : ParameterizedType
 
         if (span.Length > Length)
         {
-            span = span.Slice(0, Length);
+            throw new ArgumentException(
+                $"FixedString({Length}) cannot accept data longer than {Length} bytes, but got {span.Length} bytes");
         }
 
         writer.Write(span);

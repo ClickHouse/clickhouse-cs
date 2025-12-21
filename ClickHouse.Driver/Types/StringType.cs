@@ -16,7 +16,7 @@ internal class StringType : ClickHouseType
         switch (value)
         {
             case  string str:
-                writer.Write(str.Length);
+                writer.Write(str);
                 break;
             case  byte[] bytes:
                 writer.Write7BitEncodedInt(bytes.Length);
@@ -24,7 +24,7 @@ internal class StringType : ClickHouseType
                 break;
             case ReadOnlyMemory<byte> memory:
                 var span = memory.Span;
-                writer.Write(span.Length);
+                writer.Write7BitEncodedInt(span.Length);
                 writer.Write(span);
                 break;
             default:
