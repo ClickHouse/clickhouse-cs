@@ -31,6 +31,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Insert_002_BulkInsert.cs](Insert_002_BulkInsert.cs) - High-performance bulk data insertion using `ClickHouseBulkCopy`
 - [Insert_003_AsyncInsert.cs](Insert_003_AsyncInsert.cs) - Server-side batching with async inserts for high-concurrency workloads
 - [Insert_004_RawStreamInsert.cs](Insert_004_RawStreamInsert.cs) - Inserting raw data streams from files or memory (CSV, JSON, Parquet, etc.)
+- [Insert_005_InsertFromSelect.cs](Insert_005_InsertFromSelect.cs) - Using INSERT FROM SELECT for ETL, data transformation, and loading from external sources (S3, URL, remote servers)
 
 ### Selecting Data
 
