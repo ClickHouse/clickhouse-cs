@@ -126,6 +126,10 @@ class Program
         await SelectWithParameterBinding.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(ExportToFile)}");
+        await ExportToFile.Run();
+        WaitForUser(isInteractive);
+
         // Data Types
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("DATA TYPES");

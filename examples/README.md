@@ -37,6 +37,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Select_001_BasicSelect.cs](Select_001_BasicSelect.cs) - Basic SELECT queries and reading the results
 - [Select_002_SelectMetadata.cs](Select_002_SelectMetadata.cs) - Column metadata overview
 - [Select_003_SelectWithParameterBinding.cs](Select_003_SelectWithParameterBinding.cs) - Parameterized queries for safe and dynamic SQL construction
+- [Select_004_ExportToFile.cs](Select_004_ExportToFile.cs) - Exporting query results to files (JSONEachRow, Parquet, etc.)
 
 ### Data Types
 
