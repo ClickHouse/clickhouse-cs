@@ -113,6 +113,10 @@ class Program
         await InsertFromSelect.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(EphemeralColumns)}");
+        await EphemeralColumns.Run();
+        WaitForUser(isInteractive);
+
         // Selecting Data
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("SELECTING DATA");
