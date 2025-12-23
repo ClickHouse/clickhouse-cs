@@ -55,6 +55,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Advanced_006_Roles.cs](Advanced_006_Roles.cs) - Using ClickHouse roles to control permissions at connection and command levels
 - [Advanced_007_CustomHeaders.cs](Advanced_007_CustomHeaders.cs) - Using custom HTTP headers for proxy authentication, distributed tracing, etc
 - [Advanced_008_QueryCancellation.cs](Advanced_008_QueryCancellation.cs) - Using CancellationToken to cancel long-running queries
+- [Advanced_009_ReadOnlyUsers.cs](Advanced_009_ReadOnlyUsers.cs) - Working with READONLY = 1 users and their limitations
 
 ### Troubleshooting
 
