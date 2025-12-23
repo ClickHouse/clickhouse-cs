@@ -109,6 +109,14 @@ class Program
         await RawStreamInsert.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(InsertFromSelect)}");
+        await InsertFromSelect.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(EphemeralColumns)}");
+        await EphemeralColumns.Run();
+        WaitForUser(isInteractive);
+
         // Selecting Data
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("SELECTING DATA");
@@ -124,6 +132,10 @@ class Program
 
         Console.WriteLine($"\n\nRunning: {nameof(SelectWithParameterBinding)}");
         await SelectWithParameterBinding.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(ExportToFile)}");
+        await ExportToFile.Run();
         WaitForUser(isInteractive);
 
         // Data Types
@@ -166,6 +178,14 @@ class Program
 
         Console.WriteLine($"\n\nRunning: {nameof(CustomHeaders)}");
         await CustomHeaders.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(QueryCancellation)}");
+        await QueryCancellation.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(ReadOnlyUsers)}");
+        await ReadOnlyUsers.Run();
         WaitForUser(isInteractive);
 
         // Troubleshooting

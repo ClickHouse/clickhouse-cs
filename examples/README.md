@@ -31,12 +31,15 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Insert_002_BulkInsert.cs](Insert_002_BulkInsert.cs) - High-performance bulk data insertion using `ClickHouseBulkCopy`
 - [Insert_003_AsyncInsert.cs](Insert_003_AsyncInsert.cs) - Server-side batching with async inserts for high-concurrency workloads
 - [Insert_004_RawStreamInsert.cs](Insert_004_RawStreamInsert.cs) - Inserting raw data streams from files or memory (CSV, JSON, Parquet, etc.)
+- [Insert_005_InsertFromSelect.cs](Insert_005_InsertFromSelect.cs) - Using INSERT FROM SELECT for ETL, data transformation, and loading from external sources (S3, URL, remote servers)
+- [Insert_006_EphemeralColumns.cs](Insert_006_EphemeralColumns.cs) - Using EPHEMERAL columns to transform input data before storage
 
 ### Selecting Data
 
 - [Select_001_BasicSelect.cs](Select_001_BasicSelect.cs) - Basic SELECT queries and reading the results
 - [Select_002_SelectMetadata.cs](Select_002_SelectMetadata.cs) - Column metadata overview
 - [Select_003_SelectWithParameterBinding.cs](Select_003_SelectWithParameterBinding.cs) - Parameterized queries for safe and dynamic SQL construction
+- [Select_004_ExportToFile.cs](Select_004_ExportToFile.cs) - Exporting query results to files (JSONEachRow, Parquet, etc.)
 
 ### Data Types
 
@@ -53,6 +56,8 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Advanced_005_QueryStatistics.cs](Advanced_005_QueryStatistics.cs) - Accessing and using query statistics for performance monitoring and optimization decisions
 - [Advanced_006_Roles.cs](Advanced_006_Roles.cs) - Using ClickHouse roles to control permissions at connection and command levels
 - [Advanced_007_CustomHeaders.cs](Advanced_007_CustomHeaders.cs) - Using custom HTTP headers for proxy authentication, distributed tracing, etc
+- [Advanced_008_QueryCancellation.cs](Advanced_008_QueryCancellation.cs) - Using CancellationToken to cancel long-running queries
+- [Advanced_009_ReadOnlyUsers.cs](Advanced_009_ReadOnlyUsers.cs) - Working with READONLY = 1 users and their limitations
 
 ### Troubleshooting
 
