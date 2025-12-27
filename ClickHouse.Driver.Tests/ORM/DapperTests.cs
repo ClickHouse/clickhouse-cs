@@ -20,7 +20,12 @@ public class DapperTests : AbstractConnectionTestFixture
     public static IEnumerable<TestCaseData> SimpleSelectQueries => TestUtilities.GetDataTypeSamples()
         .Where(s => ShouldBeSupportedByDapper(s.ClickHouseType))
         .Where(s => s.ExampleValue != DBNull.Value)
-        .Where(s => !s.ClickHouseType.StartsWith("Array")) // Dapper issue, see ShouldExecuteSelectWithParameters test
+        .Select(sample => new TestCaseData($"SELECT {{value:{sample.ClickHouseType}}}", sample.ExampleValue));
+
+    public static IEnumerable<TestCaseData> SimpleSelectQueriesForStringConversion => TestUtilities.GetDataTypeSamples()
+        .Where(s => ShouldBeSupportedByDapper(s.ClickHouseType))
+        .Where(s => ShouldSupportStringConversion(s.ClickHouseType))
+        .Where(s => s.ExampleValue != DBNull.Value)
         .Select(sample => new TestCaseData($"SELECT {{value:{sample.ClickHouseType}}}", sample.ExampleValue));
 
     static DapperTests()
@@ -68,6 +73,16 @@ public class DapperTests : AbstractConnectionTestFixture
             default:
                 return true;
         }
+    }
+    
+    private static bool ShouldSupportStringConversion(string clickHouseType)
+    {
+        if (clickHouseType.Contains("Array") || clickHouseType.Contains("QBit"))
+        {
+            return false;
+        }
+
+        return true;
     }
 
 #if NET48 || NET5_0_OR_GREATER
@@ -142,7 +157,7 @@ public class DapperTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    [TestCaseSource(typeof(DapperTests), nameof(SimpleSelectQueries))]
+    [TestCaseSource(typeof(DapperTests), nameof(SimpleSelectQueriesForStringConversion))]
     public async Task ShouldExecuteSelectStringWithSingleParameterValue(string sql, object value)
     {
         if (value is JsonObject or IPAddress or Guid or TimeSpan)

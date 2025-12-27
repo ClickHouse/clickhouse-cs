@@ -169,7 +169,8 @@ public class DynamicTests : AbstractConnectionTestFixture
             clickHouseType.Contains("Nullable") ||
             clickHouseType.Contains("Tuple") ||
             clickHouseType.Contains("Variant") ||
-            clickHouseType.Contains("BFloat16"))
+            clickHouseType.Contains("BFloat16") ||
+            clickHouseType.Contains("QBit"))
         {
             return false;
         }

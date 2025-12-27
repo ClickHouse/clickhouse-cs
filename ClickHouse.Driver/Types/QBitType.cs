@@ -13,40 +13,40 @@ namespace ClickHouse.Driver.Types;
 internal class QBitType : ParameterizedType
 {
     // Delegate to ArrayType for wire format
-    private ArrayType UnderlyingArrayType => new ArrayType { UnderlyingType = ElementType };
-    
+    private ArrayType UnderlyingArrayType { get; init; }
+
     public ClickHouseType ElementType { get; set; }
+
     public int Dimension { get; set; }
-    
+
     public override Type FrameworkType => ElementType.FrameworkType.MakeArrayType();
 
     public override string Name => "QBit";
 
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)
     {
+        var elementType = parseClickHouseTypeFunc(node.ChildNodes[0]);
         return new QBitType
         {
-            ElementType = parseClickHouseTypeFunc(node.ChildNodes[0]),
+            ElementType = elementType,
             Dimension = int.Parse(node.ChildNodes[1].Value, CultureInfo.InvariantCulture),
+            UnderlyingArrayType = new ArrayType { UnderlyingType = elementType },
         };
     }
 
-    public override string ToString() => $"{Name}({ElementType},{Dimension})";
+    public override string ToString() => $"{Name}({ElementType}, {Dimension})";
 
     public override object Read(ExtendedBinaryReader reader)
     {
         // QBit wire format is Array(UnderlyingType)
         var length = reader.Read7BitEncodedInt();
-        var data = Array.CreateInstance(ElementType.FrameworkType, Dimension); // Could use a pool here
+        var data = Array.CreateInstance(ElementType.FrameworkType, Dimension);
         for (var i = 0; i < length; i++)
         {
             var value = ElementType.Read(reader);
-            if (i < Dimension)
-            {
-                data.SetValue(ClearDBNull(value), i);
-            }
+            data.SetValue(ClearDBNull(value), i);
         }
-    
+
         return data;
     }
 
