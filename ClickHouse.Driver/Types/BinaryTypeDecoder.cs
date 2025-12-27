@@ -157,6 +157,9 @@ internal static class BinaryTypeDecoder
                     Scale = reader.Read7BitEncodedInt(),
                 };
 
+            case BinaryTypeIndex.QBit:
+                return DecodeQBit(reader, typeSettings);
+
             default:
                 break;
         }
@@ -300,6 +303,13 @@ internal static class BinaryTypeDecoder
             // If parsing fails, return a string type as fallback
             return new StringType();
         }
+    }
+
+    private static QBitType DecodeQBit(ExtendedBinaryReader reader, TypeSettings typeSettings)
+    {
+        var elementType = FromByteCode(reader, typeSettings);
+        var dimension = reader.Read7BitEncodedInt();
+        return new QBitType { ElementType = elementType, Dimension = dimension };
     }
 
     private static JsonType DecodeJson(ExtendedBinaryReader reader, TypeSettings typeSettings)

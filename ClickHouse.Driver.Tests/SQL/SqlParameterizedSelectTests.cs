@@ -36,7 +36,13 @@ public class SqlParameterizedSelectTests : IDisposable
         if (clickHouseType.StartsWith("DateTime64") || clickHouseType == "Date" || clickHouseType == "Date32" || clickHouseType == "Time" || clickHouseType.Contains("FixedString"))
             Assert.Pass("Automatic type detection does not work for " + clickHouseType);
         if (clickHouseType.StartsWith("Enum"))
+        {
             clickHouseType = "String";
+        }
+        if (clickHouseType.StartsWith("QBit"))
+        {
+            Assert.Ignore("QBit does not support comparing for equality.");
+        }
         
 
         using var command = connection.CreateCommand();
@@ -77,7 +83,13 @@ public class SqlParameterizedSelectTests : IDisposable
     public async Task ShouldExecuteParameterizedCompareWithExplicitType(string exampleExpression, string clickHouseType, object value)
     {
         if (clickHouseType.StartsWith("Enum"))
+        {
             clickHouseType = "String";
+        }
+        if (clickHouseType.StartsWith("QBit"))
+        {
+            Assert.Ignore("QBit does not support comparing for equality.");
+        }
 
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {exampleExpression} as expected, {{var:{clickHouseType}}} as actual, expected = actual as equals";
