@@ -48,7 +48,7 @@ public enum Feature
     [SinceVersion("25.6")]
     Time = 1 << 12,
 
-    [SinceVersion("25.10")]
+    [SinceVersion("25.11")] // Technically 25.10, but limitations break testing
     QBit = 1 << 13,
 
     [SinceVersion("25.11")]

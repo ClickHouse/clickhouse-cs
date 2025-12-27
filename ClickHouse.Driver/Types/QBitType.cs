@@ -15,7 +15,18 @@ internal class QBitType : ParameterizedType
     // Delegate to ArrayType for wire format
     private ArrayType UnderlyingArrayType { get; init; }
 
-    public ClickHouseType ElementType { get; set; }
+    public ClickHouseType ElementType
+    {
+        get;
+        init
+        {
+            field = value;
+            UnderlyingArrayType = new ArrayType
+            {
+                UnderlyingType = value,
+            };
+        }
+    }
 
     public int Dimension { get; set; }
 
@@ -30,7 +41,6 @@ internal class QBitType : ParameterizedType
         {
             ElementType = elementType,
             Dimension = int.Parse(node.ChildNodes[1].Value, CultureInfo.InvariantCulture),
-            UnderlyingArrayType = new ArrayType { UnderlyingType = elementType },
         };
     }
 
