@@ -54,6 +54,7 @@ public static class BulkInsert
             // Generate data
             var largeData = GenerateSampleData(10000, startId: 6);
 
+            // IMPORTANT: the order of the data in the provided object[] array must match the order of the columns in the table
             await bulkCopy.WriteToServerAsync(largeData);
             Console.WriteLine($"   Total rows inserted: {bulkCopy.RowsWritten}\n");
         }
