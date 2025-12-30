@@ -154,26 +154,10 @@ internal static class HttpParameterFormatter
     /// </summary>
     private static string FormatDateTime64AsUnixTime(DateTimeOffset dto, int scale)
     {
-        // DateTime64 stores time as a scaled integer based on precision
-        // Scale 0 = seconds, 3 = milliseconds, 6 = microseconds, 9 = nanoseconds
-        // Ticks are 100ns units (10^7 per second), adjust to 10^scale per second
+        // Convert to Unix ticks (100ns units since Unix epoch), then shift to target scale
+        // Scale 7 = 100ns (same as .NET ticks), so shift by (scale - 7)
         var unixTicks = dto.UtcDateTime.Ticks - DateTimeConversions.DateTimeEpochStart.Ticks;
-
-        var scaledValue = scale switch
-        {
-            0 => unixTicks / 10_000_000L,                    // seconds
-            1 => unixTicks / 1_000_000L,                     // 10ths of second
-            2 => unixTicks / 100_000L,                       // 100ths of second
-            3 => unixTicks / 10_000L,                        // milliseconds
-            4 => unixTicks / 1_000L,                         // 10ths of millisecond
-            5 => unixTicks / 100L,                           // 100ths of millisecond
-            6 => unixTicks / 10L,                            // microseconds
-            7 => unixTicks,                                  // 100ns (same as ticks)
-            8 => unixTicks * 10L,                            // 10ns
-            9 => unixTicks * 100L,                           // nanoseconds
-            _ => throw new ArgumentOutOfRangeException(nameof(scale), $"Unsupported DateTime64 scale: {scale}")
-        };
-
+        var scaledValue = MathUtils.ShiftDecimalPlaces(unixTicks, scale - 7);
         return scaledValue.ToString(CultureInfo.InvariantCulture);
     }
 }
