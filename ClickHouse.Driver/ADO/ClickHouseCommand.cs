@@ -192,7 +192,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             stopwatch = Stopwatch.StartNew();
             logger.LogDebug("Executing SQL query. QueryId: {QueryId}", uriBuilder.GetEffectiveQueryId());
         }
-        
+
         await connection.EnsureOpenAsync().ConfigureAwait(false); // Preserve old behavior
 
         using var postMessage = connection.UseFormDataParameters

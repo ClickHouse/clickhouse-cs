@@ -3,8 +3,45 @@ v?
 
 **Breaking Changes:**
 
+* DateTime handling now respects `DateTime.Kind` property. Previously, all `DateTime` values were treated as wall-clock time in the target column's timezone regardless of their `Kind` property. The new behavior:
+
+  | DateTime.Kind | Old Behavior | New Behavior |
+  |---------------|--------------|--------------|
+  | `Utc` | Treated as wall-clock time in column timezone | Preserved as-is (instant is maintained) |
+  | `Local` | Treated as wall-clock time in column timezone | Converted to UTC preserving the instant |
+  | `Unspecified` | Treated as wall-clock time in column timezone | Treated as wall-clock time in column timezone (unchanged) |
+
+  **Migration guidance:** If you were relying on the old behavior where UTC `DateTime` values were reinterpreted in the column timezone, you should change these to `DateTimeKind.Unspecified`:
+  ```csharp
+  // Old code (worked by accident):
+  var utcTime = DateTime.UtcNow;  // Would be reinterpreted in column timezone
+
+  // New code (explicit intent):
+  var wallClockTime = DateTime.SpecifyKind(myTime, DateTimeKind.Unspecified);
+  ```
+
 
 **New Features/Improvements:**
+
+* Server timezone is now discovered from HTTP response headers. The `X-ClickHouse-Timezone` header is parsed from query responses, eliminating the need for a separate discovery query at connection startup.
+* `UseServerTimezone` documentation correction. The default value is `true` (not `false` as previously documented). When `true`, columns without an explicit timezone use the ClickHouse server's timezone. When `false`, the client's system timezone is used.
+* Improved HTTP parameter formatting for DateTime values:
+  - `DateTimeKind.Utc` and `DateTimeKind.Local` values are sent as Unix timestamps to preserve the exact instant
+  - `DateTimeKind.Unspecified` values are sent as ISO 8601 strings to be interpreted in the target timezone
+
+  **Important:** When using parameters, you must specify the timezone in the parameter type hint to have string values interpreted in the column timezone:
+  ```csharp
+  // Correct: timezone in type hint ensures proper interpretation
+  command.AddParameter("dt", myDateTime, "DateTime('Europe/Amsterdam')");
+  command.CommandText = "INSERT INTO table (dt_column) VALUES ({dt:DateTime('Europe/Amsterdam')})";
+
+  // Gotcha: without timezone hint, server timezone is used for interpretation
+  command.AddParameter("dt", myDateTime);
+  command.CommandText = "INSERT INTO table (dt_column) VALUES ({dt:DateTime})";
+  // ^ String value interpreted in SERVER timezone, not column timezone!
+  ```
+
+  This differs from bulk copy operations where the column timezone is known and used automatically.
  * Added support for setting roles at the connection and command levels.
  * Added support for custom headers at the connection level.
  * Added support for JWT/Bearer token authentication at both connection and command levels.

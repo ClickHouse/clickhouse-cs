@@ -29,6 +29,11 @@ internal abstract class AbstractDateTimeType : ParameterizedType
             DateOnly date => new DateTimeOffset(date.Year, date.Month, date.Day, 0, 0, 0, TimeSpan.Zero),
 #endif
             DateTimeOffset v => v,
+            // UTC DateTime represents a specific instant - preserve it exactly
+            DateTime { Kind: DateTimeKind.Utc } dt => new DateTimeOffset(dt),
+            // Local DateTime: convert to UTC using system timezone (preserves instant)
+            DateTime { Kind: DateTimeKind.Local } dt => new DateTimeOffset(dt),
+            // Unspecified DateTime: treat as wall-clock time in target column timezone
             DateTime dt => TimeZoneOrUtc.AtLeniently(LocalDateTime.FromDateTime(dt)).ToDateTimeOffset(),
             OffsetDateTime o => o.ToDateTimeOffset(),
             ZonedDateTime z => z.ToDateTimeOffset(),

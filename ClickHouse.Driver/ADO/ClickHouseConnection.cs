@@ -335,7 +335,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override async Task OpenAsync(CancellationToken cancellationToken)
     {
-        const string versionQuery = "SELECT version(), timezone() FORMAT TSV";
+        const string versionQuery = "SELECT version() FORMAT TSV";
 
         GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Opening ClickHouse connection to {Endpoint}.", serverUri);
         LoggingHelpers.LogHttpClientConfiguration(GetLogger(ClickHouseLogCategories.Connection), httpClientFactory);
@@ -366,10 +366,10 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             if (data.Length == 0)
                 throw new InvalidOperationException("ClickHouse server did not return version, check if the server is functional");
 
-            var serverVersionAndTimezone = Encoding.UTF8.GetString(data).Trim().Split('\t');
+            var versionString = Encoding.UTF8.GetString(data).Trim();
 
-            serverVersion = ParseVersion(serverVersionAndTimezone[0]);
-            serverTimezone = serverVersionAndTimezone[1];
+            serverVersion = ParseVersion(versionString);
+            serverTimezone = ExtractTimezone(response);
             SupportedFeatures = ClickHouseFeatureMap.GetFeatureFlags(serverVersion);
             state = ConnectionState.Open;
 
@@ -532,6 +532,15 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             return null;
     }
 
+    internal static string ExtractTimezone(HttpResponseMessage response)
+    {
+        const string timezoneHeader = "X-ClickHouse-Timezone";
+        if (response.Headers.Contains(timezoneHeader))
+            return response.Headers.GetValues(timezoneHeader).FirstOrDefault();
+        else
+            return null;
+    }
+
     internal HttpClient HttpClient => httpClientFactory.CreateClient(httpClientName);
 
     /// <summary>
@@ -539,6 +548,8 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// </summary>
     internal async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationToken cancellationToken)
     {
+        HttpResponseMessage response;
+
         // This will only have a value when sessions are enabled
         var lockRef = sessionRequestLock;
         if (lockRef != null)
@@ -547,15 +558,22 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             try
             {
                 // Force ResponseContentRead to ensure response is fully buffered before releasing lock
-                return await HttpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+                response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
                 lockRef.Release();
             }
         }
+        else
+        {
+            response = await HttpClient.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
+        }
 
-        return await HttpClient.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
+        // Extract and cache server timezone from response header
+        serverTimezone = ExtractTimezone(response);
+
+        return response;
     }
 
     internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, Settings.UseServerTimezone ? serverTimezone : TypeSettings.DefaultTimezone);

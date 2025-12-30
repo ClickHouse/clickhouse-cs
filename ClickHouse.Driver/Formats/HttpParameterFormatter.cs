@@ -79,16 +79,26 @@ internal static class HttpParameterFormatter
                 return Format(lt.UnderlyingType, value, quote);
 
             case DateTimeType dtt when value is DateTime dt:
-                return dt.ToString("s", CultureInfo.InvariantCulture);
+                // UTC/Local: convert to Unix timestamp to preserve the instant
+                // Unspecified: send as string so ClickHouse interprets in column timezone
+                if (dt.Kind == DateTimeKind.Unspecified)
+                    return dt.ToString("s", CultureInfo.InvariantCulture);
+                return new DateTimeOffset(dt).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
 
             case DateTimeType dtt when value is DateTimeOffset dto:
-                return dto.ToString("s", CultureInfo.InvariantCulture);
+                // DateTimeOffset always represents a specific instant - send as Unix timestamp
+                return dto.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
 
-            case DateTime64Type dtt when value is DateTime dtv:
-                return $"{dtv:yyyy-MM-dd HH:mm:ss.fffffff}";
+            case DateTime64Type d64t when value is DateTime dtv:
+                // UTC/Local: convert to Unix timestamp to preserve the instant
+                // Unspecified: send as string so ClickHouse interprets in column timezone
+                if (dtv.Kind == DateTimeKind.Unspecified)
+                    return $"{dtv:yyyy-MM-dd HH:mm:ss.fffffff}";
+                return FormatDateTime64AsUnixTime(new DateTimeOffset(dtv), d64t.Scale);
 
-            case DateTime64Type dtt when value is DateTimeOffset dto:
-                return $"{dto:yyyy-MM-dd HH:mm:ss.fffffff}";
+            case DateTime64Type d64t when value is DateTimeOffset dto:
+                // DateTimeOffset always represents a specific instant - send as Unix timestamp
+                return FormatDateTime64AsUnixTime(dto, d64t.Scale);
 
             case TimeType tt when value is TimeSpan ts:
                 return TimeType.FormatTimeString(ts);
@@ -137,5 +147,33 @@ internal static class HttpParameterFormatter
             default:
                 throw new ArgumentException($"Cannot convert {value} to {type}");
         }
+    }
+
+    /// <summary>
+    /// Formats a DateTimeOffset as a Unix timestamp with the appropriate scale for DateTime64.
+    /// </summary>
+    private static string FormatDateTime64AsUnixTime(DateTimeOffset dto, int scale)
+    {
+        // DateTime64 stores time as a scaled integer based on precision
+        // Scale 0 = seconds, 3 = milliseconds, 6 = microseconds, 9 = nanoseconds
+        // Ticks are 100ns units (10^7 per second), adjust to 10^scale per second
+        var unixTicks = dto.UtcDateTime.Ticks - DateTimeConversions.DateTimeEpochStart.Ticks;
+
+        var scaledValue = scale switch
+        {
+            0 => unixTicks / 10_000_000L,                    // seconds
+            1 => unixTicks / 1_000_000L,                     // 10ths of second
+            2 => unixTicks / 100_000L,                       // 100ths of second
+            3 => unixTicks / 10_000L,                        // milliseconds
+            4 => unixTicks / 1_000L,                         // 10ths of millisecond
+            5 => unixTicks / 100L,                           // 100ths of millisecond
+            6 => unixTicks / 10L,                            // microseconds
+            7 => unixTicks,                                  // 100ns (same as ticks)
+            8 => unixTicks * 10L,                            // 10ns
+            9 => unixTicks * 100L,                           // nanoseconds
+            _ => throw new ArgumentOutOfRangeException(nameof(scale), $"Unsupported DateTime64 scale: {scale}")
+        };
+
+        return scaledValue.ToString(CultureInfo.InvariantCulture);
     }
 }
