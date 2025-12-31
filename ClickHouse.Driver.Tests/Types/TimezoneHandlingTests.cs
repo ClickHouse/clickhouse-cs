@@ -572,9 +572,17 @@ public class UseServerTimezoneTests : IDisposable
     {
         // With UseServerTimezone=false, columns without explicit timezone use client's system timezone
         // Query a DateTime without timezone - should use client timezone for interpretation
-        TypeSettings.DefaultTimezone = DateTimeZoneProviders.Tzdb.GetZoneOrNull("Europe/Amsterdam").Id;
-        var result = (DateTime)await connectionWithClientTz.ExecuteScalarAsync("SELECT toDateTime('2024-01-15 12:00:00')");
-        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 13, 0, 0))); // +1 hour
+        var previousTimezone = TypeSettings.DefaultTimezone;
+        try
+        {
+            TypeSettings.DefaultTimezone = DateTimeZoneProviders.Tzdb.GetZoneOrNull("Europe/Amsterdam").Id;
+            var result = (DateTime)await connectionWithClientTz.ExecuteScalarAsync("SELECT toDateTime('2024-01-15 12:00:00')");
+            Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 13, 0, 0))); // +1 hour
+        }
+        finally
+        {
+            TypeSettings.DefaultTimezone = previousTimezone;
+        }
     }
 
     [Test]

@@ -576,7 +576,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         return response;
     }
 
-    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, Settings.UseServerTimezone ? serverTimezone : TypeSettings.DefaultTimezone);
+    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, (Settings.UseServerTimezone && serverTimezone != null) ? serverTimezone : TypeSettings.DefaultTimezone);
 
     internal ClickHouseUriBuilder CreateUriBuilder(string sql = null) => new ClickHouseUriBuilder(serverUri)
     {
