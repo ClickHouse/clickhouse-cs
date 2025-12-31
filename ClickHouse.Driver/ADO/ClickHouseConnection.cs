@@ -497,7 +497,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         }
     }
 
-    public ClickHouseCommand CreateCommand(string commandText = null) => new (this) { CommandText = commandText };
+    public new ClickHouseCommand CreateCommand(string commandText = null) => new (this) { CommandText = commandText };
 
     void IDisposable.Dispose()
     {
