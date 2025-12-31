@@ -215,6 +215,8 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [TestCase("max_dynamic_paths=10, level1_int Int64, nested.level2_string String")]
     [TestCase("max_dynamic_paths=10, level1_int Int64, nested.level2_string String, SKIP path.to.skip")]
     [TestCase("max_dynamic_types=3, level1_int Int64, nested.level2_string String")]
+    [TestCase("max_dynamic_paths=0")]
+    [TestCase("max_dynamic_paths=0, level1_int Int64, nested.level2_string String")]
     [TestCase("level1_int Int64, skip_items Int32, nested.level2_string String, SKIP path.to.skip, skip path.to.ignore")]
     public async Task ShouldSelectDataWithComplexHintedJsonType(string jsonDefinition)
     {
