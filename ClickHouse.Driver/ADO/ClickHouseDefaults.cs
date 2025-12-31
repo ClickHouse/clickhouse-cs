@@ -58,11 +58,6 @@ public static class ClickHouseDefaults
     public const bool UseSession = false;
 
     /// <summary>
-    /// Default server timezone usage setting (enabled)
-    /// </summary>
-    public const bool UseServerTimezone = true;
-
-    /// <summary>
     /// Default custom decimals setting (enabled)
     /// </summary>
     public const bool UseCustomDecimals = true;

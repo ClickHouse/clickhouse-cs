@@ -369,9 +369,20 @@ public static class TestUtilities
         yield return new DataTypeSample("DateTime('UTC')", typeof(DateTime), "toDateTime('1988-08-28 11:22:33', 'UTC')", new DateTime(1988, 08, 28, 11, 22, 33, DateTimeKind.Unspecified));
         yield return new DataTypeSample("DateTime('Pacific/Fiji')", typeof(DateTime), "toDateTime('1999-01-01 13:00:00', 'Pacific/Fiji')", new DateTime(1999, 01, 01, 13, 00, 00, DateTimeKind.Unspecified));
 
-        yield return new DataTypeSample("DateTime64(4, 'UTC')", typeof(DateTime), "toDateTime64('2043-03-01 18:34:04.4444', 9, 'UTC')", new DateTime(644444444444444000, DateTimeKind.Utc));
-        yield return new DataTypeSample("DateTime64(7, 'UTC')", typeof(DateTime), "toDateTime64('2043-03-01 18:34:04.4444444', 9, 'UTC')", new DateTime(644444444444444444, DateTimeKind.Utc));
-        yield return new DataTypeSample("DateTime64(7, 'Pacific/Fiji')", typeof(DateTime), "toDateTime64('2043-03-01 18:34:04.4444444', 9, 'Pacific/Fiji')", new DateTime(644444444444444444, DateTimeKind.Unspecified));
+        // DateTime64 precision tests go up to 7 as higher precision exceeds .NET capabilities
+        // Using AddTicks to ensure correct sub-second precision
+        yield return new DataTypeSample("DateTime64(0, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45', 0, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, DateTimeKind.Utc));
+        yield return new DataTypeSample("DateTime64(1, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.1', 1, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, 100, DateTimeKind.Utc));
+        yield return new DataTypeSample("DateTime64(2, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.12', 2, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, 120, DateTimeKind.Utc));
+        yield return new DataTypeSample("DateTime64(3, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.123', 3, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, 123, DateTimeKind.Utc));
+        yield return new DataTypeSample("DateTime64(4, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.1234', 4, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, 123, DateTimeKind.Utc).AddTicks(4000));
+        yield return new DataTypeSample("DateTime64(5, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.12345', 5, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, 123, DateTimeKind.Utc).AddTicks(4500));
+        yield return new DataTypeSample("DateTime64(6, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.123456', 6, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, 123, DateTimeKind.Utc).AddTicks(4560));
+        yield return new DataTypeSample("DateTime64(7, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.1234567', 7, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, 123, DateTimeKind.Utc).AddTicks(4567));
+        yield return new DataTypeSample("DateTime64(8, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.12345670', 8, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, 123, DateTimeKind.Utc).AddTicks(4567));
+        yield return new DataTypeSample("DateTime64(9, 'UTC')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.123456700', 9, 'UTC')", new DateTime(2024, 6, 15, 12, 30, 45, 123, DateTimeKind.Utc).AddTicks(4567));
+        // Non-UTC timezone test
+        yield return new DataTypeSample("DateTime64(7, 'Pacific/Fiji')", typeof(DateTime), "toDateTime64('2024-06-15 12:30:45.1234567', 7, 'Pacific/Fiji')", new DateTime(2024, 6, 15, 12, 30, 45, 123, DateTimeKind.Unspecified).AddTicks(4567));
 
         yield return new DataTypeSample("Decimal32(3)", typeof(ClickHouseDecimal), "toDecimal32(123.45, 3)", new ClickHouseDecimal(123.450m));
         yield return new DataTypeSample("Decimal32(3)", typeof(ClickHouseDecimal), "toDecimal32(-123.45, 3)", new ClickHouseDecimal(-123.450m));
