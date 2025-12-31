@@ -138,6 +138,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets whether to use server timezone for DateTime values.
+    /// This only applies to columns without a specified timezone.
+    /// Columns with a specified timezone will use that timezone regardless of this setting.
     /// Default: true
     /// </summary>
     public bool UseServerTimezone { get; init; } = ClickHouseDefaults.UseServerTimezone;
