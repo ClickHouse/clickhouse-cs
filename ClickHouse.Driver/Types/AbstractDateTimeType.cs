@@ -54,7 +54,11 @@ internal abstract class AbstractDateTimeType : ParameterizedType
 
     public DateTime ToDateTime(Instant instant)
     {
-        var zonedDateTime = instant.InZone(TimeZoneOrUtc);
+        // If no timezone is specified on the column, return Unspecified to preserve wall-clock time
+        if (TimeZone == null)
+            return instant.InZone(DateTimeZone.Utc).ToDateTimeUnspecified();
+
+        var zonedDateTime = instant.InZone(TimeZone);
         if (zonedDateTime.Offset.Ticks == 0)
             return zonedDateTime.ToDateTimeUtc();
         else

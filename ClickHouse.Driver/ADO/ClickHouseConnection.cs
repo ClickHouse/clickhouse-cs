@@ -42,7 +42,6 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     // Server state (populated after connection)
     private Version serverVersion;
-    private string serverTimezone;
     private Feature supportedFeatures;
 
     // Configuration fields
@@ -176,7 +175,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         {
             if (State == ConnectionState.Open)
                 throw new InvalidOperationException("Cannot change settings while connection is open.");
-            
+
             field = value;
             ApplySettings();
         }
@@ -201,8 +200,6 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             return builder.ToString();
         }
     }
-
-    public string ServerTimezone => serverTimezone;
 
     public override string DataSource { get; }
 
@@ -369,7 +366,6 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             var versionString = Encoding.UTF8.GetString(data).Trim();
 
             serverVersion = ParseVersion(versionString);
-            serverTimezone = ExtractTimezone(response);
             SupportedFeatures = ClickHouseFeatureMap.GetFeatureFlags(serverVersion);
             state = ConnectionState.Open;
 
@@ -501,7 +497,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         }
     }
 
-    public new ClickHouseCommand CreateCommand(string commandText = null) => new (this) { CommandText = commandText };
+    public ClickHouseCommand CreateCommand(string commandText = null) => new (this) { CommandText = commandText };
 
     void IDisposable.Dispose()
     {
@@ -528,15 +524,6 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         const string queryIdHeader = "X-ClickHouse-Query-Id";
         if (response.Headers.Contains(queryIdHeader))
             return response.Headers.GetValues(queryIdHeader).FirstOrDefault();
-        else
-            return null;
-    }
-
-    internal static string ExtractTimezone(HttpResponseMessage response)
-    {
-        const string timezoneHeader = "X-ClickHouse-Timezone";
-        if (response.Headers.Contains(timezoneHeader))
-            return response.Headers.GetValues(timezoneHeader).FirstOrDefault();
         else
             return null;
     }
@@ -570,13 +557,10 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             response = await HttpClient.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
         }
 
-        // Extract and cache server timezone from response header
-        serverTimezone = ExtractTimezone(response);
-
         return response;
     }
 
-    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, (Settings.UseServerTimezone && serverTimezone != null) ? serverTimezone : TypeSettings.DefaultTimezone);
+    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals);
 
     internal ClickHouseUriBuilder CreateUriBuilder(string sql = null) => new ClickHouseUriBuilder(serverUri)
     {

@@ -26,7 +26,6 @@ public class ClickHouseClientSettingsTests
             Assert.That(settings.Username, Is.EqualTo(ClickHouseDefaults.Username));
             Assert.That(settings.Password, Is.EqualTo(ClickHouseDefaults.Password));
             Assert.That(settings.UseCompression, Is.EqualTo(ClickHouseDefaults.Compression));
-            Assert.That(settings.UseServerTimezone, Is.EqualTo(ClickHouseDefaults.UseServerTimezone));
             Assert.That(settings.UseCustomDecimals, Is.EqualTo(ClickHouseDefaults.UseCustomDecimals));
             Assert.That(settings.UseSession, Is.EqualTo(ClickHouseDefaults.UseSession));
             Assert.That(settings.SessionId, Is.Null);
@@ -92,7 +91,7 @@ public class ClickHouseClientSettingsTests
         var connectionString = "Host=myhost;Port=9000;Protocol=https;Database=mydb;" +
                               "Username=myuser;Password=mypass;Path=/custom;" +
                               "Compression=false;UseSession=true;SessionId=session123;" +
-                              "Timeout=300;UseServerTimezone=false;UseCustomDecimals=false";
+                              "Timeout=300;UseCustomDecimals=false";
 
         var settings = ClickHouseClientSettings.FromConnectionString(connectionString);
 
@@ -109,7 +108,6 @@ public class ClickHouseClientSettingsTests
             Assert.That(settings.UseSession, Is.True);
             Assert.That(settings.SessionId, Is.EqualTo("session123"));
             Assert.That(settings.Timeout, Is.EqualTo(TimeSpan.FromSeconds(300)));
-            Assert.That(settings.UseServerTimezone, Is.False);
             Assert.That(settings.UseCustomDecimals, Is.False);
         });
     }
@@ -437,7 +435,6 @@ public class ClickHouseClientSettingsTests
             UseSession = true,
             SessionId = "session123",
             Timeout = TimeSpan.FromMinutes(5),
-            UseServerTimezone = false,
             UseCustomDecimals = false
         };
 
@@ -457,7 +454,6 @@ public class ClickHouseClientSettingsTests
             Assert.That(roundTrippedSettings.UseSession, Is.EqualTo(originalSettings.UseSession));
             Assert.That(roundTrippedSettings.SessionId, Is.EqualTo(originalSettings.SessionId));
             Assert.That(roundTrippedSettings.Timeout, Is.EqualTo(originalSettings.Timeout));
-            Assert.That(roundTrippedSettings.UseServerTimezone, Is.EqualTo(originalSettings.UseServerTimezone));
             Assert.That(roundTrippedSettings.UseCustomDecimals, Is.EqualTo(originalSettings.UseCustomDecimals));
         });
     }
@@ -598,7 +594,6 @@ public class ClickHouseClientSettingsTests
             Username = "testuser",
             Password = "testpass",
             UseCompression = false,
-            UseServerTimezone = false,
             UseCustomDecimals = false,
             UseSession = true,
             SessionId = "session123",

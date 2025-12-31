@@ -18,7 +18,6 @@ public class ServerTimezoneDateTimeTests : IDisposable
     public ServerTimezoneDateTimeTests()
     {
         var builder = TestUtilities.GetConnectionStringBuilder();
-        builder.UseServerTimezone = true;
         connection = new ClickHouseConnection(builder.ToString());
         connection.Open();
         using var command = connection.CreateCommand();
@@ -27,13 +26,6 @@ public class ServerTimezoneDateTimeTests : IDisposable
     }
 
     public void Dispose() => connection?.Dispose();
-
-    [Test]
-    public async Task ShouldCorrectlyDetermineServerTimezone()
-    {
-        var timezone = (string)await connection.ExecuteScalarAsync("SELECT timezone()");
-        Assert.That(connection.ServerTimezone, Is.EqualTo(timezone));
-    }
 
     [Test]
     public async Task ShouldRoundtripUnspecifiedDateTime()
@@ -133,25 +125,22 @@ public class ReadDateTimeTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task ReadDateTime_FromColumnWithoutTimezone_UsesServerTimezone()
+    public async Task ReadDateTime_FromColumnWithoutTimezone_ReturnsUnspecified()
     {
         var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync("SELECT toDateTime('2024-01-15 12:30:45')");
         reader.AssertHasFieldCount(1);
         Assert.That(reader.Read(), Is.True);
-        var dto = reader.GetDateTimeOffset(0);
-        
-        // When no timezone is specified in the column, server timezone is used (from X-ClickHouse-Timezone header)
-        var serverTimezone = connection.ServerTimezone;
-        var tz = DateTimeZoneProviders.Tzdb.GetZoneOrNull(serverTimezone);
-        Assert.That(tz, Is.Not.Null, $"Server timezone '{serverTimezone}' should be a valid IANA timezone");
+        var dt = reader.GetDateTime(0);
 
-        // Get the offset for the server timezone at the test date
-        var testInstant = Instant.FromUtc(2024, 1, 15, 12, 30, 45);
-        var expectedOffset = tz.GetUtcOffset(testInstant);
-
-        // The returned DateTimeOffset should have the server timezone's offset
-        Assert.That(dto.Offset, Is.EqualTo(expectedOffset.ToTimeSpan()),
-            $"DateTimeOffset should have server timezone ({serverTimezone}) offset");
+        // When no timezone is specified in the column, the DateTime is returned as Unspecified
+        // This preserves the wall-clock time without making assumptions about timezone
+        Assert.That(dt.Kind, Is.EqualTo(DateTimeKind.Unspecified));
+        Assert.That(dt.Year, Is.EqualTo(2024));
+        Assert.That(dt.Month, Is.EqualTo(1));
+        Assert.That(dt.Day, Is.EqualTo(15));
+        Assert.That(dt.Hour, Is.EqualTo(12));
+        Assert.That(dt.Minute, Is.EqualTo(30));
+        Assert.That(dt.Second, Is.EqualTo(45));
     }
 }
 
@@ -259,13 +248,13 @@ public class WriteDateTimeHttpParamTests : AbstractConnectionTestFixture
         // The value stored depends on UTC, NOT the column timezone.
         // UTC: 14:30 UTC → stored → read as 16:30 Amsterdam (UTC+2 in summer)
         // To get correct behavior, use {dt:DateTime('Europe/Amsterdam')} in the parameter type hint.
-        var serverTz = DateTimeZoneProviders.Tzdb.GetZoneOrNull("UTC");
-        var serverInstant = serverTz.AtLeniently(LocalDateTime.FromDateTime(original)).ToInstant();
+        var utcTz = DateTimeZoneProviders.Tzdb.GetZoneOrNull("UTC");
+        var serverInstant = utcTz.AtLeniently(LocalDateTime.FromDateTime(original)).ToInstant();
         var amsterdamTz = DateTimeZoneProviders.Tzdb.GetZoneOrNull("Europe/Amsterdam");
         var expectedInAmsterdam = serverInstant.InZone(amsterdamTz).ToDateTimeOffset();
 
         Assert.That(dto, Is.EqualTo(expectedInAmsterdam),
-            $"Without timezone hint, value is interpreted in server timezone ({connection.ServerTimezone}), then converted to column timezone");
+            $"Without timezone hint, value is interpreted in UTC, then converted to column timezone");
     }
 
     [Test]
@@ -507,93 +496,5 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
 
         // DateTimeOffset correctly converts to UTC
         Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Utc)));
-    }
-}
-
-/// <summary>
-/// Tests for the UseServerTimezone connection string flag.
-/// </summary>
-[TestFixture]
-public class UseServerTimezoneTests : IDisposable
-{
-    private ClickHouseConnection connectionWithServerTz;
-    private ClickHouseConnection connectionWithClientTz;
-
-    [SetUp]
-    public void SetUp()
-    {
-        var builderServer = TestUtilities.GetConnectionStringBuilder();
-        builderServer.UseServerTimezone = true;
-        connectionWithServerTz = new ClickHouseConnection(builderServer.ToString());
-        connectionWithServerTz.Open();
-
-        var builderClient = TestUtilities.GetConnectionStringBuilder();
-        builderClient.UseServerTimezone = false;
-        connectionWithClientTz = new ClickHouseConnection(builderClient.ToString());
-        connectionWithClientTz.Open();
-
-        using var command = connectionWithServerTz.CreateCommand();
-        command.CommandText = "CREATE DATABASE IF NOT EXISTS test;";
-        command.ExecuteScalar();
-    }
-
-    public void Dispose()
-    {
-        connectionWithServerTz?.Dispose();
-        connectionWithClientTz?.Dispose();
-    }
-
-    [Test]
-    public async Task UseServerTimezone_True_UsesServerTimezoneForColumnsWithoutTimezone()
-    {
-        var reader = (ClickHouseDataReader)await connectionWithServerTz.ExecuteReaderAsync("SELECT toDateTime('2024-01-15 12:00:00')");
-        Assert.That(reader.Read(), Is.True);
-        var dto = reader.GetDateTimeOffset(0);
-        
-        // With UseServerTimezone=true, columns without explicit timezone use server's timezone
-        var serverTzId = connectionWithServerTz.ServerTimezone;
-        Assert.That(serverTzId, Is.Not.Null.And.Not.Empty, "Server timezone should be detected");
-
-        var serverTz = DateTimeZoneProviders.Tzdb.GetZoneOrNull(serverTzId);
-        Assert.That(serverTz, Is.Not.Null, $"Server timezone '{serverTzId}' should be a valid IANA timezone");
-
-        // Get the expected offset for the server timezone at the test date
-        var testInstant = Instant.FromUtc(2024, 1, 15, 12, 0, 0);
-        var expectedOffset = serverTz.GetUtcOffset(testInstant);
-
-        // The returned DateTimeOffset should have the server timezone's offset
-        Assert.That(dto.Offset, Is.EqualTo(expectedOffset.ToTimeSpan()),
-            $"DateTimeOffset should have server timezone ({serverTzId}) offset");
-        Assert.That(dto.DateTime, Is.EqualTo(new DateTime(2024, 1, 15, 12, 0, 0)));
-    }
-
-    [Test]
-    public async Task UseServerTimezone_False_UsesClientTimezoneForColumnsWithoutTimezone()
-    {
-        // With UseServerTimezone=false, columns without explicit timezone use client's system timezone
-        // Query a DateTime without timezone - should use client timezone for interpretation
-        var previousTimezone = TypeSettings.DefaultTimezone;
-        try
-        {
-            TypeSettings.DefaultTimezone = DateTimeZoneProviders.Tzdb.GetZoneOrNull("Europe/Amsterdam").Id;
-            var result = (DateTime)await connectionWithClientTz.ExecuteScalarAsync("SELECT toDateTime('2024-01-15 12:00:00')");
-            Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 13, 0, 0))); // +1 hour
-        }
-        finally
-        {
-            TypeSettings.DefaultTimezone = previousTimezone;
-        }
-    }
-
-    [Test]
-    public async Task UseServerTimezone_ExplicitColumnTimezone_OverridesSetting()
-    {
-        // When column has explicit timezone, that timezone is used regardless of UseServerTimezone setting
-        var resultServer = (DateTime)await connectionWithServerTz.ExecuteScalarAsync("SELECT toDateTime('2024-01-15 12:00:00', 'Europe/Amsterdam')");
-        var resultClient = (DateTime)await connectionWithClientTz.ExecuteScalarAsync("SELECT toDateTime('2024-01-15 12:00:00', 'Europe/Amsterdam')");
-
-        // Both should return the same result since the column has an explicit timezone
-        Assert.That(resultServer, Is.EqualTo(resultClient));
-        Assert.That(resultServer, Is.EqualTo(new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Unspecified)));
     }
 }
