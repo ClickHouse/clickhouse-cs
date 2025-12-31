@@ -2,28 +2,27 @@ v?
 ---
 
 **Breaking Changes:**
-
 * **DateTime reading behavior changed for columns without explicit timezone.** Previously, `DateTime` columns without a timezone (e.g., `DateTime` vs `DateTime('Europe/Amsterdam')`) would use the server timezone (with `UseServerTimezone=true`) or client timezone to interpret the stored value. Now, these columns return `DateTime` with `Kind=Unspecified`, preserving the wall-clock time exactly as stored without making assumptions about timezone.
 
   | Column Type | Old Behavior | New Behavior |
   |-------------|--------------|--------------|
   | `DateTime` (no timezone) | Returned with server/client timezone applied | `DateTime` with `Kind=Unspecified` |
   | `DateTime('UTC')` | `DateTime` with `Kind=Utc` | `DateTime` with `Kind=Utc` (unchanged) |
-  | `DateTime('Europe/Amsterdam')` | `DateTime` with `Kind=Unspecified` | `DateTime` with `Kind=Unspecified` (unchanged) |
+  | `DateTime('Europe/Amsterdam')` | `DateTime` with `Kind=Unspecified` | `DateTime` with `Kind=Unspecified` (unchanged). Reading as DateTimeOffset has correct offset applied. |
 
   **Migration guidance:** If you need timezone-aware behavior, either:
   1. Use explicit timezones in your column definitions: `DateTime('UTC')` or `DateTime('Europe/Amsterdam')`
-  2. Apply the timezone yourself after reading: `DateTime.SpecifyKind(dt, DateTimeKind.Utc)`
+  2. Apply the timezone yourself after reading.
 
 * **DateTime writing now respects `DateTime.Kind` property.** Previously, all `DateTime` values were treated as wall-clock time in the target column's timezone regardless of their `Kind` property. The new behavior:
 
   | DateTime.Kind | Old Behavior | New Behavior |
   |---------------|--------------|--------------|
   | `Utc` | Treated as wall-clock time in column timezone | Preserved as-is (instant is maintained) |
-  | `Local` | Treated as wall-clock time in column timezone | Converted to UTC preserving the instant |
+  | `Local` | Treated as wall-clock time in column timezone | Instant is maintained (inserted as UTC timestamp) |
   | `Unspecified` | Treated as wall-clock time in column timezone | Treated as wall-clock time in column timezone (unchanged) |
 
-  **Migration guidance:** If you were relying on the old behavior where UTC `DateTime` values were reinterpreted in the column timezone, you should change these to `DateTimeKind.Unspecified`:
+  Migration guidance: If you were relying on the old behavior where UTC `DateTime` values were reinterpreted in the column timezone, you should change these to `DateTimeKind.Unspecified`:
   ```csharp
   // Old code (worked by accident):
   var utcTime = DateTime.UtcNow;  // Would be reinterpreted in column timezone
@@ -32,19 +31,7 @@ v?
   var wallClockTime = DateTime.SpecifyKind(myTime, DateTimeKind.Unspecified);
   ```
 
-* **Removed `UseServerTimezone` setting.** This setting has been removed from the connection string, `ClickHouseClientSettings`, and `ClickHouseConnectionStringBuilder`. It no longer has any effect since columns without timezones now return `Unspecified` DateTime values.
-
-* **Removed `ServerTimezone` property from `ClickHouseConnection`.** The server timezone is no longer tracked or exposed since it's not used for DateTime interpretation. If you need the server timezone, query it directly: `SELECT timezone()`.
-
-
-**New Features/Improvements:**
-
-* Server timezone is now discovered from HTTP response headers. The `X-ClickHouse-Timezone` header is parsed from query responses, eliminating the need for a separate discovery query at connection startup.
-* Improved HTTP parameter formatting for DateTime values:
-  - `DateTimeKind.Utc` and `DateTimeKind.Local` values are sent as Unix timestamps to preserve the exact instant
-  - `DateTimeKind.Unspecified` values are sent as ISO 8601 strings to be interpreted in the target timezone
-
-  **Important:** When using parameters, you must specify the timezone in the parameter type hint to have string values interpreted in the column timezone:
+    **Important:** When using parameters, you must specify the timezone in the parameter type hint to have string values interpreted in the column timezone:
   ```csharp
   // Correct: timezone in type hint ensures proper interpretation
   command.AddParameter("dt", myDateTime, "DateTime('Europe/Amsterdam')");
@@ -57,6 +44,13 @@ v?
   ```
 
   This differs from bulk copy operations where the column timezone is known and used automatically.
+
+* **Removed `UseServerTimezone` setting.** This setting has been removed from the connection string, `ClickHouseClientSettings`, and `ClickHouseConnectionStringBuilder`. It no longer has any effect since columns without timezones now return `Unspecified` DateTime values without any timezone changes applied to what is returned from the server.
+
+* **Removed `ServerTimezone` property from `ClickHouseConnection`.** The server timezone is no longer tracked or exposed since it's not used for DateTime interpretation. If you need the server timezone, query it directly: `SELECT timezone()`.
+
+
+**New Features/Improvements:**
  * Added support for setting roles at the connection and command levels.
  * Added support for custom headers at the connection level.
  * Added support for JWT/Bearer token authentication at both connection and command levels.

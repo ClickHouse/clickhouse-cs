@@ -142,6 +142,23 @@ public class ReadDateTimeTests : AbstractConnectionTestFixture
         Assert.That(dt.Minute, Is.EqualTo(30));
         Assert.That(dt.Second, Is.EqualTo(45));
     }
+
+    [Test]
+    public async Task ReadDateTimeOffset_FromColumnWithoutTimezone_HasZeroOffset()
+    {
+        var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync("SELECT toDateTime('2024-01-15 12:30:45')");
+        reader.AssertHasFieldCount(1);
+        Assert.That(reader.Read(), Is.True);
+        var dto = reader.GetDateTimeOffset(0);
+        
+        Assert.That(dto.Offset, Is.EqualTo(TimeSpan.Zero));
+        Assert.That(dto.Year, Is.EqualTo(2024));
+        Assert.That(dto.Month, Is.EqualTo(1));
+        Assert.That(dto.Day, Is.EqualTo(15));
+        Assert.That(dto.Hour, Is.EqualTo(12));
+        Assert.That(dto.Minute, Is.EqualTo(30));
+        Assert.That(dto.Second, Is.EqualTo(45));
+    }
 }
 
 /// <summary>
