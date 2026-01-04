@@ -77,12 +77,6 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["Port"] = value;
     }
 
-    public bool UseServerTimezone
-    {
-        get => GetBooleanOrDefault("UseServerTimezone", true);
-        set => this["UseServerTimezone"] = value;
-    }
-
     public bool UseCustomDecimals
     {
         get => GetBooleanOrDefault("UseCustomDecimals", true);
@@ -183,7 +177,6 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             UseSession = settings.UseSession,
             SessionId = settings.SessionId,
             Timeout = settings.Timeout,
-            UseServerTimezone = settings.UseServerTimezone,
             UseCustomDecimals = settings.UseCustomDecimals,
             Roles = settings.Roles,
         };

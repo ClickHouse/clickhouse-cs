@@ -58,6 +58,12 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public QueryStats QueryStats { get; private set; }
 
     /// <summary>
+    /// Gets the server's timezone from the last executed query response.
+    /// This is extracted from the X-ClickHouse-Timezone header.
+    /// </summary>
+    public string ServerTimezone { get; private set; }
+
+    /// <summary>
     /// Gets collection of custom settings which will be passed as URL query string parameters.
     /// </summary>
     /// <remarks>Not thread-safe.</remarks>
@@ -192,7 +198,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             stopwatch = Stopwatch.StartNew();
             logger.LogDebug("Executing SQL query. QueryId: {QueryId}", uriBuilder.GetEffectiveQueryId());
         }
-        
+
         await connection.EnsureOpenAsync().ConfigureAwait(false); // Preserve old behavior
 
         using var postMessage = connection.UseFormDataParameters
@@ -214,6 +220,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
             QueryId = ClickHouseConnection.ExtractQueryId(response);
             QueryStats = ExtractQueryStats(response);
+            ServerTimezone = ExtractTimezone(response);
             activity.SetQueryStats(QueryStats);
 
             var handled = await ClickHouseConnection.HandleError(response, sqlQuery, activity).ConfigureAwait(false);
@@ -322,6 +329,16 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         }
         catch
         {
+        }
+        return null;
+    }
+
+    private static string ExtractTimezone(HttpResponseMessage response)
+    {
+        const string timezoneHeader = "X-ClickHouse-Timezone";
+        if (response.Headers.TryGetValues(timezoneHeader, out var values))
+        {
+            return values.FirstOrDefault();
         }
         return null;
     }

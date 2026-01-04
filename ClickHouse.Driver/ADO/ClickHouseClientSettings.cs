@@ -56,7 +56,6 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         Password = other.Password;
         BearerToken = other.BearerToken;
         UseCompression = other.UseCompression;
-        UseServerTimezone = other.UseServerTimezone;
         UseCustomDecimals = other.UseCustomDecimals;
         UseSession = other.UseSession;
         SessionId = other.SessionId;
@@ -135,12 +134,6 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Default: true
     /// </summary>
     public bool UseCompression { get; init; } = ClickHouseDefaults.Compression;
-
-    /// <summary>
-    /// Gets or sets whether to use server timezone for DateTime values.
-    /// Default: true
-    /// </summary>
-    public bool UseServerTimezone { get; init; } = ClickHouseDefaults.UseServerTimezone;
 
     /// <summary>
     /// Gets or sets whether to use custom decimal types.
@@ -297,7 +290,6 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             UseSession = builder.UseSession,
             SessionId = builder.SessionId,
             Timeout = builder.Timeout,
-            UseServerTimezone = builder.UseServerTimezone,
             UseCustomDecimals = builder.UseCustomDecimals,
             Roles = builder.Roles,
         };
@@ -334,7 +326,6 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                Password == other.Password &&
                BearerToken == other.BearerToken &&
                UseCompression == other.UseCompression &&
-               UseServerTimezone == other.UseServerTimezone &&
                UseCustomDecimals == other.UseCustomDecimals &&
                UseSession == other.UseSession &&
                SessionId == other.SessionId &&
@@ -373,7 +364,6 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(Password);
         hash.Add(BearerToken);
         hash.Add(UseCompression);
-        hash.Add(UseServerTimezone);
         hash.Add(UseCustomDecimals);
         hash.Add(UseSession);
         hash.Add(SessionId);
@@ -419,7 +409,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     {
         var result = $"Host={Host};Port={Port};Protocol={Protocol};Database={Database};" +
                $"Username={Username};Password=****;Compression={UseCompression};" +
-               $"UseServerTimezone={UseServerTimezone};UseCustomDecimals={UseCustomDecimals};" +
+               $"UseCustomDecimals={UseCustomDecimals};" +
                $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s";
 
         if (Roles.Count > 0)

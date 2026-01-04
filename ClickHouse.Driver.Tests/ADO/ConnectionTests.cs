@@ -457,7 +457,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
             Password = "testpass",
             Path = "/custom",
             UseCompression = false,
-            UseServerTimezone = false,
             UseCustomDecimals = false,
             Timeout = TimeSpan.FromMinutes(5)
         };
@@ -476,7 +475,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
             Assert.That(connString, Does.Contain("Password=testpass"));
             Assert.That(connString, Does.Contain("Path=/custom"));
             Assert.That(connString, Does.Contain("Compression=False"));
-            Assert.That(connString, Does.Contain("UseServerTimezone=False"));
             Assert.That(connString, Does.Contain("UseCustomDecimals=False"));
             Assert.That(connString, Does.Contain("Timeout=300"));
         });
