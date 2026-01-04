@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Tests.Utilities;
+using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.ADO;
@@ -38,6 +39,7 @@ public class CustomHeadersTests
 
         using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync();
+        await connection.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0));
         var request = trackingHandler.Requests.First();
@@ -70,6 +72,7 @@ public class CustomHeadersTests
 
         using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync();
+        await connection.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0));
         var request = trackingHandler.Requests.First();
@@ -108,6 +111,7 @@ public class CustomHeadersTests
 
         using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync();
+        await connection.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0));
         var request = trackingHandler.Requests.First();
@@ -133,6 +137,7 @@ public class CustomHeadersTests
 
         using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync();
+        await connection.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0));
         // Should not throw, and default headers should be present

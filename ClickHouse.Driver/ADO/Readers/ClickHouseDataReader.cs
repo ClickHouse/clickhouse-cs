@@ -223,7 +223,16 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         {
             return ([], []);
         }
+
         var count = reader.Read7BitEncodedInt();
+
+        // Check for GZip marker: 0x1F (31) as column count, followed by 0x8B
+        // This happens when compression is misconfigured
+        if (count == 0x1F && reader.PeekChar() == 0x8B)
+        {
+            throw new InvalidOperationException("ClickHouse server returned compressed data but HttpClient did not decompress it. Check HttpClient settings.");
+        }
+
         var names = new string[count];
         var types = new ClickHouseType[count];
 
