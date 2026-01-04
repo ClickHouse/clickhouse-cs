@@ -57,9 +57,13 @@ public static class DateTimeHandling
         Console.WriteLine("\n8. Working With DateTimeOffset:");
         await Example8_DateTimeOffset(connection);
 
-        // Example 9: Important gotchas
-        Console.WriteLine("\n9. Important Gotchas and Best Practices:");
-        await Example9_Gotchas(connection);
+        // Example 9: Getting the server timezone
+        Console.WriteLine("\n9. Getting the Server Timezone:");
+        await Example9_ServerTimezone(connection);
+
+        // Example 10: Important gotchas
+        Console.WriteLine("\n10. Important Gotchas and Best Practices:");
+        await Example10_Gotchas(connection);
 
         Console.WriteLine("\n" + "=".PadRight(60, '='));
         Console.WriteLine("All DateTime handling examples completed!");
@@ -382,9 +386,25 @@ public static class DateTimeHandling
     }
 
     /// <summary>
+    /// The server timezone is available from ClickHouseCommand.ServerTimezone after any query.
+    /// This is extracted from the X-ClickHouse-Timezone response header.
+    /// </summary>
+    private static async Task Example9_ServerTimezone(ClickHouseConnection connection)
+    {
+        // The server timezone is available on any command after execution
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1";
+        await command.ExecuteNonQueryAsync();
+
+        Console.WriteLine($"   Server timezone: {command.ServerTimezone}");
+        Console.WriteLine("   Note: ServerTimezone is available on ClickHouseCommand after any query execution.");
+        Console.WriteLine("   It's extracted from the X-ClickHouse-Timezone response header for free.");
+    }
+
+    /// <summary>
     /// Important gotchas and best practices for DateTime handling.
     /// </summary>
-    private static async Task Example9_Gotchas(ClickHouseConnection connection)
+    private static async Task Example10_Gotchas(ClickHouseConnection connection)
     {
         Console.WriteLine("   GOTCHA #1: Parameter type hints and timezones");
         Console.WriteLine("   " + "-".PadRight(50, '-'));

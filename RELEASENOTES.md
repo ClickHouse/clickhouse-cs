@@ -47,7 +47,7 @@ v?
 
 * **Removed `UseServerTimezone` setting.** This setting has been removed from the connection string, `ClickHouseClientSettings`, and `ClickHouseConnectionStringBuilder`. It no longer has any effect since columns without timezones now return `Unspecified` DateTime values without any timezone changes applied to what is returned from the server.
 
-* **Removed `ServerTimezone` property from `ClickHouseConnection`.** The server timezone is no longer tracked or exposed since it's not used for DateTime interpretation. If you need the server timezone, query it directly: `SELECT timezone()`.
+* **Moved `ServerTimezone` property from `ClickHouseConnection` to `ClickHouseCommand`.** The server timezone is now available on `ClickHouseCommand.ServerTimezone` after any query execution (the timezone is now extracted from the `X-ClickHouse-Timezone` response header instead of requiring a separate query).
 
 
 **New Features/Improvements:**
