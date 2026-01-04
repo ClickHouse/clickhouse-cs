@@ -17,6 +17,10 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Core_003_DependencyInjection.cs](Core_003_DependencyInjection.cs) - Using ClickHouse with dependency injection and config binding
 - [Core_004_HttpClientConfiguration.cs](Core_004_HttpClientConfiguration.cs) - Providing custom HttpClient or IHttpClientFactory for SSL/TLS, proxy, timeouts, and more control over connection settings
 
+### ASP.NET Integration
+
+- [AspNet_001_HealthChecks.cs](AspNet_001_HealthChecks.cs) - Implementing ASP.NET health checks for ClickHouse
+
 ### Authentication
 
 - [Auth_001_JwtAuthentication.cs](Auth_001_JwtAuthentication.cs) - Using JWT/Bearer token authentication with ClickHouse.

@@ -77,6 +77,10 @@ class Program
         Console.WriteLine($"\n\nRunning: {nameof(DependencyInjection)}");
         await DependencyInjection.Run();
         WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(AspNetHealthChecks)}");
+        await AspNetHealthChecks.Run();
+        WaitForUser(isInteractive);
 #endif
 
         Console.WriteLine($"\n\nRunning: {nameof(HttpClientConfiguration)}");
