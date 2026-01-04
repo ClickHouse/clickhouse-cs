@@ -316,7 +316,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override void Open() => OpenAsync().ConfigureAwait(false).GetAwaiter().GetResult();
 
-    public override async Task OpenAsync(CancellationToken cancellationToken)
+    public override Task OpenAsync(CancellationToken cancellationToken)
     {
         GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Opening ClickHouse connection to {Endpoint}.", serverUri);
         LoggingHelpers.LogHttpClientConfiguration(GetLogger(ClickHouseLogCategories.Connection), httpClientFactory);
