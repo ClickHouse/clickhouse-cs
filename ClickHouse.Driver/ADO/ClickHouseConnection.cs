@@ -199,6 +199,8 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override string DataSource { get; }
 
+    public override string ServerVersion => string.Empty;
+
     public bool UseCompression => Settings.UseCompression;
 
     public bool SkipServerCertificateValidation => Settings.SkipServerCertificateValidation;
