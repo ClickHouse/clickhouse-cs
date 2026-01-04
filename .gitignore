@@ -333,5 +333,8 @@ ASALocalRun/
 # MFractors (Xamarin productivity tool) working folder
 .mfractor/
 
+# Claude folder
+.claude/
+
 # Local History for Visual Studio
 .localhistory/
