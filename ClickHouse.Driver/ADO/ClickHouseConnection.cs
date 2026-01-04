@@ -40,10 +40,6 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// </summary>
     private SemaphoreSlim sessionRequestLock;
 
-    // Server state (populated after connection)
-    private Version serverVersion;
-    private Feature supportedFeatures;
-
     // Configuration fields
     private Uri serverUri;
 
@@ -203,23 +199,11 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override string DataSource { get; }
 
-    public override string ServerVersion => serverVersion?.ToString();
-
     public bool UseCompression => Settings.UseCompression;
 
     public bool SkipServerCertificateValidation => Settings.SkipServerCertificateValidation;
 
     public bool UseFormDataParameters => Settings.UseFormDataParameters;
-
-    /// <summary>
-    /// Gets enum describing which ClickHouse features are available on this particular server version
-    /// Requires connection to be in Open state
-    /// </summary>
-    public virtual Feature SupportedFeatures
-    {
-        get => state == ConnectionState.Open ? supportedFeatures : throw new InvalidOperationException();
-        private set => supportedFeatures = value;
-    }
 
     private void ApplySettings()
     {
@@ -332,51 +316,15 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override async Task OpenAsync(CancellationToken cancellationToken)
     {
-        const string versionQuery = "SELECT version() FORMAT TSV";
-
         GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Opening ClickHouse connection to {Endpoint}.", serverUri);
         LoggingHelpers.LogHttpClientConfiguration(GetLogger(ClickHouseLogCategories.Connection), httpClientFactory);
 
         if (State == ConnectionState.Open)
-            return;
-        using var activity = this.StartActivity("OpenAsync");
-        activity.SetQuery(versionQuery);
+            return Task.CompletedTask;
 
-        try
-        {
-            var uriBuilder = CreateUriBuilder();
-            var request = new HttpRequestMessage(HttpMethod.Post, uriBuilder.ToString())
-            {
-                Content = new StringContent(versionQuery, Encoding.UTF8),
-            };
-            AddDefaultHttpHeaders(request.Headers);
-            using var response = await HandleError(await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false), versionQuery, activity).ConfigureAwait(false);
-#if NET5_0_OR_GREATER
-            var data = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
-#else
-            var data = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-#endif
-
-            if (data.Length > 2 && data[0] == 0x1F && data[1] == 0x8B) // Check if response starts with GZip marker
-                throw new InvalidOperationException("ClickHouse server returned compressed result but HttpClient did not decompress it. Check HttpClient settings");
-
-            if (data.Length == 0)
-                throw new InvalidOperationException("ClickHouse server did not return version, check if the server is functional");
-
-            var versionString = Encoding.UTF8.GetString(data).Trim();
-
-            serverVersion = ParseVersion(versionString);
-            SupportedFeatures = ClickHouseFeatureMap.GetFeatureFlags(serverVersion);
-            state = ConnectionState.Open;
-
-            GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Connection to {Endpoint} opened (ServerVersion: {ServerVersion}).", serverUri, serverVersion);
-        }
-        catch (Exception ex)
-        {
-            state = ConnectionState.Broken;
-            GetLogger(ClickHouseLogCategories.Connection)?.LogError(ex, "Failed to open ClickHouse connection to {Endpoint}.", serverUri);
-            throw;
-        }
+        state = ConnectionState.Open;
+        GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Connection to {Endpoint} opened.", serverUri);
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -507,18 +455,6 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         sessionRequestLock?.Dispose();
     }
 
-    internal static Version ParseVersion(string versionString)
-    {
-        if (string.IsNullOrWhiteSpace(versionString))
-            throw new ArgumentException($"'{nameof(versionString)}' cannot be null or whitespace.", nameof(versionString));
-        var parts = versionString.Split(DotSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Select(s => int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) ? i : 0)
-            .ToArray();
-        if (parts.Length == 0 || parts[0] == 0)
-            throw new InvalidOperationException($"Invalid version: {versionString}");
-        return new Version(parts.ElementAtOrDefault(0), parts.ElementAtOrDefault(1), parts.ElementAtOrDefault(2), parts.ElementAtOrDefault(3));
-    }
-
     internal static string ExtractQueryId(HttpResponseMessage response)
     {
         const string queryIdHeader = "X-ClickHouse-Query-Id";
@@ -619,8 +555,6 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     }
 
     internal ClickHouseConnectionStringBuilder ConnectionStringBuilder => ClickHouseConnectionStringBuilder.FromSettings(Settings);
-
-    private static readonly char[] DotSeparator = ['.'];
 
     protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel) => throw new NotSupportedException();
 

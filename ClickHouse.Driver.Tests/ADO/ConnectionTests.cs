@@ -26,7 +26,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
         using var httpClient = new HttpClient(httpClientHandler);
         using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString(), httpClient);
         await conn.OpenAsync();
-        ClassicAssert.IsNotEmpty(conn.ServerVersion);
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
     }
 
     [Test]
@@ -87,19 +87,10 @@ public class ConnectionTests : AbstractConnectionTestFixture
     public void ShouldConnectToServer()
     {
         using var conn = TestUtilities.GetTestClickHouseConnection();
-        ClassicAssert.IsNotEmpty(conn.ServerVersion);
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
         conn.Close();
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Closed));
     }
-
-    [Test]
-    [TestCase("1.2.3.4.altinity")]
-    [TestCase("1.2.3.4")]
-    [TestCase("20")]
-    [TestCase("20.1")]
-    [TestCase("20.1.2")]
-    public void ShoulParseVersion(string version) => _ = ClickHouseConnection.ParseVersion(version);
 
     [Test]
     public async Task TimeoutShouldCancelConnection()
@@ -580,11 +571,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
         using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
-            Assert.That(conn.ServerVersion, Is.Not.Empty);
-        });
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
     }
 
     [Test]

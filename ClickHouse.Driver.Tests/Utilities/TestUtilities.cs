@@ -99,14 +99,6 @@ public static class TestUtilities
         }
     }
 
-    [Test]
-    public static async Task ExpectedFeaturesShouldMatchActualFeatures()
-    {
-        using var connection = GetTestClickHouseConnection();
-        await connection.OpenAsync();
-        Assert.That(connection.SupportedFeatures, Is.EqualTo(SupportedFeatures & connection.SupportedFeatures));
-    }
-
     /// <summary>
     /// Utility method to allow to redirect ClickHouse connections to different machine, in case of Windows development environment
     /// </summary>
