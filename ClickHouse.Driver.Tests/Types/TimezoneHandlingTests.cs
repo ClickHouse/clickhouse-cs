@@ -247,7 +247,7 @@ public class WriteDateTimeHttpParamTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task HttpParam_UnspecifiedKind_WithoutTimezoneHint_UsesUTC()
+    public async Task HttpParam_UnspecifiedKind_WithoutTimezoneHint_InterpretsAsUtc()
     {
         // IMPORTANT: When the parameter type hint does NOT include a timezone (e.g., {dt:DateTime} instead of {dt:DateTime('Europe/Amsterdam')}),
         // ClickHouse interprets the string value in UTC, not the column's timezone.

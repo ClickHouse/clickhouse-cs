@@ -419,12 +419,12 @@ public static class DateTimeHandling
             ENGINE = Memory
         ");
 
-        // This is the common mistake
-        //When using parameters WITHOUT timezone in the type hint:
-        //command.CommandText = "INSERT INTO table (dt) VALUES ({dt:DateTime})"
-        //The string value is interpreted in UTC, NOT the column's timezone!
-        //To have the value interpreted in the column's timezone, specify it:
-        //command.CommandText = "INSERT INTO table (dt) VALUES ({dt:DateTime('Europe/Amsterdam')})"
+        // This is the common mistake:
+        // When inserting testTime via a parameter WITHOUT timezone in the type hint:
+        // command.CommandText = "INSERT INTO example_gotcha (dt_amsterdam) VALUES ({dt:DateTime})"
+        // The string value is interpreted in UTC, NOT the column's timezone!
+        // To have the value interpreted in the column's timezone, specify it:
+        // command.CommandText = "INSERT INTO example_gotcha (dt_amsterdam) VALUES ({dt:DateTime('Europe/Amsterdam')})"
 
         var testTime = new DateTime(2024, 6, 15, 14, 0, 0, DateTimeKind.Unspecified);
 
