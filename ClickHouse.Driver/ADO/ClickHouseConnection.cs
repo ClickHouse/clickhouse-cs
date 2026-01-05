@@ -348,8 +348,9 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
-        catch
+        catch (Exception ex)
         {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogWarning(ex, "Ping to {Endpoint} failed.", serverUri);
             return false;
         }
     }
