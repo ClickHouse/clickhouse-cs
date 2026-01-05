@@ -724,4 +724,55 @@ public class ConnectionTests : AbstractConnectionTestFixture
             await connection.InsertRawStreamAsync(table: "test", stream: stream, format: ""));
         Assert.That(ex.ParamName, Is.EqualTo("format"));
     }
+
+    [Test]
+    public async Task PingAsync_ReturnsTrue_WhenServerResponds()
+    {
+        var trackingHandler = new TrackingHandler(request =>
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("Ok.\n") };
+        });
+        using var httpClient = new HttpClient(trackingHandler);
+        var settings = new ClickHouseClientSettings { Host = "localhost", HttpClient = httpClient };
+        using var conn = new ClickHouseConnection(settings);
+        await conn.OpenAsync();
+
+        var result = await conn.PingAsync();
+
+        Assert.That(result, Is.True);
+        Assert.That(trackingHandler.Requests.Last().RequestUri.PathAndQuery, Is.EqualTo("/ping"));
+    }
+
+    [Test]
+    public async Task PingAsync_ReturnsFalse_WhenServerReturnsError()
+    {
+        var trackingHandler = new TrackingHandler(request =>
+        {
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        });
+        using var httpClient = new HttpClient(trackingHandler);
+        var settings = new ClickHouseClientSettings { Host = "localhost", HttpClient = httpClient };
+        using var conn = new ClickHouseConnection(settings);
+        await conn.OpenAsync();
+
+        var result = await conn.PingAsync();
+
+        Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public void PingAsync_ThrowsInvalidOperationException_WhenConnectionNotOpen()
+    {
+        using var conn = new ClickHouseConnection("Host=localhost");
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => conn.PingAsync());
+    }
+
+    [Test]
+    public async Task PingAsync_WithRealServer_ReturnsTrue()
+    {
+        var result = await connection.PingAsync();
+
+        Assert.That(result, Is.True);
+    }
 }
