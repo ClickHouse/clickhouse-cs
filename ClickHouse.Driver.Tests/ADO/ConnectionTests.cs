@@ -748,7 +748,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
     {
         var trackingHandler = new TrackingHandler(request =>
         {
-                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
         });
         using var httpClient = new HttpClient(trackingHandler);
         var settings = new ClickHouseClientSettings { Host = "localhost", HttpClient = httpClient };
