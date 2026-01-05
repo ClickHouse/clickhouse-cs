@@ -230,7 +230,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         // This happens when compression is misconfigured
         if (count == 0x1F && reader.PeekChar() == 0x8B)
         {
-            throw new InvalidOperationException("ClickHouse server returned compressed data but HttpClient did not decompress it. Check HttpClient settings.");
+            throw new InvalidOperationException("ClickHouse server returned compressed data but HttpClient did not decompress it. Ensure HttpClientHandler.AutomaticDecompression is set to DecompressionMethods.All or DecompressionMethods.GZip.");
         }
 
         var names = new string[count];
