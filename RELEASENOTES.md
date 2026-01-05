@@ -2,6 +2,15 @@ v?
 ---
 
 **Breaking Changes:**
+* **Removed feature discovery query from `OpenAsync`.** The connection's `OpenAsync()` method no longer executes `SELECT version()` to discover server capabilities. This makes connection opening instantaneous (no network round-trip) but removes the `SupportedFeatures` property from `ClickHouseConnection`. The `ServerVersion` property now throws `InvalidOperationException`.
+
+  **Migration guidance:** If you need to check the server version:
+  ```csharp
+  using var reader = await connection.ExecuteReaderAsync("SELECT version()");
+  reader.Read();
+  var version = reader.GetString(0);
+  ```
+
 * **DateTime reading behavior changed for columns without explicit timezone.** Previously, `DateTime` columns without a timezone (e.g., `DateTime` vs `DateTime('Europe/Amsterdam')`) would use the server timezone (with `UseServerTimezone=true`) or client timezone to interpret the stored value. Now, these columns return `DateTime` with `Kind=Unspecified`, preserving the wall-clock time exactly as stored without making assumptions about timezone.
 
   | Column Type | Old Behavior | New Behavior |

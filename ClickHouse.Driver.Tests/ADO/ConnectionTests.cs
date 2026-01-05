@@ -26,15 +26,17 @@ public class ConnectionTests : AbstractConnectionTestFixture
         using var httpClient = new HttpClient(httpClientHandler);
         using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString(), httpClient);
         await conn.OpenAsync();
-        ClassicAssert.IsNotEmpty(conn.ServerVersion);
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
     }
 
     [Test]
-    public void ShouldThrowExceptionOnInvalidHttpClient()
+    public async Task ShouldThrowExceptionOnInvalidHttpClient()
     {
         using var httpClient = new HttpClient(); // No decompression handler
         using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString(), httpClient);
-        Assert.Throws<InvalidOperationException>(() => conn.Open());
+        await conn.OpenAsync();
+        // Exception is thrown when executing a query, not on OpenAsync (which no longer makes requests)
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await conn.ExecuteScalarAsync("SELECT 1"));
     }
 
     [Test]
@@ -87,19 +89,10 @@ public class ConnectionTests : AbstractConnectionTestFixture
     public void ShouldConnectToServer()
     {
         using var conn = TestUtilities.GetTestClickHouseConnection();
-        ClassicAssert.IsNotEmpty(conn.ServerVersion);
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
         conn.Close();
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Closed));
     }
-
-    [Test]
-    [TestCase("1.2.3.4.altinity")]
-    [TestCase("1.2.3.4")]
-    [TestCase("20")]
-    [TestCase("20.1")]
-    [TestCase("20.1.2")]
-    public void ShoulParseVersion(string version) => _ = ClickHouseConnection.ParseVersion(version);
 
     [Test]
     public async Task TimeoutShouldCancelConnection()
@@ -197,6 +190,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
         };
         using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0));
         var request = trackingHandler.Requests[0];
@@ -226,6 +220,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
         };
         using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0));
         var request = trackingHandler.Requests[0];
@@ -253,25 +248,14 @@ public class ConnectionTests : AbstractConnectionTestFixture
         using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
 
-        // Remember the count from OpenAsync
-        var requestCountAfterOpen = trackingHandler.RequestCount;
-
         // Execute a command with a different bearer token
         var command = conn.CreateCommand();
-        command.CommandText = "SELECT 1";
+        command.CommandText = "SELECT version() FORMAT TSV";
         command.BearerToken = "command-level-token";
+        await command.ExecuteNonQueryAsync();
 
-        try
-        {
-            await command.ExecuteScalarAsync();
-        }
-        catch
-        {
-            // Ignore errors from fake response - we just want to check the request
-        }
-
-        Assert.That(trackingHandler.RequestCount, Is.GreaterThan(requestCountAfterOpen));
-        var request = trackingHandler.Requests[requestCountAfterOpen]; // Get the first request after OpenAsync
+        Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0));
+        var request = trackingHandler.Requests[0];
         Assert.That(request.Headers.Authorization, Is.Not.Null);
         Assert.That(request.Headers.Authorization.Scheme, Is.EqualTo("Bearer"));
         Assert.That(request.Headers.Authorization.Parameter, Is.EqualTo("command-level-token"));
@@ -519,8 +503,9 @@ public class ConnectionTests : AbstractConnectionTestFixture
 
         using var conn = new ClickHouseConnection(settings);
 
-        // Open connection - should use the provided HttpClient
+        // Open connection and execute a query to use the provided HttpClient
         await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0), "HttpClient should have been used");
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
@@ -543,8 +528,9 @@ public class ConnectionTests : AbstractConnectionTestFixture
         // Verify factory not called yet
         Assert.That(factory.CreateClientCallCount, Is.EqualTo(0));
 
-        // Open connection - should use the provided factory
+        // Open connection and execute a query to use the provided factory
         await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         // Verify the provided factory was actually used
         Assert.Multiple(() =>
@@ -580,11 +566,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
         using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
-            Assert.That(conn.ServerVersion, Is.Not.Empty);
-        });
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
     }
 
     [Test]
@@ -673,8 +655,9 @@ public class ConnectionTests : AbstractConnectionTestFixture
 
         using var conn = new ClickHouseConnection(settings);
 
-        // Open connection - this will make a request
+        // Open connection and execute a query to make a request
         await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         // Verify the path was used in the request
         Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0), "HttpClient should have been used");
