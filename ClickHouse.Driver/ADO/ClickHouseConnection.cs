@@ -315,6 +315,33 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override void Close() => state = ConnectionState.Closed;
 
+    /// <summary>
+    /// Pings the ClickHouse server to check if it is available.
+    /// Requires connection to be in Open state.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>True if the server responds successfully, false otherwise</returns>
+    public async Task<bool> PingAsync(CancellationToken cancellationToken = default)
+    {
+        if (State != ConnectionState.Open)
+            throw new InvalidOperationException("Connection must be open before calling PingAsync.");
+
+        try
+        {
+            var pingUri = new Uri(serverUri, "ping");
+            var request = new HttpRequestMessage(HttpMethod.Get, pingUri);
+            AddDefaultHttpHeaders(request.Headers);
+
+            using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogWarning(ex, "Ping to {Endpoint} failed.", serverUri);
+            return false;
+        }
+    }
+
     public override void Open() => OpenAsync().ConfigureAwait(false).GetAwaiter().GetResult();
 
     public override Task OpenAsync(CancellationToken cancellationToken)

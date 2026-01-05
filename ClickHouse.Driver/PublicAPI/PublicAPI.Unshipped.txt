@@ -51,6 +51,7 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.UseSession.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Validate() -> void
 ClickHouse.Driver.ADO.ClickHouseConnection.ClickHouseConnection(ClickHouse.Driver.ADO.ClickHouseClientSettings settings) -> void
 ClickHouse.Driver.ADO.ClickHouseConnection.ClickHouseConnection(string connectionString, bool skipServerCertificateValidation) -> void
+ClickHouse.Driver.ADO.ClickHouseConnection.PingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>
 ClickHouse.Driver.ADO.ClickHouseConnection.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory
 ClickHouse.Driver.ADO.ClickHouseConnection.PostStreamAsync(string sql, System.Func<System.IO.Stream, System.Threading.CancellationToken, System.Threading.Tasks.Task> callback, bool isCompressed, System.Threading.CancellationToken token) -> System.Threading.Tasks.Task
 ClickHouse.Driver.ADO.ClickHouseConnection.PostStreamAsync(string sql, System.IO.Stream data, bool isCompressed, System.Threading.CancellationToken token) -> System.Threading.Tasks.Task
