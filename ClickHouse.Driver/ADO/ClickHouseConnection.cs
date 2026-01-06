@@ -499,7 +499,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         return response;
     }
 
-    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals);
+    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, Settings.ReadStringsAsByteArrays);
 
     internal ClickHouseUriBuilder CreateUriBuilder(string sql = null) => new ClickHouseUriBuilder(serverUri)
     {

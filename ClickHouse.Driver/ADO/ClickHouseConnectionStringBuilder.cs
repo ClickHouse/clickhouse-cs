@@ -83,6 +83,12 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["UseCustomDecimals"] = value;
     }
 
+    public bool ReadStringsAsByteArrays
+    {
+        get => GetBooleanOrDefault("ReadStringsAsByteArrays", ClickHouseDefaults.ReadStringsAsByteArrays);
+        set => this["ReadStringsAsByteArrays"] = value;
+    }
+
     /// <summary>
     /// Gets or sets the ClickHouse roles to use for queries.
     /// Multiple roles can be specified as a comma-separated string.
@@ -178,6 +184,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             SessionId = settings.SessionId,
             Timeout = settings.Timeout,
             UseCustomDecimals = settings.UseCustomDecimals,
+            ReadStringsAsByteArrays = settings.ReadStringsAsByteArrays,
             Roles = settings.Roles,
         };
 
