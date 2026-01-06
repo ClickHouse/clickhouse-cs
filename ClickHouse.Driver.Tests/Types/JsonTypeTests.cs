@@ -238,12 +238,12 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         var result = (JsonObject)reader.GetValue(0);
 
         // Assert hinted properties
-        ClassicAssert.AreEqual(789, (long)result["level1_int"]);
-        ClassicAssert.AreEqual("nested_value", (string)result["nested"]["level2_string"]);
+        Assert.That((long)result["level1_int"], Is.EqualTo(789));
+        Assert.That((string)result["nested"]["level2_string"], Is.EqualTo("nested_value"));
 
         // Assert non-hinted property
         ClassicAssert.IsInstanceOf<JsonValue>(result["unhinted_float"]);
-        ClassicAssert.AreEqual(99.9, (double)result["unhinted_float"]);
+        Assert.That((double)result["unhinted_float"], Is.EqualTo(99.9));
     }
 
     [Test]
