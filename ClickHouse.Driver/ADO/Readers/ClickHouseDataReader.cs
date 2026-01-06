@@ -23,14 +23,18 @@ namespace ClickHouse.Driver.ADO.Readers;
 public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnumerable<IDataReader>, IDataRecord
 {
     private const int BufferSize = 512 * 1024;
+    private const string ExceptionTagHeader = "X-ClickHouse-Exception-Tag";
+    private const int ExceptionTagLength = 10;
 
     private readonly HttpResponseMessage httpResponse; // Used to dispose at the end of reader
     private readonly ExtendedBinaryReader reader;
+    private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
 
-    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types)
+    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, ExceptionTagAwareStream exceptionTagStream = null)
     {
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
+        this.exceptionTagStream = exceptionTagStream;
         RawTypes = types;
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
@@ -39,13 +43,43 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
     {
         if (httpResponse is null) throw new ArgumentNullException(nameof(httpResponse));
+
+        // Extract exception tag from header if present
+        string exceptionTag = null;
+        if (httpResponse.Headers.TryGetValues(ExceptionTagHeader, out var tagValues))
+            exceptionTag = System.Linq.Enumerable.FirstOrDefault(tagValues);
+
         ExtendedBinaryReader reader = null;
+        ExceptionTagAwareStream exceptionStream = null;
         try
         {
-            var stream = new BufferedStream(await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false), BufferSize);
-            reader = new ExtendedBinaryReader(stream); // will dispose of stream
+            var rawStream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            var buffered = new BufferedStream(rawStream, BufferSize);
+
+            // Conditionally wrap with exception-aware stream
+            Stream streamForReader = buffered;
+            if (!string.IsNullOrEmpty(exceptionTag) && exceptionTag.Length == ExceptionTagLength)
+            {
+                exceptionStream = new ExceptionTagAwareStream(buffered, exceptionTag);
+                streamForReader = exceptionStream;
+            }
+
+            reader = new ExtendedBinaryReader(streamForReader); // will dispose of stream
             var (names, types) = ReadHeaders(reader, settings);
-            return new ClickHouseDataReader(httpResponse, reader, names, types);
+            return new ClickHouseDataReader(httpResponse, reader, names, types, exceptionStream);
+        }
+        catch (EndOfStreamException) when (exceptionStream != null)
+        {
+            var serverEx = exceptionStream.TryExtractMidStreamException(query: null);
+            if (serverEx != null)
+            {
+                httpResponse?.Dispose();
+                reader?.Dispose();
+                throw serverEx;
+            }
+            httpResponse?.Dispose();
+            reader?.Dispose();
+            throw;
         }
         catch (Exception)
         {
@@ -198,12 +232,23 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
         var count = RawTypes.Length;
         var data = CurrentRow;
-        for (var i = 0; i < count; i++)
+
+        try
         {
-            var rawType = RawTypes[i];
-            data[i] = rawType.Read(reader);
+            for (var i = 0; i < count; i++)
+            {
+                var rawType = RawTypes[i];
+                data[i] = rawType.Read(reader);
+            }
+            return true;
         }
-        return true;
+        catch (EndOfStreamException) when (exceptionTagStream != null)
+        {
+            var serverEx = exceptionTagStream.TryExtractMidStreamException(query: null);
+            if (serverEx != null)
+                throw serverEx;
+            throw;
+        }
     }
 
 #pragma warning disable CA2215 // Dispose methods should call base class dispose

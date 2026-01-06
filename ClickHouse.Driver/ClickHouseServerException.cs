@@ -27,6 +27,12 @@ public class ClickHouseServerException : DbException
         return new ClickHouseServerException(error, query, errorCode);
     }
 
+    internal static ClickHouseServerException FromMidStreamException(string errorMessage, string query)
+    {
+        var errorCode = ParseErrorCode(errorMessage) ?? -1;
+        return new ClickHouseServerException(errorMessage, query, errorCode);
+    }
+
     private static int? ParseErrorCode(string error)
     {
         int start = -1;
