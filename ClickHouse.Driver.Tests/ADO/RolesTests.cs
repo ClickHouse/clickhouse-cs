@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
+
 namespace ClickHouse.Driver.Tests.ADO;
 
 [TestFixture]
@@ -87,7 +88,7 @@ public class RolesTests
         return connection;
     }
 
-    private async Task<string[]> QueryCurrentRoles(ClickHouseConnection connection, string[]? commandRoles = null)
+    private async Task<string[]> QueryCurrentRoles(ClickHouseConnection connection, string[] commandRoles = null)
     {
         using var command = connection.CreateCommand("SELECT currentRoles() as roles");
         if (commandRoles != null)
