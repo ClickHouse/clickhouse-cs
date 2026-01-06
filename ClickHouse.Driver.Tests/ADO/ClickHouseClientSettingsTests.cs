@@ -322,7 +322,9 @@ public class ClickHouseClientSettingsTests
         var settings = new ClickHouseClientSettings();
 
         Assert.That(settings.Equals(settings), Is.True);
+#pragma warning disable CS1718 // Intentionally testing operator== with same reference
         Assert.That(settings == settings, Is.True);
+#pragma warning restore CS1718
     }
 
     [Test]
