@@ -532,7 +532,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         return response;
     }
 
-    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode);
+    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, Settings.ReadStringsAsByteArrays, jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode);
 
     /// <summary>
     /// Registers a POCO type for JSON column serialization.

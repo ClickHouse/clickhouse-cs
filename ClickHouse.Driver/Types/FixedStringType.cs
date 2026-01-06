@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Globalization;
+using System.IO;
 using System.Text;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
@@ -10,7 +11,9 @@ internal class FixedStringType : ParameterizedType
 {
     public int Length { get; set; }
 
-    public override Type FrameworkType => typeof(byte[]);
+    public bool ReadAsByteArray { get; set; }
+
+    public override Type FrameworkType => ReadAsByteArray ? typeof(byte[]) : typeof(string);
 
     public override string Name => "FixedString";
 
@@ -19,12 +22,21 @@ internal class FixedStringType : ParameterizedType
         return new FixedStringType
         {
             Length = int.Parse(node.SingleChild.Value, CultureInfo.InvariantCulture),
+            ReadAsByteArray = settings.readStringsAsByteArrays,
         };
     }
 
     public override string ToString() => $"FixedString({Length})";
 
-    public override object Read(ExtendedBinaryReader reader) => reader.ReadBytes(Length);
+    public override object Read(ExtendedBinaryReader reader)
+    {
+        var bytes = reader.ReadBytes(Length);
+        if (ReadAsByteArray)
+        {
+            return bytes;
+        }
+        return Encoding.UTF8.GetString(bytes);
+    }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
@@ -42,9 +54,33 @@ internal class FixedStringType : ParameterizedType
             }
             writer.Write(b);
         }
+#if NET6_0_OR_GREATER
+        else if (value is ReadOnlyMemory<byte> memory)
+        {
+            if (memory.Length != Length)
+            {
+                throw new ArgumentException($"ReadOnlyMemory<byte> length {memory.Length} does not match FixedString({Length}). ReadOnlyMemory<byte> must be exactly {Length} bytes.");
+            }
+
+            writer.Write(memory.Span);
+        }
+#endif
+        else if (value is Stream stream)
+        {
+            if (stream.CanSeek)
+            {
+                var streamLength = checked((int)(stream.Length - stream.Position));
+                if (streamLength != Length)
+                {
+                    throw new ArgumentException($"Stream length {streamLength} does not match FixedString({Length}). Stream must be exactly {Length} bytes.");
+                }
+            }
+            // For non-seekable streams, skip validation - server will reject if wrong length
+            stream.CopyTo(writer.BaseStream);
+        }
         else
         {
-            throw new ArgumentException($"FixedString requires string or byte[], got {value?.GetType().Name ?? "null"}");
+            throw new ArgumentException($"FixedString requires string, byte[], ReadOnlyMemory<byte>, or Stream, got {value?.GetType().Name ?? "null"}");
         }
     }
 }

@@ -57,6 +57,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         BearerToken = other.BearerToken;
         UseCompression = other.UseCompression;
         UseCustomDecimals = other.UseCustomDecimals;
+        ReadStringsAsByteArrays = other.ReadStringsAsByteArrays;
         UseSession = other.UseSession;
         SessionId = other.SessionId;
         SkipServerCertificateValidation = other.SkipServerCertificateValidation;
@@ -144,6 +145,13 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Default: true
     /// </summary>
     public bool UseCustomDecimals { get; init; } = ClickHouseDefaults.UseCustomDecimals;
+
+    /// <summary>
+    /// Gets or sets whether to read String/FixedString columns as byte arrays instead of strings.
+    /// This is useful when storing binary data that may not be valid UTF-8.
+    /// Default: false
+    /// </summary>
+    public bool ReadStringsAsByteArrays { get; init; } = ClickHouseDefaults.ReadStringsAsByteArrays;
 
     /// <summary>
     /// Gets or sets whether to use sessions for the connection.
@@ -309,6 +317,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             SessionId = builder.SessionId,
             Timeout = builder.Timeout,
             UseCustomDecimals = builder.UseCustomDecimals,
+            ReadStringsAsByteArrays = builder.ReadStringsAsByteArrays,
             Roles = builder.Roles,
             JsonReadMode = builder.JsonReadMode,
             JsonWriteMode = builder.JsonWriteMode,
@@ -347,6 +356,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                BearerToken == other.BearerToken &&
                UseCompression == other.UseCompression &&
                UseCustomDecimals == other.UseCustomDecimals &&
+               ReadStringsAsByteArrays == other.ReadStringsAsByteArrays &&
                UseSession == other.UseSession &&
                SessionId == other.SessionId &&
                SkipServerCertificateValidation == other.SkipServerCertificateValidation &&
@@ -387,6 +397,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(BearerToken);
         hash.Add(UseCompression);
         hash.Add(UseCustomDecimals);
+        hash.Add(ReadStringsAsByteArrays);
         hash.Add(UseSession);
         hash.Add(SessionId);
         hash.Add(SkipServerCertificateValidation);
@@ -433,7 +444,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     {
         var result = $"Host={Host};Port={Port};Protocol={Protocol};Database={Database};" +
                $"Username={Username};Password=****;Compression={UseCompression};" +
-               $"UseCustomDecimals={UseCustomDecimals};" +
+               $"UseCustomDecimals={UseCustomDecimals};ReadStringsAsByteArrays={ReadStringsAsByteArrays};" +
                $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s;" +
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode}";
 

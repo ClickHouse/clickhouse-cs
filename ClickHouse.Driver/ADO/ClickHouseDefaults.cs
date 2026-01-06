@@ -63,6 +63,11 @@ public static class ClickHouseDefaults
     public const bool UseCustomDecimals = true;
 
     /// <summary>
+    /// Default setting for reading String columns as byte arrays (disabled)
+    /// </summary>
+    public const bool ReadStringsAsByteArrays = false;
+
+    /// <summary>
     /// Default setting for server certificate validation (false = validate certificates)
     /// </summary>
     public const bool SkipServerCertificateValidation = false;
