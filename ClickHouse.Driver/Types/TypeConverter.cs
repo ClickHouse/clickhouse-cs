@@ -262,6 +262,14 @@ internal static class TypeConverter
                 };
             }
 
+            if (typeName == "String")
+            {
+                return new StringType()
+                {
+                    ReadAsByteArray = settings.readStringsAsByteArrays,
+                };
+            }
+
             return typeInfo;
         }
 

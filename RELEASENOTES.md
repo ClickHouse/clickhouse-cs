@@ -60,6 +60,8 @@ v?
 
 **New Features/Improvements:**
  * Added support for QBit data type. QBit is a transposed vector column, designed to allow the user to choose a desired quantization level at runtime, speeding up approximate similarity searches. See the GitHub repo for usage examples.
+ * Added support for writing `ReadOnlyMemory<byte>` and `Stream` values to String and FixedString columns via BulkCopy.
+ * Added `ReadStringsAsByteArrays` connection string setting to read String columns as `byte[]` instead of `string`. This is useful when storing binary data in String columns that may not be valid UTF-8.
  * Added support for setting roles at the connection and command levels.
  * Added support for custom headers at the connection level.
  * Added support for JWT/Bearer token authentication at both connection and command levels.
