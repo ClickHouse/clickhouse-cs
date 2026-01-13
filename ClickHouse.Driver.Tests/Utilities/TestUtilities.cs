@@ -144,7 +144,7 @@ public static class TestUtilities
             // it could cause problems by hiding other issues
             builder["set_allow_suspicious_variant_types"] = 1; 
         }
-        if (SupportedFeatures.HasFlag(Feature.QBit) && TestEnvironment != TestEnv.Cloud)
+        if (SupportedFeatures.HasFlag(Feature.QBit))
         {
             // Cloud doesn't want us changing this option
             builder["set_allow_experimental_qbit_type"] = 1;
