@@ -31,8 +31,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="NUnit.Console" Version="3.21.1" />
-    <PackageReference Include="NUnit.ConsoleRunner" Version="3.21.1">
+    <PackageReference Include="NUnit.Console" Version="3.22.0" />
+    <PackageReference Include="NUnit.ConsoleRunner" Version="3.22.0">
       <IncludeAssets>all</IncludeAssets>
     </PackageReference>
     <PackageReference Include="NUnit3TestAdapter" Version="5.0.0">
