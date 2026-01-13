@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Globalization;
 using System.Text;
 using ClickHouse.Driver.Formats;
@@ -8,7 +9,19 @@ namespace ClickHouse.Driver.Types;
 
 internal class FixedStringType : ParameterizedType
 {
-    public int Length { get; set; }
+    private int length;
+
+    public int Length
+    {
+        get => length;
+        set
+        {
+            length = value;
+            buffer = new  byte[Length];
+        }
+    }
+
+    private byte[] buffer;
 
     public override Type FrameworkType => typeof(byte[]);
 
@@ -30,9 +43,9 @@ internal class FixedStringType : ParameterizedType
     {
         if (value is string s)
         {
-            var stringBytes = new byte[Length];
-            Encoding.UTF8.GetBytes(s, 0, s.Length, stringBytes, 0);
-            writer.Write(stringBytes);
+            Array.Clear(buffer, 0, Length);
+            Encoding.UTF8.GetBytes(s, 0, s.Length, buffer, 0);
+            writer.Write(buffer, 0, Length);
         }
         else if (value is byte[] b)
         {
