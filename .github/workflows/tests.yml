@@ -29,6 +29,7 @@ jobs:
       matrix:
         version:
           - "latest"
+          - "25.12"
           - "25.11"
           - "25.10"
           - "25.8"
