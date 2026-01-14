@@ -11,8 +11,6 @@ namespace ClickHouse.Driver.Formats;
 internal sealed class ExceptionTagAwareStream : Stream
 {
     private const string ExceptionPrefix = "__exception__";
-    private const int TokenLength = 10;
-    private const int MarkerLength = 23; // "__exception__" (13) + token (10)
     private const int BufferCapacity = 4096; // 4KB ring buffer
 
     private readonly Stream innerStream;
@@ -32,17 +30,17 @@ internal sealed class ExceptionTagAwareStream : Stream
         if (string.IsNullOrEmpty(exceptionTag))
             throw new ArgumentException("Exception tag cannot be null or empty", nameof(exceptionTag));
 
-        if (exceptionTag.Length != TokenLength)
-            throw new ArgumentException($"Exception tag must be {TokenLength} characters", nameof(exceptionTag));
-
         exceptionToken = exceptionTag;
         exceptionMarker = Encoding.UTF8.GetBytes(ExceptionPrefix + exceptionTag);
         closingMarker = Encoding.UTF8.GetBytes(exceptionTag + ExceptionPrefix);
     }
 
     public override bool CanRead => innerStream.CanRead;
+
     public override bool CanSeek => innerStream.CanSeek;
+
     public override bool CanWrite => innerStream.CanWrite;
+
     public override long Length => innerStream.Length;
 
     public override long Position
@@ -100,11 +98,10 @@ internal sealed class ExceptionTagAwareStream : Stream
     /// Scans the ring buffer for a mid-stream exception marker and returns a
     /// ClickHouseServerException if found.
     /// </summary>
-    /// <param name="query">The query being executed (may be null)</param>
     /// <returns>ClickHouseServerException if marker found, null otherwise</returns>
-    public ClickHouseServerException TryExtractMidStreamException(string query)
+    public ClickHouseServerException TryExtractMidStreamException()
     {
-        if (bytesRecorded < MarkerLength)
+        if (bytesRecorded < exceptionMarker.Length)
             return null;
 
         byte[] buffer = GetLinearBuffer();
@@ -113,7 +110,7 @@ internal sealed class ExceptionTagAwareStream : Stream
         if (markerIndex < 0)
             return null;
 
-        return ParseExceptionFormat(buffer, markerIndex, query);
+        return ParseExceptionFormat(buffer, markerIndex);
     }
 
     private byte[] GetLinearBuffer()
@@ -136,7 +133,7 @@ internal sealed class ExceptionTagAwareStream : Stream
         return result;
     }
 
-    private ClickHouseServerException ParseExceptionFormat(byte[] buffer, int markerIndex, string query)
+    private ClickHouseServerException ParseExceptionFormat(byte[] buffer, int markerIndex)
     {
         // Format: __exception__TOKEN\n<message>\n<size> TOKEN__exception__
         int messageStart = markerIndex + exceptionMarker.Length;
@@ -195,32 +192,48 @@ internal sealed class ExceptionTagAwareStream : Stream
                 errorMessage = "Unknown error (exception marker found but message incomplete)";
         }
 
-        return ClickHouseServerException.FromMidStreamException(errorMessage.Trim(), query);
+        return ClickHouseServerException.FromMidStreamException(errorMessage.Trim());
     }
 
     private static int FindPattern(byte[] buffer, byte[] pattern, int startIndex = 0)
     {
-        int limit = buffer.Length - pattern.Length;
-        for (int i = startIndex; i <= limit; i++)
+        if (pattern.Length == 0 || buffer.Length < pattern.Length + startIndex)
+            return -1;
+
+        var span = buffer.AsSpan(startIndex);
+        byte firstByte = pattern[0];
+        int patternLength = pattern.Length;
+
+        int offset = 0;
+        while (offset <= span.Length - patternLength)
         {
-            bool found = true;
-            for (int j = 0; j < pattern.Length; j++)
-            {
-                if (buffer[i + j] != pattern[j])
-                {
-                    found = false;
-                    break;
-                }
-            }
-            if (found)
-                return i;
+            // Use SIMD-optimized IndexOf to find first byte
+            int pos = span.Slice(offset).IndexOf(firstByte);
+            if (pos < 0)
+                return -1;
+
+            offset += pos;
+
+            // Check if we have enough room for full pattern
+            if (offset > span.Length - patternLength)
+                return -1;
+
+            // Verify the rest of the pattern
+            if (span.Slice(offset, patternLength).SequenceEqual(pattern))
+                return startIndex + offset;
+
+            offset++;
         }
+
         return -1;
     }
 
     public override void Flush() => innerStream.Flush();
+
     public override long Seek(long offset, SeekOrigin origin) => innerStream.Seek(offset, origin);
+
     public override void SetLength(long value) => innerStream.SetLength(value);
+
     public override void Write(byte[] buffer, int offset, int count) => innerStream.Write(buffer, offset, count);
 
     protected override void Dispose(bool disposing)

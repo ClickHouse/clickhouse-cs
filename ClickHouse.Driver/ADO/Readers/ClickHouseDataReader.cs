@@ -230,7 +230,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         }
         catch (EndOfStreamException) when (exceptionTagStream != null)
         {
-            var serverEx = exceptionTagStream.TryExtractMidStreamException(query: null);
+            var serverEx = exceptionTagStream.TryExtractMidStreamException();
             if (serverEx != null)
                 throw serverEx;
             throw;

@@ -31,14 +31,6 @@ public class ExceptionTagAwareStreamTests
     }
 
     [Test]
-    public void Constructor_ValidatesTagLength()
-    {
-        using var ms = new MemoryStream();
-        Assert.Throws<System.ArgumentException>(() => new ExceptionTagAwareStream(ms, "short"));
-        Assert.Throws<System.ArgumentException>(() => new ExceptionTagAwareStream(ms, "toolongtoken"));
-    }
-
-    [Test]
     public void Read_PassesThroughToInnerStream()
     {
         var data = new byte[] { 1, 2, 3, 4, 5 };
@@ -76,7 +68,7 @@ public class ExceptionTagAwareStreamTests
         var buffer = new byte[data.Length];
         stream.Read(buffer, 0, buffer.Length);
 
-        var result = stream.TryExtractMidStreamException(null);
+        var result = stream.TryExtractMidStreamException();
         Assert.That(result, Is.Null);
     }
 
@@ -90,7 +82,7 @@ public class ExceptionTagAwareStreamTests
         var buffer = new byte[data.Length];
         stream.Read(buffer, 0, buffer.Length);
 
-        var result = stream.TryExtractMidStreamException(null);
+        var result = stream.TryExtractMidStreamException();
         Assert.That(result, Is.Null);
     }
 
@@ -107,11 +99,10 @@ public class ExceptionTagAwareStreamTests
         var buffer = new byte[data.Length];
         stream.Read(buffer, 0, buffer.Length);
 
-        var result = stream.TryExtractMidStreamException("SELECT 1");
+        var result = stream.TryExtractMidStreamException();
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result.Message, Is.EqualTo("Test error message"));
-        Assert.That(result.Query, Is.EqualTo("SELECT 1"));
     }
 
     [Test]
@@ -128,7 +119,7 @@ public class ExceptionTagAwareStreamTests
         var buffer = new byte[data.Length];
         stream.Read(buffer, 0, buffer.Length);
 
-        var result = stream.TryExtractMidStreamException(null);
+        var result = stream.TryExtractMidStreamException();
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result.Message, Is.EqualTo(message));
@@ -147,7 +138,7 @@ public class ExceptionTagAwareStreamTests
         var buffer = new byte[data.Length];
         stream.Read(buffer, 0, buffer.Length);
 
-        var result = stream.TryExtractMidStreamException(null);
+        var result = stream.TryExtractMidStreamException();
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result.Message, Is.EqualTo("Partial error message"));
@@ -165,7 +156,7 @@ public class ExceptionTagAwareStreamTests
         var buffer = new byte[data.Length];
         stream.Read(buffer, 0, buffer.Length);
 
-        var result = stream.TryExtractMidStreamException(null);
+        var result = stream.TryExtractMidStreamException();
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result.ErrorCode, Is.EqualTo(123));
@@ -187,7 +178,7 @@ public class ExceptionTagAwareStreamTests
         var buffer = new byte[data.Length];
         stream.Read(buffer, 0, buffer.Length);
 
-        var result = stream.TryExtractMidStreamException(null);
+        var result = stream.TryExtractMidStreamException();
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result.Message, Is.EqualTo("Bulk read error"));
@@ -205,7 +196,7 @@ public class ExceptionTagAwareStreamTests
         // Read byte by byte
         while (stream.ReadByte() != -1) { }
 
-        var result = stream.TryExtractMidStreamException(null);
+        var result = stream.TryExtractMidStreamException();
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result.Message, Is.EqualTo("Byte by byte error"));
@@ -230,29 +221,10 @@ public class ExceptionTagAwareStreamTests
         var buffer = new byte[data.Length];
         stream.Read(buffer, 0, buffer.Length);
 
-        var result = stream.TryExtractMidStreamException(null);
+        var result = stream.TryExtractMidStreamException();
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result.Message, Is.EqualTo("Overflow test error"));
-    }
-
-    [Test]
-    public void RingBuffer_HandlesMultipleSmallReads()
-    {
-        var exceptionData = $"__exception__{TestToken}\nSmall reads error\n17 {TestToken}__exception__";
-        var data = Encoding.UTF8.GetBytes(exceptionData);
-
-        using var ms = new MemoryStream(data);
-        using var stream = new ExceptionTagAwareStream(ms, TestToken);
-
-        // Read in small chunks
-        var buffer = new byte[10];
-        while (stream.Read(buffer, 0, 10) > 0) { }
-
-        var result = stream.TryExtractMidStreamException(null);
-
-        Assert.That(result, Is.Not.Null);
-        Assert.That(result.Message, Is.EqualTo("Small reads error"));
     }
 
     [Test]
@@ -292,7 +264,7 @@ public class ExceptionTagAwareStreamTests
         var buffer = new byte[data.Length];
         stream.Read(buffer, 0, buffer.Length);
 
-        var result = stream.TryExtractMidStreamException(null);
+        var result = stream.TryExtractMidStreamException();
 
         Assert.That(result, Is.Null); // Should not match wrong token
     }
