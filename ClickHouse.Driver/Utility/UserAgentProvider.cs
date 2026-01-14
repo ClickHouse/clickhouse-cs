@@ -67,6 +67,9 @@ internal static class UserAgentProvider
         /// </summary>
         private static string SanitizeString(string value)
         {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
             return value.Replace(';', '|');
         }
 
