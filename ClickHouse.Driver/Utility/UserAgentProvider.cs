@@ -38,6 +38,11 @@ internal static class UserAgentProvider
                     : System.Runtime.InteropServices.RuntimeInformation.OSDescription;
                 var architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString();
 
+                // Sanitize
+                osPlatform = SanitizeString(osPlatform);
+                osDescription = SanitizeString(osDescription);
+                architecture = SanitizeString(architecture);
+
                 // Get runtime information
                 var runtime = Environment.Version.ToString();
 
@@ -55,6 +60,14 @@ internal static class UserAgentProvider
         private static bool ContainsNonAscii(string value)
         {
             return value.Any(c => (int)c > 0x7f);
+        }
+
+        /// <summary>
+        /// To avoid parsing issues, we want to remove any semicolons
+        /// </summary>
+        private static string SanitizeString(string value)
+        {
+            return value.Replace(';', '|');
         }
 
         /// <summary>
