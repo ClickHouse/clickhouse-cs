@@ -59,6 +59,11 @@ internal static class UserAgentProvider
 
         private static bool ContainsNonAscii(string value)
         {
+            if (value is null)
+            {
+                return false;
+            }
+
             return value.Any(c => (int)c > 0x7f);
         }
 
@@ -67,6 +72,11 @@ internal static class UserAgentProvider
         /// </summary>
         private static string SanitizeString(string value)
         {
+            if (value is null)
+            {
+                return string.Empty;
+            }
+
             return value.Replace(';', '|');
         }
 
