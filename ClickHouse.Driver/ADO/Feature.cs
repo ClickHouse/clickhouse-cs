@@ -54,5 +54,8 @@ public enum Feature
     [SinceVersion("25.11")]
     Geometry = 1 << 14,
 
+    [SinceVersion("25.11")]
+    ExceptionTag = 1 << 15,
+
     All = ~None, // Special value
 }
