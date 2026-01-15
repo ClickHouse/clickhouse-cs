@@ -1,10 +1,12 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Http;
 using System.Net.Security;
 
 namespace ClickHouse.Driver.Http;
 
+[SuppressMessage("Security", "CA5359:Do Not Disable Certificate Validation",  Justification = "We deliberately want to skip certificate validation in some cases.")]
 internal static class HttpHandlerProvider
 {
     public static HttpMessageHandler CreateHandler(bool skipServerCertificateValidation, int? maxConnectionsPerServer = null)

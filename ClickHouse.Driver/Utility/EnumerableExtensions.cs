@@ -65,7 +65,8 @@ internal static class EnumerableExtensions
                     {
                         yield return queue.Dequeue();
                         queue.Enqueue(e.Current);
-                    } while (e.MoveNext());
+                    }
+                    while (e.MoveNext());
                 }
                 else
                 {

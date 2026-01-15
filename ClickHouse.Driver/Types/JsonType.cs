@@ -250,7 +250,7 @@ internal class JsonType : ParameterizedType
         return obj;
     }
 
-    private static JsonNode ReadJsonFixedString(ExtendedBinaryReader reader, ClickHouseType type)
+    private static JsonValue ReadJsonFixedString(ExtendedBinaryReader reader, ClickHouseType type)
     {
         var value = type.Read(reader);
         return JsonValue.Create(Encoding.UTF8.GetString((byte[])value));
@@ -283,10 +283,10 @@ internal class JsonType : ParameterizedType
             decimal dec => JsonValue.Create(dec),
             DateTime dt => JsonValue.Create(dt),
             // Types that need string representation
-            BigInteger bi => JsonValue.Create(bi.ToString()),
+            BigInteger bi => JsonValue.Create(bi.ToString(CultureInfo.InvariantCulture)),
             Guid guid => JsonValue.Create(guid.ToString()),
             IPAddress ip => JsonValue.Create(ip.ToString()),
-            ClickHouseDecimal chDec => JsonValue.Create(chDec.ToString()),
+            ClickHouseDecimal chDec => JsonValue.Create(chDec.ToString(CultureInfo.InvariantCulture)),
             // Default: try JsonSerializer for complex types
             _ => JsonValue.Create(JsonSerializer.SerializeToElement(value))
         };
@@ -361,7 +361,8 @@ internal class JsonType : ParameterizedType
         foreach (var value in array)
         {
             var elementKind = value.GetValueKind();
-            if (elementKind != kind && !(IsBoolKind(kind) && IsBoolKind(elementKind))) // True and False are different kinds, so we need a special check for them
+            // True and False are different kinds, so we need a special check for them
+            if (elementKind != kind && !(IsBoolKind(kind) && IsBoolKind(elementKind)))
             {
                 throw new SerializationException("Array contains mixed value types");
             }

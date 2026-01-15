@@ -23,8 +23,11 @@ internal class BFloat16Type : FloatType
     [StructLayout(LayoutKind.Explicit)]
     private struct FloatUInt32Union
     {
-        [FieldOffset(0)] public float FloatValue;
-        [FieldOffset(0)] public uint UIntValue;
+        [FieldOffset(0)]
+        public float FloatValue;
+
+        [FieldOffset(0)]
+        public uint UIntValue;
     }
 
     public override object Read(ExtendedBinaryReader reader)

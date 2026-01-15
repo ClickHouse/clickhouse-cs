@@ -23,7 +23,7 @@ public enum Feature
     [SinceVersion("21.9")]
     WideTypes = 1 << 4,
 
-    [Obsolete]
+    [Obsolete("Geo feature flag is deprecated and no longer used.")]
     [SinceVersion("20.5")]
     Geo = 1 << 5,
 
