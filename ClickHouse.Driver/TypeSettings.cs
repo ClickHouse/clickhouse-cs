@@ -1,8 +1,6 @@
-﻿using NodaTime;
-
 namespace ClickHouse.Driver;
 
-internal record struct TypeSettings(bool useBigDecimal)
+internal record struct TypeSettings(bool useBigDecimal, JsonReadMode jsonReadMode, JsonWriteMode jsonWriteMode)
 {
-    public static TypeSettings Default => new TypeSettings(true);
+    public static TypeSettings Default => new TypeSettings(true, JsonReadMode.JsonNode, JsonWriteMode.JsonNode);
 }
