@@ -66,7 +66,7 @@ public class ExceptionTagAwareStreamTests
 
         // Read all data
         var buffer = new byte[data.Length];
-        stream.Read(buffer, 0, buffer.Length);
+        _ = stream.Read(buffer, 0, buffer.Length);
 
         var result = stream.TryExtractMidStreamException();
         Assert.That(result, Is.Null);
@@ -80,7 +80,7 @@ public class ExceptionTagAwareStreamTests
         using var stream = new ExceptionTagAwareStream(ms, TestToken);
 
         var buffer = new byte[data.Length];
-        stream.Read(buffer, 0, buffer.Length);
+        _ = stream.Read(buffer, 0, buffer.Length);
 
         var result = stream.TryExtractMidStreamException();
         Assert.That(result, Is.Null);
@@ -90,14 +90,15 @@ public class ExceptionTagAwareStreamTests
     public void TryExtractMidStreamException_DetectsMarker_WithCompleteFormat()
     {
         // Format: __exception__TOKEN\n<message>\n<size> TOKEN__exception__
-        var exceptionData = $"__exception__{TestToken}\nTest error message\n18 {TestToken}__exception__";
+        var message = "Test error message";
+        var exceptionData = $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__";
         var data = Encoding.UTF8.GetBytes("Some data before" + exceptionData);
 
         using var ms = new MemoryStream(data);
         using var stream = new ExceptionTagAwareStream(ms, TestToken);
 
         var buffer = new byte[data.Length];
-        stream.Read(buffer, 0, buffer.Length);
+        _ = stream.Read(buffer, 0, buffer.Length);
 
         var result = stream.TryExtractMidStreamException();
 
@@ -117,7 +118,7 @@ public class ExceptionTagAwareStreamTests
         using var stream = new ExceptionTagAwareStream(ms, TestToken);
 
         var buffer = new byte[data.Length];
-        stream.Read(buffer, 0, buffer.Length);
+        _ = stream.Read(buffer, 0, buffer.Length);
 
         var result = stream.TryExtractMidStreamException();
 
@@ -136,7 +137,7 @@ public class ExceptionTagAwareStreamTests
         using var stream = new ExceptionTagAwareStream(ms, TestToken);
 
         var buffer = new byte[data.Length];
-        stream.Read(buffer, 0, buffer.Length);
+        _ = stream.Read(buffer, 0, buffer.Length);
 
         var result = stream.TryExtractMidStreamException();
 
@@ -147,14 +148,15 @@ public class ExceptionTagAwareStreamTests
     [Test]
     public void TryExtractMidStreamException_ParsesErrorCode()
     {
-        var exceptionData = $"__exception__{TestToken}\nCode: 123. Error message here\n30 {TestToken}__exception__";
+        var message = "Code: 123. Error message here";
+        var exceptionData = $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__";
         var data = Encoding.UTF8.GetBytes(exceptionData);
 
         using var ms = new MemoryStream(data);
         using var stream = new ExceptionTagAwareStream(ms, TestToken);
 
         var buffer = new byte[data.Length];
-        stream.Read(buffer, 0, buffer.Length);
+        _ = _ = stream.Read(buffer, 0, buffer.Length);
 
         var result = stream.TryExtractMidStreamException();
 
@@ -166,7 +168,8 @@ public class ExceptionTagAwareStreamTests
     public void RingBuffer_RecordsBytes_FromBulkRead()
     {
         var prefix = new byte[100];
-        var exceptionData = $"__exception__{TestToken}\nBulk read error\n15 {TestToken}__exception__";
+        var message = "Bulk read error";
+        var exceptionData = $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__";
         var data = new byte[prefix.Length + Encoding.UTF8.GetByteCount(exceptionData)];
         Array.Copy(prefix, 0, data, 0, prefix.Length);
         Encoding.UTF8.GetBytes(exceptionData, 0, exceptionData.Length, data, prefix.Length);
@@ -176,7 +179,7 @@ public class ExceptionTagAwareStreamTests
 
         // Read all at once
         var buffer = new byte[data.Length];
-        stream.Read(buffer, 0, buffer.Length);
+        _ = stream.Read(buffer, 0, buffer.Length);
 
         var result = stream.TryExtractMidStreamException();
 
@@ -187,7 +190,8 @@ public class ExceptionTagAwareStreamTests
     [Test]
     public void RingBuffer_RecordsBytes_FromByteByByteRead()
     {
-        var exceptionData = $"__exception__{TestToken}\nByte by byte error\n18 {TestToken}__exception__";
+        var message = "Byte by byte error";
+        var exceptionData = $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__";
         var data = Encoding.UTF8.GetBytes(exceptionData);
 
         using var ms = new MemoryStream(data);
@@ -207,7 +211,8 @@ public class ExceptionTagAwareStreamTests
     {
         // Create data larger than 4KB buffer
         var prefix = new byte[5000]; // More than 4KB
-        var exceptionData = $"__exception__{TestToken}\nOverflow test error\n19 {TestToken}__exception__";
+        var message = "Overflow test error";
+        var exceptionData = $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__";
         var suffix = Encoding.UTF8.GetBytes(exceptionData);
 
         var data = new byte[prefix.Length + suffix.Length];
@@ -219,7 +224,7 @@ public class ExceptionTagAwareStreamTests
 
         // Read all data - buffer should wrap
         var buffer = new byte[data.Length];
-        stream.Read(buffer, 0, buffer.Length);
+        _ = stream.Read(buffer, 0, buffer.Length);
 
         var result = stream.TryExtractMidStreamException();
 
@@ -255,14 +260,15 @@ public class ExceptionTagAwareStreamTests
     {
         // Use a different token in the data than what the stream is configured with
         var wrongToken = "WRONGTOKEN";
-        var exceptionData = $"__exception__{wrongToken}\nWrong token error\n17 {wrongToken}__exception__";
+        var message = "Wrong token error";
+        var exceptionData = $"__exception__{wrongToken}\n{message}\n{message.Length} {wrongToken}__exception__";
         var data = Encoding.UTF8.GetBytes(exceptionData);
 
         using var ms = new MemoryStream(data);
         using var stream = new ExceptionTagAwareStream(ms, TestToken); // Looking for TestToken
 
         var buffer = new byte[data.Length];
-        stream.Read(buffer, 0, buffer.Length);
+        _ = stream.Read(buffer, 0, buffer.Length);
 
         var result = stream.TryExtractMidStreamException();
 

@@ -136,63 +136,34 @@ internal sealed class ExceptionTagAwareStream : Stream
     private ClickHouseServerException ParseExceptionFormat(byte[] buffer, int markerIndex)
     {
         // Format: __exception__TOKEN\n<message>\n<size> TOKEN__exception__
+        // We ignore the size
         int messageStart = markerIndex + exceptionMarker.Length;
 
-        // Skip newlines/whitespace after opening marker
-        while (messageStart < buffer.Length &&
-               (buffer[messageStart] == '\n' || buffer[messageStart] == '\r'))
-        {
+        // Skip newlines after opening marker
+        while (messageStart < buffer.Length && (buffer[messageStart] == '\n' || buffer[messageStart] == '\r'))
             messageStart++;
-        }
 
         // Find closing marker: TOKEN__exception__
         int closingIndex = FindPattern(buffer, closingMarker, messageStart);
 
-        string errorMessage;
-        if (closingIndex >= 0)
-        {
-            // Find the size number before closing marker (format: "<size> TOKEN__exception__")
-            int sizeEnd = closingIndex;
+        // Determine where message ends
+        int messageEnd = closingIndex >= 0 ? closingIndex : buffer.Length;
 
-            // Skip space before token
-            while (sizeEnd > messageStart && buffer[sizeEnd - 1] == ' ')
-                sizeEnd--;
+        // Trim trailing whitespace/newlines (includes the size number line if present)
+        while (messageEnd > messageStart && char.IsWhiteSpace((char)buffer[messageEnd - 1]))
+            messageEnd--;
 
-            // Find start of size number
-            int sizeStart = sizeEnd;
-            while (sizeStart > messageStart && char.IsDigit((char)buffer[sizeStart - 1]))
-                sizeStart--;
+        // Also trim any trailing digits and space (the size number)
+        while (messageEnd > messageStart && char.IsDigit((char)buffer[messageEnd - 1]))
+            messageEnd--;
+        while (messageEnd > messageStart && char.IsWhiteSpace((char)buffer[messageEnd - 1]))
+            messageEnd--;
 
-            // Message ends before the size number (and any preceding newline)
-            int messageEnd = sizeStart;
-            while (messageEnd > messageStart &&
-                   (buffer[messageEnd - 1] == '\n' || buffer[messageEnd - 1] == '\r' || buffer[messageEnd - 1] == ' '))
-            {
-                messageEnd--;
-            }
+        if (messageEnd <= messageStart)
+            return ClickHouseServerException.FromMidStreamException("Unknown error (could not parse exception message)");
 
-            if (messageEnd > messageStart)
-                errorMessage = Encoding.UTF8.GetString(buffer, messageStart, messageEnd - messageStart);
-            else
-                errorMessage = "Unknown error (could not parse exception message)";
-        }
-        else
-        {
-            // Closing marker not found - extract available text
-            int messageEnd = buffer.Length;
-            while (messageEnd > messageStart &&
-                   (buffer[messageEnd - 1] == '\n' || buffer[messageEnd - 1] == '\r'))
-            {
-                messageEnd--;
-            }
-
-            if (messageEnd > messageStart)
-                errorMessage = Encoding.UTF8.GetString(buffer, messageStart, messageEnd - messageStart);
-            else
-                errorMessage = "Unknown error (exception marker found but message incomplete)";
-        }
-
-        return ClickHouseServerException.FromMidStreamException(errorMessage.Trim());
+        var errorMessage = Encoding.UTF8.GetString(buffer, messageStart, messageEnd - messageStart);
+        return ClickHouseServerException.FromMidStreamException(errorMessage);
     }
 
     private static int FindPattern(byte[] buffer, byte[] pattern, int startIndex = 0)
