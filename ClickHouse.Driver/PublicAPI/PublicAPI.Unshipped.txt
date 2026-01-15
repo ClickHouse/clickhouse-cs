@@ -2,6 +2,20 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings
 ClickHouse.Driver.ADO.ClickHouseClientSettings.BearerToken.get -> string
 ClickHouse.Driver.ADO.ClickHouseClientSettings.BearerToken.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings() -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonReadMode.get -> ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonReadMode.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonWriteMode.get -> ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonWriteMode.init -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonReadMode.get -> ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonReadMode.set -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.get -> ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.set -> void
+ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.JsonReadMode.JsonNode = 0 -> ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.JsonReadMode.String = 1 -> ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.JsonWriteMode.JsonNode = 0 -> ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.JsonWriteMode.String = 1 -> ClickHouse.Driver.JsonWriteMode
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(ClickHouse.Driver.ADO.ClickHouseClientSettings other) -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder builder) -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(string connectionString) -> void

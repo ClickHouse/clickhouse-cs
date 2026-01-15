@@ -27,7 +27,9 @@ internal class JsonType : ParameterizedType
 
     internal TypeSettings TypeSettings { get; init; }
 
-    public override Type FrameworkType => typeof(JsonObject);
+    public override Type FrameworkType => TypeSettings.jsonReadMode == JsonReadMode.String
+        ? typeof(string)
+        : typeof(JsonObject);
 
     public override string Name => "Json";
 
@@ -44,6 +46,18 @@ internal class JsonType : ParameterizedType
     }
 
     public override object Read(ExtendedBinaryReader reader)
+    {
+        // When JsonReadMode.String is configured, ClickHouse sends JSON as a plain string
+        // (via output_format_binary_write_json_as_string=1 setting)
+        if (TypeSettings.jsonReadMode == JsonReadMode.String)
+        {
+            return reader.ReadString();
+        }
+
+        return ReadAsJsonObject(reader);
+    }
+
+    private object ReadAsJsonObject(ExtendedBinaryReader reader)
     {
         JsonObject root = new();
 
@@ -123,6 +137,38 @@ internal class JsonType : ParameterizedType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
+        // When JsonWriteMode.String is configured, ClickHouse expects JSON as a plain string
+        // (via input_format_binary_read_json_as_string=1 setting)
+        if (TypeSettings.jsonWriteMode == JsonWriteMode.String)
+        {
+            WriteAsString(writer, value);
+            return;
+        }
+
+        WriteAsJsonObject(writer, value);
+    }
+
+    private static void WriteAsString(ExtendedBinaryWriter writer, object value)
+    {
+        var jsonString = value switch
+        {
+            null or DBNull => "{}",
+            string s => s,
+            JsonObject jo => jo.ToJsonString(),
+            JsonNode jn => jn.ToJsonString(),
+            _ => JsonSerializer.Serialize(value)
+        };
+        writer.Write(jsonString);
+    }
+
+    private static void WriteAsJsonObject(ExtendedBinaryWriter writer, object value)
+    {
+        if (value is null or DBNull)
+        {
+            WriteJsonObject(writer, new JsonObject());
+            return;
+        }
+
         JsonObject rootObject;
         if (value is string inputString)
         {
