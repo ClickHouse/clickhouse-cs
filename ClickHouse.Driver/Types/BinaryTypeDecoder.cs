@@ -164,7 +164,9 @@ internal static class BinaryTypeDecoder
                 break;
         }
 
+#pragma warning disable CA2208
         throw new ArgumentOutOfRangeException(nameof(value), $"Unknown type code: {value}");
+#pragma warning restore CA2208
     }
 
     private static Enum8Type DecodeEnum8(ExtendedBinaryReader reader)
@@ -244,7 +246,7 @@ internal static class BinaryTypeDecoder
         return new TupleType { UnderlyingTypes = types };
     }
 
-    private static ClickHouseType DecodeFunction(ExtendedBinaryReader reader, TypeSettings typeSettings)
+    private static NothingType DecodeFunction(ExtendedBinaryReader reader, TypeSettings typeSettings)
     {
         var argumentsSize = reader.Read7BitEncodedInt();
         for (int i = 0; i < argumentsSize; i++)

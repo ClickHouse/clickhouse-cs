@@ -6,7 +6,9 @@ using System.Linq;
 
 namespace ClickHouse.Driver.ADO;
 
+#pragma warning disable CA1010 // Type inherits ICollection without implementing generic version - inherent to DbConnectionStringBuilder
 public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
+#pragma warning restore CA1010
 {
     public ClickHouseConnectionStringBuilder()
     {
@@ -101,6 +103,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
                 .Where(r => !string.IsNullOrEmpty(r))
                 .ToArray();
         }
+
         set
         {
             if (value == null || value.Count == 0)

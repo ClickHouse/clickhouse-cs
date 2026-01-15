@@ -22,6 +22,9 @@ using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.ADO;
 
+/// <summary>
+/// Represents a SQL command to execute against a ClickHouse database.
+/// </summary>
 public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 {
     private readonly CancellationTokenSource cts = new CancellationTokenSource();
@@ -30,23 +33,39 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     private List<string> roles;
     private ClickHouseConnection connection;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ClickHouseCommand"/> class.
+    /// </summary>
     public ClickHouseCommand()
     {
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ClickHouseCommand"/> class, with the specified connection.
+    /// </summary>
+    /// <param name="connection">The connection to use.</param>
     public ClickHouseCommand(ClickHouseConnection connection)
     {
         this.connection = connection;
     }
 
+    /// <summary>
+    /// Gets or sets the SQL query to execute.
+    /// </summary>
     public override string CommandText { get; set; }
 
+    /// <summary>
+    /// Gets or sets the command timeout in seconds. Not currently used by ClickHouse.
+    /// </summary>
     public override int CommandTimeout { get; set; }
 
+    /// <inheritdoc/>
     public override CommandType CommandType { get; set; }
 
+    /// <inheritdoc/>
     public override bool DesignTimeVisible { get; set; }
 
+    /// <inheritdoc/>
     public override UpdateRowSource UpdatedRowSource { get; set; }
 
     /// <summary>
@@ -55,6 +74,10 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     /// </summary>
     public string QueryId { get; set; }
 
+    /// <summary>
+    /// Gets statistics from the last executed query (rows read, bytes read, elapsed time, etc.).
+    /// Populated after query execution from the X-ClickHouse-Summary header.
+    /// </summary>
     public QueryStats QueryStats { get; private set; }
 
     /// <summary>
@@ -93,10 +116,13 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
     protected override DbTransaction DbTransaction { get; set; }
 
+    /// <inheritdoc/>
     public override void Cancel() => cts.Cancel();
 
+    /// <inheritdoc/>
     public override int ExecuteNonQuery() => ExecuteNonQueryAsync(cts.Token).GetAwaiter().GetResult();
 
+    /// <inheritdoc/>
     public override async Task<int> ExecuteNonQueryAsync(CancellationToken cancellationToken)
     {
         if (connection == null)
@@ -128,8 +154,10 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         return new ClickHouseRawResult(response);
     }
 
+    /// <inheritdoc/>
     public override object ExecuteScalar() => ExecuteScalarAsync(cts.Token).GetAwaiter().GetResult();
 
+    /// <inheritdoc/>
     public override async Task<object> ExecuteScalarAsync(CancellationToken cancellationToken)
     {
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
@@ -137,8 +165,15 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         return reader.Read() ? reader.GetValue(0) : null;
     }
 
+    /// <summary>
+    /// No-op. ClickHouse does not support prepared statements.
+    /// </summary>
     public override void Prepare() { /* ClickHouse has no notion of prepared statements */ }
 
+    /// <summary>
+    /// Creates a new <see cref="ClickHouseDbParameter"/> for this command.
+    /// </summary>
+    /// <returns>A new parameter instance.</returns>
     public new ClickHouseDbParameter CreateParameter() => new ClickHouseDbParameter();
 
     protected override DbParameter CreateDbParameter() => CreateParameter();

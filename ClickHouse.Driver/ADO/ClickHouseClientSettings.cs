@@ -223,7 +223,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Not recommended for production use.
     /// Default: false
     /// </summary>
-    public bool EnableDebugMode { get; init; } = false;
+    public bool EnableDebugMode { get; init; }
 
     /// <summary>
     /// Gets or sets custom ClickHouse settings to pass with queries.
@@ -354,7 +354,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// </summary>
     public override int GetHashCode()
     {
-        var hash = new HashCode();
+        HashCode hash = default;
         hash.Add(Host);
         hash.Add(Port);
         hash.Add(Protocol);

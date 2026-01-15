@@ -166,7 +166,9 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         set => Settings = new ClickHouseClientSettings(value);
     }
 
-    public ClickHouseClientSettings Settings { get;
+    public ClickHouseClientSettings Settings
+    {
+        get;
         set
         {
             if (State == ConnectionState.Open)
@@ -475,7 +477,9 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         }
     }
 
+#pragma warning disable CS0109 // Member does not hide an inherited member; new keyword is not required
     public new ClickHouseCommand CreateCommand(string commandText = null) => new (this) { CommandText = commandText };
+#pragma warning restore CS0109 // Member does not hide an inherited member; new keyword is not required
 
     void IDisposable.Dispose()
     {

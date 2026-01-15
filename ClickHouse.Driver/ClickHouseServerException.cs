@@ -60,7 +60,10 @@ public class ClickHouseServerException : DbException
                 break;
             }
         }
-
+#if NET6_0_OR_GREATER
+        return int.TryParse(error.AsSpan(start, end - start), out int result) ? result : null;
+#else
         return int.TryParse(error.Substring(start, end - start), out int result) ? result : null;
+#endif
     }
 }

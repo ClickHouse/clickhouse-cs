@@ -7,6 +7,14 @@ namespace ClickHouse.Driver.Logging;
 
 internal static class LoggingHelpers
 {
+    private const string HttpClientHandlerConfigMessage =
+        "HttpMessageHandler config\n" +
+        "  Type: {HandlerType}\n" +
+        "  Connection Pool: {ConnectionPoolSettings}\n" +
+        "  Timeouts: {TimeoutSettings}\n" +
+        "  AutomaticDecompression: {AutomaticDecompression}\n" +
+        "  SslOptions: {SslSettings}";
+
     internal static readonly EventId HttpClientConfigEventId = new(1, "HttpClientConfig");
     internal static readonly EventId HttpClientHandlerConfigEventId = new(2, "HttpClientHandlerConfig");
 
@@ -20,12 +28,7 @@ internal static class LoggingHelpers
         LoggerMessage.Define<string, string, string, string, string>(
             LogLevel.Trace,
             HttpClientHandlerConfigEventId,
-            "HttpMessageHandler config\n" +
-            "  Type: {HandlerType}\n" +
-            "  Connection Pool: {ConnectionPoolSettings}\n" +
-            "  Timeouts: {TimeoutSettings}\n" +
-            "  AutomaticDecompression: {AutomaticDecompression}\n" +
-            "  SslOptions: {SslSettings}");
+            HttpClientHandlerConfigMessage);
 
     internal static void HttpClientFactoryConfigured(
         this ILogger logger,
