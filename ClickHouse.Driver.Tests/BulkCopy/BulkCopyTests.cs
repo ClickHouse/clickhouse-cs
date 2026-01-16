@@ -295,6 +295,27 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         Assert.That(ex.InnerException.Message, Does.Contain("Stream length 6 does not match FixedString(4)"));
     }
 
+#if NET6_0_OR_GREATER
+    [Test]
+    public async Task WriteToServerAsync_FixedStringWithReadOnlyMemoryTooLong_ThrowsArgumentException()
+    {
+        var targetTable = "test.bulk_fixedstring_memory_too_long";
+        var tooLongData = new byte[] { 1, 2, 3, 4, 5, 6 }; // 6 bytes for FixedString(4)
+
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (fs FixedString(4), num Int32) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new ReadOnlyMemory<byte>(tooLongData), 42 }, 1)));
+
+        Assert.That(ex.InnerException, Is.TypeOf<ArgumentException>());
+        Assert.That(ex.InnerException.Message, Does.Contain("ReadOnlyMemory<byte> length 6 does not match FixedString(4)"));
+    }
+#endif
+
     [Test]
     public async Task ShouldReadStringAsByteArrayWithInvalidUtf8()
     {
