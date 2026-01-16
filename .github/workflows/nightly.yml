@@ -1,0 +1,17 @@
+name: Nightly head test
+
+on:
+  schedule:
+    # Run once a day at 2:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  test-head:
+    name: Test against ClickHouse HEAD
+    uses: ./.github/workflows/reusable.yml
+    secrets: inherit
+    with:
+      clickhouse-version: head
+    permissions:
+      statuses: write

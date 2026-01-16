@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Globalization;
 using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
@@ -12,5 +11,20 @@ internal class StringType : ClickHouseType
 
     public override string ToString() => "String";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToString(value, CultureInfo.InvariantCulture));
+    public override void Write(ExtendedBinaryWriter writer, object value)
+    {
+        if (value is string s)
+        {
+            writer.Write(s);
+        }
+        else if (value is byte[] b)
+        {
+            writer.Write7BitEncodedInt(b.Length);
+            writer.Write(b);
+        }
+        else
+        {
+            throw new ArgumentException($"String requires string or byte[], got {value?.GetType().Name ?? "null"}");
+        }
+    }
 }

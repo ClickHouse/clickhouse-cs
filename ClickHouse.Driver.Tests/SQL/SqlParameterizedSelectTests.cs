@@ -4,6 +4,7 @@ using System.Data;
 using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 
@@ -32,10 +33,17 @@ public class SqlParameterizedSelectTests : IDisposable
     [TestCaseSource(typeof(SqlParameterizedSelectTests), nameof(TypedQueryParameters))]
     public async Task ShouldExecuteParameterizedCompareWithTypeDetection(string exampleExpression, string clickHouseType, object value)
     {
-        if (clickHouseType.StartsWith("DateTime64") || clickHouseType == "Date" || clickHouseType == "Date32")
+        if (clickHouseType.StartsWith("DateTime64") || clickHouseType == "Date" || clickHouseType == "Date32" || clickHouseType == "Time" || clickHouseType.Contains("FixedString"))
             Assert.Pass("Automatic type detection does not work for " + clickHouseType);
         if (clickHouseType.StartsWith("Enum"))
+        {
             clickHouseType = "String";
+        }
+        if (clickHouseType.StartsWith("QBit"))
+        {
+            Assert.Ignore("QBit does not support comparing for equality.");
+        }
+        
 
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {exampleExpression} as expected, {{var:{clickHouseType}}} as actual, expected = actual as equals";
@@ -56,6 +64,8 @@ public class SqlParameterizedSelectTests : IDisposable
 
     [Test]
     [TestCaseSource(typeof(SqlParameterizedSelectTests), nameof(TypedQueryParameters))]
+    [TestCase(null, "FixedString(4)", "asdf", TestName = "Parametrized select with string for FixedString")]
+    [TestCase(null, "FixedString(4)", new byte[] { 91, 92, 93, 94}, TestName = "Parametrized select with byte array for FixedString")]
     public async Task ShouldExecuteParameterizedSelectWithExplicitType(string _, string clickHouseType, object value)
     {
         if (clickHouseType.StartsWith("Enum"))
@@ -73,7 +83,14 @@ public class SqlParameterizedSelectTests : IDisposable
     public async Task ShouldExecuteParameterizedCompareWithExplicitType(string exampleExpression, string clickHouseType, object value)
     {
         if (clickHouseType.StartsWith("Enum"))
+        {
             clickHouseType = "String";
+        }
+        if (clickHouseType.StartsWith("QBit"))
+        {
+            Assert.Ignore("QBit does not support comparing for equality.");
+        }
+
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {exampleExpression} as expected, {{var:{clickHouseType}}} as actual, expected = actual as equals";
         command.AddParameter("var", clickHouseType, value);
@@ -91,6 +108,28 @@ public class SqlParameterizedSelectTests : IDisposable
         // }
     }
 
+
+    [Test]
+    [TestCase("String")]
+    [TestCase("Int32")]
+    [TestCase("Int64")]
+    [TestCase("Float64")]
+    [TestCase("UUID")]
+    [TestCase("Date")]
+    [TestCase("DateTime")]
+    [TestCase("Bool")]
+    public async Task ShouldExecuteSelectWithNullParameterWithoutExplicitType(string underlyingType)
+    {
+        // Regression test: When adding a parameter with null value and not specifying the type,
+        // HttpParameterFormatter.Format would throw NullReferenceException
+        // trying to call parameter.Value.GetType() on null
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {{SomeField:Nullable({underlyingType})}} as res";
+        command.AddParameter("SomeField", null);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.InstanceOf<DBNull>());
+    }
 
     [Test]
     public async Task ShouldExecuteSelectWithTupleParameter()

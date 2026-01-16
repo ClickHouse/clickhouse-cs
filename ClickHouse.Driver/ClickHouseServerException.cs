@@ -27,6 +27,12 @@ public class ClickHouseServerException : DbException
         return new ClickHouseServerException(error, query, errorCode);
     }
 
+    internal static ClickHouseServerException FromMidStreamException(string errorMessage)
+    {
+        var errorCode = ParseErrorCode(errorMessage) ?? -1;
+        return new ClickHouseServerException(errorMessage, null, errorCode);
+    }
+
     private static int? ParseErrorCode(string error)
     {
         int start = -1;
@@ -54,7 +60,10 @@ public class ClickHouseServerException : DbException
                 break;
             }
         }
-
+#if NET6_0_OR_GREATER
+        return int.TryParse(error.AsSpan(start, end - start), out int result) ? result : null;
+#else
         return int.TryParse(error.Substring(start, end - start), out int result) ? result : null;
+#endif
     }
 }

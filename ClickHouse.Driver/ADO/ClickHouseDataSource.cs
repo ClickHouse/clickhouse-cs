@@ -10,8 +10,6 @@ namespace ClickHouse.Driver.ADO;
 
 public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
 {
-    private readonly IHttpClientFactory httpClientFactory;
-    private readonly string httpClientName;
     private readonly HttpClient httpClient;
     private readonly bool disposeHttpClient;
 
@@ -24,7 +22,10 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     /// <param name="disposeHttpClient">dispose of the passed-in instance of HttpClient</param>
     public ClickHouseDataSource(string connectionString, HttpClient httpClient = null, bool disposeHttpClient = true)
     {
-        ConnectionString = connectionString;
+        Settings = new ClickHouseClientSettings(connectionString)
+        {
+            HttpClient = httpClient,
+        };
         this.httpClient = httpClient;
         this.disposeHttpClient = disposeHttpClient;
     }
@@ -68,20 +69,45 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     {
         ArgumentNullException.ThrowIfNull(httpClientFactory);
         ArgumentNullException.ThrowIfNull(httpClientName);
-        ConnectionString = connectionString;
-        this.httpClientFactory = httpClientFactory;
-        this.httpClientName = httpClientName;
+        Settings = new ClickHouseClientSettings(connectionString)
+        {
+            HttpClientFactory = httpClientFactory,
+            HttpClientName = httpClientName,
+        };
     }
 
-    public override string ConnectionString
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ClickHouseDataSource"/> class using the provided settings.
+    /// The settings can optionally include an HttpClient instance or an HttpClientFactory that will be used.
+    /// </summary>
+    /// <param name="settings">ClickHouse client settings</param>
+    /// <remarks>
+    /// <list type="bullet">
+    /// <item>
+    /// If compression is not disabled in the <paramref name="settings"/>, and an HttpClient or HttpClientFactory is provided,
+    /// they must be configured to enable <see cref="HttpClientHandler.AutomaticDecompression"/> for its generated clients with GZip and Deflate methods.
+    /// </item>
+    /// </list>
+    /// </remarks>
+    public ClickHouseDataSource(ClickHouseClientSettings settings)
     {
-        get;
+        Settings = settings;
     }
 
-    public ILogger Logger
+    public ClickHouseClientSettings Settings { get; private set; }
+
+    public override string ConnectionString => ClickHouseConnectionStringBuilder.FromSettings(Settings).ToString();
+
+    public ILoggerFactory LoggerFactory
     {
-        get;
-        set;
+        get => Settings.LoggerFactory;
+        set
+        {
+            Settings = new ClickHouseClientSettings(Settings)
+            {
+                LoggerFactory = value,
+            };
+        }
     }
 
     protected override void Dispose(bool disposing)
@@ -96,15 +122,7 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
 
     protected override DbConnection CreateDbConnection()
     {
-        var cn = httpClientFactory != null
-            ? new ClickHouseConnection(ConnectionString, httpClientFactory, httpClientName)
-            : new ClickHouseConnection(ConnectionString, httpClient);
-        if (cn.Logger == null && Logger != null)
-        {
-            cn.Logger = Logger;
-        }
-
-        return cn;
+        return new ClickHouseConnection(Settings);
     }
 
     public new ClickHouseConnection CreateConnection() => (ClickHouseConnection)CreateDbConnection();

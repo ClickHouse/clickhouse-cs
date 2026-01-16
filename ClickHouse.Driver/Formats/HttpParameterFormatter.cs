@@ -3,6 +3,7 @@ using System.Collections;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Numerics;
@@ -17,10 +18,24 @@ internal static class HttpParameterFormatter
 
     public static string Format(ClickHouseDbParameter parameter, TypeSettings settings)
     {
-        var type = string.IsNullOrWhiteSpace(parameter.ClickHouseType)
-            ? TypeConverter.ToClickHouseType(parameter.Value.GetType())
-            : TypeConverter.ParseClickHouseType(parameter.ClickHouseType, settings);
-        return Format(type, parameter.Value, false);
+        if (string.IsNullOrWhiteSpace(parameter.ClickHouseType))
+        {
+            if (parameter.Value is null or DBNull)
+            {
+                // Type unknown and value is null so we can't infer it
+                return NullValueString;
+            }
+
+            // Infer type and format accordingly
+            var type = TypeConverter.ToClickHouseType(parameter.Value.GetType());
+            return Format(type, parameter.Value, false);
+        }
+        else
+        {
+            // Type has been provided
+            var type = TypeConverter.ParseClickHouseType(parameter.ClickHouseType, settings);
+            return Format(type, parameter.Value, false);
+        }
     }
 
     internal static string Format(ClickHouseType type, object value, bool quote)
@@ -48,6 +63,9 @@ internal static class HttpParameterFormatter
             case DateType dt:
                 return Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
+            case FixedStringType tt when value is byte[] fsb:
+                return quote ? Encoding.UTF8.GetString(fsb).Escape().QuoteSingle() : Encoding.UTF8.GetString(fsb).Escape();
+
             case StringType st:
             case FixedStringType tt:
             case Enum8Type e8t:
@@ -61,22 +79,44 @@ internal static class HttpParameterFormatter
                 return Format(lt.UnderlyingType, value, quote);
 
             case DateTimeType dtt when value is DateTime dt:
-                return dt.ToString("s", CultureInfo.InvariantCulture);
+                // UTC/Local: convert to Unix timestamp to preserve the instant
+                // Unspecified: send as string so ClickHouse interprets in column timezone
+                if (dt.Kind == DateTimeKind.Unspecified)
+                    return dt.ToString("s", CultureInfo.InvariantCulture);
+                return new DateTimeOffset(dt).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
 
             case DateTimeType dtt when value is DateTimeOffset dto:
-                return dto.ToString("s", CultureInfo.InvariantCulture);
+                // DateTimeOffset always represents a specific instant - send as Unix timestamp
+                return dto.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
 
-            case DateTime64Type dtt when value is DateTime dtv:
-                return $"{dtv:yyyy-MM-dd HH:mm:ss.fffffff}";
+            case DateTime64Type d64t when value is DateTime dtv:
+                // UTC/Local: convert to Unix timestamp to preserve the instant
+                // Unspecified: send as string so ClickHouse interprets in column timezone
+                if (dtv.Kind == DateTimeKind.Unspecified)
+                    return $"{dtv:yyyy-MM-dd HH:mm:ss.fffffff}";
+                return FormatDateTime64AsUnixTime(new DateTimeOffset(dtv), d64t.Scale);
 
-            case DateTime64Type dtt when value is DateTimeOffset dto:
-                return $"{dto:yyyy-MM-dd HH:mm:ss.fffffff}";
+            case DateTime64Type d64t when value is DateTimeOffset dto:
+                // DateTimeOffset always represents a specific instant - send as Unix timestamp
+                return FormatDateTime64AsUnixTime(dto, d64t.Scale);
+
+            case TimeType tt when value is TimeSpan ts:
+                return TimeType.FormatTimeString(ts);
+
+            case TimeType tt:
+                return TimeType.FormatTimeString(Convert.ToInt32(value, CultureInfo.InvariantCulture));
+
+            case Time64Type t64 when value is TimeSpan ts:
+                return t64.FormatTime64String(ts);
 
             case NullableType nt:
                 return value is null || value is DBNull ? quote ? "null" : NullValueString : Format(nt.UnderlyingType, value, quote);
 
             case ArrayType arrayType when value is IEnumerable enumerable:
                 return $"[{string.Join(",", enumerable.Cast<object>().Select(obj => Format(arrayType.UnderlyingType, obj, true)))}]";
+
+            case QBitType qbitType when value is IEnumerable enumerable:
+                return $"[{string.Join(",", enumerable.Cast<object>().Select(obj => Format(qbitType.ElementType, obj, true)))}]";
 
             case NestedType nestedType when value is IEnumerable enumerable:
                 var values = enumerable.Cast<object>().Select(x => Format(nestedType, x, false));
@@ -107,5 +147,17 @@ internal static class HttpParameterFormatter
             default:
                 throw new ArgumentException($"Cannot convert {value} to {type}");
         }
+    }
+
+    /// <summary>
+    /// Formats a DateTimeOffset as a Unix timestamp with the appropriate scale for DateTime64.
+    /// </summary>
+    private static string FormatDateTime64AsUnixTime(DateTimeOffset dto, int scale)
+    {
+        // Convert to Unix ticks (100ns units since Unix epoch), then shift to target scale
+        // Scale 7 = 100ns (same as .NET ticks), so shift by (scale - 7)
+        var unixTicks = dto.UtcDateTime.Ticks - DateTimeConversions.DateTimeEpochStart.Ticks;
+        var scaledValue = MathUtils.ShiftDecimalPlaces(unixTicks, scale - 7);
+        return scaledValue.ToString(CultureInfo.InvariantCulture);
     }
 }

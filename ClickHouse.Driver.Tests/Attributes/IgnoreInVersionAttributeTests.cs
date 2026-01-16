@@ -1,4 +1,5 @@
-﻿using NUnit.Framework;
+﻿using ClickHouse.Driver.Tests.Utilities;
+using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.Attributes;
 
@@ -6,15 +7,17 @@ namespace ClickHouse.Driver.Tests.Attributes;
 /// IgnoreInVersionAttribute tests
 /// Designed to work across 'regression' runs under different versions
 /// </summary>
-public class IgnoreInVersionAttributeTests : AbstractConnectionTestFixture
+public class IgnoreInVersionAttributeTests
 {
+    private static string ServerVersion => TestUtilities.ServerVersion.ToString();
+
     [Test]
     [IgnoreInVersion(21)]
-    public void ShouldNotRunInVersion21() => Assert.That(!connection.ServerVersion.StartsWith("21"));
+    public void ShouldNotRunInVersion21() => Assert.That(!ServerVersion.StartsWith("21"));
 
     [Test]
     [IgnoreInVersion(22)]
-    public void ShouldNotRunInVersion22() => Assert.That(!connection.ServerVersion.StartsWith("22"));
+    public void ShouldNotRunInVersion22() => Assert.That(!ServerVersion.StartsWith("22"));
 
     [Test]
     [IgnoreInVersion(21)]
@@ -23,12 +26,12 @@ public class IgnoreInVersionAttributeTests : AbstractConnectionTestFixture
     {
         Assert.Multiple(() =>
         {
-            Assert.That(!connection.ServerVersion.StartsWith("21"));
-            Assert.That(!connection.ServerVersion.StartsWith("22"));
+            Assert.That(!ServerVersion.StartsWith("21"));
+            Assert.That(!ServerVersion.StartsWith("22"));
         });
     }
 
     [Test]
     [IgnoreInVersion(22, 6)]
-    public void ShouldNotRunInVersion22dot6() => Assert.That(!connection.ServerVersion.StartsWith("22.6"));
+    public void ShouldNotRunInVersion22dot6() => Assert.That(!ServerVersion.StartsWith("22.6"));
 }

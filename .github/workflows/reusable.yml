@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       framework:
-        default: net9.0
+        default: net10.0
         required: false
         type: string
       clickhouse-version:
@@ -35,9 +35,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         name: Cache NuGet
         with:
           path: ~/.nuget/packages
@@ -46,7 +46,7 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Setup .NET Core
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: |
             3.1.x
@@ -54,14 +54,17 @@ jobs:
             6.x
             8.x
             9.x
+            10.x
 
       - name: Test
-        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework ${{ inputs.framework }} --configuration Release --verbosity normal --logger GitHubActions  /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
+        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework ${{ inputs.framework }} --configuration Release --verbosity normal --logger GitHubActions /clp:ErrorsOnly ${{ inputs.coverage && '/p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true' || '' }}
         env:
           CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
           CLICKHOUSE_VERSION: ${{ inputs.clickhouse-version }}
+          CLICKHOUSE_TEST_ENVIRONMENT: local_single_node
 
       - uses: codecov/codecov-action@v5
+        if: inputs.coverage
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true

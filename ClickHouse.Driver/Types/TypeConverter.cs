@@ -1,14 +1,12 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
-using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types.Grammar;
-using NodaTime;
 
-[assembly: InternalsVisibleTo("ClickHouse.Driver.Tests")] // assembly-level tag to expose below classes to tests
+[assembly: InternalsVisibleTo("ClickHouse.Driver.Tests, PublicKey=00240000048000009400000006020000002400005253413100040000010001000968a6468f9d0397a051f167a25dcee773c674cf7a67629f78e884d232df23ff773fbfaba602e03eede6056b39bd6a4cddcd7e5b3ca9484bd83401d14a5e9ac5c98cbe676a1e89149816f5304f617b658440b2bd775e5ece71b5a38ceeb88e844869a376ceea71cbb6393b2ac14e506b92267a3cbcd6e7dc93ff6c750d53a5c7")] // assembly-level tag to expose below classes to tests
 
 namespace ClickHouse.Driver.Types;
 
@@ -43,7 +41,7 @@ internal static class TypeConverter
         { "ENUM", "Enum" },
         { "FIXED", "Decimal" },
         { "FLOAT", "Float32" },
-        { "GEOMETRY", "String" },
+        { "GEOMETRY", "Geometry" },
         { "INET4", "IPv4" },
         { "INET6", "IPv6" },
         { "INT", "Int32" },
@@ -79,7 +77,6 @@ internal static class TypeConverter
         { "SMALLINT SIGNED", "Int16" },
         { "SMALLINT UNSIGNED", "UInt16" },
         { "TEXT", "String" },
-        { "TIME", "Int64" },
         { "TIMESTAMP", "DateTime" },
         { "TINYBLOB", "String" },
         { "TINYINT", "Int8" },
@@ -125,6 +122,7 @@ internal static class TypeConverter
         // Floating point types
         RegisterPlainType<Float32Type>();
         RegisterPlainType<Float64Type>();
+        RegisterPlainType<BFloat16Type>();
 
         // Special types
         RegisterPlainType<DynamicType>();
@@ -142,6 +140,8 @@ internal static class TypeConverter
         RegisterParameterizedType<DateTimeType>();
         RegisterParameterizedType<DateTime32Type>();
         RegisterParameterizedType<DateTime64Type>();
+        RegisterPlainType<TimeType>();
+        RegisterParameterizedType<Time64Type>();
 
         // Special 'nothing' type
         RegisterPlainType<NothingType>();
@@ -169,13 +169,18 @@ internal static class TypeConverter
         // Geo types
         RegisterPlainType<PointType>();
         RegisterPlainType<RingType>();
+        RegisterPlainType<LineStringType>();
         RegisterPlainType<PolygonType>();
+        RegisterPlainType<MultiLineStringType>();
         RegisterPlainType<MultiPolygonType>();
+        RegisterPlainType<GeometryType>();
 
         RegisterParameterizedType<ObjectType>();
         RegisterParameterizedType<JsonType>();
 
         RegisterParameterizedType<AggregateFunctionType>();
+
+        RegisterParameterizedType<QBitType>();
 
         // Mapping fixups
         ReverseMapping.Add(typeof(ClickHouseDecimal), new Decimal128Type());
@@ -185,6 +190,10 @@ internal static class TypeConverter
 #endif
         ReverseMapping[typeof(DateTime)] = new DateTimeType();
         ReverseMapping[typeof(DateTimeOffset)] = new DateTimeType();
+        ReverseMapping[typeof(TimeSpan)] = new Time64Type
+        {
+            Scale = 7, // Matches precision of TimeSpan
+        };
 
         ReverseMapping[typeof(DBNull)] = new NullableType() { UnderlyingType = new NothingType() };
         ReverseMapping[typeof(JsonObject)] = new JsonType();
@@ -245,6 +254,14 @@ internal static class TypeConverter
 
         if (node.ChildNodes.Count == 0 && SimpleTypes.TryGetValue(typeName, out var typeInfo))
         {
+            if (typeName == "Dynamic")
+            {
+                return new DynamicType()
+                {
+                    TypeSettings = settings,
+                };
+            }
+
             return typeInfo;
         }
 
@@ -274,6 +291,11 @@ internal static class TypeConverter
             return new ArrayType() { UnderlyingType = ToClickHouseType(type.GetElementType()) };
         }
 
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
+        {
+            return new ArrayType() { UnderlyingType = ToClickHouseType(type.GetGenericArguments()[0]) };
+        }
+
         var underlyingType = Nullable.GetUnderlyingType(type);
         if (underlyingType != null)
         {
@@ -285,79 +307,12 @@ internal static class TypeConverter
             return new TupleType { UnderlyingTypes = type.GetGenericArguments().Select(ToClickHouseType).ToArray() };
         }
 
-        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName.StartsWith("System.Collections.Generic.Dictionary", StringComparison.InvariantCulture))
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
         {
             var types = type.GetGenericArguments().Select(ToClickHouseType).ToArray();
             return new MapType { UnderlyingTypes = Tuple.Create(types[0], types[1]) };
         }
 
         throw new ArgumentOutOfRangeException(nameof(type), "Unknown type: " + type.ToString());
-    }
-
-    // See https://github.com/ClickHouse/ClickHouse/blob/b618fe03bf96e64bea1a1bdec01adc1c00cd61fb/src/DataTypes/DataTypesBinaryEncoding.cpp#L48
-    // https://clickhouse.com/docs/en/sql-reference/data-types/data-types-binary-encoding
-    internal static ClickHouseType FromByteCode(ExtendedBinaryReader reader)
-    {
-        var value = reader.ReadByte();
-        switch (value)
-        {
-            case 0x00: return new NothingType();
-            case 0x01: return new UInt8Type();
-            case 0x02: return new UInt16Type();
-            case 0x03: return new UInt32Type();
-            case 0x04: return new UInt64Type();
-            case 0x05: return new UInt128Type();
-            case 0x06: return new UInt256Type();
-            case 0x07: return new Int8Type();
-            case 0x08: return new Int16Type();
-            case 0x09: return new Int32Type();
-            case 0x0A: return new Int64Type();
-            case 0x0B: return new Int128Type();
-            case 0x0C: return new Int256Type();
-            case 0x0D: return new Float32Type();
-            case 0x0E: return new Float64Type();
-            case 0x0F: return new DateType();
-            case 0x10: return new Date32Type();
-            case 0x11: return new DateTimeType();
-            case 0x12: return new DateTimeType { TimeZone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(reader.ReadString()) };
-            case 0x13: return new DateTime64Type() { Scale = reader.Read7BitEncodedInt() };
-            case 0x14: return new DateTime64Type() { Scale = reader.Read7BitEncodedInt(), TimeZone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(reader.ReadString()) };
-            case 0x15: return new StringType();
-            case 0x16: return new FixedStringType() { Length = reader.Read7BitEncodedInt() };
-            // case 0x17: return new Enum8Type(); // TODO values
-            // case 0x18: return new Enum16Type(); // TODO values
-            // case 0x19: return new Decimal32Type(); // TODO precision and scale
-            // case 0x1A: return new Decimal64Type(); // TODO precision and scale
-            // case 0x1B: return new Decimal128Type(); // TODO precision and scale
-            // case 0x1C: return new Decimal256Type(); // TODO precision and scale
-            case 0x1D: return new UuidType();
-            case 0x1E: return new ArrayType() { UnderlyingType = FromByteCode(reader) };
-            // case 0x1F: return new TupleType();
-            // case 0x20: return new TupleType();
-            // case 0x21: return new UInt64Type();
-            // case 0x22: return new Int64Type();
-            case 0x23: return new NullableType() { UnderlyingType = FromByteCode(reader) };
-            // case 0x24: return new SimpleAggregateFunctionType(); // TODO function
-            // case 0x25: return new AggregateFunctionType(); // TODO function
-            case 0x26: return new LowCardinalityType() { UnderlyingType = FromByteCode(reader) };
-            case 0x27: return new MapType() { UnderlyingTypes = Tuple.Create(FromByteCode(reader), FromByteCode(reader)) };
-            case 0x28: return new IPv4Type();
-            case 0x29: return new IPv6Type();
-            // case 0x2A: return new VariantType(); // TODO nested types
-            case 0x2B: return new DynamicType();
-            // case 0x2C: return new RingType(); // TODO custom type
-            case 0x2D: return new BooleanType();
-            // case 0x2E: return new SimpleAggregateFunctionType(); // TODO function
-            // case 0x2F: return new NestedType(); // TODO nested types
-            case 0x30:
-                var _serializationVersion = reader.ReadByte(); // <uint8_serialization_version>
-                var _maxDynamicPaths = reader.Read7BitEncodedInt(); // <var_int_max_dynamic_paths>
-                var _maxDynamicTypes = reader.ReadInt32(); // <uint8_max_dynamic_types>
-                return new JsonType(); // TODO JSON settings
-            default:
-                break;
-        }
-
-        throw new ArgumentOutOfRangeException(nameof(value), $"Unknown type: {value}");
     }
 }

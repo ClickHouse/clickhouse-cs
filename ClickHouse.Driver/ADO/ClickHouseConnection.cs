@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
@@ -9,12 +9,12 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Diagnostic;
 using ClickHouse.Driver.Http;
+using ClickHouse.Driver.Logging;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 
@@ -25,43 +25,42 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     private const string CustomSettingPrefix = "set_";
 
     private readonly List<IDisposable> disposables = new();
-    private readonly string httpClientName;
-    private readonly ConcurrentDictionary<string, object> customSettings = new ConcurrentDictionary<string, object>();
+    private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
     private volatile ConnectionState state = ConnectionState.Closed; // Not an autoproperty because of interface implementation
 
-    // Values provided by constructor
+    // HTTP client management
     private HttpClient providedHttpClient;
     private IHttpClientFactory providedHttpClientFactory;
-    // Actually used value
+    private string httpClientName;
     private IHttpClientFactory httpClientFactory;
 
-    private Version serverVersion;
-    private string serverTimezone;
+    /// <summary>
+    /// This lock is used to serialize requests when using sessions,
+    /// because ClickHouse does not support using the same session from multiple connections.
+    /// </summary>
+    private SemaphoreSlim sessionRequestLock;
 
-    private string database = ClickHouseEnvironment.Database;
-    private string username = ClickHouseEnvironment.Username;
-    private string password = ClickHouseEnvironment.Password;
-    private string session;
-    private bool useServerTimezone;
-    private bool useCustomDecimals;
-    private TimeSpan timeout;
+    // Configuration fields
     private Uri serverUri;
-    private Feature supportedFeatures;
 
     public ClickHouseConnection()
         : this(string.Empty)
     {
     }
-    
+
     public ClickHouseConnection(string connectionString)
+        : this(ClickHouseClientSettings.FromConnectionString(connectionString))
     {
-        ConnectionString = connectionString;
     }
 
     public ClickHouseConnection(string connectionString, bool skipServerCertificateValidation)
     {
-        SkipServerCertificateValidation = skipServerCertificateValidation;
-        ConnectionString = connectionString;
+        var settings = new ClickHouseClientSettings(connectionString)
+        {
+            SkipServerCertificateValidation = skipServerCertificateValidation,
+        };
+
+        Settings = settings;
     }
 
     /// <summary>
@@ -72,8 +71,12 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <param name="httpClient">instance of HttpClient</param>
     public ClickHouseConnection(string connectionString, HttpClient httpClient)
     {
-        providedHttpClient = httpClient;
-        ConnectionString = connectionString;
+        var settings = new ClickHouseClientSettings(connectionString)
+        {
+            HttpClient = httpClient,
+        };
+
+        Settings = settings;
     }
 
     /// <summary>
@@ -113,30 +116,76 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// </remarks>
     public ClickHouseConnection(string connectionString, IHttpClientFactory httpClientFactory, string httpClientName = "")
     {
-        this.providedHttpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
-        this.httpClientName = httpClientName ?? throw new ArgumentNullException(nameof(httpClientName));
-        ConnectionString = connectionString;
+        var settings = new ClickHouseClientSettings(connectionString)
+        {
+            HttpClientFactory = httpClientFactory,
+            HttpClientName = httpClientName,
+        };
+
+        Settings = settings;
     }
 
-    public ILogger Logger { get; set; }
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ClickHouseConnection"/> class using ClickHouseClientSettings.
+    /// </summary>
+    /// <param name="settings">The settings to use for this connection</param>
+    public ClickHouseConnection(ClickHouseClientSettings settings)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+        Settings = settings;
+    }
+
+    private ILoggerFactory loggerFactory;
 
     /// <summary>
-    /// Gets or sets string defining connection settings for ClickHouse server
+    /// Gets a logger for the specified category name.
+    /// Loggers are lazily instantiated and cached for performance.
+    /// </summary>
+    /// <param name="categoryName">The category name for the logger.</param>
+    /// <returns>An ILogger instance, or null if no LoggerFactory is configured.</returns>
+    internal ILogger GetLogger(string categoryName)
+    {
+        if (loggerFactory == null)
+            return null;
+
+        // Cache is used here in case the logger factory implementation provided does not do caching on its own
+        return loggerCache.GetOrAdd(
+            categoryName,
+            key => new Lazy<ILogger>(() => loggerFactory.CreateLogger(key))).Value;
+    }
+
+    /// <summary>
+    /// Gets the string defining connection settings for ClickHouse server
     /// Example: Host=localhost;Port=8123;Username=default;Password=123;Compression=true
+    /// It is generally recommended create a new connection instead of modifying the settings of an existing one.
     /// </summary>
     public sealed override string ConnectionString
     {
         get => ConnectionStringBuilder.ToString();
-        set => ConnectionStringBuilder = new ClickHouseConnectionStringBuilder() { ConnectionString = value };
+        set => Settings = new ClickHouseClientSettings(value);
     }
 
-    public IDictionary<string, object> CustomSettings => customSettings;
+    public ClickHouseClientSettings Settings
+    {
+        get;
+        set
+        {
+            if (State == ConnectionState.Open)
+                throw new InvalidOperationException("Cannot change settings while connection is open.");
+
+            field = value;
+            ApplySettings();
+        }
+    }
+
+    public IDictionary<string, object> CustomSettings => Settings?.CustomSettings;
 
     public override ConnectionState State => state;
 
-    public override string Database => database;
+    public override string Database => Settings.Database;
 
-    internal string Username => username;
+    internal string Username => Settings.Username;
 
     internal Uri ServerUri => serverUri;
 
@@ -150,31 +199,41 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         }
     }
 
-    public string ServerTimezone => serverTimezone;
-
     public override string DataSource { get; }
 
-    public override string ServerVersion => serverVersion?.ToString();
+    public override string ServerVersion => throw new InvalidOperationException(
+        "ServerVersion is no longer available. Use ExecuteScalarAsync(\"SELECT version()\") to query the server version.");
 
-    public bool UseCompression { get; private set; }
+    public bool UseCompression => Settings.UseCompression;
 
-    public bool SkipServerCertificateValidation { get; private set; }
+    public bool SkipServerCertificateValidation => Settings.SkipServerCertificateValidation;
 
-    public bool UseFormDataParameters { get; private set; }
+    public bool UseFormDataParameters => Settings.UseFormDataParameters;
 
-    public void SetFormDataParameters(bool sendParametersAsFormData)
+    private void ApplySettings()
     {
-        this.UseFormDataParameters = sendParametersAsFormData;
-    }
+        Settings.Validate();
 
-    /// <summary>
-    /// Gets enum describing which ClickHouse features are available on this particular server version
-    /// Requires connection to be in Open state
-    /// </summary>
-    public virtual Feature SupportedFeatures
-    {
-        get => state == ConnectionState.Open ? supportedFeatures : throw new InvalidOperationException();
-        private set => supportedFeatures = value;
+        serverUri = new UriBuilder(Settings.Protocol, Settings.Host, Settings.Port, Settings.Path ?? string.Empty).Uri;
+
+        // HttpClientFactory/HttpClient
+        providedHttpClient = Settings.HttpClient;
+        providedHttpClientFactory = Settings.HttpClientFactory;
+        httpClientName = Settings.HttpClientName;
+
+        // Logging
+        loggerCache.Clear();
+        loggerFactory = Settings.LoggerFactory;
+
+#if NET5_0_OR_GREATER
+        // Debug mode
+        if (Settings.EnableDebugMode)
+        {
+            TraceHelper.Activate(Settings.LoggerFactory);
+        }
+#endif
+
+        ResetHttpClientFactory();
     }
 
     private void ResetHttpClientFactory()
@@ -182,26 +241,34 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         // If current httpClientFactory is owned by this connection, dispose of it
         if (httpClientFactory is IDisposable d && disposables.Contains(d))
         {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Disposing HTTP client factory owned by connection.");
             d.Dispose();
             disposables.Remove(d);
         }
 
+        // Dispose and reset the session lock if it exists
+        sessionRequestLock?.Dispose();
+        sessionRequestLock = null;
+
         // If we have a HttpClient provided, use it
         if (providedHttpClient != null)
         {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Using provided HttpClient instance.");
             httpClientFactory = new CannedHttpClientFactory(providedHttpClient);
         }
 
         // If we have a provided client factory, use that
         else if (providedHttpClientFactory != null)
         {
+            GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Using provided IHttpClientFactory instance.");
             httpClientFactory = providedHttpClientFactory;
         }
 
-        // If sessions are enabled, always use single connection
-        else if (!string.IsNullOrEmpty(session))
+        // If sessions are enabled without a provided client/factory, use single connection factory
+        else if (Settings.UseSession && !string.IsNullOrEmpty(Settings.SessionId))
         {
-            var factory = new SingleConnectionHttpClientFactory(SkipServerCertificateValidation) { Timeout = timeout };
+            GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Creating single-connection HttpClientFactory for session {SessionId}.", Settings.SessionId);
+            var factory = new SingleConnectionHttpClientFactory(SkipServerCertificateValidation) { Timeout = Settings.Timeout };
             disposables.Add(factory);
             httpClientFactory = factory;
         }
@@ -209,7 +276,15 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         // Default case - use default connection pool
         else
         {
-            httpClientFactory = new DefaultPoolHttpClientFactory(SkipServerCertificateValidation) { Timeout = timeout };
+            GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Using default pooled HttpClientFactory.");
+            httpClientFactory = new DefaultPoolHttpClientFactory(SkipServerCertificateValidation) { Timeout = Settings.Timeout };
+        }
+
+        // Initialize session lock if sessions are enabled (regardless of how HttpClient is configured)
+        if (Settings.UseSession && !string.IsNullOrEmpty(Settings.SessionId))
+        {
+            sessionRequestLock = new SemaphoreSlim(1, 1);
+            GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Session request serialization enabled for session {SessionId}.", Settings.SessionId);
         }
     }
 
@@ -226,60 +301,112 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             activity.SetSuccess();
             return response;
         }
+
         var error = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
         var ex = ClickHouseServerException.FromServerResponse(error, query);
         activity.SetException(ex);
         throw ex;
     }
 
-    public override void ChangeDatabase(string databaseName) => database = databaseName;
+    public override void ChangeDatabase(string databaseName)
+    {
+        Settings.Database = databaseName;
+    }
 
     public object Clone() => new ClickHouseConnection(ConnectionString);
 
     public override void Close() => state = ConnectionState.Closed;
 
-    public override void Open() => OpenAsync().ConfigureAwait(false).GetAwaiter().GetResult();
-
-    public override async Task OpenAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Pings the ClickHouse server to check if it is available.
+    /// Requires connection to be in Open state.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>True if the server responds successfully, false otherwise</returns>
+    public async Task<bool> PingAsync(CancellationToken cancellationToken = default)
     {
-        const string versionQuery = "SELECT version(), timezone() FORMAT TSV";
-
-        if (State == ConnectionState.Open)
-            return;
-        using var activity = this.StartActivity("OpenAsync");
-        activity.SetQuery(versionQuery);
+        if (State != ConnectionState.Open)
+            throw new InvalidOperationException("Connection must be open before calling PingAsync.");
 
         try
         {
-            var uriBuilder = CreateUriBuilder();
-            var request = new HttpRequestMessage(HttpMethod.Post, uriBuilder.ToString())
-            {
-                Content = new StringContent(versionQuery, Encoding.UTF8),
-            };
+            var pingUri = new Uri(serverUri, "ping");
+            var request = new HttpRequestMessage(HttpMethod.Get, pingUri);
             AddDefaultHttpHeaders(request.Headers);
-            var response = await HandleError(await HttpClient.SendAsync(request, cancellationToken).ConfigureAwait(false), versionQuery, activity).ConfigureAwait(false);
-#if NET5_0_OR_GREATER
-            var data = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
-#else
-            var data = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-#endif
 
-            if (data.Length > 2 && data[0] == 0x1F && data[1] == 0x8B) // Check if response starts with GZip marker
-                throw new InvalidOperationException("ClickHouse server returned compressed result but HttpClient did not decompress it. Check HttpClient settings");
-
-            if (data.Length == 0)
-                throw new InvalidOperationException("ClickHouse server did not return version, check if the server is functional");
-
-            var serverVersionAndTimezone = Encoding.UTF8.GetString(data).Trim().Split('\t');
-
-            serverVersion = ParseVersion(serverVersionAndTimezone[0]);
-            serverTimezone = serverVersionAndTimezone[1];
-            SupportedFeatures = ClickHouseFeatureMap.GetFeatureFlags(serverVersion);
-            state = ConnectionState.Open;
+            using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            state = ConnectionState.Broken;
+            GetLogger(ClickHouseLogCategories.Connection)?.LogWarning(ex, "Ping to {Endpoint} failed.", serverUri);
+            return false;
+        }
+    }
+
+    public override void Open() => OpenAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+
+    public override Task OpenAsync(CancellationToken cancellationToken)
+    {
+        GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Opening ClickHouse connection to {Endpoint}.", serverUri);
+        LoggingHelpers.LogHttpClientConfiguration(GetLogger(ClickHouseLogCategories.Connection), httpClientFactory);
+
+        if (State == ConnectionState.Open)
+            return Task.CompletedTask;
+
+        state = ConnectionState.Open;
+        GetLogger(ClickHouseLogCategories.Connection)?.LogDebug("Connection to {Endpoint} opened.", serverUri);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Inserts raw data from a stream into a ClickHouse table.
+    /// This can be used for inserting data in formats like CSV, JSON, Parquet, etc. directly from files or other streams.
+    /// </summary>
+    /// <param name="table">The destination table name</param>
+    /// <param name="stream">The stream containing the data to insert</param>
+    /// <param name="format">The ClickHouse format of the data (e.g., "CSV", "JSONEachRow", "Parquet"). See <see href="https://clickhouse.com/docs/interfaces/formats">ClickHouse Formats</see> for the full list.</param>
+    /// <param name="columns">Optional list of column names. If null, all columns are assumed in table order</param>
+    /// <param name="useCompression">Whether to compress the stream before sending (default: true)</param>
+    /// <param name="queryId">Optional query ID for tracking. A query id will be generated if left null or empty</param>
+    /// <param name="token">Cancellation token</param>
+    /// <returns>Task-wrapped HttpResponseMessage object</returns>
+    public async Task<HttpResponseMessage> InsertRawStreamAsync(
+        string table,
+        Stream stream,
+        string format,
+        IEnumerable<string> columns = null,
+        bool useCompression = true,
+        string queryId = null,
+        CancellationToken token = default)
+    {
+        if (string.IsNullOrEmpty(table))
+            throw new ArgumentException("Table name cannot be null or empty", nameof(table));
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+        if (string.IsNullOrEmpty(format))
+            throw new ArgumentException("Format cannot be null or empty", nameof(format));
+
+        await EnsureOpenAsync().ConfigureAwait(false);
+
+        var columnList = columns != null ? $"({string.Join(", ", columns)})" : string.Empty;
+        var query = $"INSERT INTO {table} {columnList} FORMAT {format}";
+
+        HttpContent content = new StreamContent(stream);
+        if (useCompression)
+        {
+            // CompressedContent handles compression and adds Content-Encoding header
+            content = new CompressedContent(content, System.Net.DecompressionMethods.GZip);
+        }
+
+        // Pass isCompressed=false since CompressedContent already adds the Content-Encoding header
+        try
+        {
+            return await PostStreamAsync(query, content, isCompressed: false, queryId, token).ConfigureAwait(false);
+        }
+        catch
+        {
+            content.Dispose();
             throw;
         }
     }
@@ -292,11 +419,12 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <param name="data">Raw stream to be sent. May contain SQL query at the beginning. May be gzip-compressed</param>
     /// <param name="isCompressed">indicates whether "Content-Encoding: gzip" header should be added</param>
     /// <param name="token">Cancellation token</param>
+    /// <param name="queryId">Query id</param>
     /// <returns>Task-wrapped HttpResponseMessage object</returns>
-    public async Task PostStreamAsync(string sql, Stream data, bool isCompressed, CancellationToken token)
+    public async Task<HttpResponseMessage> PostStreamAsync(string sql, Stream data, bool isCompressed, CancellationToken token, string queryId = null)
     {
         var content = new StreamContent(data);
-        await PostStreamAsync(sql, content, isCompressed, token).ConfigureAwait(false);
+        return await PostStreamAsync(sql, content, isCompressed, queryId, token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -307,19 +435,22 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <param name="callback">Callback invoked to write to the stream. May contain SQL query at the beginning. May be gzip-compressed</param>
     /// <param name="isCompressed">indicates whether "Content-Encoding: gzip" header should be added</param>
     /// <param name="token">Cancellation token</param>
+    /// <param name="queryId">Query id</param>
     /// <returns>Task-wrapped HttpResponseMessage object</returns>
-    public async Task PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, bool isCompressed, CancellationToken token)
+    public async Task<HttpResponseMessage> PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, bool isCompressed, CancellationToken token, string queryId = null)
     {
         var content = new StreamCallbackContent(callback, token);
-        await PostStreamAsync(sql, content, isCompressed, token).ConfigureAwait(false);
+        return await PostStreamAsync(sql, content, isCompressed, queryId, token).ConfigureAwait(false);
     }
 
-    private async Task PostStreamAsync(string sql, HttpContent content, bool isCompressed, CancellationToken token)
+    private async Task<HttpResponseMessage> PostStreamAsync(string sql, HttpContent content, bool isCompressed, string queryId, CancellationToken token)
     {
         using var activity = this.StartActivity("PostStreamAsync");
         activity.SetQuery(sql);
 
         var builder = CreateUriBuilder(sql);
+        builder.QueryId = queryId;
+
         using var postMessage = new HttpRequestMessage(HttpMethod.Post, builder.ToString());
         AddDefaultHttpHeaders(postMessage.Headers);
 
@@ -329,57 +460,108 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         {
             postMessage.Content.Headers.Add("Content-Encoding", "gzip");
         }
-        using var response = await HttpClient.SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
-        await HandleError(response, sql, activity).ConfigureAwait(false);
+
+        GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Sending streamed request to {Endpoint} (Compressed: {Compressed}).", serverUri, isCompressed);
+
+        try
+        {
+            using var response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
+            GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Streamed request to {Endpoint} received response {StatusCode}.", serverUri, response.StatusCode);
+
+            return await HandleError(response, sql, activity).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            GetLogger(ClickHouseLogCategories.Transport)?.LogError(ex, "Streamed request to {Endpoint} failed.", serverUri);
+            throw;
+        }
     }
 
-    public new ClickHouseCommand CreateCommand() => new ClickHouseCommand(this);
+#pragma warning disable CS0109 // Member does not hide an inherited member; new keyword is not required
+    public new ClickHouseCommand CreateCommand(string commandText = null) => new (this) { CommandText = commandText };
+#pragma warning restore CS0109 // Member does not hide an inherited member; new keyword is not required
 
     void IDisposable.Dispose()
     {
         GC.SuppressFinalize(this);
         foreach (var d in disposables)
             d.Dispose();
+        sessionRequestLock?.Dispose();
     }
 
-    internal static Version ParseVersion(string versionString)
+    internal static string ExtractQueryId(HttpResponseMessage response)
     {
-        if (string.IsNullOrWhiteSpace(versionString))
-            throw new ArgumentException($"'{nameof(versionString)}' cannot be null or whitespace.", nameof(versionString));
-        var parts = versionString.Split(DotSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Select(s => int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) ? i : 0)
-            .ToArray();
-        if (parts.Length == 0 || parts[0] == 0)
-            throw new InvalidOperationException($"Invalid version: {versionString}");
-        return new Version(parts.ElementAtOrDefault(0), parts.ElementAtOrDefault(1), parts.ElementAtOrDefault(2), parts.ElementAtOrDefault(3));
+        const string queryIdHeader = "X-ClickHouse-Query-Id";
+        if (response.Headers.Contains(queryIdHeader))
+            return response.Headers.GetValues(queryIdHeader).FirstOrDefault();
+        else
+            return null;
     }
 
     internal HttpClient HttpClient => httpClientFactory.CreateClient(httpClientName);
 
-    internal TypeSettings TypeSettings => new TypeSettings(useCustomDecimals, useServerTimezone ? serverTimezone : TypeSettings.DefaultTimezone);
+    /// <summary>
+    /// Sends an HTTP request, serializing requests when sessions are enabled to prevent concurrent session access.
+    /// </summary>
+    internal async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationToken cancellationToken)
+    {
+        HttpResponseMessage response;
+
+        // This will only have a value when sessions are enabled
+        var lockRef = sessionRequestLock;
+        if (lockRef != null)
+        {
+            await lockRef.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                // Force ResponseContentRead to ensure response is fully buffered before releasing lock
+                response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                lockRef.Release();
+            }
+        }
+        else
+        {
+            response = await HttpClient.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
+        }
+
+        return response;
+    }
+
+    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals);
 
     internal ClickHouseUriBuilder CreateUriBuilder(string sql = null) => new ClickHouseUriBuilder(serverUri)
     {
-        Database = database,
-        SessionId = session,
+        Database = Database,
+        SessionId = Settings.UseSession ? Settings.SessionId : null,
         UseCompression = UseCompression,
-        ConnectionQueryStringParameters = customSettings
+        ConnectionQueryStringParameters = CustomSettings
             .ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+        ConnectionRoles = Settings.Roles,
         Sql = sql,
     };
 
     internal Task EnsureOpenAsync() => state != ConnectionState.Open ? OpenAsync() : Task.CompletedTask;
 
-    internal void AddDefaultHttpHeaders(HttpRequestHeaders headers)
+    internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, string bearerTokenOverride = null)
     {
-        string versionAndHash = Assembly
-            .GetExecutingAssembly()
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion ?? "unknown";
-        string version = versionAndHash.Split('+')[0];
+        var userAgentInfo = UserAgentProvider.Info;
 
-        headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}")));
-        headers.UserAgent.Add(new ProductInfoHeaderValue("ClickHouse.Driver", version));
+        // Priority: command-level bearer token > connection-level bearer token > basic auth
+        var bearerToken = bearerTokenOverride ?? Settings.BearerToken;
+        if (!string.IsNullOrEmpty(bearerToken))
+        {
+            headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        }
+        else
+        {
+            headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Settings.Username}:{Settings.Password}")));
+        }
+
+        headers.UserAgent.Add(userAgentInfo.DriverProductInfo);
+        headers.UserAgent.Add(userAgentInfo.SystemProductInfo);
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/csv"));
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
@@ -388,57 +570,25 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
             headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("deflate"));
         }
-    }
 
-    internal ClickHouseConnectionStringBuilder ConnectionStringBuilder
-    {
-        get
+        // Apply custom headers (blocked headers are silently ignored for security)
+        foreach (var kvp in Settings.CustomHeaders)
         {
-            var builder = new ClickHouseConnectionStringBuilder
+            if (!IsBlockedHeader(kvp.Key))
             {
-                Database = database,
-                Username = username,
-                Password = password,
-                Protocol = serverUri?.Scheme,
-                Host = serverUri?.Host,
-                Path = serverUri?.AbsolutePath,
-                Port = (ushort)serverUri?.Port,
-                Compression = UseCompression,
-                UseSession = session != null,
-                Timeout = timeout,
-                UseServerTimezone = useServerTimezone,
-                UseCustomDecimals = useCustomDecimals,
-            };
-
-            foreach (var kvp in CustomSettings)
-                builder[CustomSettingPrefix + kvp.Key] = kvp.Value;
-
-            return builder;
-        }
-
-        set
-        {
-            var builder = value;
-            database = builder.Database;
-            username = builder.Username;
-            password = builder.Password;
-            serverUri = new UriBuilder(builder.Protocol, builder.Host, builder.Port, builder.Path).Uri;
-            UseCompression = builder.Compression;
-            session = builder.UseSession ? builder.SessionId ?? Guid.NewGuid().ToString() : null;
-            timeout = builder.Timeout;
-            useServerTimezone = builder.UseServerTimezone;
-            useCustomDecimals = builder.UseCustomDecimals;
-
-            foreach (var key in builder.Keys.Cast<string>().Where(k => k.StartsWith(CustomSettingPrefix, true, CultureInfo.InvariantCulture)))
-            {
-                CustomSettings.Set(key.Replace(CustomSettingPrefix, string.Empty), builder[key]);
+                headers.TryAddWithoutValidation(kvp.Key, kvp.Value);
             }
-
-            ResetHttpClientFactory();
         }
     }
 
-    private static readonly char[] DotSeparator = ['.'];
+    private static bool IsBlockedHeader(string headerName)
+    {
+        return string.Equals(headerName, "Connection", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "Authorization", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "User-Agent", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal ClickHouseConnectionStringBuilder ConnectionStringBuilder => ClickHouseConnectionStringBuilder.FromSettings(Settings);
 
     protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel) => throw new NotSupportedException();
 

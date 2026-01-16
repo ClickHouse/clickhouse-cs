@@ -32,7 +32,7 @@ public class TypeMappingTests
     [TestCase("Decimal128(3)", ExpectedResult = typeof(ClickHouseDecimal))]
 
     [TestCase("String", ExpectedResult = typeof(string))]
-    [TestCase("FixedString(5)", ExpectedResult = typeof(string))]
+    [TestCase("FixedString(5)", ExpectedResult = typeof(byte[]))]
 
     [TestCase("UUID", ExpectedResult = typeof(Guid))]
 
@@ -46,11 +46,17 @@ public class TypeMappingTests
     [TestCase("DateTime('Etc/UTC')", ExpectedResult = typeof(DateTime))]
     [TestCase("DateTime64(3)", ExpectedResult = typeof(DateTime))]
     [TestCase("DateTime64(3, 'Etc/UTC')", ExpectedResult = typeof(DateTime))]
+    [TestCase("Time", ExpectedResult = typeof(TimeSpan))]
+    [TestCase("Time64(6)", ExpectedResult = typeof(TimeSpan))]
 
+    [TestCase("Map(String, Int32)", ExpectedResult = typeof(Dictionary<string, int>))]
+    [TestCase("Map(Tuple(Int32, Int32), Int32)", ExpectedResult = typeof(Dictionary<Tuple<int,int>, int>))]
+    
     [TestCase("Nullable(UInt32)", ExpectedResult = typeof(uint?))]
     [TestCase("Array(Array(String))", ExpectedResult = typeof(string[][]))]
     [TestCase("Array(Nullable(UInt32))", ExpectedResult = typeof(uint?[]))]
     [TestCase("SimpleAggregateFunction(anyLast,Nullable(UInt32))", ExpectedResult = typeof(uint?))]
+    [TestCase("Tuple(Int32,UInt8,Nullable(Float32),Array(String))", ExpectedResult = typeof(Tuple<int, byte, float?, string[]>))]
     public Type ShouldConvertFromClickHouseType(string clickHouseType) => TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default).FrameworkType;
 
     [Test]
@@ -72,6 +78,7 @@ public class TypeMappingTests
     [TestCase(typeof(string), ExpectedResult = "String")]
 
     [TestCase(typeof(DateTime), ExpectedResult = "DateTime")]
+    [TestCase(typeof(TimeSpan), ExpectedResult = "Time64(7)")]
 
     [TestCase(typeof(IPAddress), ExpectedResult = "IPv4")]
     [TestCase(typeof(Guid), ExpectedResult = "UUID")]
@@ -79,6 +86,10 @@ public class TypeMappingTests
     [TestCase(typeof(uint?), ExpectedResult = "Nullable(UInt32)")]
     [TestCase(typeof(uint?[]), ExpectedResult = "Array(Nullable(UInt32))")]
     [TestCase(typeof(string[][]), ExpectedResult = "Array(Array(String))")]
+    [TestCase(typeof(Dictionary<string,int>), ExpectedResult = "Map(String, Int32)")]
+    [TestCase(typeof(Dictionary<Tuple<int,int>,int>), ExpectedResult = "Map(Tuple(Int32,Int32), Int32)")]
+    [TestCase(typeof(List<string>), ExpectedResult = "Array(String)")]
+    [TestCase(typeof(List<List<string>>), ExpectedResult = "Array(Array(String))")]
 #if NET6_0_OR_GREATER
     [TestCase(typeof(DateOnly), ExpectedResult = "Date")]
 #endif

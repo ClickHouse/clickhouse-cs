@@ -1,10 +1,14 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data.Common;
 using System.Globalization;
+using System.Linq;
 
 namespace ClickHouse.Driver.ADO;
 
+#pragma warning disable CA1010 // Type inherits ICollection without implementing generic version - inherent to DbConnectionStringBuilder
 public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
+#pragma warning restore CA1010
 {
     public ClickHouseConnectionStringBuilder()
     {
@@ -17,19 +21,19 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
 
     public string Database
     {
-        get => GetStringOrDefault("Database", ClickHouseEnvironment.Database);
+        get => GetStringOrDefault("Database", ClickHouseDefaults.Database);
         set => this["Database"] = value;
     }
 
     public string Username
     {
-        get => GetStringOrDefault("Username", ClickHouseEnvironment.Username);
+        get => GetStringOrDefault("Username", ClickHouseDefaults.Username);
         set => this["Username"] = value;
     }
 
     public string Password
     {
-        get => GetStringOrDefault("Password", ClickHouseEnvironment.Password);
+        get => GetStringOrDefault("Password", ClickHouseDefaults.Password);
         set => this["Password"] = value;
     }
 
@@ -75,16 +79,38 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["Port"] = value;
     }
 
-    public bool UseServerTimezone
-    {
-        get => GetBooleanOrDefault("UseServerTimezone", true);
-        set => this["UseServerTimezone"] = value;
-    }
-
     public bool UseCustomDecimals
     {
         get => GetBooleanOrDefault("UseCustomDecimals", true);
         set => this["UseCustomDecimals"] = value;
+    }
+
+    /// <summary>
+    /// Gets or sets the ClickHouse roles to use for queries.
+    /// Multiple roles can be specified as a comma-separated string.
+    /// </summary>
+    public IReadOnlyList<string> Roles
+    {
+        get
+        {
+            var rolesString = GetStringOrDefault("Roles", null);
+            if (string.IsNullOrEmpty(rolesString))
+                return Array.Empty<string>();
+
+            return rolesString
+                .Split(',')
+                .Select(r => r.Trim())
+                .Where(r => !string.IsNullOrEmpty(r))
+                .ToArray();
+        }
+
+        set
+        {
+            if (value == null || value.Count == 0)
+                Remove("Roles");
+            else
+                this["Roles"] = string.Join(",", value);
+        }
     }
 
     public TimeSpan Timeout
@@ -120,5 +146,51 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             return @int;
         else
             return @default;
+    }
+
+    /// <summary>
+    /// Converts this connection string builder to a ClickHouseClientSettings object.
+    /// </summary>
+    /// <returns>A ClickHouseClientSettings instance with values from this builder</returns>
+    public ClickHouseClientSettings ToSettings()
+    {
+        return ClickHouseClientSettings.FromConnectionStringBuilder(this);
+    }
+
+    /// <summary>
+    /// Creates a connection string builder from a ClickHouseClientSettings object.
+    /// </summary>
+    /// <param name="settings">The settings to convert</param>
+    /// <returns>A ClickHouseConnectionStringBuilder instance</returns>
+    public static ClickHouseConnectionStringBuilder FromSettings(ClickHouseClientSettings settings)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+
+        var builder = new ClickHouseConnectionStringBuilder
+        {
+            Host = settings.Host,
+            Port = settings.Port,
+            Protocol = settings.Protocol,
+            Database = settings.Database,
+            Username = settings.Username,
+            Password = settings.Password,
+            Path = settings.Path,
+            Compression = settings.UseCompression,
+            UseSession = settings.UseSession,
+            SessionId = settings.SessionId,
+            Timeout = settings.Timeout,
+            UseCustomDecimals = settings.UseCustomDecimals,
+            Roles = settings.Roles,
+        };
+
+        // Add custom settings with the set_ prefix
+        const string customSettingPrefix = "set_";
+        foreach (var kvp in settings.CustomSettings)
+        {
+            builder[customSettingPrefix + kvp.Key] = kvp.Value;
+        }
+
+        return builder;
     }
 }

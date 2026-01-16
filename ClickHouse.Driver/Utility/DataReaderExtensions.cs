@@ -6,7 +6,7 @@ using ClickHouse.Driver.Types;
 
 namespace ClickHouse.Driver.Utility;
 
-public static class DataReaderExtensions
+internal static class DataReaderExtensions
 {
     public static string[] GetColumnNames(this IDataReader reader)
     {

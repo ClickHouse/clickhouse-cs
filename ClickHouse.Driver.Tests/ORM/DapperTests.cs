@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
 using System.Linq;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -19,7 +20,12 @@ public class DapperTests : AbstractConnectionTestFixture
     public static IEnumerable<TestCaseData> SimpleSelectQueries => TestUtilities.GetDataTypeSamples()
         .Where(s => ShouldBeSupportedByDapper(s.ClickHouseType))
         .Where(s => s.ExampleValue != DBNull.Value)
-        .Where(s => !s.ClickHouseType.StartsWith("Array")) // Dapper issue, see ShouldExecuteSelectWithParameters test
+        .Select(sample => new TestCaseData($"SELECT {{value:{sample.ClickHouseType}}}", sample.ExampleValue));
+
+    public static IEnumerable<TestCaseData> SimpleSelectQueriesForStringConversion => TestUtilities.GetDataTypeSamples()
+        .Where(s => ShouldBeSupportedByDapper(s.ClickHouseType))
+        .Where(s => ShouldSupportStringConversion(s.ClickHouseType))
+        .Where(s => s.ExampleValue != DBNull.Value)
         .Select(sample => new TestCaseData($"SELECT {{value:{sample.ClickHouseType}}}", sample.ExampleValue));
 
     static DapperTests()
@@ -31,6 +37,7 @@ public class DapperTests : AbstractConnectionTestFixture
 #endif
         SqlMapper.AddTypeMap(typeof(DateTime), DbType.DateTime2);
         SqlMapper.AddTypeMap(typeof(DateTimeOffset), DbType.DateTime2);
+        SqlMapper.AddTypeHandler(new ClickHouseIpHandler());
     }
 
     // "The member value of type <xxxxxxxx> cannot be used as a parameter value"
@@ -46,20 +53,36 @@ public class DapperTests : AbstractConnectionTestFixture
             return false;
         if (clickHouseType.Contains("Nested"))
             return false;
+        if (clickHouseType.Contains("FixedString"))
+            return false;
         switch (clickHouseType)
         {
             case "UUID":
             case "Date":
             case "Date32":
             case "Nothing":
-            case "IPv4":
-            case "IPv6":
             case "Point":
             case "Ring":
+            case "Geometry":
+            case "LineString":
+            case "MultiLineString":
+            case "Polygon":
+            case "MultiPolygon":
+            case "Time":
                 return false;
             default:
                 return true;
         }
+    }
+    
+    private static bool ShouldSupportStringConversion(string clickHouseType)
+    {
+        if (clickHouseType.Contains("Array") || clickHouseType.Contains("QBit"))
+        {
+            return false;
+        }
+
+        return true;
     }
 
 #if NET48 || NET5_0_OR_GREATER
@@ -110,6 +133,19 @@ public class DapperTests : AbstractConnectionTestFixture
         };
     }
 
+    private class ClickHouseIpHandler : SqlMapper.TypeHandler<IPAddress>
+    {
+        public override void SetValue(IDbDataParameter parameter, IPAddress value)
+        {
+            parameter.Value = value;
+        }
+
+        public override IPAddress Parse(object value)
+        {
+            return IPAddress.Parse((string)value);
+        }
+    }
+
     [Test]
     public async Task ShouldExecuteSimpleSelect()
     {
@@ -121,13 +157,14 @@ public class DapperTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    [TestCaseSource(typeof(DapperTests), nameof(SimpleSelectQueries))]
+    [TestCaseSource(typeof(DapperTests), nameof(SimpleSelectQueriesForStringConversion))]
     public async Task ShouldExecuteSelectStringWithSingleParameterValue(string sql, object value)
     {
-        if (value is JsonObject)
+        if (value is JsonObject or IPAddress or Guid or TimeSpan)
         {
-            Assert.Ignore("Dapper does not support selecting JsonObject as string");
+            Assert.Ignore("Dapper does not support selecting this type as string");
         }
+
         var parameters = new Dictionary<string, object> { { "value", value } };
         var results = await connection.QueryAsync<string>(sql, parameters);
         Assert.That(results.Single(), Is.EqualTo(Convert.ToString(value, CultureInfo.InvariantCulture)));
@@ -230,5 +267,40 @@ public class DapperTests : AbstractConnectionTestFixture
             Assert.That(actual, Is.InstanceOf<DBNull>());
         else
             Assert.That(actual, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task ShouldInsertWithExceptSyntax()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_except");
+        await connection.ExecuteStatementAsync(@"
+            CREATE TABLE IF NOT EXISTS test.dapper_except (
+                id UInt32,
+                name String,
+                value Float64,
+                created DateTime DEFAULT now(),
+                updated DateTime DEFAULT now()
+            ) ENGINE Memory
+        ");
+
+        // Insert using Dapper with EXCEPT syntax
+        var sql = "INSERT INTO test.dapper_except (* EXCEPT (created, updated)) VALUES (@id, @name, @value)";
+        await connection.ExecuteAsync(sql, new { id = 100, name = "dapper-test", value = 123.45 });
+
+        // Verify the insert worked and defaults were applied
+        var result = await connection.QueryAsync("SELECT * FROM test.dapper_except");
+        var row = result.Single() as IDictionary<string, object>;
+        
+        Assert.That(row, Is.Not.Null);
+        Assert.That(row.Count, Is.EqualTo(5)); // All 5 columns should be present
+        Assert.That(row["id"], Is.EqualTo(100));
+        Assert.That(row["name"], Is.EqualTo("dapper-test"));
+        Assert.That(row["value"], Is.EqualTo(123.45));
+        
+        // Verify default timestamps were set
+        var created = (DateTime)row["created"];
+        var updated = (DateTime)row["updated"];
+        Assert.That(created, Is.GreaterThan(DateTime.UtcNow.AddMinutes(-1)));
+        Assert.That(updated, Is.GreaterThan(DateTime.UtcNow.AddMinutes(-1)));
     }
 }

@@ -22,17 +22,17 @@ jobs:
     name: ClickHouse regression
     uses: ./.github/workflows/reusable.yml
     secrets: inherit
-    # needs:
-    #   - coverage
     with:
       clickhouse-version: ${{ matrix.version }}
     strategy:
       fail-fast: false
       matrix:
         version:
-          - "25.9"
+          - "latest"
+          - "25.12"
+          - "25.11"
+          - "25.10"
           - "25.8"
-          - "25.7"
           - "25.3"
 
   regress-dotnet:
@@ -41,146 +41,27 @@ jobs:
     secrets: inherit
     with:
       framework: ${{ matrix.framework }}
-    # needs:
-    #   - coverage
     strategy:
       fail-fast: false
       matrix:
-        framework: ["net9.0", "net6.0"]
+        framework: ["net10.0", "net9.0", "net6.0"]
 
   integration:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    # needs:
-    #   - coverage
-
-    services:
-      clickhouse:
-        image: clickhouse/clickhouse-server:latest
-        ports:
-          - 8123:8123
-        env:
-          CLICKHOUSE_DB: test
-          CLICKHOUSE_USER: test
-          CLICKHOUSE_PASSWORD: test1234
-          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - uses: actions/cache@v4
-        name: Cache NuGet
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
-      - name: Setup .NET Core
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: |
-            9.x
-
-      - name: Test
-        run: dotnet test ClickHouse.Driver.IntegrationTests/ClickHouse.Driver.IntegrationTests.csproj --framework net9.0 --configuration Release --verbosity normal --logger GitHubActions  /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:SkipAutoProps=true
-        env:
-          CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
-          CLICKHOUSE_VERSION: latest
+    name: Integration
+    uses: ./.github/workflows/tests-integration.yml
+    secrets: inherit
 
   cloud:
-    name: Cloud Tests - AWS
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - uses: actions/cache@v4
-        name: Cache NuGet
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
-      - name: Setup .NET Core
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: |
-            9.x
-
-      - name: Test
-        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj 
-              --framework net9.0 --configuration Release --verbosity normal --logger GitHubActions 
-              /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
-              --filter "Category=Cloud"
-        env:
-          CLICKHOUSE_CONNECTION: Host=${{ secrets.CLICKHOUSE_CLOUD_HOST }};Port=8443;User=${{ secrets.CLICKHOUSE_CLOUD_USER }};Password=${{ secrets.CLICKHOUSE_CLOUD_PASSWORD }};Protocol=https
+    name: Cloud
+    uses: ./.github/workflows/tests-cloud.yml
+    secrets: inherit
 
   windows:
-    name: Windows Tests
-    runs-on: windows-latest
-    timeout-minutes: 5
-    steps:
-      - uses: Vampire/setup-wsl@v6
-        with:
-          distribution: Ubuntu-24.04
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup ClickHouse in WSL
-        shell: wsl-bash -u root {0}
-        run: |
-          curl https://clickhouse.com/ | sh
-          ./clickhouse server --daemon
-
-      - uses: actions/cache@v4
-        name: Cache NuGet
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
-      - name: Test
-        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj
-              --framework net9.0 --configuration Release --verbosity normal --logger GitHubActions 
-              /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
-        env:
-          CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=default
+    name: Windows
+    uses: ./.github/workflows/tests-windows.yml
+    secrets: inherit
 
   macos:
-    name: macOS Tests
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-13, macos-14]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup ClickHouse
-        run: |
-          curl https://clickhouse.com/ | sh
-          ./clickhouse server --daemon
-
-      - uses: actions/cache@v4
-        name: Cache NuGet
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
-      - name: Test
-        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj 
-              --framework net9.0 --configuration Release --verbosity normal --logger GitHubActions 
-              /clp:ErrorsOnly /p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true
-        env:
-          CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=default
+    name: macOS
+    uses: ./.github/workflows/tests-macos.yml
+    secrets: inherit

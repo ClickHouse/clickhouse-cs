@@ -25,8 +25,13 @@ dotnet_diagnostic.SA1600.severity = none # SA1600: Elements should be documented
 dotnet_diagnostic.SA1602.severity = none # SA1602: Enumeration items should be documented
 dotnet_diagnostic.SA1629.severity = none # SA1629: Documentation text should end with a period
 dotnet_diagnostic.SA1633.severity = none # SA1633: File should have header
+dotnet_diagnostic.RS0037.severity = none # RS0037: nullable PublicAPI
 
+
+dotnet_diagnostic.CA1848.severity = suggestion # CA1848: Use the LoggerMessage delegates
 dotnet_diagnostic.SA1201.severity = suggestion # SA1201: Elements should appear in the correct order
 dotnet_diagnostic.SA1202.severity = suggestion # SA1202: Elements should be ordered by access
 dotnet_diagnostic.SA1204.severity = suggestion # SA1204: Static elements should appear before instance elements
 dotnet_diagnostic.SA1515.severity = suggestion # SA1515: Single-line comment should be preceded by blank line
+dotnet_diagnostic.RS0025.severity = suggestion # RS0025: PublicAPI
+dotnet_diagnostic.RS0026.severity = suggestion # RS0026: PublicAPI

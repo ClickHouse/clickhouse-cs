@@ -6,7 +6,7 @@ using NUnit.Framework;
 namespace ClickHouse.Driver.Tests;
 
 [TestFixture]
-public class AbstractConnectionTestFixture : IDisposable
+public abstract class AbstractConnectionTestFixture : IDisposable
 {
     protected readonly ClickHouseConnection connection;
 
