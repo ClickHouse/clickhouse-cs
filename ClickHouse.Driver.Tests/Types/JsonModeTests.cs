@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
@@ -129,16 +130,16 @@ public class JsonModeTests
         await bulkCopy.WriteToServerAsync(rows);
 
         // Verify data was written correctly
-        using var reader = await connection.ExecuteReaderAsync($"SELECT id, data FROM {tableName} ORDER BY id");
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync($"SELECT id, data FROM {tableName} ORDER BY id");
 
         ClassicAssert.IsTrue(reader.Read());
-        Assert.That(reader.GetInt32(0), Is.EqualTo(1));
+        Assert.That(reader.GetUInt32(0), Is.EqualTo(1));
         // Read mode is JsonNode by default, so we get JsonObject back
         var data1 = (JsonObject)reader.GetValue(1);
         Assert.That((string)data1["name"], Is.EqualTo("Alice"));
 
         ClassicAssert.IsTrue(reader.Read());
-        Assert.That(reader.GetInt32(0), Is.EqualTo(2));
+        Assert.That(reader.GetUInt32(0), Is.EqualTo(2));
         var data2 = (JsonObject)reader.GetValue(1);
         Assert.That((string)data2["name"], Is.EqualTo("Bob"));
     }
@@ -176,7 +177,7 @@ public class JsonModeTests
         ClassicAssert.IsTrue(reader.Read());
         var data = (JsonObject)reader.GetValue(0);
         Assert.That((string)data["name"], Is.EqualTo("Charlie"));
-        Assert.That((long)data["score"], Is.EqualTo(300));
+        Assert.That((int)data["score"], Is.EqualTo(300));
     }
 
     [Test]
