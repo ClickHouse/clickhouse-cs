@@ -50,6 +50,8 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.Username.get -> string
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Username.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.UseSession.get -> bool
 ClickHouse.Driver.ADO.ClickHouseClientSettings.UseSession.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ReadStringsAsByteArrays.get -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ReadStringsAsByteArrays.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.Validate() -> void
 ClickHouse.Driver.ADO.ClickHouseCommand.BearerToken.get -> string
 ClickHouse.Driver.ADO.ClickHouseCommand.BearerToken.set -> void
@@ -67,6 +69,8 @@ ClickHouse.Driver.ADO.ClickHouseConnection.Settings.set -> void
 ClickHouse.Driver.ADO.ClickHouseConnection.SkipServerCertificateValidation.get -> bool
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.Roles.get -> System.Collections.Generic.IReadOnlyList<string>
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.Roles.set -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.ReadStringsAsByteArrays.get -> bool
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.ReadStringsAsByteArrays.set -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.ToSettings() -> ClickHouse.Driver.ADO.ClickHouseClientSettings
 ClickHouse.Driver.ADO.ClickHouseDataSource
 ClickHouse.Driver.ADO.ClickHouseDataSource.ClickHouseDataSource(ClickHouse.Driver.ADO.ClickHouseClientSettings settings) -> void
@@ -119,6 +123,7 @@ const ClickHouse.Driver.ADO.ClickHouseDefaults.SkipServerCertificateValidation =
 const ClickHouse.Driver.ADO.ClickHouseDefaults.UseCustomDecimals = true -> bool
 const ClickHouse.Driver.ADO.ClickHouseDefaults.UseFormDataParameters = false -> bool
 const ClickHouse.Driver.ADO.ClickHouseDefaults.Username = "default" -> string
+const ClickHouse.Driver.ADO.ClickHouseDefaults.ReadStringsAsByteArrays = false -> bool
 const ClickHouse.Driver.ADO.ClickHouseDefaults.UseSession = false -> bool
 const ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.ActivitySourceName = "ClickHouse.Driver" -> string
 Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions
