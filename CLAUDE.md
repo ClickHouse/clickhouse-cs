@@ -58,6 +58,10 @@ ClickHouse.Driver.sln
 - **Negative tests**: Error handling, edge cases, concurrency scenarios
 - **Existing tests**: Only add new tests, never delete/weaken existing ones
 - **Test organization**: Client tests in `.Tests`, third-party integration tests in `.IntegrationTests`
+- **Test naming**: The name of your test should consist of three parts:
+  - Name of the method being tested
+  - Scenario under which the method is being tested
+  - Expected behavior when the scenario is invoked
 
 ### Code Style
 - **Namespaces**: File-scoped namespaces (warning-level)
