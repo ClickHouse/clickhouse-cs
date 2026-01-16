@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
@@ -196,12 +197,12 @@ public class BulkCopyTests : AbstractConnectionTestFixture
 
         // Compress data, then decompress via GZipStream (which is non-seekable)
         using var compressedStream = new MemoryStream();
-        using (var gzip = new System.IO.Compression.GZipStream(compressedStream, System.IO.Compression.CompressionMode.Compress, leaveOpen: true))
+        using (var gzip = new GZipStream(compressedStream, CompressionMode.Compress, leaveOpen: true))
         {
             gzip.Write(testData, 0, testData.Length);
         }
         compressedStream.Position = 0;
-        using var decompressStream = new System.IO.Compression.GZipStream(compressedStream, System.IO.Compression.CompressionMode.Decompress);
+        using var decompressStream = new GZipStream(compressedStream, CompressionMode.Decompress);
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
         await bulkCopy.InitAsync();
@@ -226,12 +227,12 @@ public class BulkCopyTests : AbstractConnectionTestFixture
 
         // Compress data, then decompress via GZipStream (which is non-seekable)
         using var compressedStream = new MemoryStream();
-        using (var gzip = new System.IO.Compression.GZipStream(compressedStream, System.IO.Compression.CompressionMode.Compress, leaveOpen: true))
+        using (var gzip = new GZipStream(compressedStream, CompressionMode.Compress, leaveOpen: true))
         {
             gzip.Write(testData, 0, testData.Length);
         }
         compressedStream.Position = 0;
-        using var decompressStream = new System.IO.Compression.GZipStream(compressedStream, System.IO.Compression.CompressionMode.Decompress);
+        using var decompressStream = new GZipStream(compressedStream, CompressionMode.Decompress);
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
         await bulkCopy.InitAsync();
@@ -243,6 +244,55 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         ClassicAssert.IsTrue(reader.Read(), "Cannot read inserted data");
         var data = reader.GetValue(0);
         Assert.That(data, Is.EqualTo(testData));
+    }
+
+    [Test]
+    public async Task WriteToServerAsync_FixedStringWithNonSeekableStreamTooLong_ThrowsArgumentException()
+    {
+        var targetTable = "test.bulk_fixedstring_stream_too_long";
+        var tooLongData = new byte[] { 1, 2, 3, 4, 5, 6 }; // 6 bytes for FixedString(4)
+
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (fs FixedString(4), num Int32) ENGINE Memory");
+
+        // Compress data, then decompress via GZipStream (which is non-seekable)
+        using var compressedStream = new MemoryStream();
+        using (var gzip = new System.IO.Compression.GZipStream(compressedStream, System.IO.Compression.CompressionMode.Compress, leaveOpen: true))
+        {
+            gzip.Write(tooLongData, 0, tooLongData.Length);
+        }
+        compressedStream.Position = 0;
+        using var decompressStream = new System.IO.Compression.GZipStream(compressedStream, System.IO.Compression.CompressionMode.Decompress);
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+
+        // This should fail client-side with a clear error message about stream length mismatch
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { decompressStream, 42 }, 1)));
+
+        Assert.That(ex.InnerException, Is.TypeOf<ArgumentException>());
+        Assert.That(ex.InnerException.Message, Does.Contain("does not match FixedString(4)"));
+    }
+
+    [Test]
+    public async Task WriteToServerAsync_FixedStringWithSeekableStreamTooLong_ThrowsArgumentException()
+    {
+        var targetTable = "test.bulk_fixedstring_seekable_stream_too_long";
+        var tooLongData = new byte[] { 1, 2, 3, 4, 5, 6 }; // 6 bytes for FixedString(4)
+
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (fs FixedString(4), num Int32) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+
+        // MemoryStream is seekable, so we can validate length upfront
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new MemoryStream(tooLongData), 42 }, 1)));
+
+        Assert.That(ex.InnerException, Is.TypeOf<ArgumentException>());
+        Assert.That(ex.InnerException.Message, Does.Contain("Stream length 6 does not match FixedString(4)"));
     }
 
     [Test]
