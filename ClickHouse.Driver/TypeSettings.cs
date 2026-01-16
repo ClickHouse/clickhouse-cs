@@ -1,8 +1,6 @@
-﻿using NodaTime;
+﻿namespace ClickHouse.Driver;
 
-namespace ClickHouse.Driver;
-
-internal record struct TypeSettings(bool useBigDecimal)
+internal record struct TypeSettings(bool useBigDecimal, bool readStringsAsByteArrays)
 {
-    public static TypeSettings Default => new TypeSettings(true);
+    public static TypeSettings Default => new TypeSettings(true, false);
 }

@@ -66,9 +66,9 @@ internal static class BinaryTypeDecoder
                 return new DateTime64Type() { Scale = reader.ReadByte(), TimeZone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(reader.ReadString()) };
 
             case BinaryTypeIndex.String:
-                return new StringType();
+                return new StringType() { ReadAsByteArray = typeSettings.readStringsAsByteArrays };
             case BinaryTypeIndex.FixedString:
-                return new FixedStringType() { Length = reader.Read7BitEncodedInt() };
+                return new FixedStringType() { Length = reader.Read7BitEncodedInt(), ReadAsByteArray = typeSettings.readStringsAsByteArrays };
 
             case BinaryTypeIndex.Enum8:
                 return DecodeEnum8(reader);
