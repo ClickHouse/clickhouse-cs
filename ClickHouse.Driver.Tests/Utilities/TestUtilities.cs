@@ -272,7 +272,9 @@ public static class TestUtilities
             "Bool",
             "BFloat16",
         };
-        if ((!noVariantTests.Contains(baseType) && !baseType.StartsWith("Enum")) || ServerVersion > Version.Parse("25.3")) // Issue has been fixed after 25.3
+        // Also exclude FixedString when test data is byte[] - FrameworkType is now string but test data uses byte[]
+        if (((!noVariantTests.Contains(baseType) && !baseType.StartsWith("Enum")) || ServerVersion > Version.Parse("25.3"))
+            && !(baseType.StartsWith("FixedString") && baseValue is byte[]))
         {
             var variantSecondType = "String";
             // Some types can cause a database error due to suspicious variant types/wrong type inference, avoid that
