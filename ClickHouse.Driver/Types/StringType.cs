@@ -1,11 +1,14 @@
 ﻿using System;
 using System.IO;
 using ClickHouse.Driver.Formats;
+using Microsoft.IO;
 
 namespace ClickHouse.Driver.Types;
 
 internal class StringType : ClickHouseType
 {
+    private static readonly RecyclableMemoryStreamManager MemoryStreamManager = new();
+
     public bool ReadAsByteArray { get; init; }
 
     public override Type FrameworkType => ReadAsByteArray ? typeof(byte[]) : typeof(string);
@@ -51,11 +54,12 @@ internal class StringType : ClickHouseType
             else
             {
                 // Non-seekable streams must be buffered to determine length
-                using var memoryStream = new MemoryStream();
+                using var memoryStream = MemoryStreamManager.GetStream();
                 stream.CopyTo(memoryStream);
-                var bytes = memoryStream.ToArray();
-                writer.Write7BitEncodedInt(bytes.Length);
-                writer.Write(bytes);
+                var length = (int)memoryStream.Length;
+                writer.Write7BitEncodedInt(length);
+                memoryStream.Position = 0;
+                memoryStream.CopyTo(writer.BaseStream);
             }
         }
         else
