@@ -47,9 +47,6 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-  </ItemGroup>
-
-  <ItemGroup Condition="$(TargetFramework.StartsWith('net4')) Or $(TargetFramework) == 'netstandard2.1' Or $(TargetFramework) == 'net6.0'">
     <PackageReference Include="System.Text.Json" Version="10.0.1" />
   </ItemGroup>
 
