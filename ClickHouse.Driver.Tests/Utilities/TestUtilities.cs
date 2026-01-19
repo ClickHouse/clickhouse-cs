@@ -253,20 +253,39 @@ public static class TestUtilities
             mapValue
         );
 
-        // Variant(baseType, ?)
-        var variantSecondType = "String";
-        // Some types can cause a database error due to suspicious variant types/wrong type inference, avoid that
-        if (baseType.StartsWith("Enum") || baseType.StartsWith("FixedString") || baseType == "BFloat16" || baseType.StartsWith("Time"))
+        // Variant
+        // Some types have problems with parsing on the server side when it comes to variants
+        // This should be fixed with https://github.com/ClickHouse/ClickHouse/pull/90430
+        string[] noVariantTests = new[]
         {
-            variantSecondType = "Date";
-        }
+            "Int32",
+            "UInt32",
+            "Int64",
+            "UInt64",
+            "Date",
+            "Date32",
+            "DateTime",
+            "DateTime64",
+            "Float32",
+            "Bool",
+            "BFloat16",
+        };
+        if ((!noVariantTests.Contains(baseType) && !baseType.StartsWith("Enum")) || ServerVersion > Version.Parse("25.3")) // Issue has been fixed after 25.3
+        {
+            var variantSecondType = "String";
+            // Some types can cause a database error due to suspicious variant types/wrong type inference, avoid that
+            if (baseType.StartsWith("Enum") || baseType.StartsWith("FixedString") || baseType == "BFloat16" || baseType.StartsWith("Time"))
+            {
+                variantSecondType = "Date";
+            }
 
-        yield return new DataTypeSample(
-            $"Variant({baseType}, {variantSecondType})",
-            typeof(object),
-            $"{baseExpr}::Variant({baseType}, {variantSecondType})",
-            baseValue
-        );
+            yield return new DataTypeSample(
+                $"Variant({baseType}, {variantSecondType})",
+                typeof(object),
+                $"{baseExpr}::Variant({baseType}, {variantSecondType})",
+                baseValue
+            );
+        }
     }
 
     public static IEnumerable<DataTypeSample> GetDataTypeSamples()
