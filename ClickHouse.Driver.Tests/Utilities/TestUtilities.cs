@@ -80,7 +80,7 @@ public static class TestUtilities
             SupportedFeatures = Feature.All;
         }
     }
-    
+
     /// <summary>
     /// Equality assertion with special handling for certain object types
     /// </summary>
@@ -91,7 +91,7 @@ public static class TestUtilities
         if (expected is JsonNode)
         {
             // Necessary because the ordering of the fields is not guaranteed to be the same
-            Assert.That(result, Is.EqualTo(expected).Using<JsonObject,JsonObject>(JsonNode.DeepEquals));
+            Assert.That(result, Is.EqualTo(expected).Using<JsonObject, JsonObject>(JsonNode.DeepEquals));
         }
         else
         {
@@ -109,7 +109,7 @@ public static class TestUtilities
         builder.Compression = compression;
         builder.UseSession = session;
         builder.UseCustomDecimals = customDecimals;
-        
+
         if (password is not null)
         {
             builder.Password = password;
@@ -142,7 +142,7 @@ public static class TestUtilities
         {
             // Revisit this if the Geometry type is updated to not require this setting in the future 
             // it could cause problems by hiding other issues
-            builder["set_allow_suspicious_variant_types"] = 1; 
+            builder["set_allow_suspicious_variant_types"] = 1;
         }
         if (SupportedFeatures.HasFlag(Feature.QBit) && TestEnvironment != TestEnv.Cloud)
         {
@@ -154,7 +154,7 @@ public static class TestUtilities
         {
             UseFormDataParameters = useFormDataParameters
         };
-        
+
         var connection = new ClickHouseConnection(settings);
         connection.Open();
         return connection;
@@ -270,7 +270,7 @@ public static class TestUtilities
             "Bool",
             "BFloat16",
         };
-        if (!noVariantTests.Contains(baseType) && !baseType.StartsWith("Enum"))
+        if ((!noVariantTests.Contains(baseType) && !baseType.StartsWith("Enum")) || ServerVersion > Version.Parse("25.3")) // Issue has been fixed after 25.3
         {
             var variantSecondType = "String";
             // Some types can cause a database error due to suspicious variant types/wrong type inference, avoid that
@@ -306,7 +306,7 @@ public static class TestUtilities
 
         yield return new DataTypeSample("Float32", typeof(float), "toFloat32(32e6)", 32e6);
         yield return new DataTypeSample("Float32", typeof(float), "toFloat32(-32e6)", -32e6);
-        
+
         yield return new DataTypeSample("Float32", typeof(float), "toFloat32(1.1)", 1.1f);
         yield return new DataTypeSample("Float32", typeof(float), "toFloat32(-1.1)", -1.1f);
 
@@ -395,7 +395,7 @@ public static class TestUtilities
         if (SupportedFeatures.HasFlag(Feature.WideTypes))
         {
             yield return new DataTypeSample("Decimal256(25)", typeof(ClickHouseDecimal), "toDecimal256(1e-24, 25)", new ClickHouseDecimal(10e-25m));
-            yield return new DataTypeSample("Decimal256(0)", typeof(ClickHouseDecimal),"toDecimal256(repeat('1', 50), 0)", ClickHouseDecimal.Parse(new string('1', 50)));
+            yield return new DataTypeSample("Decimal256(0)", typeof(ClickHouseDecimal), "toDecimal256(repeat('1', 50), 0)", ClickHouseDecimal.Parse(new string('1', 50)));
             yield return new DataTypeSample("DateTime32('UTC')", typeof(DateTime), "toDateTime('1988-08-28 11:22:33', 'UTC')", new DateTime(1988, 08, 28, 11, 22, 33, DateTimeKind.Unspecified));
         }
 
@@ -413,7 +413,7 @@ public static class TestUtilities
                     { "five", 5 },
                     { "null", null },
                 });
-            
+
             // Maps in ClickHouse are actually Array(Tuple(...)) and duplicate keys are valid
             yield return new DataTypeSample("Map(String, UInt8)", typeof(Dictionary<string, byte>), "map('A',1,'A',2)", new Dictionary<string, byte> { { "A", 2 } });
         }
