@@ -210,6 +210,110 @@ public class JsonModeTests
         Assert.That((int)parsed["num"], Is.EqualTo(42));
     }
 
+    [Test]
+    public async Task ShouldWriteJsonObjectWithStringMode_BulkCopy()
+    {
+        // Tests: JsonObject jo => jo.ToJsonString() in WriteAsString
+        using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
+
+        var tableName = "test.json_write_jsonobject_string_mode";
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = tableName,
+        };
+        await bulkCopy.InitAsync();
+
+        var jsonObj = new JsonObject
+        {
+            ["name"] = "Diana",
+            ["score"] = 400
+        };
+
+        var rows = new[]
+        {
+            new object[] { 1u, jsonObj },
+        };
+
+        await bulkCopy.WriteToServerAsync(rows);
+
+        // Verify data was written correctly
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {tableName}");
+        ClassicAssert.IsTrue(reader.Read());
+        var data = (JsonObject)reader.GetValue(0);
+        Assert.That((string)data["name"], Is.EqualTo("Diana"));
+        Assert.That((int)data["score"], Is.EqualTo(400));
+    }
+
+    [Test]
+    public async Task ShouldWriteJsonNodeWithStringMode_BulkCopy()
+    {
+        // Tests: JsonNode jn => jn.ToJsonString() in WriteAsString
+        using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
+
+        var tableName = "test.json_write_jsonnode_string_mode";
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = tableName,
+        };
+        await bulkCopy.InitAsync();
+
+        // Create a JsonNode (not JsonObject) by parsing
+        JsonNode jsonNode = JsonNode.Parse("{\"name\": \"Eve\", \"score\": 500}");
+
+        var rows = new[]
+        {
+            new object[] { 1u, jsonNode },
+        };
+
+        await bulkCopy.WriteToServerAsync(rows);
+
+        // Verify data was written correctly
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {tableName}");
+        ClassicAssert.IsTrue(reader.Read());
+        var data = (JsonObject)reader.GetValue(0);
+        Assert.That((string)data["name"], Is.EqualTo("Eve"));
+        Assert.That((int)data["score"], Is.EqualTo(500));
+    }
+
+    [Test]
+    public async Task ShouldWritePocoWithStringMode_BulkCopy()
+    {
+        // Tests: _ => JsonSerializer.Serialize(value) in WriteAsString
+        using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
+
+        var tableName = "test.json_write_poco_string_mode";
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = tableName,
+        };
+        await bulkCopy.InitAsync();
+
+        var poco = new { name = "Frank", score = 600 };
+
+        var rows = new[]
+        {
+            new object[] { 1u, poco },
+        };
+
+        await bulkCopy.WriteToServerAsync(rows);
+
+        // Verify data was written correctly
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {tableName}");
+        ClassicAssert.IsTrue(reader.Read());
+        var data = (JsonObject)reader.GetValue(0);
+        Assert.That((string)data["name"], Is.EqualTo("Frank"));
+        Assert.That((int)data["score"], Is.EqualTo(600));
+    }
+
     #endregion
 
     #region Configuration Tests
