@@ -155,6 +155,10 @@ class Program
         await ComplexTypes.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(StringHandling)}");
+        await StringHandling.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine($"\n\nRunning: {nameof(JsonType)}");
         await JsonType.Run();
         WaitForUser(isInteractive);
