@@ -903,7 +903,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         // Date/Time
         public DateTime DateTimeVal { get; set; }
-        public TimeSpan TimeSpanVal { get; set; }
 
         // IP address (IPv4 only - type inference maps IPAddress to IPv4)
         public IPAddress IPv4Val { get; set; }
@@ -960,7 +959,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
             // Date/Time
             DateTimeVal = testDateTime,
-            TimeSpanVal = new TimeSpan(1, 2, 3, 4, 567),
 
             // IP address
             IPv4Val = IPAddress.Parse("192.168.1.1"),
@@ -1021,10 +1019,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(resultDateTime.Month, Is.EqualTo(6));
         Assert.That(resultDateTime.Day, Is.EqualTo(15));
 
-        // Verify TimeSpan (stored as Time64, returned as string)
-        var resultTimeSpan = result["TimeSpanVal"].GetValue<string>();
-        Assert.That(resultTimeSpan, Does.Contain("02:03:04")); // hours:minutes:seconds
-
         // Verify IP address
         Assert.That(result["IPv4Val"].GetValue<string>(), Is.EqualTo("192.168.1.1"));
 
@@ -1050,5 +1044,37 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(nestedArray.Count, Is.EqualTo(3));
         Assert.That(((JsonArray)nestedArray[0]).Count, Is.EqualTo(2));
         Assert.That((int)((JsonArray)nestedArray[1])[2], Is.EqualTo(5));
+    }
+
+    private class TimeSpanData { public TimeSpan Duration { get; set; } }
+
+    [Test]
+    [RequiredFeature(Feature.Json | Feature.Time)]
+    public async Task Write_WithTimeSpan_ShouldWriteAsTime64()
+    {
+        var targetTable = "test.json_write_timespan";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        var data = new TimeSpanData { Duration = new TimeSpan(1, 2, 3, 4, 567) };
+
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+
+        // TimeSpan stored as Time64, returned as string
+        var resultTimeSpan = result["Duration"].GetValue<string>();
+        Assert.That(resultTimeSpan, Does.Contain("02:03:04")); // hours:minutes:seconds
     }
 }
