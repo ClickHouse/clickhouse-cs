@@ -9,6 +9,7 @@ using System.Linq;
 using System.Net;
 using System.Numerics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using System.Text;
 using System.Text.Json;
@@ -183,7 +184,9 @@ internal class JsonType : ParameterizedType
         using var tempStream = MemoryStreamManager.GetStream();
         using var tempWriter = new ExtendedBinaryWriter(tempStream);
 
-        var fieldCount = WritePocoFields(tempWriter, value, string.Empty);
+        // Track visited objects to detect circular references
+        var visited = new HashSet<object>(ObjectReferenceEqualityComparer.Instance);
+        var fieldCount = WritePocoFields(tempWriter, value, string.Empty, visited);
 
         writer.Write7BitEncodedInt(fieldCount);
         tempStream.Position = 0;
@@ -209,54 +212,72 @@ internal class JsonType : ParameterizedType
     /// <summary>
     /// Writes POCO fields to the writer and returns the number of fields written.
     /// </summary>
-    private int WritePocoFields(ExtendedBinaryWriter writer, object poco, string prefix)
+    /// <param name="visited">Set of already visited objects to detect circular references.</param>
+    private int WritePocoFields(ExtendedBinaryWriter writer, object poco, string prefix, HashSet<object> visited)
     {
-        var type = poco.GetType();
-        var propertyInfos = GetCachedPropertyInfo(type);
-        int count = 0;
-
-        foreach (var propInfo in propertyInfos)
+        // Check for circular reference
+        if (!visited.Add(poco))
         {
-            if (propInfo.IsIgnored)
-                continue;
-            string path = GetJsonPath(prefix, propInfo);
-            var value = propInfo.Property.GetValue(poco);
+            throw new InvalidOperationException(
+                $"Circular reference detected at path '{prefix}'. " +
+                "JSON serialization does not support circular object references.");
+        }
 
-            if (value is null)
+        try
+        {
+            var type = poco.GetType();
+            var propertyInfos = GetCachedPropertyInfo(type);
+            int count = 0;
+
+            foreach (var propInfo in propertyInfos)
             {
-                // Only write nulls for hinted Nullable types
-                // ClickHouse doesn't allow Nullable inside dynamic JSON paths (Variant type)
-                if (HintedTypes.TryGetValue(path, out ClickHouseType hintedType) && hintedType is NullableType)
+                if (propInfo.IsIgnored)
+                    continue;
+                string path = GetJsonPath(prefix, propInfo);
+                var value = propInfo.Property.GetValue(poco);
+
+                if (value is null)
                 {
-                    writer.Write(path);
-                    WriteHintedValue(writer, null, hintedType);
-                    count++;
+                    // Only write nulls for hinted Nullable types
+                    // ClickHouse doesn't allow Nullable inside dynamic JSON paths (Variant type)
+                    if (HintedTypes.TryGetValue(path, out ClickHouseType hintedType) && hintedType is NullableType)
+                    {
+                        writer.Write(path);
+                        WriteHintedValue(writer, null, hintedType);
+                        count++;
+                    }
                 }
-            }
-            else if (propInfo.IsNestedObject)
-            {
-                // Recurse into sub-object
-                // Note: Collections (IEnumerable) are excluded from IsNestedObject, so they go to the else branch
-                count += WritePocoFields(writer, value, path);
-            }
-            else
-            {
-                // Write out a value
-                HintedTypes.TryGetValue(path, out ClickHouseType hintedType);
-                writer.Write(path);
-                if (hintedType != null)
+                else if (propInfo.IsNestedObject)
                 {
-                    WriteHintedValue(writer, value, hintedType);
+                    // Recurse into sub-object
+                    // Note: Collections (IEnumerable) are excluded from IsNestedObject, so they go to the else branch
+                    count += WritePocoFields(writer, value, path, visited);
                 }
                 else
                 {
-                    WriteUnhintedValue(writer, value);
+                    // Write out a value
+                    HintedTypes.TryGetValue(path, out ClickHouseType hintedType);
+                    writer.Write(path);
+                    if (hintedType != null)
+                    {
+                        WriteHintedValue(writer, value, hintedType);
+                    }
+                    else
+                    {
+                        WriteUnhintedValue(writer, value);
+                    }
+                    count++;
                 }
-                count++;
             }
-        }
 
-        return count;
+            return count;
+        }
+        finally
+        {
+            // Remove from visited when leaving this object's scope
+            // This allows the same object to appear in different branches (diamond pattern)
+            visited.Remove(poco);
+        }
     }
 
     private static string GetJsonPath(string prefix, JsonPropertyInfo propInfo)
@@ -461,5 +482,20 @@ internal class JsonType : ParameterizedType
             // Default: try JsonSerializer for complex types
             _ => JsonValue.Create(JsonSerializer.SerializeToElement(value))
         };
+    }
+
+    /// <summary>
+    /// Reference equality comparer for cycle detection.
+    /// Uses RuntimeHelpers.GetHashCode for identity-based hashing.
+    /// </summary>
+    private sealed class ObjectReferenceEqualityComparer : IEqualityComparer<object>
+    {
+        public static readonly ObjectReferenceEqualityComparer Instance = new();
+
+        private ObjectReferenceEqualityComparer() { }
+
+        public new bool Equals(object x, object y) => ReferenceEquals(x, y);
+
+        public int GetHashCode(object obj) => RuntimeHelpers.GetHashCode(obj);
     }
 }
