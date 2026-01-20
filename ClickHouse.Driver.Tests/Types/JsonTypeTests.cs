@@ -306,7 +306,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(bigNumber UInt64)
+                data JSON(BigNumber UInt64)
             ) ENGINE = Memory");
 
         var data = new UInt64Data { BigNumber = 18446744073709551615UL };
@@ -320,7 +320,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        Assert.That((ulong)result["bigNumber"], Is.EqualTo(18446744073709551615UL));
+        Assert.That((ulong)result["BigNumber"], Is.EqualTo(18446744073709551615UL));
     }
 
     private class Int64Data { public long Value { get; set; } }
@@ -332,7 +332,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(value Int64)
+                data JSON(Value Int64)
             ) ENGINE = Memory");
 
         var data = new Int64Data { Value = 9223372036854775807L };
@@ -346,7 +346,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        Assert.That((long)result["value"], Is.EqualTo(9223372036854775807L));
+        Assert.That((long)result["Value"], Is.EqualTo(9223372036854775807L));
     }
 
     private class UuidData { public Guid Uuid { get; set; } }
@@ -358,7 +358,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(uuid UUID)
+                data JSON(Uuid UUID)
             ) ENGINE = Memory");
 
         var guid = Guid.Parse("61f0c404-5cb3-11e7-907b-a6006ad3dba0");
@@ -373,7 +373,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        var actualGuid = Guid.Parse(result["uuid"].GetValue<string>());
+        var actualGuid = Guid.Parse(result["Uuid"].GetValue<string>());
         Assert.That(actualGuid, Is.EqualTo(guid));
     }
 
@@ -386,7 +386,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(price Decimal64(4))
+                data JSON(Price Decimal64(4))
             ) ENGINE = Memory");
 
         var data = new DecimalData { Price = 123.4567m };
@@ -400,7 +400,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        var actualDecimal = ClickHouseDecimal.Parse(result["price"].GetValue<string>());
+        var actualDecimal = ClickHouseDecimal.Parse(result["Price"].GetValue<string>());
         Assert.That(actualDecimal, Is.EqualTo(new ClickHouseDecimal(123.4567m)));
     }
 
@@ -414,7 +414,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(`outer.inner` UInt64)
+                data JSON(`Outer.Inner` UInt64)
             ) ENGINE = Memory");
 
         var data = new NestedOuter { Outer = new NestedInner { Inner = 9999999999999UL } };
@@ -428,7 +428,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        Assert.That((ulong)result["outer"]["inner"], Is.EqualTo(9999999999999UL));
+        Assert.That((ulong)result["Outer"]["Inner"], Is.EqualTo(9999999999999UL));
     }
 
     private class MixedData { public long Id { get; set; } public string Name { get; set; } public double Score { get; set; } }
@@ -440,7 +440,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(id Int64)
+                data JSON(Id Int64)
             ) ENGINE = Memory");
 
         var data = new MixedData { Id = 123L, Name = "test", Score = 99.5 };
@@ -454,7 +454,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        Assert.That((long)result["id"], Is.EqualTo(123L));
+        Assert.That((long)result["Id"], Is.EqualTo(123L));
         Assert.That(result["Name"].ToString(), Is.EqualTo("test"));
         Assert.That((double)result["Score"], Is.EqualTo(99.5));
     }
@@ -469,7 +469,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(ids Array(UInt64))
+                data JSON(Ids Array(UInt64))
             ) ENGINE = Memory");
 
         var data = new ArrayData { Ids = [1UL, 2UL, 3UL] };
@@ -483,7 +483,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        var arr = (JsonArray)result["ids"];
+        var arr = (JsonArray)result["Ids"];
         Assert.That(arr.Count, Is.EqualTo(3));
         Assert.That((ulong)arr[0], Is.EqualTo(1UL));
         Assert.That((ulong)arr[1], Is.EqualTo(2UL));
@@ -497,7 +497,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(ids Array(UInt64))
+                data JSON(Ids Array(UInt64))
             ) ENGINE = Memory");
 
         var data = new ListData { Ids = [1UL, 2UL, 3UL, 4UL] };
@@ -511,7 +511,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        var arr = (JsonArray)result["ids"];
+        var arr = (JsonArray)result["Ids"];
         Assert.That(arr.Count, Is.EqualTo(4));
         Assert.That((ulong)arr[0], Is.EqualTo(1UL));
         Assert.That((ulong)arr[1], Is.EqualTo(2UL));
@@ -551,7 +551,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(timestamp DateTime)
+                data JSON(Timestamp DateTime)
             ) ENGINE = Memory");
 
         var data = new { Timestamp = new DateTime(2024, 6, 15, 10, 30, 45, DateTimeKind.Utc) };
@@ -565,7 +565,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        var actualDateTime = result["timestamp"].GetValue<DateTime>();
+        var actualDateTime = result["Timestamp"].GetValue<DateTime>();
         Assert.That(actualDateTime.Year, Is.EqualTo(2024));
         Assert.That(actualDateTime.Month, Is.EqualTo(6));
         Assert.That(actualDateTime.Day, Is.EqualTo(15));
@@ -653,17 +653,17 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task Write_WithCaseInsensitiveHint_ShouldMatchProperty()
+    public async Task Write_WithCaseSensitiveHint_ShouldMatchExactCase()
     {
-        var targetTable = "test.json_write_case_insensitive";
-        // Column has lowercase hint "userid", but POCO property is "UserId"
+        var targetTable = "test.json_write_case_sensitive";
+        // Column has exact case hint "UserId" matching the POCO property
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
-                data JSON(userid Int64)
+                data JSON(UserId Int64)
             ) ENGINE = Memory");
 
-        var poco = new TestPocoCaseInsensitive { UserId = 789L };
+        var poco = new TestPocoCaseSensitive { UserId = 789L };
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -674,8 +674,37 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        // Property is written using the hint path (lowercase "userid") to match the column definition
-        Assert.That((long)result["userid"], Is.EqualTo(789L));
+        // Property matches exact case
+        Assert.That((long)result["UserId"], Is.EqualTo(789L));
+    }
+
+    [Test]
+    public async Task Write_WithCaseMismatchedHint_ShouldNotMatch()
+    {
+        var targetTable = "test.json_write_case_mismatch";
+        // Column has lowercase hint "userid", but POCO property is "UserId" - should NOT match
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(userid Int64)
+            ) ENGINE = Memory");
+
+        var poco = new TestPocoCaseSensitive { UserId = 789L };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        // "userid" hint doesn't match "UserId" property (case-sensitive), so:
+        // - "userid" exists in schema with default value 0 (hinted path with no data written to it)
+        // - "UserId" contains the actual value (written as unhinted dynamic path)
+        Assert.That((long)result["userid"], Is.EqualTo(0L));
+        Assert.That((long)result["UserId"], Is.EqualTo(789L));
     }
 
     private class TestPocoClass
@@ -701,7 +730,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         public string Secret { get; set; }
     }
 
-    private class TestPocoCaseInsensitive
+    private class TestPocoCaseSensitive
     {
         public long UserId { get; set; }
     }

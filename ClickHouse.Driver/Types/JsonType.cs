@@ -62,11 +62,6 @@ internal class JsonType : ParameterizedType
 
     public Dictionary<string, ClickHouseType> HintedTypes { get; }
 
-    /// <summary>
-    /// Case-insensitive lookup that maps to (originalPath, type).
-    /// </summary>
-    private Dictionary<string, (string OriginalPath, ClickHouseType Type)> HintedTypesIgnoreCase { get; }
-
     public JsonType()
         : this(new Dictionary<string, ClickHouseType>())
     {
@@ -75,11 +70,6 @@ internal class JsonType : ParameterizedType
     internal JsonType(Dictionary<string, ClickHouseType> hintedTypes)
     {
         HintedTypes = hintedTypes;
-        HintedTypesIgnoreCase = new Dictionary<string, (string, ClickHouseType)>(hintedTypes.Count, StringComparer.OrdinalIgnoreCase);
-        foreach (var kvp in hintedTypes)
-        {
-            HintedTypesIgnoreCase[kvp.Key] = (kvp.Key, kvp.Value);
-        }
     }
 
     /// <summary>
@@ -236,9 +226,9 @@ internal class JsonType : ParameterizedType
             {
                 // Only write nulls for hinted Nullable types
                 // ClickHouse doesn't allow Nullable inside dynamic JSON paths (Variant type)
-                if (TryGetHintedType(path, out var hintedType, out var actualPath) && hintedType is NullableType)
+                if (HintedTypes.TryGetValue(path, out ClickHouseType hintedType) && hintedType is NullableType)
                 {
-                    writer.Write(actualPath);
+                    writer.Write(path);
                     WriteHintedValue(writer, null, hintedType);
                     count++;
                 }
@@ -252,8 +242,8 @@ internal class JsonType : ParameterizedType
             else
             {
                 // Write out a value
-                TryGetHintedType(path, out var hintedType, out var actualPath);
-                writer.Write(actualPath);
+                HintedTypes.TryGetValue(path, out ClickHouseType hintedType);
+                writer.Write(path);
                 if (hintedType != null)
                 {
                     WriteHintedValue(writer, value, hintedType);
@@ -321,32 +311,6 @@ internal class JsonType : ParameterizedType
     private static JsonPropertyInfo[] GetCachedPropertyInfo(Type type)
     {
         return GetCachedTypeInfo(type).Properties;
-    }
-
-    /// <summary>
-    /// Tries to get a hinted type using case-insensitive matching.
-    /// </summary>
-    private bool TryGetHintedType(string path, out ClickHouseType hintedType)
-    {
-        return TryGetHintedType(path, out hintedType, out _);
-    }
-
-    /// <summary>
-    /// Tries to get a hinted type using case-insensitive matching.
-    /// Also returns the actual path from the hint definition (for correct serialization).
-    /// </summary>
-    private bool TryGetHintedType(string path, out ClickHouseType hintedType, out string actualPath)
-    {
-        if (HintedTypesIgnoreCase.TryGetValue(path, out var hint))
-        {
-            hintedType = hint.Type;
-            actualPath = hint.OriginalPath;
-            return true;
-        }
-
-        actualPath = path;
-        hintedType = null;
-        return false;
     }
 
     private static bool IsNestedObject(Type type)
