@@ -9,18 +9,18 @@ namespace ClickHouse.Driver.Types;
 
 internal class EnumType : ParameterizedType
 {
-    private readonly Dictionary<string, int> values;
+    internal readonly Dictionary<string, int> Values;
     private readonly Dictionary<int, string> reverseValues;
 
     public EnumType()
     {
-        values = new();
+        Values = new();
         reverseValues = new();
     }
 
     protected EnumType(Dictionary<string, int> values)
     {
-        this.values = values;
+        this.Values = values;
         reverseValues = new Dictionary<int, string>(values.Count);
         foreach (var kvp in values)
         {
@@ -52,11 +52,11 @@ internal class EnumType : ParameterizedType
         }
     }
 
-    public int Lookup(string key) => values[key];
+    public int Lookup(string key) => Values[key];
 
     public string Lookup(int value) => reverseValues.TryGetValue(value, out var key) ? key : throw new KeyNotFoundException($"Enum value {value} not found");
 
-    public override string ToString() => $"{Name}({string.Join(",", values.Select(kvp => kvp.Key + "=" + kvp.Value))}";
+    public override string ToString() => $"{Name}({string.Join(",", Values.Select(kvp => kvp.Key + "=" + kvp.Value))}";
 
     public override object Read(ExtendedBinaryReader reader) => throw new NotImplementedException();
 

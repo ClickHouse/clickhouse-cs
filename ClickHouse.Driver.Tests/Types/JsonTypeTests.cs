@@ -7,7 +7,10 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Copy;
+using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Numerics;
+using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -292,5 +295,549 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             TestUtilities.AssertEqual(expectedValue, actualNode?.GetValue<object>());
         }
+    }
+
+    private class UInt64Data { public ulong BigNumber { get; set; } }
+
+    [Test]
+    public async Task Write_WithUInt64Hint_ShouldPreservePrecision()
+    {
+        var targetTable = "test.json_write_uint64_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(bigNumber UInt64)
+            ) ENGINE = Memory");
+
+        var data = new UInt64Data { BigNumber = 18446744073709551615UL };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That((ulong)result["bigNumber"], Is.EqualTo(18446744073709551615UL));
+    }
+
+    private class Int64Data { public long Value { get; set; } }
+
+    [Test]
+    public async Task Write_WithInt64Hint_ShouldWriteCorrectType()
+    {
+        var targetTable = "test.json_write_int64_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(value Int64)
+            ) ENGINE = Memory");
+
+        var data = new Int64Data { Value = 9223372036854775807L };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That((long)result["value"], Is.EqualTo(9223372036854775807L));
+    }
+
+    private class UuidData { public Guid Uuid { get; set; } }
+
+    [Test]
+    public async Task Write_WithUuidHint_ShouldPreserveGuid()
+    {
+        var targetTable = "test.json_write_uuid_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(uuid UUID)
+            ) ENGINE = Memory");
+
+        var guid = Guid.Parse("61f0c404-5cb3-11e7-907b-a6006ad3dba0");
+        var data = new UuidData { Uuid = guid };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        var actualGuid = Guid.Parse(result["uuid"].GetValue<string>());
+        Assert.That(actualGuid, Is.EqualTo(guid));
+    }
+
+    private class DecimalData { public decimal Price { get; set; } }
+
+    [Test]
+    public async Task Write_WithDecimalHint_ShouldPreservePrecision()
+    {
+        var targetTable = "test.json_write_decimal_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(price Decimal64(4))
+            ) ENGINE = Memory");
+
+        var data = new DecimalData { Price = 123.4567m };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        var actualDecimal = ClickHouseDecimal.Parse(result["price"].GetValue<string>());
+        Assert.That(actualDecimal, Is.EqualTo(new ClickHouseDecimal(123.4567m)));
+    }
+
+    private class NestedOuter { public NestedInner Outer { get; set; } }
+    private class NestedInner { public ulong Inner { get; set; } }
+
+    [Test]
+    public async Task Write_WithNestedHints_ShouldWriteNestedFields()
+    {
+        var targetTable = "test.json_write_nested_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(`outer.inner` UInt64)
+            ) ENGINE = Memory");
+
+        var data = new NestedOuter { Outer = new NestedInner { Inner = 9999999999999UL } };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That((ulong)result["outer"]["inner"], Is.EqualTo(9999999999999UL));
+    }
+
+    private class MixedData { public long Id { get; set; } public string Name { get; set; } public double Score { get; set; } }
+
+    [Test]
+    public async Task Write_WithMixedHintedAndUnhinted_ShouldHandleBoth()
+    {
+        var targetTable = "test.json_write_mixed_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(id Int64)
+            ) ENGINE = Memory");
+
+        var data = new MixedData { Id = 123L, Name = "test", Score = 99.5 };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That((long)result["id"], Is.EqualTo(123L));
+        Assert.That(result["Name"].ToString(), Is.EqualTo("test"));
+        Assert.That((double)result["Score"], Is.EqualTo(99.5));
+    }
+
+    private class ArrayData { public ulong[] Ids { get; set; } }
+    private class ListData { public List<ulong> Ids { get; set; } }
+
+    [Test]
+    public async Task Write_WithArrayHint_ShouldWriteTypedArray()
+    {
+        var targetTable = "test.json_write_array_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(ids Array(UInt64))
+            ) ENGINE = Memory");
+
+        var data = new ArrayData { Ids = [1UL, 2UL, 3UL] };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        var arr = (JsonArray)result["ids"];
+        Assert.That(arr.Count, Is.EqualTo(3));
+        Assert.That((ulong)arr[0], Is.EqualTo(1UL));
+        Assert.That((ulong)arr[1], Is.EqualTo(2UL));
+        Assert.That((ulong)arr[2], Is.EqualTo(3UL));
+    }
+
+    [Test]
+    public async Task Write_WithArrayHint_ShouldWriteTypedList()
+    {
+        var targetTable = "test.json_write_list_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(ids Array(UInt64))
+            ) ENGINE = Memory");
+
+        var data = new ListData { Ids = [1UL, 2UL, 3UL, 4UL] };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        var arr = (JsonArray)result["ids"];
+        Assert.That(arr.Count, Is.EqualTo(4));
+        Assert.That((ulong)arr[0], Is.EqualTo(1UL));
+        Assert.That((ulong)arr[1], Is.EqualTo(2UL));
+        Assert.That((ulong)arr[2], Is.EqualTo(3UL));
+        Assert.That((ulong)arr[3], Is.EqualTo(4UL));
+    }
+
+    [Test]
+    public async Task Write_WithPocoObject_ShouldSerializeCorrectly()
+    {
+        var targetTable = "test.json_write_poco";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(Id Int64, Name String)
+            ) ENGINE = Memory");
+
+        var poco = new TestPocoClass { Id = 123L, Name = "Test" };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That((long)result["Id"], Is.EqualTo(123L));
+        Assert.That(result["Name"].ToString(), Is.EqualTo("Test"));
+    }
+
+    [Test]
+    public async Task Write_WithDateTimeHint_ShouldPreserveDateTime()
+    {
+        var targetTable = "test.json_write_datetime_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(timestamp DateTime)
+            ) ENGINE = Memory");
+
+        var data = new { Timestamp = new DateTime(2024, 6, 15, 10, 30, 45, DateTimeKind.Utc) };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        var actualDateTime = result["timestamp"].GetValue<DateTime>();
+        Assert.That(actualDateTime.Year, Is.EqualTo(2024));
+        Assert.That(actualDateTime.Month, Is.EqualTo(6));
+        Assert.That(actualDateTime.Day, Is.EqualTo(15));
+        Assert.That(actualDateTime.Hour, Is.EqualTo(10));
+        Assert.That(actualDateTime.Minute, Is.EqualTo(30));
+        Assert.That(actualDateTime.Second, Is.EqualTo(45));
+    }
+
+    private class NoHintData { public int Number { get; set; } public string Text { get; set; } public bool Flag { get; set; } }
+
+    [Test]
+    public async Task Write_WithNoHints_ShouldUseExistingBehavior()
+    {
+        var targetTable = "test.json_write_no_hints";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        var data = new NoHintData { Number = 42, Text = "hello", Flag = true };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That(result["Number"].GetValue<int>(), Is.EqualTo(42));
+        Assert.That(result["Text"].GetValue<string>(), Is.EqualTo("hello"));
+        Assert.That(result["Flag"].GetValue<bool>(), Is.True);
+    }
+
+    [Test]
+    public async Task Write_WithPocoAndJsonPathAttribute_ShouldUseCustomPath()
+    {
+        var targetTable = "test.json_write_poco_path_attr";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(user.id Int64, user.name String)
+            ) ENGINE = Memory");
+
+        var poco = new TestPocoWithPathAttribute { UserId = 456L, UserName = "CustomPath" };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That((long)result["user"]["id"], Is.EqualTo(456L));
+        Assert.That(result["user"]["name"].ToString(), Is.EqualTo("CustomPath"));
+    }
+
+    [Test]
+    public async Task Write_WithPocoAndJsonIgnoreAttribute_ShouldSkipIgnoredProperties()
+    {
+        var targetTable = "test.json_write_poco_ignore_attr";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(Name String)
+            ) ENGINE = Memory");
+
+        var poco = new TestPocoWithIgnoreAttribute { Name = "Visible", Secret = "Hidden" };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That(result["Name"].ToString(), Is.EqualTo("Visible"));
+        Assert.That(result.ContainsKey("Secret"), Is.False);
+    }
+
+    [Test]
+    public async Task Write_WithCaseInsensitiveHint_ShouldMatchProperty()
+    {
+        var targetTable = "test.json_write_case_insensitive";
+        // Column has lowercase hint "userid", but POCO property is "UserId"
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(userid Int64)
+            ) ENGINE = Memory");
+
+        var poco = new TestPocoCaseInsensitive { UserId = 789L };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        // Property is written using the hint path (lowercase "userid") to match the column definition
+        Assert.That((long)result["userid"], Is.EqualTo(789L));
+    }
+
+    private class TestPocoClass
+    {
+        public long Id { get; set; }
+        public string Name { get; set; }
+    }
+
+    private class TestPocoWithPathAttribute
+    {
+        [ClickHouseJsonPath("user.id")]
+        public long UserId { get; set; }
+
+        [ClickHouseJsonPath("user.name")]
+        public string UserName { get; set; }
+    }
+
+    private class TestPocoWithIgnoreAttribute
+    {
+        public string Name { get; set; }
+
+        [ClickHouseJsonIgnore]
+        public string Secret { get; set; }
+    }
+
+    private class TestPocoCaseInsensitive
+    {
+        public long UserId { get; set; }
+    }
+
+    private class NullableHintedData
+    {
+        public int? Value { get; set; }
+        public string Name { get; set; }
+    }
+
+    private class NullableUnhintedData
+    {
+        public int? Value { get; set; }
+        public string Name { get; set; }
+    }
+
+    [Test]
+    public async Task Write_WithNullableHintedProperty_ShouldWriteNull()
+    {
+        var targetTable = "test.json_write_nullable_hinted";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(Value Nullable(Int32), Name String)
+            ) ENGINE = Memory");
+
+        var data = new NullableHintedData { Value = null, Name = "test" };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That(result["Value"], Is.Null);
+        Assert.That(result["Name"].GetValue<string>(), Is.EqualTo("test"));
+    }
+
+    [Test]
+    public async Task Write_WithNullableUnhintedProperty_ShouldSkipField()
+    {
+        // Nullable/LowCardinality(Nullable) types are not allowed inside Variant type
+        var targetTable = "test.json_write_nullable_unhinted";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        var data = new NullableUnhintedData { Value = null, Name = "test" };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That(result["Name"].GetValue<string>(), Is.EqualTo("test"));
+        // Value should be skipped since string is not Nullable<T>
+        Assert.That(result.ContainsKey("Value"), Is.False);
+    }
+
+    [Test]
+    public async Task Write_WithNonNullableNullProperty_ShouldSkipField()
+    {
+        var targetTable = "test.json_write_nonnullable_null";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        // string is a reference type that can be null, but it's not Nullable<T>
+        var data = new NoHintData { Number = 42, Text = null, Flag = true };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That(result["Number"].GetValue<int>(), Is.EqualTo(42));
+        Assert.That(result["Flag"].GetValue<bool>(), Is.True);
+        // Text should be skipped since string is not Nullable<T>
+        Assert.That(result.ContainsKey("Text"), Is.False);
+    }
+
+    private class DictionaryData
+    {
+        public string Name { get; set; }
+        public Dictionary<string, int> Scores { get; set; }
+    }
+
+    [Test]
+    public async Task Write_WithDictionaryHint_ShouldWriteMap()
+    {
+        var targetTable = "test.json_write_dictionary_hint";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(Name String, Scores Map(String, Int32))
+            ) ENGINE = Memory");
+
+        var data = new DictionaryData
+        {
+            Name = "test",
+            Scores = new Dictionary<string, int>
+            {
+                ["math"] = 95,
+                ["science"] = 88,
+                ["english"] = 92
+            }
+        };
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        Assert.That(result["Name"].GetValue<string>(), Is.EqualTo("test"));
+        var scores = (JsonObject)result["Scores"];
+        Assert.That(scores["math"].GetValue<int>(), Is.EqualTo(95));
+        Assert.That(scores["science"].GetValue<int>(), Is.EqualTo(88));
+        Assert.That(scores["english"].GetValue<int>(), Is.EqualTo(92));
     }
 }

@@ -483,6 +483,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
 
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 1;
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -509,6 +510,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
 
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 1;
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -557,6 +559,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
 
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 1;
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -603,7 +606,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         var result = (JsonObject)reader.GetValue(0);
 
         Assert.That((string)result["name"], Is.EqualTo("test"));
-        Assert.That((long)result["count"], Is.EqualTo(42));
+        Assert.That((int)result["count"], Is.EqualTo(42));
         Assert.That((bool)result["active"], Is.EqualTo(true));
         Assert.That(JsonNode.DeepEquals(result["arrayBool"], new JsonArray(true, false)), Is.True);
 

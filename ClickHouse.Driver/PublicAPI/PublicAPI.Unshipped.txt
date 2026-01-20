@@ -153,3 +153,8 @@ virtual ClickHouse.Driver.ADO.QueryStats.Equals(ClickHouse.Driver.ADO.QueryStats
 virtual ClickHouse.Driver.ADO.QueryStats.PrintMembers(System.Text.StringBuilder builder) -> bool
 static ClickHouse.Driver.Numerics.ClickHouseDecimal.MaxDivisionPrecision.get -> int
 static ClickHouse.Driver.Numerics.ClickHouseDecimal.MaxDivisionPrecision.set -> void
+ClickHouse.Driver.Json.ClickHouseJsonIgnoreAttribute
+ClickHouse.Driver.Json.ClickHouseJsonIgnoreAttribute.ClickHouseJsonIgnoreAttribute() -> void
+ClickHouse.Driver.Json.ClickHouseJsonPathAttribute
+ClickHouse.Driver.Json.ClickHouseJsonPathAttribute.ClickHouseJsonPathAttribute(string path) -> void
+ClickHouse.Driver.Json.ClickHouseJsonPathAttribute.Path.get -> string

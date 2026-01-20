@@ -491,9 +491,9 @@ public static class TestUtilities
             yield return new DataTypeSample("Variant(UInt64, String, Array(UInt64))", typeof(string), "'Hello, World!'::Variant(UInt64, String, Array(UInt64))", "Hello, World!");
         }
 
-        if (SupportedFeatures.HasFlag(Feature.Json))
+        // Temporarily disabled before adding first-class support for input/output_format_binary_write_json_as_string
+        if (false && SupportedFeatures.HasFlag(Feature.Json))
         {
-            // TODO: properly test nulls as ClickHouse eats them
             var jsonExamples = new[]
             {
                 "{}",

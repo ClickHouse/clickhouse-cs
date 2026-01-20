@@ -58,7 +58,10 @@ v?
 * **Moved `ServerTimezone` property from `ClickHouseConnection` to `ClickHouseCommand`.** The server timezone is now available on `ClickHouseCommand.ServerTimezone` after any query execution (the timezone is now extracted from the `X-ClickHouse-Timezone` response header instead of requiring a separate query).
 * **Helper and extension methods made internal:** DateTimeConversions, DataReaderExtensions, DictionaryExtensions, EnumerableExtensions, MathUtils, StringExtensions.
 
+* **JSON writing behavior changed for string and JsonNode inputs.** When writing `string` or `JsonNode` values to JSON columns, the driver now sends the JSON as a plain string for server-side parsing. This requires the server setting `input_format_binary_read_json_as_string=1`. Objects are serialized using binary encoding with type hints.
+
 **New Features/Improvements:**
+ * Added POCO serialization support for JSON columns. When writing POCOs to JSON columns with typed hints (e.g., `JSON(id Int64, name String)`), the driver now serializes properties using the hinted types for full type fidelity. Properties without a corresponding hinted path will have their ClickHouse types inferred automatically. Property names are matched to json paths in a case-insensitive manner. Two attributes are available: `[ClickHouseJsonPath("path")]` for custom JSON paths and `[ClickHouseJsonIgnore]` to exclude properties. Property name matching is case-insensitive.
  * Added support for QBit data type. QBit is a transposed vector column, designed to allow the user to choose a desired quantization level at runtime, speeding up approximate similarity searches. See the GitHub repo for usage examples.
  * Added support for setting roles at the connection and command levels.
  * Added support for custom headers at the connection level.
