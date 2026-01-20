@@ -89,7 +89,7 @@ jobs:
         SM_HOST: ${{ secrets.SM_HOST }}
         SM_TLS_SKIP_VERIFY: false
         DIGICERT_KEY_ALIAS: ${{ secrets.DIGICERT_KEY_ALIAS }}
-        SM_LOG_LEVEL: TRACE
+        SM_LOG_LEVEL: INFO
       run: >
         & "C:\Program Files\DigiCert\DigiCert Keylocker Tools\smctl.exe" windows certsync
 
@@ -102,7 +102,7 @@ jobs:
         SM_HOST: ${{ secrets.SM_HOST }}
         SM_TLS_SKIP_VERIFY: false
         DIGICERT_KEY_ALIAS: ${{ secrets.DIGICERT_KEY_ALIAS }}
-        SM_LOG_LEVEL: TRACE
+        SM_LOG_LEVEL: INFO
       run: |
         Get-ChildItem -Path "${{ github.workspace }}\package" -Filter "*.nupkg" | ForEach-Object {
           Write-Host "Signing $($_.FullName)"
@@ -115,6 +115,20 @@ jobs:
       run: |
         dotnet nuget verify --all "${{ github.workspace }}\package\*.nupkg"
 
+    - name: Print signing logs
+      if: always()
+      run: |
+        $logDir = "$env:USERPROFILE\.signingmanager\logs"
+        Write-Host "Log directory: $logDir"
+        if (Test-Path $logDir) {
+          Get-ChildItem -Path $logDir -File | ForEach-Object {
+            Write-Host "=== $($_.Name) ==="
+            Get-Content $_.FullName
+          }
+        } else {
+          Write-Host "Log directory does not exist"
+        }
+
     - name: Upload signed package
       uses: actions/upload-artifact@v6
       with:
@@ -122,6 +136,7 @@ jobs:
         path: ${{ github.workspace }}/package/ClickHouse.Driver.*nupkg
 
   push_nuget_org:
+    if: false  # Disabled for testing
     runs-on: windows-latest
     needs: [sign]
     name: Upload to NuGet.org
@@ -137,6 +152,7 @@ jobs:
       run: dotnet nuget push ClickHouse.Driver.*.nupkg --skip-duplicate --api-key ${{ secrets.NUGET_TOKEN }} --source https://api.nuget.org/v3/index.json
 
   github_release:
+    if: false  # Disabled for testing
     runs-on: ubuntu-latest
     needs: [sign]
     name: Create GitHub release
