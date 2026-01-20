@@ -10,6 +10,7 @@ using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Numerics;
+using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
@@ -868,5 +869,180 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(scores["math"].GetValue<int>(), Is.EqualTo(95));
         Assert.That(scores["science"].GetValue<int>(), Is.EqualTo(88));
         Assert.That(scores["english"].GetValue<int>(), Is.EqualTo(92));
+    }
+
+    /// <summary>
+    /// POCO with many types to exercise BinaryTypeEncoder coverage.
+    /// </summary>
+    private class ComprehensiveTypesData
+    {
+        // Unsigned integers
+        public byte ByteVal { get; set; }
+        public ushort UShortVal { get; set; }
+        public uint UIntVal { get; set; }
+        public ulong ULongVal { get; set; }
+
+        // Signed integers
+        public sbyte SByteVal { get; set; }
+        public short ShortVal { get; set; }
+        public int IntVal { get; set; }
+        public long LongVal { get; set; }
+
+        // Floating point
+        public float FloatVal { get; set; }
+        public double DoubleVal { get; set; }
+
+        // Boolean
+        public bool BoolVal { get; set; }
+
+        // String
+        public string StringVal { get; set; }
+
+        // UUID
+        public Guid GuidVal { get; set; }
+
+        // Date/Time
+        public DateTime DateTimeVal { get; set; }
+
+        // IP address (IPv4 only - type inference maps IPAddress to IPv4)
+        public IPAddress IPv4Val { get; set; }
+
+        // Collections
+        public int[] IntArray { get; set; }
+        public List<string> StringList { get; set; }
+        public Dictionary<string, double> StringDoubleMap { get; set; }
+
+        // Nested array
+        public int[][] NestedIntArray { get; set; }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithManyUnhintedTypes_ShouldInferAndWriteAllTypes()
+    {
+        var targetTable = "test.json_write_comprehensive_types";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        var testGuid = Guid.Parse("550e8400-e29b-41d4-a716-446655440000");
+        var testDateTime = new DateTime(2024, 6, 15, 12, 30, 45, DateTimeKind.Utc);
+
+        var data = new ComprehensiveTypesData
+        {
+            // Unsigned integers
+            ByteVal = 255,
+            UShortVal = 65535,
+            UIntVal = 4294967295,
+            ULongVal = 18446744073709551615,
+
+            // Signed integers
+            SByteVal = -128,
+            ShortVal = -32768,
+            IntVal = -2147483648,
+            LongVal = -9223372036854775808,
+
+            // Floating point
+            FloatVal = 3.14159f,
+            DoubleVal = 2.718281828459045,
+
+            // Boolean
+            BoolVal = true,
+
+            // String
+            StringVal = "Hello, JSON!",
+
+            // UUID
+            GuidVal = testGuid,
+
+            // Date/Time
+            DateTimeVal = testDateTime,
+
+            // IP address
+            IPv4Val = IPAddress.Parse("192.168.1.1"),
+
+            // Collections
+            IntArray = [1, 2, 3, 4, 5],
+            StringList = ["apple", "banana", "cherry"],
+            StringDoubleMap = new Dictionary<string, double>
+            {
+                ["pi"] = 3.14159,
+                ["e"] = 2.71828
+            },
+
+            // Nested array
+            NestedIntArray = [[1, 2], [3, 4, 5], [6]]
+        };
+
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+
+        // Verify unsigned integers
+        Assert.That((byte)result["ByteVal"], Is.EqualTo(255));
+        Assert.That((ushort)result["UShortVal"], Is.EqualTo(65535));
+        Assert.That((uint)result["UIntVal"], Is.EqualTo(4294967295));
+        Assert.That((ulong)result["ULongVal"], Is.EqualTo(18446744073709551615));
+
+        // Verify signed integers
+        Assert.That((sbyte)result["SByteVal"], Is.EqualTo(-128));
+        Assert.That((short)result["ShortVal"], Is.EqualTo(-32768));
+        Assert.That((int)result["IntVal"], Is.EqualTo(-2147483648));
+        Assert.That((long)result["LongVal"], Is.EqualTo(-9223372036854775808));
+
+        // Verify floating point
+        Assert.That((float)result["FloatVal"], Is.EqualTo(3.14159f).Within(0.0001f));
+        Assert.That((double)result["DoubleVal"], Is.EqualTo(2.718281828459045).Within(0.0000001));
+
+        // Verify boolean
+        Assert.That((bool)result["BoolVal"], Is.True);
+
+        // Verify string
+        Assert.That(result["StringVal"].GetValue<string>(), Is.EqualTo("Hello, JSON!"));
+
+        // Verify UUID
+        Assert.That(Guid.Parse(result["GuidVal"].GetValue<string>()), Is.EqualTo(testGuid));
+
+        // Verify DateTime
+        var resultDateTime = result["DateTimeVal"].GetValue<DateTime>();
+        Assert.That(resultDateTime.Year, Is.EqualTo(2024));
+        Assert.That(resultDateTime.Month, Is.EqualTo(6));
+        Assert.That(resultDateTime.Day, Is.EqualTo(15));
+
+        // Verify IP address
+        Assert.That(result["IPv4Val"].GetValue<string>(), Is.EqualTo("192.168.1.1"));
+
+        // Verify int array
+        var intArray = (JsonArray)result["IntArray"];
+        Assert.That(intArray.Count, Is.EqualTo(5));
+        Assert.That((int)intArray[0], Is.EqualTo(1));
+        Assert.That((int)intArray[4], Is.EqualTo(5));
+
+        // Verify string list
+        var stringList = (JsonArray)result["StringList"];
+        Assert.That(stringList.Count, Is.EqualTo(3));
+        Assert.That(stringList[0].GetValue<string>(), Is.EqualTo("apple"));
+        Assert.That(stringList[2].GetValue<string>(), Is.EqualTo("cherry"));
+
+        // Verify map
+        var mapResult = (JsonObject)result["StringDoubleMap"];
+        Assert.That((double)mapResult["pi"], Is.EqualTo(3.14159).Within(0.0001));
+        Assert.That((double)mapResult["e"], Is.EqualTo(2.71828).Within(0.0001));
+
+        // Verify nested array
+        var nestedArray = (JsonArray)result["NestedIntArray"];
+        Assert.That(nestedArray.Count, Is.EqualTo(3));
+        Assert.That(((JsonArray)nestedArray[0]).Count, Is.EqualTo(2));
+        Assert.That((int)((JsonArray)nestedArray[1])[2], Is.EqualTo(5));
     }
 }
