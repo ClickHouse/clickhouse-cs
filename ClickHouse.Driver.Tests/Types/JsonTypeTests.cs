@@ -903,6 +903,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         // Date/Time
         public DateTime DateTimeVal { get; set; }
+        public TimeSpan TimeSpanVal { get; set; }
 
         // IP address (IPv4 only - type inference maps IPAddress to IPv4)
         public IPAddress IPv4Val { get; set; }
@@ -959,6 +960,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
             // Date/Time
             DateTimeVal = testDateTime,
+            TimeSpanVal = new TimeSpan(1, 2, 3, 4, 567),
 
             // IP address
             IPv4Val = IPAddress.Parse("192.168.1.1"),
@@ -1018,6 +1020,10 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(resultDateTime.Year, Is.EqualTo(2024));
         Assert.That(resultDateTime.Month, Is.EqualTo(6));
         Assert.That(resultDateTime.Day, Is.EqualTo(15));
+
+        // Verify TimeSpan (stored as Time64, returned as string)
+        var resultTimeSpan = result["TimeSpanVal"].GetValue<string>();
+        Assert.That(resultTimeSpan, Does.Contain("02:03:04")); // hours:minutes:seconds
 
         // Verify IP address
         Assert.That(result["IPv4Val"].GetValue<string>(), Is.EqualTo("192.168.1.1"));

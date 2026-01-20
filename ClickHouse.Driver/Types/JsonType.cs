@@ -320,6 +320,10 @@ internal class JsonType : ParameterizedType
             && type != typeof(decimal)
             && type != typeof(DateTime)
             && type != typeof(DateTimeOffset)
+            && type != typeof(TimeSpan)
+#if NET6_0_OR_GREATER
+            && type != typeof(DateOnly)
+#endif
             && type != typeof(Guid)
             && type != typeof(BigInteger)
             && type != typeof(ClickHouseDecimal)
