@@ -577,6 +577,38 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
     private class NoHintData { public int Number { get; set; } public string Text { get; set; } public bool Flag { get; set; } }
 
+    private class UnhintedDecimalData { public decimal Price { get; set; } }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithUnhintedDecimal_ShouldPreserveFractionalPart()
+    {
+        var targetTable = "test.json_write_unhinted_decimal";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        var data = new UnhintedDecimalData { Price = 123.4567m };
+
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+
+        // Decimal should preserve fractional part even without a type hint
+        var actualDecimal = ClickHouseDecimal.Parse(result["Price"].GetValue<string>());
+        Assert.That(actualDecimal, Is.EqualTo(new ClickHouseDecimal(123.4567m)));
+    }
+
     [Test]
     public async Task Write_WithNoHints_ShouldUseExistingBehavior()
     {
@@ -1048,6 +1080,84 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
     private class TimeSpanData { public TimeSpan Duration { get; set; } }
 
+    private class CircularRefA
+    {
+        public int Id { get; set; }
+        public CircularRefB RefB { get; set; }
+    }
+
+    private class CircularRefB
+    {
+        public int Id { get; set; }
+        public CircularRefA RefA { get; set; }
+    }
+
+    private class SelfReferencing
+    {
+        public int Id { get; set; }
+        public SelfReferencing Self { get; set; }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithCircularReference_ShouldThrowInvalidOperationException()
+    {
+        var targetTable = "test.json_write_circular_ref";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        // Create circular reference: A -> B -> A
+        var a = new CircularRefA { Id = 1 };
+        var b = new CircularRefB { Id = 2 };
+        a.RefB = b;
+        b.RefA = a;
+
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync([new object[] { 1u, a }]));
+
+        Assert.That(ex.InnerException, Is.TypeOf<InvalidOperationException>());
+        Assert.That(ex.InnerException.Message, Does.Contain("Circular reference detected"));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithSelfReference_ShouldThrowInvalidOperationException()
+    {
+        var targetTable = "test.json_write_self_ref";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        // Create self-reference
+        var obj = new SelfReferencing { Id = 1 };
+        obj.Self = obj;
+
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync([new object[] { 1u, obj }]));
+
+        Assert.That(ex.InnerException, Is.TypeOf<InvalidOperationException>());
+        Assert.That(ex.InnerException.Message, Does.Contain("Circular reference detected"));
+    }
+
     [Test]
     [RequiredFeature(Feature.Json | Feature.Time)]
     public async Task Write_WithTimeSpan_ShouldWriteAsTime64()
@@ -1075,6 +1185,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         // TimeSpan stored as Time64, returned as string
         var resultTimeSpan = result["Duration"].GetValue<string>();
-        Assert.That(resultTimeSpan, Does.Contain("02:03:04")); // hours:minutes:seconds
+        Assert.That(TimeSpan.Parse(resultTimeSpan), Is.EqualTo(data.Duration));
     }
 }
