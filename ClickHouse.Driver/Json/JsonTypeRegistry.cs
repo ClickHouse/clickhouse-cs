@@ -19,7 +19,7 @@ internal sealed class JsonTypeRegistry
     /// <summary>
     /// Cache for registered POCO types and their property metadata.
     /// </summary>
-    private readonly Dictionary<Type, JsonPropertyInfo[]> _registeredTypes = new();
+    private readonly Dictionary<Type, JsonPropertyInfo[]> registeredTypes = new();
 
     /// <summary>
     /// Registers a POCO type for JSON/Dynamic serialization.
@@ -29,8 +29,9 @@ internal sealed class JsonTypeRegistry
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    internal void RegisterType<T>() where T : class
-        => RegisterType(typeof(T));
+    internal void RegisterType<T>()
+    where T : class
+        => this.RegisterType(typeof(T));
 
     /// <summary>
     /// Registers a POCO type for JSON/Dynamic serialization.
@@ -46,7 +47,7 @@ internal sealed class JsonTypeRegistry
         if (type == null)
             throw new ArgumentNullException(nameof(type));
 
-        if (_registeredTypes.ContainsKey(type))
+        if (registeredTypes.ContainsKey(type))
             return;
 
         BuildPropertyInfo(type, new HashSet<Type>());
@@ -58,7 +59,7 @@ internal sealed class JsonTypeRegistry
     /// <param name="type">The type to get properties for.</param>
     /// <returns>The property info array, or null if the type is not registered.</returns>
     internal JsonPropertyInfo[] GetProperties(Type type)
-        => _registeredTypes.TryGetValue(type, out var props) ? props : null;
+        => registeredTypes.TryGetValue(type, out var props) ? props : null;
 
     /// <summary>
     /// Builds and validates property info for a type.
@@ -129,14 +130,14 @@ internal sealed class JsonTypeRegistry
             });
 
             // Recursively register nested object types (skip if already registered or being registered)
-            if (isNested && !_registeredTypes.ContainsKey(underlyingType))
+            if (isNested && !registeredTypes.ContainsKey(underlyingType))
             {
                 BuildPropertyInfo(underlyingType, typesBeingRegistered);
             }
         }
 
         // Add to the cache after processing all properties
-        _registeredTypes[type] = result.ToArray();
+        registeredTypes[type] = result.ToArray();
     }
 
     /// <summary>

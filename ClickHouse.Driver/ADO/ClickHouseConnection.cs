@@ -27,7 +27,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     private readonly List<IDisposable> disposables = new();
     private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
-    private readonly JsonTypeRegistry _jsonTypeRegistry = new();
+    private readonly JsonTypeRegistry jsonTypeRegistry = new();
     private volatile ConnectionState state = ConnectionState.Closed; // Not an autoproperty because of interface implementation
 
     // HTTP client management
@@ -532,7 +532,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         return response;
     }
 
-    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, _jsonTypeRegistry);
+    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, jsonTypeRegistry);
 
     /// <summary>
     /// Registers a POCO type for JSON column serialization.
@@ -542,8 +542,9 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    public void RegisterJsonSerializationType<T>() where T : class
-        => _jsonTypeRegistry.RegisterType<T>();
+    public void RegisterJsonSerializationType<T>() 
+    where T : class
+        => jsonTypeRegistry.RegisterType<T>();
 
     /// <summary>
     /// Registers a POCO type for JSON column serialization.
@@ -555,7 +556,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
     public void RegisterJsonSerializationType(Type type)
-        => _jsonTypeRegistry.RegisterType(type);
+        => jsonTypeRegistry.RegisterType(type);
 
     internal ClickHouseUriBuilder CreateUriBuilder(string sql = null) => new ClickHouseUriBuilder(serverUri)
     {
