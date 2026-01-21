@@ -52,7 +52,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         ClickHouseJsonSerializer.RegisterType<MissingPropertyData>();
         ClickHouseJsonSerializer.RegisterType<EmptyPocoData>();
         ClickHouseJsonSerializer.RegisterType<AllNullsData>();
-        ClickHouseJsonSerializer.RegisterType<ExtraPropertyData>();
     }
 
     public static IEnumerable<TestCaseData> JsonTypeTestCases()
