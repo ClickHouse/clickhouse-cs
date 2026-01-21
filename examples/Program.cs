@@ -151,6 +151,19 @@ class Program
         await ComplexTypes.Run();
         WaitForUser(isInteractive);
 
+        // ORM Integration
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("ORM INTEGRATION");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(DapperExample)}");
+        await DapperExample.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(Linq2DbExample)}");
+        await Linq2DbExample.Run();
+        WaitForUser(isInteractive);
+
         // Advanced
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ADVANCED FEATURES");
@@ -175,7 +188,7 @@ class Program
         Console.WriteLine($"\n\nRunning: {nameof(QueryStatistics)}");
         await QueryStatistics.Run();
         WaitForUser(isInteractive);
-        
+
         Console.WriteLine($"\n\nRunning: {nameof(Roles)}");
         await Roles.Run();
         WaitForUser(isInteractive);
@@ -192,6 +205,10 @@ class Program
         await ReadOnlyUsers.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(RetriesAndDeduplication)}");
+        await RetriesAndDeduplication.Run();
+        WaitForUser(isInteractive);
+
         // Troubleshooting
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("TROUBLESHOOTING");
@@ -203,6 +220,10 @@ class Program
 
         Console.WriteLine($"\n\nRunning: {nameof(NetworkTracing)}");
         await NetworkTracing.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(OpenTelemetryTracing)}");
+        await OpenTelemetryTracing.Run();
         WaitForUser(isInteractive);
 
         Console.WriteLine("\n\n" + new string('=', 70));

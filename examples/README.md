@@ -51,6 +51,11 @@ If something is missing, or you found a mistake in one of these examples, please
 - [DataTypes_002_DateTimeHandling.cs](DataTypes_002_DateTimeHandling.cs) - Comprehensive guide to DateTime, DateTime64, Date, Date32, timezones, DateTime.Kind behavior, and DateTimeOffset
 - [DataTypes_003_ComplexTypes.cs](DataTypes_003_ComplexTypes.cs) - Working with complex data types: Arrays, Maps, Tuples, IP addresses, and Nested structures
 
+### ORM Integration
+
+- [ORM_001_Dapper.cs](ORM_001_Dapper.cs) - Using Dapper and Dapper.Contrib with ClickHouse: queries, inserts, type handlers, and known limitations
+- [ORM_002_Linq2Db.cs](ORM_002_Linq2Db.cs) - Using linq2db with ClickHouse: LINQ queries, inserts, BulkCopy, and entity mapping
+
 ### Advanced Features
 
 - [Advanced_001_QueryIdUsage.cs](Advanced_001_QueryIdUsage.cs) - Using Query IDs to track and monitor query execution
@@ -62,11 +67,13 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Advanced_007_CustomHeaders.cs](Advanced_007_CustomHeaders.cs) - Using custom HTTP headers for proxy authentication, distributed tracing, etc
 - [Advanced_008_QueryCancellation.cs](Advanced_008_QueryCancellation.cs) - Using CancellationToken to cancel long-running queries
 - [Advanced_009_ReadOnlyUsers.cs](Advanced_009_ReadOnlyUsers.cs) - Working with READONLY = 1 users and their limitations
+- [Advanced_010_RetriesAndDeduplication.cs](Advanced_010_RetriesAndDeduplication.cs) - Retry patterns with Polly and ReplacingMergeTree for exactly-once insert semantics
 
 ### Troubleshooting
 
 - [Troubleshooting_001_LoggingConfiguration.cs](Troubleshooting_001_LoggingConfiguration.cs) - Setting up logging with Microsoft.Extensions.Logging to view diagnostic information
 - [Troubleshooting_002_NetworkTracing.cs](Troubleshooting_002_NetworkTracing.cs) - Enabling low-level .NET network tracing for debugging connection issues (HTTP, Sockets, DNS, TLS)
+- [Troubleshooting_003_OpenTelemetryTracing.cs](Troubleshooting_003_OpenTelemetryTracing.cs) - Collecting OpenTelemetry traces from the driver for distributed tracing and observability
 
 ## How to run
 
