@@ -860,6 +860,45 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(result.ContainsKey("Text"), Is.False);
     }
 
+    private class NonNullableHintedData
+    {
+        public int? Value { get; set; }
+        public string Name { get; set; }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithNonNullableHintAndNullValue_ShouldWriteNothing()
+    {
+        // Tests the BinaryTypeIndex.Nothing path in WriteHintedValue
+        // When a non-nullable hint (Int64) receives a null value, we write Nothing type
+        // ClickHouse converts Nothing to the default value for the hinted type (0 for Int64)
+        var targetTable = "test.json_write_nonnullable_hint_null";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(Value Int64, Name String)
+            ) ENGINE = Memory");
+
+        // Value is null but hint is non-nullable Int64
+        var data = new NonNullableHintedData { Value = null, Name = "test" };
+
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+        // ClickHouse handles null json values on non-nullable columns by setting to the default value, 0 in this case
+        Assert.That(result["Value"].GetValue<long>(), Is.EqualTo(0L));
+        Assert.That(result["Name"].GetValue<string>(), Is.EqualTo("test"));
+    }
+
     private class DictionaryData
     {
         public string Name { get; set; }

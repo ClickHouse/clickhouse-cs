@@ -8,10 +8,12 @@ using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Readers;
+using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
+using NUnit.Framework.Legacy;
 
 namespace ClickHouse.Driver.Tests.Types;
 
@@ -193,5 +195,249 @@ public class DynamicTests : AbstractConnectionTestFixture
             default:
                 return true;
         }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_Int32_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_int32";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, 42 }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(42));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_Int64_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_int64";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, 9223372036854775807L }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(9223372036854775807L));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_Double_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_double";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, 3.14159 }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That((double)reader.GetValue(0), Is.EqualTo(3.14159).Within(0.00001));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_String_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_string";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, "hello world" }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo("hello world"));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_Bool_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_bool";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, true }, new object[] { 2u, false }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable} ORDER BY id");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(true));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(false));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_DateTime_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_datetime";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        var dateTime = new DateTime(2024, 6, 15, 10, 30, 45, DateTimeKind.Unspecified);
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, dateTime }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (DateTime)reader.GetValue(0);
+        Assert.That(result.Year, Is.EqualTo(2024));
+        Assert.That(result.Month, Is.EqualTo(6));
+        Assert.That(result.Day, Is.EqualTo(15));
+        Assert.That(result.Hour, Is.EqualTo(10));
+        Assert.That(result.Minute, Is.EqualTo(30));
+        Assert.That(result.Second, Is.EqualTo(45));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_Guid_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_guid";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        var guid = Guid.NewGuid();
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, guid }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(guid));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_Decimal_ShouldPreservePrecision()
+    {
+        var targetTable = "test.dynamic_write_decimal";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        var decimalValue = 123.456789m;
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, decimalValue }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (ClickHouseDecimal)reader.GetValue(0);
+        Assert.That(result, Is.EqualTo(new ClickHouseDecimal(123.456789m)));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_IntArray_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_int_array";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        var array = new[] { 1, 2, 3, 4, 5 };
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, array }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (int[])reader.GetValue(0);
+        Assert.That(result, Is.EqualTo(array));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_StringList_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_string_list";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        var list = new List<string> { "a", "b", "c" };
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, list }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (string[])reader.GetValue(0);
+        Assert.That(result, Is.EqualTo(new[] { "a", "b", "c" }));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_Dictionary_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_dictionary";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        var dict = new Dictionary<string, int> { ["one"] = 1, ["two"] = 2 };
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, dict }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (Dictionary<string, int>)reader.GetValue(0);
+        Assert.That(result["one"], Is.EqualTo(1));
+        Assert.That(result["two"], Is.EqualTo(2));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_MixedTypesInSameColumn_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_mixed";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([
+            new object[] { 1u, 42 },
+            new object[] { 2u, "hello" },
+            new object[] { 3u, 3.14 },
+            new object[] { 4u, true }
+        ]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT id, value FROM {targetTable} ORDER BY id");
+
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo(42));
+
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
+
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That((double)reader.GetValue(1), Is.EqualTo(3.14));
+
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo(true));
     }
 }
