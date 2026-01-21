@@ -440,4 +440,21 @@ public class DynamicTests : AbstractConnectionTestFixture
         ClassicAssert.IsTrue(reader.Read());
         Assert.That(reader.GetValue(1), Is.EqualTo(true));
     }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_Null_ShouldRoundTrip()
+    {
+        var targetTable = "test.dynamic_write_null";
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, null }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(DBNull.Value));
+    }
 }

@@ -30,7 +30,8 @@ internal class DynamicType : ClickHouseType
     {
         if (value is null || value is DBNull)
         {
-            writer.Write(BinaryTypeIndex.Nothing);    
+            writer.Write(BinaryTypeIndex.Nothing);
+            return;
         }
         var inferredType = GetCachedInferredType(value.GetType());
         BinaryTypeDescriptionWriter.WriteTypeHeader(writer, inferredType);
