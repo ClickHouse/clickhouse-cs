@@ -40,7 +40,7 @@ public static class RawStreamInsert
         ");
 
         Console.WriteLine($"Table '{tableName}' created\n");
-        
+
         var csvFile = Path.Combine(AppContext.BaseDirectory, "resources", "people.csv");
 
         Console.WriteLine("1. Inserting from CSV file stream:");

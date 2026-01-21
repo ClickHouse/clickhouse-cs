@@ -127,7 +127,7 @@ public static class AsyncInsert
         });
 
         await Task.WhenAll(tasks);
-        
+
         Console.WriteLine($"   {concurrentInserts} concurrent inserts ({rowsPerInsert} rows each) completed");
 
         // Verify data
@@ -206,7 +206,7 @@ public static class AsyncInsert
 
                     Interlocked.Add(ref rowsSent, batchSize);
                     Interlocked.Increment(ref insertCount);
-                    
+
                     Console.WriteLine($"   Insert #{insertCount}: {batchSize} rows sent");
                 }
                 catch (Exception ex)

@@ -53,7 +53,7 @@ public static class SelectMetadata
                 }
             }
         }
-        
+
         // Clean up
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
         Console.WriteLine($"\nTable '{tableName}' dropped");

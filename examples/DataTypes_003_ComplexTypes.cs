@@ -34,7 +34,7 @@ public static class ComplexTypes
         // Example 3: Tuples
         Console.WriteLine("\n3. Working with Tuples:");
         await Example3_Tuples(connection);
-        
+
         // Example 4: IP Addresses
         Console.WriteLine("\n4. Working with IP Addresses:");
         await Example4_IPAddresses(connection);
@@ -207,7 +207,7 @@ public static class ComplexTypes
             command.AddParameter("id", 1);
             command.AddParameter("person", Tuple.Create("Alice Johnson", (byte)30, "alice@example.com"));
             command.AddParameter("coordinates", Tuple.Create(12.5, 34.7, 56.9));
-            command.AddParameter("point", "Tuple(Int32, Int32)", new List<int> { 1,2 }); // You can also insert a Tuple from an IList, but you need to specify the type explicitly
+            command.AddParameter("point", "Tuple(Int32, Int32)", new List<int> { 1, 2 }); // You can also insert a Tuple from an IList, but you need to specify the type explicitly
             await command.ExecuteNonQueryAsync();
         }
 

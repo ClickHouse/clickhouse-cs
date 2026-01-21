@@ -47,7 +47,7 @@ public static class CreateTableSingleNode
             ORDER BY (event_date, user_id)
         ");
         Console.WriteLine($"   Table '{tableName2}' created with monthly partitions\n");
-        
+
         // Example 3: Table with default values
         Console.WriteLine("3. Creating a table with default values:");
         var tableName3 = "example_with_defaults";
