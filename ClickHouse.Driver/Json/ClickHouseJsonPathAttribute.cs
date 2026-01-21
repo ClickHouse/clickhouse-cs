@@ -23,6 +23,9 @@ public sealed class ClickHouseJsonPathAttribute : Attribute
     /// <param name="path">The JSON path to use for the property.</param>
     public ClickHouseJsonPathAttribute(string path)
     {
-        Path = path ?? throw new ArgumentNullException(nameof(path));
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Path cannot be null or empty.", nameof(path));
+
+        Path = path;
     }
 }

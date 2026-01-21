@@ -111,6 +111,27 @@ public class ClickHouseJsonSerializerTests
     }
 
     [Test]
+    public void JsonPathAttribute_WithEmptyPath_ShouldThrow()
+    {
+        Assert.Throws<ArgumentException>(() => new ClickHouseJsonPathAttribute(""));
+        Assert.Throws<ArgumentException>(() => new ClickHouseJsonPathAttribute("   "));
+        Assert.Throws<ArgumentException>(() => new ClickHouseJsonPathAttribute(null));
+    }
+
+    [Test]
+    public void JsonPathAttribute_WithValidPath_ShouldSucceed()
+    {
+        var attr1 = new ClickHouseJsonPathAttribute("simple");
+        Assert.That(attr1.Path, Is.EqualTo("simple"));
+
+        var attr2 = new ClickHouseJsonPathAttribute("nested.path");
+        Assert.That(attr2.Path, Is.EqualTo("nested.path"));
+
+        var attr3 = new ClickHouseJsonPathAttribute("deeply.nested.path.here");
+        Assert.That(attr3.Path, Is.EqualTo("deeply.nested.path.here"));
+    }
+
+    [Test]
     public void IsTypeRegistered_BeforeRegistration_ShouldReturnFalse()
     {
         // Use a unique type that hasn't been registered
