@@ -47,6 +47,12 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         ClickHouseJsonSerializer.RegisterType<TimeSpanData>();
         ClickHouseJsonSerializer.RegisterType<CircularRefA>();
         ClickHouseJsonSerializer.RegisterType<SelfReferencing>();
+        ClickHouseJsonSerializer.RegisterType<ProductData>();
+        ClickHouseJsonSerializer.RegisterType<WrongTypeData>();
+        ClickHouseJsonSerializer.RegisterType<MissingPropertyData>();
+        ClickHouseJsonSerializer.RegisterType<EmptyPocoData>();
+        ClickHouseJsonSerializer.RegisterType<AllNullsData>();
+        ClickHouseJsonSerializer.RegisterType<ExtraPropertyData>();
     }
 
     public static IEnumerable<TestCaseData> JsonTypeTestCases()
@@ -350,6 +356,59 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
         Assert.That((ulong)result["BigNumber"], Is.EqualTo(18446744073709551615UL));
+    }
+
+    private class ProductData
+    {
+        public string Name { get; set; }
+        public decimal Price { get; set; }
+        public int Quantity { get; set; }
+    }
+
+    [Test]
+    public async Task Write_WithMultipleRowsAndTrailingColumns_ShouldRoundTrip()
+    {
+        var targetTable = "test.json_write_multiple_rows_trailing";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(Name String, Price Decimal64(2), Quantity Int32),
+                category String,
+                active UInt8
+            ) ENGINE = Memory");
+
+        var rows = new List<object[]>
+        {
+            new object[] { 1u, new ProductData { Name = "Widget", Price = 19.99m, Quantity = 100 }, "Electronics", (byte)1 },
+            new object[] { 2u, new ProductData { Name = "Gadget", Price = 29.99m, Quantity = 50 }, "Electronics", (byte)1 },
+            new object[] { 3u, new ProductData { Name = "Gizmo", Price = 9.99m, Quantity = 200 }, "Toys", (byte)0 },
+            new object[] { 4u, new ProductData { Name = "Thingamajig", Price = 49.99m, Quantity = 25 }, "Hardware", (byte)1 },
+        };
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync(rows);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT id, data, category, active FROM {targetTable} ORDER BY id");
+
+        for (int i = 0; i < rows.Count; i++)
+        {
+            ClassicAssert.IsTrue(reader.Read());
+
+            var expectedRow = rows[i];
+            var expectedProduct = (ProductData)expectedRow[1];
+
+            Assert.That(reader.GetValue(0), Is.EqualTo(expectedRow[0]));
+            var jsonResult = (JsonObject)reader.GetValue(1);
+            Assert.That(jsonResult["Name"].GetValue<string>(), Is.EqualTo(expectedProduct.Name));
+            Assert.That(reader.GetString(2), Is.EqualTo(expectedRow[2]));
+            Assert.That(reader.GetByte(3), Is.EqualTo(expectedRow[3]));
+        }
+
+        ClassicAssert.IsFalse(reader.Read());
     }
 
     private class Int64Data { public long Value { get; set; } }
@@ -1292,5 +1351,139 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(jsonEx.TargetType, Is.EqualTo(typeof(UnregisteredPocoData)));
         Assert.That(jsonEx.Message, Does.Contain("UnregisteredPocoData"));
         Assert.That(jsonEx.Message, Does.Contain("RegisterType"));
+    }
+
+    private class WrongTypeData
+    {
+        public string Value { get; set; }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithWrongPropertyType_ShouldThrowServerError()
+    {
+        // POCO has string property, but schema expects Int64
+        var targetTable = "test.json_write_wrong_type";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(Value Int64)
+            ) ENGINE = Memory");
+
+        var data = new WrongTypeData { Value = "not a number" };
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+
+        // Server should reject this - we're sending a string where Int64 is expected
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]));
+
+        Assert.That(ex.InnerException, Is.TypeOf<FormatException>());
+    }
+
+    private class MissingPropertyData
+    {
+        public int Id { get; set; }
+        // Missing "Name" property that schema expects
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithMissingHintedProperty_ShouldSucceedWithNull()
+    {
+        // POCO is missing a property that the schema hints for - should write null/default
+        var targetTable = "test.json_write_missing_property";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(Id Int32, Name String)
+            ) ENGINE = Memory");
+
+        var data = new MissingPropertyData { Id = 42 };
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+
+        // Id should be present, Name should be absent (not written)
+        Assert.That(result["Id"].GetValue<int>(), Is.EqualTo(42));
+        Assert.That(result.ContainsKey("Name"), Is.False);
+    }
+
+    private class EmptyPocoData
+    {
+        // No properties
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithEmptyPoco_ShouldWriteEmptyObject()
+    {
+        var targetTable = "test.json_write_empty_poco";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        var data = new EmptyPocoData();
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That(result.Count, Is.EqualTo(0));
+    }
+
+    private class AllNullsData
+    {
+        public string Name { get; set; }
+        public int? Count { get; set; }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithAllNullProperties_ShouldWriteEmptyObject()
+    {
+        var targetTable = "test.json_write_all_nulls";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        var data = new AllNullsData { Name = null, Count = null };
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+
+        // Null properties should not be written to JSON
+        Assert.That(result.Count, Is.EqualTo(0));
     }
 }

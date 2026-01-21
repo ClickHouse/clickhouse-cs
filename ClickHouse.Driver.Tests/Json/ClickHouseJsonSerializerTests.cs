@@ -92,6 +92,24 @@ public class ClickHouseJsonSerializerTests
             ClickHouseJsonSerializer.RegisterType(null));
     }
 
+    private class PocoWithDuplicatePaths
+    {
+        [ClickHouseJsonPath("shared.path")]
+        public int First { get; set; }
+
+        [ClickHouseJsonPath("shared.path")]
+        public string Second { get; set; }
+    }
+
+    [Test]
+    public void RegisterType_WithDuplicateJsonPaths_ShouldThrow()
+    {
+        var ex = Assert.Throws<ClickHouseJsonSerializationException>(() =>
+            ClickHouseJsonSerializer.RegisterType<PocoWithDuplicatePaths>());
+
+        Assert.That(ex.Message, Does.Contain("shared.path"));
+    }
+
     [Test]
     public void IsTypeRegistered_BeforeRegistration_ShouldReturnFalse()
     {
