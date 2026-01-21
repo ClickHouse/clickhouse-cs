@@ -21,6 +21,34 @@ namespace ClickHouse.Driver.Tests.Types;
 [TestFixture]
 public class JsonTypeTests : AbstractConnectionTestFixture
 {
+    [OneTimeSetUp]
+    public void RegisterPocoTypes()
+    {
+        // Register all POCO types used in JSON serialization tests
+        ClickHouseJsonSerializer.RegisterType<UInt64Data>();
+        ClickHouseJsonSerializer.RegisterType<Int64Data>();
+        ClickHouseJsonSerializer.RegisterType<UuidData>();
+        ClickHouseJsonSerializer.RegisterType<DecimalData>();
+        ClickHouseJsonSerializer.RegisterType<NestedOuter>();
+        ClickHouseJsonSerializer.RegisterType<MixedData>();
+        ClickHouseJsonSerializer.RegisterType<ArrayData>();
+        ClickHouseJsonSerializer.RegisterType<ListData>();
+        ClickHouseJsonSerializer.RegisterType<TestPocoClass>();
+        ClickHouseJsonSerializer.RegisterType<NoHintData>();
+        ClickHouseJsonSerializer.RegisterType<UnhintedDecimalData>();
+        ClickHouseJsonSerializer.RegisterType<TestPocoWithPathAttribute>();
+        ClickHouseJsonSerializer.RegisterType<TestPocoWithIgnoreAttribute>();
+        ClickHouseJsonSerializer.RegisterType<TestPocoCaseSensitive>();
+        ClickHouseJsonSerializer.RegisterType<NullableHintedData>();
+        ClickHouseJsonSerializer.RegisterType<NullableUnhintedData>();
+        ClickHouseJsonSerializer.RegisterType<NonNullableHintedData>();
+        ClickHouseJsonSerializer.RegisterType<DictionaryData>();
+        ClickHouseJsonSerializer.RegisterType<ComprehensiveTypesData>();
+        ClickHouseJsonSerializer.RegisterType<TimeSpanData>();
+        ClickHouseJsonSerializer.RegisterType<CircularRefA>();
+        ClickHouseJsonSerializer.RegisterType<SelfReferencing>();
+    }
+
     public static IEnumerable<TestCaseData> JsonTypeTestCases()
     {
         // Int256 - BigInteger must be a string in JSON for ClickHouse to parse it
@@ -556,6 +584,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             ) ENGINE = Memory");
 
         var data = new { Timestamp = new DateTime(2024, 6, 15, 10, 30, 45, DateTimeKind.Utc) };
+        ClickHouseJsonSerializer.RegisterType(data.GetType());
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -791,6 +820,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             ) ENGINE = Memory");
 
         var data = new NullableHintedData { Value = null, Name = "test" };
+        ClickHouseJsonSerializer.RegisterType(data.GetType());
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -1225,5 +1255,42 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // TimeSpan stored as Time64, returned as string
         var resultTimeSpan = result["Duration"].GetValue<string>();
         Assert.That(TimeSpan.Parse(resultTimeSpan), Is.EqualTo(data.Duration));
+    }
+
+    private class UnregisteredPocoData
+    {
+        public int Id { get; set; }
+        public string Name { get; set; }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithUnregisteredType_ShouldThrowClickHouseJsonSerializationException()
+    {
+        var targetTable = "test.json_write_unregistered_type";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON
+            ) ENGINE = Memory");
+
+        // UnregisteredPocoData is intentionally NOT registered
+        var data = new UnregisteredPocoData { Id = 1, Name = "test" };
+
+        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]));
+
+        Assert.That(ex.InnerException, Is.TypeOf<ClickHouseJsonSerializationException>());
+        var jsonEx = (ClickHouseJsonSerializationException)ex.InnerException;
+        Assert.That(jsonEx.TargetType, Is.EqualTo(typeof(UnregisteredPocoData)));
+        Assert.That(jsonEx.Message, Does.Contain("UnregisteredPocoData"));
+        Assert.That(jsonEx.Message, Does.Contain("RegisterType"));
     }
 }

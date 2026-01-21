@@ -1,14 +1,9 @@
 ﻿using System;
-using System.Collections;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using System.Net;
 using System.Numerics;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using System.Text;
@@ -33,11 +28,6 @@ internal class JsonType : ParameterizedType
     ];
 
     /// <summary>
-    /// Cache for reflected property metadata per type.
-    /// </summary>
-    private static readonly ConcurrentDictionary<Type, JsonTypeCache> PropertyCache = new();
-
-    /// <summary>
     /// Shared DynamicType instance for writing unhinted values.
     /// </summary>
     private static readonly DynamicType DynamicTypeInstance = new();
@@ -46,14 +36,6 @@ internal class JsonType : ParameterizedType
     /// Memory stream manager for temporary buffers during POCO serialization.
     /// </summary>
     private static readonly RecyclableMemoryStreamManager MemoryStreamManager = new();
-
-    /// <summary>
-    /// Cached type information for JSON serialization.
-    /// </summary>
-    private sealed class JsonTypeCache
-    {
-        public JsonPropertyInfo[] Properties { get; init; }
-    }
 
     internal TypeSettings TypeSettings { get; init; }
 
@@ -71,20 +53,6 @@ internal class JsonType : ParameterizedType
     internal JsonType(Dictionary<string, ClickHouseType> hintedTypes)
     {
         HintedTypes = hintedTypes;
-    }
-
-    /// <summary>
-    /// Cached property information for JSON serialization.
-    /// </summary>
-    private sealed class JsonPropertyInfo
-    {
-        public PropertyInfo Property { get; init; }
-
-        public string JsonPath { get; init; }
-
-        public bool IsIgnored { get; init; }
-
-        public bool IsNestedObject { get; init; }
     }
 
     public override object Read(ExtendedBinaryReader reader)
@@ -226,7 +194,12 @@ internal class JsonType : ParameterizedType
         try
         {
             var type = poco.GetType();
-            var propertyInfos = GetCachedPropertyInfo(type);
+            var propertyInfos = ClickHouseJsonSerializer.GetProperties(type);
+            if (propertyInfos == null)
+            {
+                throw new ClickHouseJsonSerializationException(type);
+            }
+
             int count = 0;
 
             foreach (var propInfo in propertyInfos)
@@ -288,88 +261,14 @@ internal class JsonType : ParameterizedType
     }
 
     /// <summary>
-    /// Gets cached type information, computing it if not already cached.
-    /// </summary>
-    private static JsonTypeCache GetCachedTypeInfo(Type type)
-    {
-        return PropertyCache.GetOrAdd(type, t =>
-        {
-            var properties = t.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-            var result = new List<JsonPropertyInfo>(properties.Length);
-
-            foreach (var property in properties)
-            {
-                if (!property.CanRead)
-                    continue;
-
-                var ignoreAttr = property.GetCustomAttribute<ClickHouseJsonIgnoreAttribute>();
-                var pathAttr = property.GetCustomAttribute<ClickHouseJsonPathAttribute>();
-
-                var jsonPath = pathAttr?.Path ?? property.Name;
-                var propertyType = property.PropertyType;
-                var underlyingType = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
-                var isNested = IsNestedObject(underlyingType);
-
-                result.Add(new JsonPropertyInfo
-                {
-                    Property = property,
-                    JsonPath = jsonPath,
-                    IsIgnored = ignoreAttr != null,
-                    IsNestedObject = isNested,
-                });
-            }
-
-            return new JsonTypeCache
-            {
-                Properties = result.ToArray(),
-            };
-        });
-    }
-
-    /// <summary>
-    /// Gets cached property information for a type.
-    /// </summary>
-    private static JsonPropertyInfo[] GetCachedPropertyInfo(Type type)
-    {
-        return GetCachedTypeInfo(type).Properties;
-    }
-
-    private static bool IsNestedObject(Type type)
-    {
-        return !type.IsPrimitive
-            && type != typeof(string)
-            && type != typeof(decimal)
-            && type != typeof(DateTime)
-            && type != typeof(DateTimeOffset)
-            && type != typeof(TimeSpan)
-#if NET6_0_OR_GREATER
-            && type != typeof(DateOnly)
-#endif
-            && type != typeof(Guid)
-            && type != typeof(BigInteger)
-            && type != typeof(ClickHouseDecimal)
-            && type != typeof(IPAddress)
-            && !typeof(IEnumerable).IsAssignableFrom(type)
-            && !type.IsEnum;
-    }
-
-    /// <summary>
     /// Uses the type from the column definition to write the given value.
     /// </summary>
     private static void WriteHintedValue(ExtendedBinaryWriter writer, object value, ClickHouseType hintedType)
     {
-        if (value is null || value is DBNull)
+        if ((value is null || value is DBNull) && hintedType is NullableType)
         {
-            if (hintedType is NullableType)
-            {
-                // Nullable types handle null via their own Write method (writes byte 1)
-                hintedType.Write(writer, null);
-            }
-            else
-            {
-                writer.Write(BinaryTypeIndex.Nothing);
-            }
-            return;
+            // Nullable types handle null via their own Write method (writes byte 1)
+            hintedType.Write(writer, null);
         }
 
         hintedType.Write(writer, value);

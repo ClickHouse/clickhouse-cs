@@ -28,6 +28,10 @@ internal class DynamicType : ClickHouseType
     /// </summary>
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
+        if (value is null || value is DBNull)
+        {
+            writer.Write(BinaryTypeIndex.Nothing);    
+        }
         var inferredType = GetCachedInferredType(value.GetType());
         BinaryTypeDescriptionWriter.WriteTypeHeader(writer, inferredType);
         inferredType.Write(writer, value);

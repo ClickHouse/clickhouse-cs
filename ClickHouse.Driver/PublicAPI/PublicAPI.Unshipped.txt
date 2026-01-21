@@ -158,3 +158,15 @@ ClickHouse.Driver.Json.ClickHouseJsonIgnoreAttribute.ClickHouseJsonIgnoreAttribu
 ClickHouse.Driver.Json.ClickHouseJsonPathAttribute
 ClickHouse.Driver.Json.ClickHouseJsonPathAttribute.ClickHouseJsonPathAttribute(string path) -> void
 ClickHouse.Driver.Json.ClickHouseJsonPathAttribute.Path.get -> string
+ClickHouse.Driver.Json.ClickHouseJsonSerializer
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.ClickHouseJsonSerializationException(string message) -> void
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.ClickHouseJsonSerializationException(System.Type targetType, string propertyName, System.Type propertyType) -> void
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.ClickHouseJsonSerializationException(System.Type unregisteredType) -> void
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.PropertyName.get -> string
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.PropertyType.get -> System.Type
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.TargetType.get -> System.Type
+static ClickHouse.Driver.Json.ClickHouseJsonSerializer.IsTypeRegistered(System.Type type) -> bool
+static ClickHouse.Driver.Json.ClickHouseJsonSerializer.IsTypeRegistered<T>() -> bool
+static ClickHouse.Driver.Json.ClickHouseJsonSerializer.RegisterType(System.Type type) -> void
+static ClickHouse.Driver.Json.ClickHouseJsonSerializer.RegisterType<T>() -> void

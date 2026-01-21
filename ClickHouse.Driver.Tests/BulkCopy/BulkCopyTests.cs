@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Copy.Serializer;
+using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
@@ -596,8 +597,8 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = targetTable,
         };
 
-        var obj = new { name = "test", count = 42, active = true, arrayBool = new bool[] { true, false} };
-
+        var obj = new { name = "test", count = 42, active = true, arrayBool = new bool[] { true, false } };
+        ClickHouseJsonSerializer.RegisterType(obj.GetType());
         await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[obj]]);
 
