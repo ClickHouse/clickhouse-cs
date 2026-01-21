@@ -93,6 +93,7 @@ public static class ClickHouseJsonSerializer
 
         var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
         var result = new List<JsonPropertyInfo>(properties.Length);
+        var usedPaths = new HashSet<string>();
 
         foreach (var property in properties)
         {
@@ -114,6 +115,14 @@ public static class ClickHouseJsonSerializer
 
             var pathAttr = property.GetCustomAttribute<ClickHouseJsonPathAttribute>();
             var jsonPath = pathAttr?.Path ?? property.Name;
+
+            // Validate path uniqueness
+            if (!usedPaths.Add(jsonPath))
+            {
+                throw new ClickHouseJsonSerializationException(
+                    $"Failed to register type '{type.Name}': multiple properties map to JSON path '{jsonPath}'.");
+            }
+
             var propertyType = property.PropertyType;
             var underlyingType = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
             var isNested = IsNestedObject(underlyingType);
