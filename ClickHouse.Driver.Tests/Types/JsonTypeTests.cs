@@ -1394,7 +1394,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_WithMissingHintedProperty_ShouldSucceedWithNull()
     {
-        // POCO is missing a property that the schema hints for - should write null/default
+        // POCO is missing a property that the schema hints for - should be default
         var targetTable = "test.json_write_missing_property";
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
@@ -1415,9 +1415,9 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
 
-        // Id should be present, Name should be absent (not written)
+        // Id should be present, Name should be default
         Assert.That(result["Id"].GetValue<int>(), Is.EqualTo(42));
-        Assert.That(result.ContainsKey("Name"), Is.False);
+        Assert.That(result["Name"].GetValue<string>(), Is.EqualTo(string.Empty));
     }
 
     private class EmptyPocoData
