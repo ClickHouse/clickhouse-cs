@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
@@ -26,12 +27,27 @@ internal class ArrayType : ParameterizedType
     public override object Read(ExtendedBinaryReader reader)
     {
         var length = reader.Read7BitEncodedInt();
-        var data = Array.CreateInstance(UnderlyingType.FrameworkType, length);
-        for (var i = 0; i < length; i++)
+        if (length == 0)
         {
-            data.SetValue(ClearDBNull(UnderlyingType.Read(reader)), i);
+            return Array.CreateInstance(UnderlyingType.FrameworkType, 0);
         }
-        return data;
+
+        var buffer = ArrayPool<object>.Shared.Rent(length);
+        try
+        {
+            for (var i = 0; i < length; i++)
+            {
+                buffer[i] = ClearDBNull(UnderlyingType.Read(reader));
+            }
+
+            var data = Array.CreateInstance(UnderlyingType.FrameworkType, length);
+            Array.Copy(buffer, data, length);
+            return data;
+        }
+        finally
+        {
+            ArrayPool<object>.Shared.Return(buffer, clearArray: true);
+        }
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
