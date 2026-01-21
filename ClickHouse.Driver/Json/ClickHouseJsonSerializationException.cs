@@ -66,6 +66,6 @@ public class ClickHouseJsonSerializationException : Exception
     private static string FormatUnregisteredTypeMessage(Type unregisteredType)
     {
         return $"Type '{unregisteredType.Name}' is not registered for JSON serialization. " +
-               $"Call ClickHouseJsonSerializer.RegisterType<{unregisteredType.Name}>() before inserting data.";
+               $"Call connection.RegisterJsonSerializationType<{unregisteredType.Name}>() before inserting data.";
     }
 }

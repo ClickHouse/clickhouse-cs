@@ -194,7 +194,7 @@ internal class JsonType : ParameterizedType
         try
         {
             var type = poco.GetType();
-            var propertyInfos = ClickHouseJsonSerializer.GetProperties(type);
+            var propertyInfos = TypeSettings.jsonTypeRegistry?.GetProperties(type);
             if (propertyInfos == null)
             {
                 throw new ClickHouseJsonSerializationException(type);

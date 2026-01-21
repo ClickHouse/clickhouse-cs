@@ -1,6 +1,5 @@
 using System;
 using System.Collections;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Numerics;
@@ -12,15 +11,15 @@ using NodaTime;
 namespace ClickHouse.Driver.Json;
 
 /// <summary>
-/// Provides registration and validation for POCO types used with JSON and Dynamic columns.
+/// Registry for POCO types used with JSON and Dynamic columns.
 /// Types must be registered before they can be serialized.
 /// </summary>
-public static class ClickHouseJsonSerializer
+internal sealed class JsonTypeRegistry
 {
     /// <summary>
     /// Cache for registered POCO types and their property metadata.
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, JsonPropertyInfo[]> RegisteredTypes = new();
+    private readonly Dictionary<Type, JsonPropertyInfo[]> _registeredTypes = new();
 
     /// <summary>
     /// Registers a POCO type for JSON/Dynamic serialization.
@@ -30,7 +29,7 @@ public static class ClickHouseJsonSerializer
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    public static void RegisterType<T>() where T : class
+    internal void RegisterType<T>() where T : class
         => RegisterType(typeof(T));
 
     /// <summary>
@@ -42,47 +41,31 @@ public static class ClickHouseJsonSerializer
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    public static void RegisterType(Type type)
+    internal void RegisterType(Type type)
     {
         if (type == null)
             throw new ArgumentNullException(nameof(type));
 
-        if (RegisteredTypes.ContainsKey(type))
+        if (_registeredTypes.ContainsKey(type))
             return;
 
         BuildPropertyInfo(type, new HashSet<Type>());
     }
 
     /// <summary>
-    /// Checks if a type is registered for JSON serialization.
-    /// </summary>
-    /// <typeparam name="T">The type to check.</typeparam>
-    /// <returns>True if the type is registered, false otherwise.</returns>
-    public static bool IsTypeRegistered<T>() where T : class
-        => IsTypeRegistered(typeof(T));
-
-    /// <summary>
-    /// Checks if a type is registered for JSON serialization.
-    /// </summary>
-    /// <param name="type">The type to check.</param>
-    /// <returns>True if the type is registered, false otherwise.</returns>
-    public static bool IsTypeRegistered(Type type)
-        => type != null && RegisteredTypes.ContainsKey(type);
-
-    /// <summary>
     /// Gets the property info for a registered type.
     /// </summary>
     /// <param name="type">The type to get properties for.</param>
     /// <returns>The property info array, or null if the type is not registered.</returns>
-    internal static JsonPropertyInfo[] GetProperties(Type type)
-        => RegisteredTypes.TryGetValue(type, out var props) ? props : null;
+    internal JsonPropertyInfo[] GetProperties(Type type)
+        => _registeredTypes.TryGetValue(type, out var props) ? props : null;
 
     /// <summary>
     /// Builds and validates property info for a type.
     /// </summary>
     /// <param name="type">The type to build property info for.</param>
     /// <param name="typesBeingRegistered">Set of types currently being registered in this call chain.</param>
-    private static void BuildPropertyInfo(Type type, HashSet<Type> typesBeingRegistered)
+    private void BuildPropertyInfo(Type type, HashSet<Type> typesBeingRegistered)
     {
         // Track this type to prevent infinite recursion from circular references
         if (!typesBeingRegistered.Add(type))
@@ -142,14 +125,14 @@ public static class ClickHouseJsonSerializer
             });
 
             // Recursively register nested object types (skip if already registered or being registered)
-            if (isNested && !RegisteredTypes.ContainsKey(underlyingType))
+            if (isNested && !_registeredTypes.ContainsKey(underlyingType))
             {
                 BuildPropertyInfo(underlyingType, typesBeingRegistered);
             }
         }
 
         // Add to the cache after processing all properties
-        RegisteredTypes.TryAdd(type, result.ToArray());
+        _registeredTypes[type] = result.ToArray();
     }
 
     /// <summary>

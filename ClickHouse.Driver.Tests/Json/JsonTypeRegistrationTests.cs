@@ -1,12 +1,15 @@
 using System;
+using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Json;
 using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.Json;
 
 [TestFixture]
-public class ClickHouseJsonSerializerTests
+public class JsonTypeRegistrationTests
 {
+    private ClickHouseConnection connection;
+
     private class ValidPoco
     {
         public int Id { get; set; }
@@ -32,38 +35,54 @@ public class ClickHouseJsonSerializerTests
         public PocoWithUnsupportedProperty Nested { get; set; }
     }
 
+    private class PocoWithDuplicatePaths
+    {
+        [ClickHouseJsonPath("shared.path")]
+        public int First { get; set; }
+
+        [ClickHouseJsonPath("shared.path")]
+        public string Second { get; set; }
+    }
+
+    [SetUp]
+    public void SetUp()
+    {
+        connection = new ClickHouseConnection();
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        connection?.Dispose();
+    }
+
     [Test]
-    public void RegisterType_WithValidPoco_ShouldSucceed()
+    public void RegisterJsonSerializationType_WithValidPoco_ShouldSucceed()
     {
         // Should not throw
-        ClickHouseJsonSerializer.RegisterType<ValidPoco>();
-
-        Assert.That(ClickHouseJsonSerializer.IsTypeRegistered<ValidPoco>(), Is.True);
+        connection.RegisterJsonSerializationType<ValidPoco>();
     }
 
     [Test]
-    public void RegisterType_WithNestedPoco_ShouldRegisterNestedTypesToo()
+    public void RegisterJsonSerializationType_WithNestedPoco_ShouldSucceed()
     {
-        ClickHouseJsonSerializer.RegisterType<NestedValidPoco>();
-
-        Assert.That(ClickHouseJsonSerializer.IsTypeRegistered<NestedValidPoco>(), Is.True);
-        Assert.That(ClickHouseJsonSerializer.IsTypeRegistered<ValidPoco>(), Is.True);
+        // Should not throw - nested types are registered automatically
+        connection.RegisterJsonSerializationType<NestedValidPoco>();
     }
 
     [Test]
-    public void RegisterType_CalledTwice_ShouldBeIdempotent()
+    public void RegisterJsonSerializationType_CalledTwice_ShouldBeIdempotent()
     {
-        ClickHouseJsonSerializer.RegisterType<ValidPoco>();
-        ClickHouseJsonSerializer.RegisterType<ValidPoco>();
-
-        Assert.That(ClickHouseJsonSerializer.IsTypeRegistered<ValidPoco>(), Is.True);
+        // Should not throw when called multiple times
+        connection.RegisterJsonSerializationType<ValidPoco>();
+        connection.RegisterJsonSerializationType<ValidPoco>();
     }
 
     [Test]
-    public void RegisterType_WithUnsupportedPropertyType_ShouldThrowWithHelpfulMessage()
+    public void RegisterJsonSerializationType_WithUnsupportedPropertyType_ShouldThrowWithHelpfulMessage()
     {
         var ex = Assert.Throws<ClickHouseJsonSerializationException>(() =>
-            ClickHouseJsonSerializer.RegisterType<PocoWithUnsupportedProperty>());
+            connection.RegisterJsonSerializationType<PocoWithUnsupportedProperty>());
 
         Assert.That(ex.TargetType, Is.EqualTo(typeof(PocoWithUnsupportedProperty)));
         Assert.That(ex.PropertyName, Is.EqualTo("Pointer"));
@@ -74,10 +93,10 @@ public class ClickHouseJsonSerializerTests
     }
 
     [Test]
-    public void RegisterType_WithNestedUnsupportedPropertyType_ShouldThrowWithHelpfulMessage()
+    public void RegisterJsonSerializationType_WithNestedUnsupportedPropertyType_ShouldThrowWithHelpfulMessage()
     {
         var ex = Assert.Throws<ClickHouseJsonSerializationException>(() =>
-            ClickHouseJsonSerializer.RegisterType<PocoWithNestedUnsupportedProperty>());
+            connection.RegisterJsonSerializationType<PocoWithNestedUnsupportedProperty>());
 
         // The exception should be about the nested type's unsupported property
         Assert.That(ex.TargetType, Is.EqualTo(typeof(PocoWithUnsupportedProperty)));
@@ -86,26 +105,17 @@ public class ClickHouseJsonSerializerTests
     }
 
     [Test]
-    public void RegisterType_WithNullType_ShouldThrowArgumentNullException()
+    public void RegisterJsonSerializationType_WithNullType_ShouldThrowArgumentNullException()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            ClickHouseJsonSerializer.RegisterType(null));
-    }
-
-    private class PocoWithDuplicatePaths
-    {
-        [ClickHouseJsonPath("shared.path")]
-        public int First { get; set; }
-
-        [ClickHouseJsonPath("shared.path")]
-        public string Second { get; set; }
+            connection.RegisterJsonSerializationType(null));
     }
 
     [Test]
-    public void RegisterType_WithDuplicateJsonPaths_ShouldThrow()
+    public void RegisterJsonSerializationType_WithDuplicateJsonPaths_ShouldThrow()
     {
         var ex = Assert.Throws<ClickHouseJsonSerializationException>(() =>
-            ClickHouseJsonSerializer.RegisterType<PocoWithDuplicatePaths>());
+            connection.RegisterJsonSerializationType<PocoWithDuplicatePaths>());
 
         Assert.That(ex.Message, Does.Contain("shared.path"));
     }
@@ -129,23 +139,5 @@ public class ClickHouseJsonSerializerTests
 
         var attr3 = new ClickHouseJsonPathAttribute("deeply.nested.path.here");
         Assert.That(attr3.Path, Is.EqualTo("deeply.nested.path.here"));
-    }
-
-    [Test]
-    public void IsTypeRegistered_BeforeRegistration_ShouldReturnFalse()
-    {
-        // Use a unique type that hasn't been registered
-        Assert.That(ClickHouseJsonSerializer.IsTypeRegistered<UnregisteredTestClass>(), Is.False);
-    }
-
-    [Test]
-    public void IsTypeRegistered_WithNullType_ShouldReturnFalse()
-    {
-        Assert.That(ClickHouseJsonSerializer.IsTypeRegistered(null), Is.False);
-    }
-
-    private class UnregisteredTestClass
-    {
-        public int Value { get; set; }
     }
 }

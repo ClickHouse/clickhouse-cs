@@ -598,7 +598,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         };
 
         var obj = new { name = "test", count = 42, active = true, arrayBool = new bool[] { true, false } };
-        ClickHouseJsonSerializer.RegisterType(obj.GetType());
+        connection.RegisterJsonSerializationType(obj.GetType());
         await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[obj]]);
 

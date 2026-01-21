@@ -21,37 +21,37 @@ namespace ClickHouse.Driver.Tests.Types;
 [TestFixture]
 public class JsonTypeTests : AbstractConnectionTestFixture
 {
-    [OneTimeSetUp]
+    [SetUp]
     public void RegisterPocoTypes()
     {
         // Register all POCO types used in JSON serialization tests
-        ClickHouseJsonSerializer.RegisterType<UInt64Data>();
-        ClickHouseJsonSerializer.RegisterType<Int64Data>();
-        ClickHouseJsonSerializer.RegisterType<UuidData>();
-        ClickHouseJsonSerializer.RegisterType<DecimalData>();
-        ClickHouseJsonSerializer.RegisterType<NestedOuter>();
-        ClickHouseJsonSerializer.RegisterType<MixedData>();
-        ClickHouseJsonSerializer.RegisterType<ArrayData>();
-        ClickHouseJsonSerializer.RegisterType<ListData>();
-        ClickHouseJsonSerializer.RegisterType<TestPocoClass>();
-        ClickHouseJsonSerializer.RegisterType<NoHintData>();
-        ClickHouseJsonSerializer.RegisterType<UnhintedDecimalData>();
-        ClickHouseJsonSerializer.RegisterType<TestPocoWithPathAttribute>();
-        ClickHouseJsonSerializer.RegisterType<TestPocoWithIgnoreAttribute>();
-        ClickHouseJsonSerializer.RegisterType<TestPocoCaseSensitive>();
-        ClickHouseJsonSerializer.RegisterType<NullableHintedData>();
-        ClickHouseJsonSerializer.RegisterType<NullableUnhintedData>();
-        ClickHouseJsonSerializer.RegisterType<NonNullableHintedData>();
-        ClickHouseJsonSerializer.RegisterType<DictionaryData>();
-        ClickHouseJsonSerializer.RegisterType<ComprehensiveTypesData>();
-        ClickHouseJsonSerializer.RegisterType<TimeSpanData>();
-        ClickHouseJsonSerializer.RegisterType<CircularRefA>();
-        ClickHouseJsonSerializer.RegisterType<SelfReferencing>();
-        ClickHouseJsonSerializer.RegisterType<ProductData>();
-        ClickHouseJsonSerializer.RegisterType<WrongTypeData>();
-        ClickHouseJsonSerializer.RegisterType<MissingPropertyData>();
-        ClickHouseJsonSerializer.RegisterType<EmptyPocoData>();
-        ClickHouseJsonSerializer.RegisterType<AllNullsData>();
+        connection.RegisterJsonSerializationType<UInt64Data>();
+        connection.RegisterJsonSerializationType<Int64Data>();
+        connection.RegisterJsonSerializationType<UuidData>();
+        connection.RegisterJsonSerializationType<DecimalData>();
+        connection.RegisterJsonSerializationType<NestedOuter>();
+        connection.RegisterJsonSerializationType<MixedData>();
+        connection.RegisterJsonSerializationType<ArrayData>();
+        connection.RegisterJsonSerializationType<ListData>();
+        connection.RegisterJsonSerializationType<TestPocoClass>();
+        connection.RegisterJsonSerializationType<NoHintData>();
+        connection.RegisterJsonSerializationType<UnhintedDecimalData>();
+        connection.RegisterJsonSerializationType<TestPocoWithPathAttribute>();
+        connection.RegisterJsonSerializationType<TestPocoWithIgnoreAttribute>();
+        connection.RegisterJsonSerializationType<TestPocoCaseSensitive>();
+        connection.RegisterJsonSerializationType<NullableHintedData>();
+        connection.RegisterJsonSerializationType<NullableUnhintedData>();
+        connection.RegisterJsonSerializationType<NonNullableHintedData>();
+        connection.RegisterJsonSerializationType<DictionaryData>();
+        connection.RegisterJsonSerializationType<ComprehensiveTypesData>();
+        connection.RegisterJsonSerializationType<TimeSpanData>();
+        connection.RegisterJsonSerializationType<CircularRefA>();
+        connection.RegisterJsonSerializationType<SelfReferencing>();
+        connection.RegisterJsonSerializationType<ProductData>();
+        connection.RegisterJsonSerializationType<WrongTypeData>();
+        connection.RegisterJsonSerializationType<MissingPropertyData>();
+        connection.RegisterJsonSerializationType<EmptyPocoData>();
+        connection.RegisterJsonSerializationType<AllNullsData>();
     }
 
     public static IEnumerable<TestCaseData> JsonTypeTestCases()
@@ -642,7 +642,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             ) ENGINE = Memory");
 
         var data = new { Timestamp = new DateTime(2024, 6, 15, 10, 30, 45, DateTimeKind.Utc) };
-        ClickHouseJsonSerializer.RegisterType(data.GetType());
+        connection.RegisterJsonSerializationType(data.GetType());
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -878,7 +878,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             ) ENGINE = Memory");
 
         var data = new NullableHintedData { Value = null, Name = "test" };
-        ClickHouseJsonSerializer.RegisterType(data.GetType());
+        connection.RegisterJsonSerializationType(data.GetType());
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -1349,7 +1349,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         var jsonEx = (ClickHouseJsonSerializationException)ex.InnerException;
         Assert.That(jsonEx.TargetType, Is.EqualTo(typeof(UnregisteredPocoData)));
         Assert.That(jsonEx.Message, Does.Contain("UnregisteredPocoData"));
-        Assert.That(jsonEx.Message, Does.Contain("RegisterType"));
+        Assert.That(jsonEx.Message, Does.Contain("RegisterJsonSerializationType"));
     }
 
     private class WrongTypeData
