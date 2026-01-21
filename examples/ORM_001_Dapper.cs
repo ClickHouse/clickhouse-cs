@@ -67,7 +67,6 @@ public static class DapperExample
     /// <summary>
     /// Demonstrates inserting data using Dapper's anonymous object parameter binding.
     /// Uses @parameter syntax which Dapper translates to ADO.NET parameters.
-    /// 
     /// </summary>
     private static async Task InsertWithAnonymousParameters(ClickHouseConnection connection)
     {

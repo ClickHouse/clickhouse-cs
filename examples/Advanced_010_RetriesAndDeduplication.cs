@@ -78,7 +78,7 @@ public static class RetriesAndDeduplication
                 ShouldHandle = new PredicateBuilder()
                     .Handle<HttpRequestException>()
                     .Handle<TaskCanceledException>()
-                    .Handle<ClickHouseServerException>(), // Retry all ClickHouse errors for this demo. You can filter specific error codes here.
+                    .Handle<ClickHouseServerException>(), // Retry all ClickHouse errors for this demo. You can filter specific error codes here. In production, you should only filter retryable errors (eg not syntax errors).
                 OnRetry = args =>
                 {
                     Console.WriteLine($"   Retry attempt {args.AttemptNumber} (simulated transient failure)");
