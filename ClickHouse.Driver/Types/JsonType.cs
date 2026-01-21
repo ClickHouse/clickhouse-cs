@@ -38,9 +38,9 @@ internal class JsonType : ParameterizedType
     private static readonly ConcurrentDictionary<Type, JsonTypeCache> PropertyCache = new();
 
     /// <summary>
-    /// Cache for inferred ClickHouse types from .NET types.
+    /// Shared DynamicType instance for writing unhinted values.
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, ClickHouseType> InferredTypeCache = new();
+    private static readonly DynamicType DynamicTypeInstance = new();
 
     /// <summary>
     /// Memory stream manager for temporary buffers during POCO serialization.
@@ -376,29 +376,11 @@ internal class JsonType : ParameterizedType
     }
 
     /// <summary>
-    /// For cases when there is no type hint, we use type inference to write the value.
+    /// For cases when there is no type hint, we delegate to DynamicType
+    /// which handles type inference and binary encoding.
     /// </summary>
     private static void WriteUnhintedValue(ExtendedBinaryWriter writer, object value)
-    {
-        var inferredType = GetCachedInferredType(value);
-
-        // For dynamic paths in json (ie those without a defined type in the table),
-        // the value must be preceded by the binary encoding type index.
-        BinaryTypeEncoder.WriteTypeHeader(writer, inferredType);
-        inferredType.Write(writer, value);
-    }
-
-    /// <summary>
-    /// Use the type converter to infer the ClickHouse type from the native type, and cache the results.
-    /// </summary>
-    private static ClickHouseType GetCachedInferredType(object value)
-        => GetCachedInferredType(value.GetType());
-
-    /// <summary>
-    /// Use the type converter to infer the ClickHouse type from the .NET type, and cache the results.
-    /// </summary>
-    private static ClickHouseType GetCachedInferredType(Type type)
-        => InferredTypeCache.GetOrAdd(type, TypeConverter.ToClickHouseType);
+        => DynamicTypeInstance.Write(writer, value);
 
     internal JsonNode ReadJsonNode(ExtendedBinaryReader reader, ClickHouseType hintedType)
     {

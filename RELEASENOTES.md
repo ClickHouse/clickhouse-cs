@@ -71,6 +71,7 @@ v?
  * Added support for writing `byte[]` values to String type columns via BulkCopy.
  * Added `PingAsync` method to `ClickHouseConnection` for checking server availability via the `/ping` endpoint.
  * Added support for detecting mid-stream exceptions via the `X-ClickHouse-Exception-Tag` header (ClickHouse 25.11+). When `http_write_exception_in_output_format` is set to 0 on the server, exceptions that occur while streaming results are now properly detected and thrown as `ClickHouseServerException` (which includes the exception message) instead of `EndOfStreamException`.
+ * Added support for writing to `Dynamic` type columns via BulkCopy. Values are automatically type-inferred from their .NET types and serialized with the appropriate binary type header. Supports all common types including integers, floating point, strings, booleans, DateTime, Guid, decimal, arrays, lists, and dictionaries.
 
 **Bug Fixes:**
  * Fixed a crash when reading a Map with duplicate keys. The current behavior is to return only the last value for a given key.
