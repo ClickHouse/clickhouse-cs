@@ -4,11 +4,11 @@ using ClickHouse.Driver.Formats;
 namespace ClickHouse.Driver.Types;
 
 /// <summary>
-/// Encodes ClickHouse type definitions to binary encoding.
+/// Encodes ClickHouse type definitions to binary encoding, for Dynamic type headers.
 /// This is the inverse of <see cref="BinaryTypeDecoder"/>.
 /// See: https://clickhouse.com/docs/en/sql-reference/data-types/data-types-binary-encoding
 /// </summary>
-internal static class BinaryTypeEncoder
+internal static class BinaryTypeDescriptionWriter
 {
     /// <summary>
     /// Writes the binary type header for a ClickHouseType.
