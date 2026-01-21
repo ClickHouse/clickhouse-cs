@@ -47,7 +47,7 @@ If something is missing, or you found a mistake in one of these examples, please
 
 ### Data Types
 
-- DataTypes_001_SimpleTypes.cs
+- [DataTypes_001_SimpleTypes.cs](DataTypes_001_SimpleTypes.cs) - Simple/scalar data types: integers (Int8-Int256), floats, decimals (ClickHouseDecimal), boolean
 - [DataTypes_002_DateTimeHandling.cs](DataTypes_002_DateTimeHandling.cs) - Comprehensive guide to DateTime, DateTime64, Date, Date32, timezones, DateTime.Kind behavior, and DateTimeOffset
 - [DataTypes_003_ComplexTypes.cs](DataTypes_003_ComplexTypes.cs) - Working with complex data types: Arrays, Maps, Tuples, IP addresses, and Nested structures
 

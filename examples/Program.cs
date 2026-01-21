@@ -147,7 +147,11 @@ class Program
         Console.WriteLine("DATA TYPES");
         Console.WriteLine(new string('=', 70) + "\n");
 
-        Console.WriteLine($"Running: {nameof(ComplexTypes)}");
+        Console.WriteLine($"Running: {nameof(SimpleTypes)}");
+        await SimpleTypes.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(ComplexTypes)}");
         await ComplexTypes.Run();
         WaitForUser(isInteractive);
 
