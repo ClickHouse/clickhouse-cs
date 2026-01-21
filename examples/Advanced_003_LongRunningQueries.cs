@@ -38,7 +38,7 @@ public static class LongRunningQueries
         Console.WriteLine("   Configuring query with progress headers...");
         Console.WriteLine("   This approach keeps the HTTP connection alive by sending periodic progress updates.");
         Console.WriteLine();
-        
+
         // Execute a query with progress headers enabled
         using (var command = connection.CreateCommand())
         {

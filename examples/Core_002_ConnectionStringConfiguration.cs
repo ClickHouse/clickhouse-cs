@@ -51,14 +51,14 @@ public static class ConnectionStringConfiguration
             Database = "default",
         };
         Console.WriteLine($"   Settings: Host={secureSettings.Host}, Port={secureSettings.Port}, Protocol={secureSettings.Protocol}");
-        
+
 
         // 4: Connection with custom settings
         Console.WriteLine("\n4. Connection with custom ClickHouse settings:");
         var settingsWithCustom = new ClickHouseClientSettings("Host=localhost");
         settingsWithCustom.CustomSettings.Add("max_execution_time", 10);
         settingsWithCustom.CustomSettings.Add("max_memory_usage", 10000000000);
-        
+
         using (var connection = new ClickHouseConnection(settingsWithCustom))
         {
             await connection.OpenAsync();

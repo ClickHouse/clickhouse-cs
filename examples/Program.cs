@@ -147,8 +147,25 @@ class Program
         Console.WriteLine("DATA TYPES");
         Console.WriteLine(new string('=', 70) + "\n");
 
-        Console.WriteLine($"Running: {nameof(ComplexTypes)}");
+        Console.WriteLine($"Running: {nameof(SimpleTypes)}");
+        await SimpleTypes.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(ComplexTypes)}");
         await ComplexTypes.Run();
+        WaitForUser(isInteractive);
+
+        // ORM Integration
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("ORM INTEGRATION");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(DapperExample)}");
+        await DapperExample.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(Linq2DbExample)}");
+        await Linq2DbExample.Run();
         WaitForUser(isInteractive);
 
         // Advanced
@@ -175,7 +192,7 @@ class Program
         Console.WriteLine($"\n\nRunning: {nameof(QueryStatistics)}");
         await QueryStatistics.Run();
         WaitForUser(isInteractive);
-        
+
         Console.WriteLine($"\n\nRunning: {nameof(Roles)}");
         await Roles.Run();
         WaitForUser(isInteractive);
@@ -192,6 +209,14 @@ class Program
         await ReadOnlyUsers.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(RetriesAndDeduplication)}");
+        await RetriesAndDeduplication.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(Compression)}");
+        await Compression.Run();
+        WaitForUser(isInteractive);
+
         // Troubleshooting
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("TROUBLESHOOTING");
@@ -203,6 +228,19 @@ class Program
 
         Console.WriteLine($"\n\nRunning: {nameof(NetworkTracing)}");
         await NetworkTracing.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(OpenTelemetryTracing)}");
+        await OpenTelemetryTracing.Run();
+        WaitForUser(isInteractive);
+
+        // Testing
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("TESTING");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(Testcontainers)}");
+        await Testcontainers.Run();
         WaitForUser(isInteractive);
 
         Console.WriteLine("\n\n" + new string('=', 70));

@@ -59,7 +59,7 @@ public static class BasicSelect
             }
         }
 
-        
+
         // Example 2: SELECT with aggregations
         Console.WriteLine("\n2. SELECT with aggregations (average salary by department):");
         using (var reader = await connection.ExecuteReaderAsync($@"
@@ -83,13 +83,13 @@ public static class BasicSelect
             }
         }
 
-        
+
         // Example 3: Using ExecuteScalarAsync for single value
         Console.WriteLine("\n3. Using ExecuteScalarAsync for single value:");
         var totalEmployees = await connection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
         Console.WriteLine($"   Total employees: {totalEmployees}");
 
-        
+
         // Example 4: Reading data with GetFieldValue<T>
         Console.WriteLine("\n7. Using GetFieldValue<T> for type-safe reading:");
         using (var reader = await connection.ExecuteReaderAsync(
