@@ -269,6 +269,7 @@ internal class JsonType : ParameterizedType
         {
             // Nullable types handle null via their own Write method (writes byte 1)
             hintedType.Write(writer, null);
+            return;
         }
 
         hintedType.Write(writer, value);
