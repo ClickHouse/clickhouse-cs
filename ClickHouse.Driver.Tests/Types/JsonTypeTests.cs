@@ -1485,4 +1485,44 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // Null properties should not be written to JSON
         Assert.That(result.Count, Is.EqualTo(0));
     }
+
+    private class PocoWithIndexer
+    {
+        public int Id { get; set; }
+        public string Name { get; set; }
+
+        // Indexer - should be ignored during serialization
+        public string this[int index] => $"Item{index}";
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_PocoWithIndexer_ShouldIgnoreIndexer()
+    {
+        var targetTable = "test.json_write_indexer";
+        await connection.ExecuteStatementAsync(
+            $@"CREATE OR REPLACE TABLE {targetTable} (
+                id UInt32,
+                data JSON(Id Int32, Name String)
+            ) ENGINE = Memory");
+
+        connection.RegisterJsonSerializationType<PocoWithIndexer>();
+        var data = new PocoWithIndexer { Id = 42, Name = "test" };
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (JsonObject)reader.GetValue(0);
+
+        // Should have exactly 2 properties (Id and Name), indexer should be ignored
+        Assert.That(result.Count, Is.EqualTo(2), "Should only have Id and Name, indexer should be ignored");
+        Assert.That(result["Id"].GetValue<int>(), Is.EqualTo(42));
+        Assert.That(result["Name"].GetValue<string>(), Is.EqualTo("test"));
+    }
 }

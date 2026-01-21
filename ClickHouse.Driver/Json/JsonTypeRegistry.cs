@@ -83,6 +83,10 @@ internal sealed class JsonTypeRegistry
             if (!property.CanRead)
                 continue;
 
+            // Skip indexers - they have index parameters and can't be serialized as simple properties
+            if (property.GetIndexParameters().Length > 0)
+                continue;
+
             var ignoreAttr = property.GetCustomAttribute<ClickHouseJsonIgnoreAttribute>();
             if (ignoreAttr != null)
             {
