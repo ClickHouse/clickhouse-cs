@@ -213,6 +213,10 @@ class Program
         await RetriesAndDeduplication.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(Compression)}");
+        await Compression.Run();
+        WaitForUser(isInteractive);
+
         // Troubleshooting
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("TROUBLESHOOTING");
@@ -228,6 +232,15 @@ class Program
 
         Console.WriteLine($"\n\nRunning: {nameof(OpenTelemetryTracing)}");
         await OpenTelemetryTracing.Run();
+        WaitForUser(isInteractive);
+
+        // Testing
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("TESTING");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(Testcontainers)}");
+        await Testcontainers.Run();
         WaitForUser(isInteractive);
 
         Console.WriteLine("\n\n" + new string('=', 70));

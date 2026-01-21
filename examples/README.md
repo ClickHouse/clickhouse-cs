@@ -68,12 +68,17 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Advanced_008_QueryCancellation.cs](Advanced_008_QueryCancellation.cs) - Using CancellationToken to cancel long-running queries
 - [Advanced_009_ReadOnlyUsers.cs](Advanced_009_ReadOnlyUsers.cs) - Working with READONLY = 1 users and their limitations
 - [Advanced_010_RetriesAndDeduplication.cs](Advanced_010_RetriesAndDeduplication.cs) - Retry patterns with Polly and ReplacingMergeTree for exactly-once insert semantics
+- [Advanced_011_Compression.cs](Advanced_011_Compression.cs) - Understanding the UseCompression setting: how it works, when to disable it, and custom HttpClient requirements
 
 ### Troubleshooting
 
 - [Troubleshooting_001_LoggingConfiguration.cs](Troubleshooting_001_LoggingConfiguration.cs) - Setting up logging with Microsoft.Extensions.Logging to view diagnostic information
 - [Troubleshooting_002_NetworkTracing.cs](Troubleshooting_002_NetworkTracing.cs) - Enabling low-level .NET network tracing for debugging connection issues (HTTP, Sockets, DNS, TLS)
 - [Troubleshooting_003_OpenTelemetryTracing.cs](Troubleshooting_003_OpenTelemetryTracing.cs) - Collecting OpenTelemetry traces from the driver for distributed tracing and observability
+
+### Testing
+
+- [Testing_001_Testcontainers.cs](Testing_001_Testcontainers.cs) - Using Testcontainers to spin up ephemeral ClickHouse instances for integration testing
 
 ## How to run
 
