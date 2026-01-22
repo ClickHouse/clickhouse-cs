@@ -21,6 +21,7 @@ public enum JsonReadMode
     /// <summary>
     /// No server settings are automatically applied. Use this for readonly connections
     /// where setting server parameters is not allowed. Behavior is same as Binary.
+    /// Does not set output_format_binary_write_json_as_string.
     /// </summary>
     None = 2,
 }

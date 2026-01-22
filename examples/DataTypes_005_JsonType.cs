@@ -34,7 +34,7 @@ public static class JsonType
 
         // Example 3: Writing JSON from different sources
         Console.WriteLine("\n3. Writing JSON from Different Sources:");
-        await Example3_WritingJson();
+        await Example3_WritingJsonWithStringMode();
 
         // Example 4: String mode for both read and write
         Console.WriteLine("\n4. String Mode for Both Read and Write:");
@@ -121,7 +121,7 @@ public static class JsonType
     /// All inputs are serialized to JSON strings and sent to the server.
     /// The server parses the strings (input_format_binary_read_json_as_string=1).
     /// </summary>
-    private static async Task Example3_WritingJson()
+    private static async Task Example3_WritingJsonWithStringMode()
     {
         // Use JsonWriteMode.String to write JSON from various source types
         using var connection = new ClickHouseConnection("Host=localhost;JsonWriteMode=String");
@@ -254,55 +254,22 @@ public static class JsonType
     ///    - Requires type registration via RegisterJsonSerializationType
     ///    - Supports custom path mappings via attributes
     ///    - Better for typed schemas with hints
+    /// 
+    /// The key difference is that POCOs will be serialized to the ClickHouse RowBinary format
+    /// with the correct ClickHouse types that correspond to the .NET types in the POCO. (That information is lost when serializing to a json string.)
+    /// For paths that have types defined in the column, the type information will be used for appropriate serialization.
     /// </summary>
     private static async Task Example5_PocoSerialization()
     {
-        // APPROACH 1: String mode - simple, no registration needed
-        Console.WriteLine("   Approach 1: String mode (simple)");
+        Console.WriteLine("\n   Binary mode with type registration");
 
-        using var stringModeConnection = new ClickHouseConnection("Host=localhost;JsonWriteMode=String");
-        await stringModeConnection.OpenAsync();
-        stringModeConnection.CustomSettings["allow_experimental_json_type"] = 1;
-
-        var tableName = "example_json_poco_string";
-        await stringModeConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        await stringModeConnection.ExecuteStatementAsync($@"
-            CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory
-        ");
-
-        using var bulkCopy = new ClickHouseBulkCopy(stringModeConnection)
-        {
-            DestinationTableName = tableName,
-        };
-        await bulkCopy.InitAsync();
-
-        // POCOs serialized via System.Text.Json - no registration needed!
-        var rows = new List<object[]>
-        {
-            new object[] { 1u, new UserEvent { UserId = 123, Action = "login", Timestamp = DateTime.UtcNow } },
-            new object[] { 2u, new Product { Name = "Widget", Price = 29.99m, InStock = true, Tags = ["electronics", "gadget"] } },
-        };
-
-        await bulkCopy.WriteToServerAsync(rows);
-        Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows (no type registration needed!)");
-
-        using var reader = await stringModeConnection.ExecuteReaderAsync($"SELECT id, data FROM {tableName} ORDER BY id");
-        while (reader.Read())
-        {
-            var id = reader.GetFieldValue<uint>(0);
-            var data = (JsonObject)reader.GetValue(1);
-            Console.WriteLine($"     ID {id}: {data.ToJsonString()}");
-        }
-
-        // APPROACH 2: Binary mode - type registration with custom path mappings
-        Console.WriteLine("\n   Approach 2: Binary mode with type registration");
-
-        // Must explicitly set JsonWriteMode=Binary since default is now String
+        // Must explicitly set JsonWriteMode=Binary since default is String
         using var binaryModeConnection = new ClickHouseConnection("Host=localhost;JsonWriteMode=Binary");
         await binaryModeConnection.OpenAsync();
         binaryModeConnection.CustomSettings["allow_experimental_json_type"] = 1;
 
-        // Register types - enables custom path mappings via attributes
+        // To use binary writing with POCOs, you must register the types at the connection first 
+        // This enables custom path mappings via attributes and catching errors early
         binaryModeConnection.RegisterJsonSerializationType<EventWithCustomPaths>();
 
         var tableName2 = "example_json_poco_binary";
@@ -333,32 +300,10 @@ public static class JsonType
             Console.WriteLine("     Note: 'type' and 'position.x/y' paths, 'InternalId' ignored");
         }
 
-        await stringModeConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
         await binaryModeConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName2}");
     }
 
     // POCO classes for Example 5
-
-    /// <summary>
-    /// Simple POCO with common property types.
-    /// </summary>
-    private class UserEvent
-    {
-        public int UserId { get; set; }
-        public string Action { get; set; }
-        public DateTime Timestamp { get; set; }
-    }
-
-    /// <summary>
-    /// POCO with decimal and array types.
-    /// </summary>
-    private class Product
-    {
-        public string Name { get; set; }
-        public decimal Price { get; set; }
-        public bool InStock { get; set; }
-        public string[] Tags { get; set; }
-    }
 
     /// <summary>
     /// POCO demonstrating attribute-based customization:
@@ -368,7 +313,7 @@ public static class JsonType
     private class EventWithCustomPaths
     {
         [ClickHouseJsonPath("type")]
-        public string EventType { get; set; }
+        public required string EventType { get; set; }
 
         [ClickHouseJsonPath("position.x")]
         public int XCoordinate { get; set; }
@@ -377,6 +322,6 @@ public static class JsonType
         public int YCoordinate { get; set; }
 
         [ClickHouseJsonIgnore]
-        public string InternalId { get; set; }
+        public required string InternalId { get; set; }
     }
 }

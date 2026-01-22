@@ -20,17 +20,6 @@ namespace ClickHouse.Driver.Tests.BulkCopy;
 
 public class BulkCopyTests : AbstractConnectionTestFixture
 {
-    private static ClickHouseConnection CreateJsonStringModeConnection()
-    {
-        var builder = TestUtilities.GetConnectionStringBuilder();
-        builder.JsonWriteMode = JsonWriteMode.String;
-        var settings = new ClickHouseClientSettings(builder);
-        settings.CustomSettings["allow_experimental_json_type"] = 1;
-        var conn = new ClickHouseConnection(settings);
-        conn.Open();
-        return conn;
-    }
-
     public static IEnumerable<TestCaseData> GetInsertSingleValueTestCases()
     {
         foreach (var sample in TestUtilities.GetDataTypeSamples())
@@ -495,7 +484,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
 
-        using var jsonConnection = CreateJsonStringModeConnection();
+        using var jsonConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.String);
         using var bulkCopy = new ClickHouseBulkCopy(jsonConnection)
         {
             DestinationTableName = targetTable,
@@ -522,7 +511,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
 
-        using var jsonConnection = CreateJsonStringModeConnection();
+        using var jsonConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.String);
         using var bulkCopy = new ClickHouseBulkCopy(jsonConnection)
         {
             DestinationTableName = targetTable,
@@ -571,7 +560,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
 
-        using var jsonConnection = CreateJsonStringModeConnection();
+        using var jsonConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.String);
         using var bulkCopy = new ClickHouseBulkCopy(jsonConnection)
         {
             DestinationTableName = targetTable,
