@@ -167,3 +167,5 @@ ClickHouse.Driver.Json.ClickHouseJsonSerializationException.PropertyType.get -> 
 ClickHouse.Driver.Json.ClickHouseJsonSerializationException.TargetType.get -> System.Type
 ClickHouse.Driver.ADO.ClickHouseConnection.RegisterJsonSerializationType(System.Type type) -> void
 ClickHouse.Driver.ADO.ClickHouseConnection.RegisterJsonSerializationType<T>() -> void
+ClickHouse.Driver.IClickHouseConnection.RegisterJsonSerializationType(System.Type type) -> void
+ClickHouse.Driver.IClickHouseConnection.RegisterJsonSerializationType<T>() -> void
