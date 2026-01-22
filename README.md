@@ -41,7 +41,7 @@ We have a wide range of [examples](./examples), aiming to cover typical scenario
 
 ## ClickHouse Versions
 
-The supported versions ofthe ClickHouse database server coincide with the versions currently receiving security updates.
+The supported versions of the ClickHouse database server coincide with the versions currently receiving security updates.
 
 For the list of currently supported versions, see [here](https://github.com/ClickHouse/ClickHouse/blob/master/SECURITY.md#security-change-log-and-support).
 
