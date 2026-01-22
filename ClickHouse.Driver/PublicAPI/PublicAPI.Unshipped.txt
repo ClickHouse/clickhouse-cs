@@ -169,3 +169,17 @@ ClickHouse.Driver.ADO.ClickHouseConnection.RegisterJsonSerializationType(System.
 ClickHouse.Driver.ADO.ClickHouseConnection.RegisterJsonSerializationType<T>() -> void
 ClickHouse.Driver.IClickHouseConnection.RegisterJsonSerializationType(System.Type type) -> void
 ClickHouse.Driver.IClickHouseConnection.RegisterJsonSerializationType<T>() -> void
+ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.JsonReadMode.Binary = 0 -> ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.JsonReadMode.String = 1 -> ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.JsonWriteMode.Binary = 0 -> ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.JsonWriteMode.String = 1 -> ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonReadMode.get -> ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonReadMode.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonWriteMode.get -> ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonWriteMode.init -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonReadMode.get -> ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonReadMode.set -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.get -> ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.set -> void

@@ -124,6 +124,26 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["Timeout"] = value.TotalSeconds;
     }
 
+    /// <summary>
+    /// Gets or sets how JSON columns are returned when reading data.
+    /// Default: Binary
+    /// </summary>
+    public JsonReadMode JsonReadMode
+    {
+        get => GetEnumOrDefault("JsonReadMode", JsonReadMode.Binary);
+        set => this["JsonReadMode"] = value.ToString();
+    }
+
+    /// <summary>
+    /// Gets or sets how JSON data is sent when writing.
+    /// Default: String
+    /// </summary>
+    public JsonWriteMode JsonWriteMode
+    {
+        get => GetEnumOrDefault("JsonWriteMode", JsonWriteMode.String);
+        set => this["JsonWriteMode"] = value.ToString();
+    }
+
     private bool GetBooleanOrDefault(string name, bool @default)
     {
         if (TryGetValue(name, out var value))
@@ -146,6 +166,13 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             return @int;
         else
             return @default;
+    }
+
+    private T GetEnumOrDefault<T>(string name, T @default) where T : struct, Enum
+    {
+        if (TryGetValue(name, out var value) && value is string s && Enum.TryParse<T>(s, ignoreCase: true, out var result))
+            return result;
+        return @default;
     }
 
     /// <summary>
@@ -182,6 +209,8 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Timeout = settings.Timeout,
             UseCustomDecimals = settings.UseCustomDecimals,
             Roles = settings.Roles,
+            JsonReadMode = settings.JsonReadMode,
+            JsonWriteMode = settings.JsonWriteMode,
         };
 
         // Add custom settings with the set_ prefix

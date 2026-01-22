@@ -632,34 +632,34 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task Write_WithDateTimeHint_ShouldPreserveDateTime()
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithDateTimeHint_BinaryMode_ShouldPreserveDateTime()
     {
+        // DateTime hints require Binary mode for proper type conversion
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+
         var targetTable = "test.json_write_datetime_hint";
-        await connection.ExecuteStatementAsync(
+        await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
                 data JSON(Timestamp DateTime)
             ) ENGINE = Memory");
 
-        var data = new { Timestamp = new DateTime(2024, 6, 15, 10, 30, 45, DateTimeKind.Utc) };
-        connection.RegisterJsonSerializationType(data.GetType());
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        var dt = new DateTime(2024, 6, 15, 10, 30, 45, DateTimeKind.Utc);
+        var data = new { Timestamp = dt };
+        binaryConnection.RegisterJsonSerializationType(data.GetType());
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };
         await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
-        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
         var actualDateTime = result["Timestamp"].GetValue<DateTime>();
-        Assert.That(actualDateTime.Year, Is.EqualTo(2024));
-        Assert.That(actualDateTime.Month, Is.EqualTo(6));
-        Assert.That(actualDateTime.Day, Is.EqualTo(15));
-        Assert.That(actualDateTime.Hour, Is.EqualTo(10));
-        Assert.That(actualDateTime.Minute, Is.EqualTo(30));
-        Assert.That(actualDateTime.Second, Is.EqualTo(45));
+        Assert.That(actualDateTime, Is.EqualTo(dt));
     }
 
     private class NoHintData { public int Number { get; set; } public string Text { get; set; } public bool Flag { get; set; } }
@@ -670,6 +670,8 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_WithUnhintedDecimal_ShouldPreserveFractionalPart()
     {
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryConnection.RegisterJsonSerializationType<UnhintedDecimalData>();
         var targetTable = "test.json_write_unhinted_decimal";
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
@@ -679,15 +681,14 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         var data = new UnhintedDecimalData { Price = 123.4567m };
 
-        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };
         await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
-        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
 
@@ -717,30 +718,35 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
-        Assert.That(result["Number"].GetValue<int>(), Is.EqualTo(42));
+        Assert.That(result["Number"].GetValue<long>(), Is.EqualTo(42));
         Assert.That(result["Text"].GetValue<string>(), Is.EqualTo("hello"));
         Assert.That(result["Flag"].GetValue<bool>(), Is.True);
     }
 
     [Test]
-    public async Task Write_WithPocoAndJsonPathAttribute_ShouldUseCustomPath()
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithPocoAndJsonPathAttribute_BinaryMode_ShouldUseCustomPath()
     {
+        // ClickHouseJsonPath attribute only works in Binary mode
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryConnection.RegisterJsonSerializationType<TestPocoWithPathAttribute>();
+
         var targetTable = "test.json_write_poco_path_attr";
-        await connection.ExecuteStatementAsync(
+        await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
                 data JSON(user.id Int64, user.name String)
             ) ENGINE = Memory");
 
         var poco = new TestPocoWithPathAttribute { UserId = 456L, UserName = "CustomPath" };
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };
         await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
 
-        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
         Assert.That((long)result["user"]["id"], Is.EqualTo(456L));
@@ -748,24 +754,29 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task Write_WithPocoAndJsonIgnoreAttribute_ShouldSkipIgnoredProperties()
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_WithPocoAndJsonIgnoreAttribute_BinaryMode_ShouldSkipIgnoredProperties()
     {
+        // ClickHouseJsonIgnore attribute only works in Binary mode
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryConnection.RegisterJsonSerializationType<TestPocoWithIgnoreAttribute>();
+
         var targetTable = "test.json_write_poco_ignore_attr";
-        await connection.ExecuteStatementAsync(
+        await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
                 data JSON(Name String)
             ) ENGINE = Memory");
 
         var poco = new TestPocoWithIgnoreAttribute { Name = "Visible", Secret = "Hidden" };
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };
         await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
 
-        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
         Assert.That(result["Name"].ToString(), Is.EqualTo("Visible"));
@@ -923,8 +934,9 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithNonNullableNullProperty_ShouldSkipField()
     {
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         var targetTable = "test.json_write_nonnullable_null";
-        await connection.ExecuteStatementAsync(
+        await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
                 data JSON
@@ -932,14 +944,15 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         // string is a reference type that can be null, but it's not Nullable<T>
         var data = new NoHintData { Number = 42, Text = null, Flag = true };
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        binaryConnection.RegisterJsonSerializationType<NoHintData>();
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };
         await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
-        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
         Assert.That(result["Number"].GetValue<int>(), Is.EqualTo(42));
@@ -971,7 +984,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // Value is null but hint is non-nullable Int64
         var data = new NonNullableHintedData { Value = null, Name = "test" };
 
-        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -1077,10 +1089,13 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
     [Test]
     [RequiredFeature(Feature.Json)]
-    public async Task Write_WithManyUnhintedTypes_ShouldInferAndWriteAllTypes()
+    public async Task Write_WithManyUnhintedTypes_BinaryMode_ShouldInferAndWriteAllTypes()
     {
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryConnection.RegisterJsonSerializationType<ComprehensiveTypesData>();
+
         var targetTable = "test.json_write_comprehensive_types";
-        await connection.ExecuteStatementAsync(
+        await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
                 data JSON
@@ -1135,15 +1150,14 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             NestedIntArray = [[1, 2], [3, 4, 5], [6]]
         };
 
-        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };
         await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
-        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
 
@@ -1229,6 +1243,9 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_WithCircularReference_ShouldThrowInvalidOperationException()
     {
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryConnection.RegisterJsonSerializationType<CircularRefA>();
+        binaryConnection.RegisterJsonSerializationType<CircularRefB>();
         var targetTable = "test.json_write_circular_ref";
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
@@ -1242,8 +1259,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         a.RefB = b;
         b.RefA = a;
 
-        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };
@@ -1260,6 +1276,8 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_WithSelfReference_ShouldThrowInvalidOperationException()
     {
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryConnection.RegisterJsonSerializationType<SelfReferencing>();
         var targetTable = "test.json_write_self_ref";
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
@@ -1271,8 +1289,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         var obj = new SelfReferencing { Id = 1 };
         obj.Self = obj;
 
-        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };
@@ -1298,7 +1315,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         var data = new TimeSpanData { Duration = new TimeSpan(1, 2, 3, 4, 567) };
 
-        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
@@ -1323,10 +1339,12 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
     [Test]
     [RequiredFeature(Feature.Json)]
-    public async Task Write_WithUnregisteredType_ShouldThrowClickHouseJsonSerializationException()
+    public async Task Write_WithUnregisteredType_BinaryMode_ShouldThrowClickHouseJsonSerializationException()
     {
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+
         var targetTable = "test.json_write_unregistered_type";
-        await connection.ExecuteStatementAsync(
+        await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
                 data JSON
@@ -1335,8 +1353,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // UnregisteredPocoData is intentionally NOT registered
         var data = new UnregisteredPocoData { Id = 1, Name = "test" };
 
-        connection.CustomSettings["input_format_binary_read_json_as_string"] = 0;
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };
@@ -1359,11 +1376,14 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
     [Test]
     [RequiredFeature(Feature.Json)]
-    public async Task Write_WithWrongPropertyType_ShouldThrowServerError()
+    public async Task Write_WithWrongPropertyType_BinaryMode_ShouldThrowFormatException()
     {
+        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryConnection.RegisterJsonSerializationType<WrongTypeData>();
+
         // POCO has string property, but schema expects Int64
         var targetTable = "test.json_write_wrong_type";
-        await connection.ExecuteStatementAsync(
+        await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
                 data JSON(Value Int64)
@@ -1371,7 +1391,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         var data = new WrongTypeData { Value = "not a number" };
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
         {
             DestinationTableName = targetTable,
         };

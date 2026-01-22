@@ -76,6 +76,10 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Deep copy the CustomHeaders dictionary
         CustomHeaders = new Dictionary<string, string>(other.CustomHeaders.ToDictionary(x => x.Key, x => x.Value));
+
+        // Copy JSON mode settings
+        JsonReadMode = other.JsonReadMode;
+        JsonWriteMode = other.JsonWriteMode;
     }
 
     /// <summary>
@@ -248,6 +252,20 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public IReadOnlyDictionary<string, string> CustomHeaders { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
+    /// Gets or sets how JSON columns are returned when reading data.
+    /// Binary (default): Returns System.Text.Json.Nodes.JsonObject
+    /// String: Returns the raw JSON string (requires server setting output_format_binary_write_json_as_string=1)
+    /// </summary>
+    public JsonReadMode JsonReadMode { get; init; } = JsonReadMode.Binary;
+
+    /// <summary>
+    /// Gets or sets how JSON data is sent when writing.
+    /// String (default): Client sends JSON as string. Accepts JsonObject, JsonNode, strings, and POCOs.
+    /// Binary: Client serializes to binary JSON format. Only registered POCO types are supported.
+    /// </summary>
+    public JsonWriteMode JsonWriteMode { get; init; } = JsonWriteMode.String;
+
+    /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
     /// Values not specified in the connection string will use default values.
     /// </summary>
@@ -292,6 +310,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Timeout = builder.Timeout,
             UseCustomDecimals = builder.UseCustomDecimals,
             Roles = builder.Roles,
+            JsonReadMode = builder.JsonReadMode,
+            JsonWriteMode = builder.JsonWriteMode,
         };
 
         // Extract custom settings from connection string builder
@@ -336,6 +356,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                HttpClientFactory == other.HttpClientFactory &&
                HttpClientName == other.HttpClientName &&
                EnableDebugMode == other.EnableDebugMode &&
+               JsonReadMode == other.JsonReadMode &&
+               JsonWriteMode == other.JsonWriteMode &&
                Roles.SequenceEqual(other.Roles) &&
                CustomHeaders.Count == other.CustomHeaders.Count &&
                CustomHeaders.All(kvp => other.CustomHeaders.TryGetValue(kvp.Key, out var value) && kvp.Value == value);
@@ -371,6 +393,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(UseFormDataParameters);
         hash.Add(Timeout);
         hash.Add(EnableDebugMode);
+        hash.Add(JsonReadMode);
+        hash.Add(JsonWriteMode);
         foreach (var kvp in CustomSettings)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
@@ -410,7 +434,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         var result = $"Host={Host};Port={Port};Protocol={Protocol};Database={Database};" +
                $"Username={Username};Password=****;Compression={UseCompression};" +
                $"UseCustomDecimals={UseCustomDecimals};" +
-               $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s";
+               $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s;" +
+               $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode}";
 
         if (Roles.Count > 0)
         {

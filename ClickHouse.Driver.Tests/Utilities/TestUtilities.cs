@@ -103,12 +103,14 @@ public static class TestUtilities
     /// Utility method to allow to redirect ClickHouse connections to different machine, in case of Windows development environment
     /// </summary>
     /// <returns></returns>
-    public static ClickHouseConnection GetTestClickHouseConnection(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false)
+    public static ClickHouseConnection GetTestClickHouseConnection(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
     {
         var builder = GetConnectionStringBuilder();
         builder.Compression = compression;
         builder.UseSession = session;
         builder.UseCustomDecimals = customDecimals;
+        builder.JsonReadMode = jsonReadMode;
+        builder.JsonWriteMode = jsonWriteMode;
 
         if (password is not null)
         {
@@ -491,13 +493,11 @@ public static class TestUtilities
             yield return new DataTypeSample("Variant(UInt64, String, Array(UInt64))", typeof(string), "'Hello, World!'::Variant(UInt64, String, Array(UInt64))", "Hello, World!");
         }
 
-        // Temporarily disabled before adding first-class support for input/output_format_binary_write_json_as_string
-        if (false && SupportedFeatures.HasFlag(Feature.Json))
+        if (SupportedFeatures.HasFlag(Feature.Json))
         {
             var jsonExamples = new[]
             {
                 "{}",
-                //"{\"val\": null}",
                 "{\"val\": \"string\"}",
                 "{\"val\": 1}",
                 "{\"val\": 1.5}",
