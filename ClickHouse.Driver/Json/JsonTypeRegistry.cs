@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Numerics;
@@ -19,7 +20,7 @@ internal sealed class JsonTypeRegistry
     /// <summary>
     /// Cache for registered POCO types and their property metadata.
     /// </summary>
-    private readonly Dictionary<Type, JsonPropertyInfo[]> registeredTypes = new();
+    private readonly ConcurrentDictionary<Type, JsonPropertyInfo[]> registeredTypes = new();
 
     /// <summary>
     /// Registers a POCO type for JSON/Dynamic serialization.
