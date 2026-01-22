@@ -14,6 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Diagnostic;
 using ClickHouse.Driver.Http;
+using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Logging;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
@@ -26,6 +27,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     private readonly List<IDisposable> disposables = new();
     private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
+    private readonly JsonTypeRegistry jsonTypeRegistry = new();
     private volatile ConnectionState state = ConnectionState.Closed; // Not an autoproperty because of interface implementation
 
     // HTTP client management
@@ -530,7 +532,31 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         return response;
     }
 
-    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals);
+    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, jsonTypeRegistry);
+
+    /// <summary>
+    /// Registers a POCO type for JSON column serialization.
+    /// Types must be registered before they can be used in bulk copy operations with JSON or Dynamic columns.
+    /// </summary>
+    /// <typeparam name="T">The POCO type to register.</typeparam>
+    /// <exception cref="ClickHouseJsonSerializationException">
+    /// Thrown if any property type cannot be mapped to a ClickHouse type.
+    /// </exception>
+    public void RegisterJsonSerializationType<T>() 
+    where T : class
+        => jsonTypeRegistry.RegisterType<T>();
+
+    /// <summary>
+    /// Registers a POCO type for JSON column serialization.
+    /// Types must be registered before they can be used in bulk copy operations with JSON or Dynamic columns.
+    /// </summary>
+    /// <param name="type">The POCO type to register.</param>
+    /// <exception cref="ArgumentNullException">Thrown if <paramref name="type"/> is null.</exception>
+    /// <exception cref="ClickHouseJsonSerializationException">
+    /// Thrown if any property type cannot be mapped to a ClickHouse type.
+    /// </exception>
+    public void RegisterJsonSerializationType(Type type)
+        => jsonTypeRegistry.RegisterType(type);
 
     internal ClickHouseUriBuilder CreateUriBuilder(string sql = null) => new ClickHouseUriBuilder(serverUri)
     {

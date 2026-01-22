@@ -1,29 +1,41 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClickHouse.Driver.Formats;
+using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types.Grammar;
 using ClickHouse.Driver.Utility;
+using Microsoft.IO;
 
 namespace ClickHouse.Driver.Types;
 
 internal class JsonType : ParameterizedType
 {
-    private readonly string[] jsonSettingNames =
+    private static readonly string[] JsonSettingNames =
     [
         "max_dynamic_paths",
         "max_dynamic_types",
         "skip "
     ];
+
+    /// <summary>
+    /// Shared DynamicType instance for writing unhinted values.
+    /// </summary>
+    private static readonly DynamicType DynamicTypeInstance = new();
+
+    /// <summary>
+    /// Memory stream manager for temporary buffers during POCO serialization.
+    /// </summary>
+    private static readonly RecyclableMemoryStreamManager MemoryStreamManager = new();
 
     internal TypeSettings TypeSettings { get; init; }
 
@@ -86,7 +98,7 @@ internal class JsonType : ParameterizedType
         TypeSettings settings)
     {
         var hintedTypes = node.ChildNodes
-            .Where(childNode => !jsonSettingNames.Any(jsonSettingName => childNode.Value.StartsWith(jsonSettingName, StringComparison.OrdinalIgnoreCase)))
+            .Where(childNode => !JsonSettingNames.Any(jsonSettingName => childNode.Value.StartsWith(jsonSettingName, StringComparison.OrdinalIgnoreCase)))
             .Select(childNode =>
             {
                 var hintParts = childNode.Value.Split(' ');
@@ -123,90 +135,152 @@ internal class JsonType : ParameterizedType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-        JsonObject rootObject;
-        if (value is string inputString)
+        // String and JsonNode inputs: write as string, let server parse
+        if (value is string || value is JsonNode)
         {
-            rootObject = (JsonObject)JsonNode.Parse(inputString);
-        }
-        else if (value is JsonObject inputObject)
-        {
-            rootObject = inputObject;
-        }
-        else
-        {
-            rootObject = (JsonObject)JsonSerializer.SerializeToNode(value);
+            WriteAsString(writer, value);
+            return;
         }
 
-        // Simple depth-first search to flatten the JSON object into a dictionary
-        WriteJsonObject(writer, rootObject);
+        // POCO with hints
+        WritePocoWithHints(writer, value);
     }
 
-    internal static void WriteJsonObject(ExtendedBinaryWriter writer, JsonObject rootObject)
+    private void WritePocoWithHints(ExtendedBinaryWriter writer, object value)
     {
-        Dictionary<string, JsonNode> fields = new();
-        StringBuilder currentPath = new();
-        FlattenJson(rootObject, ref currentPath, ref fields);
+        // Single-pass approach: write fields to temp buffer while counting, then copy to output
+        using var tempStream = MemoryStreamManager.GetStream();
+        using var tempWriter = new ExtendedBinaryWriter(tempStream);
 
-        writer.Write7BitEncodedInt(fields.Count);
-        foreach (var field in fields)
-        {
-            writer.Write(field.Key);
-            WriteJsonNode(writer, field.Value);
-        }
+        // Track visited objects to detect circular references
+        var visited = new HashSet<object>(ObjectReferenceEqualityComparer.Instance);
+        var fieldCount = WritePocoFields(tempWriter, value, string.Empty, visited);
+
+        writer.Write7BitEncodedInt(fieldCount);
+        tempStream.Position = 0;
+        tempStream.CopyTo(writer.BaseStream);
     }
 
-    internal static void FlattenJson(JsonObject parent, ref StringBuilder currentPath, ref Dictionary<string, JsonNode> fields)
+    /// <summary>
+    /// Write a json string or JsonNode as a string.
+    /// This will only work with input_format_binary_read_json_as_string=1
+    /// </summary>
+    private static void WriteAsString(ExtendedBinaryWriter writer, object value)
     {
-        foreach (var property in parent)
+        var jsonString = value switch
         {
-            var pathLengthBefore = currentPath.Length;
-            if (currentPath.Length > 0)
-                currentPath.Append('.');
-            currentPath.Append(property.Key);
+            string s => s,
+            JsonNode node => node.ToJsonString(),
+            _ => throw new ArgumentException($"Expected string or JsonNode, got {value.GetType().Name}")
+        };
 
-            if (property.Value is JsonObject jObject)
-            {
-                FlattenJson(jObject, ref currentPath, ref fields);
-            }
-            else if (property.Value is null || property.Value.GetValueKind() == JsonValueKind.Null)
-            {
-                fields[currentPath.ToString()] = null;
-            }
-            else
-            {
-                fields[currentPath.ToString()] = property.Value;
-            }
-
-            currentPath.Length = pathLengthBefore;
-        }
+        writer.Write(jsonString);
     }
 
-    internal static IEnumerable<JsonNode> LeafNodes(JsonNode node)
+    /// <summary>
+    /// Writes POCO fields to the writer and returns the number of fields written.
+    /// </summary>
+    /// <param name="visited">Set of already visited objects to detect circular references.</param>
+    private int WritePocoFields(ExtendedBinaryWriter writer, object poco, string prefix, HashSet<object> visited)
     {
-        if (node is JsonObject jObject)
+        // Check for circular reference
+        if (!visited.Add(poco))
         {
-            foreach (var property in jObject)
+            throw new InvalidOperationException(
+                $"Circular reference detected at path '{prefix}'. " +
+                "JSON serialization does not support circular object references.");
+        }
+
+        try
+        {
+            var type = poco.GetType();
+            var propertyInfos = TypeSettings.jsonTypeRegistry?.GetProperties(type);
+            if (propertyInfos == null)
             {
-                if (property.Value is JsonObject)
+                throw new ClickHouseJsonSerializationException(type);
+            }
+
+            int count = 0;
+
+            foreach (var propInfo in propertyInfos)
+            {
+                if (propInfo.IsIgnored)
+                    continue;
+                string path = GetJsonPath(prefix, propInfo);
+                var value = propInfo.Property.GetValue(poco);
+
+                if (value is null)
                 {
-                    foreach (var child in LeafNodes(property.Value))
-                        yield return child;
+                    // Only write nulls for hinted Nullable types
+                    // ClickHouse doesn't allow Nullable inside dynamic JSON paths (Variant type)
+                    if (HintedTypes.TryGetValue(path, out ClickHouseType hintedType) && hintedType is NullableType)
+                    {
+                        writer.Write(path);
+                        WriteHintedValue(writer, null, hintedType);
+                        count++;
+                    }
+                }
+                else if (propInfo.IsNestedObject)
+                {
+                    // Recurse into sub-object
+                    // Note: Collections (IEnumerable) are excluded from IsNestedObject, so they go to the else branch
+                    count += WritePocoFields(writer, value, path, visited);
                 }
                 else
                 {
-                    yield return property.Value;
+                    // Write out a value
+                    HintedTypes.TryGetValue(path, out ClickHouseType hintedType);
+                    writer.Write(path);
+                    if (hintedType != null)
+                    {
+                        WriteHintedValue(writer, value, hintedType);
+                    }
+                    else
+                    {
+                        WriteUnhintedValue(writer, value);
+                    }
+                    count++;
                 }
             }
+
+            return count;
         }
-        else if (node is JsonArray jArray)
+        finally
         {
-            yield return jArray;
-        }
-        else
-        {
-            yield break;
+            // Remove from visited when leaving this object's scope
+            // This allows the same object to appear in different branches (diamond pattern)
+            visited.Remove(poco);
         }
     }
+
+    private static string GetJsonPath(string prefix, JsonPropertyInfo propInfo)
+    {
+        return string.IsNullOrEmpty(prefix)
+            ? propInfo.JsonPath
+            : $"{prefix}.{propInfo.JsonPath}";
+    }
+
+    /// <summary>
+    /// Uses the type from the column definition to write the given value.
+    /// </summary>
+    private static void WriteHintedValue(ExtendedBinaryWriter writer, object value, ClickHouseType hintedType)
+    {
+        if ((value is null || value is DBNull) && hintedType is NullableType)
+        {
+            // Nullable types handle null via their own Write method (writes byte 1)
+            hintedType.Write(writer, null);
+            return;
+        }
+
+        hintedType.Write(writer, value);
+    }
+
+    /// <summary>
+    /// For cases when there is no type hint, we delegate to DynamicType
+    /// which handles type inference and binary encoding.
+    /// </summary>
+    private static void WriteUnhintedValue(ExtendedBinaryWriter writer, object value)
+        => DynamicTypeInstance.Write(writer, value);
 
     internal JsonNode ReadJsonNode(ExtendedBinaryReader reader, ClickHouseType hintedType)
     {
@@ -292,186 +366,18 @@ internal class JsonType : ParameterizedType
         };
     }
 
-    internal static void WriteJsonNode(ExtendedBinaryWriter writer, JsonNode node)
+    /// <summary>
+    /// Reference equality comparer for cycle detection.
+    /// Uses RuntimeHelpers.GetHashCode for identity-based hashing.
+    /// </summary>
+    private sealed class ObjectReferenceEqualityComparer : IEqualityComparer<object>
     {
-        switch (node)
-        {
-            case JsonArray array:
-                WriteJsonArray(writer, array);
-                break;
-            case JsonValue value:
-                WriteJsonValue(writer, value);
-                break;
-            case null:
-                writer.Write(BinaryTypeIndex.Nothing);
-                break;
-            default:
-                throw new SerializationException($"Unsupported JSON node type: {node.GetType()}");
-        }
+        public static readonly ObjectReferenceEqualityComparer Instance = new();
+
+        private ObjectReferenceEqualityComparer() { }
+
+        public new bool Equals(object x, object y) => ReferenceEquals(x, y);
+
+        public int GetHashCode(object obj) => RuntimeHelpers.GetHashCode(obj);
     }
-
-    internal static void WriteJsonArray(ExtendedBinaryWriter writer, JsonArray array)
-    {
-        writer.Write(BinaryTypeIndex.Array);
-
-        var kind = array.Count > 0 ? array[0].GetValueKind() : JsonValueKind.Null;
-
-        // For numbers, detect the specific type from the first element
-        byte numericTypeIndex = BinaryTypeIndex.Float64;
-        if (kind == JsonValueKind.Number)
-        {
-            var firstVal = (JsonValue)array[0];
-            if (firstVal.TryGetValue<int>(out _))
-                numericTypeIndex = BinaryTypeIndex.Int32;
-            else if (firstVal.TryGetValue<long>(out _))
-                numericTypeIndex = BinaryTypeIndex.Int64;
-        }
-
-        // Step 1: Write binary tag for array element type
-        switch (kind)
-        {
-            case JsonValueKind.Undefined:
-            case JsonValueKind.String:
-                writer.Write(BinaryTypeIndex.String);
-                break;
-            case JsonValueKind.Number:
-                writer.Write(numericTypeIndex);
-                break;
-            case JsonValueKind.False:
-            case JsonValueKind.True:
-                writer.Write(BinaryTypeIndex.Bool);
-                break;
-            case JsonValueKind.Null:
-                writer.Write(BinaryTypeIndex.Nothing);
-                break;
-            case JsonValueKind.Object:
-                writer.Write(BinaryTypeIndex.Json);
-                writer.Write((byte)0); // serialization version
-                writer.Write7BitEncodedInt(256); // max_dynamic_paths
-                writer.Write((int)16); // max_dynamic_types
-                break;
-            default:
-                throw new SerializationException($"Unsupported JSON value kind: {kind}");
-        }
-
-        // Step 2: Write array length
-        writer.Write7BitEncodedInt(array.Count);
-
-        // Step 3: Write array elements
-        foreach (var value in array)
-        {
-            var elementKind = value.GetValueKind();
-            // True and False are different kinds, so we need a special check for them
-            if (elementKind != kind && !(IsBoolKind(kind) && IsBoolKind(elementKind)))
-            {
-                throw new SerializationException("Array contains mixed value types");
-            }
-
-            switch (kind)
-            {
-                case JsonValueKind.Undefined:
-                case JsonValueKind.String:
-                    writer.Write(value.ToString());
-                    break;
-                case JsonValueKind.Number:
-                    WriteJsonArrayNumber(writer, (JsonValue)value, numericTypeIndex);
-                    break;
-                case JsonValueKind.False:
-                case JsonValueKind.True:
-                    writer.Write(value.GetValue<bool>());
-                    break;
-                case JsonValueKind.Null:
-                    writer.Write(BinaryTypeIndex.Nothing);
-                    break;
-                case JsonValueKind.Object:
-                    WriteJsonObject(writer, (JsonObject)value);
-                    break;
-                default:
-                    throw new SerializationException($"Unsupported JSON value kind: {value.GetValueKind()}");
-            }
-        }
-    }
-
-    internal static void WriteJsonValue(ExtendedBinaryWriter writer, JsonValue value)
-    {
-        switch (value.GetValueKind())
-        {
-            case JsonValueKind.Undefined:
-            case JsonValueKind.String:
-                writer.Write(BinaryTypeIndex.String);
-                writer.Write(value.ToString());
-                break;
-            case JsonValueKind.Number:
-                WriteJsonNumber(writer, value);
-                break;
-            case JsonValueKind.False:
-            case JsonValueKind.True:
-                writer.Write(BinaryTypeIndex.Bool);
-                writer.Write(value.GetValue<bool>());
-                break;
-            case JsonValueKind.Null:
-                writer.Write(BinaryTypeIndex.Nothing);
-                break;
-            default:
-                throw new SerializationException($"Unsupported JSON value kind: {value.GetValueKind()}");
-        }
-    }
-
-    private static void WriteJsonNumber(ExtendedBinaryWriter writer, JsonValue value)
-    {
-        if (value.TryGetValue<long>(out var l))
-        {
-            writer.Write(BinaryTypeIndex.Int64);
-            writer.Write(l);
-        }
-        else if (value.TryGetValue<int>(out var i))
-        {
-            writer.Write(BinaryTypeIndex.Int32);
-            writer.Write(i);
-        }
-        else if (value.TryGetValue<double>(out var d))
-        {
-            writer.Write(BinaryTypeIndex.Float64);
-            writer.Write(d);
-        }
-        else
-        {
-            // Fallback: parse from string representation
-            writer.Write(BinaryTypeIndex.Float64);
-            writer.Write(double.Parse(value.ToString(), CultureInfo.InvariantCulture));
-        }
-    }
-
-    private static void WriteJsonArrayNumber(ExtendedBinaryWriter writer, JsonValue value, byte typeIndex)
-    {
-        switch (typeIndex)
-        {
-            case BinaryTypeIndex.Int32:
-                if (value.TryGetValue<int>(out var i))
-                {
-                    writer.Write(i);
-                    break;
-                }
-                throw new ArgumentException($"Expected json array element to be Int32: {value}. Arrays must contain only one type of element.");
-            case BinaryTypeIndex.Int64:
-                if (value.TryGetValue<long>(out var l))
-                {
-                    writer.Write(l);
-                    break;
-                }
-                throw new ArgumentException($"Expected json array element to be Int64: {value}. Arrays must contain only one type of element.");
-            default: // Float64
-                if (value.TryGetValue<double>(out var d))
-                {
-                    writer.Write(d);
-                }
-                else
-                {
-                    writer.Write(double.Parse(value.ToString(), CultureInfo.InvariantCulture));
-                }
-                break;
-        }
-    }
-
-    private static bool IsBoolKind(JsonValueKind kind) => kind is JsonValueKind.True or JsonValueKind.False;
 }

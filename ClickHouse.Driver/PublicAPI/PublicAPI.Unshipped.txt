@@ -153,3 +153,19 @@ virtual ClickHouse.Driver.ADO.QueryStats.Equals(ClickHouse.Driver.ADO.QueryStats
 virtual ClickHouse.Driver.ADO.QueryStats.PrintMembers(System.Text.StringBuilder builder) -> bool
 static ClickHouse.Driver.Numerics.ClickHouseDecimal.MaxDivisionPrecision.get -> int
 static ClickHouse.Driver.Numerics.ClickHouseDecimal.MaxDivisionPrecision.set -> void
+ClickHouse.Driver.Json.ClickHouseJsonIgnoreAttribute
+ClickHouse.Driver.Json.ClickHouseJsonIgnoreAttribute.ClickHouseJsonIgnoreAttribute() -> void
+ClickHouse.Driver.Json.ClickHouseJsonPathAttribute
+ClickHouse.Driver.Json.ClickHouseJsonPathAttribute.ClickHouseJsonPathAttribute(string path) -> void
+ClickHouse.Driver.Json.ClickHouseJsonPathAttribute.Path.get -> string
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.ClickHouseJsonSerializationException(string message) -> void
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.ClickHouseJsonSerializationException(System.Type targetType, string propertyName, System.Type propertyType) -> void
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.ClickHouseJsonSerializationException(System.Type unregisteredType) -> void
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.PropertyName.get -> string
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.PropertyType.get -> System.Type
+ClickHouse.Driver.Json.ClickHouseJsonSerializationException.TargetType.get -> System.Type
+ClickHouse.Driver.ADO.ClickHouseConnection.RegisterJsonSerializationType(System.Type type) -> void
+ClickHouse.Driver.ADO.ClickHouseConnection.RegisterJsonSerializationType<T>() -> void
+ClickHouse.Driver.IClickHouseConnection.RegisterJsonSerializationType(System.Type type) -> void
+ClickHouse.Driver.IClickHouseConnection.RegisterJsonSerializationType<T>() -> void

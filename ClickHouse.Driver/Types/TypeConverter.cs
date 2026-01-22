@@ -183,8 +183,8 @@ internal static class TypeConverter
         RegisterParameterizedType<QBitType>();
 
         // Mapping fixups
-        ReverseMapping.Add(typeof(ClickHouseDecimal), new Decimal128Type());
-        ReverseMapping.Add(typeof(decimal), new Decimal128Type());
+        ReverseMapping.Add(typeof(ClickHouseDecimal), new Decimal128Type { Scale = 9 });
+        ReverseMapping.Add(typeof(decimal), new Decimal128Type { Scale = 9 });
 #if NET6_0_OR_GREATER
         ReverseMapping.Add(typeof(DateOnly), new DateType());
 #endif
