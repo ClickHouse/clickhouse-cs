@@ -172,9 +172,11 @@ ClickHouse.Driver.IClickHouseConnection.RegisterJsonSerializationType<T>() -> vo
 ClickHouse.Driver.JsonReadMode
 ClickHouse.Driver.JsonReadMode.Binary = 0 -> ClickHouse.Driver.JsonReadMode
 ClickHouse.Driver.JsonReadMode.String = 1 -> ClickHouse.Driver.JsonReadMode
+ClickHouse.Driver.JsonReadMode.None = 2 -> ClickHouse.Driver.JsonReadMode
 ClickHouse.Driver.JsonWriteMode
 ClickHouse.Driver.JsonWriteMode.Binary = 0 -> ClickHouse.Driver.JsonWriteMode
 ClickHouse.Driver.JsonWriteMode.String = 1 -> ClickHouse.Driver.JsonWriteMode
+ClickHouse.Driver.JsonWriteMode.None = 2 -> ClickHouse.Driver.JsonWriteMode
 ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonReadMode.get -> ClickHouse.Driver.JsonReadMode
 ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonReadMode.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonWriteMode.get -> ClickHouse.Driver.JsonWriteMode

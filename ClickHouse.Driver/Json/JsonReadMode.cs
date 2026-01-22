@@ -14,5 +14,13 @@ public enum JsonReadMode
     /// Sets output_format_binary_write_json_as_string=1. JSON is returned as a raw string.
     /// Preserves the exact JSON string representation from ClickHouse.
     /// </summary>
+#pragma warning disable CA1720 // Identifier contains type name
     String = 1,
+#pragma warning restore CA1720 // Identifier contains type name
+
+    /// <summary>
+    /// No server settings are automatically applied. Use this for readonly connections
+    /// where setting server parameters is not allowed. Behavior is same as Binary.
+    /// </summary>
+    None = 2,
 }

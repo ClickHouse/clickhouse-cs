@@ -673,7 +673,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryConnection.RegisterJsonSerializationType<UnhintedDecimalData>();
         var targetTable = "test.json_write_unhinted_decimal";
-        await connection.ExecuteStatementAsync(
+        await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
                 data JSON

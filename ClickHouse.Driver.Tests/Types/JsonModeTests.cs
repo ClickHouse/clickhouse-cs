@@ -48,7 +48,12 @@ public class JsonModeTests
         // Verify the JSON string can be parsed
         var parsed = JsonNode.Parse(jsonString);
         Assert.That((string)parsed["name"], Is.EqualTo("John"));
-        Assert.That((int)parsed["age"], Is.EqualTo(30));
+
+        // ClickHouse 25.3 returns numbers as strings in this scenario
+        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
+            Assert.That(int.Parse(parsed["age"].ToString()), Is.EqualTo(30));
+        else
+            Assert.That(parsed["age"].GetValue<int>(), Is.EqualTo(30));
     }
 
     [Test]
@@ -205,7 +210,12 @@ public class JsonModeTests
         // Verify the JSON content
         var parsed = JsonNode.Parse((string)result);
         Assert.That((string)parsed["key"], Is.EqualTo("value"));
-        Assert.That((int)parsed["num"], Is.EqualTo(42));
+
+        // ClickHouse 25.3 returns numbers as strings in this scenario
+        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
+            Assert.That(int.Parse(parsed["num"].ToString()), Is.EqualTo(42));
+        else
+            Assert.That((int)parsed["num"], Is.EqualTo(42));
     }
 
     [Test]
@@ -522,10 +532,10 @@ public class JsonModeTests
         Assert.That(reader.Read(), Is.True);
 
         var result = (JsonObject)reader.GetValue(0);
-        Assert.That(result["name"]!.GetValue<string>(), Is.EqualTo("test"));
-        Assert.That(result["count"]!.GetValue<long>(), Is.EqualTo(42));
-        Assert.That(result["active"]!.GetValue<bool>(), Is.True);
-        Assert.That(((JsonArray)result["tags"]!).Count, Is.EqualTo(3));
+        Assert.That(result["name"].GetValue<string>(), Is.EqualTo("test"));
+        Assert.That(result["count"].GetValue<long>(), Is.EqualTo(42));
+        Assert.That(result["active"].GetValue<bool>(), Is.True);
+        Assert.That(((JsonArray)result["tags"]).Count, Is.EqualTo(3));
 
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
@@ -557,8 +567,13 @@ public class JsonModeTests
         // Parse both to compare structure (server may reformat)
         var originalParsed = JsonNode.Parse(original);
         var resultParsed = JsonNode.Parse(result);
-        Assert.That(resultParsed!["name"]!.GetValue<string>(), Is.EqualTo(originalParsed!["name"]!.GetValue<string>()));
-        Assert.That(resultParsed["value"]!.GetValue<long>(), Is.EqualTo(originalParsed["value"]!.GetValue<long>()));
+        Assert.That(resultParsed["name"].GetValue<string>(), Is.EqualTo(originalParsed["name"].GetValue<string>()));
+
+        // ClickHouse 25.3 returns numbers as strings in this scenario
+        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
+            Assert.That(long.Parse(resultParsed["value"].ToString()), Is.EqualTo(originalParsed["value"].GetValue<long>()));
+        else
+            Assert.That(resultParsed["value"].GetValue<long>(), Is.EqualTo(originalParsed["value"].GetValue<long>()));
 
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
@@ -587,9 +602,9 @@ public class JsonModeTests
         Assert.That(reader.Read(), Is.True);
 
         var result = (JsonObject)reader.GetValue(0);
-        Assert.That(result["name"]!.GetValue<string>(), Is.EqualTo("poco_test"));
-        Assert.That(result["score"]!.GetValue<long>(), Is.EqualTo(99));
-        Assert.That(result["enabled"]!.GetValue<bool>(), Is.True);
+        Assert.That(result["name"].GetValue<string>(), Is.EqualTo("poco_test"));
+        Assert.That(result["score"].GetValue<long>(), Is.EqualTo(99));
+        Assert.That(result["enabled"].GetValue<bool>(), Is.True);
 
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
@@ -627,8 +642,8 @@ public class JsonModeTests
         Assert.That(reader.Read(), Is.True);
 
         var result = (JsonObject)reader.GetValue(0);
-        Assert.That(result["user"]!["profile"]!["name"]!.GetValue<string>(), Is.EqualTo("deep"));
-        Assert.That(result["user"]!["profile"]!["level"]!.GetValue<long>(), Is.EqualTo(3));
+        Assert.That(result["user"]["profile"]["name"].GetValue<string>(), Is.EqualTo("deep"));
+        Assert.That(result["user"]["profile"]["level"].GetValue<long>(), Is.EqualTo(3));
 
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
@@ -663,7 +678,7 @@ public class JsonModeTests
         {
             var id = reader.GetFieldValue<uint>(0);
             var data = (JsonObject)reader.GetValue(1);
-            results.Add((id, data["value"]!.GetValue<long>()));
+            results.Add((id, data["value"].GetValue<long>()));
         }
 
         Assert.That(results.Count, Is.EqualTo(3));

@@ -562,13 +562,6 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     {
         var queryParams = CustomSettings.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
 
-        // Inject JSON format settings based on mode
-        if (Settings.JsonReadMode == JsonReadMode.String)
-            queryParams["output_format_binary_write_json_as_string"] = "1";
-
-        if (Settings.JsonWriteMode == JsonWriteMode.String)
-            queryParams["input_format_binary_read_json_as_string"] = "1";
-
         return new ClickHouseUriBuilder(serverUri)
         {
             Database = Database,
@@ -577,6 +570,8 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
             ConnectionQueryStringParameters = queryParams,
             ConnectionRoles = Settings.Roles,
             Sql = sql,
+            JsonReadMode = Settings.JsonReadMode,
+            JsonWriteMode = Settings.JsonWriteMode,
         };
     }
 

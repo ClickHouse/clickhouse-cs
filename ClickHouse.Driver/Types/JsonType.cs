@@ -158,7 +158,7 @@ internal class JsonType : ParameterizedType
         if (value is string or JsonNode)
         {
             throw new ArgumentException(
-                $"String and JsonNode inputs require JsonWriteMode.String. " +
+                $"String and JsonNode inputs require JsonWriteMode.String. Current value: {TypeSettings.jsonWriteMode}. " +
                 $"Either use JsonWriteMode.String in your connection string, or use a registered POCO type.");
         }
 
