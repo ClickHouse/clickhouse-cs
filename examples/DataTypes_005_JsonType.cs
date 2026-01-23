@@ -9,168 +9,85 @@ namespace ClickHouse.Driver.Examples;
 
 /// <summary>
 /// Demonstrates working with ClickHouse JSON type.
-/// Covers:
-/// - Reading JSON as JsonObject (default)
-/// - Reading JSON as string (JsonReadMode.String)
-/// - Writing JSON from JsonObject, JsonNode, strings, and POCOs
-/// - Configuring JsonReadMode and JsonWriteMode via connection string
-/// - Round-trip scenarios with different mode combinations
-/// - POCO serialization with type registration
+///
+/// Examples are organized by operation:
+/// 1. Insert with String Mode (default) - strings, JsonObject, JsonNode, POCOs
+/// 2. Insert with Binary Mode - registered POCOs with custom attributes
+/// 3. Read with Binary Mode (default) - JsonObject with nested access
+/// 4. Read with String Mode - raw JSON strings
+/// 5. Querying JSON Paths - SQL path access, typed schemas
 /// </summary>
 public static class JsonType
 {
     public static async Task Run()
     {
-        Console.WriteLine("JSON Type Examples\n");
+        Console.WriteLine("JSON Type Examples");
         Console.WriteLine("=".PadRight(60, '='));
 
-        // Example 1: Reading JSON as JsonObject (default)
-        Console.WriteLine("\n1. Reading JSON as JsonObject (default):");
-        await Example1_ReadAsJsonObject();
-
-        // Example 2: Reading JSON as string
-        Console.WriteLine("\n2. Reading JSON as String:");
-        await Example2_ReadAsString();
-
-        // Example 3: Writing JSON from different sources
-        Console.WriteLine("\n3. Writing JSON from Different Sources:");
-        await Example3_WritingJsonWithStringMode();
-
-        // Example 4: String mode for both read and write
-        Console.WriteLine("\n4. String Mode for Both Read and Write:");
-        await Example4_StringModeRoundTrip();
-
-        // Example 5: POCO serialization with type registration
-        Console.WriteLine("\n5. POCO Serialization with Type Registration:");
-        await Example5_PocoSerialization();
+        await Example1_InsertStringMode();
+        await Example2_InsertBinaryMode();
+        await Example3_ReadBinaryMode();
+        await Example4_ReadStringMode();
+        await Example5_QueryingJsonPaths();
 
         Console.WriteLine("\n" + "=".PadRight(60, '='));
         Console.WriteLine("All JSON type examples completed!");
     }
 
     /// <summary>
-    /// By default, JSON columns are returned as System.Text.Json.Nodes.JsonObject.
-    /// This allows programmatic access to JSON properties.
+    /// Writing in String mode (default) serializes all inputs to JSON strings.
+    /// The server parses these strings via input_format_binary_read_json_as_string=1.
+    ///
+    /// Supported input types:
+    /// - Raw JSON strings (passed through directly)
+    /// - JsonObject/JsonNode (serialized via ToJsonString())
+    /// - POCOs (serialized via System.Text.Json.JsonSerializer)
     /// </summary>
-    private static async Task Example1_ReadAsJsonObject()
+    private static async Task Example1_InsertStringMode()
     {
+        Console.WriteLine("\n1. INSERT WITH STRING MODE (Default)");
+        Console.WriteLine("-".PadRight(50, '-'));
+
+        // JsonWriteMode.String is the default, so we can omit it
         using var connection = new ClickHouseConnection("Host=localhost");
         await connection.OpenAsync();
-
-        // Enable experimental JSON type
         connection.CustomSettings["allow_experimental_json_type"] = 1;
 
-        // Query JSON data
-        using var reader = await connection.ExecuteReaderAsync(
-            "SELECT '{\"name\": \"Alice\", \"age\": 30, \"active\": true}'::Json");
-
-        if (reader.Read())
-        {
-            var json = (JsonObject)reader.GetValue(0);
-
-            Console.WriteLine($"   Type: {json.GetType().Name}");
-            Console.WriteLine($"   Name: {json["name"]}");
-            Console.WriteLine($"   Age: {json["age"]}");
-            Console.WriteLine($"   Active: {json["active"]}");
-
-            // Access nested properties
-            var nested = JsonNode.Parse("""{"user": {"profile": {"email": "alice@example.com"}}}""")!.AsObject();
-            Console.WriteLine($"\n   Nested access example:");
-            Console.WriteLine($"   Email: {nested["user"]!["profile"]!["email"]}");
-        }
-    }
-
-    /// <summary>
-    /// When JsonReadMode is set to String, JSON columns are returned as raw strings.
-    /// This is useful when:
-    /// - You want to avoid parsing overhead
-    /// - You need the exact JSON representation from the server
-    /// - You're passing JSON through without modification
-    /// </summary>
-    private static async Task Example2_ReadAsString()
-    {
-        // Configure JsonReadMode via connection string
-        using var connection = new ClickHouseConnection("Host=localhost;JsonReadMode=String");
-        await connection.OpenAsync();
-
-        connection.CustomSettings["allow_experimental_json_type"] = 1;
-
-        using var reader = await connection.ExecuteReaderAsync(
-            "SELECT '{\"name\": \"Bob\", \"scores\": [95, 87, 92]}'::Json");
-
-        if (reader.Read())
-        {
-            var jsonString = (string)reader.GetValue(0);
-
-            Console.WriteLine($"   Type: {jsonString.GetType().Name}");
-            Console.WriteLine($"   Raw JSON: {jsonString}");
-
-            // You can still parse it if needed
-            var parsed = JsonNode.Parse(jsonString);
-            Console.WriteLine($"   Parsed name: {parsed!["name"]}");
-        }
-    }
-
-    /// <summary>
-    /// JSON can be written from various source types using JsonWriteMode.String:
-    /// - JsonObject: Serialized via ToJsonString()
-    /// - JsonNode: Serialized via ToJsonString()
-    /// - String: Passed through directly
-    /// - POCOs: Serialized via System.Text.Json.JsonSerializer
-    ///
-    /// All inputs are serialized to JSON strings and sent to the server.
-    /// The server parses the strings (input_format_binary_read_json_as_string=1).
-    /// </summary>
-    private static async Task Example3_WritingJsonWithStringMode()
-    {
-        // Use JsonWriteMode.String to write JSON from various source types
-        using var connection = new ClickHouseConnection("Host=localhost;JsonWriteMode=String");
-        await connection.OpenAsync();
-
-        connection.CustomSettings["allow_experimental_json_type"] = 1;
-
-        var tableName = "example_json_write";
-
+        var tableName = "example_insert_string_mode";
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
         await connection.ExecuteStatementAsync($@"
-            CREATE TABLE {tableName}
-            (
-                id UInt32,
-                data Json
-            )
-            ENGINE = Memory
-        ");
+            CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
-        {
-            DestinationTableName = tableName,
-        };
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
         await bulkCopy.InitAsync();
 
-        // Write from different source types - all serialized to JSON strings
+        // All these input types work with String mode
         var rows = new List<object[]>
         {
-            // From JsonObject → ToJsonString()
-            new object[] { 1u, new JsonObject { ["source"] = "JsonObject", ["value"] = 100 } },
+            // 1. Raw JSON string - passed through directly
+            new object[] { 1u, """{"source": "raw_string", "value": 100}""" },
 
-            // From JsonNode (parsed) → ToJsonString()
-            new object[] { 2u, JsonNode.Parse("""{"source": "JsonNode", "value": 200}""")! },
+            // 2. JsonObject - serialized via ToJsonString()
+            new object[] { 2u, new JsonObject { ["source"] = "JsonObject", ["value"] = 200 } },
 
-            // From String → passed through directly
-            new object[] { 3u, """{"source": "String", "value": 300}""" },
+            // 3. JsonNode (parsed) - serialized via ToJsonString()
+            new object[] { 3u, JsonNode.Parse("""{"source": "JsonNode", "value": 300}""")! },
 
-            // From anonymous object (POCO) → JsonSerializer.Serialize()
-            new object[] { 4u, new { source = "POCO", value = 400 } },
+            // 4. Anonymous POCO - serialized via JsonSerializer.Serialize()
+            new object[] { 4u, new { source = "anonymous_poco", value = 400 } },
+
+            // 5. Typed POCO - also serialized via JsonSerializer.Serialize()
+            new object[] { 5u, new SimpleEvent { Source = "typed_poco", Value = 500 } },
         };
 
         await bulkCopy.WriteToServerAsync(rows);
-        Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows");
+        Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows with various input types\n");
 
-        // Read back
+        // Verify the data
         using var reader = await connection.ExecuteReaderAsync(
             $"SELECT id, data FROM {tableName} ORDER BY id");
 
-        Console.WriteLine("\n   Results:");
+        Console.WriteLine("   Results:");
         while (reader.Read())
         {
             var id = reader.GetFieldValue<uint>(0);
@@ -182,133 +99,239 @@ public static class JsonType
     }
 
     /// <summary>
-    /// String mode can be enabled/disabled separately for reading and writing.
-    /// String mode for both reading and writing is useful when:
-    /// - You have JSON strings and want to pass them through unchanged, letting the server parse them
-    /// - You want to minimize serialization overhead
-    /// - You need precise control over JSON formatting
+    /// Writing in Binary mode writes POCOs using ClickHouse's native binary format.
+    /// This preserves type information and supports custom path mappings.
+    /// 
+    /// For paths that have types defined in the column, the type information will be used for appropriate serialization.
+    /// For paths that are not typed, the client will use type inference to pick a suitable ClickHouse type depending on the .NET type.
+    ///
+    /// Requirements:
+    /// - Must set JsonWriteMode=Binary in connection string
+    /// - Must register POCO types via RegisterJsonSerializationType<T>()
+    /// - Cannot write strings or JsonNode
+    ///
+    /// Controling the parsing via attributes:
+    /// - [ClickHouseJsonPath] - map properties to custom JSON paths
+    /// - [ClickHouseJsonIgnore] - exclude properties from serialization
     /// </summary>
-    private static async Task Example4_StringModeRoundTrip()
+    private static async Task Example2_InsertBinaryMode()
     {
-        // Configure both read and write modes via connection string
-        using var connection = new ClickHouseConnection(
-            "Host=localhost;JsonReadMode=String;JsonWriteMode=String");
-        await connection.OpenAsync();
+        Console.WriteLine("\n2. INSERT WITH BINARY MODE");
+        Console.WriteLine("-".PadRight(50, '-'));
 
+        // Must explicitly set Binary mode
+        using var connection = new ClickHouseConnection("Host=localhost;JsonWriteMode=Binary");
+        await connection.OpenAsync();
         connection.CustomSettings["allow_experimental_json_type"] = 1;
 
-        var tableName = "example_json_string_mode";
+        // Register POCO types before using them
+        connection.RegisterJsonSerializationType<EventWithCustomPaths>();
+        Console.WriteLine("   Registered POCO types for binary serialization\n");
 
+        var tableName = "example_insert_binary_mode";
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
         await connection.ExecuteStatementAsync($@"
-            CREATE TABLE {tableName}
-            (
-                id UInt32,
-                data Json
-            )
-            ENGINE = Memory
-        ");
+            CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
-        {
-            DestinationTableName = tableName,
-        };
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
         await bulkCopy.InitAsync();
 
-        // Write raw JSON strings
         var rows = new List<object[]>
         {
-            new object[] { 1u, """{"event": "click", "x": 100, "y": 200}""" },
-            new object[] { 2u, """{"event": "scroll", "delta": -50}""" },
-
-            // Can also write JsonObject/JsonNode - they get serialized to string
-            new object[] { 3u, new JsonObject { ["event"] = "keypress", ["key"] = "Enter" } },
+            // Custom path mapping: EventType -> "type", XCoordinate -> "position.x"
+            new object[] { 1u, new EventWithCustomPaths
+            {
+                EventType = "click",
+                XCoordinate = 150,
+                YCoordinate = 300,
+                InternalId = "ignored-field"  // Will be excluded via [ClickHouseJsonIgnore]
+            }},
         };
 
         await bulkCopy.WriteToServerAsync(rows);
-        Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows with JsonWriteMode.String");
+        Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows with binary serialization\n");
 
-        // Read back as strings
+        // Verify the data
         using var reader = await connection.ExecuteReaderAsync(
             $"SELECT id, data FROM {tableName} ORDER BY id");
 
-        Console.WriteLine("\n   Results (read as strings):");
+        Console.WriteLine("   Results:");
         while (reader.Read())
         {
             var id = reader.GetFieldValue<uint>(0);
-            var data = (string)reader.GetValue(1);
-            Console.WriteLine($"     ID {id}: {data}");
+            var data = (JsonObject)reader.GetValue(1);
+            Console.WriteLine($"     ID {id}: {data.ToJsonString()}");
         }
 
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
-    /// POCOs can be written to JSON columns in two ways:
-    ///
-    /// 1. String mode (simple): Uses System.Text.Json.JsonSerializer
-    ///    - No type registration required
-    ///    - Just set JsonWriteMode=String in connection string
-    ///
-    /// 2. Binary mode (advanced): Uses custom binary serialization
-    ///    - Requires type registration via RegisterJsonSerializationType
-    ///    - Supports custom path mappings via attributes
-    ///    - Better for typed schemas with hints
-    /// 
-    /// The key difference is that POCOs will be serialized to the ClickHouse RowBinary format
-    /// with the correct ClickHouse types that correspond to the .NET types in the POCO. (That information is lost when serializing to a json string.)
-    /// For paths that have types defined in the column, the type information will be used for appropriate serialization.
+    /// Binary read mode (default) returns JSON as System.Text.Json.Nodes.JsonObject.
+    /// This allows programmatic access to JSON properties with full type support.
     /// </summary>
-    private static async Task Example5_PocoSerialization()
+    private static async Task Example3_ReadBinaryMode()
     {
-        Console.WriteLine("\n   Binary mode with type registration");
+        Console.WriteLine("\n3. READ WITH BINARY MODE (Default)");
+        Console.WriteLine("-".PadRight(50, '-'));
 
-        // Must explicitly set JsonWriteMode=Binary since default is String
-        using var binaryModeConnection = new ClickHouseConnection("Host=localhost;JsonWriteMode=Binary");
-        await binaryModeConnection.OpenAsync();
-        binaryModeConnection.CustomSettings["allow_experimental_json_type"] = 1;
+        // JsonReadMode.Binary is the default, so we can omit it
+        using var connection = new ClickHouseConnection("Host=localhost");
+        await connection.OpenAsync();
+        connection.CustomSettings["allow_experimental_json_type"] = 1;
 
-        // To use binary writing with POCOs, you must register the types at the connection first 
-        // This enables custom path mappings via attributes and catching errors early
-        binaryModeConnection.RegisterJsonSerializationType<EventWithCustomPaths>();
-
-        var tableName2 = "example_json_poco_binary";
-        await binaryModeConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName2}");
-        await binaryModeConnection.ExecuteStatementAsync($"CREATE TABLE {tableName2} (data Json) ENGINE = Memory");
-
-        using var bulkCopy2 = new ClickHouseBulkCopy(binaryModeConnection)
+        // Read and print
+        Console.WriteLine("\n   Property access:");
+        using (var reader = await connection.ExecuteReaderAsync(
+            """SELECT '{"user": {"profile": {"email": "bob@example.com", "verified": true}}}'::Json"""))
         {
-            DestinationTableName = tableName2,
-        };
-        await bulkCopy2.InitAsync();
-
-        var eventData = new EventWithCustomPaths
-        {
-            EventType = "click",
-            XCoordinate = 150,
-            YCoordinate = 300,
-            InternalId = "should-be-ignored"
-        };
-
-        await bulkCopy2.WriteToServerAsync(new[] { new object[] { eventData } });
-
-        using var reader2 = await binaryModeConnection.ExecuteReaderAsync($"SELECT data FROM {tableName2}");
-        if (reader2.Read())
-        {
-            var data = (JsonObject)reader2.GetValue(0);
-            Console.WriteLine($"     Custom paths result: {data.ToJsonString()}");
-            Console.WriteLine("     Note: 'type' and 'position.x/y' paths, 'InternalId' ignored");
+            if (reader.Read())
+            {
+                var json = (JsonObject)reader.GetValue(0);
+                var email = json["user"]!["profile"]!["email"]!.GetValue<string>();
+                var verified = json["user"]!["profile"]!["verified"]!.GetValue<bool>();
+                Console.WriteLine($"      Email: {email}");
+                Console.WriteLine($"      Verified: {verified}");
+            }
         }
-
-        await binaryModeConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName2}");
     }
 
-    // POCO classes for Example 5
+    /// <summary>
+    /// String read mode returns JSON as raw strings.
+    /// Useful for:
+    /// - Pass-through scenarios (avoiding parse overhead)
+    /// - When you need the exact server representation
+    /// - Integration with other JSON libraries
+    /// </summary>
+    private static async Task Example4_ReadStringMode()
+    {
+        Console.WriteLine("\n4. READ WITH STRING MODE");
+        Console.WriteLine("-".PadRight(50, '-'));
+
+        using var connection = new ClickHouseConnection("Host=localhost;JsonReadMode=String");
+        await connection.OpenAsync();
+        connection.CustomSettings["allow_experimental_json_type"] = 1;
+
+        // Read as raw string
+        Console.WriteLine("   a) Raw string output:");
+        using (var reader = await connection.ExecuteReaderAsync(
+            """SELECT '{"event": "click", "x": 100, "y": 200}'::Json"""))
+        {
+            if (reader.Read())
+            {
+                var jsonString = (string)reader.GetValue(0);
+                Console.WriteLine($"      Type returned: {jsonString.GetType().Name}");
+                Console.WriteLine($"      Raw JSON: {jsonString}");
+            }
+        }
+
+        // Parse manually if needed
+        Console.WriteLine("\n   b) Manual parsing when needed:");
+        using (var reader = await connection.ExecuteReaderAsync(
+            """SELECT '{"user": "Alice", "action": "login"}'::Json"""))
+        {
+            if (reader.Read())
+            {
+                var jsonString = (string)reader.GetValue(0);
+
+                // Parse with System.Text.Json if you need structured access
+                var parsed = JsonNode.Parse(jsonString);
+                Console.WriteLine($"      Parsed user: {parsed!["user"]}");
+                Console.WriteLine($"      Parsed action: {parsed["action"]}");
+            }
+        }
+    }
 
     /// <summary>
-    /// POCO demonstrating attribute-based customization:
-    /// - ClickHouseJsonPath: Maps property to custom JSON path
-    /// - ClickHouseJsonIgnore: Excludes property from serialization
+    /// ClickHouse supports querying JSON paths directly in SQL.
+    /// This example covers:
+    /// - Path access syntax (data.field)
+    /// - Typed JSON schemas with hints
+    /// - Combining SQL queries with .NET reading
+    /// </summary>
+    private static async Task Example5_QueryingJsonPaths()
+    {
+        Console.WriteLine("\n5. QUERYING JSON PATHS");
+        Console.WriteLine("-".PadRight(50, '-'));
+
+        using var connection = new ClickHouseConnection("Host=localhost;");
+        await connection.OpenAsync();
+        connection.CustomSettings["allow_experimental_json_type"] = 1;
+
+        // Setup: Create table with JSON and insert data, this is partially typed and partially dynamic
+        Console.WriteLine("\n   Typed JSON schema with hints:");
+        var typedTable = "example_typed_json";
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {typedTable}");
+        await connection.ExecuteStatementAsync($@"
+            CREATE TABLE {typedTable} (
+                id UInt32,
+                data Json(
+                    age Int32,
+                    tags Array(String),
+                    `metadata.created` DateTime
+                )
+            ) ENGINE = Memory");
+
+        Console.WriteLine("      Created table with typed JSON schema:");
+        Console.WriteLine("        - age: Int23");
+        Console.WriteLine("        - tags: Array(String)");
+        Console.WriteLine("        - metadata.created: DateTime");
+
+        // Insert data - hints ensure proper type handling
+        connection.CustomSettings["date_time_input_format"] = "best_effort";
+        using var bulkCopy2 = new ClickHouseBulkCopy(connection) { DestinationTableName = typedTable };
+        await bulkCopy2.InitAsync();
+        await bulkCopy2.WriteToServerAsync(new[]
+        {
+            new object[] { 1u, """{"name": "Alice", "age": 30, "tags": ["admin", "active"], "metadata": {"created": "2024-01-15T10:30:00Z"}}""" },
+            new object[] { 2u, """{"name": "Bob", "age": 25, "tags": ["user"], "metadata": {"created": "2024-02-20T14:45:00Z"}}""" },
+        });
+
+        // Query paths
+        Console.WriteLine("\n   Querying typed paths:");
+        using (var reader = await connection.ExecuteReaderAsync(
+            $"SELECT data.name, data.age, data.tags, data.`metadata.created` FROM {typedTable} ORDER BY data.age"))
+        {
+            while (reader.Read())
+            {
+                var name = reader.GetString(0);
+                var age = reader.GetInt32(1);
+                var tags = reader.GetFieldValue<string[]>(2);
+                var created = reader.GetDateTime(3);
+                Console.WriteLine($"      {name} (age {age}): tags=[{string.Join(", ", tags)}], created={created:yyyy-MM-dd}");
+            }
+        }
+
+        // Aggregations on JSON paths
+        Console.WriteLine("\n   Aggregations on JSON paths:");
+        using (var reader = await connection.ExecuteReaderAsync(
+            $"SELECT avg(data.age), max(data.age), min(data.age) FROM {typedTable}"))
+        {
+            if (reader.Read())
+            {
+                Console.WriteLine($"      Average age: {reader.GetDouble(0):F1}");
+                Console.WriteLine($"      Max age: {reader.GetInt32(1)}");
+                Console.WriteLine($"      Min age: {reader.GetInt32(2)}");
+            }
+        }
+
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {typedTable}");
+    }
+
+    /// <summary>Simple POCO for String mode serialization.</summary>
+    private class SimpleEvent
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("source")]
+        public string Source { get; set; } = "";
+
+        [System.Text.Json.Serialization.JsonPropertyName("value")]
+        public int Value { get; set; }
+    }
+
+    /// <summary>
+    /// POCO with custom path mappings for Binary mode.
+    /// - [ClickHouseJsonPath] maps properties to custom JSON paths
+    /// - [ClickHouseJsonIgnore] excludes properties from serialization
     /// </summary>
     private class EventWithCustomPaths
     {
