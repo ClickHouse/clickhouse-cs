@@ -67,6 +67,8 @@ internal static class HttpParameterFormatter
                 return Convert.ToString(value, CultureInfo.InvariantCulture);
             case DecimalType dt when value is ClickHouseDecimal chd:
                 return chd.ToString(CultureInfo.InvariantCulture);
+            case DecimalType dt when value is string s:
+                return ClickHouseDecimal.Parse(s, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
             case DecimalType dt:
                 return Convert.ToDecimal(value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
 
