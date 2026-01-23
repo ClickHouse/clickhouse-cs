@@ -56,7 +56,7 @@ public static class SelectWithParameterBinding
                 WHERE registration_date >= {{startDate:Date}}
                 ORDER BY registration_date";
 
-            command.AddParameter("startDate", "Date", new DateTime(2020, 1, 1)); // "Date" here specifies the ClickHouse type
+            command.AddParameter("startDate", new DateTime(2020, 1, 1)); // "Date" here specifies the ClickHouse type
 
             using var reader = await command.ExecuteReaderAsync();
             Console.WriteLine("   Users registered since 2020:");
@@ -106,7 +106,7 @@ public static class SelectWithParameterBinding
             foreach (var country in countries)
             {
                 command.Parameters.Clear();
-                command.AddParameter("country", "String", country);
+                command.AddParameter("country", country);
 
                 var topUser = await command.ExecuteScalarAsync();
                 Console.WriteLine($"   Top user in {country}: {topUser}");
@@ -124,7 +124,7 @@ public static class SelectWithParameterBinding
                 WHERE country IN ({{countries:Array(String)}})
                 ORDER BY age DESC";
 
-            command.AddParameter("countries", "Array(String)", new[] { "USA", "UK" });
+            command.AddParameter("countries", new[] { "USA", "UK" });
 
             using var reader = await command.ExecuteReaderAsync();
 
@@ -146,7 +146,7 @@ public static class SelectWithParameterBinding
                 ORDER BY age, score
                 LIMIT 3";
 
-            command.AddParameter("comparison", "Tuple(UInt8, Float32)", Tuple.Create((byte)30, 85.0f));
+            command.AddParameter("comparison", Tuple.Create((byte)30, 85.0f));
 
             using var reader = await command.ExecuteReaderAsync();
             Console.WriteLine("   Users with (age, score) > (30, 85.0):");

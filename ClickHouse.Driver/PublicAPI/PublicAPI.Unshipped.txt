@@ -186,3 +186,4 @@ ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonReadMode.set -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.get -> ClickHouse.Driver.JsonWriteMode
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.set -> void
 [Obsolete]ClickHouse.Driver.Copy.ClickHouseBulkCopy.InitAsync() -> System.Threading.Tasks.Task
+static ClickHouse.Driver.Utility.CommandExtensions.AddParameterWithTypeOverride(this ClickHouse.Driver.ADO.ClickHouseCommand command, string parameterName, string clickHouseType, object parameterValue) -> ClickHouse.Driver.ADO.Parameters.ClickHouseDbParameter

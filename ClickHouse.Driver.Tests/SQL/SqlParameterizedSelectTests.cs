@@ -72,7 +72,7 @@ public class SqlParameterizedSelectTests : IDisposable
             clickHouseType = "String";
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {{var:{clickHouseType}}} as res";
-        command.AddParameter("var", clickHouseType, value);
+        command.AddParameter("var", value);
 
         var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
         TestUtilities.AssertEqual(result, value);
@@ -93,7 +93,7 @@ public class SqlParameterizedSelectTests : IDisposable
 
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {exampleExpression} as expected, {{var:{clickHouseType}}} as actual, expected = actual as equals";
-        command.AddParameter("var", clickHouseType, value);
+        command.AddParameter("var", value);
 
         var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
         TestUtilities.AssertEqual(result[0], result[1]);

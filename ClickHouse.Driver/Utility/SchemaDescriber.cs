@@ -78,13 +78,13 @@ internal static class SchemaDescriber
         if (database != null)
         {
             query.Append(" WHERE database={database:String}");
-            command.AddParameter("database", "String", database);
+            command.AddParameter("database", database);
         }
 
         if (table != null)
         {
             query.Append(" AND table={table:String}");
-            command.AddParameter("table", "String", table);
+            command.AddParameter("table", table);
         }
 
         command.CommandText = query.ToString();

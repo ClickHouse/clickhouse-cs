@@ -18,7 +18,8 @@ public interface IClickHouseConnection : IDbConnection
     /// Registers a POCO type for JSON column serialization.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
-    void RegisterJsonSerializationType<T>() where T : class;
+    void RegisterJsonSerializationType<T>()
+        where T : class;
 
     /// <summary>
     /// Registers a POCO type for JSON column serialization.
