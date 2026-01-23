@@ -289,12 +289,14 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     {
         if (commandParameters != null)
         {
+            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
             sqlQuery = commandParameters.ReplacePlaceholders(sqlQuery);
             foreach (ClickHouseDbParameter parameter in commandParameters)
             {
+                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
                 uriBuilder.AddSqlQueryParameter(
                     parameter.ParameterName,
-                    HttpParameterFormatter.Format(parameter, connection.TypeSettings));
+                    HttpParameterFormatter.Format(parameter, connection.TypeSettings, sqlTypeHint));
             }
         }
 
@@ -321,12 +323,14 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
         if (commandParameters != null)
         {
+            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
             sqlQuery = commandParameters.ReplacePlaceholders(sqlQuery);
 
             foreach (ClickHouseDbParameter parameter in commandParameters)
             {
+                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
                 content.Add(
-                    content: new StringContent(HttpParameterFormatter.Format(parameter, connection.TypeSettings)),
+                    content: new StringContent(HttpParameterFormatter.Format(parameter, connection.TypeSettings, sqlTypeHint)),
                     name: $"param_{parameter.ParameterName}");
             }
         }

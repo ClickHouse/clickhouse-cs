@@ -17,8 +17,24 @@ internal static class HttpParameterFormatter
     private const string NullValueString = "\\N";
 
     public static string Format(ClickHouseDbParameter parameter, TypeSettings settings)
+        => Format(parameter, settings, sqlTypeHint: null);
+
+    /// <summary>
+    /// Formats a parameter value for HTTP transport.
+    /// </summary>
+    /// <param name="parameter">The parameter to format.</param>
+    /// <param name="settings">Type settings for parsing.</param>
+    /// <param name="sqlTypeHint">
+    /// Optional type hint extracted from the SQL query (e.g., from <c>{name:Type}</c>).
+    /// The parameter's explicit <see cref="ClickHouseDbParameter.ClickHouseType"/> takes precedence over this hint.
+    /// </param>
+    /// <returns>The formatted parameter value string.</returns>
+    public static string Format(ClickHouseDbParameter parameter, TypeSettings settings, string sqlTypeHint)
     {
-        if (string.IsNullOrWhiteSpace(parameter.ClickHouseType))
+        // Explicit parameter type takes precedence, then SQL type hint, then inference
+        var effectiveType = parameter.ClickHouseType ?? sqlTypeHint;
+
+        if (string.IsNullOrWhiteSpace(effectiveType))
         {
             if (parameter.Value is null or DBNull)
             {
@@ -33,7 +49,7 @@ internal static class HttpParameterFormatter
         else
         {
             // Type has been provided
-            var type = TypeConverter.ParseClickHouseType(parameter.ClickHouseType, settings);
+            var type = TypeConverter.ParseClickHouseType(effectiveType, settings);
             return Format(type, parameter.Value, false);
         }
     }
