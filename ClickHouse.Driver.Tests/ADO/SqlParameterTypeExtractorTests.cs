@@ -205,4 +205,13 @@ public class SqlParameterTypeExtractorTests
         Assert.That(hints, Has.Count.EqualTo(1));
         Assert.That(hints["a"], Is.EqualTo(expectedType));
     }
+
+    [Test]
+    public void ExtractTypeHints_UnterminatedParameter_ReturnsEmptyDictionary()
+    {
+        var sql = "SELECT {id:Int32";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Is.Empty);
+    }
 }
