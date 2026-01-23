@@ -46,17 +46,18 @@ public static class SelectWithParameterBinding
 
         Console.WriteLine($"Created and populated table '{tableName}'\n");
 
-        // Example 1: Parameters with explicit ClickHouse type specification. This is the recommended approach.
+        // Example 1: Using parameters. The ClickHouse type is parsed from the query, and used to serialize the parameter value appropriately
         Console.WriteLine("\n1. Parameters with explicit types:");
         using (var command = connection.CreateCommand())
         {
+            // The ClickHouse parameter format is {parameter_name:clickhouse_type}. Below, "Date" specifies the type of the parameter
             command.CommandText = $@"
                 SELECT username, registration_date
                 FROM {tableName}
                 WHERE registration_date >= {{startDate:Date}}
                 ORDER BY registration_date";
 
-            command.AddParameter("startDate", new DateTime(2020, 1, 1)); // "Date" here specifies the ClickHouse type
+            command.AddParameter("startDate", new DateTime(2020, 1, 1));
 
             using var reader = await command.ExecuteReaderAsync();
             Console.WriteLine("   Users registered since 2020:");
@@ -66,32 +67,8 @@ public static class SelectWithParameterBinding
             }
         }
 
-        // Example 2: Simple parameter binding with type inference
-        // WARNING: Type inference can result in unexpected issues, especially with numeric types
-        // and complex data types. It is strongly recommended to always specify the type explicitly.
-        Console.WriteLine("\n2. Simple parameter binding with type inference:");
-        using (var command = connection.CreateCommand())
-        {
-            command.CommandText = $@"
-                SELECT username, age, score
-                FROM {tableName}
-                WHERE age >= {{minAge:UInt8}} AND score >= {{minScore:Float32}}
-                ORDER BY score DESC";
-
-            // Type will be inferred - may lead to unexpected behavior
-            command.AddParameter("minAge", (byte)30);
-            command.AddParameter("minScore", 90.0f);
-
-            using var reader = await command.ExecuteReaderAsync();
-            Console.WriteLine("   Users aged 30+ with score >= 90:");
-            while (reader.Read())
-            {
-                Console.WriteLine($"   - {reader.GetString(0)}, Age: {reader.GetByte(1)}, Score: {reader.GetFloat(2):F1}");
-            }
-        }
-
-        // Example 3: Reusing command with different parameter values
-        Console.WriteLine("\n3. Reusing command with different parameters:");
+        // Example 2: Reusing command with different parameter values
+        Console.WriteLine("\n2. Reusing command with different parameters:");
         using (var command = connection.CreateCommand())
         {
             command.CommandText = $@"
@@ -113,8 +90,8 @@ public static class SelectWithParameterBinding
             }
         }
 
-        // Example 4: Parameter binding with IN clause using arrays
-        Console.WriteLine("\n4. Parameter binding with IN clause:");
+        // Example 3: Parameter binding with IN clause using arrays
+        Console.WriteLine("\n3. Parameter binding with IN clause:");
         using (var command = connection.CreateCommand())
         {
             // Note: For IN clauses with arrays, we need to format them properly
@@ -135,7 +112,7 @@ public static class SelectWithParameterBinding
             }
         }
 
-        // Example 5: Parameter binding for tuple comparison
+        // Example 4: Parameter binding for tuple comparison
         Console.WriteLine("\n5. Parameter binding with tuple:");
         using (var command = connection.CreateCommand())
         {
