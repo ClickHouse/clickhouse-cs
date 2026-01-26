@@ -348,7 +348,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -388,7 +387,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(rows);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT id, data, category, active FROM {targetTable} ORDER BY id");
@@ -427,7 +425,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -454,7 +451,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -481,7 +477,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -509,7 +504,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -535,7 +529,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -564,7 +557,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -592,7 +584,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -621,7 +612,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -652,7 +642,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -685,7 +674,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -712,7 +700,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -743,7 +730,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
 
         using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -773,7 +759,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
 
         using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -799,7 +784,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -825,7 +809,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, poco }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -894,7 +877,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -920,7 +902,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -949,7 +930,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -988,7 +968,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -1029,7 +1008,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -1154,7 +1132,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -1263,7 +1240,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
 
         var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
             await bulkCopy.WriteToServerAsync([new object[] { 1u, a }]));
@@ -1293,7 +1269,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
 
         var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
             await bulkCopy.WriteToServerAsync([new object[] { 1u, obj }]));
@@ -1319,7 +1294,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -1357,7 +1331,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
 
         var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
             await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]));
@@ -1395,7 +1368,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
 
         // Server should reject this - we're sending a string where Int64 is expected
         var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
@@ -1428,7 +1400,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -1462,7 +1433,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -1495,7 +1465,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
@@ -1533,7 +1502,6 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, data }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");

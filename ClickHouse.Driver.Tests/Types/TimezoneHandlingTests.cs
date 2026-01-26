@@ -559,7 +559,6 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test", 
             ColumnNames = ["dt_utc"],
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[dt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_utc FROM test.datetime_bulk_test");
@@ -576,7 +575,6 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_amsterdam"]
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[original]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_amsterdam FROM test.datetime_bulk_test");
@@ -600,7 +598,6 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_amsterdam"],
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[original]]);
 
         var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync("SELECT dt_amsterdam FROM test.datetime_bulk_test");
@@ -623,7 +620,6 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_utc"]
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[utcDt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_utc FROM test.datetime_bulk_test");
@@ -644,7 +640,6 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_amsterdam"]
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[utcDt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_amsterdam FROM test.datetime_bulk_test");
@@ -665,7 +660,6 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_utc"]
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[localDt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_utc FROM test.datetime_bulk_test");
@@ -768,7 +762,6 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_utc"]
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[dto]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_utc FROM test.datetime_bulk_test");

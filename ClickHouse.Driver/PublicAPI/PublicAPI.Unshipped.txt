@@ -185,3 +185,4 @@ ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonReadMode.get -> Clic
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonReadMode.set -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.get -> ClickHouse.Driver.JsonWriteMode
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.set -> void
+[Obsolete]ClickHouse.Driver.Copy.ClickHouseBulkCopy.InitAsync() -> System.Threading.Tasks.Task

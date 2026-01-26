@@ -206,7 +206,6 @@ public class DynamicTests : AbstractConnectionTestFixture
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, 42 }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -223,7 +222,6 @@ public class DynamicTests : AbstractConnectionTestFixture
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, 9223372036854775807L }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -240,7 +238,6 @@ public class DynamicTests : AbstractConnectionTestFixture
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, 3.14159 }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -257,7 +254,6 @@ public class DynamicTests : AbstractConnectionTestFixture
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, "hello world" }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -274,7 +270,6 @@ public class DynamicTests : AbstractConnectionTestFixture
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, true }, new object[] { 2u, false }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable} ORDER BY id");
@@ -295,7 +290,6 @@ public class DynamicTests : AbstractConnectionTestFixture
         var dateTime = new DateTime(2024, 6, 15, 10, 30, 45, DateTimeKind.Unspecified);
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, dateTime }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -320,7 +314,6 @@ public class DynamicTests : AbstractConnectionTestFixture
         var guid = Guid.NewGuid();
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, guid }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -339,7 +332,6 @@ public class DynamicTests : AbstractConnectionTestFixture
         var decimalValue = 123.456789m;
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, decimalValue }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -359,7 +351,6 @@ public class DynamicTests : AbstractConnectionTestFixture
         var array = new[] { 1, 2, 3, 4, 5 };
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, array }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -379,7 +370,6 @@ public class DynamicTests : AbstractConnectionTestFixture
         var list = new List<string> { "a", "b", "c" };
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, list }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -399,7 +389,6 @@ public class DynamicTests : AbstractConnectionTestFixture
         var dict = new Dictionary<string, int> { ["one"] = 1, ["two"] = 2 };
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, dict }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
@@ -418,7 +407,6 @@ public class DynamicTests : AbstractConnectionTestFixture
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([
             new object[] { 1u, 42 },
             new object[] { 2u, "hello" },
@@ -450,7 +438,6 @@ public class DynamicTests : AbstractConnectionTestFixture
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([new object[] { 1u, null }]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");

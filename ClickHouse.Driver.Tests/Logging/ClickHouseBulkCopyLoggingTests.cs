@@ -29,7 +29,7 @@ public class ClickHouseBulkCopyLoggingTests
     }
 
     [Test]
-    public async Task InitAsync_WithDebugLogging_LogsMetadataLoading()
+    public async Task WriteToServerAsync_WithDebugLogging_LogsMetadataLoading()
     {
         // Arrange
         var factory = new CapturingLoggerFactory();
@@ -46,8 +46,10 @@ public class ClickHouseBulkCopyLoggingTests
             DestinationTableName = targetTable,
         };
 
+        var rows = Enumerable.Range(1, 10).Select(i => new object[] { i }).ToList();
+
         // Act
-        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync(rows);
 
         // Assert
         Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.BulkCopy));
@@ -88,9 +90,6 @@ public class ClickHouseBulkCopyLoggingTests
             MaxDegreeOfParallelism = 2
         };
 
-        // Mock column initialization
-        await bulkCopy.InitAsync();
-
         var rows = Enumerable.Range(1, 10).Select(i => new object[] { i }).ToList();
 
         // Act
@@ -129,8 +128,6 @@ public class ClickHouseBulkCopyLoggingTests
             DestinationTableName = targetTable,
             BatchSize = 5,
         };
-        
-        await bulkCopy.InitAsync();
 
         var rows = Enumerable.Range(1, 10).Select(i => new object[] { i }).ToList();
         
@@ -174,16 +171,6 @@ public class ClickHouseBulkCopyLoggingTests
         {
             DestinationTableName = targetTable,
         };
-
-        // Mock column initialization
-        try
-        {
-            await bulkCopy.InitAsync();
-        }
-        catch
-        {
-            // Ignore init errors
-        }
 
         var rows = Enumerable.Range(1, 10).Select(i => new object[] {i}).ToList();
 
