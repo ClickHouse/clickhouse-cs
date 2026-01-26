@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -106,6 +107,11 @@ public class JsonModeTests
         var parsed = JsonNode.Parse((string)result);
         var numbers = parsed["numbers"].AsArray();
         Assert.That(numbers.Count, Is.EqualTo(5));
+        // ClickHouse 25.3 returns numbers as strings in this scenario
+        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
+            Assert.That(numbers.Select(x => int.Parse(x.GetValue<string>())).ToArray(), Is.EquivalentTo(new int[] { 1,2,3,4,5 }));
+        else
+            Assert.That(numbers.Select(x => x.GetValue<int>()).ToArray(), Is.EquivalentTo(new int[] { 1,2,3,4,5 }));
     }
 
     [Test]
