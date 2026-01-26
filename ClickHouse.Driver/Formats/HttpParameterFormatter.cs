@@ -79,26 +79,28 @@ internal static class HttpParameterFormatter
                 return Format(lt.UnderlyingType, value, quote);
 
             case DateTimeType dtt when value is DateTime dt:
-                // UTC/Local: convert to Unix timestamp to preserve the instant
-                // Unspecified: send as string so ClickHouse interprets in column timezone
+                // ClickHouse HTTP parameters expect DateTime as ISO-formatted strings.
+                // Unspecified: send as-is so ClickHouse interprets in parameter timezone
+                // UTC/Local: convert to parameter timezone (or UTC if not specified) to preserve instant
                 if (dt.Kind == DateTimeKind.Unspecified)
                     return dt.ToString("s", CultureInfo.InvariantCulture);
-                return new DateTimeOffset(dt).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+                return FormatDateTimeInTargetTimezone(new DateTimeOffset(dt), dtt.TimeZoneOrUtc);
 
             case DateTimeType dtt when value is DateTimeOffset dto:
-                // DateTimeOffset always represents a specific instant - send as Unix timestamp
-                return dto.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+                // DateTimeOffset: convert to parameter timezone (or UTC if not specified) to preserve instant
+                return FormatDateTimeInTargetTimezone(dto, dtt.TimeZoneOrUtc);
 
             case DateTime64Type d64t when value is DateTime dtv:
-                // UTC/Local: convert to Unix timestamp to preserve the instant
-                // Unspecified: send as string so ClickHouse interprets in column timezone
+                // ClickHouse HTTP parameters expect DateTime64 as ISO-formatted strings.
+                // Unspecified: send as-is so ClickHouse interprets in parameter timezone
+                // UTC/Local: convert to parameter timezone (or UTC if not specified) to preserve instant
                 if (dtv.Kind == DateTimeKind.Unspecified)
                     return $"{dtv:yyyy-MM-dd HH:mm:ss.fffffff}";
-                return FormatDateTime64AsUnixTime(new DateTimeOffset(dtv), d64t.Scale);
+                return FormatDateTime64InTargetTimezone(new DateTimeOffset(dtv), d64t.TimeZoneOrUtc);
 
             case DateTime64Type d64t when value is DateTimeOffset dto:
-                // DateTimeOffset always represents a specific instant - send as Unix timestamp
-                return FormatDateTime64AsUnixTime(dto, d64t.Scale);
+                // DateTimeOffset: convert to parameter timezone (or UTC if not specified) to preserve instant
+                return FormatDateTime64InTargetTimezone(dto, d64t.TimeZoneOrUtc);
 
             case TimeType tt when value is TimeSpan ts:
                 return TimeType.FormatTimeString(ts);
@@ -150,14 +152,23 @@ internal static class HttpParameterFormatter
     }
 
     /// <summary>
-    /// Formats a DateTimeOffset as a Unix timestamp with the appropriate scale for DateTime64.
+    /// Formats a DateTimeOffset as an ISO string in the target timezone.
+    /// This preserves the instant while formatting in the timezone ClickHouse will interpret the string as.
     /// </summary>
-    private static string FormatDateTime64AsUnixTime(DateTimeOffset dto, int scale)
+    private static string FormatDateTimeInTargetTimezone(DateTimeOffset dto, NodaTime.DateTimeZone targetTimezone)
     {
-        // Convert to Unix ticks (100ns units since Unix epoch), then shift to target scale
-        // Scale 7 = 100ns (same as .NET ticks), so shift by (scale - 7)
-        var unixTicks = dto.UtcDateTime.Ticks - DateTimeConversions.DateTimeEpochStart.Ticks;
-        var scaledValue = MathUtils.ShiftDecimalPlaces(unixTicks, scale - 7);
-        return scaledValue.ToString(CultureInfo.InvariantCulture);
+        var instant = NodaTime.Instant.FromDateTimeOffset(dto);
+        var zonedDateTime = instant.InZone(targetTimezone);
+        return zonedDateTime.ToDateTimeUnspecified().ToString("s", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Formats a DateTimeOffset as an ISO string with sub-second precision in the target timezone.
+    /// </summary>
+    private static string FormatDateTime64InTargetTimezone(DateTimeOffset dto, NodaTime.DateTimeZone targetTimezone)
+    {
+        var instant = NodaTime.Instant.FromDateTimeOffset(dto);
+        var zonedDateTime = instant.InZone(targetTimezone);
+        return $"{zonedDateTime.ToDateTimeUnspecified():yyyy-MM-dd HH:mm:ss.fffffff}";
     }
 }
