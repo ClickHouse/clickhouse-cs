@@ -22,7 +22,7 @@ public static class ReadOnlyUsers
         Console.WriteLine("This example demonstrates the limitations of READONLY = 1 users.\n");
 
         // Setup using the default (non-read-only) user
-        using var defaultClient = new ClickHouseConnection("Host=localhost;"); 
+        using var defaultClient = new ClickHouseConnection("Host=localhost");
         await defaultClient.OpenAsync();
 
         // Create a unique read-only user for this example
