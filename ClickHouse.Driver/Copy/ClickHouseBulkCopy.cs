@@ -33,6 +33,8 @@ public class ClickHouseBulkCopy : IDisposable
     private readonly RecyclableMemoryStreamManager memoryStreamManager;
     private long rowsWritten;
     private (string[] names, ClickHouseType[] types) columnNamesAndTypes;
+    private Task initializationTask;
+    private readonly SemaphoreSlim initializationLock = new SemaphoreSlim(1, 1);
 
     public ClickHouseBulkCopy(ClickHouseConnection connection)
         : this(connection, RowBinaryFormat.RowBinary) { }
@@ -110,11 +112,42 @@ public class ClickHouseBulkCopy : IDisposable
     public long RowsWritten => Interlocked.Read(ref rowsWritten);
 
     /// <summary>
-    /// One-time init operation to load column types using provided names
-    /// Required to call before WriteToServerAsync
+    /// One-time init operation to load column types using provided names.
+    /// This method is now called automatically before the first WriteToServerAsync call.
     /// </summary>
     /// <returns>Awaitable task</returns>
+    [Obsolete("InitAsync is no longer required and will be removed in a future version. Initialization now occurs automatically before the first write operation.")]
     public async Task InitAsync()
+    {
+        await EnsureInitializedAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Thread-safe method to ensure the BulkCopy object is initialized by loading the table structure
+    /// </summary>
+    private async Task EnsureInitializedAsync()
+    {
+        // Fast path: already initialized successfully
+        if (initializationTask != null && initializationTask.Status == TaskStatus.RanToCompletion)
+            return;
+
+        await initializationLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // Double-check after acquiring lock
+            if (initializationTask != null && initializationTask.Status == TaskStatus.RanToCompletion)
+                return;
+
+            initializationTask = InitAsyncCore();
+            await initializationTask.ConfigureAwait(false);
+        }
+        finally
+        {
+            initializationLock.Release();
+        }
+    }
+
+    private async Task InitAsyncCore()
     {
         if (DestinationTableName is null)
             throw new InvalidOperationException($"{nameof(DestinationTableName)} is null");
@@ -161,9 +194,13 @@ public class ClickHouseBulkCopy : IDisposable
         if (string.IsNullOrWhiteSpace(DestinationTableName))
             throw new InvalidOperationException("Destination table not set");
 
+        // Auto-initialize if not already done
+        await EnsureInitializedAsync().ConfigureAwait(false);
+
         var (columnNames, columnTypes) = columnNamesAndTypes;
+        // Safety check (initialization should have succeeded if we got here)
         if (columnNames == null || columnTypes == null)
-            throw new InvalidOperationException("Column names not initialized. Call InitAsync once to load column data");
+            throw new InvalidOperationException("Column names not initialized. Initialization failed.");
 
         var query = $"INSERT INTO {DestinationTableName} ({string.Join(", ", columnNames)}) FORMAT {rowBinaryFormat.ToString()}";
 
@@ -249,6 +286,7 @@ public class ClickHouseBulkCopy : IDisposable
         {
             connection?.Dispose();
         }
+        initializationLock?.Dispose();
         GC.SuppressFinalize(this);
     }
 
