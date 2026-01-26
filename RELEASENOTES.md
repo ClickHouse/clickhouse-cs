@@ -73,6 +73,7 @@ v?
   - Server setting `input_format_binary_read_json_as_string=1` is automatically set when using String write mode
 
 **New Features/Improvements:**
+ * `ClickHouseBulkCopy.InitAsync()` is now called automatically before the first write operation. Manual calls to `InitAsync()` are no longer required and the method has been marked as `[Obsolete]`. It will be removed in a future version. Existing code that calls `InitAsync()` will continue to work but will generate a compiler warning.
  * Added POCO serialization support for JSON columns. When writing POCOs to JSON columns with typed hints (e.g., `JSON(id Int64, name String)`), the driver now serializes properties using the hinted types for full type fidelity. Properties without a corresponding hinted path will have their ClickHouse types inferred automatically. Two attributes are available: `[ClickHouseJsonPath("path")]` for custom JSON paths and `[ClickHouseJsonIgnore]` to exclude properties. Property name matching to hint paths is case-sensitive (matching ClickHouse behavior which allows paths like `userName` and `UserName` to coexist). Types must be explicitly registered on the connection using `connection.RegisterJsonSerializationType<T>()`.
  * Added `JsonReadMode` and `JsonWriteMode` connection string settings for configurable JSON handling:
    - `JsonReadMode.Binary` (default): Returns `System.Text.Json.Nodes.JsonObject`
