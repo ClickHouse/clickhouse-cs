@@ -58,10 +58,27 @@ v?
 * **Moved `ServerTimezone` property from `ClickHouseConnection` to `ClickHouseCommand`.** The server timezone is now available on `ClickHouseCommand.ServerTimezone` after any query execution (the timezone is now extracted from the `X-ClickHouse-Timezone` response header instead of requiring a separate query).
 * **Helper and extension methods made internal:** DateTimeConversions, DataReaderExtensions, DictionaryExtensions, EnumerableExtensions, MathUtils, StringExtensions.
 
-* **JSON writing behavior changed for string and JsonNode inputs.** When writing `string` or `JsonNode` values to JSON columns, the driver now sends the JSON as a plain string for server-side parsing. This requires the server setting `input_format_binary_read_json_as_string=1`. Objects are serialized using binary encoding with type hints.
+* **JSON writing default behavior changed.** The default `JsonWriteMode` has changed from `Binary` to `String`. This affects how JSON data is written to ClickHouse:
+
+  | Input Type | Old Default (Binary) | New Default (String) |
+  |------------|---------------------|----------------------|
+  | `JsonObject` / `JsonNode` | Binary encoding | Serialized via `JsonSerializer.Serialize()` |
+  | `string` | Binary encoding (parsed client-side) | Passed through directly |
+  | POCO (registered) | Binary encoding with type hints | Serialized via `JsonSerializer.Serialize()` |
+  | POCO (unregistered) | Exception | Serialized via `JsonSerializer.Serialize()` |
+
+  **Impact if you don't modify your code:**
+  - JSON writing will still work, but uses string serialization instead of binary encoding; the json string will be parsed on the server instead of the client. This could lead to subtle changes in paths without type hints, eg values previously parsed as ints may be parsed as longs.
+  - `ClickHouseJsonPath` and `ClickHouseJsonIgnore` attributes are ignored in String mode (they only work in Binary mode). Serialization happens via System.Text.Json, so you can use those attributes instead.
+  - Server setting `input_format_binary_read_json_as_string=1` is automatically set when using String write mode
 
 **New Features/Improvements:**
  * Added POCO serialization support for JSON columns. When writing POCOs to JSON columns with typed hints (e.g., `JSON(id Int64, name String)`), the driver now serializes properties using the hinted types for full type fidelity. Properties without a corresponding hinted path will have their ClickHouse types inferred automatically. Two attributes are available: `[ClickHouseJsonPath("path")]` for custom JSON paths and `[ClickHouseJsonIgnore]` to exclude properties. Property name matching to hint paths is case-sensitive (matching ClickHouse behavior which allows paths like `userName` and `UserName` to coexist). Types must be explicitly registered on the connection using `connection.RegisterJsonSerializationType<T>()`.
+ * Added `JsonReadMode` and `JsonWriteMode` connection string settings for configurable JSON handling:
+   - `JsonReadMode.Binary` (default): Returns `System.Text.Json.Nodes.JsonObject`
+   - `JsonReadMode.String`: Returns raw JSON string. Sets server setting `output_format_binary_write_json_as_string=1`.
+   - `JsonWriteMode.String` (default): Accepts `JsonObject`, `JsonNode`, strings, and any object (serialized via `System.Text.Json.JsonSerializer`). Sets Server setting `input_format_binary_read_json_as_string=1`.
+   - `JsonWriteMode.Binary`: Only accepts registered POCO types with full type hint support and custom path attributes. Writing `string` or `JsonNode` values with `JsonWriteMode.Binary` throws an exception.
  * Added support for QBit data type. QBit is a transposed vector column, designed to allow the user to choose a desired quantization level at runtime, speeding up approximate similarity searches. See the GitHub repo for usage examples.
  * Added support for setting roles at the connection and command levels.
  * Added support for custom headers at the connection level.

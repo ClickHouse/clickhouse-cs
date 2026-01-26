@@ -49,6 +49,10 @@ internal class ClickHouseUriBuilder
 
     public IReadOnlyList<string> CommandRoles { get; set; }
 
+    public JsonReadMode JsonReadMode { get; set; }
+
+    public JsonWriteMode JsonWriteMode { get; set; }
+
     /// <summary>
     /// Gets the effective query ID that will be used in the request.
     /// If QueryId is not set, generates and caches a new GUID.
@@ -72,6 +76,13 @@ internal class ClickHouseUriBuilder
         parameters.SetOrRemove("session_id", SessionId);
         parameters.SetOrRemove("query", Sql);
         parameters.Set("query_id", GetEffectiveQueryId());
+
+        // Inject JSON format settings based on mode - do this before sqlQueryParameters to allow for overrides
+        if (JsonReadMode == JsonReadMode.String)
+            parameters.Set("output_format_binary_write_json_as_string", "1");
+
+        if (JsonWriteMode == JsonWriteMode.String)
+            parameters.Set("input_format_binary_read_json_as_string", "1");
 
         foreach (var parameter in sqlQueryParameters)
             parameters.Set("param_" + parameter.Key, parameter.Value.ToString(CultureInfo.InvariantCulture));

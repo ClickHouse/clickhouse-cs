@@ -532,7 +532,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         return response;
     }
 
-    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, jsonTypeRegistry);
+    internal TypeSettings TypeSettings => new TypeSettings(Settings.UseCustomDecimals, jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode);
 
     /// <summary>
     /// Registers a POCO type for JSON column serialization.
@@ -558,16 +558,22 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     public void RegisterJsonSerializationType(Type type)
         => jsonTypeRegistry.RegisterType(type);
 
-    internal ClickHouseUriBuilder CreateUriBuilder(string sql = null) => new ClickHouseUriBuilder(serverUri)
+    internal ClickHouseUriBuilder CreateUriBuilder(string sql = null)
     {
-        Database = Database,
-        SessionId = Settings.UseSession ? Settings.SessionId : null,
-        UseCompression = UseCompression,
-        ConnectionQueryStringParameters = CustomSettings
-            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-        ConnectionRoles = Settings.Roles,
-        Sql = sql,
-    };
+        var queryParams = CustomSettings.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+        return new ClickHouseUriBuilder(serverUri)
+        {
+            Database = Database,
+            SessionId = Settings.UseSession ? Settings.SessionId : null,
+            UseCompression = UseCompression,
+            ConnectionQueryStringParameters = queryParams,
+            ConnectionRoles = Settings.Roles,
+            Sql = sql,
+            JsonReadMode = Settings.JsonReadMode,
+            JsonWriteMode = Settings.JsonWriteMode,
+        };
+    }
 
     internal Task EnsureOpenAsync() => state != ConnectionState.Open ? OpenAsync() : Task.CompletedTask;
 

@@ -39,7 +39,9 @@ internal class JsonType : ParameterizedType
 
     internal TypeSettings TypeSettings { get; init; }
 
-    public override Type FrameworkType => typeof(JsonObject);
+    public override Type FrameworkType => TypeSettings.jsonReadMode == JsonReadMode.String
+        ? typeof(string)
+        : typeof(JsonObject);
 
     public override string Name => "Json";
 
@@ -56,6 +58,16 @@ internal class JsonType : ParameterizedType
     }
 
     public override object Read(ExtendedBinaryReader reader)
+    {
+        // When JsonReadMode.String is configured, ClickHouse sends JSON as a plain string
+        // (via output_format_binary_write_json_as_string=1 setting)
+        if (TypeSettings.jsonReadMode == JsonReadMode.String)
+            return reader.ReadString();
+
+        return ReadAsJsonObject(reader);
+    }
+
+    private object ReadAsJsonObject(ExtendedBinaryReader reader)
     {
         JsonObject root = new();
 
@@ -135,14 +147,21 @@ internal class JsonType : ParameterizedType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-        // String and JsonNode inputs: write as string, let server parse
-        if (value is string || value is JsonNode)
+        // String mode: serialize everything to JSON string, let server parse
+        if (TypeSettings.jsonWriteMode == JsonWriteMode.String)
         {
             WriteAsString(writer, value);
             return;
         }
 
-        // POCO with hints
+        // Binary mode: only POCOs supported
+        if (value is string or JsonNode)
+        {
+            throw new ArgumentException(
+                $"String and JsonNode inputs require JsonWriteMode.String. Current value: {TypeSettings.jsonWriteMode}. " +
+                $"Either use JsonWriteMode.String in your connection string, or use a registered POCO type.");
+        }
+
         WritePocoWithHints(writer, value);
     }
 
@@ -162,7 +181,7 @@ internal class JsonType : ParameterizedType
     }
 
     /// <summary>
-    /// Write a json string or JsonNode as a string.
+    /// Write any value as a JSON string.
     /// This will only work with input_format_binary_read_json_as_string=1
     /// </summary>
     private static void WriteAsString(ExtendedBinaryWriter writer, object value)
@@ -171,7 +190,7 @@ internal class JsonType : ParameterizedType
         {
             string s => s,
             JsonNode node => node.ToJsonString(),
-            _ => throw new ArgumentException($"Expected string or JsonNode, got {value.GetType().Name}")
+            _ => JsonSerializer.Serialize(value) // POCO
         };
 
         writer.Write(jsonString);

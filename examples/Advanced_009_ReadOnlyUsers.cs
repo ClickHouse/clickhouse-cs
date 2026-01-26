@@ -30,6 +30,9 @@ public static class ReadOnlyUsers
         var readOnlyUsername = $"clickhouse_cs_readonly_user_{guid}";
         var readOnlyPassword = $"{guid}_pwd";
 
+        // The default JsonWriteMode sets a parameter which cannot be used by readonly users, so it must be changed
+        string readOnlyConnectionString = $"Host=localhost;Username={readOnlyUsername};Password={readOnlyPassword};JsonWriteMode=None";
+
         await SetupReadOnlyUser(defaultClient, readOnlyUsername, readOnlyPassword);
         await SetupTestTable(defaultClient);
 
@@ -40,16 +43,16 @@ public static class ReadOnlyUsers
         try
         {
             // 1. Read-only user CAN query tables they have access to
-            await DemonstrateAllowedSelect(readOnlyUsername, readOnlyPassword);
+            await DemonstrateAllowedSelect(readOnlyConnectionString);
 
             // 2. Read-only user CANNOT insert data
-            await DemonstrateInsertBlocked(readOnlyUsername, readOnlyPassword);
+            await DemonstrateInsertBlocked(readOnlyConnectionString);
 
             // 3. Read-only user CANNOT query tables they don't have access to
-            await DemonstrateUnauthorizedTableBlocked(readOnlyUsername, readOnlyPassword);
+            await DemonstrateUnauthorizedTableBlocked(readOnlyConnectionString);
 
             // 4. Read-only user CANNOT use most ClickHouse settings
-            await DemonstrateSettingsBlocked(readOnlyUsername, readOnlyPassword);
+            await DemonstrateSettingsBlocked(readOnlyConnectionString);
 
             Console.WriteLine("All read-only user examples completed!");
         }
@@ -100,11 +103,11 @@ public static class ReadOnlyUsers
     /// <summary>
     /// Read-only users CAN select from tables they have been granted access to.
     /// </summary>
-    private static async Task DemonstrateAllowedSelect(string username, string password)
+    private static async Task DemonstrateAllowedSelect(string connectionString)
     {
         Console.WriteLine("1. Read-only user CAN query granted tables:");
 
-        using var client = new ClickHouseConnection($"Host=localhost;Username={username};Password={password}");
+        using var client = new ClickHouseConnection(connectionString);
         await client.OpenAsync();
 
         using var reader = await client.ExecuteReaderAsync($"SELECT * FROM {TestTableName}");
@@ -120,11 +123,11 @@ public static class ReadOnlyUsers
     /// <summary>
     /// Read-only users CANNOT insert data into any table.
     /// </summary>
-    private static async Task DemonstrateInsertBlocked(string username, string password)
+    private static async Task DemonstrateInsertBlocked(string connectionString)
     {
         Console.WriteLine("2. Read-only user CANNOT insert data:");
 
-        using var client = new ClickHouseConnection($"Host=localhost;Username={username};Password={password}");
+        using var client = new ClickHouseConnection(connectionString);
         await client.OpenAsync();
 
         try
@@ -143,11 +146,11 @@ public static class ReadOnlyUsers
     /// <summary>
     /// Read-only users CANNOT query tables they don't have access to.
     /// </summary>
-    private static async Task DemonstrateUnauthorizedTableBlocked(string username, string password)
+    private static async Task DemonstrateUnauthorizedTableBlocked(string connectionString)
     {
         Console.WriteLine("3. Read-only user CANNOT query non-granted tables (e.g., system.users):");
 
-        using var client = new ClickHouseConnection($"Host=localhost;Username={username};Password={password}");
+        using var client = new ClickHouseConnection(connectionString);
         await client.OpenAsync();
 
         try
@@ -166,11 +169,11 @@ public static class ReadOnlyUsers
     /// <summary>
     /// Read-only users CANNOT modify ClickHouse settings like send_progress_in_http_headers.
     /// </summary>
-    private static async Task DemonstrateSettingsBlocked(string username, string password)
+    private static async Task DemonstrateSettingsBlocked(string connectionString)
     {
         Console.WriteLine("4. Read-only user CANNOT use custom ClickHouse settings:");
 
-        using var client = new ClickHouseConnection($"Host=localhost;Username={username};Password={password}");
+        using var client = new ClickHouseConnection(connectionString);
         await client.OpenAsync();
 
         using var command = client.CreateCommand();
