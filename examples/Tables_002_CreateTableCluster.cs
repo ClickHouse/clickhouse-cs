@@ -37,6 +37,6 @@ public static class CreateTableCluster
             ORDER BY (id)
         ";
 
-        connection.ExecuteStatementAsync(clusterTableDDL);
+        await connection.ExecuteStatementAsync(clusterTableDDL);
     }
 }
