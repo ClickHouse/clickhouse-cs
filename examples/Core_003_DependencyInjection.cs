@@ -12,6 +12,42 @@ namespace ClickHouse.Driver.Examples;
 /// Demonstrates how to use ClickHouse with dependency injection in .NET 7+ applications.
 /// Shows proper integration with IServiceCollection, ClickHouseDataSource, and IHttpClientFactory.
 /// Also, loading options using the ConfigurationBuilder.
+///
+/// <para>
+/// <strong>IMPORTANT: Connection Pooling and Socket Exhaustion</strong>
+/// </para>
+/// <para>
+/// If you create multiple <see cref="ClickHouseConnection"/> instances without passing a shared
+/// <see cref="HttpClient"/>, each connection will create its own <see cref="HttpClient"/> with its
+/// own connection pool. In high-throughput scenarios, this can lead to socket exhaustion and poor performance
+/// as each pool maintains separate TCP connections to the server.
+/// </para>
+/// <para>
+/// To avoid this:
+/// <list type="bullet">
+/// <item>
+/// <description>
+/// <strong>Use a singleton HttpClient</strong>: Pass a shared <see cref="HttpClient"/> instance to all
+/// <see cref="ClickHouseConnection"/> objects via <see cref="ClickHouseClientSettings.HttpClient"/>.
+/// This maintains a single connection pool and reuses TCP connections efficiently. If using an IHttpClientFactory,
+/// make sure you are not constantly recreating HttpClients.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <strong>Use a singleton ClickHouseConnection</strong>: A single long-lived connection instance
+/// achieves the same result since the underlying <see cref="HttpClient"/> is shared.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <strong>Using <see cref="ClickHouseDataSource"/></strong>: Call <c>AddClickHouseDataSource()</c> which registers
+/// <see cref="ClickHouseDataSource"/> as a singleton by default. All <see cref="ClickHouseConnection"/>
+/// instances resolved from DI will share the same <see cref="HttpClient"/> and connection pool.
+/// </description>
+/// </item>
+/// </list>
+/// </para>
 /// </summary>
 public static class DependencyInjection
 {
@@ -40,14 +76,17 @@ public static class DependencyInjection
         // Add logging (optional but recommended)
         services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Warning));
 
-        // Register ClickHouse with a connection string
+        // Register ClickHouse with a connection string.
+        // - ClickHouseDataSource is registered as a SINGLETON by default
+        // - All ClickHouseConnection instances share the same underlying HttpClient
         services.AddClickHouseDataSource("Host=localhost;Port=8123;Protocol=http;Username=default;Password=;Database=default");
 
         // Build the service provider
         var serviceProvider = services.BuildServiceProvider();
 
-        // Resolve and use a ClickHouseConnection
-        // Note: ClickHouseConnection is registered as Transient by default
+        // Resolve and use a ClickHouseConnection.
+        // Note: ClickHouseConnection is registered as Transient by default, but all
+        // connections share the same HttpClient from the singleton ClickHouseDataSource.
         using (var scope = serviceProvider.CreateScope())
         {
             var connection = scope.ServiceProvider.GetRequiredService<ClickHouseConnection>();
@@ -103,11 +142,9 @@ public static class DependencyInjection
         var services = new ServiceCollection();
         services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Warning));
 
-        // Register a named HttpClient with custom configuration
-        // This is important for production scenarios where you want to control:
-        // - Timeout settings
-        // - Retry policies (using Polly)
-        // - Custom message handlers
+        // Register a named HttpClient with custom configuration.
+        // This is important for production scenarios where you want to control HttpClient
+        // or HttpHandler settings.
         services.AddHttpClient("ClickHouseClient", client =>
         {
             client.Timeout = TimeSpan.FromMinutes(5);
@@ -118,22 +155,20 @@ public static class DependencyInjection
             PooledConnectionIdleTimeout = TimeSpan.FromSeconds(5), // Make sure to set this to a value lower than the server idle timeout (10s for Cloud)
         });
 
-        // Register ClickHouse using the HttpClient factory
-        var connectionString = "Host=localhost;Port=8123;Protocol=http;Username=default;Password=;Database=default";
+        // Register ClickHouse with a settings factory that resolves IHttpClientFactory from DI.
+        // The underlying SocketsHandler will be shared.
+        services.AddClickHouseDataSource(sp =>
+        {
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new ClickHouseClientSettings
+            {
+                Host = "localhost",
+                HttpClientFactory = factory,
+                HttpClientName = "ClickHouseClient",
+            };
+        });
 
-        // Build the service provider so we can access IHttpClientFactory
         var serviceProvider = services.BuildServiceProvider();
-        var factory = serviceProvider.GetRequiredService<IHttpClientFactory>();
-
-        // Re-create service collection with ClickHouse registration
-        services.AddClickHouseDataSource(
-            connectionString,
-            factory,
-            httpClientName: "ClickHouseClient"
-        );
-
-        // Rebuild the service provider with the complete registration
-        serviceProvider = services.BuildServiceProvider();
 
         using (var scope = serviceProvider.CreateScope())
         {
