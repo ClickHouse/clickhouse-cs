@@ -542,7 +542,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    public void RegisterJsonSerializationType<T>() 
+    public void RegisterJsonSerializationType<T>()
     where T : class
         => jsonTypeRegistry.RegisterType<T>();
 

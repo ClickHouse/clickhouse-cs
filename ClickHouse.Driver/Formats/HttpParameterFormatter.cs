@@ -124,10 +124,8 @@ internal static class HttpParameterFormatter
                 var values = enumerable.Cast<object>().Select(x => Format(nestedType, x, false));
                 return $"[{string.Join(",", values)}]";
 
-#if !NET462
             case TupleType tupleType when value is ITuple tuple:
                 return $"({string.Join(",", tupleType.UnderlyingTypes.Select((x, i) => Format(x, tuple[i], true)))})";
-#endif
 
             case TupleType tupleType when value is IList list:
                 return $"({string.Join(",", tupleType.UnderlyingTypes.Select((x, i) => Format(x, list[i], true)))})";

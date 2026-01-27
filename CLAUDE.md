@@ -5,7 +5,7 @@
 ### Project Context
 - **ClickHouse.Driver** is the official ADO.NET client for ClickHouse database
 - **Critical priorities**: Stability, correctness, performance, and comprehensive testing
-- **Tech stack**: C#/.NET targeting `net462`, `net48`, `netstandard2.1`, `net6.0`, `net8.0`, `net9.0`, `net10.0`
+- **Tech stack**: C#/.NET targeting `net6.0`, `net8.0`, `net9.0`, `net10.0`
 - **Tests run on**: `net6.0`, `net8.0`, `net9.0`, `net10.0`; Integration tests: `net10.0`; Benchmarks: `net10.0`
 
 ### Solution Structure
@@ -37,7 +37,7 @@ ClickHouse.Driver.sln
 
 ### Correctness & Safety First
 - **Protocol fidelity**: Correct serialization/deserialization of ClickHouse types across all supported versions
-- **Multi-framework compatibility**: Changes must work on .NET Framework 4.6.2 through .NET 10.0
+- **Multi-framework compatibility**: Changes must work on .NET 6.0 through .NET 10.0
 - **Type mapping**: ClickHouse has 60+ specialized types - ensure correct mapping, no data loss
 - **Thread safety**: Database client must handle concurrent operations safely
 - **Async patterns**: Maintain proper async/await, `CancellationToken` support, no sync-over-async
