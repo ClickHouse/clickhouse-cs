@@ -159,6 +159,10 @@ class Program
         await JsonType.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(GeometryTypes)}");
+        await GeometryTypes.Run();
+        WaitForUser(isInteractive);
+
         // ORM Integration
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ORM INTEGRATION");

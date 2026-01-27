@@ -28,6 +28,8 @@ If something is missing, or you found a mistake in one of these examples, please
 ### Creating Tables
 
 - [Tables_001_CreateTableSingleNode.cs](Tables_001_CreateTableSingleNode.cs) - Creating tables with different engines and data types on a single-node deployment
+- [Tables_002_CreateTableCluster.cs](Tables_002_CreateTableCluster.cs) - Creating ReplicatedMergeTree tables on an on-premises ClickHouse cluster with ON CLUSTER and macros
+- [Tables_003_CreateTableCloud.cs](Tables_003_CreateTableCloud.cs) - Creating tables on ClickHouse Cloud (automatic replication, no ENGINE needed)
 
 ### Inserting Data
 
@@ -51,6 +53,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [DataTypes_002_DateTimeHandling.cs](DataTypes_002_DateTimeHandling.cs) - Comprehensive guide to DateTime, DateTime64, Date, Date32, timezones, DateTime.Kind behavior, and DateTimeOffset
 - [DataTypes_003_ComplexTypes.cs](DataTypes_003_ComplexTypes.cs) - Working with complex data types: Arrays, Maps, Tuples, IP addresses, and Nested structures
 - [DataTypes_005_JsonType.cs](DataTypes_005_JsonType.cs) - Working with JSON type: reading as JsonObject or string, writing from various sources, and configuring JsonReadMode/JsonWriteMode
+- [DataTypes_006_Geometry.cs](DataTypes_006_Geometry.cs) - Geometry types: Point, Polygon, WKT parsing, H3 geospatial indexing, point-in-polygon checks, and great circle distance calculations
 
 ### ORM Integration
 
