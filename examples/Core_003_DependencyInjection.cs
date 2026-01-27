@@ -175,8 +175,8 @@ public static class DependencyInjection
             var connection = scope.ServiceProvider.GetRequiredService<ClickHouseConnection>();
             await connection.OpenAsync();
 
-            var database = connection.Database;
-            Console.WriteLine($"   Connected to database: {database}");
+            var version = await connection.ExecuteScalarAsync("SELECT version()");
+            Console.WriteLine($"   Connected to ClickHouse version: {version}");
         }
     }
 }
