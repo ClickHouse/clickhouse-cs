@@ -113,7 +113,7 @@ public static class SelectWithParameterBinding
         }
 
         // Example 4: Parameter binding for tuple comparison
-        Console.WriteLine("\n5. Parameter binding with tuple:");
+        Console.WriteLine("\n4. Parameter binding with tuple:");
         using (var command = connection.CreateCommand())
         {
             command.CommandText = $@"
