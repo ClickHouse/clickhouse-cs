@@ -49,8 +49,6 @@ public static class BulkInsert
                 Console.WriteLine($"   Batch sent: {e.RowsWritten} rows written");
             };
 
-            await bulkCopy.InitAsync();
-
             // Generate data
             var largeData = GenerateSampleData(10000, startId: 6);
 
@@ -80,8 +78,6 @@ public static class BulkInsert
             ColumnNames = new[] { "id", "name" }, // Only specify these columns, others use defaults
         })
         {
-            await bulkCopy.InitAsync();
-
             var partialData = new List<object[]>
             {
                 new object[] { 1UL, "Item 1" },

@@ -308,8 +308,6 @@ public static class DateTimeHandling
             DestinationTableName = tableName,
         })
         {
-            await bulkCopy.InitAsync();
-
             // Unspecified DateTime values are treated as wall-clock time in the column's timezone
             var data = new List<object[]>
             {

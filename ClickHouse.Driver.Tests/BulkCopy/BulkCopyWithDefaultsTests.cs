@@ -43,7 +43,6 @@ public class BulkCopyWithDefaultsTests : AbstractConnectionTestFixture
             BatchSize = 100
         };
 
-        await bulkCopyWithDefaults.InitAsync();
         await bulkCopyWithDefaults.WriteToServerAsync(Enumerable.Repeat(new[] { insertValue }, 1));
 
         Assert.That(bulkCopyWithDefaults.RowsWritten, Is.EqualTo(1));

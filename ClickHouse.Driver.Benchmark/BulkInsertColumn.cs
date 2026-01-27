@@ -47,7 +47,6 @@ public class BulkInsertColumn
             MaxDegreeOfParallelism = 1,
             ColumnNames = new[] { "col1" }
         };
-        bulkCopy.InitAsync().Wait();
     }
 
     [Benchmark]
