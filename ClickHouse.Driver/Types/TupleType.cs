@@ -28,10 +28,8 @@ internal class TupleType : ParameterizedType
     {
         var count = underlyingTypes.Length;
 
-#if !NET462
         if (count > 7)
             return typeof(LargeTuple);
-#endif
 
         var typeArgs = new Type[count];
         for (var i = 0; i < count; i++)
@@ -42,7 +40,6 @@ internal class TupleType : ParameterizedType
         return genericType.MakeGenericType(typeArgs);
     }
 
-#if !NET462
     public ITuple MakeTuple(params object[] values)
     {
         var count = values.Length;
@@ -62,7 +59,6 @@ internal class TupleType : ParameterizedType
 
         return (ITuple)Activator.CreateInstance(frameworkType, valuesCopy);
     }
-#endif
 
     public override Type FrameworkType => frameworkType;
 
@@ -87,16 +83,12 @@ internal class TupleType : ParameterizedType
             var value = UnderlyingTypes[i].Read(reader);
             contents[i] = ClearDBNull(value);
         }
-#if !NET462
+
         return MakeTuple(contents);
-#else
-        return contents;
-#endif
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-#if !NET462
         if (value is ITuple tuple)
         {
             if (tuple.Length != UnderlyingTypes.Length)
@@ -107,7 +99,7 @@ internal class TupleType : ParameterizedType
             }
             return;
         }
-#endif
+
         if (value is IList list)
         {
             if (list.Count != UnderlyingTypes.Length)
