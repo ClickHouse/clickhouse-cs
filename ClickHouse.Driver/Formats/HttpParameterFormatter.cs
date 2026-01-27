@@ -28,27 +28,23 @@ internal static class HttpParameterFormatter
     /// <returns>The formatted parameter value string.</returns>
     public static string Format(ClickHouseDbParameter parameter, TypeSettings settings, string sqlTypeHint = null)
     {
+        if (parameter.Value is null or DBNull)
+        {
+            return NullValueString;
+        }
+
         // Explicit parameter type takes precedence, then SQL type hint, then inference
         var effectiveType = parameter.ClickHouseType ?? sqlTypeHint;
 
         if (string.IsNullOrWhiteSpace(effectiveType))
         {
-            if (parameter.Value is null or DBNull)
-            {
-                // Type unknown and value is null so we can't infer it
-                return NullValueString;
-            }
-
             // Infer type and format accordingly
             var type = TypeConverter.ToClickHouseType(parameter.Value.GetType());
             return Format(type, parameter.Value, false);
         }
-        else
-        {
-            // Type has been provided
-            var type = TypeConverter.ParseClickHouseType(effectiveType, settings);
-            return Format(type, parameter.Value, false);
-        }
+
+        var parsedType = TypeConverter.ParseClickHouseType(effectiveType, settings);
+        return Format(parsedType, parameter.Value, false);
     }
 
     internal static string Format(ClickHouseType type, object value, bool quote)

@@ -110,6 +110,32 @@ public class SqlParameterizedSelectTests : IDisposable
 
 
     [Test]
+    public async Task AddParameter_NullValueWithNonNullableStringSqlTypeHint_ReturnsEmptyString()
+    {
+        // When null is passed to a non-nullable String type hint, ClickHouse interprets \N as empty string
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {val:String} as res";
+        command.AddParameter("val", null);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(""));
+    }
+
+    [Test]
+    [TestCase("Int32")]
+    [TestCase("DateTime")]
+    public void AddParameter_NullValueWithNonNullableNonStringSqlTypeHint_ThrowsServerException(string typeHint)
+    {
+        // When null is passed to non-nullable non-string types, the server rejects \N
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {{val:{typeHint}}} as res";
+        command.AddParameter("val", null);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+            await command.ExecuteReaderAsync());
+    }
+
+    [Test]
     [TestCase("String")]
     [TestCase("Int32")]
     [TestCase("Int64")]
