@@ -54,6 +54,21 @@ internal static class SqlParameterTypeExtractor
                 inSqlString = true;
                 i++;
             }
+            else if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+            {
+                // SQL-style line comment: -- (skip to end of line)
+                i = SkipToEndOfLine(sql, i + 2);
+            }
+            else if (c == '#')
+            {
+                // SQL-style line comment: # or #! (skip to end of line)
+                i = SkipToEndOfLine(sql, i + 1);
+            }
+            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+            {
+                // C-style block comment: /* ... */ (skip to closing */)
+                i = SkipBlockComment(sql, i + 2);
+            }
             else if (c == '{')
             {
                 // Potential parameter start - try to extract {name:Type}
@@ -153,5 +168,25 @@ internal static class SqlParameterTypeExtractor
 
         // Unterminated parameter
         return (null, null, 0);
+    }
+
+    /// <summary>
+    /// Skips to the end of a line
+    /// Returns the index of the first character after the newline, or sql.Length if no newline found.
+    /// </summary>
+    private static int SkipToEndOfLine(string sql, int startIndex)
+    {
+        var newlineIndex = sql.IndexOf('\n', startIndex);
+        return newlineIndex < 0 ? sql.Length : newlineIndex + 1;
+    }
+
+    /// <summary>
+    /// Skips a C-style block comment (after /*).
+    /// Returns the index of the first character after */, or sql.Length if not found.
+    /// </summary>
+    private static int SkipBlockComment(string sql, int startIndex)
+    {
+        var endIndex = sql.IndexOf("*/", startIndex, StringComparison.Ordinal);
+        return endIndex < 0 ? sql.Length : endIndex + 2;
     }
 }

@@ -236,4 +236,210 @@ public class SqlParameterTypeExtractorTests
         Assert.That(hints, Has.Count.EqualTo(1));
         Assert.That(hints["val"], Is.EqualTo("Int32"));
     }
+
+    [Test]
+    public void ExtractTypeHints_ParameterInDoubleDashComment_IgnoresComment()
+    {
+        var sql = "SELECT {val:Int32} -- {val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterInDoubleDashCommentNoSpace_IgnoresComment()
+    {
+        var sql = "SELECT {val:Int32} --{val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterInHashBangComment_IgnoresComment()
+    {
+        var sql = "SELECT {val:Int32} #! {val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterInHashBangCommentNoSpace_IgnoresComment()
+    {
+        var sql = "SELECT {val:Int32} #!{val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterInHashComment_IgnoresComment()
+    {
+        var sql = "SELECT {val:Int32} # {val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterInHashCommentNoSpace_IgnoresComment()
+    {
+        var sql = "SELECT {val:Int32} #{val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterInCStyleComment_IgnoresComment()
+    {
+        var sql = "SELECT {val:Int32} /* {val:String} */";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterInCStyleCommentNoSpaces_IgnoresComment()
+    {
+        var sql = "SELECT {val:Int32} /*{val:String}*/";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterInMultilineCStyleComment_IgnoresComment()
+    {
+        var sql = @"SELECT {val:Int32}
+/*
+{val:String}
+*/";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterAfterLineComment_ParsesCorrectly()
+    {
+        var sql = @"SELECT {val:Int32} -- comment
+, {other:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(2));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+        Assert.That(hints["other"], Is.EqualTo("String"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_ParameterAfterCStyleComment_ParsesCorrectly()
+    {
+        var sql = "SELECT {val:Int32} /* comment */ , {other:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(2));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+        Assert.That(hints["other"], Is.EqualTo("String"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_DoubleDashInsideString_NotTreatedAsComment()
+    {
+        var sql = "SELECT {val:String} WHERE name = '--not a comment' AND {val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("String"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_HashInsideString_NotTreatedAsComment()
+    {
+        var sql = "SELECT {val:String} WHERE name = '#not a comment' AND {val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("String"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_CStyleCommentInsideString_NotTreatedAsComment()
+    {
+        var sql = "SELECT {val:String} WHERE name = '/* not a comment */' AND {val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("String"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_UnclosedBlockComment_TreatsRestAsComment()
+    {
+        var sql = "SELECT {val:Int32} /* {val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_CommentAtStart_IgnoresComment()
+    {
+        var sql = "-- comment\nSELECT {val:Int32}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_EmptyBlockComment_IgnoresComment()
+    {
+        var sql = "SELECT /**/{val:Int32}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_BlockCommentMarkersInsideLineComment_IgnoresAll()
+    {
+        var sql = "SELECT {val:Int32} -- /* {val:String} */";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_CommentAtEndNoNewline_IgnoresComment()
+    {
+        var sql = "SELECT {val:Int32} -- {val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_EscapedQuotesWithCommentMarkers_NotTreatedAsComment()
+    {
+        var sql = "SELECT 1 WHERE name = 'it''s -- not a comment' AND {val:String}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("String"));
+    }
 }
