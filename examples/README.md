@@ -14,7 +14,7 @@ If something is missing, or you found a mistake in one of these examples, please
 
 - [Core_001_BasicUsage.cs](Core_001_BasicUsage.cs) - Creating a client, tables, and performing basic insert/select operations (using ClickHouseClientSettings)
 - [Core_002_ConnectionStringConfiguration.cs](Core_002_ConnectionStringConfiguration.cs) - Various connection string formats and configuration options
-- [Core_003_DependencyInjection.cs](Core_003_DependencyInjection.cs) - Using ClickHouse with dependency injection and config binding
+- [Core_003_DependencyInjection.cs](Core_003_DependencyInjection.cs) - Using ClickHouse with dependency injection and config binding; correct client and connection pool lifetime handling
 - [Core_004_HttpClientConfiguration.cs](Core_004_HttpClientConfiguration.cs) - Providing custom HttpClient or IHttpClientFactory for SSL/TLS, proxy, timeouts, and more control over connection settings
 
 ### ASP.NET Integration
