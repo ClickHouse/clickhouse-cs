@@ -256,23 +256,19 @@ public static class TestUtilities
         );
 
         // Variant
-        // Some types have problems with parsing on the server side when it comes to variants
-        // This should be fixed with https://github.com/ClickHouse/ClickHouse/pull/90430
-        string[] noVariantTests = new[]
-        {
-            "Int32",
-            "UInt32",
-            "Int64",
-            "UInt64",
-            "Date",
-            "Date32",
-            "DateTime",
-            "DateTime64",
-            "Float32",
-            "Bool",
-            "BFloat16",
-        };
-        if ((!noVariantTests.Contains(baseType) && !baseType.StartsWith("Enum")) || ServerVersion > Version.Parse("25.3")) // Issue has been fixed after 25.3
+        // Skip conditions:
+        // 1. FixedString with byte[] test data: FrameworkType is now string, but test data uses byte[]
+        var isFixedStringWithByteArray = baseType.StartsWith("FixedString") && baseValue is byte[];
+        if (isFixedStringWithByteArray)
+            yield break;
+
+        // 2. Some types have server-side parsing issues with Variant (fixed after 25.3)
+        //    See: https://github.com/ClickHouse/ClickHouse/pull/90430
+        string[] serverParsingIssueTypes = ["Int32", "UInt32", "Int64", "UInt64", "Date", "Date32", "DateTime", "DateTime64", "Float32", "Bool", "BFloat16"];
+        var hasServerParsingIssue = serverParsingIssueTypes.Contains(baseType) || baseType.StartsWith("Enum");
+        var serverParsingFixed = ServerVersion > Version.Parse("25.3");
+
+        if (!hasServerParsingIssue || serverParsingFixed)
         {
             var variantSecondType = "String";
             // Some types can cause a database error due to suspicious variant types/wrong type inference, avoid that

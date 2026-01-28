@@ -346,7 +346,8 @@ internal class JsonType : ParameterizedType
     private static JsonValue ReadJsonFixedString(ExtendedBinaryReader reader, ClickHouseType type)
     {
         var value = type.Read(reader);
-        return JsonValue.Create(Encoding.UTF8.GetString((byte[])value));
+        var str = value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : (string)value;
+        return JsonValue.Create(str);
     }
 
     private static JsonNode ReadJsonValue(ExtendedBinaryReader reader, ClickHouseType type)

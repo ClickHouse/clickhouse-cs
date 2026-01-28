@@ -19,6 +19,38 @@ namespace ClickHouse.Driver.Tests.Types;
 
 public class DynamicTests : AbstractConnectionTestFixture
 {
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task ShouldReadDynamicStringAsByteArray()
+    {
+        // Test that ReadStringsAsByteArrays setting works with Dynamic type containing String
+        var cb = TestUtilities.GetConnectionStringBuilder();
+        cb.ReadStringsAsByteArrays = true;
+        using var conn = new ClickHouseConnection(cb.ToString());
+
+        using var reader = await conn.ExecuteReaderAsync("SELECT 'hello'::Dynamic");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = reader.GetValue(0);
+        Assert.That(result, Is.TypeOf<byte[]>());
+        Assert.That(result, Is.EqualTo(new byte[] { 0x68, 0x65, 0x6C, 0x6C, 0x6F })); // "hello" in UTF-8
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task ShouldReadDynamicFixedStringAsByteArray()
+    {
+        // Test that ReadStringsAsByteArrays setting works with Dynamic type containing FixedString
+        var cb = TestUtilities.GetConnectionStringBuilder();
+        cb.ReadStringsAsByteArrays = true;
+        using var conn = new ClickHouseConnection(cb.ToString());
+
+        using var reader = await conn.ExecuteReaderAsync("SELECT 'test'::FixedString(4)::Dynamic");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = reader.GetValue(0);
+        Assert.That(result, Is.TypeOf<byte[]>());
+        Assert.That(result, Is.EqualTo(new byte[] { 0x74, 0x65, 0x73, 0x74 })); // "test" in UTF-8
+    }
+
     public static IEnumerable<TestCaseData> DirectDynamicCastQueries
     {
         get
