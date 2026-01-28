@@ -1,6 +1,11 @@
 v?
 ---
 
+**Documentation and Usage Examples:**
+Coinciding with the 1.0.0 release of the driver, we have greatly expanded the documentation and usage examples.
+ * Documentation: https://clickhouse.com/docs/integrations/csharp
+ * Usage examples: https://github.com/ClickHouse/clickhouse-cs/tree/main/examples
+
 **Breaking Changes:**
 * **Removed feature discovery query from `OpenAsync`.** The connection's `OpenAsync()` method no longer executes `SELECT version()` to discover server capabilities. This makes connection opening instantaneous (no network round-trip) but removes the `SupportedFeatures` property from `ClickHouseConnection`. The `ServerVersion` property now throws `InvalidOperationException`.
 
