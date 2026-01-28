@@ -72,7 +72,7 @@ public class SqlParameterizedSelectTests : IDisposable
             clickHouseType = "String";
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {{var:{clickHouseType}}} as res";
-        command.AddParameter("var", clickHouseType, value);
+        command.AddParameter("var", value);
 
         var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
         TestUtilities.AssertEqual(result, value);
@@ -93,7 +93,7 @@ public class SqlParameterizedSelectTests : IDisposable
 
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {exampleExpression} as expected, {{var:{clickHouseType}}} as actual, expected = actual as equals";
-        command.AddParameter("var", clickHouseType, value);
+        command.AddParameter("var", value);
 
         var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
         TestUtilities.AssertEqual(result[0], result[1]);
@@ -108,6 +108,45 @@ public class SqlParameterizedSelectTests : IDisposable
         // }
     }
 
+
+    [Test]
+    public async Task AddParameter_NullValueWithNonNullableStringSqlTypeHint_ReturnsEmptyString()
+    {
+        // When null is passed to a non-nullable String type hint, ClickHouse interprets \N as empty string
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {val:String} as res";
+        command.AddParameter("val", null);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(""));
+    }
+
+    [Test]
+    [TestCase("Int32")]
+    [TestCase("DateTime")]
+    public void AddParameter_NullValueWithNonNullableNonStringSqlTypeHint_ThrowsServerException(string typeHint)
+    {
+        // When null is passed to non-nullable non-string types, the server rejects \N
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {{val:{typeHint}}} as res";
+        command.AddParameter("val", null);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+            await command.ExecuteReaderAsync());
+    }
+
+    [Test]
+    public void AddParameter_InvalidTypeHint_ThrowsArgumentException()
+    {
+        string invalidType = "NotARealType";
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {{val:{invalidType}}} as res";
+        command.AddParameter("val", 123);
+
+        var ex = Assert.ThrowsAsync<ArgumentException>(async () =>
+            await command.ExecuteReaderAsync());
+        Assert.That(ex.Message, Does.Contain($"Unknown type: {invalidType}"));
+    }
 
     [Test]
     [TestCase("String")]
