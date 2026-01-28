@@ -23,7 +23,7 @@ If something is missing, or you found a mistake in one of these examples, please
 
 ### Authentication
 
-- [Auth_001_JwtAuthentication.cs](Auth/Auth_001_JwtAuthentication.cs) - Using JWT/Bearer token authentication with ClickHouse.
+- [Auth_001_JwtAuthentication.cs](Core/Auth_001_JwtAuthentication.cs) - Using JWT/Bearer token authentication with ClickHouse.
 
 ### Creating Tables
 
