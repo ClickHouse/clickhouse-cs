@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace ClickHouse.Driver.ADO.Parameters;
@@ -59,6 +60,11 @@ internal static class SqlParameterTypeExtractor
                 var (paramName, paramType, endIndex) = TryExtractParameter(sql, i);
                 if (paramName != null && paramType != null)
                 {
+                    if (result.TryGetValue(paramName, out var existingType) && existingType != paramType)
+                    {
+                        throw new ArgumentException(
+                            $"Parameter '{paramName}' has conflicting type hints: '{existingType}' and '{paramType}'");
+                    }
                     result[paramName] = paramType;
                     i = endIndex;
                 }

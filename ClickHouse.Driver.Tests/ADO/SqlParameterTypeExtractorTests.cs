@@ -1,3 +1,4 @@
+using System;
 using ClickHouse.Driver.ADO.Parameters;
 using NUnit.Framework;
 
@@ -213,5 +214,26 @@ public class SqlParameterTypeExtractorTests
         var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
 
         Assert.That(hints, Is.Empty);
+    }
+
+    [Test]
+    public void ExtractTypeHints_SameParameterWithDifferentTypes_ThrowsArgumentException()
+    {
+        var sql = "SELECT {val:Int32}, {val:String}";
+
+        var ex = Assert.Throws<ArgumentException>(() => SqlParameterTypeExtractor.ExtractTypeHints(sql));
+        Assert.That(ex.Message, Does.Contain("Parameter 'val' has conflicting type hints"));
+        Assert.That(ex.Message, Does.Contain("Int32"));
+        Assert.That(ex.Message, Does.Contain("String"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_SameParameterWithSameType_ReturnsType()
+    {
+        var sql = "SELECT {val:Int32}, {val:Int32}";
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
     }
 }
