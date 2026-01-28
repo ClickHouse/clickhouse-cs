@@ -47,13 +47,13 @@ internal static class UserAgentProvider
                 var runtime = Environment.Version.ToString();
 
                 // Pre-build ProductInfoHeaderValue objects
-                SystemProductInfo = new ProductInfoHeaderValue($"(platform:{osPlatform}; os:{osDescription}; runtime:{runtime}; arch:{architecture})");
+                SystemProductInfo = new ProductInfoHeaderValue($"(platform:{osPlatform}; os:{osDescription}; lv:{runtime}; arch:{architecture})");
             }
             catch
             {
                 // If anything fails during initialization, create fallback values
                 DriverProductInfo ??= new ProductInfoHeaderValue("ClickHouse.Driver", "unknown");
-                SystemProductInfo = new ProductInfoHeaderValue("(platform:unknown; os:unknown; runtime:unknown; arch:unknown)");
+                SystemProductInfo = new ProductInfoHeaderValue("(platform:unknown; os:unknown; lv:unknown; arch:unknown)");
             }
         }
 
