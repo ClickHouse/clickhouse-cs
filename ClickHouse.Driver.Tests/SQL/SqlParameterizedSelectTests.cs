@@ -136,6 +136,19 @@ public class SqlParameterizedSelectTests : IDisposable
     }
 
     [Test]
+    public void AddParameter_InvalidTypeHint_ThrowsArgumentException()
+    {
+        string invalidType = "NotARealType";
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {{val:{invalidType}}} as res";
+        command.AddParameter("val", 123);
+
+        var ex = Assert.ThrowsAsync<ArgumentException>(async () =>
+            await command.ExecuteReaderAsync());
+        Assert.That(ex.Message, Does.Contain($"Unknown type: {invalidType}"));
+    }
+
+    [Test]
     [TestCase("String")]
     [TestCase("Int32")]
     [TestCase("Int64")]
