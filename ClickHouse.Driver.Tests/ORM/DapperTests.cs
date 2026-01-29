@@ -32,9 +32,7 @@ public class DapperTests : AbstractConnectionTestFixture
     {
         SqlMapper.AddTypeHandler(new ClickHouseDecimalHandler());
         SqlMapper.AddTypeHandler(new DateTimeOffsetHandler());
-#if NET48 || NET5_0_OR_GREATER
         SqlMapper.AddTypeHandler(new ITupleHandler());
-#endif
         SqlMapper.AddTypeMap(typeof(DateTime), DbType.DateTime2);
         SqlMapper.AddTypeMap(typeof(DateTimeOffset), DbType.DateTime2);
         SqlMapper.AddTypeHandler(new ClickHouseIpHandler());
@@ -85,7 +83,6 @@ public class DapperTests : AbstractConnectionTestFixture
         return true;
     }
 
-#if NET48 || NET5_0_OR_GREATER
     private class ITupleHandler : SqlMapper.TypeHandler<ITuple>
     {
         public override void SetValue(IDbDataParameter parameter, ITuple value) => parameter.Value = value;
@@ -101,7 +98,6 @@ public class DapperTests : AbstractConnectionTestFixture
         ClassicAssert.IsInstanceOf<ITuple>(result);
         Assert.That(result.AsEnumerable(), Is.EqualTo(new[] { 1, 2, 3 }).AsCollection);
     }
-#endif
 
     private class DateTimeOffsetHandler : SqlMapper.TypeHandler<DateTimeOffset>
     {
