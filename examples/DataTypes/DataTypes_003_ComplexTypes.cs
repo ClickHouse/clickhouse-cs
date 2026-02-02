@@ -207,7 +207,7 @@ public static class ComplexTypes
             command.AddParameter("id", 1);
             command.AddParameter("person", Tuple.Create("Alice Johnson", (byte)30, "alice@example.com"));
             command.AddParameter("coordinates", Tuple.Create(12.5, 34.7, 56.9));
-            command.AddParameter("point", "Tuple(Int32, Int32)", new List<int> { 1, 2 }); // You can also insert a Tuple from an IList, but you need to specify the type explicitly
+            command.AddParameter("point", new List<int> { 1, 2 });
             await command.ExecuteNonQueryAsync();
         }
 

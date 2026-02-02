@@ -16,26 +16,35 @@ internal static class HttpParameterFormatter
 {
     private const string NullValueString = "\\N";
 
-    public static string Format(ClickHouseDbParameter parameter, TypeSettings settings)
+    /// <summary>
+    /// Formats a parameter value for HTTP transport.
+    /// </summary>
+    /// <param name="parameter">The parameter to format.</param>
+    /// <param name="settings">Type settings for parsing.</param>
+    /// <param name="sqlTypeHint">
+    /// Optional type hint extracted from the SQL query (e.g., from <c>{name:Type}</c>).
+    /// The parameter's explicit <see cref="ClickHouseDbParameter.ClickHouseType"/> takes precedence over this hint.
+    /// </param>
+    /// <returns>The formatted parameter value string.</returns>
+    public static string Format(ClickHouseDbParameter parameter, TypeSettings settings, string sqlTypeHint = null)
     {
-        if (string.IsNullOrWhiteSpace(parameter.ClickHouseType))
+        if (parameter.Value is null or DBNull)
         {
-            if (parameter.Value is null or DBNull)
-            {
-                // Type unknown and value is null so we can't infer it
-                return NullValueString;
-            }
+            return NullValueString;
+        }
 
+        // Explicit parameter type takes precedence, then SQL type hint, then inference
+        var effectiveType = parameter.ClickHouseType ?? sqlTypeHint;
+
+        if (string.IsNullOrWhiteSpace(effectiveType))
+        {
             // Infer type and format accordingly
             var type = TypeConverter.ToClickHouseType(parameter.Value.GetType());
             return Format(type, parameter.Value, false);
         }
-        else
-        {
-            // Type has been provided
-            var type = TypeConverter.ParseClickHouseType(parameter.ClickHouseType, settings);
-            return Format(type, parameter.Value, false);
-        }
+
+        var parsedType = TypeConverter.ParseClickHouseType(effectiveType, settings);
+        return Format(parsedType, parameter.Value, false);
     }
 
     internal static string Format(ClickHouseType type, object value, bool quote)
@@ -51,6 +60,8 @@ internal static class HttpParameterFormatter
                 return Convert.ToString(value, CultureInfo.InvariantCulture);
             case DecimalType dt when value is ClickHouseDecimal chd:
                 return chd.ToString(CultureInfo.InvariantCulture);
+            case DecimalType dt when value is string s:
+                return ClickHouseDecimal.Parse(s, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
             case DecimalType dt:
                 return Convert.ToDecimal(value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
 

@@ -178,11 +178,6 @@ public class DapperTests : AbstractConnectionTestFixture
         var rows = await connection.QueryAsync(sql, parameters);
         IDictionary<string, object> row = rows.Single();
 
-        // Workaround: Dapper does not specify type, so
-        // DateTime is always mapped as CH's 32-bit DateTime
-        if (expected is DateTime dt)
-            expected = dt.AddTicks(-dt.Ticks % TimeSpan.TicksPerSecond);
-
         TestUtilities.AssertEqual(expected, row.Single().Value);
     }
 

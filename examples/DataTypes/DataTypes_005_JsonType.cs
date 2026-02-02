@@ -59,7 +59,6 @@ public static class JsonType
             CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
 
         // All these input types work with String mode
         var rows = new List<object[]>
@@ -134,7 +133,6 @@ public static class JsonType
             CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
 
         var rows = new List<object[]>
         {
@@ -280,7 +278,7 @@ public static class JsonType
         // Insert data - hints ensure proper type handling
         connection.CustomSettings["date_time_input_format"] = "best_effort";
         using var bulkCopy2 = new ClickHouseBulkCopy(connection) { DestinationTableName = typedTable };
-        await bulkCopy2.InitAsync();
+
         await bulkCopy2.WriteToServerAsync(new[]
         {
             new object[] { 1u, """{"name": "Alice", "age": 30, "tags": ["admin", "active"], "metadata": {"created": "2024-01-15T10:30:00Z"}}""" },

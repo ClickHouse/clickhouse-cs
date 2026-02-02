@@ -121,6 +121,10 @@ class Program
         await EphemeralColumns.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(UpsertsWithReplacingMergeTree)}");
+        await UpsertsWithReplacingMergeTree.Run();
+        WaitForUser(isInteractive);
+
         // Selecting Data
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("SELECTING DATA");
