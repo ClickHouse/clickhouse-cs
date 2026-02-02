@@ -38,6 +38,40 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         yield return new TestCaseData("String", new byte[] { 121, 122, 123, 124 }); // Test both formats for String
     }
 
+    public static IEnumerable<TestCaseData> GetStringInsertTestCases()
+    {
+        var testData = new byte[] { 121, 122, 123, 124 };
+
+        // Stream
+        yield return new TestCaseData("String", "string_stream", new MemoryStream(testData), testData)
+            .SetName("ShouldInsertStringFromStream");
+        yield return new TestCaseData("FixedString(4)", "fixedstring_stream", new MemoryStream(testData), testData)
+            .SetName("ShouldInsertFixedStringFromStream");
+
+        // Non-seekable stream
+        yield return new TestCaseData("String", "string_nonseekable_stream", CreateNonSeekableStream(testData), testData)
+            .SetName("ShouldInsertStringFromNonSeekableStream");
+        yield return new TestCaseData("FixedString(4)", "fixedstring_nonseekable_stream", CreateNonSeekableStream(testData), testData)
+            .SetName("ShouldInsertFixedStringFromNonSeekableStream");
+
+        // ReadOnlyMemory
+        yield return new TestCaseData("String", "string_memory", new ReadOnlyMemory<byte>(testData), testData)
+            .SetName("ShouldInsertStringFromReadOnlyMemory");
+        yield return new TestCaseData("FixedString(4)", "fixedstring_memory", new ReadOnlyMemory<byte>(testData), testData)
+            .SetName("ShouldInsertFixedStringFromReadOnlyMemory");
+    }
+
+    private static GZipStream CreateNonSeekableStream(byte[] data)
+    {
+        var compressedStream = new MemoryStream();
+        using (var gzip = new GZipStream(compressedStream, CompressionMode.Compress, leaveOpen: true))
+        {
+            gzip.Write(data, 0, data.Length);
+        }
+        compressedStream.Position = 0;
+        return new GZipStream(compressedStream, CompressionMode.Decompress);
+    }
+
     [Test]
     [TestCaseSource(typeof(BulkCopyTests), nameof(GetInsertSingleValueTestCases))]
     public async Task ShouldExecuteSingleValueInsertViaBulkCopy(string clickHouseType, object insertedValue)
@@ -100,143 +134,17 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     }
 #endif
 
-#if NET6_0_OR_GREATER
     [Test]
-    public async Task ShouldInsertStringFromReadOnlyMemory()
+    [TestCaseSource(typeof(BulkCopyTests), nameof(GetStringInsertTestCases))]
+    public async Task ShouldInsertStringOrFixedString(string columnType, string tableSuffix, object input, byte[] testData)
     {
-        var targetTable = "test.bulk_string_memory";
-        var testData = new byte[] { 121, 122, 123, 124 };
+        var targetTable = $"test.bulk_{tableSuffix}";
 
         await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
-        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value String) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value {columnType}) ENGINE Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
-        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new ReadOnlyMemory<byte>(testData) }, 1));
-
-        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
-
-        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
-        ClassicAssert.IsTrue(reader.Read(), "Cannot read inserted data");
-        var data = reader.GetValue(0);
-        Assert.That(data, Is.EqualTo(testData));
-    }
-
-    [Test]
-    public async Task ShouldInsertFixedStringFromReadOnlyMemory()
-    {
-        var targetTable = "test.bulk_fixedstring_memory";
-        var testData = new byte[] { 121, 122, 123, 124 };
-
-        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
-        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value FixedString(4)) ENGINE Memory");
-
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
-        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new ReadOnlyMemory<byte>(testData) }, 1));
-
-        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
-
-        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
-        ClassicAssert.IsTrue(reader.Read(), "Cannot read inserted data");
-        var data = reader.GetValue(0);
-        Assert.That(data, Is.EqualTo(testData));
-    }
-#endif
-
-    [Test]
-    public async Task ShouldInsertStringFromStream()
-    {
-        var targetTable = "test.bulk_string_stream";
-        var testData = new byte[] { 121, 122, 123, 124 };
-
-        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
-        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value String) ENGINE Memory");
-
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
-        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new MemoryStream(testData) }, 1));
-
-        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
-
-        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
-        ClassicAssert.IsTrue(reader.Read(), "Cannot read inserted data");
-        var data = reader.GetValue(0);
-        Assert.That(data, Is.EqualTo(testData));
-    }
-
-    [Test]
-    public async Task ShouldInsertFixedStringFromStream()
-    {
-        var targetTable = "test.bulk_fixedstring_stream";
-        var testData = new byte[] { 121, 122, 123, 124 };
-
-        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
-        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value FixedString(4)) ENGINE Memory");
-
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
-        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new MemoryStream(testData) }, 1));
-
-        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
-
-        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
-        ClassicAssert.IsTrue(reader.Read(), "Cannot read inserted data");
-        var data = reader.GetValue(0);
-        Assert.That(data, Is.EqualTo(testData));
-    }
-
-    [Test]
-    public async Task ShouldInsertStringFromNonSeekableStream()
-    {
-        var targetTable = "test.bulk_string_nonseekable_stream";
-        var testData = new byte[] { 121, 122, 123, 124 };
-
-        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
-        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value String) ENGINE Memory");
-
-        // Compress data, then decompress via GZipStream (which is non-seekable)
-        using var compressedStream = new MemoryStream();
-        using (var gzip = new GZipStream(compressedStream, CompressionMode.Compress, leaveOpen: true))
-        {
-            gzip.Write(testData, 0, testData.Length);
-        }
-        compressedStream.Position = 0;
-        using var decompressStream = new GZipStream(compressedStream, CompressionMode.Decompress);
-
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
-        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { decompressStream }, 1));
-
-        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
-
-        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
-        ClassicAssert.IsTrue(reader.Read(), "Cannot read inserted data");
-        var data = reader.GetValue(0);
-        Assert.That(data, Is.EqualTo(testData));
-    }
-
-    [Test]
-    public async Task ShouldInsertFixedStringFromNonSeekableStream()
-    {
-        var targetTable = "test.bulk_fixedstring_nonseekable_stream";
-        var testData = new byte[] { 121, 122, 123, 124 };
-
-        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
-        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value FixedString(4)) ENGINE Memory");
-
-        // Compress data, then decompress via GZipStream (which is non-seekable)
-        using var compressedStream = new MemoryStream();
-        using (var gzip = new GZipStream(compressedStream, CompressionMode.Compress, leaveOpen: true))
-        {
-            gzip.Write(testData, 0, testData.Length);
-        }
-        compressedStream.Position = 0;
-        using var decompressStream = new GZipStream(compressedStream, CompressionMode.Decompress);
-
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
-        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { decompressStream }, 1));
+        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { input }, 1));
 
         Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
 
@@ -257,15 +165,13 @@ public class BulkCopyTests : AbstractConnectionTestFixture
 
         // Compress data, then decompress via GZipStream (which is non-seekable)
         using var compressedStream = new MemoryStream();
-        using (var gzip = new System.IO.Compression.GZipStream(compressedStream, System.IO.Compression.CompressionMode.Compress, leaveOpen: true))
+        using (var gzip = new GZipStream(compressedStream, CompressionMode.Compress, leaveOpen: true))
         {
             gzip.Write(tooLongData, 0, tooLongData.Length);
         }
         compressedStream.Position = 0;
-        using var decompressStream = new System.IO.Compression.GZipStream(compressedStream, System.IO.Compression.CompressionMode.Decompress);
-
+        using var decompressStream = new GZipStream(compressedStream, CompressionMode.Decompress);
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
 
         // This should fail client-side with a clear error message about stream length mismatch
         var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
@@ -285,7 +191,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (fs FixedString(4), num Int32) ENGINE Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
 
         // MemoryStream is seekable, so we can validate length upfront
         var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
@@ -295,7 +200,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         Assert.That(ex.InnerException.Message, Does.Contain("Stream length 6 does not match FixedString(4)"));
     }
 
-#if NET6_0_OR_GREATER
     [Test]
     public async Task WriteToServerAsync_FixedStringWithReadOnlyMemoryTooLong_ThrowsArgumentException()
     {
@@ -306,7 +210,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (fs FixedString(4), num Int32) ENGINE Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
 
         var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
             await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new ReadOnlyMemory<byte>(tooLongData), 42 }, 1)));
@@ -314,7 +217,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         Assert.That(ex.InnerException, Is.TypeOf<ArgumentException>());
         Assert.That(ex.InnerException.Message, Does.Contain("ReadOnlyMemory<byte> length 6 does not match FixedString(4)"));
     }
-#endif
 
     [Test]
     public async Task ShouldReadStringAsByteArrayWithInvalidUtf8()
@@ -328,7 +230,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
 
         // Insert using byte[]
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { invalidUtf8 }, 1));
 
         Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
@@ -346,33 +247,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task ShouldReadStringAsByteArrayWithValidUtf8()
-    {
-        // Valid UTF-8 bytes for "hello"
-        var validUtf8 = new byte[] { 0x68, 0x65, 0x6C, 0x6C, 0x6F };
-
-        var targetTable = "test.bulk_string_valid_utf8_as_bytes";
-        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
-        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value String) ENGINE Memory");
-
-        // Insert using string
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
-        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { "hello" }, 1));
-
-        // Read back with ReadStringsAsByteArrays=true
-        var cb = TestUtilities.GetConnectionStringBuilder();
-        cb.ReadStringsAsByteArrays = true;
-        using var conn2 = new ClickHouseConnection(cb.ToString());
-
-        using var reader = await conn2.ExecuteReaderAsync($"SELECT * from {targetTable}");
-        Assert.That(reader.Read(), Is.True);
-        var data = reader.GetValue(0);
-        Assert.That(data, Is.TypeOf<byte[]>());
-        Assert.That(data, Is.EqualTo(validUtf8));
-    }
-
-    [Test]
     public async Task ShouldReadStringAsStringByDefault()
     {
         var targetTable = "test.bulk_string_default_read";
@@ -380,7 +254,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value String) ENGINE Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { "hello" }, 1));
 
         // Read back without ReadStringsAsByteArrays (default is false)
