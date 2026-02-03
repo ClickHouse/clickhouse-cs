@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Diagnostic;
 using ClickHouse.Driver.Http;
@@ -151,7 +152,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <inheritdoc />
     public Task<int> ExecuteNonQueryAsync(
         string sql,
-        IEnumerable<ClickHouseParameter> parameters = null,
+        IEnumerable<ClickHouseDbParameter> parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
@@ -161,7 +162,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <inheritdoc />
     public Task<T> ExecuteScalarAsync<T>(
         string sql,
-        IEnumerable<ClickHouseParameter> parameters = null,
+        IEnumerable<ClickHouseDbParameter> parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
@@ -171,7 +172,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <inheritdoc />
     public Task<ClickHouseDataReader> ExecuteReaderAsync(
         string sql,
-        IEnumerable<ClickHouseParameter> parameters = null,
+        IEnumerable<ClickHouseDbParameter> parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
@@ -298,10 +299,10 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         string sessionId = Settings.UseSession ? Settings.SessionId : null;
-        if (queryOverride != null)
+        if (queryOverride != null && queryOverride.UseSession != null)
         {
             // Prioritize query-level setting
-            sessionId = queryOverride.UseSession ? queryOverride.SessionId : null;
+            sessionId = queryOverride.UseSession.Value ? queryOverride.SessionId : null;
         }
 
         return new ClickHouseUriBuilder(_serverUri)

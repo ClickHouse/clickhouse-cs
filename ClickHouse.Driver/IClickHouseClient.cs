@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Json;
 
@@ -30,7 +31,7 @@ public interface IClickHouseClient : IDisposable
     /// <returns>The number of rows affected.</returns>
     Task<int> ExecuteNonQueryAsync(
         string sql,
-        IEnumerable<ClickHouseParameter> parameters = null,
+        IEnumerable<ClickHouseDbParameter> parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default);
 
@@ -45,7 +46,7 @@ public interface IClickHouseClient : IDisposable
     /// <returns>The first column of the first row, or default if no results.</returns>
     Task<T> ExecuteScalarAsync<T>(
         string sql,
-        IEnumerable<ClickHouseParameter> parameters = null,
+        IEnumerable<ClickHouseDbParameter> parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default);
 
@@ -59,7 +60,7 @@ public interface IClickHouseClient : IDisposable
     /// <returns>A data reader for the query results.</returns>
     Task<ClickHouseDataReader> ExecuteReaderAsync(
         string sql,
-        IEnumerable<ClickHouseParameter> parameters = null,
+        IEnumerable<ClickHouseDbParameter> parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default);
 

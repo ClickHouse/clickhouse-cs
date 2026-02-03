@@ -40,9 +40,10 @@ public class QueryOptions
 
     /// <summary>
     /// Gets or sets whether to use sessions for the connection.
-    /// Default: false
+    /// If set to null, will not override client settings.
+    /// Default: null
     /// </summary>
-    public bool UseSession { get; init; } = ClickHouseDefaults.UseSession;
+    public bool? UseSession { get; init; }
 
     /// <summary>
     /// Gets or sets the session ID to use (the value is only used if UseSession is true).
