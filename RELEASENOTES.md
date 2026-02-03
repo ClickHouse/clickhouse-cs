@@ -7,6 +7,8 @@ Coinciding with the 1.0.0 release of the driver, we have greatly expanded the do
  * Usage examples: https://github.com/ClickHouse/clickhouse-cs/tree/main/examples
 
 **Breaking Changes:**
+* **Dropped support for .NET Framework and .NET Standard.** The library now targets only `net6.0`, `net8.0`, `net9.0`, and `net10.0`. Removed support for `net462`, `net48`, and `netstandard2.1`. If you are using .NET Framework, you will need to stay on the previous version or migrate to .NET 6.0+.
+
 * **Removed feature discovery query from `OpenAsync`.** The connection's `OpenAsync()` method no longer executes `SELECT version()` to discover server capabilities. This makes connection opening instantaneous (no network round-trip) but removes the `SupportedFeatures` property from `ClickHouseConnection`. The `ServerVersion` property now throws `InvalidOperationException`.
 
   **Migration guidance:** If you need to check the server version:

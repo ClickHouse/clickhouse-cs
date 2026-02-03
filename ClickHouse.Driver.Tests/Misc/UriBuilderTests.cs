@@ -7,7 +7,6 @@ namespace ClickHouse.Driver.Tests.Misc;
 
 public class UriBuilderTests
 {
-#if !NET462 && !NET48
     [Test]
     public void ShouldSetUriParametersCorrectly()
     {
@@ -291,5 +290,4 @@ public class UriBuilderTests
         // Now GetEffectiveQueryId should return the custom ID, not the cached GUID
         Assert.That(uriBuilder.GetEffectiveQueryId(), Is.EqualTo("my-custom-id"));
     }
-#endif
 }

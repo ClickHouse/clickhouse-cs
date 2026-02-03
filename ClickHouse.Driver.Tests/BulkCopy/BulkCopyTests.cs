@@ -510,7 +510,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
     }
 
-#if NET48 || NET5_0_OR_GREATER
     [Test]
     public async Task ShouldInsertNestedTable()
     {
@@ -533,7 +532,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             Assert.That(await connection.ExecuteScalarAsync($"SELECT count() FROM {targetTable}"), Is.EqualTo(1));
         });
     }
-#endif
 
     [Test]
     public async Task ShouldInsertDoubleNestedTable()
