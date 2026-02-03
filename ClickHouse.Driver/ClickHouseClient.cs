@@ -325,7 +325,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         var userAgentInfo = UserAgentProvider.Info;
 
         // Priority: override > connection-level bearer token > basic auth
-        var bearerToken = queryOverride.BearerToken ?? Settings.BearerToken;
+        var bearerToken = queryOverride?.BearerToken ?? Settings.BearerToken;
         if (!string.IsNullOrEmpty(bearerToken))
         {
             headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
@@ -353,7 +353,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         ApplyCustomHeaders(headers, Settings.CustomHeaders);
 
         // Override
-        ApplyCustomHeaders(headers, queryOverride.CustomHeaders);
+        ApplyCustomHeaders(headers, queryOverride?.CustomHeaders);
     }
 
     private static void ApplyCustomHeaders(HttpRequestHeaders requestHeaders, IReadOnlyDictionary<string, string> customHeaders)
