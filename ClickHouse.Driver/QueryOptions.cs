@@ -60,4 +60,10 @@ public class QueryOptions
     /// Default: null
     /// </summary>
     public string BearerToken { get; init; }
+
+    /// <summary>
+    /// Gets or sets the timeout for operations. If set, overrides the client settings.
+    /// Default: null
+    /// </summary>
+    public TimeSpan? Timeout { get; init; }
 }
