@@ -15,9 +15,9 @@ public sealed class InsertOptions : QueryOptions
     public int BatchSize { get; init; } = 100_000;
 
     /// <summary>
-    /// Gets or sets the maximum number of parallel batch insert operations. Default is 4.
+    /// Gets or sets the maximum number of parallel batch insert operations. Default is 1.
     /// </summary>
-    public int MaxDegreeOfParallelism { get; init; } = 4;
+    public int MaxDegreeOfParallelism { get; init; } = 1;
 
     /// <summary>
     /// Gets or sets the row binary format to use. Default is RowBinary.
