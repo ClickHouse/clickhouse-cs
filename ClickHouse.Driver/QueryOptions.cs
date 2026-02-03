@@ -47,7 +47,6 @@ public class QueryOptions
 
     /// <summary>
     /// Gets or sets the session ID to use (the value is only used if UseSession is true).
-    /// If null and UseSession is true, a new GUID will be generated.
     /// Default: null
     /// </summary>
     public string SessionId { get; init; }
