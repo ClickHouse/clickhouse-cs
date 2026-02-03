@@ -99,14 +99,16 @@ public interface IClickHouseClient : IDisposable
     /// <param name="stream">The stream containing the data to insert.</param>
     /// <param name="format">The ClickHouse format of the data (e.g., "CSV", "JSONEachRow", "Parquet").</param>
     /// <param name="columns">Optional column names. If null, all columns are assumed in table order.</param>
+    /// <param name="useCompression">Whether to compress the stream before sending (default: true)</param>
     /// <param name="options">Optional insert options.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task InsertRawStreamAsync(
+    Task<HttpResponseMessage> InsertRawStreamAsync(
         string table,
         Stream stream,
         string format,
         IEnumerable<string> columns = null,
+        bool useCompression = true,
         InsertOptions options = null,
         CancellationToken cancellationToken = default);
 

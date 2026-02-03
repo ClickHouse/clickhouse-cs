@@ -202,11 +202,12 @@ public sealed class ClickHouseClient : IClickHouseClient
     }
 
     /// <inheritdoc />
-    public Task InsertRawStreamAsync(
+    public Task<HttpResponseMessage> InsertRawStreamAsync(
         string table,
         Stream stream,
         string format,
         IEnumerable<string> columns = null,
+        bool useCompression = true,
         InsertOptions options = null,
         CancellationToken cancellationToken = default)
     {
