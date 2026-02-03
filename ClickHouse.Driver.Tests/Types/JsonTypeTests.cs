@@ -235,12 +235,12 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             uint128Value
         ).SetName("UInt128");
 
-        // FixedString(10) - Fixed-length string
+        // FixedString(10) - Fixed-length string (returns string by default)
         yield return new TestCaseData(
             "code FixedString(10)",
             "{\"code\": \"ABC1234567\"}",
             "code",
-            Encoding.UTF8.GetBytes("ABC1234567")
+            "ABC1234567"
         ).SetName("FixedString(10)");
     }
     

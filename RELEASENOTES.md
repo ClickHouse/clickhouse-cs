@@ -97,6 +97,8 @@ Coinciding with the 1.0.0 release of the driver, we have greatly expanded the do
    - `JsonWriteMode.String` (default): Accepts `JsonObject`, `JsonNode`, strings, and any object (serialized via `System.Text.Json.JsonSerializer`). Sets Server setting `input_format_binary_read_json_as_string=1`.
    - `JsonWriteMode.Binary`: Only accepts registered POCO types with full type hint support and custom path attributes. Writing `string` or `JsonNode` values with `JsonWriteMode.Binary` throws an exception.
  * Added support for QBit data type. QBit is a transposed vector column, designed to allow the user to choose a desired quantization level at runtime, speeding up approximate similarity searches. See the GitHub repo for usage examples.
+ * Added support for writing `ReadOnlyMemory<byte>` and `Stream` values to String and FixedString columns via BulkCopy.
+ * Added `ReadStringsAsByteArrays` connection string setting to read String columns as `byte[]` instead of `string`. This is useful when storing binary data in String columns that may not be valid UTF-8.
  * Added support for setting roles at the connection and command levels.
  * Added support for custom headers at the connection level.
  * Added support for JWT/Bearer token authentication at both connection and command levels.

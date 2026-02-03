@@ -53,6 +53,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [DataTypes_001_SimpleTypes.cs](DataTypes/DataTypes_001_SimpleTypes.cs) - Simple/scalar data types: integers (Int8-Int256), floats, decimals (ClickHouseDecimal), boolean
 - [DataTypes_002_DateTimeHandling.cs](DataTypes/DataTypes_002_DateTimeHandling.cs) - Comprehensive guide to DateTime, DateTime64, Date, Date32, timezones, DateTime.Kind behavior, and DateTimeOffset
 - [DataTypes_003_ComplexTypes.cs](DataTypes/DataTypes_003_ComplexTypes.cs) - Working with complex data types: Arrays, Maps, Tuples, IP addresses, and Nested structures
+- [DataTypes_004_StringHandling.cs](DataTypes/DataTypes_004_StringHandling.cs) - String and FixedString handling, binary data, ReadStringsAsByteArrays setting, and writing from Streams
 - [DataTypes_005_JsonType.cs](DataTypes/DataTypes_005_JsonType.cs) - Working with JSON type: reading as JsonObject or string, writing from various sources, and configuring JsonReadMode/JsonWriteMode
 - [DataTypes_006_Geometry.cs](DataTypes/DataTypes_006_Geometry.cs) - Geometry types: Point, Polygon, WKT parsing, H3 geospatial indexing, point-in-polygon checks, and great circle distance calculations
 - [Vector_001_QBitSimilaritySearch.cs](DataTypes/Vector_001_QBitSimilaritySearch.cs) - Vector similarity search using quantized binary embeddings
