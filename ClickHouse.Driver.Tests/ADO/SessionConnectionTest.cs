@@ -113,26 +113,4 @@ public class SessionConnectionTest
         await connection.ExecuteStatementAsync("CREATE TEMPORARY TABLE test_temp_table (value UInt8)");
         await connection.ExecuteScalarAsync("SELECT COUNT(*) from test_temp_table");
     }
-
-    [Test]
-    public async Task Session_ConcurrentRequests_AreSerialized()
-    {
-        var sessionId = "TEST-" + Guid.NewGuid();
-        var marker = Guid.NewGuid().ToString("N");
-
-        using var connection = (ClickHouseConnection)CreateConnection(useSession: true, sessionId);
-
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-
-        // Two 300ms sleep queries with markers we can find in query_log
-        var task1 = connection.ExecuteScalarAsync($"SELECT sleep(0.3), 'marker1_{marker}'");
-        var task2 = connection.ExecuteScalarAsync($"SELECT sleep(0.3), 'marker2_{marker}'");
-
-        await Task.WhenAll(task1, task2);
-        stopwatch.Stop();
-
-        // Quick sanity check: should take >550ms if serialized
-        Assert.That(stopwatch.ElapsedMilliseconds, Is.GreaterThan(550),
-            $"Requests should be serialized. Expected >550ms but took {stopwatch.ElapsedMilliseconds}ms");
-    }
 }

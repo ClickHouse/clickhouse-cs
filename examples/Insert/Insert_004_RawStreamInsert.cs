@@ -13,22 +13,21 @@ public static class RawStreamInsert
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
-
-        await InsertFromFile(connection);
-        await InsertFromMemory(connection);
+        using var client = new ClickHouseClient("Host=localhost");
+        
+        await InsertFromFile(client);
+        await InsertFromMemory(client);
     }
 
     /// <summary>
     /// Demonstrates inserting data from a CSV file stream.
     /// </summary>
-    private static async Task InsertFromFile(ClickHouseConnection connection)
+    private static async Task InsertFromFile(ClickHouseClient client)
     {
         var tableName = "example_raw_stream_file";
 
         // Create a test table matching the CSV structure
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 Id UInt64,
@@ -52,7 +51,7 @@ public static class RawStreamInsert
         // For older versions, use "CSVWithNames" or use the setting input_format_csv_skip_first_lines
         await using (var fileStream = File.OpenRead(csvFile))
         {
-            using var response = await connection.InsertRawStreamAsync(
+            using var response = await client.InsertRawStreamAsync(
                 table: tableName,
                 stream: fileStream,
                 format: "CSV");
@@ -62,7 +61,7 @@ public static class RawStreamInsert
 
         // Query and display results
         Console.WriteLine("   Querying inserted data:");
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {tableName} ORDER BY Id"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT * FROM {tableName} ORDER BY Id"))
         {
             Console.WriteLine("   ID\tName\t\tValue");
             Console.WriteLine("   --\t----\t\t-----");
@@ -77,23 +76,23 @@ public static class RawStreamInsert
             }
         }
 
-        var totalCount = await connection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        var totalCount = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
         Console.WriteLine($"\n   Total rows: {totalCount}");
 
         // Clean up table
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         Console.WriteLine($"\n   Table '{tableName}' dropped\n");
     }
 
     /// <summary>
     /// Demonstrates inserting data from in-memory streams in various formats.
     /// </summary>
-    private static async Task InsertFromMemory(ClickHouseConnection connection)
+    private static async Task InsertFromMemory(ClickHouseClient client)
     {
         var tableName = "example_raw_stream_memory";
 
         // Create a test table
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 id UInt64,
@@ -118,7 +117,7 @@ public static class RawStreamInsert
 
         using (var jsonStream = new MemoryStream(Encoding.UTF8.GetBytes(jsonData)))
         {
-            using var response = await connection.InsertRawStreamAsync(
+            using var response = await client.InsertRawStreamAsync(
                 table: tableName,
                 stream: jsonStream,
                 format: "JSONEachRow",
@@ -129,7 +128,7 @@ public static class RawStreamInsert
 
         // Query and display all results
         Console.WriteLine("   Querying all inserted data:");
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {tableName} ORDER BY id"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT * FROM {tableName} ORDER BY id"))
         {
             Console.WriteLine("   ID\tProduct\t\t\tPrice\t\tIn Stock");
             Console.WriteLine("   --\t-------\t\t\t-----\t\t--------");
@@ -145,11 +144,11 @@ public static class RawStreamInsert
             }
         }
 
-        var totalCount = await connection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        var totalCount = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
         Console.WriteLine($"\n   Total rows: {totalCount}");
 
         // Clean up table
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         Console.WriteLine($"\n   Table '{tableName}' dropped");
     }
 }

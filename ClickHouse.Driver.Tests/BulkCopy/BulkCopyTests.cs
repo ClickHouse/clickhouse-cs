@@ -731,22 +731,22 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task ShouldInsertJsonFromAnonymousObject_BinaryMode()
     {
-        using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         var targetTable = "test." + SanitizeTableName($"bulk_json_anon");
-        await binaryConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
-        await binaryConnection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
+        await binaryClient.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await binaryClient.ExecuteNonQueryAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
 
-        using var bulkCopy = new ClickHouseBulkCopy(binaryConnection)
+        using var bulkCopy = new ClickHouseBulkCopy(binaryClient.CreateConnection())
         {
             DestinationTableName = targetTable,
         };
 
         var obj = new { name = "test", count = 42, active = true, arrayBool = new bool[] { true, false } };
-        binaryConnection.RegisterJsonSerializationType(obj.GetType());
-        await bulkCopy.InitAsync();
+        binaryClient.RegisterJsonSerializationType(obj.GetType());
+
         await bulkCopy.WriteToServerAsync([[obj]]);
 
-        using var reader = await binaryConnection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        using var reader = await binaryClient.ExecuteReaderAsync($"SELECT * from {targetTable}");
         Assert.That(reader.Read(), Is.True);
 
         var result = (JsonObject)reader.GetValue(0);
@@ -773,7 +773,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         };
 
         var obj = new { name = "test", count = 42, active = true, arrayBool = new bool[] { true, false } };
-        connection.RegisterJsonSerializationType(obj.GetType());
+        client.RegisterJsonSerializationType(obj.GetType());
         await bulkCopy.WriteToServerAsync([[obj]]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");

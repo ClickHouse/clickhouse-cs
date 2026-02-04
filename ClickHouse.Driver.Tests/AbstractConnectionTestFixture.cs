@@ -9,13 +9,13 @@ namespace ClickHouse.Driver.Tests;
 public abstract class AbstractConnectionTestFixture : IDisposable
 {
     protected readonly ClickHouseConnection connection;
+    protected readonly ClickHouseClient client;
 
     protected AbstractConnectionTestFixture()
     {
-        connection = TestUtilities.GetTestClickHouseConnection();
-        using var command = connection.CreateCommand();
-        command.CommandText = "CREATE DATABASE IF NOT EXISTS test;";
-        command.ExecuteScalar();
+        client = TestUtilities.GetTestClickHouseClient();
+        connection = client.CreateConnection();
+        client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test;").GetAwaiter().GetResult();
     }
 
     protected static string SanitizeTableName(string input)

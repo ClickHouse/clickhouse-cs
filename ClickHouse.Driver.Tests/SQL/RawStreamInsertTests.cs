@@ -56,7 +56,7 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
         var columns = useColumns ? new[] { "id", "name", "value" } : null;
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(data));
-        using var response = await connection.InsertRawStreamAsync(
+        using var response = await client.InsertRawStreamAsync(
             table: tableName,
             stream: stream,
             format: format,
@@ -88,7 +88,7 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
             """);
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(JsonCompactEachRowData));
-        using var response = await connection.InsertRawStreamAsync(
+        using var response = await client.InsertRawStreamAsync(
             table: "test.raw_json_compact",
             stream: stream,
             format: "JSONCompactEachRow",
@@ -120,18 +120,18 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
         var queryId = "test-raw-stream-insert-" + System.Guid.NewGuid().ToString("N");
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(CsvDataNoHeader));
-        using var response = await connection.InsertRawStreamAsync(
+        using var response = await client.InsertRawStreamAsync(
             table: "test.raw_query_id",
             stream: stream,
             format: "CSV",
             columns: new[] { "id", "name", "value" },
-            queryId: queryId);
+            options: new QueryOptions { QueryId = queryId});
 
         Assert.That(response.IsSuccessStatusCode, Is.True);
 
         // Verify query ID from response header
-        var returnedQueryId = ClickHouseConnection.ExtractQueryId(response);
-        Assert.That(returnedQueryId, Is.EqualTo(queryId));
+        var queryResult = new QueryResult(response);
+        Assert.That(queryResult.QueryId, Is.EqualTo(queryId));
     }
 
     [Test]
@@ -154,7 +154,7 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
             """;
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(partialCsv));
-        using var response = await connection.InsertRawStreamAsync(
+        using var response = await client.InsertRawStreamAsync(
             table: "test.raw_partial_columns",
             stream: stream,
             format: "CSV",

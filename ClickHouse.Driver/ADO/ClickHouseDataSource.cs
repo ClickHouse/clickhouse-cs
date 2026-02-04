@@ -10,8 +10,8 @@ namespace ClickHouse.Driver.ADO;
 
 public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
 {
-    private readonly HttpClient httpClient;
-    private readonly bool disposeHttpClient;
+    private ClickHouseClient client;
+    private readonly bool disposeClient;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseDataSource"/> class using provided HttpClient.
@@ -22,12 +22,12 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     /// <param name="disposeHttpClient">dispose of the passed-in instance of HttpClient</param>
     public ClickHouseDataSource(string connectionString, HttpClient httpClient = null, bool disposeHttpClient = true)
     {
-        Settings = new ClickHouseClientSettings(connectionString)
+        var settings = new ClickHouseClientSettings(connectionString)
         {
             HttpClient = httpClient,
         };
-        this.httpClient = httpClient;
-        this.disposeHttpClient = disposeHttpClient;
+        client = new ClickHouseClient(settings);
+        disposeClient = disposeHttpClient;
     }
 
     /// <summary>
@@ -69,11 +69,13 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     {
         ArgumentNullException.ThrowIfNull(httpClientFactory);
         ArgumentNullException.ThrowIfNull(httpClientName);
-        Settings = new ClickHouseClientSettings(connectionString)
+        var settings = new ClickHouseClientSettings(connectionString)
         {
             HttpClientFactory = httpClientFactory,
             HttpClientName = httpClientName,
         };
+        client = new ClickHouseClient(settings);
+        disposeClient = true;
     }
 
     /// <summary>
@@ -91,22 +93,29 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     /// </remarks>
     public ClickHouseDataSource(ClickHouseClientSettings settings)
     {
-        Settings = settings;
+        client = new ClickHouseClient(settings);
+        disposeClient = true;
     }
 
-    public ClickHouseClientSettings Settings { get; private set; }
+    public ClickHouseClientSettings Settings => client.Settings;
 
-    public override string ConnectionString => ClickHouseConnectionStringBuilder.FromSettings(Settings).ToString();
+    public override string ConnectionString => client.ConnectionStringBuilder.ToString();
 
     public ILoggerFactory LoggerFactory
     {
         get => Settings.LoggerFactory;
         set
         {
-            Settings = new ClickHouseClientSettings(Settings)
+            var newSettings = new ClickHouseClientSettings(Settings)
             {
                 LoggerFactory = value,
             };
+            var oldClient = client;
+            client = new ClickHouseClient(newSettings);
+            if (disposeClient)
+            {
+                oldClient?.Dispose();
+            }
         }
     }
 
@@ -114,15 +123,15 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     {
         base.Dispose(disposing);
 
-        if (disposing && disposeHttpClient)
+        if (disposing && disposeClient)
         {
-            httpClient?.Dispose();
+            client?.Dispose();
         }
     }
 
     protected override DbConnection CreateDbConnection()
     {
-        return new ClickHouseConnection(Settings);
+        return new ClickHouseConnection(client);
     }
 
     public new ClickHouseConnection CreateConnection() => (ClickHouseConnection)CreateDbConnection();

@@ -123,7 +123,7 @@ public class JsonModeTests
         {
             DestinationTableName = tableName,
         };
-        await bulkCopy.InitAsync();
+        
 
         var rows = new[]
         {
@@ -162,7 +162,7 @@ public class JsonModeTests
         {
             DestinationTableName = tableName,
         };
-        await bulkCopy.InitAsync();
+        
 
         var jsonObj = new JsonObject
         {
@@ -200,7 +200,7 @@ public class JsonModeTests
         {
             DestinationTableName = tableName,
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync(new[] { new object[] { originalJson } });
 
         // Read back as string
@@ -234,7 +234,7 @@ public class JsonModeTests
         {
             DestinationTableName = tableName,
         };
-        await bulkCopy.InitAsync();
+        
 
         var jsonObj = new JsonObject
         {
@@ -271,7 +271,7 @@ public class JsonModeTests
         {
             DestinationTableName = tableName,
         };
-        await bulkCopy.InitAsync();
+        
 
         // Create a JsonNode (not JsonObject) by parsing
         JsonNode jsonNode = JsonNode.Parse("{\"name\": \"Eve\", \"score\": 500}");
@@ -306,7 +306,7 @@ public class JsonModeTests
         {
             DestinationTableName = tableName,
         };
-        await bulkCopy.InitAsync();
+        
 
         // Serialize POCO to JSON string manually
         var jsonString = System.Text.Json.JsonSerializer.Serialize(new { name = "Frank", score = 600 });
@@ -364,7 +364,7 @@ public class JsonModeTests
             DestinationTableName = tableName,
             ColumnNames = ["Document", "Id"],
         };
-        await bulkCopy.InitAsync();
+        
 
         // JSON with ISO 8601 datetime format (e.g., "2024-07-09T14:06:05.083Z")
         var jsonDocument = """{"$type":"AwsIamUserModel","Id":"AIDA5BUDWVFSA4MIBMX3J","DisplayName":"lambda_UpdateAlias","SystemCreationTime":"2024-07-09T14:06:05.083Z"}""";
@@ -398,7 +398,7 @@ public class JsonModeTests
         {
             DestinationTableName = tableName,
         };
-        await bulkCopy.InitAsync();
+        
 
         var jsonString = """{"name": "test"}""";
 
@@ -423,7 +423,7 @@ public class JsonModeTests
         {
             DestinationTableName = tableName,
         };
-        await bulkCopy.InitAsync();
+        
 
         var jsonObj = new JsonObject { ["name"] = "test" };
 
@@ -448,7 +448,7 @@ public class JsonModeTests
         {
             DestinationTableName = tableName,
         };
-        await bulkCopy.InitAsync();
+        
 
         var poco = new { name = "test", value = 42 };
         await bulkCopy.WriteToServerAsync(new[] { new object[] { poco } });
@@ -527,7 +527,7 @@ public class JsonModeTests
         };
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync(new[] { new object[] { 1u, original } });
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {tableName}");
@@ -559,7 +559,7 @@ public class JsonModeTests
         var original = """{"name":"test","value":123}""";
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync(new[] { new object[] { 1u, original } });
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {tableName}");
@@ -597,7 +597,7 @@ public class JsonModeTests
         var original = new { name = "poco_test", score = 99, enabled = true };
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync(new[] { new object[] { 1u, original } });
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {tableName}");
@@ -637,7 +637,7 @@ public class JsonModeTests
         };
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync(new[] { new object[] { 1u, original } });
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {tableName}");
@@ -671,7 +671,7 @@ public class JsonModeTests
         };
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync(rows);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT id, data FROM {tableName} ORDER BY id");

@@ -16,27 +16,17 @@ namespace ClickHouse.Driver.Tests.Logging;
 public class HttpClientLoggingTests
 {
     [Test]
-    public void ConnectionOpen_DefaultConnection_LogsHttpClientAndHandlerConfigAtTraceLevel()
+    public void ClientCreated_DefaultConnection_LogsHttpClientAndHandlerConfigAtTraceLevel()
     {
         var factory = new CapturingLoggerFactory();
         var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder())
         {
             LoggerFactory = factory,
         };
-        var connection = new ClickHouseConnection(settings);
-
-        try
-        {
-            // This will fail to connect but should log the config
-            connection.Open();
-        }
-        catch
-        {
-            // Ignore connection errors - we're just testing logging
-        }
-
+        var client = new ClickHouseClient(settings);
+        
         Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.Connection));
-        var logger = factory.Loggers[ClickHouseLogCategories.Connection];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged HttpClient config
         var httpClientConfigLog = logger.Logs.Find(l => l.EventId == LoggingHelpers.HttpClientConfigEventId);
@@ -53,25 +43,16 @@ public class HttpClientLoggingTests
     }
 
     [Test]
-    public void ConnectionOpen_DefaultConnection_LogsSocketsHttpHandlerType()
+    public void ClientCreated_DefaultConnection_LogsSocketsHttpHandlerType()
     {
         var factory = new CapturingLoggerFactory();
         var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder())
         {
             LoggerFactory = factory,
         };
-        var connection = new ClickHouseConnection(settings);
+        var client = new ClickHouseClient(settings);
 
-        try
-        {
-            connection.Open();
-        }
-        catch
-        {
-            // Ignore connection errors
-        }
-
-        var logger = factory.Loggers[ClickHouseLogCategories.Connection];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
         var handlerConfigLog = logger.Logs.Find(l => l.EventId == LoggingHelpers.HttpClientHandlerConfigEventId);
 
         Assert.That(handlerConfigLog, Is.Not.Null);
@@ -81,7 +62,7 @@ public class HttpClientLoggingTests
     }
 
     [Test]
-    public void ConnectionOpen_CustomHttpClientWithHandlerSettings_LogsCustomConfiguration()
+    public void ClientCreated_CustomHttpClientWithHandlerSettings_LogsCustomConfiguration()
     {
         var factory = new CapturingLoggerFactory();
         var handler = new HttpClientHandler
@@ -96,18 +77,9 @@ public class HttpClientLoggingTests
             HttpClient =  httpClient,
             LoggerFactory = factory,
         };
-        var connection = new ClickHouseConnection(settings);
+        var client = new ClickHouseClient(settings);
 
-        try
-        {
-            connection.Open();
-        }
-        catch
-        {
-            // Ignore connection errors
-        }
-
-        var logger = factory.Loggers[ClickHouseLogCategories.Connection];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
         var handlerConfigLog = logger.Logs.Find(l => l.EventId == LoggingHelpers.HttpClientHandlerConfigEventId);
 
         Assert.That(handlerConfigLog, Is.Not.Null);
@@ -115,7 +87,7 @@ public class HttpClientLoggingTests
     }
 
     [Test]
-    public void ConnectionOpen_UseSessionEnabled_LogsHttpClientAndHandlerConfig()
+    public void ClientCreated_UseSessionEnabled_LogsHttpClientAndHandlerConfig()
     {
         var factory = new CapturingLoggerFactory();
         var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder())
@@ -123,19 +95,10 @@ public class HttpClientLoggingTests
             LoggerFactory = factory,
             UseSession = true
         };
-        var connection = new ClickHouseConnection(settings);
-
-        try
-        {
-            connection.Open();
-        }
-        catch
-        {
-            // Ignore connection errors
-        }
+        var client = new ClickHouseClient(settings);
 
         Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.Connection));
-        var logger = factory.Loggers[ClickHouseLogCategories.Connection];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged HttpClient config even with UseSession=true
         var httpClientConfigLog = logger.Logs.Find(l => l.EventId == LoggingHelpers.HttpClientConfigEventId);
@@ -148,7 +111,7 @@ public class HttpClientLoggingTests
     }
 
     [Test]
-    public void ConnectionOpen_CustomHttpClientFactory_LogsFactoryTypeName()
+    public void ClientCreated_CustomHttpClientFactory_LogsFactoryTypeName()
     {
         var factory = new CapturingLoggerFactory();
         var customFactory = new CustomHttpClientFactory();
@@ -158,18 +121,9 @@ public class HttpClientLoggingTests
             HttpClientFactory = customFactory,
             LoggerFactory = factory,
         };
-        var connection = new ClickHouseConnection(settings);
+        var client = new ClickHouseClient(settings);
 
-        try
-        {
-            connection.Open();
-        }
-        catch
-        {
-            // Ignore connection errors
-        }
-
-        var logger = factory.Loggers[ClickHouseLogCategories.Connection];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
         var httpClientConfigLog = logger.Logs.Find(l => l.EventId == LoggingHelpers.HttpClientConfigEventId);
 
         Assert.That(httpClientConfigLog, Is.Not.Null);
@@ -177,7 +131,7 @@ public class HttpClientLoggingTests
     }
 
     [Test]
-    public void ConnectionOpen_TraceLevelNotEnabled_DoesNotLogHttpClientConfig()
+    public void ClientCreated_TraceLevelNotEnabled_DoesNotLogHttpClientConfig()
     {
         // Create a logger that doesn't log Trace level
         var factory = new CapturingLoggerFactory();
@@ -187,25 +141,16 @@ public class HttpClientLoggingTests
         {
             LoggerFactory = factory,
         };
-        var connection = new ClickHouseConnection(settings);
-
-        try
-        {
-            connection.Open();
-        }
-        catch
-        {
-            // Ignore connection errors
-        }
+        var client = new ClickHouseClient(settings);
 
         // Should not have logged anything since Trace is not enabled
-        var logger = factory.Loggers[ClickHouseLogCategories.Connection];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
         Assert.That(logger.Logs.Count(l => l.EventId == LoggingHelpers.HttpClientConfigEventId), Is.EqualTo(0));
     }
 
     #if NET5_0_OR_GREATER
     [Test]
-    public void ConnectionOpen_SocketsHttpHandler_LogsSettings()
+    public void ClientCreated_SocketsHttpHandler_LogsSettings()
     {
         var factory = new CapturingLoggerFactory();
 
@@ -230,18 +175,9 @@ public class HttpClientLoggingTests
             HttpClient = httpClient,
             LoggerFactory = factory,
         };
-        var connection = new ClickHouseConnection(settings);
+        var client = new ClickHouseClient(settings);
 
-        try
-        {
-            connection.Open();
-        }
-        catch
-        {
-            // Ignore connection errors
-        }
-
-        var logger = factory.Loggers[ClickHouseLogCategories.Connection];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
         var handlerConfigLog = logger.Logs.Find(l => l.EventId == LoggingHelpers.HttpClientHandlerConfigEventId);
 
         Assert.That(handlerConfigLog, Is.Not.Null);
@@ -263,7 +199,7 @@ public class HttpClientLoggingTests
 #endif
 
     [Test]
-    public void ConnectionOpen_UnknownHandlerType_LogsUnknownHandlerTypeAtDebugLevel()
+    public void ClientCreated_UnknownHandlerType_LogsUnknownHandlerTypeAtDebugLevel()
     {
         var factory = new CapturingLoggerFactory();
 
@@ -276,18 +212,9 @@ public class HttpClientLoggingTests
             HttpClient = httpClient,
             LoggerFactory = factory,
         };
-        var connection = new ClickHouseConnection(settings);
+        var client = new ClickHouseClient(settings);
 
-        try
-        {
-            connection.Open();
-        }
-        catch
-        {
-            // Ignore connection errors
-        }
-
-        var logger = factory.Loggers[ClickHouseLogCategories.Connection];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
         var unknownHandlerLog = logger.Logs.Find(l =>
             l.LogLevel == LogLevel.Debug &&
             l.Message.Contains("Unknown handler type") &&

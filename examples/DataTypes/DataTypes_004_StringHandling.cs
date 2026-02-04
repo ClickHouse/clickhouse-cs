@@ -111,7 +111,6 @@ public static class StringHandling
         ");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
 
         // Insert strings of different lengths
         var data = new List<object[]>
@@ -159,7 +158,6 @@ public static class StringHandling
         ");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
 
         // Write binary data that is NOT valid UTF-8
         var binaryData = new byte[] { 0xFF, 0xFE, 0x00, 0x01, 0x02 };
