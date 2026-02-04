@@ -503,12 +503,12 @@ public sealed class ClickHouseClient : IClickHouseClient
             UseCompression = Settings.UseCompression,
             ConnectionQueryStringParameters = Settings.CustomSettings,
             CommandQueryStringParameters = queryOverride?.CustomSettings,
-            ConnectionRoles = queryOverride?.Roles ?? Settings.Roles,
+            ConnectionRoles = Settings.Roles,
+            CommandRoles = queryOverride?.Roles,
             Sql = sql,
             JsonReadMode = Settings.JsonReadMode,
             JsonWriteMode = Settings.JsonWriteMode,
             QueryId = queryOverride?.QueryId,
-            CommandRoles = queryOverride?.Roles ?? Settings.Roles,
         };
     }
 
