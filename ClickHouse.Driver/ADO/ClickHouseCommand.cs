@@ -218,19 +218,11 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
     private QueryOptions BuildQueryOptions()
     {
-        // Only create options if there's something to override
-        if (QueryId == null &&
-            BearerToken == null &&
-            (roles == null || roles.Count == 0) &&
-            (customSettings == null || customSettings.Count == 0))
-        {
-            return null;
-        }
-
         return new QueryOptions
         {
             QueryId = QueryId,
             BearerToken = BearerToken,
+            Database = connection?.Database,
             Roles = roles?.Count > 0 ? roles : null,
             CustomSettings = customSettings?.Count > 0 ? customSettings : null,
         };

@@ -715,4 +715,35 @@ public class ConnectionTests : AbstractConnectionTestFixture
         conn.Dispose();
         Assert.DoesNotThrowAsync(async () => await sharedClient.PingAsync());
     }
+
+    [Test]
+    public void ChangeDatabase_ShouldBePerConnection()
+    {
+        // Arrange - create shared client with default database
+        using var sharedClient = new ClickHouseClient("Host=localhost;Database=default");
+        using var conn1 = new ClickHouseConnection(sharedClient);
+        using var conn2 = new ClickHouseConnection(sharedClient);
+
+        // Act - change database on conn1 only
+        conn1.ChangeDatabase("other_db");
+
+        // Assert - conn1 should have new database, conn2 should still have default
+        Assert.That(conn1.Database, Is.EqualTo("other_db"));
+        Assert.That(conn2.Database, Is.EqualTo("default"));
+    }
+
+    [Test]
+    public void ChangeDatabase_ShouldNotAffectClientSettings()
+    {
+        // Arrange
+        using var sharedClient = new ClickHouseClient("Host=localhost;Database=default");
+        using var conn = new ClickHouseConnection(sharedClient);
+
+        // Act
+        conn.ChangeDatabase("other_db");
+
+        // Assert - client settings should be unchanged
+        Assert.That(conn.Database, Is.EqualTo("other_db"));
+        Assert.That(sharedClient.Settings.Database, Is.EqualTo("default"));
+    }
 }

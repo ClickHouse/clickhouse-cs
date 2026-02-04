@@ -16,6 +16,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 {
     private volatile ConnectionState state = ConnectionState.Closed; // Not an autoproperty because of interface implementation
     private bool ownsClient = true;
+    private string selectedDatabase;
 
     internal ClickHouseClient ClickHouseClient { get; private set; }
 
@@ -166,7 +167,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override ConnectionState State => state;
 
-    public override string Database => Settings.Database;
+    public override string Database => selectedDatabase ?? Settings.Database;
 
     public override string DataSource { get; }
 
@@ -196,7 +197,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override void ChangeDatabase(string databaseName)
     {
-        ClickHouseClient.Settings.Database = databaseName;
+        selectedDatabase = databaseName;
     }
 
     public object Clone() => new ClickHouseConnection(ClickHouseClient);
