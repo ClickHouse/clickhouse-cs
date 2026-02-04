@@ -25,7 +25,7 @@ public class HttpClientLoggingTests
         };
         var client = new ClickHouseClient(settings);
         
-        Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.Connection));
+        Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.Client));
         var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged HttpClient config
@@ -97,7 +97,7 @@ public class HttpClientLoggingTests
         };
         var client = new ClickHouseClient(settings);
 
-        Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.Connection));
+        Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.Client));
         var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged HttpClient config even with UseSession=true
