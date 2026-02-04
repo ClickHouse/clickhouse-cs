@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -12,13 +13,18 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
+using ClickHouse.Driver.Copy;
+using ClickHouse.Driver.Copy.Serializer;
 using ClickHouse.Driver.Diagnostic;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Http;
 using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Logging;
+using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.IO;
 
 namespace ClickHouse.Driver;
 
@@ -46,6 +52,24 @@ public sealed class ClickHouseClient : IClickHouseClient
     private readonly string httpClientName;
     private readonly Uri serverUri;
     private readonly ILoggerFactory loggerFactory;
+
+    private static readonly RecyclableMemoryStreamManager CommonMemoryStreamManager = new(new RecyclableMemoryStreamManager.Options
+    {
+        MaximumLargePoolFreeBytes = 512 * 1024 * 1024,
+        MaximumSmallPoolFreeBytes = 128 * 1024 * 1024,
+        BlockSize = 256 * 1024,
+    });
+
+    private readonly RecyclableMemoryStreamManager memoryStreamManager;
+
+    /// <summary>
+    /// Gets RecyclableMemoryStreamManager used to create recyclable streams.
+    /// </summary>
+    public RecyclableMemoryStreamManager MemoryStreamManager
+    {
+        get { return memoryStreamManager ?? CommonMemoryStreamManager; }
+        init { memoryStreamManager = value; }
+    }
 
     private bool disposed;
 
@@ -347,15 +371,140 @@ public sealed class ClickHouseClient : IClickHouseClient
         return new ClickHouseRawResult(response.HttpResponseMessage);
     }
 
+    private static string GetColumnsExpression(IEnumerable<string> columns) => columns == null || !columns.Any() ? "*" : string.Join(",", columns);
+
+    private async Task<(string[] names, ClickHouseType[] types)> LoadNamesAndTypesAsync(string destinationTableName, IEnumerable<string> columns = null)
+    {
+        using var reader = (ClickHouseDataReader)await ExecuteReaderAsync($"SELECT {GetColumnsExpression(columns)} FROM {destinationTableName} WHERE 1=0").ConfigureAwait(false);
+        var types = reader.GetClickHouseColumnTypes();
+        var names = reader.GetColumnNames().Select(c => c.EncloseColumnName()).ToArray();
+        return (names, types);
+    }
+
+    private async Task<int> SendBatchAsync(string destinationTable, Batch batch, BatchSerializer serializer, InsertOptions insertOptions, Action<long> onBatchSent, CancellationToken token)
+    {
+        var logger = GetLogger(ClickHouseLogCategories.Client);
+
+        using (batch) // Dispose object regardless whether sending succeeds
+        {
+            using var stream = MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
+            // Async serialization
+            await Task.Run(() => serializer.Serialize(batch, stream), token).ConfigureAwait(false);
+
+            // Seek to beginning as after writing it's at end
+            stream.Seek(0, SeekOrigin.Begin);
+
+            // Async sending
+            logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
+            await PostStreamAsync(null, stream, true, token).ConfigureAwait(false);
+
+            onBatchSent?.Invoke(batch.Size);
+
+            logger?.LogDebug("Batch sent to {Table}. Rows in batch: {BatchRows}.", destinationTable, batch.Size);
+            return batch.Size;
+        }
+    }
+
     /// <inheritdoc />
     public Task<long> InsertBinaryAsync(
         string table,
         IEnumerable<string> columns,
         IEnumerable<object[]> rows,
-        InsertOptions options = null,
+        InsertOptions options = default,
         CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException();
+        return InsertBinaryAsync(table, columns, rows, options, onBatchSent: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Internal version which takes a callback method, to allow us to maintain backwards
+    /// compat with the BatchSent event in BulkCopy.
+    /// </summary>
+    internal async Task<long> InsertBinaryAsync(
+        string table,
+        IEnumerable<string> columns,
+        IEnumerable<object[]> rows,
+        InsertOptions options,
+        Action<long> onBatchSent,
+        CancellationToken cancellationToken)
+    {
+        if (table is null)
+            throw new InvalidOperationException($"{nameof(table)} is null");
+        if (rows is null)
+            throw new ArgumentNullException(nameof(rows));
+
+        // Use default values if none provided
+        options ??= new InsertOptions();
+
+        var serializer = BatchSerializer.GetByRowBinaryFormat(options.Format);
+
+        // Load table structure
+        var logger = GetLogger(ClickHouseLogCategories.Client);
+        logger?.LogDebug("Loading metadata for table {Table}.", table);
+
+        var (columnNames, columnTypes) = await LoadNamesAndTypesAsync(table, columns).ConfigureAwait(false);
+        if (columnNames == null || columnTypes == null)
+            throw new InvalidOperationException("Column names not initialized. Initialization failed.");
+
+        if (logger?.IsEnabled(LogLevel.Debug) ?? false)
+        {
+            logger.LogDebug("Metadata loaded for table {Table}. Columns: {Columns}.", table, string.Join(", ", columnNames ?? Array.Empty<string>()));
+        }
+
+        // Insert
+        var query = $"INSERT INTO {table} ({string.Join(", ", columnNames)}) FORMAT {options.Format.ToString()}";
+
+        var isDebugLoggingEnabled = logger?.IsEnabled(LogLevel.Debug) ?? false;
+        Stopwatch stopwatch = null;
+        if (isDebugLoggingEnabled)
+        {
+            stopwatch = Stopwatch.StartNew();
+            logger.LogDebug("Starting bulk copy into {Table} with batch size {BatchSize} and degree {Degree}.", table, options.BatchSize, options.MaxDegreeOfParallelism);
+        }
+
+        var tasks = new Task<int>[options.MaxDegreeOfParallelism];
+        for (var i = 0; i < tasks.Length; i++)
+        {
+            tasks[i] = Task.FromResult(0);
+        }
+
+        foreach (var batch in ClickHouseClient.IntoBatches(rows, query, columnTypes, options.BatchSize))
+        {
+            while (true)
+            {
+                var completedTaskIndex = Array.FindIndex(tasks, t => t.IsCompleted);
+                if (completedTaskIndex >= 0)
+                {
+                    tasks[completedTaskIndex] = SendBatchAsync(table, batch, serializer, options, onBatchSent, cancellationToken);
+                    break; // while (true); go to next batch
+                }
+                else
+                {
+                    var completedTask = await Task.WhenAny(tasks).ConfigureAwait(false);
+                    await completedTask.ConfigureAwait(false);
+                }
+            }
+        }
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        long totalRowsWritten = tasks.Sum(x => x.Result);
+
+        if (isDebugLoggingEnabled)
+        {
+            stopwatch.Stop();
+            logger.LogDebug("Bulk copy into {Table} completed in {ElapsedMilliseconds:F2} ms. Total rows: {Rows}.", table, stopwatch.Elapsed.TotalMilliseconds, totalRowsWritten);
+        }
+
+        return totalRowsWritten;
+    }
+
+    private static IEnumerable<Batch> IntoBatches(IEnumerable<object[]> rows, string query, ClickHouseType[] types, int batchSize)
+    {
+        foreach (var (batch, size) in rows.BatchRented(batchSize))
+        {
+            yield return new Batch { Rows = batch, Size = size, Query = query, Types = types };
+        }
     }
 
     /// <inheritdoc />

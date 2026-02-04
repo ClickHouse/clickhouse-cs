@@ -10,9 +10,9 @@ namespace ClickHouse.Driver.ADO;
 
 public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
 {
-    private ClickHouseClient client;
     private readonly bool disposeClient;
     private readonly HttpClient httpClient;
+    private readonly ClickHouseClient client;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseDataSource"/> class using provided HttpClient.
