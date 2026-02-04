@@ -101,7 +101,11 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     protected override DbConnection DbConnection
     {
         get => connection;
-        set => connection = (ClickHouseConnection)value;
+        set
+        {
+            connection = (ClickHouseConnection)value;
+            client = connection?.ClickHouseClient;
+        }
     }
 
     protected override DbParameterCollection DbParameterCollection => commandParameters;
