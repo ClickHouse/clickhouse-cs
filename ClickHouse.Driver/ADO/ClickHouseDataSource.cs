@@ -12,6 +12,7 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
 {
     private ClickHouseClient client;
     private readonly bool disposeClient;
+    private readonly HttpClient httpClient;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseDataSource"/> class using provided HttpClient.
@@ -26,6 +27,7 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
         {
             HttpClient = httpClient,
         };
+        this.httpClient = httpClient;
         client = new ClickHouseClient(settings);
         disposeClient = disposeHttpClient;
     }
@@ -104,7 +106,7 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     public ILoggerFactory LoggerFactory
     {
         get => Settings.LoggerFactory;
-        set
+        init
         {
             var newSettings = new ClickHouseClientSettings(Settings)
             {
@@ -126,6 +128,7 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
         if (disposing && disposeClient)
         {
             client?.Dispose();
+            httpClient?.Dispose();
         }
     }
 
