@@ -338,13 +338,13 @@ public sealed class ClickHouseClient : IClickHouseClient
     }
 
     /// <inheritdoc />
-    public Task<ClickHouseRawResult> ExecuteRawResultAsync(
+    public async Task<ClickHouseRawResult> ExecuteRawResultAsync(
         string sql,
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        // Will be implemented in Phase 2
-        throw new NotImplementedException();
+        var response = await PostSqlQueryAsync(sql, null, options, cancellationToken).ConfigureAwait(false);
+        return new ClickHouseRawResult(response.HttpResponseMessage);
     }
 
     /// <inheritdoc />
