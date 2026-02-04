@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -18,10 +17,8 @@ using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Http;
 using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Logging;
-using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
-using Microsoft.IO;
 
 namespace ClickHouse.Driver;
 
