@@ -433,7 +433,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         try
         {
-            using var response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
+            var response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
             GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Streamed request to {Endpoint} received response {StatusCode}.", serverUri, response.StatusCode);
 
             return await HandleError(response, sql, activity).ConfigureAwait(false);
