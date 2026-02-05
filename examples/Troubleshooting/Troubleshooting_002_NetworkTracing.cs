@@ -1,5 +1,6 @@
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Diagnostic;
+using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.Examples;
@@ -28,8 +29,6 @@ public static class NetworkTracing
         Console.WriteLine("This example demonstrates low-level .NET network tracing.");
         Console.WriteLine("You will see detailed HTTP, Socket, DNS, and TLS events.\n");
 
-
-
         // Step 1: Configure a logger factory with Trace level enabled
         var loggerFactory = LoggerFactory.Create(builder =>
         {
@@ -38,7 +37,7 @@ public static class NetworkTracing
                 .SetMinimumLevel(LogLevel.Trace); // Must be Trace level to see network events
         });
 
-        // Step 2: Configure ClickHouse connection with EnableDebugMode
+        // Step 2: Configure ClickHouse client with EnableDebugMode
         var settings = new ClickHouseClientSettings("Host=localhost;Port=8123;Username=default;Database=default")
         {
             LoggerFactory = loggerFactory,
@@ -49,24 +48,18 @@ public static class NetworkTracing
 
         try
         {
-            using (var connection = new ClickHouseConnection(settings))
+            using var client = new ClickHouseClient(settings);
+
+            // Execute a simple query - you'll see DNS resolution, socket connection, HTTP request/response details
+            Console.WriteLine("\n[Application] Executing query...\n");
+
+            using var reader = await client.ExecuteReaderAsync("SELECT version(), 'Hello from ClickHouse!' as message");
+
+            if (await reader.ReadAsync())
             {
-                // Open connection - you'll see DNS resolution, socket connection, TLS handshake (if HTTPS)
-                await connection.OpenAsync();
-                Console.WriteLine("\n[Application] Connection opened successfully\n");
-
-                // Execute a simple query - you'll see HTTP request/response details
-                using var command = connection.CreateCommand();
-                command.CommandText = "SELECT version(), 'Hello from ClickHouse!' as message";
-                using var reader = await command.ExecuteReaderAsync();
-
-                if (await reader.ReadAsync())
-                {
-                    Console.WriteLine($"\n[Application] ClickHouse version: {reader.GetString(0)}");
-                    Console.WriteLine($"[Application] Message: {reader.GetString(1)}\n");
-                }
+                Console.WriteLine($"\n[Application] ClickHouse version: {reader.GetString(0)}");
+                Console.WriteLine($"[Application] Message: {reader.GetString(1)}\n");
             }
-
         }
         catch (Exception ex)
         {

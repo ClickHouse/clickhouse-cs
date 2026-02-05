@@ -63,5 +63,4 @@ public static class QueryStatistics
 
         Console.WriteLine("\nAll query statistics examples completed!");
     }
-
 }

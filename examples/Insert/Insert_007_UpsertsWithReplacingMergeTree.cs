@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -8,7 +7,7 @@ namespace ClickHouse.Driver.Examples;
 ///
 /// ReplacingMergeTree automatically deduplicates rows with the same sorting key (ORDER BY),
 /// keeping only the row with the highest version. This enables performant "upsert" behavior.
-/// 
+///
 /// Other specialized MergeTree variants exist as well, see https://clickhouse.com/docs/en/engines/table-engines/mergetree-family/
 ///
 /// Key concepts:
@@ -23,33 +22,32 @@ public static class UpsertsWithReplacingMergeTree
 
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
-        await SetupTable(connection);
+        await SetupTable(client);
 
-        await InsertInitialData(connection);
+        await InsertInitialData(client);
 
-        await PerformUpserts(connection);
+        await PerformUpserts(client);
 
-        await DemonstrateSoftDeletes(connection);
+        await DemonstrateSoftDeletes(client);
 
-        await ShowQueryingStrategies(connection);
+        await ShowQueryingStrategies(client);
 
-        await ForceMergeAndVerify(connection);
+        await ForceMergeAndVerify(client);
 
-        await Cleanup(connection);
+        await Cleanup(client);
     }
 
     /// <summary>
     /// Creates a ReplacingMergeTree table with version and deleted columns.
     /// </summary>
-    private static async Task SetupTable(ClickHouseConnection connection)
+    private static async Task SetupTable(ClickHouseClient client)
     {
         Console.WriteLine("1. Creating ReplacingMergeTree table with version and deleted columns:");
 
-        await connection.ExecuteStatementAsync($@"DROP TABLE IF EXISTS {TableName}");
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"DROP TABLE IF EXISTS {TableName}");
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {TableName} (
                 user_id UInt64,
                 email String,
@@ -72,57 +70,42 @@ public static class UpsertsWithReplacingMergeTree
     /// <summary>
     /// Inserts initial user records.
     /// </summary>
-    private static async Task InsertInitialData(ClickHouseConnection connection)
+    private static async Task InsertInitialData(ClickHouseClient client)
     {
         Console.WriteLine("2. Inserting initial user records:");
 
-        using var command = connection.CreateCommand();
-        command.CommandText = $@"
-            INSERT INTO {TableName} (user_id, email, name, status, version)
-            VALUES
-                ({{id1:UInt64}}, {{email1:String}}, {{name1:String}}, {{status1:String}}, {{ver1:UInt64}}),
-                ({{id2:UInt64}}, {{email2:String}}, {{name2:String}}, {{status2:String}}, {{ver2:UInt64}}),
-                ({{id3:UInt64}}, {{email3:String}}, {{name3:String}}, {{status3:String}}, {{ver3:UInt64}})
-        ";
+        var rows = new List<object[]>
+        {
+            new object[] { 1UL, "alice@example.com", "Alice", "active", 1UL },
+            new object[] { 2UL, "bob@example.com", "Bob", "active", 1UL },
+            new object[] { 3UL, "carol@example.com", "Carol", "pending", 1UL }
+        };
 
-        command.AddParameter("id1", 1UL);
-        command.AddParameter("email1", "alice@example.com");
-        command.AddParameter("name1", "Alice");
-        command.AddParameter("status1", "active");
-        command.AddParameter("ver1", 1UL);
+        var columns = new[] { "user_id", "email", "name", "status", "version" };
+        await client.InsertBinaryAsync(TableName, columns, rows);
 
-        command.AddParameter("id2", 2UL);
-        command.AddParameter("email2", "bob@example.com");
-        command.AddParameter("name2", "Bob");
-        command.AddParameter("status2", "active");
-        command.AddParameter("ver2", 1UL);
-
-        command.AddParameter("id3", 3UL);
-        command.AddParameter("email3", "carol@example.com");
-        command.AddParameter("name3", "Carol");
-        command.AddParameter("status3", "pending");
-        command.AddParameter("ver3", 1UL);
-
-        await command.ExecuteNonQueryAsync();
         Console.WriteLine("   Inserted 3 users (Alice, Bob, Carol) with version=1\n");
     }
 
     /// <summary>
     /// Demonstrates the upsert pattern: insert a new row with higher version to "update".
     /// </summary>
-    private static async Task PerformUpserts(ClickHouseConnection connection)
+    private static async Task PerformUpserts(ClickHouseClient client)
     {
         Console.WriteLine("3. Performing upserts (updates via insert with higher version):");
 
         // Update Alice's email by inserting a new row with version=2
         Console.WriteLine("   Updating Alice's email (user_id=1) by inserting version=2...");
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {TableName} (user_id, email, name, status, version)
-            VALUES (1, 'alice.smith@example.com', 'Alice Smith', 'active', 2)
-        ");
+
+        var rows = new List<object[]>
+        {
+            new object[] { 1UL, "alice.smith@example.com", "Alice Smith", "active", 2UL }
+        };
+        var columns = new[] { "user_id", "email", "name", "status", "version" };
+        await client.InsertBinaryAsync(TableName, columns, rows);
 
         // Show that both versions exist before merge
-        var rowCount = await connection.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
+        var rowCount = await client.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
         Console.WriteLine($"\n   Total rows in table (before merge): {rowCount}");
         Console.WriteLine("   Note: Both old and new versions coexist until background merge runs\n");
     }
@@ -130,16 +113,19 @@ public static class UpsertsWithReplacingMergeTree
     /// <summary>
     /// Demonstrates soft deletes using the deleted column.
     /// </summary>
-    private static async Task DemonstrateSoftDeletes(ClickHouseConnection connection)
+    private static async Task DemonstrateSoftDeletes(ClickHouseClient client)
     {
         Console.WriteLine("4. Performing soft delete:");
 
         // Delete Carol by inserting a row with deleted=1
         Console.WriteLine("   Deleting Carol (user_id=3) by inserting version=2 with deleted=1...");
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {TableName} (user_id, email, name, status, version, deleted)
-            VALUES (3, 'carol@example.com', 'Carol', 'pending', 2, 1)
-        ");
+
+        var rows = new List<object[]>
+        {
+            new object[] { 3UL, "carol@example.com", "Carol", "pending", 2UL, (byte)1 }
+        };
+        var columns = new[] { "user_id", "email", "name", "status", "version", "deleted" };
+        await client.InsertBinaryAsync(TableName, columns, rows);
 
         Console.WriteLine("   Soft delete inserted. Row will be removed during next merge.\n");
     }
@@ -147,13 +133,13 @@ public static class UpsertsWithReplacingMergeTree
     /// <summary>
     /// Shows different querying strategies with and without FINAL.
     /// </summary>
-    private static async Task ShowQueryingStrategies(ClickHouseConnection connection)
+    private static async Task ShowQueryingStrategies(ClickHouseClient client)
     {
         Console.WriteLine("5. Querying strategies:");
 
         // Query WITHOUT FINAL - shows all versions
         Console.WriteLine("\n   a) Query WITHOUT FINAL (shows all row versions):");
-        using (var reader = await connection.ExecuteReaderAsync(
+        using (var reader = await client.ExecuteReaderAsync(
             $"SELECT user_id, email, name, status, version, deleted FROM {TableName} ORDER BY user_id, version"))
         {
             Console.WriteLine("      user_id | email                      | name        | status  | ver | del");
@@ -172,7 +158,7 @@ public static class UpsertsWithReplacingMergeTree
 
         // Query WITH FINAL - shows deduplicated view
         Console.WriteLine("\n   b) Query WITH FINAL (deduplicated, deleted rows removed):");
-        using (var reader = await connection.ExecuteReaderAsync(
+        using (var reader = await client.ExecuteReaderAsync(
             $"SELECT user_id, email, name, status, version FROM {TableName} FINAL ORDER BY user_id"))
         {
             Console.WriteLine("      user_id | email                      | name        | status  | ver");
@@ -194,17 +180,17 @@ public static class UpsertsWithReplacingMergeTree
     /// <summary>
     /// Forces a merge to physically collapse duplicates.
     /// </summary>
-    private static async Task ForceMergeAndVerify(ClickHouseConnection connection)
+    private static async Task ForceMergeAndVerify(ClickHouseClient client)
     {
         Console.WriteLine("6. Forcing merge to physically deduplicate:");
 
-        var beforeCount = await connection.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
+        var beforeCount = await client.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
         Console.WriteLine($"   Rows before OPTIMIZE: {beforeCount}");
 
-        await connection.ExecuteStatementAsync($"OPTIMIZE TABLE {TableName} FINAL");
+        await client.ExecuteNonQueryAsync($"OPTIMIZE TABLE {TableName} FINAL");
         Console.WriteLine("   Executed: OPTIMIZE TABLE ... FINAL");
 
-        var afterCount = await connection.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
+        var afterCount = await client.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
         Console.WriteLine($"   Rows after OPTIMIZE: {afterCount}");
 
         Console.WriteLine("\n   After merge, the table physically contains only the latest versions.");
@@ -212,9 +198,9 @@ public static class UpsertsWithReplacingMergeTree
     }
 
 
-    private static async Task Cleanup(ClickHouseConnection connection)
+    private static async Task Cleanup(ClickHouseClient client)
     {
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {TableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {TableName}");
         Console.WriteLine($"Table '{TableName}' dropped");
     }
 }

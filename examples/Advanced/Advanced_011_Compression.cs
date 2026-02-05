@@ -41,9 +41,9 @@ namespace ClickHouse.Driver.Examples;
 ///
 /// The driver's default HttpClient already has this configured.
 ///
-/// ## ClickHouseBulkCopy
+/// ## InsertBinaryAsync
 ///
-/// Note: ClickHouseBulkCopy always uses GZip compression for uploads regardless
+/// Note: InsertBinaryAsync always uses GZip compression for uploads regardless
 /// of the UseCompression setting. This is because bulk inserts benefit significantly
 /// from compression due to the large data volumes involved.
 /// </summary>
@@ -55,28 +55,24 @@ public static class Compression
 
         // Default: compression enabled
         Console.WriteLine("1. Default behavior (compression enabled):");
-        using (var connection = new ClickHouseConnection("Host=localhost"))
+        using (var client = new ClickHouseClient("Host=localhost"))
         {
-            await connection.OpenAsync();
-
             // The driver will:
             // - Compress request bodies with GZip
             // - Request compressed responses via enable_http_compression=true
-            var result = await connection.ExecuteScalarAsync("SELECT 'Compressed request and response'");
+            var result = await client.ExecuteScalarAsync("SELECT 'Compressed request and response'");
             Console.WriteLine($"   Result: {result}");
             Console.WriteLine("   Request was GZip compressed, response was GZip compressed\n");
         }
 
         // Compression disabled
         Console.WriteLine("2. Compression disabled:");
-        using (var connection = new ClickHouseConnection("Host=localhost;Compression=false"))
+        using (var client = new ClickHouseClient("Host=localhost;Compression=false"))
         {
-            await connection.OpenAsync();
-
             // The driver will:
             // - Send uncompressed request bodies
             // - Set enable_http_compression=false (uncompressed responses)
-            var result = await connection.ExecuteScalarAsync("SELECT 'Uncompressed request and response'");
+            var result = await client.ExecuteScalarAsync("SELECT 'Uncompressed request and response'");
             Console.WriteLine($"   Result: {result}");
             Console.WriteLine("   Request was uncompressed, response was uncompressed\n");
         }
@@ -88,10 +84,9 @@ public static class Compression
             Host = "localhost",
             UseCompression = false  // Disable compression
         };
-        using (var connection = new ClickHouseConnection(settings))
+        using (var client = new ClickHouseClient(settings))
         {
-            await connection.OpenAsync();
-            var result = await connection.ExecuteScalarAsync("SELECT 1");
+            var result = await client.ExecuteScalarAsync("SELECT 1");
             Console.WriteLine($"   UseCompression = {settings.UseCompression}");
             Console.WriteLine($"   Result: {result}\n");
         }

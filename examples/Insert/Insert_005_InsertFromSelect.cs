@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -40,13 +39,12 @@ public static class InsertFromSelect
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         Console.WriteLine("INSERT FROM SELECT Examples\n");
 
-        await BasicCopy(connection);
-        await TransformAndAggregate(connection);
+        await BasicCopy(client);
+        await TransformAndAggregate(client);
 
         Console.WriteLine("All INSERT FROM SELECT examples completed!");
     }
@@ -54,7 +52,7 @@ public static class InsertFromSelect
     /// <summary>
     /// Basic example: Copy data from one table to another.
     /// </summary>
-    private static async Task BasicCopy(ClickHouseConnection connection)
+    private static async Task BasicCopy(ClickHouseClient client)
     {
         Console.WriteLine("1. Basic copy from one table to another:");
 
@@ -62,7 +60,7 @@ public static class InsertFromSelect
         var targetTable = "example_insert_select_target";
 
         // Create source table with data
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {sourceTable}
             (
                 id UInt64,
@@ -73,7 +71,7 @@ public static class InsertFromSelect
             ORDER BY id
         ");
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             INSERT INTO {sourceTable} VALUES
             (1, 'Alpha', 10.5),
             (2, 'Beta', 20.3),
@@ -83,7 +81,7 @@ public static class InsertFromSelect
         ");
 
         // Create target table with same schema
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {targetTable}
             (
                 id UInt64,
@@ -95,24 +93,24 @@ public static class InsertFromSelect
         ");
 
         // Copy all data from source to target
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             INSERT INTO {targetTable}
             SELECT * FROM {sourceTable}
         ");
 
-        var count = await connection.ExecuteScalarAsync($"SELECT count() FROM {targetTable}");
+        var count = await client.ExecuteScalarAsync($"SELECT count() FROM {targetTable}");
         Console.WriteLine($"   Copied {count} rows from {sourceTable} to {targetTable}");
 
         // Cleanup
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {sourceTable}");
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {sourceTable}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {targetTable}");
         Console.WriteLine($"   Tables dropped\n");
     }
 
     /// <summary>
     /// Transform data during insertion with aggregations.
     /// </summary>
-    private static async Task TransformAndAggregate(ClickHouseConnection connection)
+    private static async Task TransformAndAggregate(ClickHouseClient client)
     {
         Console.WriteLine("2. Transform and aggregate data during insertion:");
 
@@ -120,7 +118,7 @@ public static class InsertFromSelect
         var summaryTable = "example_order_summary";
 
         // Create orders table with sample data
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {ordersTable}
             (
                 order_id UInt64,
@@ -134,7 +132,7 @@ public static class InsertFromSelect
             ORDER BY (order_date, order_id)
         ");
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             INSERT INTO {ordersTable} VALUES
             (1, 100, 'Widget', 5, 10.00, '2024-01-15'),
             (2, 100, 'Gadget', 2, 25.00, '2024-01-16'),
@@ -145,7 +143,7 @@ public static class InsertFromSelect
         ");
 
         // Create summary table for aggregated data
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {summaryTable}
             (
                 customer_id UInt32,
@@ -158,7 +156,7 @@ public static class InsertFromSelect
         ");
 
         // Insert aggregated data
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             INSERT INTO {summaryTable}
             SELECT
                 customer_id,
@@ -172,7 +170,7 @@ public static class InsertFromSelect
 
         // Display results
         Console.WriteLine("   Customer order summary:");
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {summaryTable} ORDER BY customer_id"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT * FROM {summaryTable} ORDER BY customer_id"))
         {
             Console.WriteLine("   Customer ID | Orders | Quantity | Total Spent");
             Console.WriteLine("   ------------|--------|----------|------------");
@@ -183,8 +181,8 @@ public static class InsertFromSelect
         }
 
         // Cleanup
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {ordersTable}");
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {summaryTable}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {ordersTable}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {summaryTable}");
         Console.WriteLine($"\n   Tables dropped\n");
     }
 }

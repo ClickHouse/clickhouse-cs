@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -26,13 +25,7 @@ public static class QueryCancellation
     {
         Console.WriteLine("1. Cancel query after timeout:");
 
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
-
-        using var command = connection.CreateCommand();
-
-        // This query would take 3 seconds to complete, but we'll cancel it after 1 second
-        command.CommandText = "SELECT sleep(3)";
+        using var client = new ClickHouseClient("Host=localhost");
 
         // Create a cancellation token that will cancel after 1 second
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
@@ -42,7 +35,8 @@ public static class QueryCancellation
 
         try
         {
-            await command.ExecuteNonQueryAsync(cts.Token);
+            // This query would take 3 seconds to complete, but we'll cancel it after 1 second
+            await client.ExecuteNonQueryAsync("SELECT sleep(3)", cancellationToken: cts.Token);
             Console.WriteLine("   Query completed (unexpected)");
         }
         catch (OperationCanceledException)
@@ -66,14 +60,7 @@ public static class QueryCancellation
     {
         Console.WriteLine("\n2. Cancel query manually from another task:");
 
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
-
-        using var command = connection.CreateCommand();
-
-        // This query would take 3 seconds to complete
-        command.CommandText = "SELECT sleep(3)";
-
+        using var client = new ClickHouseClient("Host=localhost");
         using var cts = new CancellationTokenSource();
 
         Console.WriteLine("   Starting a 3-second query...");
@@ -91,7 +78,8 @@ public static class QueryCancellation
 
         try
         {
-            await command.ExecuteNonQueryAsync(cts.Token);
+            // This query would take 3 seconds to complete
+            await client.ExecuteNonQueryAsync("SELECT sleep(3)", cancellationToken: cts.Token);
             Console.WriteLine("   Query completed (unexpected)");
         }
         catch (OperationCanceledException)

@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 using Testcontainers.ClickHouse;
 
@@ -32,7 +31,7 @@ namespace ClickHouse.Driver.Examples;
 ///    * GitHub Actions:
 ///      - Testcontainers works out of the box with GitHub Actions
 ///      - No special configuration needed
-///    
+///
 ///    * Azure DevOps:
 ///      - Use Linux agents or Windows with Docker Desktop
 ///      - May need to set TESTCONTAINERS_RYUK_DISABLED=true in some cases
@@ -76,12 +75,11 @@ public static class Testcontainers
     /// </summary>
     private static async Task RunSimulatedTests(string connectionString)
     {
-        using var connection = new ClickHouseConnection(connectionString);
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient(connectionString);
 
         // Test 1: Create table
         Console.WriteLine("   [TEST] CreateTable_ShouldSucceed");
-        await connection.ExecuteStatementAsync(@"
+        await client.ExecuteNonQueryAsync(@"
             CREATE TABLE test_users (
                 id UInt64,
                 name String,
@@ -92,21 +90,19 @@ public static class Testcontainers
         ");
         Console.WriteLine("          PASSED - Table created\n");
 
-        // Test 2: Insert data
+        // Test 2: Insert data using InsertBinaryAsync
         Console.WriteLine("   [TEST] InsertData_ShouldSucceed");
-        using var insertCommand = connection.CreateCommand();
-        insertCommand.CommandText = @"
-            INSERT INTO test_users (id, name, email) VALUES
-            ({id:UInt64}, {name:String}, {email:String})";
-        insertCommand.AddParameter("id", 1UL);
-        insertCommand.AddParameter("name", "Alice");
-        insertCommand.AddParameter("email", "alice@example.com");
-        await insertCommand.ExecuteNonQueryAsync();
+        var rows = new List<object[]>
+        {
+            new object[] { 1UL, "Alice", "alice@example.com" }
+        };
+        var columns = new[] { "id", "name", "email" };
+        await client.InsertBinaryAsync("test_users", columns, rows);
         Console.WriteLine("          PASSED - Data inserted\n");
 
         // Test 3: Query data
         Console.WriteLine("   [TEST] QueryData_ShouldReturnInsertedRow");
-        var name = await connection.ExecuteScalarAsync("SELECT name FROM test_users WHERE id = 1");
+        var name = await client.ExecuteScalarAsync("SELECT name FROM test_users WHERE id = 1");
         Console.WriteLine($"Name: {name}");
         if ((string)name! != "Alice")
             throw new Exception($"Expected 'Alice' but got '{name}'");
@@ -114,14 +110,14 @@ public static class Testcontainers
 
         // Test 4: Verify count
         Console.WriteLine("   [TEST] Count_ShouldBeOne");
-        var count = await connection.ExecuteScalarAsync("SELECT count() FROM test_users");
+        var count = await client.ExecuteScalarAsync("SELECT count() FROM test_users");
         if ((ulong)count! != 1)
             throw new Exception($"Expected 1 but got {count}");
         Console.WriteLine("          PASSED - Count is correct\n");
 
         // Test 5: Drop table (cleanup within test)
         Console.WriteLine("   [TEST] DropTable_ShouldSucceed");
-        await connection.ExecuteStatementAsync("DROP TABLE test_users");
+        await client.ExecuteNonQueryAsync("DROP TABLE test_users");
         Console.WriteLine("          PASSED - Table dropped");
 
         Console.WriteLine("\n   All tests passed!");

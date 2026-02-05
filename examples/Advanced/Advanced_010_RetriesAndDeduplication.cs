@@ -1,4 +1,4 @@
-using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Utility;
 using Polly;
 using Polly.Retry;
@@ -23,30 +23,29 @@ public static class RetriesAndDeduplication
 
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         // Create a ReplacingMergeTree table for deduplication
-        await SetupReplacingMergeTreeTable(connection);
+        await SetupReplacingMergeTreeTable(client);
 
         // Demonstrate retry with simulated random failures
-        await InsertWithRetryAndSimulatedFailures(connection);
+        await InsertWithRetryAndSimulatedFailures(client);
 
         // Show how duplicates are handled
-        await DemonstrateDuplicateHandling(connection);
+        await DemonstrateDuplicateHandling(client);
 
-        await Cleanup(connection);
+        await Cleanup(client);
     }
 
     /// <summary>
     /// Creates a ReplacingMergeTree table that automatically deduplicates rows.
     /// The 'version' column determines which row to keep (highest version wins).
     /// </summary>
-    private static async Task SetupReplacingMergeTreeTable(ClickHouseConnection connection)
+    private static async Task SetupReplacingMergeTreeTable(ClickHouseClient client)
     {
         Console.WriteLine("1. Creating ReplacingMergeTree table:");
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {TableName} (
                 id UInt64,
                 data String,
@@ -64,7 +63,7 @@ public static class RetriesAndDeduplication
     /// Demonstrates using Polly to retry inserts with simulated random failures.
     /// Uses ClickHouse's throwIf() function to randomly fail ~33% of inserts.
     /// </summary>
-    private static async Task InsertWithRetryAndSimulatedFailures(ClickHouseConnection connection)
+    private static async Task InsertWithRetryAndSimulatedFailures(ClickHouseClient client)
     {
         Console.WriteLine("2. Insert with Polly retry policy (simulating ~33% failure rate):");
 
@@ -103,16 +102,19 @@ public static class RetriesAndDeduplication
             {
                 // Use throwIf() to simulate random failures (~33% chance)
                 // This throws FUNCTION_THROW_IF_VALUE_IS_NON_ZERO (error code 395)
-                await connection.ExecuteStatementAsync($@"
-                    SELECT throwIf(rand() % 3 = 0, 'Simulated transient failure for record {record.Id}!')");
+                await client.ExecuteNonQueryAsync($@"
+                    SELECT throwIf(rand() % 3 = 0, 'Simulated transient failure for record {record.Id}!')", cancellationToken: ct);
 
                 // If we get here, the "pre-check" passed - do the actual insert
-                using var command = connection.CreateCommand();
-                command.CommandText = $"INSERT INTO {TableName} (id, data, version) VALUES ({{id:UInt64}}, {{data:String}}, {{version:UInt64}})";
-                command.AddParameter("id", record.Id);
-                command.AddParameter("data", record.Data);
-                command.AddParameter("version", record.Version);
-                await command.ExecuteNonQueryAsync(ct);
+                var parameters = new ClickHouseParameterCollection();
+                parameters.AddParameter("id", record.Id);
+                parameters.AddParameter("data", record.Data);
+                parameters.AddParameter("version", record.Version);
+
+                await client.ExecuteNonQueryAsync(
+                    $"INSERT INTO {TableName} (id, data, version) VALUES ({{id:UInt64}}, {{data:String}}, {{version:UInt64}})",
+                    parameters,
+                    cancellationToken: ct);
             });
         }
 
@@ -122,22 +124,22 @@ public static class RetriesAndDeduplication
     /// <summary>
     /// Shows how ReplacingMergeTree handles duplicate inserts.
     /// </summary>
-    private static async Task DemonstrateDuplicateHandling(ClickHouseConnection connection)
+    private static async Task DemonstrateDuplicateHandling(ClickHouseClient client)
     {
         Console.WriteLine("3. Demonstrating duplicate handling:");
 
         // Insert a "duplicate" with the same id but higher version (simulating a retry)
         Console.WriteLine("   Inserting duplicate of id=1 with version=2 (simulating retry)...");
-        await connection.ExecuteStatementAsync(
+        await client.ExecuteNonQueryAsync(
             $"INSERT INTO {TableName} (id, data, version) VALUES (1, 'Record A - Updated', 2)");
 
         // Both versions exist
-        var countBefore = await connection.ExecuteScalarAsync($"SELECT count() FROM {TableName} WHERE id = 1");
+        var countBefore = await client.ExecuteScalarAsync($"SELECT count() FROM {TableName} WHERE id = 1");
         Console.WriteLine($"   Rows with id=1: {countBefore}");
 
         // Show the final state
         Console.WriteLine("\n   Final table contents (FINAL modifier ensures deduplicated view):");
-        using var reader = await connection.ExecuteReaderAsync(
+        using var reader = await client.ExecuteReaderAsync(
             $"SELECT id, data, version FROM {TableName} FINAL ORDER BY id");
 
         Console.WriteLine("   ID  Data                    Version");
@@ -151,9 +153,9 @@ public static class RetriesAndDeduplication
         }
     }
 
-    private static async Task Cleanup(ClickHouseConnection connection)
+    private static async Task Cleanup(ClickHouseClient client)
     {
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {TableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {TableName}");
         Console.WriteLine($"Table '{TableName}' dropped");
     }
 }

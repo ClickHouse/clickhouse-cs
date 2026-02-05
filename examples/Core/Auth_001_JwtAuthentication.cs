@@ -20,8 +20,8 @@ public static class JwtAuthentication
             return;
         }
 
-        // 1. Basic JWT authentication at connection level
-        Console.WriteLine("1. JWT authentication at connection level:");
+        // 1. Basic JWT authentication
+        Console.WriteLine("1. JWT authentication:");
         var settings = new ClickHouseClientSettings
         {
             Host = host,
@@ -30,10 +30,9 @@ public static class JwtAuthentication
             BearerToken = jwt,
         };
 
-        using (var connection = new ClickHouseConnection(settings))
+        using (var client = new ClickHouseClient(settings))
         {
-            await connection.OpenAsync();
-            var version = await connection.ExecuteScalarAsync("SELECT version()");
+            var version = await client.ExecuteScalarAsync("SELECT version()");
             Console.WriteLine($"   Connected to ClickHouse version: {version}");
         }
 
@@ -47,32 +46,23 @@ public static class JwtAuthentication
             Protocol = "https",
             Username = "ignored_user",    // These are ignored when BearerToken is set
             Password = "ignored_password",
-            BearerToken = jwt,        // Bearer token is used instead
+            BearerToken = jwt,            // Bearer token is used instead
         };
 
-        using (var connection = new ClickHouseConnection(settingsWithBoth))
+        using (var client = new ClickHouseClient(settingsWithBoth))
         {
-            await connection.OpenAsync();
+            await client.ExecuteNonQueryAsync("SELECT 1");
             Console.WriteLine("   Connected successfully using Bearer token (Username/Password ignored)");
         }
 
-        // 3. Command-level token override
-        // Useful when you need different tokens for different operations
-        Console.WriteLine("\n3. Command-level token override:");
-        using (var connection = new ClickHouseConnection(settings))
+        // 3. Per-query token override via QueryOptions
+        Console.WriteLine("\n3. Per-query token override:");
+        using (var client = new ClickHouseClient(settings))
         {
-            await connection.OpenAsync();
-
-            using var command = connection.CreateCommand();
-            command.BearerToken = jwt; // Override connection-level token
-            command.CommandText = "SELECT currentUser()";
-
-            var user = await command.ExecuteScalarAsync();
+            var options = new QueryOptions { BearerToken = jwt };
+            var user = await client.ExecuteScalarAsync("SELECT currentUser()", options: options);
             Console.WriteLine($"   Current user: {user}");
         }
-
-        // 4. Token refresh pattern (conceptual)
-        // Not implemented yet
 
         Console.WriteLine("\nJWT authentication examples completed successfully!");
     }
