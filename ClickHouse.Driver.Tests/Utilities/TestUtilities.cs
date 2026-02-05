@@ -99,11 +99,7 @@ public static class TestUtilities
         }
     }
 
-    /// <summary>
-    /// Utility method to allow to redirect ClickHouse connections to different machine, in case of Windows development environment
-    /// </summary>
-    /// <returns></returns>
-    public static ClickHouseConnection GetTestClickHouseConnection(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
+    public static ClickHouseClient GetTestClickHouseClient(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
     {
         var builder = GetConnectionStringBuilder();
         builder.Compression = compression;
@@ -157,9 +153,21 @@ public static class TestUtilities
             UseFormDataParameters = useFormDataParameters
         };
 
-        var connection = new ClickHouseConnection(settings);
-        connection.Open();
-        return connection;
+        var client = new ClickHouseClient(settings);
+
+        return client;
+    }
+
+    /// <summary>
+    /// Utility method to allow to redirect ClickHouse connections to different machine, in case of Windows development environment
+    /// </summary>
+    /// <returns></returns>
+    public static ClickHouseConnection GetTestClickHouseConnection(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
+    {
+        var client = GetTestClickHouseClient(compression, session, customDecimals, password, useFormDataParameters, jsonReadMode, jsonWriteMode);
+        var conn = client.CreateConnection();
+        conn.Open();
+        return conn;
     }
 
     public static ClickHouseConnectionStringBuilder GetConnectionStringBuilder()

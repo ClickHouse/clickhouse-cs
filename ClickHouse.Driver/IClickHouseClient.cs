@@ -31,22 +31,21 @@ public interface IClickHouseClient : IDisposable
     /// <returns>The number of rows affected.</returns>
     Task<int> ExecuteNonQueryAsync(
         string sql,
-        IEnumerable<ClickHouseDbParameter> parameters = null,
+        ClickHouseParameterCollection parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Executes a SQL query and returns the first column of the first row.
     /// </summary>
-    /// <typeparam name="T">The expected return type.</typeparam>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="parameters">Optional parameters for the query.</param>
     /// <param name="options">Optional query options to override client defaults.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The first column of the first row, or default if no results.</returns>
-    Task<T> ExecuteScalarAsync<T>(
+    Task<object> ExecuteScalarAsync(
         string sql,
-        IEnumerable<ClickHouseDbParameter> parameters = null,
+        ClickHouseParameterCollection parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default);
 
@@ -60,7 +59,7 @@ public interface IClickHouseClient : IDisposable
     /// <returns>A data reader for the query results.</returns>
     Task<ClickHouseDataReader> ExecuteReaderAsync(
         string sql,
-        IEnumerable<ClickHouseDbParameter> parameters = null,
+        ClickHouseParameterCollection parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default);
 
@@ -100,7 +99,7 @@ public interface IClickHouseClient : IDisposable
     /// <param name="format">The ClickHouse format of the data (e.g., "CSV", "JSONEachRow", "Parquet").</param>
     /// <param name="columns">Optional column names. If null, all columns are assumed in table order.</param>
     /// <param name="useCompression">Whether to compress the stream before sending (default: true)</param>
-    /// <param name="options">Optional insert options.</param>
+    /// <param name="options">Optional query options.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     Task<HttpResponseMessage> InsertRawStreamAsync(
@@ -109,7 +108,7 @@ public interface IClickHouseClient : IDisposable
         string format,
         IEnumerable<string> columns = null,
         bool useCompression = true,
-        InsertOptions options = null,
+        QueryOptions options = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -150,7 +149,8 @@ public interface IClickHouseClient : IDisposable
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    void RegisterJsonSerializationType<T>() where T : class;
+    void RegisterJsonSerializationType<T>()
+        where T : class;
 
     /// <summary>
     /// Registers a POCO type for JSON column serialization.
@@ -165,6 +165,7 @@ public interface IClickHouseClient : IDisposable
 
     /// <summary>
     /// Creates a new <see cref="ClickHouseConnection"/> that uses this client's HTTP connection pool.
+    /// These connection instances are light and can be short-lived.
     /// </summary>
     /// <returns>A new connection instance.</returns>
     ClickHouseConnection CreateConnection();

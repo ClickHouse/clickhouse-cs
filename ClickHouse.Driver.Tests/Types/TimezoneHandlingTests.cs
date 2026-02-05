@@ -312,7 +312,7 @@ public class WriteDateTimeHttpParamTests : AbstractConnectionTestFixture
         var utcDt = new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Utc);
 
         var command = connection.CreateCommand();
-        command.AddParameter("dt", "DateTime('Europe/Amsterdam')", utcDt);
+        command.AddParameter("dt", utcDt);
         command.CommandText = "INSERT INTO test.datetime_http_test (dt_amsterdam) VALUES ({dt:DateTime('Europe/Amsterdam')})";
         await command.ExecuteNonQueryAsync();
 
@@ -370,7 +370,7 @@ public class WriteDateTimeHttpParamTests : AbstractConnectionTestFixture
         var expectedUtc = new DateTimeOffset(localDt).UtcDateTime;
 
         var command = connection.CreateCommand();
-        command.AddParameter("dt", "DateTime('Europe/Amsterdam')", localDt);
+        command.AddParameter("dt", localDt);
         command.CommandText = "INSERT INTO test.datetime_http_test (dt_amsterdam) VALUES ({dt:DateTime('Europe/Amsterdam')})";
         await command.ExecuteNonQueryAsync();
 
@@ -460,7 +460,7 @@ public class WriteDateTimeHttpParamTests : AbstractConnectionTestFixture
         var dto = new DateTimeOffset(2024, 1, 15, 15, 0, 0, TimeSpan.FromHours(3));
 
         var command = connection.CreateCommand();
-        command.AddParameter("dt", "DateTime('Europe/Amsterdam')", dto);
+        command.AddParameter("dt", dto);
         command.CommandText = "INSERT INTO test.datetime_http_test (dt_amsterdam) VALUES ({dt:DateTime('Europe/Amsterdam')})";
         await command.ExecuteNonQueryAsync();
 
@@ -680,7 +680,7 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_amsterdam"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[localDt]]);
 
         var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync("SELECT dt_amsterdam FROM test.datetime_bulk_test");
@@ -702,7 +702,7 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_no_tz"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[dt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_no_tz FROM test.datetime_bulk_test");
@@ -721,7 +721,7 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_no_tz"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[utcDt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_no_tz FROM test.datetime_bulk_test");
@@ -742,7 +742,7 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_no_tz"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[localDt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_no_tz FROM test.datetime_bulk_test");
@@ -783,7 +783,7 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_utc"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[dt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_utc FROM test.datetime_bulk_test");
@@ -803,7 +803,7 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime_bulk_test",
             ColumnNames = ["dt_utc"]
         };
-        await bulkCopy.InitAsync();
+
         await bulkCopy.WriteToServerAsync([[dto]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_utc FROM test.datetime_bulk_test");
@@ -842,7 +842,7 @@ public class WriteDateTime64HttpParamTests : AbstractConnectionTestFixture
         var dt = DateTimeConversions.DateTimeEpochStart;
 
         var command = connection.CreateCommand();
-        command.AddParameter("dt", "DateTime64(3)", dt);
+        command.AddParameter("dt", dt);
         command.CommandText = "INSERT INTO test.datetime64_http_test (dt64_utc) VALUES ({dt:DateTime64(3)})";
         await command.ExecuteNonQueryAsync();
 
@@ -856,7 +856,7 @@ public class WriteDateTime64HttpParamTests : AbstractConnectionTestFixture
         var utcDt = new DateTime(2024, 1, 15, 12, 30, 45, 123, DateTimeKind.Utc);
 
         var command = connection.CreateCommand();
-        command.AddParameter("dt", "DateTime64(3)", utcDt);
+        command.AddParameter("dt", utcDt);
         command.CommandText = "INSERT INTO test.datetime64_http_test (dt64_utc) VALUES ({dt:DateTime64(3)})";
         await command.ExecuteNonQueryAsync();
 
@@ -871,7 +871,7 @@ public class WriteDateTime64HttpParamTests : AbstractConnectionTestFixture
         var dt = new DateTime(2024, 1, 15, 12, 30, 45, 123, DateTimeKind.Unspecified);
 
         var command = connection.CreateCommand();
-        command.AddParameter("dt", "DateTime64(3)", dt);
+        command.AddParameter("dt", dt);
         command.CommandText = "INSERT INTO test.datetime64_http_test (dt64_utc) VALUES ({dt:DateTime64(3)})";
         await command.ExecuteNonQueryAsync();
 
@@ -887,7 +887,7 @@ public class WriteDateTime64HttpParamTests : AbstractConnectionTestFixture
         var utcDt = new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Utc);
 
         var command = connection.CreateCommand();
-        command.AddParameter("dt", "DateTime64(3)", utcDt);
+        command.AddParameter("dt", utcDt);
         command.CommandText = "INSERT INTO test.datetime64_http_test (dt64_amsterdam) VALUES ({dt:DateTime64(3)})";
         await command.ExecuteNonQueryAsync();
 
@@ -904,7 +904,7 @@ public class WriteDateTime64HttpParamTests : AbstractConnectionTestFixture
         var expectedUtc = new DateTimeOffset(localDt).UtcDateTime;
 
         var command = connection.CreateCommand();
-        command.AddParameter("dt", "DateTime64(3)", localDt);
+        command.AddParameter("dt", localDt);
         command.CommandText = "INSERT INTO test.datetime64_http_test (dt64_utc) VALUES ({dt:DateTime64(3)})";
         await command.ExecuteNonQueryAsync();
 
@@ -919,7 +919,7 @@ public class WriteDateTime64HttpParamTests : AbstractConnectionTestFixture
         var dto = new DateTimeOffset(2024, 1, 15, 15, 0, 0, 123, TimeSpan.FromHours(3)); // 15:00 +03:00 = 12:00 UTC
 
         var command = connection.CreateCommand();
-        command.AddParameter("dt", "DateTime64(3)", dto);
+        command.AddParameter("dt", dto);
         command.CommandText = "INSERT INTO test.datetime64_http_test (dt64_utc) VALUES ({dt:DateTime64(3)})";
         await command.ExecuteNonQueryAsync();
 
@@ -964,7 +964,7 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime64_bulk_test",
             ColumnNames = ["dt64_utc"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[dt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt64_utc FROM test.datetime64_bulk_test");
@@ -981,7 +981,7 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime64_bulk_test",
             ColumnNames = ["dt64_utc"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[utcDt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt64_utc FROM test.datetime64_bulk_test");
@@ -999,7 +999,7 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime64_bulk_test",
             ColumnNames = ["dt64_utc"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[dt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt64_utc FROM test.datetime64_bulk_test");
@@ -1021,7 +1021,7 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime64_bulk_test",
             ColumnNames = ["dt64_amsterdam"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[utcDt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt64_amsterdam FROM test.datetime64_bulk_test");
@@ -1040,7 +1040,7 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = "test.datetime64_bulk_test",
             ColumnNames = ["dt64_utc"]
         };
-        await bulkCopy.InitAsync();
+        
         await bulkCopy.WriteToServerAsync([[localDt]]);
 
         var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt64_utc FROM test.datetime64_bulk_test");

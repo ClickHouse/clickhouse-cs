@@ -1,4 +1,5 @@
-﻿using System;
+﻿#nullable enable
+using System;
 using System.Collections.Generic;
 using ClickHouse.Driver.ADO;
 
@@ -49,7 +50,7 @@ public class QueryOptions
     /// Gets or sets the session ID to use (the value is only used if UseSession is true).
     /// Default: null
     /// </summary>
-    public string SessionId { get; init; }
+    public string? SessionId { get; init; }
 
     /// <summary>
     /// Gets or sets the bearer token for JWT authentication.
@@ -58,7 +59,7 @@ public class QueryOptions
     /// The token should be provided as-is (already encoded if required by your auth provider).
     /// Default: null
     /// </summary>
-    public string BearerToken { get; init; }
+    public string? BearerToken { get; init; }
 
     /// <summary>
     /// Gets or sets the timeout for operations. If set, overrides the client settings.

@@ -27,6 +27,7 @@ public class ClickHouseBulkCopy : IDisposable
     });
 
     private readonly ClickHouseConnection connection;
+    private readonly ClickHouseClient client;
     private readonly BatchSerializer batchSerializer;
     private readonly RowBinaryFormat rowBinaryFormat;
     private readonly bool ownsConnection;
@@ -45,6 +46,7 @@ public class ClickHouseBulkCopy : IDisposable
     public ClickHouseBulkCopy(ClickHouseConnection connection, RowBinaryFormat rowBinaryFormat)
     {
         this.connection = connection ?? throw new ArgumentNullException(nameof(connection));
+        client = connection.ClickHouseClient;
         this.rowBinaryFormat = rowBinaryFormat;
         batchSerializer = BatchSerializer.GetByRowBinaryFormat(rowBinaryFormat);
     }
@@ -152,7 +154,7 @@ public class ClickHouseBulkCopy : IDisposable
         if (DestinationTableName is null)
             throw new InvalidOperationException($"{nameof(DestinationTableName)} is null");
 
-        var logger = connection.GetLogger(ClickHouseLogCategories.BulkCopy);
+        var logger = client.GetLogger(ClickHouseLogCategories.BulkCopy);
         logger?.LogDebug("Loading metadata for table {Table}.", DestinationTableName);
 
         columnNamesAndTypes = await LoadNamesAndTypesAsync(DestinationTableName, ColumnNames).ConfigureAwait(false);
@@ -189,7 +191,7 @@ public class ClickHouseBulkCopy : IDisposable
         if (rows is null)
             throw new ArgumentNullException(nameof(rows));
 
-        var logger = connection.GetLogger(ClickHouseLogCategories.BulkCopy);
+        var logger = client.GetLogger(ClickHouseLogCategories.BulkCopy);
 
         if (string.IsNullOrWhiteSpace(DestinationTableName))
             throw new InvalidOperationException("Destination table not set");
@@ -255,7 +257,7 @@ public class ClickHouseBulkCopy : IDisposable
 
     private async Task SendBatchAsync(Batch batch, CancellationToken token)
     {
-        var logger = connection.GetLogger(ClickHouseLogCategories.BulkCopy);
+        var logger = client.GetLogger(ClickHouseLogCategories.BulkCopy);
 
         using (batch) // Dispose object regardless whether sending succeeds
         {

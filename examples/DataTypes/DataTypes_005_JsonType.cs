@@ -119,20 +119,18 @@ public static class JsonType
         Console.WriteLine("-".PadRight(50, '-'));
 
         // Must explicitly set Binary mode
-        using var connection = new ClickHouseConnection("Host=localhost;JsonWriteMode=Binary");
-        await connection.OpenAsync();
-        connection.CustomSettings["allow_experimental_json_type"] = 1;
+        using var client = new ClickHouseClient("Host=localhost;JsonWriteMode=Binary;set_allow_experimental_json_type=1");
 
         // Register POCO types before using them
-        connection.RegisterJsonSerializationType<EventWithCustomPaths>();
+        client.RegisterJsonSerializationType<EventWithCustomPaths>();
         Console.WriteLine("   Registered POCO types for binary serialization\n");
 
         var tableName = "example_insert_binary_mode";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
+        using var bulkCopy = new ClickHouseBulkCopy(client.CreateConnection()) { DestinationTableName = tableName };
 
         var rows = new List<object[]>
         {
@@ -150,7 +148,7 @@ public static class JsonType
         Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows with binary serialization\n");
 
         // Verify the data
-        using var reader = await connection.ExecuteReaderAsync(
+        using var reader = await client.ExecuteReaderAsync(
             $"SELECT id, data FROM {tableName} ORDER BY id");
 
         Console.WriteLine("   Results:");
@@ -161,7 +159,7 @@ public static class JsonType
             Console.WriteLine($"     ID {id}: {data.ToJsonString()}");
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>

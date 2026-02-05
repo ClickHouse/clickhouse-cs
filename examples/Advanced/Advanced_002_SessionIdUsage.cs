@@ -9,15 +9,9 @@ namespace ClickHouse.Driver.Examples;
 /// - Creating and using temporary tables
 /// - Maintaining query context across multiple statements
 ///
-/// IMPORTANT LIMITATION: When UseSession is enabled with a SessionId, the driver creates
-/// a single-connection HttpClientFactory instead of using a pooled connection. This means
-/// all queries in the session will use the same underlying HTTP connection, which is not
-/// suitable for high-performance or high-concurrency scenarios.
-///
-/// Making queries using the same id from multiple connections simultaneously will cause errors.
-/// 
-/// Consider using regular tables with TTL instead of temporary tables
-/// if you need to share data across multiple connections
+/// Note: Making queries using the same session ID from multiple connections simultaneously
+/// may cause errors on the server side. Consider using regular tables with TTL instead of
+/// temporary tables if you need to share data across multiple connections.
 /// </summary>
 public static class SessionIdUsage
 {

@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -12,6 +13,7 @@ using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Diagnostic;
+using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Http;
 using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Logging;
@@ -37,16 +39,15 @@ namespace ClickHouse.Driver;
 /// </remarks>
 public sealed class ClickHouseClient : IClickHouseClient
 {
-    private readonly List<IDisposable> _disposables = new();
-    private readonly ConcurrentDictionary<string, Lazy<ILogger>> _loggerCache = new();
-    private readonly JsonTypeRegistry _jsonTypeRegistry = new();
+    private readonly List<IDisposable> disposables = new();
+    private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
+    private readonly JsonTypeRegistry jsonTypeRegistry = new();
+    private readonly IHttpClientFactory httpClientFactory;
+    private readonly string httpClientName;
+    private readonly Uri serverUri;
+    private readonly ILoggerFactory loggerFactory;
 
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly string _httpClientName;
-    private readonly Uri _serverUri;
-    private readonly ILoggerFactory _loggerFactory;
-
-    private bool _disposed;
+    private bool disposed;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseClient"/> class with the specified connection string.
@@ -63,7 +64,10 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <param name="connectionString">The ClickHouse connection string.</param>
     /// <param name="httpClient">Instance of HttpClient</param>
     public ClickHouseClient(string connectionString, HttpClient httpClient)
-        : this(new ClickHouseClientSettings(connectionString) { HttpClient = httpClient })
+        : this(new ClickHouseClientSettings(connectionString)
+        {
+            HttpClient = httpClient,
+        })
     {
     }
 
@@ -74,8 +78,11 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <param name="httpClientFactory">An IHttpClientFactory</param>
     /// <param name="httpClientName">The name of the HTTP client you want to be created using the provided factory. If left empty, the default client will be created.</param>
     public ClickHouseClient(string connectionString, IHttpClientFactory httpClientFactory, string httpClientName = "")
-        : this(new ClickHouseClientSettings(connectionString) 
-            { HttpClientFactory = httpClientFactory, HttpClientName = httpClientName })
+        : this(new ClickHouseClientSettings(connectionString)
+        {
+            HttpClientFactory = httpClientFactory,
+            HttpClientName = httpClientName,
+        })
     {
     }
 
@@ -88,16 +95,16 @@ public sealed class ClickHouseClient : IClickHouseClient
         Settings = settings ?? throw new ArgumentNullException(nameof(settings));
         Settings.Validate();
 
-        _serverUri = new UriBuilder(Settings.Protocol, Settings.Host, Settings.Port, Settings.Path ?? string.Empty).Uri;
-        _httpClientName = Settings.HttpClientName ?? string.Empty;
-        _loggerFactory = Settings.LoggerFactory;
+        serverUri = new UriBuilder(Settings.Protocol, Settings.Host, Settings.Port, Settings.Path ?? string.Empty).Uri;
+        httpClientName = Settings.HttpClientName ?? string.Empty;
+        loggerFactory = Settings.LoggerFactory;
 
-        if (Settings.EnableDebugMode && _loggerFactory != null)
+        if (Settings.EnableDebugMode && loggerFactory != null)
         {
-            TraceHelper.Activate(_loggerFactory);
+            TraceHelper.Activate(loggerFactory);
         }
 
-        _httpClientFactory = CreateHttpClientFactory(settings);
+        httpClientFactory = CreateHttpClientFactory(settings);
     }
 
     /// <summary>
@@ -105,22 +112,34 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// </summary>
     public ClickHouseClientSettings Settings { get; }
 
+    internal string RedactedConnectionString
+    {
+        get
+        {
+            var builder = ConnectionStringBuilder;
+            builder.Password = "****";
+            return builder.ToString();
+        }
+    }
+
+    internal ClickHouseConnectionStringBuilder ConnectionStringBuilder => ClickHouseConnectionStringBuilder.FromSettings(Settings);
+
     /// <summary>
     /// Gets the type settings for serialization.
     /// </summary>
-    internal TypeSettings TypeSettings => new(Settings.UseCustomDecimals, Settings.ReadStringsAsByteArrays, _jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode);
+    internal TypeSettings TypeSettings => new(Settings.UseCustomDecimals, Settings.ReadStringsAsByteArrays, jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode);
 
     /// <summary>
     /// Gets the server URI.
     /// </summary>
-    internal Uri ServerUri => _serverUri;
+    internal Uri ServerUri => serverUri;
 
     /// <inheritdoc />
     public async Task<bool> PingAsync(QueryOptions queryOptions = null, CancellationToken cancellationToken = default)
     {
         try
         {
-            var pingUri = new Uri(_serverUri, "ping");
+            var pingUri = new Uri(serverUri, "ping");
             using var request = new HttpRequestMessage(HttpMethod.Get, pingUri);
             AddDefaultHttpHeaders(request.Headers, queryOptions);
 
@@ -129,7 +148,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
         catch (Exception ex)
         {
-            GetLogger(ClickHouseLogCategories.Connection)?.LogWarning(ex, "Ping to {Endpoint} failed.", _serverUri);
+            GetLogger(ClickHouseLogCategories.Connection)?.LogWarning(ex, "Ping to {Endpoint} failed.", serverUri);
             return false;
         }
     }
@@ -137,57 +156,195 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <inheritdoc />
     public void RegisterJsonSerializationType<T>()
         where T : class
-        => _jsonTypeRegistry.RegisterType<T>();
+        => jsonTypeRegistry.RegisterType<T>();
 
     /// <inheritdoc />
     public void RegisterJsonSerializationType(Type type)
-        => _jsonTypeRegistry.RegisterType(type);
+        => jsonTypeRegistry.RegisterType(type);
 
     /// <inheritdoc/>
     public ClickHouseConnection CreateConnection()
     {
-        throw new NotImplementedException();
+        return new ClickHouseConnection(this);
     }
 
     /// <inheritdoc />
-    public Task<int> ExecuteNonQueryAsync(
+    public async Task<int> ExecuteNonQueryAsync(
         string sql,
-        IEnumerable<ClickHouseDbParameter> parameters = null,
+        ClickHouseParameterCollection parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException();
+        var response = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+        using var reader = new ExtendedBinaryReader(await response.HttpResponseMessage.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false));
+
+        return reader.PeekChar() != -1 ? reader.Read7BitEncodedInt() : 0;
     }
 
     /// <inheritdoc />
-    public Task<T> ExecuteScalarAsync<T>(
+    public async Task<object> ExecuteScalarAsync(
         string sql,
-        IEnumerable<ClickHouseDbParameter> parameters = null,
+        ClickHouseParameterCollection parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException();
+        var reader = await ExecuteReaderAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+        return reader.Read() ? reader.GetValue(0) : null;
     }
 
     /// <inheritdoc />
-    public Task<ClickHouseDataReader> ExecuteReaderAsync(
+    public async Task<ClickHouseDataReader> ExecuteReaderAsync(
         string sql,
-        IEnumerable<ClickHouseDbParameter> parameters = null,
+        ClickHouseParameterCollection parameters = null,
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        // Will be implemented in Phase 2
-        throw new NotImplementedException();
+        var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings).ConfigureAwait(false);
+    }
+
+    internal async Task<QueryResult> PostSqlQueryAsync(
+        string sql,
+        ClickHouseParameterCollection parameters = null,
+        QueryOptions options = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var activity = this.StartActivity("PostSqlQueryAsync");
+
+        var uriBuilder = CreateUriBuilder(queryOverride: options);
+
+        var logger = GetLogger(ClickHouseLogCategories.Command);
+        var isDebugLoggingEnabled = logger?.IsEnabled(LogLevel.Debug) ?? false;
+        Stopwatch stopwatch = null;
+        if (isDebugLoggingEnabled)
+        {
+            stopwatch = Stopwatch.StartNew();
+            logger.LogDebug("Executing SQL query. QueryId: {QueryId}", uriBuilder.GetEffectiveQueryId());
+        }
+
+        using var postMessage = Settings.UseFormDataParameters
+            ? BuildHttpRequestMessageWithFormData(
+                sql,
+                parameters,
+                uriBuilder,
+                options)
+            : BuildHttpRequestMessageWithQueryParams(
+                sql,
+                parameters,
+                uriBuilder,
+                options);
+
+        activity.SetQuery(sql);
+
+        HttpResponseMessage response = null;
+        try
+        {
+            response = await SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+
+            var handled = await HandleError(response, sql, activity).ConfigureAwait(false);
+            var result = new QueryResult(handled);
+
+            if (isDebugLoggingEnabled)
+            {
+                LogQuerySuccess(stopwatch, uriBuilder.GetEffectiveQueryId(), logger, result.QueryStats);
+            }
+
+            activity.SetQueryStats(result.QueryStats);
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "Query (QueryId: {QueryId}) failed.", uriBuilder.GetEffectiveQueryId());
+            activity?.SetException(ex);
+            throw;
+        }
+    }
+
+    private HttpRequestMessage BuildHttpRequestMessageWithQueryParams(string sqlQuery, ClickHouseParameterCollection parameters, ClickHouseUriBuilder uriBuilder, QueryOptions queryOptions)
+    {
+        if (parameters != null)
+        {
+            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
+            sqlQuery = parameters.ReplacePlaceholders(sqlQuery);
+            foreach (ClickHouseDbParameter parameter in parameters)
+            {
+                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
+                uriBuilder.AddSqlQueryParameter(
+                    parameter.ParameterName,
+                    HttpParameterFormatter.Format(parameter, TypeSettings, sqlTypeHint));
+            }
+        }
+
+        var uri = uriBuilder.ToString();
+
+        var postMessage = new HttpRequestMessage(HttpMethod.Post, uri);
+
+        AddDefaultHttpHeaders(postMessage.Headers, queryOptions);
+        HttpContent content = new StringContent(sqlQuery);
+        content.Headers.ContentType = new MediaTypeHeaderValue("text/sql");
+        if (Settings.UseCompression)
+        {
+            content = new CompressedContent(content, DecompressionMethods.GZip);
+        }
+
+        postMessage.Content = content;
+
+        return postMessage;
+    }
+
+    private HttpRequestMessage BuildHttpRequestMessageWithFormData(string sqlQuery, ClickHouseParameterCollection parameters, ClickHouseUriBuilder uriBuilder, QueryOptions queryOptions)
+    {
+        var content = new MultipartFormDataContent();
+
+        if (parameters != null)
+        {
+            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
+            sqlQuery = parameters.ReplacePlaceholders(sqlQuery);
+
+            foreach (ClickHouseDbParameter parameter in parameters)
+            {
+                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
+                content.Add(
+                    content: new StringContent(HttpParameterFormatter.Format(parameter, TypeSettings, sqlTypeHint)),
+                    name: $"param_{parameter.ParameterName}");
+            }
+        }
+
+        content.Add(
+            content: new StringContent(sqlQuery),
+            name: "query");
+
+        var uri = uriBuilder.ToString();
+
+        var postMessage = new HttpRequestMessage(HttpMethod.Post, uri);
+
+        AddDefaultHttpHeaders(postMessage.Headers, queryOptions);
+
+        postMessage.Content = content;
+
+        return postMessage;
+    }
+
+    private static void LogQuerySuccess(Stopwatch stopwatch, string queryId, ILogger logger, QueryStats queryStats)
+    {
+        stopwatch.Stop();
+        logger.LogDebug(
+            "Query (QueryId: {QueryId}) succeeded in {ElapsedMilliseconds:F2} ms. Query Stats: {QueryStats}",
+            queryId,
+            stopwatch.Elapsed.TotalMilliseconds,
+            queryStats);
     }
 
     /// <inheritdoc />
-    public Task<ClickHouseRawResult> ExecuteRawResultAsync(
+    public async Task<ClickHouseRawResult> ExecuteRawResultAsync(
         string sql,
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        // Will be implemented in Phase 2
-        throw new NotImplementedException();
+        var response = await PostSqlQueryAsync(sql, null, options, cancellationToken).ConfigureAwait(false);
+        return new ClickHouseRawResult(response.HttpResponseMessage);
     }
 
     /// <inheritdoc />
@@ -202,16 +359,42 @@ public sealed class ClickHouseClient : IClickHouseClient
     }
 
     /// <inheritdoc />
-    public Task<HttpResponseMessage> InsertRawStreamAsync(
+    public async Task<HttpResponseMessage> InsertRawStreamAsync(
         string table,
         Stream stream,
         string format,
         IEnumerable<string> columns = null,
         bool useCompression = true,
-        InsertOptions options = null,
+        QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException();
+        if (string.IsNullOrEmpty(table))
+            throw new ArgumentException("Table name cannot be null or empty", nameof(table));
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+        if (string.IsNullOrEmpty(format))
+            throw new ArgumentException("Format cannot be null or empty", nameof(format));
+
+        var columnList = columns != null ? $"({string.Join(", ", columns)})" : string.Empty;
+        var query = $"INSERT INTO {table} {columnList} FORMAT {format}";
+
+        HttpContent content = new StreamContent(stream);
+        if (useCompression)
+        {
+            // CompressedContent handles compression and adds Content-Encoding header
+            content = new CompressedContent(content, System.Net.DecompressionMethods.GZip);
+        }
+
+        // Pass isCompressed=false since CompressedContent already adds the Content-Encoding header
+        try
+        {
+            return await PostStreamAsync(query, content, isCompressed: false, options, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            content.Dispose();
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -220,7 +403,6 @@ public sealed class ClickHouseClient : IClickHouseClient
         var content = new StreamContent(data);
         return await PostStreamAsync(sql, content, isCompressed, queryOptions, token).ConfigureAwait(false);
     }
-
 
     /// <inheritdoc />
     public async Task<HttpResponseMessage> PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, bool isCompressed, CancellationToken token, QueryOptions queryOptions = null)
@@ -231,7 +413,36 @@ public sealed class ClickHouseClient : IClickHouseClient
 
     private async Task<HttpResponseMessage> PostStreamAsync(string sql, HttpContent content, bool isCompressed, QueryOptions queryOptions, CancellationToken token)
     {
-        throw new NotImplementedException();
+        using var activity = this.StartActivity("PostStreamAsync");
+        activity.SetQuery(sql);
+
+        var builder = CreateUriBuilder(sql);
+        builder.QueryId = queryOptions?.QueryId;
+
+        using var postMessage = new HttpRequestMessage(HttpMethod.Post, builder.ToString());
+        AddDefaultHttpHeaders(postMessage.Headers, queryOptions);
+
+        postMessage.Content = content;
+        postMessage.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        if (isCompressed)
+        {
+            postMessage.Content.Headers.Add("Content-Encoding", "gzip");
+        }
+
+        GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Sending streamed request to {Endpoint} (Compressed: {Compressed}).", serverUri, isCompressed);
+
+        try
+        {
+            var response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
+            GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Streamed request to {Endpoint} received response {StatusCode}.", serverUri, response.StatusCode);
+
+            return await HandleError(response, sql, activity).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            GetLogger(ClickHouseLogCategories.Transport)?.LogError(ex, "Streamed request to {Endpoint} failed.", serverUri);
+            throw;
+        }
     }
 
     /// <summary>
@@ -239,12 +450,12 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// </summary>
     public void Dispose()
     {
-        if (_disposed)
+        if (disposed)
             return;
 
-        _disposed = true;
+        disposed = true;
 
-        foreach (var d in _disposables)
+        foreach (var d in disposables)
         {
             d.Dispose();
         }
@@ -257,72 +468,51 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// </summary>
     internal ILogger GetLogger(string categoryName)
     {
-        if (_loggerFactory == null)
+        if (loggerFactory == null)
             return null;
 
-        return _loggerCache.GetOrAdd(
+        return loggerCache.GetOrAdd(
             categoryName,
-            key => new Lazy<ILogger>(() => _loggerFactory.CreateLogger(key))).Value;
+            key => new Lazy<ILogger>(() => loggerFactory.CreateLogger(key))).Value;
     }
 
     /// <summary>
     /// Gets an HTTP client from the factory.
     /// </summary>
-    internal HttpClient HttpClient => _httpClientFactory.CreateClient(_httpClientName);
-
-    /// <summary>
-    /// Sends an HTTP request.
-    /// </summary>
-    internal async Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request,
-        HttpCompletionOption completionOption,
-        CancellationToken cancellationToken)
-    {
-        return await HttpClient.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
-    }
+    internal HttpClient HttpClient => httpClientFactory.CreateClient(httpClientName);
 
     /// <summary>
     /// Creates a URI builder for the specified SQL query.
     /// </summary>
     internal ClickHouseUriBuilder CreateUriBuilder(string sql = null, QueryOptions queryOverride = null)
     {
-        var customSettings = Settings.CustomSettings ?? new Dictionary<string, object>();
-        var queryParams = new Dictionary<string, object>(customSettings);
-
-        // TODO move settings merging into ClickHouseUriBuilder after refactor
-        // Merge query-level custom settings
-        if (queryOverride?.CustomSettings != null)
-        {
-            foreach (var kvp in queryOverride.CustomSettings)
-            {
-                queryParams[kvp.Key] = kvp.Value;
-            }
-        }
-
         string sessionId = Settings.UseSession ? Settings.SessionId : null;
-        if (queryOverride != null && queryOverride.UseSession != null)
+        if (queryOverride?.UseSession != null)
         {
             // Prioritize query-level setting
             sessionId = queryOverride.UseSession.Value ? queryOverride.SessionId : null;
         }
 
-        return new ClickHouseUriBuilder(_serverUri)
+        return new ClickHouseUriBuilder(serverUri)
         {
             Database = queryOverride?.Database ?? Settings.Database,
             SessionId = sessionId,
             UseCompression = Settings.UseCompression,
-            ConnectionQueryStringParameters = queryParams,
-            ConnectionRoles = queryOverride?.Roles ?? Settings.Roles,
+            ConnectionQueryStringParameters = Settings.CustomSettings,
+            CommandQueryStringParameters = queryOverride?.CustomSettings,
+            ConnectionRoles = Settings.Roles,
+            CommandRoles = queryOverride?.Roles,
             Sql = sql,
             JsonReadMode = Settings.JsonReadMode,
             JsonWriteMode = Settings.JsonWriteMode,
+            QueryId = queryOverride?.QueryId,
         };
     }
 
     /// <summary>
     /// Adds default HTTP headers to a request.
     /// </summary>
-    internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, QueryOptions queryOverride)
+    internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, QueryOptions queryOverride = null)
     {
         var userAgentInfo = UserAgentProvider.Info;
 
@@ -375,7 +565,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <summary>
     /// Handles HTTP response errors.
     /// </summary>
-    internal static async Task<HttpResponseMessage> HandleError(HttpResponseMessage response, string query, Activity activity)
+    private static async Task<HttpResponseMessage> HandleError(HttpResponseMessage response, string query, Activity activity)
     {
         if (response.IsSuccessStatusCode)
         {
@@ -391,26 +581,40 @@ public sealed class ClickHouseClient : IClickHouseClient
 
     private IHttpClientFactory CreateHttpClientFactory(ClickHouseClientSettings settings)
     {
+        IHttpClientFactory factory;
         if (settings.HttpClient != null)
         {
             GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Using provided HttpClient instance.");
-            return new CannedHttpClientFactory(settings.HttpClient);
+            factory = new CannedHttpClientFactory(settings.HttpClient);
         }
-
-        if (settings.HttpClientFactory != null)
+        else if (settings.HttpClientFactory != null)
         {
             GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Using IHttpClientFactory from settings.");
-            return settings.HttpClientFactory;
+            factory = settings.HttpClientFactory;
+        }
+        else
+        {
+            // Default: create pooled factory
+            GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Creating default pooled HttpClientFactory.");
+            var defaultFactory = new DefaultPoolHttpClientFactory(settings.SkipServerCertificateValidation)
+            {
+                Timeout = settings.Timeout,
+            };
+            disposables.Add(defaultFactory);
+            factory = defaultFactory;
         }
 
-        // Default: create pooled factory
-        GetLogger(ClickHouseLogCategories.Connection)?.LogInformation("Creating default pooled HttpClientFactory.");
-        var factory = new DefaultPoolHttpClientFactory(settings.SkipServerCertificateValidation)
-        {
-            Timeout = settings.Timeout,
-        };
-        _disposables.Add(factory);
+        LoggingHelpers.LogHttpClientConfiguration(GetLogger(ClickHouseLogCategories.Client), factory);
+
         return factory;
+    }
+
+    /// <summary>
+    /// Sends an HTTP request
+    /// </summary>
+    internal async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationToken cancellationToken)
+    {
+        return await HttpClient.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
     }
 
     private static bool IsBlockedHeader(string headerName)

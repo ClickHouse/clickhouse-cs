@@ -2,23 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
-using System.Diagnostics;
-using System.Linq;
-using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
-using ClickHouse.Driver.Diagnostic;
 using ClickHouse.Driver.Formats;
-using ClickHouse.Driver.Json;
-using ClickHouse.Driver.Logging;
-using ClickHouse.Driver.Utility;
-using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -32,6 +22,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     private Dictionary<string, object> customSettings;
     private List<string> roles;
     private ClickHouseConnection connection;
+    private ClickHouseClient client;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseCommand"/> class.
@@ -47,6 +38,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public ClickHouseCommand(ClickHouseConnection connection)
     {
         this.connection = connection;
+        client = connection.ClickHouseClient;
     }
 
     /// <summary>
@@ -109,7 +101,11 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     protected override DbConnection DbConnection
     {
         get => connection;
-        set => connection = (ClickHouseConnection)value;
+        set
+        {
+            connection = (ClickHouseConnection)value;
+            client = connection?.ClickHouseClient;
+        }
     }
 
     protected override DbParameterCollection DbParameterCollection => commandParameters;
@@ -130,11 +126,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
         using var response = await PostSqlQueryAsync(CommandText, lcts.Token).ConfigureAwait(false);
-#if NET5_0_OR_GREATER
         using var reader = new ExtendedBinaryReader(await response.Content.ReadAsStreamAsync(lcts.Token).ConfigureAwait(false));
-#else
-        using var reader = new ExtendedBinaryReader(await response.Content.ReadAsStreamAsync().ConfigureAwait(false));
-#endif
 
         return reader.PeekChar() != -1 ? reader.Read7BitEncodedInt() : 0;
     }
@@ -209,176 +201,30 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             default:
                 break;
         }
+
         var result = await PostSqlQueryAsync(sqlBuilder.ToString(), lcts.Token).ConfigureAwait(false);
-        return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.TypeSettings).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result, client.TypeSettings).ConfigureAwait(false);
     }
 
     private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token)
     {
-        if (connection == null)
-            throw new InvalidOperationException("Connection not set");
-
-        using var activity = connection.StartActivity("PostSqlQueryAsync");
-
-        var uriBuilder = connection.CreateUriBuilder();
-        uriBuilder.QueryId = QueryId;
-        uriBuilder.CommandQueryStringParameters = customSettings;
-        uriBuilder.CommandRoles = roles;
-
-        var logger = connection.GetLogger(ClickHouseLogCategories.Command);
-        var isDebugLoggingEnabled = logger?.IsEnabled(LogLevel.Debug) ?? false;
-        Stopwatch stopwatch = null;
-        if (isDebugLoggingEnabled)
-        {
-            stopwatch = Stopwatch.StartNew();
-            logger.LogDebug("Executing SQL query. QueryId: {QueryId}", uriBuilder.GetEffectiveQueryId());
-        }
-
-        await connection.EnsureOpenAsync().ConfigureAwait(false); // Preserve old behavior
-
-        using var postMessage = connection.UseFormDataParameters
-            ? BuildHttpRequestMessageWithFormData(
-                sqlQuery: sqlQuery,
-                uriBuilder: uriBuilder)
-            : BuildHttpRequestMessageWithQueryParams(
-                sqlQuery: sqlQuery,
-                uriBuilder: uriBuilder);
-
-        activity.SetQuery(sqlQuery);
-
-        HttpResponseMessage response = null;
-        try
-        {
-            response = await connection
-                .SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, token)
-                .ConfigureAwait(false);
-
-            QueryId = ClickHouseConnection.ExtractQueryId(response);
-            QueryStats = ExtractQueryStats(response);
-            ServerTimezone = ExtractTimezone(response);
-            activity.SetQueryStats(QueryStats);
-
-            var handled = await ClickHouseConnection.HandleError(response, sqlQuery, activity).ConfigureAwait(false);
-
-            if (isDebugLoggingEnabled)
-            {
-                LogQuerySuccess(stopwatch, QueryId, logger);
-            }
-
-            return handled;
-        }
-        catch (Exception ex)
-        {
-            logger?.LogError(ex, "Query (QueryId: {QueryId}) failed.", uriBuilder.GetEffectiveQueryId());
-            activity?.SetException(ex);
-            throw;
-        }
+        var options = BuildQueryOptions();
+        QueryResult result = await client.PostSqlQueryAsync(sqlQuery, commandParameters, options, token).ConfigureAwait(false);
+        QueryId = result.QueryId;
+        QueryStats = result.QueryStats;
+        ServerTimezone = result.ServerTimezone;
+        return result.HttpResponseMessage;
     }
 
-    private void LogQuerySuccess(Stopwatch stopwatch, string queryId, ILogger logger)
+    private QueryOptions BuildQueryOptions()
     {
-        stopwatch.Stop();
-        logger.LogDebug(
-            "Query (QueryId: {QueryId}) succeeded in {ElapsedMilliseconds:F2} ms. Query Stats: {QueryStats}",
-            queryId,
-            stopwatch.Elapsed.TotalMilliseconds,
-            QueryStats);
-    }
-
-    private HttpRequestMessage BuildHttpRequestMessageWithQueryParams(string sqlQuery, ClickHouseUriBuilder uriBuilder)
-    {
-        if (commandParameters != null)
+        return new QueryOptions
         {
-            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
-            sqlQuery = commandParameters.ReplacePlaceholders(sqlQuery);
-            foreach (ClickHouseDbParameter parameter in commandParameters)
-            {
-                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
-                uriBuilder.AddSqlQueryParameter(
-                    parameter.ParameterName,
-                    HttpParameterFormatter.Format(parameter, connection.TypeSettings, sqlTypeHint));
-            }
-        }
-
-        var uri = uriBuilder.ToString();
-
-        var postMessage = new HttpRequestMessage(HttpMethod.Post, uri);
-
-        connection.AddDefaultHttpHeaders(postMessage.Headers, bearerTokenOverride: BearerToken);
-        HttpContent content = new StringContent(sqlQuery);
-        content.Headers.ContentType = new MediaTypeHeaderValue("text/sql");
-        if (connection.UseCompression)
-        {
-            content = new CompressedContent(content, DecompressionMethods.GZip);
-        }
-
-        postMessage.Content = content;
-
-        return postMessage;
-    }
-
-    private HttpRequestMessage BuildHttpRequestMessageWithFormData(string sqlQuery, ClickHouseUriBuilder uriBuilder)
-    {
-        var content = new MultipartFormDataContent();
-
-        if (commandParameters != null)
-        {
-            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
-            sqlQuery = commandParameters.ReplacePlaceholders(sqlQuery);
-
-            foreach (ClickHouseDbParameter parameter in commandParameters)
-            {
-                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
-                content.Add(
-                    content: new StringContent(HttpParameterFormatter.Format(parameter, connection.TypeSettings, sqlTypeHint)),
-                    name: $"param_{parameter.ParameterName}");
-            }
-        }
-
-        content.Add(
-            content: new StringContent(sqlQuery),
-            name: "query");
-
-        var uri = uriBuilder.ToString();
-
-        var postMessage = new HttpRequestMessage(HttpMethod.Post, uri);
-
-        connection.AddDefaultHttpHeaders(postMessage.Headers, bearerTokenOverride: BearerToken);
-
-        postMessage.Content = content;
-
-        return postMessage;
-    }
-
-    private static readonly JsonSerializerOptions SummarySerializerOptions = new JsonSerializerOptions
-    {
-        PropertyNamingPolicy = new SnakeCaseNamingPolicy(),
-        NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString,
-    };
-
-    private static QueryStats ExtractQueryStats(HttpResponseMessage response)
-    {
-        try
-        {
-            const string summaryHeader = "X-ClickHouse-Summary";
-            if (response.Headers.TryGetValues(summaryHeader, out var values))
-            {
-                return JsonSerializer.Deserialize<QueryStats>(values.First(), SummarySerializerOptions);
-            }
-        }
-        catch
-        {
-        }
-        return null;
-    }
-
-    private static string ExtractTimezone(HttpResponseMessage response)
-    {
-        const string timezoneHeader = "X-ClickHouse-Timezone";
-        if (response.Headers.TryGetValues(timezoneHeader, out var values))
-        {
-            return values.FirstOrDefault();
-        }
-        return null;
+            QueryId = QueryId,
+            BearerToken = BearerToken,
+            Database = connection?.Database,
+            Roles = roles?.Count > 0 ? roles : null,
+            CustomSettings = customSettings?.Count > 0 ? customSettings : null,
+        };
     }
 }
