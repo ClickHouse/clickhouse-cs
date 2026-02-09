@@ -8,6 +8,8 @@ namespace ClickHouse.Driver.Examples;
 /// ReplacingMergeTree automatically deduplicates rows with the same sorting key (ORDER BY),
 /// keeping only the row with the highest version. This enables performant "upsert" behavior.
 ///
+/// Note that FINAL incurs a performance penalty, see the blog here for tips on managing that: https://clickhouse.com/blog/clickhouse-postgresql-change-data-capture-cdc-part-1#final-performance
+///
 /// Other specialized MergeTree variants exist as well, see https://clickhouse.com/docs/en/engines/table-engines/mergetree-family/
 ///
 /// Key concepts:
