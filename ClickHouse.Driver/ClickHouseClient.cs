@@ -440,6 +440,11 @@ public sealed class ClickHouseClient : IClickHouseClient
         // Use default values if none provided
         options ??= new InsertOptions();
 
+        if (options.BatchSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "BatchSize must be greater than zero");
+        if (options.MaxDegreeOfParallelism <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "MaxDegreeOfParallelism must be greater than zero");
+
         var serializer = BatchSerializer.GetByRowBinaryFormat(options.Format);
 
         // Load table structure
@@ -646,6 +651,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             JsonReadMode = Settings.JsonReadMode,
             JsonWriteMode = Settings.JsonWriteMode,
             QueryId = queryOverride?.QueryId,
+            MaxExecutionTime = queryOverride?.MaxExecutionTime,
         };
     }
 
@@ -696,6 +702,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             {
                 if (!IsBlockedHeader(kvp.Key))
                 {
+                    requestHeaders.Remove(kvp.Key);
                     requestHeaders.TryAddWithoutValidation(kvp.Key, kvp.Value);
                 }
             }

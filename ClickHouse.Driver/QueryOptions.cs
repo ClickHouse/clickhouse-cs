@@ -62,8 +62,10 @@ public class QueryOptions
     public string? BearerToken { get; init; }
 
     /// <summary>
-    /// Gets or sets the timeout for operations. If set, overrides the client settings.
-    /// Default: null
+    /// Gets or sets the maximum execution time for this query.
+    /// When set, this value is passed to ClickHouse as the max_execution_time setting,
+    /// which causes the server to cancel the query if it exceeds this duration.
+    /// Default: null (no limit)
     /// </summary>
-    public TimeSpan? Timeout { get; init; }
+    public TimeSpan? MaxExecutionTime { get; init; }
 }
