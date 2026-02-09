@@ -45,6 +45,10 @@ namespace ClickHouse.Driver;
 /// </remarks>
 public sealed class ClickHouseClient : IClickHouseClient
 {
+    private const int DefaultMemoryStreamBlockSize = 256 * 1024; // 256 KB
+    private const int DefaultMaxSmallPoolFreeBytes = 128 * 1024 * 1024; // 128 MB
+    private const int DefaultMaxLargePoolFreeBytes = 512 * 1024 * 1024; // 512 MB
+
     private readonly List<IDisposable> disposables = new();
     private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
     private readonly JsonTypeRegistry jsonTypeRegistry = new();
@@ -55,9 +59,9 @@ public sealed class ClickHouseClient : IClickHouseClient
 
     private static readonly RecyclableMemoryStreamManager CommonMemoryStreamManager = new(new RecyclableMemoryStreamManager.Options
     {
-        MaximumLargePoolFreeBytes = 512 * 1024 * 1024,
-        MaximumSmallPoolFreeBytes = 128 * 1024 * 1024,
-        BlockSize = 256 * 1024,
+        MaximumLargePoolFreeBytes = DefaultMaxLargePoolFreeBytes,
+        MaximumSmallPoolFreeBytes = DefaultMaxSmallPoolFreeBytes,
+        BlockSize = DefaultMemoryStreamBlockSize,
     });
 
     private readonly RecyclableMemoryStreamManager memoryStreamManager;
