@@ -840,7 +840,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             await bulkCopy.WriteToServerAsync(rows);
         });
 
-        Assert.That(ex.Message, Does.Contain("Destination table not set"));
+        Assert.That(ex.Message, Does.Contain("table is null"));
     }
 
     [Test]
