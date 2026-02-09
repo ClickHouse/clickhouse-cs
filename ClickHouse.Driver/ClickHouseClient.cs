@@ -377,9 +377,9 @@ public sealed class ClickHouseClient : IClickHouseClient
 
     private static string GetColumnsExpression(IEnumerable<string> columns) => columns == null || !columns.Any() ? "*" : string.Join(",", columns);
 
-    private async Task<(string[] names, ClickHouseType[] types)> LoadNamesAndTypesAsync(string destinationTableName, IEnumerable<string> columns = null)
+    private async Task<(string[] names, ClickHouseType[] types)> LoadNamesAndTypesAsync(string destinationTableName, QueryOptions options, IEnumerable<string> columns = null)
     {
-        using var reader = (ClickHouseDataReader)await ExecuteReaderAsync($"SELECT {GetColumnsExpression(columns)} FROM {destinationTableName} WHERE 1=0").ConfigureAwait(false);
+        using var reader = (ClickHouseDataReader)await ExecuteReaderAsync($"SELECT {GetColumnsExpression(columns)} FROM {destinationTableName} WHERE 1=0", null, options).ConfigureAwait(false);
         var types = reader.GetClickHouseColumnTypes();
         var names = reader.GetColumnNames().Select(c => c.EncloseColumnName()).ToArray();
         return (names, types);
@@ -400,7 +400,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
             // Async sending
             logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
-            await PostStreamAsync(null, stream, true, token).ConfigureAwait(false);
+            await PostStreamAsync(null, stream, true, token, insertOptions).ConfigureAwait(false);
 
             onBatchSent?.Invoke(batch.Size);
 
@@ -446,7 +446,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         var logger = GetLogger(ClickHouseLogCategories.Client);
         logger?.LogDebug("Loading metadata for table {Table}.", table);
 
-        var (columnNames, columnTypes) = await LoadNamesAndTypesAsync(table, columns).ConfigureAwait(false);
+        var (columnNames, columnTypes) = await LoadNamesAndTypesAsync(table, options, columns).ConfigureAwait(false);
         if (columnNames == null || columnTypes == null)
             throw new InvalidOperationException("Column names not initialized. Initialization failed.");
 
@@ -466,33 +466,21 @@ public sealed class ClickHouseClient : IClickHouseClient
             logger.LogDebug("Starting bulk copy into {Table} with batch size {BatchSize} and degree {Degree}.", table, options.BatchSize, options.MaxDegreeOfParallelism);
         }
 
-        var tasks = new Task<int>[options.MaxDegreeOfParallelism];
-        for (var i = 0; i < tasks.Length; i++)
-        {
-            tasks[i] = Task.FromResult(0);
-        }
+        long totalRowsWritten = 0;
+        var batches = IntoBatches(rows, query, columnTypes, options.BatchSize);
 
-        foreach (var batch in ClickHouseClient.IntoBatches(rows, query, columnTypes, options.BatchSize))
-        {
-            while (true)
+        await Parallel.ForEachAsync(
+            batches,
+            new ParallelOptions
             {
-                var completedTaskIndex = Array.FindIndex(tasks, t => t.IsCompleted);
-                if (completedTaskIndex >= 0)
-                {
-                    tasks[completedTaskIndex] = SendBatchAsync(table, batch, serializer, options, onBatchSent, cancellationToken);
-                    break; // while (true); go to next batch
-                }
-                else
-                {
-                    var completedTask = await Task.WhenAny(tasks).ConfigureAwait(false);
-                    await completedTask.ConfigureAwait(false);
-                }
-            }
-        }
-
-        await Task.WhenAll(tasks).ConfigureAwait(false);
-
-        long totalRowsWritten = tasks.Sum(x => x.Result);
+                MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
+                CancellationToken = cancellationToken,
+            },
+            async (batch, ct) =>
+            {
+                var count = await SendBatchAsync(table, batch, serializer, options, onBatchSent, ct).ConfigureAwait(false);
+                Interlocked.Add(ref totalRowsWritten, count);
+            }).ConfigureAwait(false);
 
         if (isDebugLoggingEnabled)
         {
@@ -569,8 +557,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         using var activity = this.StartActivity("PostStreamAsync");
         activity.SetQuery(sql);
 
-        var builder = CreateUriBuilder(sql);
-        builder.QueryId = queryOptions?.QueryId;
+        var builder = CreateUriBuilder(sql, queryOptions);
 
         using var postMessage = new HttpRequestMessage(HttpMethod.Post, builder.ToString());
         AddDefaultHttpHeaders(postMessage.Headers, queryOptions);
