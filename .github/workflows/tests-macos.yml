@@ -6,6 +6,7 @@ on:
       ref:
         required: false
         type: string
+
 jobs:
   macos:
     name: macOS Tests
@@ -23,7 +24,7 @@ jobs:
 
       - name: Setup ClickHouse
         run: |
-         curl https://clickhouse.com/ | sh
+          curl https://clickhouse.com/ | sh
 
           # Diagnostic: try --daemon and capture what happens (for bug report)
           echo "=== Diagnostic: testing --daemon flag ==="
@@ -50,7 +51,39 @@ jobs:
           ls -la ./clickhouse-server.pid 2>/dev/null || echo "No ./clickhouse-server.pid"
           ls -la /var/run/clickhouse-server/ 2>/dev/null || echo "No /var/run/clickhouse-server/"
 
+          # Test if daemon actually responds to requests
+          echo -e "\nWaiting for daemon to respond (up to 30s):"
+          DAEMON_READY=false
+          for i in {1..30}; do
+            if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
+              echo "Daemon responded after $i seconds"
+              DAEMON_READY=true
+              break
+            fi
+            # Check if process is still alive
+            if ! pgrep clickhouse > /dev/null 2>&1; then
+              echo "Daemon process died after $i seconds"
+              break
+            fi
+            echo "  Waiting... ($i/30)"
+            sleep 1
+          done
+
+          if [ "$DAEMON_READY" = true ]; then
+            echo -e "\nDaemon is responding! Running test queries:"
+            echo "  /ping:"
+            curl -s http://localhost:8123/ping
+            echo -e "\n  SELECT 1:"
+            curl -s "http://localhost:8123/?query=SELECT%201"
+            echo -e "\n  SELECT version():"
+            curl -s "http://localhost:8123/?query=SELECT%20version()"
+            echo -e "\nDaemon test PASSED - --daemon flag works on this system"
+          else
+            echo -e "\nDaemon test FAILED - server did not respond within 30 seconds"
+          fi
+
           # Kill any leftover processes before real startup
+          echo -e "\nCleaning up daemon process..."
           pkill -9 clickhouse 2>/dev/null || true
           sleep 1
 
