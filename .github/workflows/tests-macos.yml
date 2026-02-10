@@ -80,6 +80,22 @@ jobs:
             echo -e "\nDaemon test PASSED - --daemon flag works on this system"
           else
             echo -e "\nDaemon test FAILED - server did not respond within 30 seconds"
+
+            # Check for macOS crash reports
+            echo -e "\nChecking for macOS crash reports:"
+            ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null | grep -i clickhouse || echo "No clickhouse crash reports in DiagnosticReports"
+            ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null | grep -i clickhouse || echo "No clickhouse crash reports in system DiagnosticReports"
+
+            # Show recent crash reports if any
+            CRASH_REPORT=$(ls -t ~/Library/Logs/DiagnosticReports/*clickhouse* 2>/dev/null | head -1)
+            if [ -n "$CRASH_REPORT" ]; then
+              echo -e "\nMost recent crash report ($CRASH_REPORT):"
+              head -100 "$CRASH_REPORT"
+            fi
+
+            # Check system log for clues
+            echo -e "\nRecent system log entries for clickhouse:"
+            log show --predicate 'process == "clickhouse"' --last 1m 2>/dev/null | tail -20 || echo "No entries found in system log"
           fi
 
           # Kill any leftover processes before real startup
