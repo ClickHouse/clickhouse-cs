@@ -8,6 +8,7 @@ using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using NodaTime;
 using NUnit.Framework;
+#pragma warning disable CS0618 // Type or member is obsolete
 
 namespace ClickHouse.Driver.Tests.Types;
 

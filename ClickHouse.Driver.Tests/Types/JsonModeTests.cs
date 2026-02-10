@@ -10,6 +10,7 @@ using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
+#pragma warning disable CS0618 // Type or member is obsolete
 
 namespace ClickHouse.Driver.Tests.Types;
 
