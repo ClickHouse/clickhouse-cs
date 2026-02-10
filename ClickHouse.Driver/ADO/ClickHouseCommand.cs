@@ -22,7 +22,6 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     private Dictionary<string, object> customSettings;
     private List<string> roles;
     private ClickHouseConnection connection;
-    private ClickHouseClient client;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseCommand"/> class.
@@ -38,7 +37,6 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public ClickHouseCommand(ClickHouseConnection connection)
     {
         this.connection = connection;
-        client = connection.ClickHouseClient;
     }
 
     /// <summary>
@@ -101,11 +99,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     protected override DbConnection DbConnection
     {
         get => connection;
-        set
-        {
-            connection = (ClickHouseConnection)value;
-            client = connection?.ClickHouseClient;
-        }
+        set => connection = (ClickHouseConnection)value;
     }
 
     protected override DbParameterCollection DbParameterCollection => commandParameters;
@@ -203,13 +197,13 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         }
 
         var result = await PostSqlQueryAsync(sqlBuilder.ToString(), lcts.Token).ConfigureAwait(false);
-        return await ClickHouseDataReader.FromHttpResponseAsync(result, client.TypeSettings).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.ClickHouseClient.TypeSettings).ConfigureAwait(false);
     }
 
     private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token)
     {
         var options = BuildQueryOptions();
-        QueryResult result = await client.PostSqlQueryAsync(sqlQuery, commandParameters, options, token).ConfigureAwait(false);
+        QueryResult result = await connection.ClickHouseClient.PostSqlQueryAsync(sqlQuery, commandParameters, options, token).ConfigureAwait(false);
         QueryId = result.QueryId;
         QueryStats = result.QueryStats;
         ServerTimezone = result.ServerTimezone;
