@@ -26,9 +26,9 @@ jobs:
         shell: wsl-bash -u root {0}
         run: |
           curl https://clickhouse.com/ | sh
-          mkdir -p /etc/clickhouse-server/config.d
+          ./clickhouse install --noninteractive
           cp "$(wslpath '${{ github.workspace }}')/.github/clickhouse-config.xml" /etc/clickhouse-server/config.d/query_log.xml
-          ./clickhouse server --daemon
+          clickhouse start
 
       - uses: actions/cache@v5
         name: Cache NuGet
