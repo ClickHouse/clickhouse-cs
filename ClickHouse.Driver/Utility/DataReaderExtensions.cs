@@ -42,7 +42,6 @@ internal static class DataReaderExtensions
         }
     }
 
-#if !NET462
     internal static IEnumerable<object> AsEnumerable(this ITuple tuple)
     {
         for (int i = 0; i < tuple.Length; i++)
@@ -50,5 +49,4 @@ internal static class DataReaderExtensions
             yield return tuple[i];
         }
     }
-#endif
 }

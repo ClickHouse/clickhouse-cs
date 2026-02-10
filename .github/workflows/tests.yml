@@ -7,6 +7,12 @@ on:
       - "**/*.md"
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit SHA to run on"
+        required: false
+        type: string
 
 jobs:
   coverage:
@@ -15,6 +21,7 @@ jobs:
     secrets: inherit
     with:
       coverage: true
+      ref: ${{ inputs.ref }}
     permissions:
       statuses: write
 
@@ -24,14 +31,15 @@ jobs:
     secrets: inherit
     with:
       clickhouse-version: ${{ matrix.version }}
+      ref: ${{ inputs.ref }}
     strategy:
       fail-fast: false
       matrix:
         version:
           - "latest"
+          - "26.1"
           - "25.12"
           - "25.11"
-          - "25.10"
           - "25.8"
           - "25.3"
 
@@ -41,6 +49,7 @@ jobs:
     secrets: inherit
     with:
       framework: ${{ matrix.framework }}
+      ref: ${{ inputs.ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -50,18 +59,26 @@ jobs:
     name: Integration
     uses: ./.github/workflows/tests-integration.yml
     secrets: inherit
+    with:
+      ref: ${{ inputs.ref }}
 
   cloud:
     name: Cloud
     uses: ./.github/workflows/tests-cloud.yml
     secrets: inherit
+    with:
+      ref: ${{ inputs.ref }}
 
   windows:
     name: Windows
     uses: ./.github/workflows/tests-windows.yml
     secrets: inherit
+    with:
+      ref: ${{ inputs.ref }}
 
   macos:
     name: macOS
     uses: ./.github/workflows/tests-macos.yml
     secrets: inherit
+    with:
+      ref: ${{ inputs.ref }}

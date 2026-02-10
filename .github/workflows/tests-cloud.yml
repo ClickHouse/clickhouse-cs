@@ -2,6 +2,10 @@ name: Cloud Tests
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
 
 jobs:
   cloud:
@@ -12,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/cache@v5
         name: Cache NuGet
