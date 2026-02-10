@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -10,13 +9,12 @@ public static class SelectMetadata
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         var tableName = "example_formats";
 
         // Create and populate a test table
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 id UInt32,
@@ -30,16 +28,18 @@ public static class SelectMetadata
         Console.WriteLine($"Created table '{tableName}'\n");
 
         // Insert sample data
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {tableName} (id, name, values)
-            VALUES (1, 'Example', [10, 20, 30])
-        ");
+        var rows = new List<object[]>
+        {
+            new object[] { 1u, "Example", new uint[] { 10, 20, 30 } }
+        };
+        var columns = new[] { "id", "name", "values" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         Console.WriteLine("Inserted sample data\n");
 
         // Example 1: Reading data field by field
         Console.WriteLine("\n1. Column metadata:");
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {tableName} LIMIT 1"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT * FROM {tableName} LIMIT 1"))
         {
             if (reader.Read())
             {
@@ -55,7 +55,7 @@ public static class SelectMetadata
         }
 
         // Clean up
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         Console.WriteLine($"\nTable '{tableName}' dropped");
     }
 }

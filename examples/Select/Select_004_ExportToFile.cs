@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -12,13 +11,12 @@ public static class ExportToFile
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         var tableName = "example_export";
 
         // Create and populate a test table
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 id UInt64,
@@ -30,36 +28,35 @@ public static class ExportToFile
             ORDER BY (id)
         ");
 
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {tableName} VALUES
-            (1, 'Alice Johnson', 'Engineering', 95000),
-            (2, 'Bob Smith', 'Sales', 75000),
-            (3, 'Carol White', 'Engineering', 105000),
-            (4, 'David Brown', 'Marketing', 68000),
-            (5, 'Eve Davis', 'Engineering', 88000)
-        ");
+        var rows = new List<object[]>
+        {
+            new object[] { 1UL, "Alice Johnson", "Engineering", 95000f },
+            new object[] { 2UL, "Bob Smith", "Sales", 75000f },
+            new object[] { 3UL, "Carol White", "Engineering", 105000f },
+            new object[] { 4UL, "David Brown", "Marketing", 68000f },
+            new object[] { 5UL, "Eve Davis", "Engineering", 88000f }
+        };
+        var columns = new[] { "id", "name", "department", "salary" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         Console.WriteLine($"Created and populated table '{tableName}'\n");
 
-        await ExportToJsonEachRow(connection, tableName);
-        await ExportToParquetFile(connection, tableName);
+        await ExportToJsonEachRow(client, tableName);
+        await ExportToParquetFile(client, tableName);
 
         // Clean up
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         Console.WriteLine($"\nTable '{tableName}' dropped");
     }
 
     /// <summary>
     /// Demonstrates exporting query results as JSONEachRow format to memory.
     /// </summary>
-    private static async Task ExportToJsonEachRow(ClickHouseConnection connection, string tableName)
+    private static async Task ExportToJsonEachRow(ClickHouseClient client, string tableName)
     {
         Console.WriteLine("1. Export to JSONEachRow (in memory):");
 
-        using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT * FROM {tableName} FORMAT JSONEachRow";
-
-        using var result = await command.ExecuteRawResultAsync(CancellationToken.None);
+        using var result = await client.ExecuteRawResultAsync($"SELECT * FROM {tableName} FORMAT JSONEachRow");
 
         // Read the entire response as a string
         var json = await result.ReadAsStringAsync();
@@ -75,7 +72,7 @@ public static class ExportToFile
     /// <summary>
     /// Demonstrates exporting query results as Parquet format to a file.
     /// </summary>
-    private static async Task ExportToParquetFile(ClickHouseConnection connection, string tableName)
+    private static async Task ExportToParquetFile(ClickHouseClient client, string tableName)
     {
         Console.WriteLine("2. Export to Parquet file:");
 
@@ -83,10 +80,7 @@ public static class ExportToFile
 
         try
         {
-            using var command = connection.CreateCommand();
-            command.CommandText = $"SELECT * FROM {tableName} FORMAT Parquet";
-
-            using var result = await command.ExecuteRawResultAsync(CancellationToken.None);
+            using var result = await client.ExecuteRawResultAsync($"SELECT * FROM {tableName} FORMAT Parquet");
 
             // Stream directly to file
             await using (var fileStream = File.Create(parquetFile))

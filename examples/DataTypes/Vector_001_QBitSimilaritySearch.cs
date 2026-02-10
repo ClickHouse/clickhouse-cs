@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -12,15 +11,14 @@ public static class QBitSimilaritySearch
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         Console.WriteLine("=== QBit Similarity Search with Different Precision Levels ===\n");
 
         var tableName = "example_qbit_similarity";
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE {tableName}
             (
                 word String,
@@ -32,7 +30,7 @@ public static class QBitSimilaritySearch
 
         // Insert sample word embeddings (simplified 5-dimensional vectors)
         // In practice, these would come from an embedding model
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             INSERT INTO {tableName} VALUES
             ('apple',  [0.9, 0.1, 0.8, 0.2, 0.7]),
             ('banana', [0.85, 0.15, 0.75, 0.25, 0.65]),
@@ -51,7 +49,7 @@ public static class QBitSimilaritySearch
         Console.WriteLine("=== High Precision Search (32 bits) ===");
         Console.WriteLine("Using L2DistanceTransposed with precision=32\n");
 
-        using (var reader = await connection.ExecuteReaderAsync($@"
+        using (var reader = await client.ExecuteReaderAsync($@"
             SELECT
                 word,
                 L2DistanceTransposed(vec, {queryVector}, 32) AS distance
@@ -74,7 +72,7 @@ public static class QBitSimilaritySearch
         Console.WriteLine("\n=== Low Precision Search (12 bits) ===");
         Console.WriteLine("Using L2DistanceTransposed with precision=12\n");
 
-        using (var reader = await connection.ExecuteReaderAsync($@"
+        using (var reader = await client.ExecuteReaderAsync($@"
             SELECT
                 word,
                 L2DistanceTransposed(vec, {queryVector}, 12) AS distance
@@ -95,7 +93,7 @@ public static class QBitSimilaritySearch
 
         // Read vector data back as float[]
         Console.WriteLine("\n=== Reading QBit Data ===\n");
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT word, vec FROM {tableName} LIMIT 3"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT word, vec FROM {tableName} LIMIT 3"))
         {
             while (reader.Read())
             {
@@ -105,7 +103,7 @@ public static class QBitSimilaritySearch
             }
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         Console.WriteLine($"\nCleaned up table '{tableName}'");
     }
 }

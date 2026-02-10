@@ -12,6 +12,11 @@ namespace ClickHouse.Driver.Examples;
 /// Demonstrates using Dapper ORM with the ClickHouse driver.
 /// Dapper provides a simple object mapping layer over ADO.NET connections.
 ///
+/// Connection Lifetime Pattern:
+/// - Use ClickHouseDataSource as a singleton (register in DI, or create once and reuse)
+/// - Create short-lived connections per operation using dataSource.CreateConnection()
+/// - The DataSource manages connection pooling internally
+///
 /// NOTE: Dapper's @parameter syntax does NOT work with ClickHouse's {param:Type} syntax.
 /// The following will NOT work:
 ///     connection.QueryAsync&lt;string&gt;("SELECT {p1:Int32}", new { p1 = 42 });
@@ -29,7 +34,13 @@ public static class DapperExample
 
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
+        // Create a DataSource - in a real app, this would be a singleton (register in DI)
+        // The DataSource manages HttpClient pooling internally
+        var dataSource = new ClickHouseDataSource("Host=localhost");
+
+        // Create a connection from the DataSource
+        // Connections are lightweight - create them per operation
+        await using var connection = dataSource.CreateConnection();
         await connection.OpenAsync();
 
         await SetupTable(connection);

@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -20,32 +19,33 @@ public static class CreateTableCloud
 
         // Connect to ClickHouse Cloud
         var connectionString = $"Host={cloudHost};Port=8443;Protocol=https;Username=default;Password={cloudPassword}";
-        using var connection = new ClickHouseConnection(connectionString);
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient(connectionString);
 
         Console.WriteLine($"Connected to ClickHouse Cloud: {cloudHost}\n");
 
         Console.WriteLine("Creating a simple table (Cloud handles replication):");
         var tableName1 = "example_cloud_simple";
 
-        using (var command = connection.CreateCommand())
+        // Note: No ENGINE clause needed - Cloud defaults to ReplicatedMergeTree
+        // No ON CLUSTER needed - Cloud handles distribution automatically
+        // Use QueryOptions to add custom settings per query
+        var options = new QueryOptions
         {
-            // Note: No ENGINE clause needed - Cloud defaults to ReplicatedMergeTree
-            // No ON CLUSTER needed - Cloud handles distribution automatically
-            command.CommandText = $@"
-                CREATE TABLE IF NOT EXISTS {tableName1}
-                (
-                    id UInt64,
-                    name String,
-                    created_at DateTime DEFAULT now()
-                )
-                ORDER BY (id)
-            ";
+            CustomSettings = new Dictionary<string, object>
+            {
+                ["wait_end_of_query"] = "1"
+            }
+        };
 
-            command.CustomSettings.Add("wait_end_of_query", "1");
-
-            await command.ExecuteNonQueryAsync();
-        }
+        await client.ExecuteNonQueryAsync($@"
+            CREATE TABLE IF NOT EXISTS {tableName1}
+            (
+                id UInt64,
+                name String,
+                created_at DateTime DEFAULT now()
+            )
+            ORDER BY (id)
+        ", options: options);
 
         Console.WriteLine($"   Table '{tableName1}' created\n");
     }

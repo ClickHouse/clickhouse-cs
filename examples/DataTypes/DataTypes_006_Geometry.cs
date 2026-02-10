@@ -1,4 +1,4 @@
-using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -16,30 +16,29 @@ public static class GeometryTypes
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         Console.WriteLine("Geometry Types Examples\n");
 
         // Example 1: Basic geometry types
         Console.WriteLine("1. Basic Geometry Types (Point, Polygon):");
-        await Example1_BasicGeometryTypes(connection);
+        await Example1_BasicGeometryTypes(client);
 
         // Example 2: WKT support
         Console.WriteLine("\n2. WKT (Well-Known Text) Support:");
-        await Example2_WktSupport(connection);
+        await Example2_WktSupport(client);
 
         // Example 3: H3 indexing
         Console.WriteLine("\n3. H3 Geospatial Indexing:");
-        await Example3_H3Indexing(connection);
+        await Example3_H3Indexing(client);
 
         // Example 4: Point in polygon
         Console.WriteLine("\n4. Point-in-Polygon Containment:");
-        await Example4_PointInPolygon(connection);
+        await Example4_PointInPolygon(client);
 
         // Example 5: Great circle distance
         Console.WriteLine("\n5. Great Circle Distance:");
-        await Example5_GreatCircleDistance(connection);
+        await Example5_GreatCircleDistance(client);
 
         Console.WriteLine("\nAll geometry examples completed!");
     }
@@ -49,11 +48,11 @@ public static class GeometryTypes
     /// Points are represented as Tuple&lt;double, double&gt; (x, y).
     /// Polygons are arrays of rings, where each ring is an array of points.
     /// </summary>
-    private static async Task Example1_BasicGeometryTypes(ClickHouseConnection connection)
+    private static async Task Example1_BasicGeometryTypes(ClickHouseClient client)
     {
         var tableName = "example_geometry_basic";
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 id UInt32,
@@ -66,64 +65,59 @@ public static class GeometryTypes
 
         Console.WriteLine($"   Created table '{tableName}' with Point and Polygon columns");
 
-        // Insert data with geometry types
-        using (var command = connection.CreateCommand())
+        // Insert data with geometry types using InsertBinaryAsync
+        // Point is represented as Tuple<double, double> (x, y) or (longitude, latitude)
+        var location = Tuple.Create(4.9041, 52.3676); // Amsterdam coordinates (lon, lat)
+
+        // Polygon is an array of rings. First ring is outer boundary, subsequent rings are holes.
+        // Each ring is an array of points, with the last point equal to the first (closed ring).
+        // This polygon roughly covers central Amsterdam
+        var outerRing = new[]
         {
-            command.CommandText = $@"
-                INSERT INTO {tableName} (id, location, boundary)
-                VALUES ({{id:UInt32}}, {{location:Point}}, {{boundary:Polygon}})
-            ";
+            Tuple.Create(4.85, 52.35),
+            Tuple.Create(4.95, 52.35),
+            Tuple.Create(4.95, 52.40),
+            Tuple.Create(4.85, 52.40),
+            Tuple.Create(4.85, 52.35) // Close the ring
+        };
 
-            // Point is represented as Tuple<double, double> (x, y) or (longitude, latitude)
-            command.AddParameter("id", 1);
-            command.AddParameter("location", Tuple.Create(4.9041, 52.3676)); // Amsterdam coordinates (lon, lat)
-
-            // Polygon is an array of rings. First ring is outer boundary, subsequent rings are holes.
-            // Each ring is an array of points, with the last point equal to the first (closed ring).
-            // This polygon roughly covers central Amsterdam
-            var outerRing = new[]
-            {
-                Tuple.Create(4.85, 52.35),
-                Tuple.Create(4.95, 52.35),
-                Tuple.Create(4.95, 52.40),
-                Tuple.Create(4.85, 52.40),
-                Tuple.Create(4.85, 52.35) // Close the ring
-            };
-            command.AddParameter("boundary", new[] { outerRing });
-
-            await command.ExecuteNonQueryAsync();
-        }
+        var rows = new List<object[]>
+        {
+            new object[] { 1u, location, new[] { outerRing } }
+        };
+        var columns = new[] { "id", "location", "boundary" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         Console.WriteLine("   Inserted row with Point and Polygon data");
 
         // Read back the geometry data
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT id, location, boundary FROM {tableName}"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT id, location, boundary FROM {tableName}"))
         {
             Console.WriteLine("\n   Reading geometry data:");
             while (reader.Read())
             {
                 var id = reader.GetFieldValue<uint>(0);
-                var location = reader.GetFieldValue<Tuple<double, double>>(1);
+                var loc = reader.GetFieldValue<Tuple<double, double>>(1);
                 var boundary = reader.GetFieldValue<Tuple<double, double>[][]>(2);
 
                 Console.WriteLine($"\n   ID: {id}");
-                Console.WriteLine($"     Location (Point): ({location.Item1}, {location.Item2})");
+                Console.WriteLine($"     Location (Point): ({loc.Item1}, {loc.Item2})");
                 Console.WriteLine($"     Boundary (Polygon): {boundary.Length} ring(s), outer ring has {boundary[0].Length} points");
             }
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
     /// Demonstrates WKT (Well-Known Text) parsing functions for creating geometry from text.
     /// WKT is a standard text format for representing geometry objects.
     /// </summary>
-    private static async Task Example2_WktSupport(ClickHouseConnection connection)
+    private static async Task Example2_WktSupport(ClickHouseClient client)
     {
         // Parse Point from WKT
         Console.WriteLine("   Parsing Point from WKT:");
-        using (var reader = await connection.ExecuteReaderAsync("SELECT readWKTPoint('POINT (37.6173 55.7558)')"))
+        using (var reader = await client.ExecuteReaderAsync("SELECT readWKTPoint('POINT (37.6173 55.7558)')"))
         {
             if (reader.Read())
             {
@@ -134,7 +128,7 @@ public static class GeometryTypes
 
         // Parse Polygon from WKT
         Console.WriteLine("\n   Parsing Polygon from WKT:");
-        using (var reader = await connection.ExecuteReaderAsync(@"
+        using (var reader = await client.ExecuteReaderAsync(@"
             SELECT readWKTPolygon('POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))')
         "))
         {
@@ -148,7 +142,7 @@ public static class GeometryTypes
 
         // Parse Ring from WKT - Ring uses POLYGON format
         Console.WriteLine("\n   Parsing Ring from WKT:");
-        using (var reader = await connection.ExecuteReaderAsync(@"
+        using (var reader = await client.ExecuteReaderAsync(@"
             SELECT readWKTRing('POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))')
         "))
         {
@@ -161,7 +155,7 @@ public static class GeometryTypes
 
         // Parse MultiPolygon from WKT
         Console.WriteLine("\n   Parsing MultiPolygon from WKT:");
-        using (var reader = await connection.ExecuteReaderAsync(@"
+        using (var reader = await client.ExecuteReaderAsync(@"
             SELECT readWKTMultiPolygon('MULTIPOLYGON (((0 0, 10 0, 10 10, 0 10, 0 0)), ((20 20, 30 20, 30 30, 20 30, 20 20)))')
         "))
         {
@@ -178,7 +172,7 @@ public static class GeometryTypes
     /// H3 is a hierarchical hexagonal grid system for indexing geographic coordinates.
     /// Note: As of ClickHouse 25.5, geoToH3() uses (lat, lon) order.
     /// </summary>
-    private static async Task Example3_H3Indexing(ClickHouseConnection connection)
+    private static async Task Example3_H3Indexing(ClickHouseClient client)
     {
         // Basic geoToH3 conversion
         Console.WriteLine("   Converting coordinates to H3 index:");
@@ -187,37 +181,34 @@ public static class GeometryTypes
         var lat = 52.33676;
         var lon = 4.9041;
 
-        using (var command = connection.CreateCommand())
+        // geoToH3(lat, lon, resolution) - note: lat, lon order as of ClickHouse 25.5
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("lat", lat);
+        parameters.AddParameter("lon", lon);
+
+        using (var reader = await client.ExecuteReaderAsync(@"
+            SELECT
+                geoToH3({lat:Float64}, {lon:Float64}, 5) AS h3_res5,
+                geoToH3({lat:Float64}, {lon:Float64}, 10) AS h3_res10,
+                geoToH3({lat:Float64}, {lon:Float64}, 15) AS h3_res15
+        ", parameters))
         {
-            // geoToH3(lat, lon, resolution) - note: lat, lon order as of ClickHouse 25.5
-            command.CommandText = @"
-                SELECT
-                    geoToH3({lat:Float64}, {lon:Float64}, 5) AS h3_res5,
-                    geoToH3({lat:Float64}, {lon:Float64}, 10) AS h3_res10,
-                    geoToH3({lat:Float64}, {lon:Float64}, 15) AS h3_res15
-            ";
-            command.AddParameter("lat", lat);
-            command.AddParameter("lon", lon);
-
-            using (var reader = await command.ExecuteReaderAsync())
+            if (reader.Read())
             {
-                if (reader.Read())
-                {
-                    var h3Res5 = reader.GetFieldValue<ulong>(0);
-                    var h3Res10 = reader.GetFieldValue<ulong>(1);
-                    var h3Res15 = reader.GetFieldValue<ulong>(2);
+                var h3Res5 = reader.GetFieldValue<ulong>(0);
+                var h3Res10 = reader.GetFieldValue<ulong>(1);
+                var h3Res15 = reader.GetFieldValue<ulong>(2);
 
-                    Console.WriteLine($"     Coordinates: ({lat}, {lon}) - Amsterdam");
-                    Console.WriteLine($"     H3 Resolution 5:  {h3Res5}");
-                    Console.WriteLine($"     H3 Resolution 10: {h3Res10}");
-                    Console.WriteLine($"     H3 Resolution 15: {h3Res15}");
-                }
+                Console.WriteLine($"     Coordinates: ({lat}, {lon}) - Amsterdam");
+                Console.WriteLine($"     H3 Resolution 5:  {h3Res5}");
+                Console.WriteLine($"     H3 Resolution 10: {h3Res10}");
+                Console.WriteLine($"     H3 Resolution 15: {h3Res15}");
             }
         }
 
         // Convert H3 index back to coordinates
         Console.WriteLine("\n   Converting H3 index back to coordinates:");
-        using (var reader = await connection.ExecuteReaderAsync($@"
+        using (var reader = await client.ExecuteReaderAsync($@"
             SELECT h3ToGeo(geoToH3({lat}, {lon}, 10)) AS center_point
         "))
         {
@@ -230,7 +221,7 @@ public static class GeometryTypes
 
         // Get H3 cell boundary as polygon
         Console.WriteLine("\n   Getting H3 cell boundary:");
-        using (var reader = await connection.ExecuteReaderAsync($@"
+        using (var reader = await client.ExecuteReaderAsync($@"
             SELECT h3ToGeoBoundary(geoToH3({lat}, {lon}, 8)) AS boundary
         "))
         {
@@ -245,7 +236,7 @@ public static class GeometryTypes
         Console.WriteLine("\n   Practical: Grouping locations by H3 cell:");
         var tableName = "example_h3_locations";
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 name String,
@@ -256,16 +247,17 @@ public static class GeometryTypes
             ORDER BY name
         ");
 
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {tableName} (name, lat, lon)
-            VALUES
-                ('Location A', 52.3731, 4.8936),
-                ('Location B', 52.3735, 4.8940),
-                ('Location C', 52.3750, 4.8950),
-                ('Location D', 52.3900, 4.9100)
-        ");
+        var rows = new List<object[]>
+        {
+            new object[] { "Location A", 52.3731, 4.8936 },
+            new object[] { "Location B", 52.3735, 4.8940 },
+            new object[] { "Location C", 52.3750, 4.8950 },
+            new object[] { "Location D", 52.3900, 4.9100 }
+        };
+        var columns = new[] { "name", "lat", "lon" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
-        using (var reader = await connection.ExecuteReaderAsync($@"
+        using (var reader = await client.ExecuteReaderAsync($@"
             SELECT
                 geoToH3(lat, lon, 7) AS h3_cell,
                 count() AS location_count,
@@ -286,21 +278,21 @@ public static class GeometryTypes
             }
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
     /// Demonstrates point-in-polygon containment checks.
     /// Useful for geofencing, area-based filtering, and spatial queries.
     /// </summary>
-    private static async Task Example4_PointInPolygon(ClickHouseConnection connection)
+    private static async Task Example4_PointInPolygon(ClickHouseClient client)
     {
         // Define a simple rectangular polygon (e.g., a geofence)
         Console.WriteLine("   Basic point-in-polygon check:");
 
         // Polygon vertices (clockwise or counter-clockwise)
         // This represents a rectangular area
-        using (var reader = await connection.ExecuteReaderAsync(@"
+        using (var reader = await client.ExecuteReaderAsync(@"
             SELECT
                 pointInPolygon((5, 5), [(0, 0), (10, 0), (10, 10), (0, 10)]) AS inside,
                 pointInPolygon((15, 15), [(0, 0), (10, 0), (10, 10), (0, 10)]) AS outside
@@ -319,7 +311,7 @@ public static class GeometryTypes
         Console.WriteLine("\n   Practical: Filtering locations within a geofence:");
         var tableName = "example_geofence";
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 device_id String,
@@ -331,18 +323,19 @@ public static class GeometryTypes
         ");
 
         // Insert some device locations around Amsterdam
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {tableName} (device_id, lat, lon)
-            VALUES
-                ('device_1', 52.3731, 4.8936),
-                ('device_2', 52.3752, 4.8840),
-                ('device_3', 52.3105, 4.7683),
-                ('device_4', 52.3600, 4.8852)
-        ");
+        var rows = new List<object[]>
+        {
+            new object[] { "device_1", 52.3731, 4.8936 },
+            new object[] { "device_2", 52.3752, 4.8840 },
+            new object[] { "device_3", 52.3105, 4.7683 },
+            new object[] { "device_4", 52.3600, 4.8852 }
+        };
+        var columns = new[] { "device_id", "lat", "lon" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         // Define a geofence polygon around central Amsterdam
         // Check which devices are inside the geofence
-        using (var reader = await connection.ExecuteReaderAsync($@"
+        using (var reader = await client.ExecuteReaderAsync($@"
             SELECT
                 device_id,
                 lat,
@@ -367,14 +360,14 @@ public static class GeometryTypes
             }
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
     /// Demonstrates great circle distance calculations between geographic coordinates.
     /// Uses the haversine formula to calculate the shortest distance over the Earth's surface.
     /// </summary>
-    private static async Task Example5_GreatCircleDistance(ClickHouseConnection connection)
+    private static async Task Example5_GreatCircleDistance(ClickHouseClient client)
     {
         // Calculate distance between two cities
         Console.WriteLine("   Distance between cities:");
@@ -393,7 +386,7 @@ public static class GeometryTypes
         Console.WriteLine("     From Amsterdam to:");
         foreach (var (name, lon, lat) in cities.Skip(1))
         {
-            using (var reader = await connection.ExecuteReaderAsync($@"
+            using (var reader = await client.ExecuteReaderAsync($@"
                 SELECT greatCircleDistance(4.9041, 52.3676, {lon}, {lat}) AS distance_meters
             "))
             {
@@ -411,7 +404,7 @@ public static class GeometryTypes
         Console.WriteLine("\n   Practical: Finding nearby locations:");
         var tableName = "example_locations_distance";
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 name String,
@@ -422,22 +415,23 @@ public static class GeometryTypes
             ORDER BY name
         ");
 
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {tableName} (name, lon, lat)
-            VALUES
-                ('Dam Square', 4.8936, 52.3731),
-                ('Anne Frank House', 4.8840, 52.3752),
-                ('Rijksmuseum', 4.8852, 52.3600),
-                ('Amsterdam Centraal', 4.9003, 52.3791),
-                ('Schiphol Airport', 4.7683, 52.3105)
-        ");
+        var rows = new List<object[]>
+        {
+            new object[] { "Dam Square", 4.8936, 52.3731 },
+            new object[] { "Anne Frank House", 4.8840, 52.3752 },
+            new object[] { "Rijksmuseum", 4.8852, 52.3600 },
+            new object[] { "Amsterdam Centraal", 4.9003, 52.3791 },
+            new object[] { "Schiphol Airport", 4.7683, 52.3105 }
+        };
+        var columns = new[] { "name", "lon", "lat" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         // Find locations within 5km of Dam Square
         var centerLon = 4.8936;
         var centerLat = 52.3731;
         var radiusMeters = 5000;
 
-        using (var reader = await connection.ExecuteReaderAsync($@"
+        using (var reader = await client.ExecuteReaderAsync($@"
             SELECT
                 name,
                 greatCircleDistance({centerLon}, {centerLat}, lon, lat) AS distance
@@ -455,6 +449,6 @@ public static class GeometryTypes
             }
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 }

@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -11,13 +10,12 @@ public static class BasicSelect
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         var tableName = "example_select_basic";
 
         // Create and populate a test table
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 id UInt64,
@@ -31,23 +29,25 @@ public static class BasicSelect
             ORDER BY (id)
         ");
 
-        // Insert sample data
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {tableName} VALUES
-            (1, 'Alice Johnson', 'Engineering', 95000, '2020-01-15', true),
-            (2, 'Bob Smith', 'Sales', 75000, '2019-06-20', true),
-            (3, 'Carol White', 'Engineering', 105000, '2018-03-10', true),
-            (4, 'David Brown', 'Marketing', 68000, '2021-09-05', true),
-            (5, 'Eve Davis', 'Engineering', 88000, '2020-11-12', false),
-            (6, 'Frank Miller', 'Sales', 82000, '2019-02-28', true),
-            (7, 'Grace Lee', 'Marketing', 71000, '2022-01-08', true)
-        ");
+        // Insert sample data using InsertBinaryAsync
+        var rows = new List<object[]>
+        {
+            new object[] { 1UL, "Alice Johnson", "Engineering", 95000f, new DateOnly(2020, 1, 15), true },
+            new object[] { 2UL, "Bob Smith", "Sales", 75000f, new DateOnly(2019, 6, 20), true },
+            new object[] { 3UL, "Carol White", "Engineering", 105000f, new DateOnly(2018, 3, 10), true },
+            new object[] { 4UL, "David Brown", "Marketing", 68000f, new DateOnly(2021, 9, 5), true },
+            new object[] { 5UL, "Eve Davis", "Engineering", 88000f, new DateOnly(2020, 11, 12), false },
+            new object[] { 6UL, "Frank Miller", "Sales", 82000f, new DateOnly(2019, 2, 28), true },
+            new object[] { 7UL, "Grace Lee", "Marketing", 71000f, new DateOnly(2022, 1, 8), true }
+        };
+        var columns = new[] { "id", "name", "department", "salary", "hire_date", "is_active" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         Console.WriteLine($"Created and populated table '{tableName}'\n");
 
         // Example 1: SELECT with WHERE clause
         Console.WriteLine("\n1. SELECT with WHERE clause (Engineering department only):");
-        using (var reader = await connection.ExecuteReaderAsync(
+        using (var reader = await client.ExecuteReaderAsync(
             $"SELECT name, salary FROM {tableName} WHERE department = 'Engineering' ORDER BY salary DESC"))
         {
             Console.WriteLine("Name\t\t\tSalary");
@@ -62,7 +62,7 @@ public static class BasicSelect
 
         // Example 2: SELECT with aggregations
         Console.WriteLine("\n2. SELECT with aggregations (average salary by department):");
-        using (var reader = await connection.ExecuteReaderAsync($@"
+        using (var reader = await client.ExecuteReaderAsync($@"
             SELECT
                 department,
                 count() as employee_count,
@@ -86,13 +86,13 @@ public static class BasicSelect
 
         // Example 3: Using ExecuteScalarAsync for single value
         Console.WriteLine("\n3. Using ExecuteScalarAsync for single value:");
-        var totalEmployees = await connection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        var totalEmployees = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
         Console.WriteLine($"   Total employees: {totalEmployees}");
 
 
         // Example 4: Reading data with GetFieldValue<T>
-        Console.WriteLine("\n7. Using GetFieldValue<T> for type-safe reading:");
-        using (var reader = await connection.ExecuteReaderAsync(
+        Console.WriteLine("\n4. Using GetFieldValue<T> for type-safe reading:");
+        using (var reader = await client.ExecuteReaderAsync(
             $"SELECT id, name, salary FROM {tableName} WHERE id = 1"))
         {
             if (reader.Read())
@@ -105,7 +105,7 @@ public static class BasicSelect
         }
 
         // Clean up
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         Console.WriteLine($"\nTable '{tableName}' dropped");
     }
 }

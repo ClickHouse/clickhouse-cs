@@ -1,5 +1,4 @@
 using System.Net;
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -18,39 +17,38 @@ public static class ComplexTypes
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         Console.WriteLine("Complex Data Types Examples\n");
 
         // Example 1: Arrays
         Console.WriteLine("1. Working with Arrays:");
-        await Example1_Arrays(connection);
+        await Example1_Arrays(client);
 
         // Example 2: Maps
         Console.WriteLine("\n2. Working with Maps:");
-        await Example2_Maps(connection);
+        await Example2_Maps(client);
 
         // Example 3: Tuples
         Console.WriteLine("\n3. Working with Tuples:");
-        await Example3_Tuples(connection);
+        await Example3_Tuples(client);
 
         // Example 4: IP Addresses
         Console.WriteLine("\n4. Working with IP Addresses:");
-        await Example4_IPAddresses(connection);
+        await Example4_IPAddresses(client);
 
         // Example 5: Nested structures
         Console.WriteLine("\n5. Working with Nested structures:");
-        await Example5_Nested(connection);
+        await Example5_Nested(client);
 
         Console.WriteLine("\nAll complex data types examples completed!");
     }
 
-    private static async Task Example1_Arrays(ClickHouseConnection connection)
+    private static async Task Example1_Arrays(ClickHouseClient client)
     {
         var tableName = "example_arrays";
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 id UInt32,
@@ -64,25 +62,18 @@ public static class ComplexTypes
 
         Console.WriteLine($"   Created table '{tableName}' with Array columns");
 
-        // Insert data with arrays
-        using (var command = connection.CreateCommand())
+        // Insert data with arrays using InsertBinaryAsync
+        var rows = new List<object[]>
         {
-            command.CommandText = $@"
-                INSERT INTO {tableName} (id, tags, numbers, scores)
-                VALUES ({{id:UInt32}}, {{tags:Array(String)}}, {{numbers:Array(Int32)}}, {{scores:Array(Float64)}})
-            ";
-
-            command.AddParameter("id", 1);
-            command.AddParameter("tags", new[] { "important", "urgent", "review" });
-            command.AddParameter("numbers", new List<int> { 10, 20, 30, 40 }); // Lists are transformed to Arrays in ClickHouse
-            command.AddParameter("scores", new[] { 95.5, 87.3, 92.1 });
-            await command.ExecuteNonQueryAsync();
-        }
+            new object[] { 1u, new[] { "important", "urgent", "review" }, new[] { 10, 20, 30, 40 }, new[] { 95.5, 87.3, 92.1 } }
+        };
+        var columns = new[] { "id", "tags", "numbers", "scores" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         Console.WriteLine("   Inserted rows with array data");
 
         // Query and read arrays
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT id, tags, numbers, scores FROM {tableName} ORDER BY id"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT id, tags, numbers, scores FROM {tableName} ORDER BY id"))
         {
             Console.WriteLine("\n   Reading array data:");
             while (reader.Read())
@@ -101,20 +92,20 @@ public static class ComplexTypes
 
         // Array functions
         Console.WriteLine("\n   Using array functions:");
-        var arrayLength = await connection.ExecuteScalarAsync($"SELECT length(tags) FROM {tableName} WHERE id = 1");
+        var arrayLength = await client.ExecuteScalarAsync($"SELECT length(tags) FROM {tableName} WHERE id = 1");
         Console.WriteLine($"     Length of tags array for ID=1: {arrayLength}");
 
-        var hasElement = await connection.ExecuteScalarAsync($"SELECT has(tags, 'urgent') FROM {tableName} WHERE id = 1");
+        var hasElement = await client.ExecuteScalarAsync($"SELECT has(tags, 'urgent') FROM {tableName} WHERE id = 1");
         Console.WriteLine($"     Does ID=1 have 'urgent' tag? {hasElement}");
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
-    private static async Task Example2_Maps(ClickHouseConnection connection)
+    private static async Task Example2_Maps(ClickHouseClient client)
     {
         var tableName = "example_maps";
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 user_id UInt32,
@@ -126,28 +117,23 @@ public static class ComplexTypes
 
         Console.WriteLine($"   Created table '{tableName}' with Map columns");
 
-        // Insert data with maps
-        using (var command = connection.CreateCommand())
+        // Insert data with maps using InsertBinaryAsync
+        var rows = new List<object[]>
         {
-            command.CommandText = $@"
-                INSERT INTO {tableName} (user_id, preferences)
-                VALUES ({{user_id:UInt32}}, {{preferences:Map(String, String)}})
-            ";
-
-            command.AddParameter("user_id", 1);
-            command.AddParameter("preferences", new Dictionary<string, string>
+            new object[] { 1u, new Dictionary<string, string>
             {
                 { "theme", "dark" },
                 { "language", "en" },
                 { "timezone", "UTC" },
-            });
-            await command.ExecuteNonQueryAsync();
-        }
+            }}
+        };
+        var columns = new[] { "user_id", "preferences" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         Console.WriteLine("   Inserted row with map data");
 
         // Query and read maps
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT user_id, preferences FROM {tableName}"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT user_id, preferences FROM {tableName}"))
         {
             Console.WriteLine("\n   Reading map data:");
             while (reader.Read())
@@ -166,18 +152,18 @@ public static class ComplexTypes
 
         // Map functions
         Console.WriteLine("\n   Using map functions:");
-        var prefValue = await connection.ExecuteScalarAsync($"SELECT preferences['theme'] FROM {tableName} WHERE user_id = 1");
+        var prefValue = await client.ExecuteScalarAsync($"SELECT preferences['theme'] FROM {tableName} WHERE user_id = 1");
         Console.WriteLine($"     Theme preference: {prefValue}");
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
-    private static async Task Example3_Tuples(ClickHouseConnection connection)
+    private static async Task Example3_Tuples(ClickHouseClient client)
     {
         var tableName = "example_tuples";
 
         // Tuples can be named, or not
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 id UInt32,
@@ -191,30 +177,23 @@ public static class ComplexTypes
 
         Console.WriteLine($"   Created table '{tableName}' with Tuple columns");
 
-        // Insert data with tuples
-        using (var command = connection.CreateCommand())
+        // Insert data with tuples using InsertBinaryAsync
+        var rows = new List<object[]>
         {
-            command.CommandText = $@"
-                INSERT INTO {tableName} (id, person, coordinates, point)
-                VALUES (
-                    {{id:UInt32}},
-                    {{person:Tuple(String, UInt8, String)}},
-                    {{coordinates:Tuple(Float64, Float64, Float64)}},
-                    {{point:Tuple(Int32, Int32)}}
-                )
-            ";
-
-            command.AddParameter("id", 1);
-            command.AddParameter("person", Tuple.Create("Alice Johnson", (byte)30, "alice@example.com"));
-            command.AddParameter("coordinates", Tuple.Create(12.5, 34.7, 56.9));
-            command.AddParameter("point", new List<int> { 1, 2 });
-            await command.ExecuteNonQueryAsync();
-        }
+            new object[] {
+                1u,
+                Tuple.Create("Alice Johnson", (byte)30, "alice@example.com"),
+                Tuple.Create(12.5, 34.7, 56.9),
+                Tuple.Create(1, 2)
+            }
+        };
+        var columns = new[] { "id", "person", "coordinates", "point" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         Console.WriteLine("   Inserted row with tuple data");
 
         // Query and read tuples
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT id, person, coordinates, point FROM {tableName}"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT id, person, coordinates, point FROM {tableName}"))
         {
             Console.WriteLine("\n   Reading tuple data:");
             while (reader.Read())
@@ -231,14 +210,14 @@ public static class ComplexTypes
             }
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
-    private static async Task Example4_IPAddresses(ClickHouseConnection connection)
+    private static async Task Example4_IPAddresses(ClickHouseClient client)
     {
         var tableName = "example_ip_addresses";
 
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 id UInt32,
@@ -252,32 +231,19 @@ public static class ComplexTypes
 
         Console.WriteLine($"   Created table '{tableName}' with IPv4 and IPv6 columns");
 
-        // Insert data with IP addresses
-        using (var command = connection.CreateCommand())
+        // Insert data with IP addresses using InsertBinaryAsync
+        var rows = new List<object[]>
         {
-            command.CommandText = $@"
-                INSERT INTO {tableName} (id, ipv4_addr, ipv6_addr, request_time)
-                VALUES ({{id:UInt32}}, {{ipv4:IPv4}}, {{ipv6:IPv6}}, {{time:DateTime}})
-            ";
-
-            command.AddParameter("id", 1);
-            command.AddParameter("ipv4", IPAddress.Parse("192.168.1.100"));
-            command.AddParameter("ipv6", IPAddress.Parse("2001:0db8:85a3:0000:0000:8a2e:0370:7334"));
-            command.AddParameter("time", DateTime.UtcNow);
-            await command.ExecuteNonQueryAsync();
-
-            command.Parameters.Clear();
-            command.AddParameter("id", 2);
-            command.AddParameter("ipv4", IPAddress.Parse("10.0.0.1"));
-            command.AddParameter("ipv6", IPAddress.Parse("fe80::1"));
-            command.AddParameter("time", DateTime.UtcNow);
-            await command.ExecuteNonQueryAsync();
-        }
+            new object[] { 1u, IPAddress.Parse("192.168.1.100"), IPAddress.Parse("2001:0db8:85a3:0000:0000:8a2e:0370:7334"), DateTime.UtcNow },
+            new object[] { 2u, IPAddress.Parse("10.0.0.1"), IPAddress.Parse("fe80::1"), DateTime.UtcNow }
+        };
+        var columns = new[] { "id", "ipv4_addr", "ipv6_addr", "request_time" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         Console.WriteLine("   Inserted rows with IP address data");
 
         // Query and read IP addresses
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT id, ipv4_addr, ipv6_addr FROM {tableName} ORDER BY id"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT id, ipv4_addr, ipv6_addr FROM {tableName} ORDER BY id"))
         {
             Console.WriteLine("\n   Reading IP address data:");
             while (reader.Read())
@@ -292,15 +258,15 @@ public static class ComplexTypes
             }
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
-    private static async Task Example5_Nested(ClickHouseConnection connection)
+    private static async Task Example5_Nested(ClickHouseClient client)
     {
         var tableName = "example_nested";
 
         // Nested is a special type representing an array of tuples
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
             (
                 order_id UInt32,
@@ -317,17 +283,19 @@ public static class ComplexTypes
         Console.WriteLine($"   Created table '{tableName}' with Nested structure");
 
         // Insert data - Nested columns are stored as separate arrays
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {tableName} (order_id, items.name, items.quantity, items.price)
-            VALUES
-                (1, ['Widget', 'Gadget', 'Tool'], [2, 1, 3], [19.99, 49.99, 9.99]),
-                (2, ['Book', 'Pen'], [5, 10], [12.50, 1.25])
-        ");
+        // Using InsertBinaryAsync with nested arrays
+        var rows = new List<object[]>
+        {
+            new object[] { 1u, new[] { "Widget", "Gadget", "Tool" }, new uint[] { 2, 1, 3 }, new[] { 19.99, 49.99, 9.99 } },
+            new object[] { 2u, new[] { "Book", "Pen" }, new uint[] { 5, 10 }, new[] { 12.50, 1.25 } }
+        };
+        var columns = new[] { "order_id", "items.name", "items.quantity", "items.price" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
         Console.WriteLine("   Inserted rows with nested data");
 
         // Query nested data
-        using (var reader = await connection.ExecuteReaderAsync($@"
+        using (var reader = await client.ExecuteReaderAsync($@"
             SELECT
                 order_id,
                 items.name,
@@ -354,6 +322,6 @@ public static class ComplexTypes
             }
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 }

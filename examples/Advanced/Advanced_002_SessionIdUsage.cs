@@ -8,10 +8,6 @@ namespace ClickHouse.Driver.Examples;
 /// Sessions are primarily used for:
 /// - Creating and using temporary tables
 /// - Maintaining query context across multiple statements
-///
-/// Note: Making queries using the same session ID from multiple connections simultaneously
-/// may cause errors on the server side. Consider using regular tables with TTL instead of
-/// temporary tables if you need to share data across multiple connections.
 /// </summary>
 public static class SessionIdUsage
 {
@@ -19,7 +15,6 @@ public static class SessionIdUsage
     {
         Console.WriteLine("Session ID Usage Examples\n");
 
-        // Example 1: Using sessions for temporary tables
         // To use temporary tables, you must enable sessions
         var settings = new ClickHouseClientSettings
         {
@@ -28,14 +23,13 @@ public static class SessionIdUsage
             // If you don't set SessionId, a GUID will be automatically generated
         };
 
-        using var connection = new ClickHouseConnection(settings);
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient(settings);
 
         Console.WriteLine($"   Session ID: {settings.SessionId}");
 
         // Create a temporary table
         // Temporary tables only exist within the session and are automatically dropped
-        await connection.ExecuteStatementAsync(@"
+        await client.ExecuteNonQueryAsync(@"
             CREATE TEMPORARY TABLE temp_users
             (
                 id UInt64,
@@ -46,18 +40,15 @@ public static class SessionIdUsage
         Console.WriteLine("   Created temporary table 'temp_users'");
 
         // Insert data into the temporary table
-        using (var command = connection.CreateCommand())
+        var rows = new List<object[]>
         {
-            command.CommandText = "INSERT INTO temp_users (id, name, email) VALUES ({id:UInt64}, {name:String}, {email:String})";
-            command.AddParameter("id", 1UL);
-            command.AddParameter("name", "Alice");
-            command.AddParameter("email", "alice@example.com");
-            await command.ExecuteNonQueryAsync();
-        }
+            new object[] { 1UL, "Alice", "alice@example.com" },
+        };
+        await client.InsertBinaryAsync("temp_users", new[] { "id", "name", "email" }, rows);
         Console.WriteLine("   Inserted data into temporary table");
 
         // Query the temporary table
-        using (var reader = await connection.ExecuteReaderAsync("SELECT id, name, email FROM temp_users ORDER BY id"))
+        using (var reader = await client.ExecuteReaderAsync("SELECT id, name, email FROM temp_users ORDER BY id"))
         {
             Console.WriteLine("\n   Data from temporary table:");
             Console.WriteLine("   ID\tName\tEmail");
@@ -71,8 +62,8 @@ public static class SessionIdUsage
             }
         }
 
-        // Temporary tables are automatically dropped when the connection closes
-        Console.WriteLine("\n   Temporary table will be dropped when connection closes");
+        // Temporary tables are automatically dropped when the session ends
+        Console.WriteLine("\n   Temporary table will be dropped when session ends");
 
         Console.WriteLine("\nAll Session ID examples completed!");
     }

@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -22,8 +21,7 @@ public static class ReadOnlyUsers
         Console.WriteLine("This example demonstrates the limitations of READONLY = 1 users.\n");
 
         // Setup using the default (non-read-only) user
-        using var defaultClient = new ClickHouseConnection("Host=localhost");
-        await defaultClient.OpenAsync();
+        using var defaultClient = new ClickHouseClient("Host=localhost");
 
         // Create a unique read-only user for this example
         var guid = Guid.NewGuid().ToString("N");
@@ -60,16 +58,16 @@ public static class ReadOnlyUsers
         {
             // Cleanup
             Console.WriteLine("\nCleaning up...");
-            await defaultClient.ExecuteStatementAsync($"DROP TABLE IF EXISTS {TestTableName}");
-            await defaultClient.ExecuteStatementAsync($"DROP USER IF EXISTS {readOnlyUsername}");
+            await defaultClient.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {TestTableName}");
+            await defaultClient.ExecuteNonQueryAsync($"DROP USER IF EXISTS {readOnlyUsername}");
             Console.WriteLine("Cleanup complete.");
         }
     }
 
-    private static async Task SetupReadOnlyUser(ClickHouseConnection client, string username, string password)
+    private static async Task SetupReadOnlyUser(ClickHouseClient client, string username, string password)
     {
         // Create a read-only user with READONLY = 1
-        await client.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE USER {username}
             IDENTIFIED WITH sha256_password BY '{password}'
             DEFAULT DATABASE default
@@ -77,23 +75,23 @@ public static class ReadOnlyUsers
         ");
 
         // Grant access only to SHOW TABLES and SELECT on the test table
-        await client.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             GRANT SHOW TABLES, SELECT
             ON {TestTableName}
             TO {username}
         ");
     }
 
-    private static async Task SetupTestTable(ClickHouseConnection client)
+    private static async Task SetupTestTable(ClickHouseClient client)
     {
-        await client.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE OR REPLACE TABLE {TestTableName}
             (id UInt64, name String)
             ENGINE MergeTree()
             ORDER BY (id)
         ");
 
-        await client.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             INSERT INTO {TestTableName} VALUES
             (12, 'foo'),
             (42, 'bar')
@@ -107,8 +105,7 @@ public static class ReadOnlyUsers
     {
         Console.WriteLine("1. Read-only user CAN query granted tables:");
 
-        using var client = new ClickHouseConnection(connectionString);
-        await client.OpenAsync();
+        using var client = new ClickHouseClient(connectionString);
 
         using var reader = await client.ExecuteReaderAsync($"SELECT * FROM {TestTableName}");
         Console.WriteLine("   Query result:");
@@ -127,12 +124,11 @@ public static class ReadOnlyUsers
     {
         Console.WriteLine("2. Read-only user CANNOT insert data:");
 
-        using var client = new ClickHouseConnection(connectionString);
-        await client.OpenAsync();
+        using var client = new ClickHouseClient(connectionString);
 
         try
         {
-            await client.ExecuteStatementAsync($"INSERT INTO {TestTableName} VALUES (100, 'blocked')");
+            await client.ExecuteNonQueryAsync($"INSERT INTO {TestTableName} VALUES (100, 'blocked')");
             Console.WriteLine("   Unexpected success!");
         }
         catch (ClickHouseServerException ex)
@@ -150,8 +146,7 @@ public static class ReadOnlyUsers
     {
         Console.WriteLine("3. Read-only user CANNOT query non-granted tables (e.g., system.users):");
 
-        using var client = new ClickHouseConnection(connectionString);
-        await client.OpenAsync();
+        using var client = new ClickHouseClient(connectionString);
 
         try
         {
@@ -173,16 +168,19 @@ public static class ReadOnlyUsers
     {
         Console.WriteLine("4. Read-only user CANNOT use custom ClickHouse settings:");
 
-        using var client = new ClickHouseConnection(connectionString);
-        await client.OpenAsync();
+        using var client = new ClickHouseClient(connectionString);
 
-        using var command = client.CreateCommand();
-        command.CommandText = $"SELECT * FROM {TestTableName}";
-        command.CustomSettings.Add("send_progress_in_http_headers", 1);
+        var options = new QueryOptions
+        {
+            CustomSettings = new Dictionary<string, object>
+            {
+                ["send_progress_in_http_headers"] = 1,
+            },
+        };
 
         try
         {
-            using var reader = await command.ExecuteReaderAsync();
+            using var reader = await client.ExecuteReaderAsync($"SELECT * FROM {TestTableName}", options: options);
             Console.WriteLine("   Unexpected success!");
         }
         catch (ClickHouseServerException ex)

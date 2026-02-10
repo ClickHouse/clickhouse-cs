@@ -69,7 +69,7 @@ public static class AsyncInsert
     /// </summary>
     private static async Task Example1_AsyncInsertWithWait()
     {
-        // Configure async inserts at connection level.
+        // Configure async inserts at client level.
         // You can also set these directly in the connection string using the "set_" prefix:
         //
         //   "Host=localhost;set_async_insert=1;set_wait_for_async_insert=1;set_async_insert_busy_timeout_ms=1000"
@@ -80,13 +80,12 @@ public static class AsyncInsert
         settings.CustomSettings["async_insert_max_data_size"] = 1_000_000;
         settings.CustomSettings["async_insert_busy_timeout_ms"] = 1000;
 
-        using var connection = new ClickHouseConnection(settings);
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient(settings);
 
         var tableName = "example_async_insert_wait";
 
         // Create table
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE OR REPLACE TABLE {tableName}
             (id Int32, data String)
             ENGINE MergeTree
@@ -103,8 +102,6 @@ public static class AsyncInsert
 
         var tasks = Enumerable.Range(0, concurrentInserts).Select(async batchIndex =>
         {
-            using var command = connection.CreateCommand();
-
             // Build VALUES clause for batch insert
             var values = string.Join(",\n",
                 Enumerable.Range(0, rowsPerInsert).Select(_ =>
@@ -114,11 +111,9 @@ public static class AsyncInsert
                     return $"({id}, '{data}')";
                 }));
 
-            command.CommandText = $"INSERT INTO {tableName} (id, data) VALUES {values}";
-
             try
             {
-                await command.ExecuteNonQueryAsync();
+                await client.ExecuteNonQueryAsync($"INSERT INTO {tableName} (id, data) VALUES {values}");
             }
             catch (Exception ex)
             {
@@ -131,11 +126,11 @@ public static class AsyncInsert
         Console.WriteLine($"   {concurrentInserts} concurrent inserts ({rowsPerInsert} rows each) completed");
 
         // Verify data
-        var count = await connection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        var count = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
         Console.WriteLine($"   Total rows in table: {count} (expected: {concurrentInserts * rowsPerInsert})");
 
         // Cleanup
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
@@ -161,13 +156,12 @@ public static class AsyncInsert
         settings.CustomSettings["async_insert_max_data_size"] = 1_000_000;
         settings.CustomSettings["async_insert_busy_timeout_ms"] = 1000;
 
-        using var connection = new ClickHouseConnection(settings);
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient(settings);
 
         var tableName = "example_async_insert_nowait";
 
         // Create table
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE OR REPLACE TABLE {tableName}
             (id Int32, name String)
             ENGINE MergeTree
@@ -193,16 +187,13 @@ public static class AsyncInsert
                 var batchSize = random.Next(10, 100);
                 var startId = rowsSent;
 
-                using var command = connection.CreateCommand();
                 var values = string.Join(",\n",
                     Enumerable.Range(0, batchSize).Select(i =>
                         $"({startId + i}, 'Name {startId + i}')"));
 
-                command.CommandText = $"INSERT INTO {tableName} (id, name) VALUES {values}";
-
                 try
                 {
-                    await command.ExecuteNonQueryAsync();
+                    await client.ExecuteNonQueryAsync($"INSERT INTO {tableName} (id, name) VALUES {values}");
 
                     Interlocked.Add(ref rowsSent, batchSize);
                     Interlocked.Increment(ref insertCount);
@@ -228,7 +219,7 @@ public static class AsyncInsert
 
                 try
                 {
-                    var written = await connection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+                    var written = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
                     Console.WriteLine($"   >> Status: {rowsSent} rows sent, {written} rows written to table");
                 }
                 catch (Exception ex)
@@ -250,10 +241,10 @@ public static class AsyncInsert
         try { await monitorTask; } catch (OperationCanceledException) { }
 
         // Final count
-        var finalCount = await connection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        var finalCount = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
         Console.WriteLine($"\n   Final: {rowsSent} rows sent, {finalCount} rows written");
 
         // Cleanup
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 }
