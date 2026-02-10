@@ -23,7 +23,38 @@ jobs:
 
       - name: Setup ClickHouse
         run: |
-          curl https://clickhouse.com/ | sh
+         curl https://clickhouse.com/ | sh
+
+          # Diagnostic: try --daemon and capture what happens (for bug report)
+          echo "=== Diagnostic: testing --daemon flag ==="
+          echo "ClickHouse version:"
+          ./clickhouse --version || true
+
+          echo -e "\nAttempting: ./clickhouse server --daemon"
+          ./clickhouse server --daemon > daemon_stdout.log 2>&1
+          DAEMON_EXIT_CODE=$?
+          echo "Exit code: $DAEMON_EXIT_CODE"
+
+          echo -e "\nStdout/stderr from --daemon:"
+          cat daemon_stdout.log || echo "(empty)"
+
+          echo -e "\nChecking for clickhouse processes:"
+          pgrep -l clickhouse || echo "No clickhouse processes found"
+
+          echo -e "\nChecking for log files in common locations:"
+          ls -la ./clickhouse-server.log 2>/dev/null || echo "No ./clickhouse-server.log"
+          ls -la /var/log/clickhouse-server/ 2>/dev/null || echo "No /var/log/clickhouse-server/"
+          ls -la ~/clickhouse-server.log 2>/dev/null || echo "No ~/clickhouse-server.log"
+
+          echo -e "\nChecking for pid files:"
+          ls -la ./clickhouse-server.pid 2>/dev/null || echo "No ./clickhouse-server.pid"
+          ls -la /var/run/clickhouse-server/ 2>/dev/null || echo "No /var/run/clickhouse-server/"
+
+          # Kill any leftover processes before real startup
+          pkill -9 clickhouse 2>/dev/null || true
+          sleep 1
+
+          echo -e "\n=== End diagnostic. Starting server with background process ==="
 
           # Start server in background (--daemon may not work reliably on macOS)
           ./clickhouse server > clickhouse.log 2>&1 &
