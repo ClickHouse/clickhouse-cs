@@ -27,7 +27,6 @@ jobs:
         run: |
           curl https://clickhouse.com/ | sh
           ./clickhouse install --noninteractive
-          cp "$(wslpath '${{ github.workspace }}')/.github/clickhouse-config.xml" /etc/clickhouse-server/config.d/query_log.xml
           clickhouse start
 
       - uses: actions/cache@v5
