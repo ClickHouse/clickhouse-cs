@@ -27,6 +27,20 @@ jobs:
           curl https://clickhouse.com/ | sh
           ./clickhouse server --daemon
 
+          # Wait for ClickHouse to be ready
+          for i in {1..30}; do
+            if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
+              echo "ClickHouse is ready"
+              break
+            fi
+            echo "Waiting for ClickHouse to start... ($i/30)"
+            sleep 1
+          done
+
+          # Verify server is responding
+          curl -s http://localhost:8123/ping || exit 1
+
+
       - uses: actions/cache@v5
         name: Cache NuGet
         with:
