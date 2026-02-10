@@ -10,6 +10,7 @@ using ClickHouse.Driver.Logging;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+#pragma warning disable CS0618 // Type or member is obsolete
 
 namespace ClickHouse.Driver.Tests.Logging;
 
