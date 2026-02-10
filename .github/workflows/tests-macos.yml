@@ -25,7 +25,9 @@ jobs:
       - name: Setup ClickHouse
         run: |
           curl https://clickhouse.com/ | sh
-          ./clickhouse server --config-file=.github/clickhouse-config.xml > clickhouse.log 2>&1 &
+          sudo mkdir -p /etc/clickhouse-server/config.d
+          sudo cp .github/clickhouse-config.xml /etc/clickhouse-server/config.d/query_log.xml
+          ./clickhouse server > clickhouse.log 2>&1 &
 
           for i in $(seq 1 30); do
             if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
