@@ -110,4 +110,57 @@ public class ClickHouseClientTests : AbstractConnectionTestFixture
             Assert.That(client.RedactedConnectionString, Is.Not.Contains($"Password={MOCK}"));
         });
     }
+
+    [Test]
+    public async Task Constructor_WithHttpClient_ShouldUseProvidedHttpClient()
+    {
+        var trackingHandler = new TrackingHandler(new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+        });
+        using var httpClient = new HttpClient(trackingHandler);
+
+        var connectionString = TestUtilities.GetConnectionStringBuilder().ToString();
+        using var client = new ClickHouseClient(connectionString, httpClient);
+
+        await client.ExecuteScalarAsync("SELECT 1");
+
+        Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0), "Provided HttpClient should have been used");
+    }
+
+    [Test]
+    public async Task Constructor_WithHttpClientFactory_ShouldUseProvidedFactory()
+    {
+        var factory = new TestHttpClientFactory();
+
+        var connectionString = TestUtilities.GetConnectionStringBuilder().ToString();
+        using var client = new ClickHouseClient(connectionString, factory, "test-client");
+
+        Assert.That(factory.CreateClientCallCount, Is.EqualTo(0));
+
+        await client.ExecuteScalarAsync("SELECT 1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.CreateClientCallCount, Is.GreaterThan(0), "Provided HttpClientFactory was not used");
+            Assert.That(factory.LastRequestedClientName, Is.EqualTo("test-client"));
+        });
+    }
+
+    [Test]
+    public async Task Constructor_WithHttpClientFactoryDefaultName_ShouldUseEmptyName()
+    {
+        var factory = new TestHttpClientFactory();
+
+        var connectionString = TestUtilities.GetConnectionStringBuilder().ToString();
+        using var client = new ClickHouseClient(connectionString, factory);
+
+        await client.ExecuteScalarAsync("SELECT 1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.CreateClientCallCount, Is.GreaterThan(0), "Provided HttpClientFactory was not used");
+            Assert.That(factory.LastRequestedClientName, Is.EqualTo(""));
+        });
+    }
 }
