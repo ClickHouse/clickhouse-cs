@@ -216,7 +216,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        var reader = await ExecuteReaderAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+        using var reader = await ExecuteReaderAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
         return reader.Read() ? reader.GetValue(0) : null;
     }
 

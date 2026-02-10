@@ -99,7 +99,7 @@ public static class TestUtilities
         }
     }
 
-    public static ClickHouseClient GetTestClickHouseClient(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
+    public static ClickHouseClientSettings GetTestClickHouseClientSettings(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
     {
         var builder = GetConnectionStringBuilder();
         builder.Compression = compression;
@@ -138,7 +138,7 @@ public static class TestUtilities
         }
         if (SupportedFeatures.HasFlag(Feature.Geometry))
         {
-            // Revisit this if the Geometry type is updated to not require this setting in the future 
+            // Revisit this if the Geometry type is updated to not require this setting in the future
             // it could cause problems by hiding other issues
             builder["set_allow_suspicious_variant_types"] = 1;
         }
@@ -148,14 +148,16 @@ public static class TestUtilities
             builder["set_allow_experimental_qbit_type"] = 1;
         }
 
-        var settings = new ClickHouseClientSettings(builder)
+        return new ClickHouseClientSettings(builder)
         {
             UseFormDataParameters = useFormDataParameters
         };
+    }
 
-        var client = new ClickHouseClient(settings);
-
-        return client;
+    public static ClickHouseClient GetTestClickHouseClient(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
+    {
+        var settings = GetTestClickHouseClientSettings(compression, session, customDecimals, password, useFormDataParameters, jsonReadMode, jsonWriteMode);
+        return new ClickHouseClient(settings);
     }
 
     /// <summary>
@@ -164,8 +166,10 @@ public static class TestUtilities
     /// <returns></returns>
     public static ClickHouseConnection GetTestClickHouseConnection(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
     {
-        var client = GetTestClickHouseClient(compression, session, customDecimals, password, useFormDataParameters, jsonReadMode, jsonWriteMode);
-        var conn = client.CreateConnection();
+        // Construct from settings so the connection owns its internal ClickHouseClient.
+        // Using client.CreateConnection() would set ownsClient=false, leaking the client on dispose.
+        var settings = GetTestClickHouseClientSettings(compression, session, customDecimals, password, useFormDataParameters, jsonReadMode, jsonWriteMode);
+        var conn = new ClickHouseConnection(settings);
         conn.Open();
         return conn;
     }

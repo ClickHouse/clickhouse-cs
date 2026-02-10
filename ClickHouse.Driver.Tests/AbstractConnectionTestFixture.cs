@@ -31,5 +31,9 @@ public abstract class AbstractConnectionTestFixture : IDisposable
     }
 
     [OneTimeTearDown]
-    public void Dispose() => connection?.Dispose();
+    public void Dispose()
+    {
+        connection?.Dispose();
+        client?.Dispose();
+    }
 }
