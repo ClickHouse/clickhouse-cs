@@ -1,6 +1,5 @@
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Readers;
-using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -49,9 +48,9 @@ public static class DateTimeHandling
         Console.WriteLine("\n6. Writing DateTime Via Parameters:");
         await Example6_WriteViaParameters(connection);
 
-        // Example 7: Writing DateTime via bulk copy
-        Console.WriteLine("\n7. Writing DateTime Via Bulk Copy:");
-        await Example7_WriteViaBulkCopy(connection);
+        // Example 7: Writing DateTime via InsertBinaryAsync
+        Console.WriteLine("\n7. Writing DateTime Via InsertBinaryAsync:");
+        await Example7_WriteViaInsertBinaryAsync(connection);
 
         // Example 8: Working with DateTimeOffset
         Console.WriteLine("\n8. Working With DateTimeOffset:");
@@ -285,11 +284,11 @@ public static class DateTimeHandling
     }
 
     /// <summary>
-    /// Writing DateTime values via bulk copy.
-    /// Bulk copy knows the target column's timezone, so it can correctly
+    /// Writing DateTime values via InsertBinaryAsync.
+    /// InsertBinaryAsync knows the target column's timezone, so it can correctly
     /// interpret DateTime.Kind=Unspecified as wall-clock time in that timezone.
     /// </summary>
-    private static async Task Example7_WriteViaBulkCopy(ClickHouseConnection connection)
+    private static async Task Example7_WriteViaInsertBinaryAsync(ClickHouseConnection connection)
     {
         var tableName = "example_datetime_bulk";
 
@@ -303,29 +302,26 @@ public static class DateTimeHandling
             ENGINE = Memory
         ");
 
-        using (var bulkCopy = new ClickHouseBulkCopy(connection)
-        {
-            DestinationTableName = tableName,
-        })
-        {
-            // Unspecified DateTime values are treated as wall-clock time in the column's timezone
-            var data = new List<object[]>
-            {
-                // Row 1: Same wall-clock time (12:00) in both columns
-                new object[] { 1u,
-                    new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Unspecified), // 12:00 UTC
-                    new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Unspecified)  // 12:00 Amsterdam
-                },
-                // Row 2: UTC DateTime - instant is preserved
-                new object[] { 2u,
-                    new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc), // 12:00 UTC
-                    new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc)  // 12:00 UTC = 14:00 Amsterdam
-                },
-            };
+        using var client = new ClickHouseClient("Host=localhost");
 
-            await bulkCopy.WriteToServerAsync(data);
-            Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows via bulk copy");
-        }
+        // Unspecified DateTime values are treated as wall-clock time in the column's timezone
+        var columns = new[] { "id", "dt_utc", "dt_amsterdam" };
+        var data = new List<object[]>
+        {
+            // Row 1: Same wall-clock time (12:00) in both columns
+            new object[] { 1u,
+                new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Unspecified), // 12:00 UTC
+                new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Unspecified)  // 12:00 Amsterdam
+            },
+            // Row 2: UTC DateTime - instant is preserved
+            new object[] { 2u,
+                new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc), // 12:00 UTC
+                new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc)  // 12:00 UTC = 14:00 Amsterdam
+            },
+        };
+
+        await client.InsertBinaryAsync(tableName, columns, data);
+        Console.WriteLine($"   Inserted {data.Count} rows via InsertBinaryAsync");
 
         // Read back
         var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(

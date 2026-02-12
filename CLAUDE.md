@@ -3,7 +3,9 @@
 ## Repository Overview
 
 ### Project Context
-- **ClickHouse.Driver** is the official ADO.NET client for ClickHouse database
+- **ClickHouse.Driver** is the official .NET client for ClickHouse database
+- **Primary API**: `ClickHouseClient` - thread-safe, singleton-friendly, recommended for most use cases
+- **ADO.NET API**: `ClickHouseConnection`/`ClickHouseCommand` - for ORM compatibility (Dapper, EF Core, linq2db)
 - **Critical priorities**: Stability, correctness, performance, and comprehensive testing
 - **Tech stack**: C#/.NET targeting `net6.0`, `net8.0`, `net9.0`, `net10.0`
 - **Tests run on**: `net6.0`, `net8.0`, `net9.0`, `net10.0`; Integration tests: `net10.0`; Benchmarks: `net10.0`
@@ -12,11 +14,11 @@
 ```
 ClickHouse.Driver.sln
 ├── ClickHouse.Driver/                   # Main library (NuGet package)
-│   ├── ADO/                            # Core ADO.NET (Connection, Command, DataReader, Parameters)
+│   ├── Utility/                        # ClickHouseClient (primary API), schema, feature detection
+│   ├── ADO/                            # ADO.NET layer (Connection, Command, DataReader, Parameters)
 │   ├── Types/                          # 60+ ClickHouse type implementations + TypeConverter.cs
-│   ├── Copy/                           # Bulk copy & binary serialization
+│   ├── Copy/                           # Binary serialization (used internally by ClickHouseClient)
 │   ├── Http/                           # HTTP layer & connection pooling
-│   ├── Utility/                        # Schema, feature detection, extensions
 │   └── PublicAPI/                      # Public API surface tracking (analyzer-enforced)
 ├── ClickHouse.Driver.Tests/            # NUnit tests (multi-framework)
 ├── ClickHouse.Driver.IntegrationTests/ # Integration tests (net10.0)
@@ -24,12 +26,39 @@ ClickHouse.Driver.sln
 ```
 
 ### Key Files
+- **Primary API**: `ClickHouseClient.cs` - main entry point for most applications
 - **Type system**: `Types/TypeConverter.cs` (14KB, complex), `Types/Grammar/` (type parsing)
-- **Core ADO**: `ADO/ClickHouseConnection.cs`, `ADO/ClickHouseCommand.cs`, `ADO/Readers/`
-- **Protocol**: Binary serialization in `Copy/Serializer/`, HTTP formatting in `Formats/`
+- **ADO.NET layer**: `ADO/ClickHouseConnection.cs`, `ADO/ClickHouseCommand.cs`, `ADO/Readers/`
 - **Feature detection**: `Utility/ClickHouseFeatureMap.cs` (version-based capabilities)
 - **Public API**: `PublicAPI/*.txt` (Roslyn analyzer enforces shipped signatures)
 - **Config**: `.editorconfig` (file-scoped namespaces, StyleCop suppressions)
+
+### API Architecture
+
+**ClickHouseClient** (recommended):
+```csharp
+using var client = new ClickHouseClient("Host=localhost");
+await client.ExecuteNonQueryAsync("CREATE TABLE ...");
+await client.InsertBinaryAsync(tableName, columns, rows);  // High-performance bulk insert
+using var reader = await client.ExecuteReaderAsync("SELECT ...");
+var scalar = await client.ExecuteScalarAsync("SELECT count() ...");
+```
+
+**ClickHouseConnection** (for ORMs):
+```csharp
+// Use ClickHouseDataSource for proper connection lifetime management with ORMs
+var dataSource = new ClickHouseDataSource("Host=localhost");
+services.AddSingleton(dataSource);
+
+// Dapper, EF Core, linq2db work with DbConnection
+using var connection = dataSource.CreateConnection();
+var users = connection.Query<User>("SELECT * FROM users");
+```
+
+**Key differences**:
+- `ClickHouseClient`: Thread-safe, can be singleton, has `InsertBinaryAsync` for bulk inserts
+- `ClickHouseConnection`: ADO.NET `DbConnection`, required for ORM compatibility
+- `ClickHouseBulkCopy`: **Deprecated** - use `ClickHouseClient.InsertBinaryAsync` instead
 
 ---
 
@@ -68,8 +97,30 @@ ClickHouse.Driver.sln
 - **Analyzers**: Respect `.editorconfig`, StyleCop suppressions, nullable contexts
 
 ### Configuration & Settings
-- **Configuration**: happens through connection string and ClickHouseClientSettings
+- **Client configuration**: Connection string or `ClickHouseClientSettings` for client-level settings
+- **Per-query options**: `QueryOptions` for query-specific settings (QueryId, CustomSettings, Roles, BearerToken)
+- **Parameters**: Use `ClickHouseParameterCollection` with `ClickHouseDbParameter` for parameterized queries
 - **Feature flags**: Consider adding optional behavior behind connection string settings
+
+```csharp
+// Client-level settings
+var settings = new ClickHouseClientSettings("Host=localhost");
+settings.CustomSettings.Add("max_threads", 4);
+using var client = new ClickHouseClient(settings);
+
+// Per-query options
+var options = new QueryOptions
+{
+    QueryId = "my-query-id",
+    CustomSettings = new Dictionary<string, object> { ["max_execution_time"] = 30 },
+};
+await client.ExecuteReaderAsync("SELECT ...", options: options);
+
+// Parameters
+var parameters = new ClickHouseParameterCollection();
+parameters.Add("id", 42UL);
+await client.ExecuteReaderAsync("SELECT * FROM t WHERE id = {id:UInt64}", parameters);
+```
 
 ### Observability & Diagnostics
 - **Error messages**: Must be clear, actionable, include context (connection string, query, server version)

@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -21,8 +20,7 @@ public static class EphemeralColumns
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         Console.WriteLine("Ephemeral Columns Examples\n");
 
@@ -31,7 +29,7 @@ public static class EphemeralColumns
         var tableName = "example_ephemeral_derived";
 
         // Create table where multiple columns are derived from ephemeral inputs
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE OR REPLACE TABLE {tableName}
             (
                 id              UInt64,
@@ -51,38 +49,25 @@ public static class EphemeralColumns
         Console.WriteLine("   - first_name: String EPHEMERAL");
         Console.WriteLine("   - last_name: String EPHEMERAL\n");
 
-        // Insert with ephemeral columns using parameterized query
+        // Insert with ephemeral columns using InsertBinaryAsync
+        // Note: Must specify the ephemeral columns explicitly
         Console.WriteLine("   Inserting data with first_name and last_name:");
 
-        var people = new[]
+        var rows = new List<object[]>
         {
-            (Id: 1UL, FirstName: "Alice", LastName: "Smith"),
-            (Id: 2UL, FirstName: "Bob", LastName: "Johnson"),
-            (Id: 3UL, FirstName: "Carol", LastName: "Williams")
+            new object[] { 1UL, "Alice", "Smith" },
+            new object[] { 2UL, "Bob", "Johnson" },
+            new object[] { 3UL, "Carol", "Williams" }
         };
 
-        using (var command = connection.CreateCommand())
-        {
-            command.CommandText = $@"
-                INSERT INTO {tableName} (id, first_name, last_name)
-                VALUES ({{id:UInt64}}, {{first_name:String}}, {{last_name:String}})";
+        var columns = new[] { "id", "first_name", "last_name" };
+        await client.InsertBinaryAsync(tableName, columns, rows);
 
-            foreach (var person in people)
-            {
-                command.Parameters.Clear();
-                command.AddParameter("id", person.Id);
-                command.AddParameter("first_name", person.FirstName);
-                command.AddParameter("last_name", person.LastName);
-                await command.ExecuteNonQueryAsync();
-                Console.WriteLine($"   - Inserted id={person.Id}, first_name='{person.FirstName}', last_name='{person.LastName}'");
-            }
-        }
-
-        Console.WriteLine();
+        Console.WriteLine("   - Inserted 3 rows with ephemeral columns\n");
 
         // Query results - derived columns are stored, ephemeral columns are not
         Console.WriteLine("   Query results (derived columns are stored, ephemeral are not):");
-        using (var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {tableName} ORDER BY id"))
+        using (var reader = await client.ExecuteReaderAsync($"SELECT * FROM {tableName} ORDER BY id"))
         {
             Console.WriteLine("   ID\tFull Name\t\tName Length");
             Console.WriteLine("   --\t---------\t\t-----------");
@@ -93,7 +78,7 @@ public static class EphemeralColumns
         }
 
         // Cleanup
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         Console.WriteLine($"\n   Table dropped\n");
 
         Console.WriteLine("All ephemeral column examples completed!");

@@ -25,7 +25,8 @@ jobs:
       - name: Setup ClickHouse
         run: |
           curl https://clickhouse.com/ | sh
-          ./clickhouse server --daemon
+          sudo ./clickhouse install --noninteractive
+          sudo clickhouse start
 
       - uses: actions/cache@v5
         name: Cache NuGet

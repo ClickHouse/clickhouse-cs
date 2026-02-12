@@ -4,7 +4,7 @@ using ClickHouse.Driver.Utility;
 namespace ClickHouse.Driver.Examples;
 
 /// <summary>
-/// Examples of different ways to configure a connection to ClickHouse.
+/// Examples of different ways to configure a ClickHouseClient.
 /// Shows various connection string formats and options.
 /// </summary>
 public static class ConnectionStringConfiguration
@@ -13,11 +13,10 @@ public static class ConnectionStringConfiguration
     {
         // 1: Connection string with named parameters
         Console.WriteLine("1. Connection string with named parameters:");
-        using (var connection = new ClickHouseConnection(
+        using (var client = new ClickHouseClient(
             "Host=localhost;Port=8123;Protocol=http;Username=default;Password=;Database=default"))
         {
-            await connection.OpenAsync();
-            var version = await connection.ExecuteScalarAsync("SELECT version()");
+            var version = await client.ExecuteScalarAsync("SELECT version()");
             Console.WriteLine($"   Connected to ClickHouse version: {version}");
         }
 
@@ -32,10 +31,9 @@ public static class ConnectionStringConfiguration
             Database = "default",
             Protocol = "http",
         };
-        using (var connection = new ClickHouseConnection(settings))
+        using (var client = new ClickHouseClient(settings))
         {
-            await connection.OpenAsync();
-            var version = await connection.ExecuteScalarAsync("SELECT version()");
+            var version = await client.ExecuteScalarAsync("SELECT version()");
             Console.WriteLine($"   Connected to ClickHouse version: {version}");
         }
 
@@ -52,19 +50,15 @@ public static class ConnectionStringConfiguration
         };
         Console.WriteLine($"   Settings: Host={secureSettings.Host}, Port={secureSettings.Port}, Protocol={secureSettings.Protocol}");
 
-
         // 4: Connection with custom settings
         Console.WriteLine("\n4. Connection with custom ClickHouse settings:");
         var settingsWithCustom = new ClickHouseClientSettings("Host=localhost");
         settingsWithCustom.CustomSettings.Add("max_execution_time", 10);
         settingsWithCustom.CustomSettings.Add("max_memory_usage", 10000000000);
 
-        using (var connection = new ClickHouseConnection(settingsWithCustom))
+        using (var client = new ClickHouseClient(settingsWithCustom))
         {
-            await connection.OpenAsync();
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT 1";
-            await command.ExecuteScalarAsync();
+            await client.ExecuteNonQueryAsync("SELECT 1");
             Console.WriteLine("   Executed query with custom ClickHouse settings");
         }
 

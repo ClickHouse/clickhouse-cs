@@ -1,45 +1,44 @@
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
 
 /// <summary>
-/// Demonstrates simple data insertion methods in ClickHouse.
-/// Shows parameterized queries and basic INSERT statements.
-/// For performant inserts using the binary format, see the BulkCopy examples instead.
+/// Demonstrates three data insertion approaches in ClickHouse:
+/// 1. InsertBinaryAsync - High-performance binary format (recommended for bulk data)
+/// 2. ExecuteStatementAsync with parameters - SQL with parameterized values
+/// 3. ADO.NET Command - Classic ADO.NET pattern with ClickHouseCommand
 /// </summary>
 public static class SimpleDataInsert
 {
     private const string TableName = "example_simple_insert";
-    private const string ExceptTableName = "example_insert_except";
 
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
-        await SetupTable(connection);
+        await SetupTable(client);
 
-        // Insert a single row using {name:Type} parameter syntax
-        await InsertUsingParameterizedQuery(connection);
+        // Option 1: InsertBinaryAsync (recommended for bulk inserts)
+        await InsertUsingBinaryAsync(client);
 
-        // Insert multiple rows by reusing the same command
-        await InsertMultipleRowsWithCommandReuse(connection);
+        // Option 2: ExecuteStatementAsync with parameters
+        await InsertUsingParameterizedStatement(client);
 
-        // Simple insert without parameters using extension method
-        await InsertUsingExecuteStatementAsync(connection);
+        // Option 3: ADO.NET Command pattern
+        await InsertUsingAdoCommand();
 
-        await VerifyInsertedData(connection);
+        // Option 4: EXCEPT clause for DEFAULT columns
+        await InsertUsingExceptClause(client);
 
-        // Use EXCEPT clause to skip columns with DEFAULT values
-        await InsertUsingExceptClause(connection);
-
-        await Cleanup(connection);
+        await VerifyInsertedData(client);
+        await Cleanup(client);
     }
 
-    private static async Task SetupTable(ClickHouseConnection connection)
+    private static async Task SetupTable(ClickHouseClient client)
     {
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {TableName}
             (
                 id UInt64,
@@ -57,89 +56,92 @@ public static class SimpleDataInsert
     }
 
     /// <summary>
-    /// Demonstrates inserting a single row using parameterized query.
-    /// Parameters are specified using {name:Type} syntax in the query.
+    /// Option 1: InsertBinaryAsync - High-performance binary format.
+    /// Recommended for inserting multiple rows efficiently.
     /// </summary>
-    private static async Task InsertUsingParameterizedQuery(ClickHouseConnection connection)
+    private static async Task InsertUsingBinaryAsync(ClickHouseClient client)
     {
-        Console.WriteLine("1. Inserting data using parameterized query:");
-        using var command = connection.CreateCommand();
+        Console.WriteLine("1. InsertBinaryAsync (recommended for bulk inserts):");
 
+        var rows = new List<object[]>
+        {
+            new object[] { 1UL, "Alice Smith", "alice@example.com", (byte)28, 95.5f, DateTime.UtcNow },
+            new object[] { 2UL, "Bob Johnson", "bob@example.com", (byte)35, 87.3f, DateTime.UtcNow },
+            new object[] { 3UL, "Carol White", "carol@example.com", (byte)42, 92.1f, DateTime.UtcNow },
+        };
+
+        var columns = new[] { "id", "name", "email", "age", "score", "registered_at" };
+        await client.InsertBinaryAsync(TableName, columns, rows);
+
+        Console.WriteLine($"   Inserted {rows.Count} rows using binary format\n");
+    }
+
+    /// <summary>
+    /// Option 2: ExecuteNonQueryAsync with parameters.
+    /// Uses {name:Type} syntax for parameterized values.
+    /// </summary>
+    private static async Task InsertUsingParameterizedStatement(ClickHouseClient client)
+    {
+        Console.WriteLine("2. ExecuteNonQueryAsync with parameters:");
+
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("id", 4UL);
+        parameters.AddParameter("name", "David Brown");
+        parameters.AddParameter("email", "david@example.com");
+        parameters.AddParameter("age", (byte)29);
+        parameters.AddParameter("score", 88.9f);
+        parameters.AddParameter("timestamp", DateTime.UtcNow);
+
+        await client.ExecuteNonQueryAsync($@"
+            INSERT INTO {TableName} (id, name, email, age, score, registered_at)
+            VALUES ({{id:UInt64}}, {{name:String}}, {{email:String}}, {{age:UInt8}}, {{score:Float32}}, {{timestamp:DateTime}})",
+            parameters);
+
+        Console.WriteLine("   Inserted 1 row using parameterized statement\n");
+    }
+
+    /// <summary>
+    /// Option 3: ADO.NET Command pattern.
+    /// Classic approach using ClickHouseConnection and ClickHouseCommand.
+    /// Useful when integrating with ORMs or ADO.NET-based tools.
+    /// </summary>
+    private static async Task InsertUsingAdoCommand()
+    {
+        Console.WriteLine("3. ADO.NET Command pattern:");
+
+        using var connection = new ClickHouseConnection("Host=localhost");
+        await connection.OpenAsync();
+
+        using var command = connection.CreateCommand();
         command.CommandText = $@"
             INSERT INTO {TableName} (id, name, email, age, score, registered_at)
             VALUES ({{id:UInt64}}, {{name:String}}, {{email:String}}, {{age:UInt8}}, {{score:Float32}}, {{timestamp:DateTime}})";
 
-        command.AddParameter("id", 1);
-        command.AddParameter("name", "Alice Smith");
-        command.AddParameter("email", "alice@example.com");
-        command.AddParameter("age", 28);
-        command.AddParameter("score", 95.5f);
+        command.AddParameter("id", 5UL);
+        command.AddParameter("name", "Eve Davis");
+        command.AddParameter("email", "eve@example.com");
+        command.AddParameter("age", (byte)31);
+        command.AddParameter("score", 91.7f);
         command.AddParameter("timestamp", DateTime.UtcNow);
 
         await command.ExecuteNonQueryAsync();
-        Console.WriteLine("   Inserted 1 row with parameters\n");
+
+        Console.WriteLine("   Inserted 1 row using ADO.NET Command\n");
     }
 
     /// <summary>
-    /// Demonstrates inserting multiple rows by reusing a command with different parameter values.
-    /// The Parameters collection is cleared between each insert.
+    /// Option 4: Using EXCEPT clause to skip columns with DEFAULT values.
+    /// The server automatically populates columns excluded via EXCEPT.
     /// </summary>
-    private static async Task InsertMultipleRowsWithCommandReuse(ClickHouseConnection connection)
+    private static async Task InsertUsingExceptClause(ClickHouseClient client)
     {
-        Console.WriteLine("2. Inserting multiple rows using parameters:");
-        using var command = connection.CreateCommand();
+        Console.WriteLine("4. Insert using EXCEPT clause:");
 
-        command.CommandText = $@"
-            INSERT INTO {TableName} (id, name, email, age, score, registered_at)
-            VALUES ({{id:UInt64}}, {{name:String}}, {{email:String}}, {{age:UInt8}}, {{score:Float32}}, {{timestamp:DateTime}})";
-
-        var users = new[]
-        {
-            new { Id = 2UL, Name = "Bob Johnson", Email = "bob@example.com", Age = (byte)35, Score = 87.3f },
-            new { Id = 3UL, Name = "Carol White", Email = "carol@example.com", Age = (byte)42, Score = 92.1f },
-            new { Id = 4UL, Name = "David Brown", Email = "david@example.com", Age = (byte)29, Score = 88.9f },
-        };
-
-        foreach (var user in users)
-        {
-            command.Parameters.Clear();
-            command.AddParameter("id", user.Id);
-            command.AddParameter("name", user.Name);
-            command.AddParameter("email", user.Email);
-            command.AddParameter("age", user.Age);
-            command.AddParameter("score", user.Score);
-            command.AddParameter("timestamp", DateTime.UtcNow);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        Console.WriteLine($"   Inserted {users.Length} rows\n");
-    }
-
-    /// <summary>
-    /// Demonstrates inserting data using ExecuteStatementAsync extension method.
-    /// Suitable for simple cases where parameterization is not needed.
-    /// </summary>
-    private static async Task InsertUsingExecuteStatementAsync(ClickHouseConnection connection)
-    {
-        Console.WriteLine("3. Inserting data using ExecuteStatementAsync:");
-        await connection.ExecuteStatementAsync($@"
-            INSERT INTO {TableName} (id, name, email, age, score, registered_at)
-            VALUES (5, 'Eve Davis', 'eve@example.com', 31, 91.7, now())
-        ");
-        Console.WriteLine("   Inserted 1 row using ExecuteStatementAsync\n");
-    }
-
-    /// <summary>
-    /// Demonstrates inserting data using the EXCEPT clause to exclude columns with DEFAULT values.
-    /// This is useful when you want the server to populate certain columns automatically.
-    /// </summary>
-    private static async Task InsertUsingExceptClause(ClickHouseConnection connection)
-    {
-        Console.WriteLine("4. Inserting data using EXCEPT clause:");
+        var exceptTableName = "example_insert_except";
 
         // Create a table with DEFAULT columns
-        await connection.ExecuteStatementAsync($@"
-            CREATE TABLE IF NOT EXISTS {ExceptTableName} (
+        await client.ExecuteNonQueryAsync($@"
+            CREATE TABLE IF NOT EXISTS {exceptTableName} (
                 id Int32,
                 name String,
                 value Float64,
@@ -148,22 +150,20 @@ public static class SimpleDataInsert
             ) ENGINE = Memory
         ");
 
-        using var command = connection.CreateCommand();
-
         // Use EXCEPT to exclude columns that have DEFAULT values
-        // The server will automatically populate 'created' and 'updated' columns
-        command.CommandText = $"INSERT INTO {ExceptTableName} (* EXCEPT (created, updated)) VALUES ({{id:Int32}}, {{name:String}}, {{value:Float64}})";
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("id", 1);
+        parameters.AddParameter("name", "Test Item");
+        parameters.AddParameter("value", 123.45);
 
-        command.AddParameter("id", 1);
-        command.AddParameter("name", "Test Item");
-        command.AddParameter("value", 123.45);
+        await client.ExecuteNonQueryAsync(
+            $"INSERT INTO {exceptTableName} (* EXCEPT (created, updated)) VALUES ({{id:Int32}}, {{name:String}}, {{value:Float64}})",
+            parameters);
 
-        await command.ExecuteNonQueryAsync();
-        Console.WriteLine("   Inserted 1 row using EXCEPT clause (created/updated auto-populated)\n");
+        Console.WriteLine("   Inserted 1 row using EXCEPT clause (created/updated auto-populated)");
 
         // Verify the data was inserted with DEFAULT values
-        using var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {ExceptTableName}");
-        Console.WriteLine("   Result:");
+        using var reader = await client.ExecuteReaderAsync($"SELECT * FROM {exceptTableName}");
         while (reader.Read())
         {
             var id = reader.GetInt32(0);
@@ -171,17 +171,17 @@ public static class SimpleDataInsert
             var value = reader.GetDouble(2);
             var created = reader.GetDateTime(3);
             var updated = reader.GetDateTime(4);
-            Console.WriteLine($"   id={id}, name={name}, value={value}, created={created:HH:mm:ss}, updated={updated:HH:mm:ss}\n");
+            Console.WriteLine($"   Result: id={id}, name={name}, value={value}, created={created:HH:mm:ss}, updated={updated:HH:mm:ss}\n");
         }
 
-        // Clean up the EXCEPT example table
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {ExceptTableName}");
+        // Clean up
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {exceptTableName}");
     }
 
-    private static async Task VerifyInsertedData(ClickHouseConnection connection)
+    private static async Task VerifyInsertedData(ClickHouseClient client)
     {
         Console.WriteLine("Verifying inserted data:");
-        using var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {TableName} ORDER BY id");
+        using var reader = await client.ExecuteReaderAsync($"SELECT * FROM {TableName} ORDER BY id");
 
         Console.WriteLine("ID\tName\t\t\tEmail\t\t\t\tAge\tScore\tRegistered At");
         Console.WriteLine("--\t----\t\t\t-----\t\t\t\t---\t-----\t-------------");
@@ -198,13 +198,13 @@ public static class SimpleDataInsert
             Console.WriteLine($"{id}\t{name,-20}\t{email,-30}\t{age}\t{score:F1}\t{registeredAt:yyyy-MM-dd HH:mm:ss}");
         }
 
-        var count = await connection.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
+        var count = await client.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
         Console.WriteLine($"\nTotal rows inserted: {count}");
     }
 
-    private static async Task Cleanup(ClickHouseConnection connection)
+    private static async Task Cleanup(ClickHouseClient client)
     {
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {TableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {TableName}");
         Console.WriteLine($"\nTable '{TableName}' dropped");
     }
 }

@@ -7,7 +7,7 @@ using ClickHouse.Driver.Utility;
 namespace ClickHouse.Driver.Examples;
 
 /// <summary>
-/// Demonstrates how to provide your own HttpClient or IHttpClientFactory to ClickHouse connections.
+/// Demonstrates how to provide your own HttpClient or IHttpClientFactory to ClickHouseClient.
 /// This is important for:
 /// - Custom SSL/TLS configuration (certificates, validation)
 /// - Proxy configuration
@@ -15,21 +15,22 @@ namespace ClickHouse.Driver.Examples;
 /// - Connection pooling control
 /// - Integration with dependency injection
 ///
-/// IMPORTANT LIMITATIONS:
-/// - When providing your own HttpClient, YOU are responsible for:
-///   * Enabling automatic decompression (required if compression is not disabled)
-///   * Setting appropriate timeouts
-///   * Certificate validation
-///   * Disposal (if not using DI).
-/// It is recommended that you reuse and do not dispose HttpSocketsHandler/HttpClientHandler,
-/// as they maintain internal connection pools.
+/// <para>
+/// <strong>IMPORTANT: When providing your own HttpClient, YOU are responsible for:</strong>
+/// <list type="bullet">
+/// <item>Enabling automatic decompression (required if compression is enabled)</item>
+/// <item>Setting appropriate timeouts</item>
+/// <item>Certificate validation</item>
+/// <item>Disposal (if not using DI)</item>
+/// </list>
+/// </para>
 ///
-/// IMPORTANT: Connection Idle Timeout
-/// - If you provide your own HttpClient/HttpClientFactory, ensure that the client-side
-///   idle connection timeout is SMALLER than the server's keep_alive_timeout setting.
-/// - ClickHouse Cloud default keep_alive_timeout: 10 seconds
-/// - If client timeout >= server timeout, you may encounter half-open connections that
-///   fail with "connection was closed" errors
+/// <para>
+/// <strong>Connection Idle Timeout:</strong>
+/// If you provide your own HttpClient/HttpClientFactory, ensure that the client-side
+/// idle connection timeout is SMALLER than the server's keep_alive_timeout setting.
+/// ClickHouse Cloud default keep_alive_timeout: 10 seconds.
+/// </para>
 /// </summary>
 public static class HttpClientConfiguration
 {
@@ -37,8 +38,8 @@ public static class HttpClientConfiguration
     {
         Console.WriteLine("HttpClient Configuration Examples\n");
 
-        // Example 1: Basic custom HttpClient
-        Console.WriteLine("1. Providing a custom HttpClient:");
+        // Example 1: ClickHouseClient with custom HttpClient
+        Console.WriteLine("1. ClickHouseClient with custom HttpClient:");
         await Example1_CustomHttpClient();
 
         // Example 2: SSL/TLS configuration
@@ -79,18 +80,23 @@ public static class HttpClientConfiguration
             Timeout = TimeSpan.FromMinutes(5),
         };
 
-        // Pass the HttpClient to the connection
+        // Pass the HttpClient via settings
         var settings = new ClickHouseClientSettings
         {
             Host = "localhost",
             HttpClient = httpClient,
         };
 
+        // Option A: Use ClickHouseClient directly (recommended for new code)
+        using var client = new ClickHouseClient(settings);
+        var version = await client.ExecuteScalarAsync("SELECT version()");
+        Console.WriteLine($"   Using ClickHouseClient: {version}");
+
+        // Option B: Use ClickHouseConnection for ADO.NET compatibility
         using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync();
-
-        var version = await connection.ExecuteScalarAsync("SELECT version()");
-        Console.WriteLine($"   Connected to ClickHouse version: {version}");
+        version = await connection.ExecuteScalarAsync("SELECT version()");
+        Console.WriteLine($"   Using ClickHouseConnection: {version}");
     }
 
     private static async Task Example2_SslConfiguration()
@@ -207,11 +213,16 @@ public static class HttpClientConfiguration
             HttpClientName = "ClickHouseClient", // Optional: factory can use this name
         };
 
+        // Option A: Use ClickHouseClient directly (recommended for new code)
+        using var client = new ClickHouseClient(settings);
+        var version = await client.ExecuteScalarAsync("SELECT version()");
+        Console.WriteLine($"   Using ClickHouseClient: {version}");
+
+        // Option B: Use ClickHouseConnection for ADO.NET compatibility
         using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync();
-
-        var version = await connection.ExecuteScalarAsync("SELECT version()");
-        Console.WriteLine($"   Connected using IHttpClientFactory: {version}");
+        version = await connection.ExecuteScalarAsync("SELECT version()");
+        Console.WriteLine($"   Using ClickHouseConnection: {version}");
 
         // Factory handles disposal
     }

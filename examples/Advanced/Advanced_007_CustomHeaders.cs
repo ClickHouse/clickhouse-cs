@@ -1,11 +1,10 @@
-using System.Collections.Generic;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
 
 /// <summary>
-/// Demonstrates how to use custom HTTP headers with ClickHouse connections.
+/// Demonstrates how to use custom HTTP headers with ClickHouse.
 /// Custom headers can be used for proxy authentication, distributed tracing via correlation ids, etc.
 ///
 /// The Authorization, User-Agent, and Connection headers cannot be overridden.
@@ -35,10 +34,8 @@ public static class CustomHeaders
 
         try
         {
-            using var connection = new ClickHouseConnection(settings);
-            await connection.OpenAsync();
-
-            var result = await connection.ExecuteScalarAsync("SELECT 42");
+            using var client = new ClickHouseClient(settings);
+            var result = await client.ExecuteScalarAsync("SELECT 42");
             Console.WriteLine($"   Query executed successfully: {result}");
         }
         catch

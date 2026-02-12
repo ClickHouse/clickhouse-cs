@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Diagnostic;
 using ClickHouse.Driver.Utility;
 using OpenTelemetry;
@@ -40,28 +39,27 @@ public static class OpenTelemetryTracing
         Console.WriteLine($"Listening to ActivitySource: {ClickHouseDiagnosticsOptions.ActivitySourceName}");
         Console.WriteLine("SQL in traces: enabled\n");
 
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         // Query with results - shows read statistics
-        await ExecuteQueryWithResults(connection);
+        await ExecuteQueryWithResults(client);
 
         // Insert operation - shows write statistics
-        await ExecuteInsert(connection);
+        await ExecuteInsert(client);
 
         // Error trace demonstration
-        await ExecuteWithError(connection);
+        await ExecuteWithError(client);
 
         // Reset to default
         ClickHouseDiagnosticsOptions.IncludeSqlInActivityTags = false;
     }
 
-    private static async Task ExecuteQueryWithResults(ClickHouseConnection connection)
+    private static async Task ExecuteQueryWithResults(ClickHouseClient client)
     {
         Console.WriteLine("\n1. Query with results (shows read statistics):");
         Console.WriteLine("   Trace will include: db.clickhouse.read_rows, db.clickhouse.read_bytes\n");
 
-        using var reader = await connection.ExecuteReaderAsync(
+        using var reader = await client.ExecuteReaderAsync(
             "SELECT number, toString(number) as str FROM system.numbers LIMIT 100");
 
         var count = 0;
@@ -69,37 +67,37 @@ public static class OpenTelemetryTracing
         Console.WriteLine($"   Read {count} rows\n");
     }
 
-    private static async Task ExecuteInsert(ClickHouseConnection connection)
+    private static async Task ExecuteInsert(ClickHouseClient client)
     {
         Console.WriteLine("\n2. Insert operation (shows write statistics):");
         Console.WriteLine("   Trace will include: db.clickhouse.written_rows, db.clickhouse.written_bytes\n");
 
-        await connection.ExecuteStatementAsync(@"
+        await client.ExecuteNonQueryAsync(@"
             CREATE TABLE IF NOT EXISTS example_otel_trace (
                 id UInt32,
                 value String
             ) ENGINE = Memory
         ");
 
-        using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO example_otel_trace VALUES ({id:UInt32}, {value:String})";
-        command.AddParameter("id", 1);
-        command.AddParameter("value", "test");
-        await command.ExecuteNonQueryAsync();
+        var rows = new List<object[]>
+        {
+            new object[] { 1u, "test" }
+        };
+        await client.InsertBinaryAsync("example_otel_trace", new[] { "id", "value" }, rows);
 
         Console.WriteLine("   Inserted 1 row\n");
 
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS example_otel_trace");
+        await client.ExecuteNonQueryAsync("DROP TABLE IF EXISTS example_otel_trace");
     }
 
-    private static async Task ExecuteWithError(ClickHouseConnection connection)
+    private static async Task ExecuteWithError(ClickHouseClient client)
     {
         Console.WriteLine("\n3. Error trace (intentional error):");
         Console.WriteLine("   Trace will show: otel.status_code=ERROR, Activity.StatusDescription will include exception details\n");
 
         try
         {
-            await connection.ExecuteScalarAsync("SELECT * FROM non_existent_table_12345");
+            await client.ExecuteScalarAsync("SELECT * FROM non_existent_table_12345");
         }
         catch (Exception ex)
         {

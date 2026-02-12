@@ -21,22 +21,19 @@ public static class LoggingConfiguration
                 .SetMinimumLevel(LogLevel.Trace); // Set to Trace to see HttpClient configuration
         });
 
-        Console.WriteLine("Creating connection with Trace-level logging enabled...\n");
+        Console.WriteLine("Creating client with Trace-level logging enabled...\n");
 
-        // Create connection settings with logger factory
+        // Create client settings with logger factory
         var settings = new ClickHouseClientSettings("Host=localhost;Port=8123;Username=default;Database=default")
         {
             LoggerFactory = loggerFactory,
         };
 
-        using var connection = new ClickHouseConnection(settings);
-
-        Console.WriteLine("Opening connection (watch for HttpClient configuration logs)...\n");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient(settings);
 
         // Perform a simple query
         Console.WriteLine("\n\nPerforming a simple query...");
-        var result = await connection.ExecuteScalarAsync("SELECT 1");
+        var result = await client.ExecuteScalarAsync("SELECT 1");
         Console.WriteLine($"Query result: {result}");
     }
 }

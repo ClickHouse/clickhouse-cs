@@ -7,6 +7,7 @@ using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
+#pragma warning disable CS0618 // Type or member is obsolete
 
 namespace ClickHouse.Driver.Tests.BulkCopy;
 

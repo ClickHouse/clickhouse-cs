@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClickHouse.Driver.ADO;
-using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Utility;
 
@@ -49,18 +48,15 @@ public static class JsonType
         Console.WriteLine("-".PadRight(50, '-'));
 
         // JsonWriteMode.String is the default, so we can omit it
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
-        connection.CustomSettings["allow_experimental_json_type"] = 1;
+        using var client = new ClickHouseClient("Host=localhost;set_allow_experimental_json_type=1");
 
         var tableName = "example_insert_string_mode";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-
         // All these input types work with String mode
+        var columns = new[] { "id", "data" };
         var rows = new List<object[]>
         {
             // 1. Raw JSON string - passed through directly
@@ -79,11 +75,11 @@ public static class JsonType
             new object[] { 5u, new SimpleEvent { Source = "typed_poco", Value = 500 } },
         };
 
-        await bulkCopy.WriteToServerAsync(rows);
-        Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows with various input types\n");
+        await client.InsertBinaryAsync(tableName, columns, rows);
+        Console.WriteLine($"   Inserted {rows.Count} rows with various input types\n");
 
         // Verify the data
-        using var reader = await connection.ExecuteReaderAsync(
+        using var reader = await client.ExecuteReaderAsync(
             $"SELECT id, data FROM {tableName} ORDER BY id");
 
         Console.WriteLine("   Results:");
@@ -94,13 +90,13 @@ public static class JsonType
             Console.WriteLine($"     ID {id}: source={data["source"]}, value={data["value"]}");
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
     /// Writing in Binary mode writes POCOs using ClickHouse's native binary format.
     /// This preserves type information and supports custom path mappings.
-    /// 
+    ///
     /// For paths that have types defined in the column, the type information will be used for appropriate serialization.
     /// For paths that are not typed, the client will use type inference to pick a suitable ClickHouse type depending on the .NET type.
     ///
@@ -119,21 +115,18 @@ public static class JsonType
         Console.WriteLine("-".PadRight(50, '-'));
 
         // Must explicitly set Binary mode
-        using var connection = new ClickHouseConnection("Host=localhost;JsonWriteMode=Binary");
-        await connection.OpenAsync();
-        connection.CustomSettings["allow_experimental_json_type"] = 1;
+        using var client = new ClickHouseClient("Host=localhost;JsonWriteMode=Binary;set_allow_experimental_json_type=1");
 
         // Register POCO types before using them
-        connection.RegisterJsonSerializationType<EventWithCustomPaths>();
+        client.RegisterJsonSerializationType<EventWithCustomPaths>();
         Console.WriteLine("   Registered POCO types for binary serialization\n");
 
         var tableName = "example_insert_binary_mode";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-
+        var columns = new[] { "id", "data" };
         var rows = new List<object[]>
         {
             // Custom path mapping: EventType -> "type", XCoordinate -> "position.x"
@@ -146,11 +139,11 @@ public static class JsonType
             }},
         };
 
-        await bulkCopy.WriteToServerAsync(rows);
-        Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows with binary serialization\n");
+        await client.InsertBinaryAsync(tableName, columns, rows);
+        Console.WriteLine($"   Inserted {rows.Count} rows with binary serialization\n");
 
         // Verify the data
-        using var reader = await connection.ExecuteReaderAsync(
+        using var reader = await client.ExecuteReaderAsync(
             $"SELECT id, data FROM {tableName} ORDER BY id");
 
         Console.WriteLine("   Results:");
@@ -161,7 +154,7 @@ public static class JsonType
             Console.WriteLine($"     ID {id}: {data.ToJsonString()}");
         }
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
@@ -276,14 +269,16 @@ public static class JsonType
         Console.WriteLine("        - metadata.created: DateTime");
 
         // Insert data - hints ensure proper type handling
-        connection.CustomSettings["date_time_input_format"] = "best_effort";
-        using var bulkCopy2 = new ClickHouseBulkCopy(connection) { DestinationTableName = typedTable };
+        using var client = new ClickHouseClient("Host=localhost;set_allow_experimental_json_type=1;set_date_time_input_format=best_effort");
 
-        await bulkCopy2.WriteToServerAsync(new[]
+        var columns = new[] { "id", "data" };
+        var rows = new[]
         {
             new object[] { 1u, """{"name": "Alice", "age": 30, "tags": ["admin", "active"], "metadata": {"created": "2024-01-15T10:30:00Z"}}""" },
             new object[] { 2u, """{"name": "Bob", "age": 25, "tags": ["user"], "metadata": {"created": "2024-02-20T14:45:00Z"}}""" },
-        });
+        };
+
+        await client.InsertBinaryAsync(typedTable, columns, rows);
 
         // Query paths
         Console.WriteLine("\n   Querying typed paths:");

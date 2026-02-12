@@ -8,7 +8,7 @@ namespace ClickHouse.Driver.Tests.Json;
 [TestFixture]
 public class JsonTypeRegistrationTests
 {
-    private ClickHouseConnection connection;
+    private ClickHouseClient client;
 
     private class ValidPoco
     {
@@ -47,42 +47,42 @@ public class JsonTypeRegistrationTests
     [SetUp]
     public void SetUp()
     {
-        connection = new ClickHouseConnection();
+        client = new ClickHouseClient(new ClickHouseClientSettings());
     }
 
     [TearDown]
     public void TearDown()
     {
-        connection?.Dispose();
+        client?.Dispose();
     }
 
     [Test]
     public void RegisterJsonSerializationType_WithValidPoco_ShouldSucceed()
     {
         // Should not throw
-        connection.RegisterJsonSerializationType<ValidPoco>();
+        client.RegisterJsonSerializationType<ValidPoco>();
     }
 
     [Test]
     public void RegisterJsonSerializationType_WithNestedPoco_ShouldSucceed()
     {
         // Should not throw - nested types are registered automatically
-        connection.RegisterJsonSerializationType<NestedValidPoco>();
+        client.RegisterJsonSerializationType<NestedValidPoco>();
     }
 
     [Test]
     public void RegisterJsonSerializationType_CalledTwice_ShouldBeIdempotent()
     {
         // Should not throw when called multiple times
-        connection.RegisterJsonSerializationType<ValidPoco>();
-        connection.RegisterJsonSerializationType<ValidPoco>();
+        client.RegisterJsonSerializationType<ValidPoco>();
+        client.RegisterJsonSerializationType<ValidPoco>();
     }
 
     [Test]
     public void RegisterJsonSerializationType_WithUnsupportedPropertyType_ShouldThrowWithHelpfulMessage()
     {
         var ex = Assert.Throws<ClickHouseJsonSerializationException>(() =>
-            connection.RegisterJsonSerializationType<PocoWithUnsupportedProperty>());
+            client.RegisterJsonSerializationType<PocoWithUnsupportedProperty>());
 
         Assert.That(ex.TargetType, Is.EqualTo(typeof(PocoWithUnsupportedProperty)));
         Assert.That(ex.PropertyName, Is.EqualTo("Pointer"));
@@ -96,7 +96,7 @@ public class JsonTypeRegistrationTests
     public void RegisterJsonSerializationType_WithNestedUnsupportedPropertyType_ShouldThrowWithHelpfulMessage()
     {
         var ex = Assert.Throws<ClickHouseJsonSerializationException>(() =>
-            connection.RegisterJsonSerializationType<PocoWithNestedUnsupportedProperty>());
+            client.RegisterJsonSerializationType<PocoWithNestedUnsupportedProperty>());
 
         // The exception should be about the nested type's unsupported property
         Assert.That(ex.TargetType, Is.EqualTo(typeof(PocoWithUnsupportedProperty)));
@@ -108,14 +108,14 @@ public class JsonTypeRegistrationTests
     public void RegisterJsonSerializationType_WithNullType_ShouldThrowArgumentNullException()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            connection.RegisterJsonSerializationType(null));
+            client.RegisterJsonSerializationType(null));
     }
 
     [Test]
     public void RegisterJsonSerializationType_WithDuplicateJsonPaths_ShouldThrow()
     {
         var ex = Assert.Throws<ClickHouseJsonSerializationException>(() =>
-            connection.RegisterJsonSerializationType<PocoWithDuplicatePaths>());
+            client.RegisterJsonSerializationType<PocoWithDuplicatePaths>());
 
         Assert.That(ex.Message, Does.Contain("shared.path"));
     }

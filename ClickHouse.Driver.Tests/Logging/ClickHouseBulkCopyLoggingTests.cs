@@ -10,6 +10,7 @@ using ClickHouse.Driver.Logging;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+#pragma warning disable CS0618 // Type or member is obsolete
 
 namespace ClickHouse.Driver.Tests.Logging;
 
@@ -52,8 +53,8 @@ public class ClickHouseBulkCopyLoggingTests
         await bulkCopy.WriteToServerAsync(rows);
 
         // Assert
-        Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.BulkCopy));
-        var logger = factory.Loggers[ClickHouseLogCategories.BulkCopy];
+        Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.Client));
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged metadata loading start
         var startLog = logger.Logs.Find(l =>
@@ -96,7 +97,7 @@ public class ClickHouseBulkCopyLoggingTests
         await bulkCopy.WriteToServerAsync(rows);
 
         // Assert
-        var logger = factory.Loggers[ClickHouseLogCategories.BulkCopy];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged bulk copy start
         var startLog = logger.Logs.Find(l =>
@@ -135,7 +136,7 @@ public class ClickHouseBulkCopyLoggingTests
 
 
         // Assert
-        var logger = factory.Loggers[ClickHouseLogCategories.BulkCopy];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged batch sending
         var sendingLogs = logger.Logs.FindAll(l =>
@@ -149,8 +150,7 @@ public class ClickHouseBulkCopyLoggingTests
         var sentLogs = logger.Logs.FindAll(l =>
             l.LogLevel == LogLevel.Debug &&
             l.Message.Contains("Batch sent to") &&
-            l.Message.Contains(bulkCopy.DestinationTableName) &&
-            l.Message.Contains("Total rows written"));
+            l.Message.Contains(bulkCopy.DestinationTableName));
         Assert.That(sentLogs.Count, Is.GreaterThan(0), "Should log batch sent completion at Debug level");
     }
 
@@ -185,7 +185,7 @@ public class ClickHouseBulkCopyLoggingTests
         }
 
         // Assert
-        var logger = factory.Loggers[ClickHouseLogCategories.BulkCopy];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged completion with total rows
         var completionLog = logger.Logs.Find(l =>

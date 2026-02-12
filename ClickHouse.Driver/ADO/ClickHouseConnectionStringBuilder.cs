@@ -174,7 +174,8 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             return @default;
     }
 
-    private T GetEnumOrDefault<T>(string name, T @default) where T : struct, Enum
+    private T GetEnumOrDefault<T>(string name, T @default)
+        where T : struct, Enum
     {
         if (TryGetValue(name, out var value) && value is string s && Enum.TryParse<T>(s, ignoreCase: true, out var result))
             return result;

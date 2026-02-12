@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -12,8 +11,7 @@ public static class CreateTableCluster
     public static async Task Run()
     {
         // For cluster operations, connect to any node in the cluster
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         Console.WriteLine("Creating tables on a ClickHouse cluster\n");
 
@@ -37,6 +35,6 @@ public static class CreateTableCluster
             ORDER BY (id)
         ";
 
-        await connection.ExecuteStatementAsync(clusterTableDDL);
+        await client.ExecuteNonQueryAsync(clusterTableDDL);
     }
 }

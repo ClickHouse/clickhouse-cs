@@ -53,6 +53,8 @@ internal class ClickHouseUriBuilder
 
     public JsonWriteMode JsonWriteMode { get; set; }
 
+    public TimeSpan? MaxExecutionTime { get; set; }
+
     /// <summary>
     /// Gets the effective query ID that will be used in the request.
     /// If QueryId is not set, generates and caches a new GUID.
@@ -98,6 +100,9 @@ internal class ClickHouseUriBuilder
             foreach (var parameter in CommandQueryStringParameters)
                 parameters.Set(parameter.Key, Convert.ToString(parameter.Value, CultureInfo.InvariantCulture));
         }
+
+        if (MaxExecutionTime.HasValue)
+            parameters.Set("max_execution_time", MaxExecutionTime.Value.TotalSeconds.ToString(CultureInfo.InvariantCulture));
 
         var queryString = string.Join("&", parameters.Select(kvp => $"{kvp.Key}={HttpUtility.UrlEncode(kvp.Value)}"));
 

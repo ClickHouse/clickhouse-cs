@@ -1,4 +1,3 @@
-using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -11,15 +10,14 @@ public static class CreateTableSingleNode
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
-        await connection.OpenAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         Console.WriteLine("Creating tables on a single ClickHouse node\n");
 
         // Example 1: Simple MergeTree table
         Console.WriteLine("1. Creating a simple MergeTree table:");
         var tableName1 = "example_simple_mergetree";
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName1}
             (
                 id UInt64,
@@ -34,7 +32,7 @@ public static class CreateTableSingleNode
         // Example 2: MergeTree with partition by
         Console.WriteLine("2. Creating a MergeTree table with partitioning:");
         var tableName2 = "example_partitioned_mergetree";
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName2}
             (
                 event_date Date,
@@ -51,7 +49,7 @@ public static class CreateTableSingleNode
         // Example 3: Table with default values
         Console.WriteLine("3. Creating a table with default values:");
         var tableName3 = "example_with_defaults";
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName3}
             (
                 id UInt64,
@@ -67,7 +65,7 @@ public static class CreateTableSingleNode
         // Example 4: Memory engine table (for temporary data)
         Console.WriteLine("4. Creating a Memory engine table:");
         var tableName4 = "example_memory";
-        await connection.ExecuteStatementAsync($@"
+        await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName4}
             (
                 id UInt64,
@@ -79,7 +77,7 @@ public static class CreateTableSingleNode
 
         // Verify tables were created
         Console.WriteLine("Verifying created tables:");
-        using (var reader = await connection.ExecuteReaderAsync(
+        using (var reader = await client.ExecuteReaderAsync(
             "SELECT name, engine FROM system.tables WHERE name LIKE 'example_%' AND database = currentDatabase() ORDER BY name"))
         {
             Console.WriteLine("Table Name\t\t\t\t\tEngine");
@@ -94,10 +92,10 @@ public static class CreateTableSingleNode
 
         // Clean up - drop all created tables
         Console.WriteLine("\nCleaning up example tables...");
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName1}");
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName2}");
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName3}");
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName4}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName1}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName2}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName3}");
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName4}");
         Console.WriteLine("All example tables dropped");
     }
 }

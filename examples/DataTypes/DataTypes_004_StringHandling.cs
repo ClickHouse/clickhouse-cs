@@ -1,6 +1,5 @@
 using System.Text;
 using ClickHouse.Driver.ADO;
-using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -110,17 +109,17 @@ public static class StringHandling
             ENGINE = Memory
         ");
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         // Insert strings of different lengths
+        var columns = new[] { "fixed_str" };
         var data = new List<object[]>
         {
             new object[] { "AB" },    // 2 bytes -> padded to 5
             new object[] { "ABCDE" }, // 5 bytes -> exact fit
         };
 
-        await bulkCopy.WriteToServerAsync(data);
+        await client.InsertBinaryAsync(tableName, columns, data);
 
         // Read back and show the actual bytes
         var cb = new ClickHouseConnectionStringBuilder("Host=localhost")
@@ -158,12 +157,12 @@ public static class StringHandling
             ENGINE = Memory
         ");
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
-        await bulkCopy.InitAsync();
+        using var client = new ClickHouseClient("Host=localhost");
 
         // Write binary data that is NOT valid UTF-8
         var binaryData = new byte[] { 0xFF, 0xFE, 0x00, 0x01, 0x02 };
 
+        var columns = new[] { "id", "data" };
         var data = new List<object[]>
         {
             new object[] { 1u, binaryData },  // Write as byte[]
@@ -171,8 +170,8 @@ public static class StringHandling
             new object[] { 3u, new MemoryStream(binaryData) }, // Write as Stream
         };
 
-        await bulkCopy.WriteToServerAsync(data);
-        Console.WriteLine($"   Inserted {bulkCopy.RowsWritten} rows with binary data");
+        await client.InsertBinaryAsync(tableName, columns, data);
+        Console.WriteLine($"   Inserted {data.Count} rows with binary data");
 
         // Read back as byte[] to preserve the binary data
         var cb = new ClickHouseConnectionStringBuilder("Host=localhost")
