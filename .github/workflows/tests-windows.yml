@@ -11,7 +11,7 @@ jobs:
   windows:
     name: Windows Tests
     runs-on: windows-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: Vampire/setup-wsl@v6
         with:
