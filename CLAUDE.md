@@ -118,7 +118,7 @@ await client.ExecuteReaderAsync("SELECT ...", options: options);
 
 // Parameters
 var parameters = new ClickHouseParameterCollection();
-parameters.Add("id", 42UL);
+parameters.AddParameter("id", 42UL);
 await client.ExecuteReaderAsync("SELECT * FROM t WHERE id = {id:UInt64}", parameters);
 ```
 
