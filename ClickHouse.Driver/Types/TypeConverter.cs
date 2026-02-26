@@ -315,6 +315,11 @@ internal static class TypeConverter
             return new TupleType { UnderlyingTypes = type.GetGenericArguments().Select(ToClickHouseType).ToArray() };
         }
 
+        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName.StartsWith("System.ValueTuple", StringComparison.InvariantCulture))
+        {
+            return new TupleType { UnderlyingTypes = type.GetGenericArguments().Select(ToClickHouseType).ToArray() };
+        }
+
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
         {
             var types = type.GetGenericArguments().Select(ToClickHouseType).ToArray();
