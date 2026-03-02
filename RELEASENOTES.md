@@ -1,3 +1,8 @@
+v1.0.1
+---
+
+ * Marked ClickHouseConnection.ServerVersion property as Obsolete.
+
 v1.0.0
 ---
 
