@@ -171,7 +171,11 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override string DataSource { get; }
 
+    [Obsolete("ServerVersion is no longer available. Use ExecuteScalarAsync(\"SELECT version()\") to query the server version.")]
+
+#pragma warning disable CS0809 // Obsolete member overrides non-obsolete member
     public override string ServerVersion => throw new InvalidOperationException(
+#pragma warning restore CS0809 // Obsolete member overrides non-obsolete member
         "ServerVersion is no longer available. Use ExecuteScalarAsync(\"SELECT version()\") to query the server version.");
 
     public bool UseCompression => Settings.UseCompression;
