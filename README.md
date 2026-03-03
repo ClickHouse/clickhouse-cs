@@ -29,7 +29,7 @@ Official C#/ADO.NET client for [ClickHouse](https://clickhouse.com/).
  * High performance
  * Supports bulk insertion
  * Uses compressed binary protocol over HTTP(S)
- * Available for .NET Core/Framework/Standard
+ * Available for .NET 6.0+
 
 ## Documentation
 
