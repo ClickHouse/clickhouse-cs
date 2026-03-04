@@ -4,6 +4,7 @@ using System.Data;
 using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -34,8 +35,8 @@ public class DapperTests : AbstractConnectionTestFixture
         SqlMapper.AddTypeHandler(new DateTimeOffsetHandler());
         SqlMapper.AddTypeHandler(new ITupleHandler());
         SqlMapper.AddTypeMap(typeof(DateTime), DbType.DateTime2);
-        SqlMapper.AddTypeMap(typeof(DateTimeOffset), DbType.DateTime2);
         SqlMapper.AddTypeHandler(new ClickHouseIpHandler());
+        SqlMapper.AddTypeHandler(new BigIntegerHandler());
     }
 
     // "The member value of type <xxxxxxxx> cannot be used as a parameter value"
@@ -43,21 +44,10 @@ public class DapperTests : AbstractConnectionTestFixture
     {
         if (clickHouseType.Contains("Tuple"))
             return false;
-        if (clickHouseType.Contains("Map"))
-            return false;
-        if (clickHouseType.Contains("Int128"))
-            return false;
-        if (clickHouseType.Contains("Int256"))
-            return false;
         if (clickHouseType.Contains("Nested"))
-            return false;
-        if (clickHouseType.Contains("FixedString"))
             return false;
         switch (clickHouseType)
         {
-            case "UUID":
-            case "Date":
-            case "Date32":
             case "Nothing":
             case "Point":
             case "Ring":
@@ -66,7 +56,6 @@ public class DapperTests : AbstractConnectionTestFixture
             case "MultiLineString":
             case "Polygon":
             case "MultiPolygon":
-            case "Time":
                 return false;
             default:
                 return true;
@@ -75,7 +64,20 @@ public class DapperTests : AbstractConnectionTestFixture
     
     private static bool ShouldSupportStringConversion(string clickHouseType)
     {
-        if (clickHouseType.Contains("Array") || clickHouseType.Contains("QBit"))
+        // Dapper does not support selecting these as string
+        if (clickHouseType == "Time" ||
+            clickHouseType.Contains("Array") || 
+            clickHouseType.Contains("Int128") || 
+            clickHouseType.Contains("Int256") || 
+            clickHouseType.Contains("QBit") ||
+            clickHouseType.Contains("Json") ||
+            clickHouseType.Contains("IPv4") ||
+            clickHouseType.Contains("IPv6") ||
+            clickHouseType.Contains("UUID") ||
+            clickHouseType.Contains("Map") ||
+            clickHouseType.Contains("Time64") ||
+            clickHouseType.Contains("Tuple") ||
+            clickHouseType.Contains("FixedString"))
         {
             return false;
         }
@@ -129,6 +131,21 @@ public class DapperTests : AbstractConnectionTestFixture
         };
     }
 
+    private class BigIntegerHandler : SqlMapper.TypeHandler<BigInteger>
+    {
+        public override void SetValue(IDbDataParameter parameter, BigInteger value) => parameter.Value = value;
+
+        public override BigInteger Parse(object value) => value switch
+        {
+            BigInteger bi => bi,
+            long l => new BigInteger(l),
+            ulong ul => new BigInteger(ul),
+            decimal d => new BigInteger(d),
+            string s => BigInteger.Parse(s, CultureInfo.InvariantCulture),
+            _ => throw new ArgumentException($"Cannot convert {value.GetType()} to BigInteger", nameof(value)),
+        };
+    }
+
     private class ClickHouseIpHandler : SqlMapper.TypeHandler<IPAddress>
     {
         public override void SetValue(IDbDataParameter parameter, IPAddress value)
@@ -156,11 +173,6 @@ public class DapperTests : AbstractConnectionTestFixture
     [TestCaseSource(typeof(DapperTests), nameof(SimpleSelectQueriesForStringConversion))]
     public async Task ShouldExecuteSelectStringWithSingleParameterValue(string sql, object value)
     {
-        if (value is JsonObject or IPAddress or Guid or TimeSpan)
-        {
-            Assert.Ignore("Dapper does not support selecting this type as string");
-        }
-
         var parameters = new Dictionary<string, object> { { "value", value } };
         var results = await connection.QueryAsync<string>(sql, parameters);
         Assert.That(results.Single(), Is.EqualTo(Convert.ToString(value, CultureInfo.InvariantCulture)));
@@ -258,6 +270,200 @@ public class DapperTests : AbstractConnectionTestFixture
             Assert.That(actual, Is.InstanceOf<DBNull>());
         else
             Assert.That(actual, Is.EqualTo(expected));
+    }
+
+    // Used as both Dapper parameter object and query result mapping target
+    private class SimpleRow
+    {
+        public int Id { get; set; }
+        public string Name { get; set; }
+        public double Value { get; set; }
+    }
+
+    [Test]
+    public async Task ShouldInsertAndSelectWithAnonymousObject()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_anon");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_anon (id Int32, name String, value Float64) ENGINE Memory");
+
+        // Anonymous object as parameter source - the most common Dapper pattern
+        await connection.ExecuteAsync(
+            "INSERT INTO test.dapper_anon (id, name, value) VALUES (@Id, @Name, @Value)",
+            new { Id = 1, Name = "alice", Value = 3.14 });
+
+        var rows = (await connection.QueryAsync<SimpleRow>("SELECT id, name, value FROM test.dapper_anon")).ToList();
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].Id, Is.EqualTo(1));
+        Assert.That(rows[0].Name, Is.EqualTo("alice"));
+        Assert.That(rows[0].Value, Is.EqualTo(3.14));
+    }
+
+    [Test]
+    public async Task ShouldInsertWithPocoParameters()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_poco");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_poco (id Int32, name String, value Float64) ENGINE Memory");
+
+        // POCO class as parameter source - Dapper reflects its properties identically to anonymous objects
+        var param = new SimpleRow { Id = 42, Name = "bob", Value = 99.9 };
+        await connection.ExecuteAsync(
+            "INSERT INTO test.dapper_poco (id, name, value) VALUES (@Id, @Name, @Value)", param);
+
+        var rows = (await connection.QueryAsync<SimpleRow>("SELECT id, name, value FROM test.dapper_poco")).ToList();
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].Id, Is.EqualTo(42));
+        Assert.That(rows[0].Name, Is.EqualTo("bob"));
+    }
+
+    [Test]
+    public async Task ShouldSelectWithDynamicParametersFromDictionary()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_dynparams");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_dynparams (id Int32, name String) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_dynparams VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
+
+        // DynamicParameters constructed from a dictionary
+        var dict = new Dictionary<string, object> { { "Id", 2 } };
+        var dynParams = new DynamicParameters(dict);
+
+        var rows = (await connection.QueryAsync<SimpleRow>(
+            "SELECT id, name FROM test.dapper_dynparams WHERE id = @Id", dynParams)).ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].Name, Is.EqualTo("bob"));
+    }
+
+    [Test]
+    public async Task ShouldSelectWithDynamicParametersFromAnonymousObject()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_dynparams2");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_dynparams2 (id Int32, name String) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_dynparams2 VALUES (1, 'alice'), (2, 'bob')");
+
+        // DynamicParameters constructed from an anonymous object
+        var dynParams = new DynamicParameters(new { Id = 1 });
+
+        var rows = (await connection.QueryAsync<SimpleRow>(
+            "SELECT id, name FROM test.dapper_dynparams2 WHERE id = @Id", dynParams)).ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].Name, Is.EqualTo("alice"));
+    }
+
+    [Test]
+    public async Task ShouldSelectPureNoParameters_MappingToPoco()
+    {
+        // Pure SELECT with no parameters, mapping to a POCO - basic Dapper use case
+        var rows = (await connection.QueryAsync<SimpleRow>(
+            "SELECT 1 as id, 'hello' as name, 2.5 as value")).ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].Id, Is.EqualTo(1));
+        Assert.That(rows[0].Name, Is.EqualTo("hello"));
+        Assert.That(rows[0].Value, Is.EqualTo(2.5));
+    }
+
+    [Test]
+    public async Task ShouldSelectPureFromTable_MappingToPoco()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_pure");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_pure (id Int32, name String, value Float64) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_pure VALUES (10, 'test', 1.5), (20, 'test2', 2.5)");
+
+        var rows = (await connection.QueryAsync<SimpleRow>("SELECT id, name, value FROM test.dapper_pure ORDER BY id")).ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(2));
+        Assert.That(rows[0].Id, Is.EqualTo(10));
+        Assert.That(rows[1].Id, Is.EqualTo(20));
+    }
+
+    [Test]
+    public async Task ShouldSelectWithMultipleAnonymousParameters()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_multi");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_multi (id Int32, name String, value Float64) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_multi VALUES (1, 'alice', 1.0), (2, 'bob', 2.0), (3, 'carol', 3.0)");
+
+        // Multiple parameters from a single anonymous object
+        var rows = (await connection.QueryAsync<SimpleRow>(
+            "SELECT id, name, value FROM test.dapper_multi WHERE id >= @MinId AND name = @Name",
+            new { MinId = 1, Name = "bob" })).ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].Id, Is.EqualTo(2));
+    }
+
+    // Object with a Tuple field - for testing Tuple-in-object scenarios
+    private class RowWithTuple
+    {
+        public int Id { get; set; }
+        public ITuple Coords { get; set; }
+    }
+
+    [Test]
+    public async Task ShouldSelectReturningObjectWithTupleColumn()
+    {
+        // Pure SELECT returning a tuple column - no tuple PARAMETER, just tuple in RESULT
+        // This tests whether Dapper can materialize a tuple column into a POCO
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_tuple_col");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_tuple_col (id Int32, coords Tuple(Int32, Int32)) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_tuple_col VALUES (1, (10, 20))");
+
+        var rows = (await connection.QueryAsync<RowWithTuple>(
+            "SELECT id, coords FROM test.dapper_tuple_col")).ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].Id, Is.EqualTo(1));
+        Assert.That(rows[0].Coords, Is.Not.Null);
+        Assert.That(rows[0].Coords[0], Is.EqualTo(10));
+        Assert.That(rows[0].Coords[1], Is.EqualTo(20));
+    }
+
+    [Test]
+    public async Task ShouldSelectTupleFromLiteral()
+    {
+        // Simplest tuple SELECT - no table, no params
+        var result = (await connection.QueryAsync<ITuple>("SELECT tuple(42, 'hello')")).Single();
+        Assert.That(result[0], Is.EqualTo(42));
+        Assert.That(result[1], Is.EqualTo("hello"));
+    }
+
+    [Test]
+    public async Task ShouldSelectWithWhereInUsingHasAndArrayParam()
+    {
+        // ClickHouse doesn't support Dapper's automatic IN expansion (@Ids -> @Ids1, @Ids2, ...).
+        // Instead, use has() with an Array parameter and ClickHouse native {param:Type} syntax.
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_in");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_in (id Int32, name String) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_in VALUES (1, 'alice'), (2, 'bob'), (3, 'carol'), (4, 'dave')");
+
+        var parameters = new Dictionary<string, object> { { "ids", new[] { 1, 3 } } };
+        var rows = (await connection.QueryAsync<SimpleRow>(
+            "SELECT id, name FROM test.dapper_in WHERE has({ids:Array(Int32)}, id) ORDER BY id",
+            parameters)).ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(2));
+        Assert.That(rows[0].Name, Is.EqualTo("alice"));
+        Assert.That(rows[1].Name, Is.EqualTo("carol"));
+    }
+
+    [Test]
+    public async Task ShouldSelectWithWhereInDapperExpansion()
+    {
+        // Test Dapper's native IN expansion: WHERE id IN @Ids
+        // Dapper rewrites this to WHERE id IN (@Ids1, @Ids2, ...) with individual params.
+        // Each @IdsN then gets replaced by {IdsN:Type} via ReplacePlaceholders.
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_in2");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_in2 (id Int32, name String) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_in2 VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
+
+        var rows = (await connection.QueryAsync<SimpleRow>(
+            "SELECT id, name FROM test.dapper_in2 WHERE id IN @Ids ORDER BY id",
+            new { Ids = new[] { 1, 3 } })).ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(2));
+        Assert.That(rows[0].Name, Is.EqualTo("alice"));
+        Assert.That(rows[1].Name, Is.EqualTo("carol"));
     }
 
     [Test]
