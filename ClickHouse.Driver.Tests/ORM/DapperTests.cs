@@ -75,7 +75,7 @@ public class DapperTests : AbstractConnectionTestFixture
             clickHouseType.Contains("IPv6") ||
             clickHouseType.Contains("UUID") ||
             clickHouseType.Contains("Map") ||
-            clickHouseType.Contains("Time64") ||
+            clickHouseType.StartsWith("Time64") || // Don't want to affect DateTime64
             clickHouseType.Contains("Tuple") ||
             clickHouseType.Contains("FixedString"))
         {
