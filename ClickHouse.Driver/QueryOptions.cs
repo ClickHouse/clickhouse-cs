@@ -12,8 +12,8 @@ public class QueryOptions
 {
     /// <summary>
     /// Gets or sets the query identifier for tracking and logging purposes.
-    /// If an ID not provided, it will be generated.
-    /// For batch inserts, each batch gets a unique derived ID (`{queryId}-0`, `{queryId}-1`, etc.).
+    /// If not provided, a GUID will be generated.
+    /// For batch inserts, each batch gets a unique suffixed ID ({queryId}-1, {queryId}-2, etc.).
     /// </summary>
     public string? QueryId { get; init; }
 

@@ -2,7 +2,7 @@ v1.0.2
 ---
 
 **Bug Fixes:**
-* Fixed `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` errors when using `InsertBinaryAsync` with a `QueryId`. The schema probe and all batch inserts were sharing the same query ID. Each sub-request now receives a unique derived ID (`{queryId}-0`, `{queryId}-1`, etc.).
+* Fixed `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` errors when using `InsertBinaryAsync` with a `QueryId`. The schema probe and all batch inserts were sharing the same query ID. The schema probe now uses the base query ID, and each batch insert receives a unique suffixed ID (`{queryId}-1`, `{queryId}-2`, etc.).
 
 v1.0.1
 ---
