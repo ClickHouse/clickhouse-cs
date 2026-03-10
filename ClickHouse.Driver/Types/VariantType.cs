@@ -7,7 +7,7 @@ namespace ClickHouse.Driver.Types;
 
 internal class VariantType : ParameterizedType
 {
-    public ClickHouseType[] UnderlyingTypes { get; private set; }
+    public ClickHouseType[] UnderlyingTypes { get; internal set; }
 
     public override Type FrameworkType => typeof(object);
 

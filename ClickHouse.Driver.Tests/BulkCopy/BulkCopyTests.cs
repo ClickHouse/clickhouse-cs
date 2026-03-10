@@ -2,6 +2,8 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
@@ -10,10 +12,12 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Copy.Serializer;
+using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 using NUnit.Framework.Internal;
+#pragma warning disable CS0618 // Type or member is obsolete
 
 namespace ClickHouse.Driver.Tests.BulkCopy;
 
@@ -23,12 +27,50 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     {
         foreach (var sample in TestUtilities.GetDataTypeSamples())
         {
-            if (new[] { "Enum8", "Nothing", "Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))" }.Contains(sample.ClickHouseType))
+            if (new[] { "Enum8", "Nothing" }.Contains(sample.ClickHouseType))
                 continue;
             yield return new TestCaseData(sample.ClickHouseType, sample.ExampleValue);
         }
         yield return new TestCaseData("String", "1\t2\n3");
         yield return new TestCaseData("DateTime('Asia/Ashkhabad')", new DateTime(2020, 2, 20, 20, 20, 20, DateTimeKind.Unspecified));
+        yield return new TestCaseData("FixedString(4)", "asdf");
+        yield return new TestCaseData("FixedString(4)", new byte[] { 121, 122, 123, 124 }); // Test both formats for FixedString
+        yield return new TestCaseData("String", "asdf");
+        yield return new TestCaseData("String", new byte[] { 121, 122, 123, 124 }); // Test both formats for String
+    }
+
+    public static IEnumerable<TestCaseData> GetStringInsertTestCases()
+    {
+        var testData = new byte[] { 121, 122, 123, 124 };
+
+        // Stream
+        yield return new TestCaseData("String", "string_stream", new MemoryStream(testData), testData)
+            .SetName("ShouldInsertStringFromStream");
+        yield return new TestCaseData("FixedString(4)", "fixedstring_stream", new MemoryStream(testData), testData)
+            .SetName("ShouldInsertFixedStringFromStream");
+
+        // Non-seekable stream
+        yield return new TestCaseData("String", "string_nonseekable_stream", CreateNonSeekableStream(testData), testData)
+            .SetName("ShouldInsertStringFromNonSeekableStream");
+        yield return new TestCaseData("FixedString(4)", "fixedstring_nonseekable_stream", CreateNonSeekableStream(testData), testData)
+            .SetName("ShouldInsertFixedStringFromNonSeekableStream");
+
+        // ReadOnlyMemory
+        yield return new TestCaseData("String", "string_memory", new ReadOnlyMemory<byte>(testData), testData)
+            .SetName("ShouldInsertStringFromReadOnlyMemory");
+        yield return new TestCaseData("FixedString(4)", "fixedstring_memory", new ReadOnlyMemory<byte>(testData), testData)
+            .SetName("ShouldInsertFixedStringFromReadOnlyMemory");
+    }
+
+    private static GZipStream CreateNonSeekableStream(byte[] data)
+    {
+        var compressedStream = new MemoryStream();
+        using (var gzip = new GZipStream(compressedStream, CompressionMode.Compress, leaveOpen: true))
+        {
+            gzip.Write(data, 0, data.Length);
+        }
+        compressedStream.Position = 0;
+        return new GZipStream(compressedStream, CompressionMode.Decompress);
     }
 
     [Test]
@@ -51,7 +93,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
 
         bulkCopy.BatchSent += (sender, e) => Interlocked.Add(ref batchSentInvocationCount, e.RowsWritten);
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new[] { insertedValue }, 1));
 
         Assert.That(batchSentInvocationCount, Is.EqualTo(1));
@@ -82,7 +123,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             BatchSize = 100
         };
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new DateOnly(1999, 12, 31) }, 1));
 
         Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
@@ -94,6 +134,136 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         Assert.That(data, Is.EqualTo(new DateTime(1999, 12, 31)), "Original and actually inserted values differ");
     }
 #endif
+
+    [Test]
+    [TestCaseSource(typeof(BulkCopyTests), nameof(GetStringInsertTestCases))]
+    public async Task ShouldInsertStringOrFixedString(string columnType, string tableSuffix, object input, byte[] testData)
+    {
+        var targetTable = $"test.bulk_{tableSuffix}";
+
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value {columnType}) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { input }, 1));
+
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        ClassicAssert.IsTrue(reader.Read(), "Cannot read inserted data");
+        var data = reader.GetValue(0);
+        Assert.That(data, Is.EqualTo(testData));
+    }
+
+    [Test]
+    public async Task WriteToServerAsync_FixedStringWithNonSeekableStreamTooLong_ThrowsArgumentException()
+    {
+        var targetTable = "test.bulk_fixedstring_stream_too_long";
+        var tooLongData = new byte[] { 1, 2, 3, 4, 5, 6 }; // 6 bytes for FixedString(4)
+
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (fs FixedString(4), num Int32) ENGINE Memory");
+
+        // Compress data, then decompress via GZipStream (which is non-seekable)
+        using var compressedStream = new MemoryStream();
+        using (var gzip = new GZipStream(compressedStream, CompressionMode.Compress, leaveOpen: true))
+        {
+            gzip.Write(tooLongData, 0, tooLongData.Length);
+        }
+        compressedStream.Position = 0;
+        using var decompressStream = new GZipStream(compressedStream, CompressionMode.Decompress);
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+
+        // This should fail client-side with a clear error message about stream length mismatch
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { decompressStream, 42 }, 1)));
+
+        Assert.That(ex.InnerException, Is.TypeOf<ArgumentException>());
+        Assert.That(ex.InnerException.Message, Does.Contain("does not match FixedString(4)"));
+    }
+
+    [Test]
+    public async Task WriteToServerAsync_FixedStringWithSeekableStreamTooLong_ThrowsArgumentException()
+    {
+        var targetTable = "test.bulk_fixedstring_seekable_stream_too_long";
+        var tooLongData = new byte[] { 1, 2, 3, 4, 5, 6 }; // 6 bytes for FixedString(4)
+
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (fs FixedString(4), num Int32) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+
+        // MemoryStream is seekable, so we can validate length upfront
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new MemoryStream(tooLongData), 42 }, 1)));
+
+        Assert.That(ex.InnerException, Is.TypeOf<ArgumentException>());
+        Assert.That(ex.InnerException.Message, Does.Contain("Stream length 6 does not match FixedString(4)"));
+    }
+
+    [Test]
+    public async Task WriteToServerAsync_FixedStringWithReadOnlyMemoryTooLong_ThrowsArgumentException()
+    {
+        var targetTable = "test.bulk_fixedstring_memory_too_long";
+        var tooLongData = new byte[] { 1, 2, 3, 4, 5, 6 }; // 6 bytes for FixedString(4)
+
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (fs FixedString(4), num Int32) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { new ReadOnlyMemory<byte>(tooLongData), 42 }, 1)));
+
+        Assert.That(ex.InnerException, Is.TypeOf<ArgumentException>());
+        Assert.That(ex.InnerException.Message, Does.Contain("ReadOnlyMemory<byte> length 6 does not match FixedString(4)"));
+    }
+
+    [Test]
+    public async Task ShouldReadStringAsByteArrayWithInvalidUtf8()
+    {
+        // Bytes that are invalid UTF-8 sequences
+        var invalidUtf8 = new byte[] { 0xFF, 0xFE, 0x00, 0x01 };
+
+        var targetTable = "test.bulk_string_invalid_utf8";
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value String) ENGINE Memory");
+
+        // Insert using byte[]
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { invalidUtf8 }, 1));
+
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
+
+        // Read back with ReadStringsAsByteArrays=true
+        var cb = TestUtilities.GetConnectionStringBuilder();
+        cb.ReadStringsAsByteArrays = true;
+        using var conn2 = new ClickHouseConnection(cb.ToString());
+
+        using var reader = await conn2.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var data = reader.GetValue(0);
+        Assert.That(data, Is.TypeOf<byte[]>());
+        Assert.That(data, Is.EqualTo(invalidUtf8));
+    }
+
+    [Test]
+    public async Task ShouldReadStringAsStringByDefault()
+    {
+        var targetTable = "test.bulk_string_default_read";
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value String) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { "hello" }, 1));
+
+        // Read back without ReadStringsAsByteArrays (default is false)
+        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var data = reader.GetValue(0);
+        Assert.That(data, Is.TypeOf<string>());
+        Assert.That(data, Is.EqualTo("hello"));
+    }
 
     [Test]
     [Explicit("Infinite loop test")]
@@ -124,7 +294,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
                     BatchSize = 100
                 };
 
-                await bulkCopy.InitAsync();
                 await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { 0, "a", DateTime.Now }, 1000));
                 i++;
             }
@@ -148,7 +317,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = targetTable,
             ColumnNames = new[] { "value2" }
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { 5 }, 5), CancellationToken.None);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
@@ -167,7 +335,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = targetTable,
             ColumnNames = new[] { "`field.id`, `@value`" }
         };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { 5, 5 }, 5));
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {targetTable}");
@@ -186,7 +353,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = targetTable
         };
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { 1, 2, "3" }, 5));
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {targetTable}");
@@ -220,7 +386,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             BatchSize = 100
         };
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new[] { (object)1 }, 1), CancellationToken.None);
 
         Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
@@ -245,7 +410,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = tableName };
 
         var rowToInsert = new[] { Enumerable.Range(1, columnCount).Select(x => (object)x).ToArray() };
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(rowToInsert);
     }
 
@@ -260,7 +424,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         var rows = Enumerable.Range(250, 10).Select(n => new object[] { n }).ToArray();
 
         var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
-        await bulkCopy.InitAsync();
         try
         {
             await bulkCopy.WriteToServerAsync(rows);
@@ -288,7 +451,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             BatchSize = 100
         };
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new[] { (object)1 }, 1), CancellationToken.None);
 
         Assert.Multiple(async () =>
@@ -318,7 +480,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         const int Count = 1000;
         var data = Enumerable.Repeat(new object[] { 1 }, Count);
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(data, CancellationToken.None);
 
         Assert.Multiple(async () =>
@@ -341,7 +502,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = targetTable,
         };
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(new List<object[]>
         {
             new object[] { DBNull.Value, new[] { 1, 2, 3 } },
@@ -351,7 +511,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
     }
 
-#if NET48 || NET5_0_OR_GREATER
     [Test]
     public async Task ShouldInsertNestedTable()
     {
@@ -365,8 +524,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             DestinationTableName = targetTable,
         };
 
-        await bulkCopy.InitAsync();
-
         await bulkCopy.WriteToServerAsync(new List<object[]>() { new object[] { Guid.NewGuid(), new ITuple[] { ("1", "Comment1"), ("2", "Comment2"), ("3", "Comment3") } } });
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
@@ -376,7 +533,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             Assert.That(await connection.ExecuteScalarAsync($"SELECT count() FROM {targetTable}"), Is.EqualTo(1));
         });
     }
-#endif
 
     [Test]
     public async Task ShouldInsertDoubleNestedTable()
@@ -390,8 +546,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         {
             DestinationTableName = targetTable,
         };
-
-        await bulkCopy.InitAsync();
 
         var comments = new[]
         {
@@ -443,8 +597,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             BatchSize = 1000
         };
 
-        await bulkCopy.InitAsync();
-
         Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () => await bulkCopy.WriteToServerAsync(data, CancellationToken.None));
     }
 
@@ -463,7 +615,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             BatchSize = poolSize
         };
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { 0, "a", DateTime.Now }, 100));
 
         var rentedArray = ArrayPool<object>.Shared.Rent(poolSize);
@@ -479,7 +630,8 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        using var jsonConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.String);
+        using var bulkCopy = new ClickHouseBulkCopy(jsonConnection)
         {
             DestinationTableName = targetTable,
         };
@@ -487,7 +639,6 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         var jsonString = "{\"bool\": true}";
         var jsonObject = (JsonObject)JsonNode.Parse(jsonString);
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync([[jsonString], [jsonObject]]);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
@@ -497,6 +648,145 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         }
     }
 
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldInsertJsonWithComplexTypes()
+    {
+        var targetTable = "test." + SanitizeTableName($"bulk_json_complex");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
+
+        using var jsonConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.String);
+        using var bulkCopy = new ClickHouseBulkCopy(jsonConnection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var jsonObject = new JsonObject
+        {
+            ["boolValue"] = true,
+            ["numberValue"] = 42.5,
+            ["stringValue"] = "hello",
+            ["nullValue"] = null,
+            ["arrayValueDouble"] = new JsonArray(1.5, 2.5, 3.5),
+            ["arrayValueInt"] = new JsonArray(1, 2, 3),
+            ["nestedObject"] = new JsonObject
+            {
+                ["innerString"] = "nested",
+                ["innerNumber"] = 123,
+                ["innerLong"] = 124L,
+            },
+        };
+
+        await bulkCopy.WriteToServerAsync([[jsonObject]]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((bool)result["boolValue"], Is.EqualTo(true));
+        Assert.That((double)result["numberValue"], Is.EqualTo(42.5));
+        Assert.That((string)result["stringValue"], Is.EqualTo("hello"));
+        Assert.That(result["nullValue"], Is.Null);
+        Assert.That(JsonNode.DeepEquals(result["arrayValueDouble"], new JsonArray(1.5, 2.5, 3.5)), Is.True);
+        Assert.That(JsonNode.DeepEquals(result["arrayValueInt"], new JsonArray(1, 2, 3)), Is.True);
+        Assert.That(JsonNode.DeepEquals(result["nestedObject"], new JsonObject { ["innerString"] = "nested", ["innerNumber"] = 123, ["innerLong"] = 124L }), Is.True);
+
+        Assert.That(reader.Read(), Is.False);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldInsertJsonFromString()
+    {
+        var targetTable = "test." + SanitizeTableName($"bulk_json_string");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
+
+        using var jsonConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.String);
+        using var bulkCopy = new ClickHouseBulkCopy(jsonConnection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var jsonString = "{\"name\": \"test\", \"count\": 42, \"active\": true}";
+
+        await bulkCopy.WriteToServerAsync([[jsonString]]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((string)result["name"], Is.EqualTo("test"));
+        Assert.That((long)result["count"], Is.EqualTo(42));
+        Assert.That((bool)result["active"], Is.EqualTo(true));
+
+        Assert.That(reader.Read(), Is.False);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldInsertJsonFromAnonymousObject_BinaryMode()
+    {
+        using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        var targetTable = "test." + SanitizeTableName($"bulk_json_anon");
+        await binaryClient.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await binaryClient.ExecuteNonQueryAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(binaryClient.CreateConnection())
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var obj = new { name = "test", count = 42, active = true, arrayBool = new bool[] { true, false } };
+        binaryClient.RegisterJsonSerializationType(obj.GetType());
+
+        await bulkCopy.WriteToServerAsync([[obj]]);
+
+        using var reader = await binaryClient.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((string)result["name"], Is.EqualTo("test"));
+        Assert.That((int)result["count"], Is.EqualTo(42));
+        Assert.That((bool)result["active"], Is.EqualTo(true));
+        Assert.That(JsonNode.DeepEquals(result["arrayBool"], new JsonArray(true, false)), Is.True);
+
+        Assert.That(reader.Read(), Is.False);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldInsertJsonFromAnonymousObject_StringMode()
+    {
+        var targetTable = "test." + SanitizeTableName($"bulk_json_anon");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value JSON) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var obj = new { name = "test", count = 42, active = true, arrayBool = new bool[] { true, false } };
+        client.RegisterJsonSerializationType(obj.GetType());
+        await bulkCopy.WriteToServerAsync([[obj]]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((string)result["name"], Is.EqualTo("test"));
+        Assert.That((long)result["count"], Is.EqualTo(42));
+        Assert.That((bool)result["active"], Is.EqualTo(true));
+        Assert.That(JsonNode.DeepEquals(result["arrayBool"], new JsonArray(true, false)), Is.True);
+
+        Assert.That(reader.Read(), Is.False);
+    }
 
     [Test]
     public async Task ShouldInsertTupleWithEnum()
@@ -524,31 +814,9 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             new object[] { 2, Tuple.Create("Item B", "Inactive") }
         };
 
-        await bulkCopy.InitAsync();
         await bulkCopy.WriteToServerAsync(data);
 
         Assert.That(bulkCopy.RowsWritten, Is.EqualTo(2));
-    }
-    
-    [Test]
-    public void InitAsync_WithNullDestinationTableName_ThrowsInvalidOperationException()
-    {
-        // Arrange
-        var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder());
-
-        using var connection = new ClickHouseConnection(settings);
-        var bulkCopy = new ClickHouseBulkCopy(connection)
-        {
-            DestinationTableName = null,  // Not set
-        };
-
-        // Act & Assert
-        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
-        {
-            await bulkCopy.InitAsync();
-        });
-
-        Assert.That(ex.Message, Does.Contain("DestinationTableName"));
     }
 
     [Test]
@@ -571,7 +839,138 @@ public class BulkCopyTests : AbstractConnectionTestFixture
             await bulkCopy.WriteToServerAsync(rows);
         });
 
-        Assert.That(ex.Message, Does.Contain("Destination table not set"));
+        Assert.That(ex.Message, Does.Contain("table is null"));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.QBit)]
+    public async Task ShouldInsertQBitFloat32()
+    {
+        var targetTable = "test." + SanitizeTableName("bulk_qbit_float32");
+
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (vec QBit(Float32, 9)) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var testData = new float[] { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f };
+
+        await bulkCopy.WriteToServerAsync([[(object)testData]]);
+
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT vec FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var result = (float[])reader.GetValue(0);
+        Assert.That(result, Is.EqualTo(testData));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.QBit)]
+    public async Task ShouldInsertQBitFloat64()
+    {
+        var targetTable = "test." + SanitizeTableName("bulk_qbit_float64");
+
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (vec QBit(Float64, 8)) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var testData = new double[] { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+
+        await bulkCopy.WriteToServerAsync([[(object)testData]]);
+
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT vec FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var result = (double[])reader.GetValue(0);
+        Assert.That(result, Is.EqualTo(testData));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.QBit)]
+    public async Task ShouldInsertQBitBFloat16()
+    {
+        var targetTable = "test." + SanitizeTableName("bulk_qbit_bfloat16");
+
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (vec QBit(BFloat16, 6)) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var testData = new float[] { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
+
+        await bulkCopy.WriteToServerAsync([[(object)testData]]);
+
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(1));
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT vec FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var result = (float[])reader.GetValue(0);
+        // BFloat16 has reduced precision, check approximate equality
+        Assert.That(result.Length, Is.EqualTo(testData.Length));
+        for (int i = 0; i < result.Length; i++)
+        {
+            Assert.That(result[i], Is.EqualTo(testData[i]).Within(0.01f));
+        }
+    }
+
+    [Test]
+    public async Task WriteToServerAsync_WithoutInitAsync_AutoInitializesSuccessfully()
+    {
+        var targetTable = "test." + SanitizeTableName("bulk_auto_init");
+
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value Int32) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        // Act - No InitAsync call, should auto-initialize
+        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { 1 }, 5));
+
+        // Assert
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(5));
+        Assert.That(await connection.ExecuteScalarAsync($"SELECT count() FROM {targetTable}"), Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task WriteToServerAsync_ConcurrentCalls_InitializesOnlyOnce()
+    {
+        var targetTable = "test." + SanitizeTableName("bulk_concurrent_init");
+
+        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value Int32) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+            BatchSize = 10,
+        };
+
+        var rows = Enumerable.Repeat(new object[] { 1 }, 10).ToArray();
+
+        // Act - Multiple concurrent WriteToServerAsync calls without explicit InitAsync
+        var tasks = Enumerable.Range(0, 5)
+            .Select(_ => bulkCopy.WriteToServerAsync(rows))
+            .ToArray();
+
+        await Task.WhenAll(tasks);
+
+        // Assert - All writes succeeded, no exceptions from concurrent init
+        Assert.That(bulkCopy.RowsWritten, Is.EqualTo(50));
     }
 }
 

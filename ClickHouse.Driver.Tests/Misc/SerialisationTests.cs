@@ -10,7 +10,10 @@ namespace ClickHouse.Driver.Tests.Misc;
 [TestFixture]
 public class SerialisationTests
 {
+    // Json type is excluded because it has mode-dependent serialization behavior
+    // that doesn't fit the simple binary round-trip model. Json is tested separately.
     public static IEnumerable<TestCaseData> TestCases => TestUtilities.GetDataTypeSamples()
+        .Where(sample => !sample.ClickHouseType.StartsWith("Json"))
         .Select(sample => new TestCaseData(sample.ExampleValue, sample.ClickHouseType)
         { TestName = $"ShouldRoundtripSerialisation({sample.ExampleExpression}, {sample.ClickHouseType})" });
 

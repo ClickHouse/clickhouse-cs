@@ -13,7 +13,6 @@ public class DefaultSettingsTests
         {
             Assert.That(builder.UseCustomDecimals, Is.EqualTo(true));
             Assert.That(builder.Compression, Is.EqualTo(true));
-            Assert.That(builder.UseServerTimezone, Is.EqualTo(true));
             Assert.That(builder.UseSession, Is.EqualTo(false));
         });
     }

@@ -26,7 +26,6 @@ public class ClickHouseClientSettingsTests
             Assert.That(settings.Username, Is.EqualTo(ClickHouseDefaults.Username));
             Assert.That(settings.Password, Is.EqualTo(ClickHouseDefaults.Password));
             Assert.That(settings.UseCompression, Is.EqualTo(ClickHouseDefaults.Compression));
-            Assert.That(settings.UseServerTimezone, Is.EqualTo(ClickHouseDefaults.UseServerTimezone));
             Assert.That(settings.UseCustomDecimals, Is.EqualTo(ClickHouseDefaults.UseCustomDecimals));
             Assert.That(settings.UseSession, Is.EqualTo(ClickHouseDefaults.UseSession));
             Assert.That(settings.SessionId, Is.Null);
@@ -92,7 +91,7 @@ public class ClickHouseClientSettingsTests
         var connectionString = "Host=myhost;Port=9000;Protocol=https;Database=mydb;" +
                               "Username=myuser;Password=mypass;Path=/custom;" +
                               "Compression=false;UseSession=true;SessionId=session123;" +
-                              "Timeout=300;UseServerTimezone=false;UseCustomDecimals=false";
+                              "Timeout=300;UseCustomDecimals=false";
 
         var settings = ClickHouseClientSettings.FromConnectionString(connectionString);
 
@@ -109,7 +108,6 @@ public class ClickHouseClientSettingsTests
             Assert.That(settings.UseSession, Is.True);
             Assert.That(settings.SessionId, Is.EqualTo("session123"));
             Assert.That(settings.Timeout, Is.EqualTo(TimeSpan.FromSeconds(300)));
-            Assert.That(settings.UseServerTimezone, Is.False);
             Assert.That(settings.UseCustomDecimals, Is.False);
         });
     }
@@ -253,32 +251,6 @@ public class ClickHouseClientSettingsTests
     }
 
     [Test]
-    public void Validate_WithUseSessionAndHttpClient_ShouldThrow()
-    {
-        var settings = new ClickHouseClientSettings
-        {
-            UseSession = true,
-            HttpClient = new HttpClient()
-        };
-
-        var ex = Assert.Throws<InvalidOperationException>(() => settings.Validate());
-        Assert.That(ex.Message, Does.Contain("UseSession cannot be combined with a custom HttpClient"));
-    }
-
-    [Test]
-    public void Validate_WithUseSessionAndHttpClientFactory_ShouldThrow()
-    {
-        var settings = new ClickHouseClientSettings
-        {
-            UseSession = true,
-            HttpClientFactory = new TestHttpClientFactory()
-        };
-
-        var ex = Assert.Throws<InvalidOperationException>(() => settings.Validate());
-        Assert.That(ex.Message, Does.Contain("UseSession cannot be combined with a custom HttpClientFactory"));
-    }
-
-    [Test]
     public void Validate_WithBothHttpClientAndFactory_ShouldThrow()
     {
         var settings = new ClickHouseClientSettings
@@ -350,7 +322,9 @@ public class ClickHouseClientSettingsTests
         var settings = new ClickHouseClientSettings();
 
         Assert.That(settings.Equals(settings), Is.True);
+#pragma warning disable CS1718 // Intentionally testing operator== with same reference
         Assert.That(settings == settings, Is.True);
+#pragma warning restore CS1718
     }
 
     [Test]
@@ -463,7 +437,6 @@ public class ClickHouseClientSettingsTests
             UseSession = true,
             SessionId = "session123",
             Timeout = TimeSpan.FromMinutes(5),
-            UseServerTimezone = false,
             UseCustomDecimals = false
         };
 
@@ -483,7 +456,6 @@ public class ClickHouseClientSettingsTests
             Assert.That(roundTrippedSettings.UseSession, Is.EqualTo(originalSettings.UseSession));
             Assert.That(roundTrippedSettings.SessionId, Is.EqualTo(originalSettings.SessionId));
             Assert.That(roundTrippedSettings.Timeout, Is.EqualTo(originalSettings.Timeout));
-            Assert.That(roundTrippedSettings.UseServerTimezone, Is.EqualTo(originalSettings.UseServerTimezone));
             Assert.That(roundTrippedSettings.UseCustomDecimals, Is.EqualTo(originalSettings.UseCustomDecimals));
         });
     }
@@ -624,7 +596,6 @@ public class ClickHouseClientSettingsTests
             Username = "testuser",
             Password = "testpass",
             UseCompression = false,
-            UseServerTimezone = false,
             UseCustomDecimals = false,
             UseSession = true,
             SessionId = "session123",
@@ -652,7 +623,7 @@ public class ClickHouseClientSettingsTests
             var originalValue = property.GetValue(original);
             var copyValue = property.GetValue(copy);
 
-            if (property.Name == "CustomSettings")
+            if (property.Name == nameof(ClickHouseClientSettings.CustomSettings))
             {
                 // CustomSettings should be a different instance (deep copy)
                 Assert.That(copyValue, Is.Not.SameAs(originalValue),
@@ -661,7 +632,13 @@ public class ClickHouseClientSettingsTests
                 var originalDict = originalValue as IDictionary<string, object>;
                 var copyDict = copyValue as IDictionary<string, object>;
                 Assert.That(copyDict, Is.EquivalentTo(originalDict),
-                    $"CustomSettings values should be copied");
+                    $"Dictionary values should be copied");
+            }
+            else if (property.Name == nameof(ClickHouseClientSettings.CustomHeaders))
+            {
+                var originalDict = originalValue as IDictionary<string, string>;
+                var copyDict = copyValue as IDictionary<string, string>;
+                Assert.That(copyDict, Is.EquivalentTo(originalDict), "Custom headers should be copied");
             }
             else if (property.PropertyType.IsValueType || property.PropertyType == typeof(string))
             {
@@ -676,6 +653,211 @@ public class ClickHouseClientSettingsTests
                     $"Property {property.Name} should reference the same object");
             }
         }
+    }
+    
+    [Test]
+    public void Settings_Roles_ShouldBeEmptyByDefault()
+    {
+        var settings = new ClickHouseClientSettings();
+
+        Assert.That(settings.Roles, Is.Not.Null);
+        Assert.That(settings.Roles, Is.Empty);
+    }
+
+    [Test]
+    public void Settings_Roles_ShouldBeSettable()
+    {
+        var roles = new[] { "admin", "reader" };
+        var settings = new ClickHouseClientSettings { Roles = roles };
+
+        Assert.That(settings.Roles, Has.Count.EqualTo(2));
+        Assert.That(settings.Roles, Contains.Item("admin"));
+        Assert.That(settings.Roles, Contains.Item("reader"));
+    }
+
+    [Test]
+    public void Settings_CopyConstructor_ShouldCopyRoles()
+    {
+        var original = new ClickHouseClientSettings { Roles = new[] { "admin", "writer" } };
+        var copy = new ClickHouseClientSettings(original);
+
+        Assert.That(copy.Roles, Has.Count.EqualTo(2));
+        Assert.That(copy.Roles, Contains.Item("admin"));
+        Assert.That(copy.Roles, Contains.Item("writer"));
+        // Verify it's a copy, not the same reference
+        Assert.That(copy.Roles, Is.Not.SameAs(original.Roles));
+    }
+
+    [Test]
+    public void Settings_Equals_ShouldReturnTrue_WhenRolesMatch()
+    {
+        var settings1 = new ClickHouseClientSettings { Roles = new[] { "admin", "reader" } };
+        var settings2 = new ClickHouseClientSettings { Roles = new[] { "admin", "reader" } };
+
+        Assert.That(settings1.Equals(settings2), Is.True);
+    }
+
+    [Test]
+    public void Settings_Equals_ShouldReturnFalse_WhenRolesDiffer()
+    {
+        var settings1 = new ClickHouseClientSettings { Roles = new[] { "admin" } };
+        var settings2 = new ClickHouseClientSettings { Roles = new[] { "reader" } };
+
+        Assert.That(settings1.Equals(settings2), Is.False);
+    }
+
+    [Test]
+    public void Settings_GetHashCode_ShouldIncludeRoles()
+    {
+        var settings1 = new ClickHouseClientSettings { Roles = new[] { "admin" } };
+        var settings2 = new ClickHouseClientSettings { Roles = new[] { "reader" } };
+
+        Assert.That(settings1.GetHashCode(), Is.Not.EqualTo(settings2.GetHashCode()));
+    }
+
+    [Test]
+    public void Settings_ToString_ShouldIncludeRoles()
+    {
+        var settings = new ClickHouseClientSettings { Roles = new[] { "admin", "reader" } };
+        var str = settings.ToString();
+
+        Assert.That(str, Does.Contain("Roles=admin,reader"));
+    }
+
+    [Test]
+    public void Settings_ToString_ShouldNotIncludeRoles_WhenEmpty()
+    {
+        var settings = new ClickHouseClientSettings();
+        var str = settings.ToString();
+
+        Assert.That(str, Does.Not.Contain("Roles="));
+    }
+
+    [Test]
+    public void Settings_ConstructorFromConnectionString_ShouldParseSingleRole()
+    {
+        var settings = new ClickHouseClientSettings("Host=localhost;Roles=admin");
+        Assert.That(settings.Roles, Contains.Item("admin"));
+    }
+
+    [Test]
+    public void Settings_ConstructorFromConnectionString_ShouldParseMultipleRoles()
+    {
+        var settings = new ClickHouseClientSettings("Host=localhost;Roles=admin,janitor");
+        Assert.That(settings.Roles.Count, Is.EqualTo(2));
+        Assert.That(settings.Roles, Contains.Item("admin"));
+        Assert.That(settings.Roles, Contains.Item("janitor"));
+    }
+
+    [Test]
+    public void Settings_CustomHeaders_ShouldBeEmptyByDefault()
+    {
+        var settings = new ClickHouseClientSettings();
+
+        Assert.That(settings.CustomHeaders, Is.Not.Null);
+        Assert.That(settings.CustomHeaders, Is.Empty);
+    }
+
+    [Test]
+    public void Settings_CustomHeaders_ShouldBeSettable()
+    {
+        var headers = new Dictionary<string, string>
+        {
+            { "X-Custom-Header", "value1" },
+            { "X-Another-Header", "value2" }
+        };
+        var settings = new ClickHouseClientSettings { CustomHeaders = headers };
+
+        Assert.That(settings.CustomHeaders, Has.Count.EqualTo(2));
+        Assert.That(settings.CustomHeaders["X-Custom-Header"], Is.EqualTo("value1"));
+        Assert.That(settings.CustomHeaders["X-Another-Header"], Is.EqualTo("value2"));
+    }
+
+    [Test]
+    public void Settings_CopyConstructor_ShouldCopyCustomHeaders()
+    {
+        var original = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string>
+            {
+                { "X-Custom-Header", "value1" }
+            }
+        };
+        var copy = new ClickHouseClientSettings(original);
+
+        Assert.That(copy.CustomHeaders, Has.Count.EqualTo(1));
+        Assert.That(copy.CustomHeaders["X-Custom-Header"], Is.EqualTo("value1"));
+        // Verify it's a copy, not the same reference
+        Assert.That(copy.CustomHeaders, Is.Not.SameAs(original.CustomHeaders));
+    }
+
+    [Test]
+    public void Settings_Equals_ShouldReturnTrue_WhenCustomHeadersMatch()
+    {
+        var settings1 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value" } }
+        };
+        var settings2 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value" } }
+        };
+
+        Assert.That(settings1.Equals(settings2), Is.True);
+    }
+
+    [Test]
+    public void Settings_Equals_ShouldReturnFalse_WhenCustomHeadersDiffer()
+    {
+        var settings1 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value1" } }
+        };
+        var settings2 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value2" } }
+        };
+
+        Assert.That(settings1.Equals(settings2), Is.False);
+    }
+
+    [Test]
+    public void Settings_GetHashCode_ShouldIncludeCustomHeaders()
+    {
+        var settings1 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value1" } }
+        };
+        var settings2 = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string> { { "X-Header", "value2" } }
+        };
+
+        Assert.That(settings1.GetHashCode(), Is.Not.EqualTo(settings2.GetHashCode()));
+    }
+    
+    [Test]
+    public void Settings_ToString_ShouldNotIncludeCustomHeaders_WhenEmpty()
+    {
+        var settings = new ClickHouseClientSettings();
+        var str = settings.ToString();
+
+        Assert.That(str, Does.Not.Contain("CustomHeaders="));
+    }
+
+    [Test]
+    public void Settings_ToString_ShouldNotExposeCustomHeaderValues()
+    {
+        var settings = new ClickHouseClientSettings
+        {
+            CustomHeaders = new Dictionary<string, string>
+            {
+                { "X-Secret-Header", "secret-value" }
+            }
+        };
+        var str = settings.ToString();
+
+        Assert.That(str, Does.Not.Contain("secret-value"));
     }
 
     private class TestLoggerFactory : ILoggerFactory

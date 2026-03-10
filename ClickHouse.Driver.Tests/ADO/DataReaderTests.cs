@@ -154,7 +154,6 @@ public class DataReaderTests : AbstractConnectionTestFixture
         ClassicAssert.IsFalse(reader.Read());
     }
 
-#if NET48 || NET5_0_OR_GREATER
     [Test]
     public async Task ShouldReadTuple()
     {
@@ -163,7 +162,6 @@ public class DataReaderTests : AbstractConnectionTestFixture
         ClassicAssert.NotNull(reader.GetTuple(0));
         ClassicAssert.IsFalse(reader.Read());
     }
-#endif
 
     [Test]
     public async Task ShouldReadGuid()

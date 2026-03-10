@@ -52,7 +52,7 @@ internal class MapType : ParameterizedType
         {
             var key = KeyType.Read(reader); // null is not supported as dictionary key in C#
             var value = ClearDBNull(ValueType.Read(reader));
-            dict.Add(key, value);
+            dict[key] = value;
         }
         return dict;
     }

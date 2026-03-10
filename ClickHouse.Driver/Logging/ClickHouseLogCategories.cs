@@ -6,4 +6,5 @@ internal static class ClickHouseLogCategories
     internal const string Command = "ClickHouse.Driver.Command";
     internal const string Transport = "ClickHouse.Driver.Transport";
     internal const string BulkCopy = "ClickHouse.Driver.BulkCopy";
+    internal const string Client = "ClickHouse.Driver.Client";
 }

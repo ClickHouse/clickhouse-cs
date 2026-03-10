@@ -10,6 +10,7 @@ namespace ClickHouse.Driver;
 internal class ClickHouseUriBuilder
 {
     private readonly IDictionary<string, string> sqlQueryParameters = new Dictionary<string, string>();
+    private string effectiveQueryId;
 
     public ClickHouseUriBuilder(Uri baseUri)
     {
@@ -26,13 +27,42 @@ internal class ClickHouseUriBuilder
 
     public string SessionId { get; set; }
 
-    public string QueryId { get; set; }
+    private string queryId;
+
+    public string QueryId
+    {
+        get => queryId;
+        set
+        {
+            queryId = value;
+            effectiveQueryId = null; // Clear cache so GetEffectiveQueryId() re-evaluates
+        }
+    }
 
     public static string DefaultFormat => "RowBinaryWithNamesAndTypes";
 
     public IDictionary<string, object> ConnectionQueryStringParameters { get; set; }
 
     public IDictionary<string, object> CommandQueryStringParameters { get; set; }
+
+    public IReadOnlyList<string> ConnectionRoles { get; set; }
+
+    public IReadOnlyList<string> CommandRoles { get; set; }
+
+    public JsonReadMode JsonReadMode { get; set; }
+
+    public JsonWriteMode JsonWriteMode { get; set; }
+
+    public TimeSpan? MaxExecutionTime { get; set; }
+
+    /// <summary>
+    /// Gets the effective query ID that will be used in the request.
+    /// If QueryId is not set, generates and caches a new GUID.
+    /// </summary>
+    public string GetEffectiveQueryId()
+    {
+        return effectiveQueryId ??= string.IsNullOrEmpty(QueryId) ? Guid.NewGuid().ToString() : QueryId;
+    }
 
     public bool AddSqlQueryParameter(string name, string value) =>
         DictionaryExtensions.TryAdd(sqlQueryParameters, name, value);
@@ -47,7 +77,14 @@ internal class ClickHouseUriBuilder
         parameters.SetOrRemove("database", Database);
         parameters.SetOrRemove("session_id", SessionId);
         parameters.SetOrRemove("query", Sql);
-        parameters.SetOrRemove("query_id", QueryId);
+        parameters.Set("query_id", GetEffectiveQueryId());
+
+        // Inject JSON format settings based on mode - do this before sqlQueryParameters to allow for overrides
+        if (JsonReadMode == JsonReadMode.String)
+            parameters.Set("output_format_binary_write_json_as_string", "1");
+
+        if (JsonWriteMode == JsonWriteMode.String)
+            parameters.Set("input_format_binary_read_json_as_string", "1");
 
         foreach (var parameter in sqlQueryParameters)
             parameters.Set("param_" + parameter.Key, parameter.Value.ToString(CultureInfo.InvariantCulture));
@@ -64,7 +101,18 @@ internal class ClickHouseUriBuilder
                 parameters.Set(parameter.Key, Convert.ToString(parameter.Value, CultureInfo.InvariantCulture));
         }
 
+        if (MaxExecutionTime.HasValue)
+            parameters.Set("max_execution_time", MaxExecutionTime.Value.TotalSeconds.ToString(CultureInfo.InvariantCulture));
+
         var queryString = string.Join("&", parameters.Select(kvp => $"{kvp.Key}={HttpUtility.UrlEncode(kvp.Value)}"));
+
+        // Append role parameters - command roles replace connection roles
+        var activeRoles = CommandRoles?.Count > 0 ? CommandRoles : ConnectionRoles;
+        if (activeRoles?.Count > 0)
+        {
+            var roleParams = string.Join("&", activeRoles.Select(role => $"role={HttpUtility.UrlEncode(role)}"));
+            queryString = string.IsNullOrEmpty(queryString) ? roleParams : $"{queryString}&{roleParams}";
+        }
 
         var uriBuilder = new UriBuilder(BaseUri) { Query = queryString };
         return uriBuilder.ToString();

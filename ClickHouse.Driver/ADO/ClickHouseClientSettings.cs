@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using Microsoft.Extensions.Logging;
 
@@ -53,9 +54,10 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         Path = other.Path;
         Username = other.Username;
         Password = other.Password;
+        BearerToken = other.BearerToken;
         UseCompression = other.UseCompression;
-        UseServerTimezone = other.UseServerTimezone;
         UseCustomDecimals = other.UseCustomDecimals;
+        ReadStringsAsByteArrays = other.ReadStringsAsByteArrays;
         UseSession = other.UseSession;
         SessionId = other.SessionId;
         SkipServerCertificateValidation = other.SkipServerCertificateValidation;
@@ -69,6 +71,16 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Deep copy the CustomSettings dictionary
         CustomSettings = new Dictionary<string, object>(other.CustomSettings);
+
+        // Copy roles list
+        Roles = other.Roles.ToArray();
+
+        // Deep copy the CustomHeaders dictionary
+        CustomHeaders = new Dictionary<string, string>(other.CustomHeaders.ToDictionary(x => x.Key, x => x.Value));
+
+        // Copy JSON mode settings
+        JsonReadMode = other.JsonReadMode;
+        JsonWriteMode = other.JsonWriteMode;
     }
 
     /// <summary>
@@ -93,7 +105,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Gets or sets the database name.
     /// Default: "" (if empty, will use the user's default database if it has been configured).
     /// </summary>
-    public string Database { get; init; } = ClickHouseDefaults.Database;
+    public string Database { get; set; } = ClickHouseDefaults.Database;
 
     /// <summary>
     /// Gets or sets the path component of the URL (for reverse proxy scenarios).
@@ -114,22 +126,32 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public string Password { get; init; } = ClickHouseDefaults.Password;
 
     /// <summary>
+    /// Gets or sets the bearer token for JWT authentication.
+    /// When set, Bearer authentication is used instead of Basic authentication
+    /// (Username and Password are ignored for the Authorization header).
+    /// The token should be provided as-is (already encoded if required by your auth provider).
+    /// Default: null
+    /// </summary>
+    public string BearerToken { get; init; }
+
+    /// <summary>
     /// Gets or sets whether to use compression for data transfer.
     /// Default: true
     /// </summary>
     public bool UseCompression { get; init; } = ClickHouseDefaults.Compression;
 
     /// <summary>
-    /// Gets or sets whether to use server timezone for DateTime values.
-    /// Default: true
-    /// </summary>
-    public bool UseServerTimezone { get; init; } = ClickHouseDefaults.UseServerTimezone;
-
-    /// <summary>
     /// Gets or sets whether to use custom decimal types.
     /// Default: true
     /// </summary>
     public bool UseCustomDecimals { get; init; } = ClickHouseDefaults.UseCustomDecimals;
+
+    /// <summary>
+    /// Gets or sets whether to read String/FixedString columns as byte arrays instead of strings.
+    /// This is useful when storing binary data that may not be valid UTF-8.
+    /// Default: false
+    /// </summary>
+    public bool ReadStringsAsByteArrays { get; init; } = ClickHouseDefaults.ReadStringsAsByteArrays;
 
     /// <summary>
     /// Gets or sets whether to use sessions for the connection.
@@ -213,13 +235,43 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Not recommended for production use.
     /// Default: false
     /// </summary>
-    public bool EnableDebugMode { get; init; } = false;
+    public bool EnableDebugMode { get; init; }
 
     /// <summary>
     /// Gets or sets custom ClickHouse settings to pass with queries.
     /// Default: empty dictionary
     /// </summary>
     public IDictionary<string, object> CustomSettings { get; init; } = new Dictionary<string, object>();
+
+    /// <summary>
+    /// Gets or sets the ClickHouse roles to use for queries.
+    /// Multiple roles can be specified and will be sent as separate role= query parameters.
+    /// Default: empty list
+    /// </summary>
+    public IReadOnlyList<string> Roles { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Gets or sets custom HTTP headers to send with each request.
+    /// These headers are applied after the default headers, allowing you to override most headers.
+    /// The following headers cannot be overridden and will be silently ignored:
+    /// Connection, Authorization, User-Agent
+    /// Default: empty dictionary
+    /// </summary>
+    public IReadOnlyDictionary<string, string> CustomHeaders { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
+    /// Gets or sets how JSON columns are returned when reading data.
+    /// Binary (default): Returns System.Text.Json.Nodes.JsonObject
+    /// String: Returns the raw JSON string (requires server setting output_format_binary_write_json_as_string=1)
+    /// </summary>
+    public JsonReadMode JsonReadMode { get; init; } = JsonReadMode.Binary;
+
+    /// <summary>
+    /// Gets or sets how JSON data is sent when writing.
+    /// String (default): Client sends JSON as string. Accepts JsonObject, JsonNode, strings, and POCOs.
+    /// Binary: Client serializes to binary JSON format. Only registered POCO types are supported.
+    /// </summary>
+    public JsonWriteMode JsonWriteMode { get; init; } = JsonWriteMode.String;
 
     /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
@@ -264,8 +316,11 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             UseSession = builder.UseSession,
             SessionId = builder.SessionId,
             Timeout = builder.Timeout,
-            UseServerTimezone = builder.UseServerTimezone,
             UseCustomDecimals = builder.UseCustomDecimals,
+            ReadStringsAsByteArrays = builder.ReadStringsAsByteArrays,
+            Roles = builder.Roles,
+            JsonReadMode = builder.JsonReadMode,
+            JsonWriteMode = builder.JsonWriteMode,
         };
 
         // Extract custom settings from connection string builder
@@ -298,9 +353,10 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                Path == other.Path &&
                Username == other.Username &&
                Password == other.Password &&
+               BearerToken == other.BearerToken &&
                UseCompression == other.UseCompression &&
-               UseServerTimezone == other.UseServerTimezone &&
                UseCustomDecimals == other.UseCustomDecimals &&
+               ReadStringsAsByteArrays == other.ReadStringsAsByteArrays &&
                UseSession == other.UseSession &&
                SessionId == other.SessionId &&
                SkipServerCertificateValidation == other.SkipServerCertificateValidation &&
@@ -309,7 +365,12 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                HttpClient == other.HttpClient &&
                HttpClientFactory == other.HttpClientFactory &&
                HttpClientName == other.HttpClientName &&
-               EnableDebugMode == other.EnableDebugMode;
+               EnableDebugMode == other.EnableDebugMode &&
+               JsonReadMode == other.JsonReadMode &&
+               JsonWriteMode == other.JsonWriteMode &&
+               Roles.SequenceEqual(other.Roles) &&
+               CustomHeaders.Count == other.CustomHeaders.Count &&
+               CustomHeaders.All(kvp => other.CustomHeaders.TryGetValue(kvp.Key, out var value) && kvp.Value == value);
     }
 
     /// <summary>
@@ -325,7 +386,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// </summary>
     public override int GetHashCode()
     {
-        var hash = new HashCode();
+        HashCode hash = default;
         hash.Add(Host);
         hash.Add(Port);
         hash.Add(Protocol);
@@ -333,16 +394,27 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(Path);
         hash.Add(Username);
         hash.Add(Password);
+        hash.Add(BearerToken);
         hash.Add(UseCompression);
-        hash.Add(UseServerTimezone);
         hash.Add(UseCustomDecimals);
+        hash.Add(ReadStringsAsByteArrays);
         hash.Add(UseSession);
         hash.Add(SessionId);
         hash.Add(SkipServerCertificateValidation);
         hash.Add(UseFormDataParameters);
         hash.Add(Timeout);
         hash.Add(EnableDebugMode);
+        hash.Add(JsonReadMode);
+        hash.Add(JsonWriteMode);
         foreach (var kvp in CustomSettings)
+        {
+            hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
+        }
+        foreach (var role in Roles)
+        {
+            hash.Add(role);
+        }
+        foreach (var kvp in CustomHeaders)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
         }
@@ -370,10 +442,23 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// </summary>
     public override string ToString()
     {
-        return $"Host={Host};Port={Port};Protocol={Protocol};Database={Database};" +
+        var result = $"Host={Host};Port={Port};Protocol={Protocol};Database={Database};" +
                $"Username={Username};Password=****;Compression={UseCompression};" +
-               $"UseServerTimezone={UseServerTimezone};UseCustomDecimals={UseCustomDecimals};" +
-               $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s";
+               $"UseCustomDecimals={UseCustomDecimals};ReadStringsAsByteArrays={ReadStringsAsByteArrays};" +
+               $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s;" +
+               $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode}";
+
+        if (Roles.Count > 0)
+        {
+            result += $";Roles={string.Join(",", Roles)}";
+        }
+
+        if (CustomHeaders.Count > 0)
+        {
+            result += $";CustomHeaders={string.Join(",", CustomHeaders.Select(x => $"{x.Key}:***"))}";
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -395,12 +480,6 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         if (Timeout < TimeSpan.Zero)
             throw new InvalidOperationException("Timeout cannot be negative");
-
-        if (UseSession && HttpClient != null)
-            throw new InvalidOperationException("UseSession cannot be combined with a custom HttpClient (sessions require a single persistent connection)");
-
-        if (UseSession && HttpClientFactory != null)
-            throw new InvalidOperationException("UseSession cannot be combined with a custom HttpClientFactory (sessions require a single persistent connection)");
 
         if (HttpClient != null && HttpClientFactory != null)
             throw new InvalidOperationException("Cannot specify both HttpClient and HttpClientFactory");

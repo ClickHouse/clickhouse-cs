@@ -1,10 +1,8 @@
-﻿using NodaTime;
+using ClickHouse.Driver.Json;
 
 namespace ClickHouse.Driver;
 
-internal record struct TypeSettings(bool useBigDecimal, string timezone)
+internal record struct TypeSettings(bool useBigDecimal, bool readStringsAsByteArrays, JsonTypeRegistry jsonTypeRegistry, JsonReadMode jsonReadMode, JsonWriteMode jsonWriteMode)
 {
-    public static string DefaultTimezone = DateTimeZoneProviders.Tzdb.GetSystemDefault().Id;
-
-    public static TypeSettings Default => new TypeSettings(true, DefaultTimezone);
+    public static TypeSettings Default => new TypeSettings(true, false, null, JsonReadMode.Binary, JsonWriteMode.String);
 }

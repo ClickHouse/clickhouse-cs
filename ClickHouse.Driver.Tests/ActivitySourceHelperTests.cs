@@ -34,7 +34,7 @@ public class ActivitySourceHelperTests : AbstractConnectionTestFixture
         };
         ActivitySource.AddActivityListener(listener);
 
-        using var activity = connection.StartActivity("TestActivity");
+        using var activity = client.StartActivity("TestActivity");
         ClassicAssert.NotNull(activity);
     }
 

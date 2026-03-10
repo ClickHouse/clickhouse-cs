@@ -1,5 +1,6 @@
 using System;
 using System.Data;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -25,15 +26,17 @@ public class ConnectionTests : AbstractConnectionTestFixture
         using var httpClient = new HttpClient(httpClientHandler);
         using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString(), httpClient);
         await conn.OpenAsync();
-        ClassicAssert.IsNotEmpty(conn.ServerVersion);
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
     }
 
     [Test]
-    public void ShouldThrowExceptionOnInvalidHttpClient()
+    public async Task ShouldThrowExceptionOnInvalidHttpClient()
     {
         using var httpClient = new HttpClient(); // No decompression handler
         using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString(), httpClient);
-        Assert.Throws<InvalidOperationException>(() => conn.Open());
+        await conn.OpenAsync();
+        // Exception is thrown when executing a query, not on OpenAsync (which no longer makes requests)
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await conn.ExecuteScalarAsync("SELECT 1"));
     }
 
     [Test]
@@ -45,6 +48,26 @@ public class ConnectionTests : AbstractConnectionTestFixture
 
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
         Assert.That(conn.SkipServerCertificateValidation, Is.True);
+    }
+
+    [Test]
+    public async Task ShouldBeAbleToSetConnectionStringAfterCreation() // Necessary to support this for some scenarios involving ClickHouseConnectionFactory
+    {
+        var conn = new ClickHouseConnection();
+        conn.ConnectionString = TestUtilities.GetConnectionStringBuilder().ToString();
+        await conn.OpenAsync();
+
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
+    }
+
+    [Test]
+    public async Task ShouldNotBeAbleToSetConnectionStringWhileOpen()
+    {
+        using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString());
+        await conn.OpenAsync();
+
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
+        Assert.Throws<InvalidOperationException>(() => conn.ConnectionString = "Host=otherhost");
     }
 
     [Test]
@@ -66,19 +89,10 @@ public class ConnectionTests : AbstractConnectionTestFixture
     public void ShouldConnectToServer()
     {
         using var conn = TestUtilities.GetTestClickHouseConnection();
-        ClassicAssert.IsNotEmpty(conn.ServerVersion);
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
         conn.Close();
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Closed));
     }
-
-    [Test]
-    [TestCase("1.2.3.4.altinity")]
-    [TestCase("1.2.3.4")]
-    [TestCase("20")]
-    [TestCase("20.1")]
-    [TestCase("20.1.2")]
-    public void ShoulParseVersion(string version) => _ = ClickHouseConnection.ParseVersion(version);
 
     [Test]
     public async Task TimeoutShouldCancelConnection()
@@ -101,12 +115,39 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task ServerShouldSetQueryId()
+    public async Task ShouldAutoGenerateQueryIdWhenNull()
     {
         var command = connection.CreateCommand();
         command.CommandText = "SELECT 1";
+        ClassicAssert.IsNull(command.QueryId);
         await command.ExecuteScalarAsync();
         ClassicAssert.IsFalse(string.IsNullOrWhiteSpace(command.QueryId));
+        Assert.That(Guid.TryParse(command.QueryId, out _), Is.True, "Auto-generated QueryId should be a valid GUID");
+    }
+
+    [Test]
+    public async Task ShouldAutoGenerateQueryIdWhenEmpty()
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1";
+        command.QueryId = string.Empty;
+        await command.ExecuteScalarAsync();
+        ClassicAssert.IsFalse(string.IsNullOrWhiteSpace(command.QueryId));
+        Assert.That(Guid.TryParse(command.QueryId, out _), Is.True, "Auto-generated QueryId should be a valid GUID");
+    }
+
+    [Test]
+    public async Task ShouldGenerateUniqueQueryIdsForDifferentCommands()
+    {
+        var command1 = connection.CreateCommand();
+        command1.CommandText = "SELECT 1";
+        await command1.ExecuteScalarAsync();
+
+        var command2 = connection.CreateCommand();
+        command2.CommandText = "SELECT 2";
+        await command2.ExecuteScalarAsync();
+
+        Assert.That(command1.QueryId, Is.Not.EqualTo(command2.QueryId), "Different commands should have different auto-generated QueryIds");
     }
 
     [Test]
@@ -114,19 +155,110 @@ public class ConnectionTests : AbstractConnectionTestFixture
     {
         string queryId = "MyQueryId123456";
         var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1";
+        command.CommandText = "SELECT query_id()";
         command.QueryId = queryId;
-        await command.ExecuteScalarAsync();
+        string returnedQueryId = (string)await command.ExecuteScalarAsync();
         Assert.That(command.QueryId, Is.EqualTo(queryId));
+        Assert.That(returnedQueryId, Is.EqualTo(queryId));
     }
 
     [Test]
     public async Task ClientShouldSetUserAgent()
     {
         var headers = new HttpRequestMessage().Headers;
-        connection.AddDefaultHttpHeaders(headers);
+        client.AddDefaultHttpHeaders(headers);
         // Build assembly version defaults to 1.0.0
         Assert.That(headers.UserAgent.ToString().Contains("ClickHouse.Driver/1.0.0"), Is.True);
+    }
+
+    [Test]
+    public async Task Request_WithoutBearerToken_ShouldUseBasicAuth()
+    {
+        var fakeResponse = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("25.10\tUTC")
+        };
+        var trackingHandler = new TrackingHandler(fakeResponse);
+        using var httpClient = new HttpClient(trackingHandler);
+
+        var settings = new ClickHouseClientSettings
+        {
+            Host = "localhost",
+            Username = "testuser",
+            Password = "testpass",
+            HttpClient = httpClient
+        };
+        using var conn = new ClickHouseConnection(settings);
+        await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
+
+        Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0));
+        var request = trackingHandler.Requests[0];
+        Assert.That(request.Headers.Authorization, Is.Not.Null);
+        Assert.That(request.Headers.Authorization.Scheme, Is.EqualTo("Basic"));
+        var expectedCredentials = Convert.ToBase64String(Encoding.UTF8.GetBytes("testuser:testpass"));
+        Assert.That(request.Headers.Authorization.Parameter, Is.EqualTo(expectedCredentials));
+    }
+
+    [Test]
+    public async Task Request_WithBearerToken_ShouldUseBearerAuth()
+    {
+        var fakeResponse = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("25.10\tUTC")
+        };
+        var trackingHandler = new TrackingHandler(fakeResponse);
+        using var httpClient = new HttpClient(trackingHandler);
+
+        var settings = new ClickHouseClientSettings
+        {
+            Host = "localhost",
+            Username = "testuser",
+            Password = "testpass",
+            BearerToken = "my-jwt-token-here",
+            HttpClient = httpClient
+        };
+        using var conn = new ClickHouseConnection(settings);
+        await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
+
+        Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0));
+        var request = trackingHandler.Requests[0];
+        Assert.That(request.Headers.Authorization, Is.Not.Null);
+        Assert.That(request.Headers.Authorization.Scheme, Is.EqualTo("Bearer"));
+        Assert.That(request.Headers.Authorization.Parameter, Is.EqualTo("my-jwt-token-here"));
+    }
+
+    [Test]
+    public async Task Command_WithBearerTokenOverride_ShouldUseCommandToken()
+    {
+        var fakeResponse = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("25.10\tUTC")
+        };
+        var trackingHandler = new TrackingHandler(fakeResponse);
+        using var httpClient = new HttpClient(trackingHandler);
+
+        var settings = new ClickHouseClientSettings
+        {
+            Host = "localhost",
+            BearerToken = "connection-level-token",
+            HttpClient = httpClient
+        };
+        using var conn = new ClickHouseConnection(settings);
+        await conn.OpenAsync();
+
+        // Execute a command with a different bearer token
+        var command = conn.CreateCommand();
+        command.CommandText = "SELECT version() FORMAT TSV";
+        command.BearerToken = "command-level-token";
+        await command.ExecuteNonQueryAsync();
+
+        Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0));
+        var request = trackingHandler.Requests[0];
+        Assert.That(request.Headers.Authorization, Is.Not.Null);
+        Assert.That(request.Headers.Authorization.Scheme, Is.EqualTo("Bearer"));
+        Assert.That(request.Headers.Authorization.Parameter, Is.EqualTo("command-level-token"));
     }
 
     [Test]
@@ -177,7 +309,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    [Ignore("Needs support for named tuple parameters")]
     public void ShouldFetchSchemaDatabaseColumns()
     {
         var schema = connection.GetSchema("Columns", ["system"]);
@@ -202,22 +333,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
         Assert.That(conn.Database, Is.EqualTo("system"));
         conn.ChangeDatabase("default");
         Assert.That(conn.Database, Is.EqualTo("default"));
-    }
-
-    [Test]
-    public void ShouldExcludePasswordFromRedactedConnectionString()
-    {
-        const string MOCK = "verysecurepassword";
-        var settings = new ClickHouseClientSettings()
-        {
-            Password = MOCK,
-        };
-        using var conn = new ClickHouseConnection(settings);
-        Assert.Multiple(() =>
-        {
-            Assert.That(conn.ConnectionString, Contains.Substring($"Password={MOCK}"));
-            Assert.That(conn.RedactedConnectionString, Is.Not.Contains($"Password={MOCK}"));
-        });
     }
 
     [Test]
@@ -255,8 +370,8 @@ public class ConnectionTests : AbstractConnectionTestFixture
     {
         var queryId = Guid.NewGuid().ToString();
         var httpResponseMessage = await connection.PostStreamAsync("SELECT version()", (_, _) => Task.CompletedTask, false, CancellationToken.None, queryId);
-        
-        Assert.That(ClickHouseConnection.ExtractQueryId(httpResponseMessage), Is.EqualTo(queryId));
+        var queryResult = new QueryResult(httpResponseMessage);
+        Assert.That(queryResult.QueryId, Is.EqualTo(queryId));
     }
 
     private static string[] GetColumnNames(DataTable table) => table.Columns.Cast<DataColumn>().Select(dc => dc.ColumnName).ToArray();
@@ -310,7 +425,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
             Password = "testpass",
             Path = "/custom",
             UseCompression = false,
-            UseServerTimezone = false,
             UseCustomDecimals = false,
             Timeout = TimeSpan.FromMinutes(5)
         };
@@ -329,7 +443,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
             Assert.That(connString, Does.Contain("Password=testpass"));
             Assert.That(connString, Does.Contain("Path=/custom"));
             Assert.That(connString, Does.Contain("Compression=False"));
-            Assert.That(connString, Does.Contain("UseServerTimezone=False"));
             Assert.That(connString, Does.Contain("UseCustomDecimals=False"));
             Assert.That(connString, Does.Contain("Timeout=300"));
         });
@@ -359,31 +472,26 @@ public class ConnectionTests : AbstractConnectionTestFixture
     [Test]
     public async Task Constructor_WithSettingsWithHttpClient_ShouldUseProvidedHttpClient()
     {
-        // Create a substitute for HttpClient
-        var mockHttpClient = Substitute.ForPartsOf<HttpClient>();
-
-        // Configure it to forward to a real client for actual functionality
-        var realHandler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate };
-        using var realHttpClient = new HttpClient(realHandler);
-
-        mockHttpClient.SendAsync(Arg.Any<HttpRequestMessage>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo => realHttpClient.SendAsync(
-                callInfo.Arg<HttpRequestMessage>(),
-                callInfo.Arg<CancellationToken>()));
+        // Use a tracking handler to verify our HttpClient is actually used
+        var trackingHandler = new TrackingHandler(new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+        });
+        using var httpClient = new HttpClient(trackingHandler);
 
         var builder = TestUtilities.GetConnectionStringBuilder();
         var settings = new ClickHouseClientSettings(builder)
         {
-            HttpClient = mockHttpClient,
+            HttpClient = httpClient,
         };
 
         using var conn = new ClickHouseConnection(settings);
 
-        // Open connection - should use the provided HttpClient
+        // Open connection and execute a query to use the provided HttpClient
         await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
-        mockHttpClient.Received().SendAsync(Arg.Any<HttpRequestMessage>(), Arg.Any<CancellationToken>());
-
+        Assert.That(trackingHandler.RequestCount, Is.GreaterThan(0), "HttpClient should have been used");
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
     }
 
@@ -404,8 +512,9 @@ public class ConnectionTests : AbstractConnectionTestFixture
         // Verify factory not called yet
         Assert.That(factory.CreateClientCallCount, Is.EqualTo(0));
 
-        // Open connection - should use the provided factory
+        // Open connection and execute a query to use the provided factory
         await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         // Verify the provided factory was actually used
         Assert.Multiple(() =>
@@ -433,21 +542,6 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public void Constructor_WithSettingsWithUseSessionAndHttpClient_ShouldThrow()
-    {
-        using var httpClient = new HttpClient();
-
-        var settings = new ClickHouseClientSettings
-        {
-            Host = "localhost",
-            UseSession = true,
-            HttpClient = httpClient
-        };
-
-        Assert.Throws<InvalidOperationException>(() => new ClickHouseConnection(settings));
-    }
-
-    [Test]
     public async Task Constructor_WithSettings_ShouldConnectToServer()
     {
         var builder = TestUtilities.GetConnectionStringBuilder();
@@ -456,11 +550,7 @@ public class ConnectionTests : AbstractConnectionTestFixture
         using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
-            Assert.That(conn.ServerVersion, Is.Not.Empty);
-        });
+        Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
     }
 
     [Test]
@@ -532,38 +622,128 @@ public class ConnectionTests : AbstractConnectionTestFixture
     [Test]
     public async Task Constructor_WithSettingsWithPath_ShouldApplyPath()
     {
-        var capturedUri = (Uri)null;
-
-        // Create a substitute HttpClient to capture the request
-        var mockHttpClient = Substitute.ForPartsOf<HttpClient>();
-
-        // Create a fake successful response
+        // Use a fake response so we don't need a real server at the custom path
         var fakeResponse = new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("25.10\tUTC")
         };
-
-        mockHttpClient.SendAsync(Arg.Any<HttpRequestMessage>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                var request = callInfo.Arg<HttpRequestMessage>();
-                capturedUri = request.RequestUri;
-                return Task.FromResult(fakeResponse);
-            });
+        var trackingHandler = new TrackingHandler(fakeResponse);
+        using var httpClient = new HttpClient(trackingHandler);
 
         var builder = TestUtilities.GetConnectionStringBuilder();
         var settings = new ClickHouseClientSettings(builder)
         {
             Path = "/custom/reverse/proxy/path",
-            HttpClient = mockHttpClient,
+            HttpClient = httpClient,
         };
 
         using var conn = new ClickHouseConnection(settings);
 
-        // Open connection - this will make a request
+        // Open connection and execute a query to make a request
         await conn.OpenAsync();
+        await conn.ExecuteStatementAsync("SELECT version() FORMAT TSV");
 
         // Verify the path was used in the request
-        Assert.That(capturedUri.AbsolutePath, Does.StartWith("/custom/reverse/proxy/path"), "Path was not applied to request");
+        Assert.That(trackingHandler.Requests, Has.Count.GreaterThan(0), "HttpClient should have been used");
+        Assert.That(trackingHandler.Requests[0].RequestUri.AbsolutePath, Does.StartWith("/custom/reverse/proxy/path"), "Path was not applied to request");
+    }
+
+    [Test]
+    public void Dispose_WithOwnedClient_ShouldDisposeClient()
+    {
+        // Arrange - connection created from connection string owns its client
+        var conn = new ClickHouseConnection("Host=localhost");
+        var client = conn.ClickHouseClient;
+
+        // Act
+        conn.Dispose();
+
+        // Assert - client should be disposed (calling Dispose again should be safe but we can't easily verify)
+        // We verify indirectly by checking that a new connection with the same client would fail
+        // after the original connection disposed it
+        Assert.DoesNotThrow(() => client.Dispose()); // Dispose should be idempotent
+    }
+
+    [Test]
+    public void Dispose_WithSharedClient_ShouldNotDisposeClient()
+    {
+        // Arrange - create a shared client
+        using var sharedClient = new ClickHouseClient("Host=localhost");
+
+        // Create two connections sharing the same client
+        var conn1 = new ClickHouseConnection(sharedClient);
+        var conn2 = new ClickHouseConnection(sharedClient);
+
+        // Act - dispose both connections
+        conn1.Dispose();
+        conn2.Dispose();
+
+        // Assert - shared client should still be usable (not disposed)
+        // Ping will fail since there's no server, but it shouldn't throw ObjectDisposedException
+        Assert.DoesNotThrowAsync(async () => await sharedClient.PingAsync());
+    }
+
+    [Test]
+    public void ApplySettings_WithSharedClient_ShouldNotDisposeOriginalClient()
+    {
+        // Arrange - create a shared client
+        using var sharedClient = new ClickHouseClient("Host=localhost");
+        var conn = new ClickHouseConnection(sharedClient);
+
+        // Act - change connection string (which calls ApplySettings internally)
+        conn.ConnectionString = "Host=otherhost";
+
+        // Assert - shared client should still be usable (not disposed)
+        Assert.DoesNotThrowAsync(async () => await sharedClient.PingAsync());
+    }
+
+    [Test]
+    public void ApplySettings_AfterChange_ShouldOwnNewClient()
+    {
+        // Arrange - start with shared client
+        using var sharedClient = new ClickHouseClient("Host=localhost");
+        var conn = new ClickHouseConnection(sharedClient);
+
+        // Act - change connection string creates a new owned client
+        conn.ConnectionString = "Host=otherhost";
+        var newClient = conn.ClickHouseClient;
+
+        // Assert - new client should be different from shared client
+        Assert.That(newClient, Is.Not.SameAs(sharedClient));
+
+        // Dispose connection - should dispose the new client (not the shared one)
+        conn.Dispose();
+        Assert.DoesNotThrowAsync(async () => await sharedClient.PingAsync());
+    }
+
+    [Test]
+    public void ChangeDatabase_ShouldBePerConnection()
+    {
+        // Arrange - create shared client with default database
+        using var sharedClient = new ClickHouseClient("Host=localhost;Database=default");
+        using var conn1 = new ClickHouseConnection(sharedClient);
+        using var conn2 = new ClickHouseConnection(sharedClient);
+
+        // Act - change database on conn1 only
+        conn1.ChangeDatabase("other_db");
+
+        // Assert - conn1 should have new database, conn2 should still have default
+        Assert.That(conn1.Database, Is.EqualTo("other_db"));
+        Assert.That(conn2.Database, Is.EqualTo("default"));
+    }
+
+    [Test]
+    public void ChangeDatabase_ShouldNotAffectClientSettings()
+    {
+        // Arrange
+        using var sharedClient = new ClickHouseClient("Host=localhost;Database=default");
+        using var conn = new ClickHouseConnection(sharedClient);
+
+        // Act
+        conn.ChangeDatabase("other_db");
+
+        // Assert - client settings should be unchanged
+        Assert.That(conn.Database, Is.EqualTo("other_db"));
+        Assert.That(sharedClient.Settings.Database, Is.EqualTo("default"));
     }
 }

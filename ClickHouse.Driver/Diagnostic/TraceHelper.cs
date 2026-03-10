@@ -94,7 +94,8 @@ public static class TraceHelper
             try
             {
                 var message = FormatEventMessage(eventData);
-                logger.LogTrace("[{EventSource}] {EventName}: {Message}",
+                logger.LogTrace(
+                    "[{EventSource}] {EventName}: {Message}",
                     eventData.EventSource?.Name ?? "Unknown",
                     eventData.EventName ?? "Unknown",
                     message);

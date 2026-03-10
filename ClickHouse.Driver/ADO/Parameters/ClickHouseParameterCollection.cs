@@ -7,7 +7,7 @@ using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.ADO.Parameters;
 
-internal class ClickHouseParameterCollection : DbParameterCollection
+public class ClickHouseParameterCollection : DbParameterCollection
 {
     private readonly List<ClickHouseDbParameter> parameters = new();
 

@@ -11,7 +11,6 @@ namespace ClickHouse.Driver.Tests.Types;
 
 public class TupleTypeTests : AbstractConnectionTestFixture
 {
-#if NET48 || NET5_0_OR_GREATER
     [Test]
     public async Task ShouldSelectTuple([Range(1, 24, 4)] int count)
     {
@@ -27,7 +26,6 @@ public class TupleTypeTests : AbstractConnectionTestFixture
     }
 
     private static IEnumerable<object> AsEnumerable(ITuple tuple) => Enumerable.Range(0, tuple.Length).Select(i => tuple[i]);
-#endif
 
     [Test]
     [TestCase("Tuple(String, Int32)")]

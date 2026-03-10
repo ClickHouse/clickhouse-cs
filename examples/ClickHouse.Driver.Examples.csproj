@@ -12,7 +12,25 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
+      <PackageReference Include="Dapper" Version="2.1.35" />
+      <PackageReference Include="Dapper.Contrib" Version="2.0.78" />
+      <PackageReference Include="linq2db" Version="6.1.0" />
+      <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.15.0" />
+      <PackageReference Include="Polly" Version="8.5.2" />
+      <PackageReference Include="Testcontainers.ClickHouse" Version="4.10.0" />
+      <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.3" />
+      <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.3" />
+      <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.3" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.3" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Update="appsettings.example.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="resources\people.csv">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
     </ItemGroup>
 
 </Project>

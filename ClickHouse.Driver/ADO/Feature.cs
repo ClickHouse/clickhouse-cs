@@ -23,7 +23,7 @@ public enum Feature
     [SinceVersion("21.9")]
     WideTypes = 1 << 4,
 
-    [Obsolete]
+    [Obsolete("Geo feature flag is deprecated and no longer used.")]
     [SinceVersion("20.5")]
     Geo = 1 << 5,
 
@@ -44,6 +44,18 @@ public enum Feature
 
     [SinceVersion("25.1")]
     Dynamic = 1 << 11,
+
+    [SinceVersion("25.6")]
+    Time = 1 << 12,
+
+    [SinceVersion("25.11")] // Technically 25.10, but limitations break testing
+    QBit = 1 << 13,
+
+    [SinceVersion("25.11")]
+    Geometry = 1 << 14,
+
+    [SinceVersion("25.11")]
+    ExceptionTag = 1 << 15,
 
     All = ~None, // Special value
 }

@@ -1,5 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data.Common;
+using System.Net;
+using System.Net.Http;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
@@ -18,6 +21,18 @@ public class SessionConnectionTest
         if (sessionId != null)
             builder.SessionId = sessionId;
         return new ClickHouseConnection(builder.ToString());
+    }
+
+    private static ClickHouseConnection CreateConnectionWithHttpClient(HttpClient httpClient, bool useSession, string sessionId = null)
+    {
+        var builder = TestUtilities.GetConnectionStringBuilder();
+        var settings = new ClickHouseClientSettings(builder)
+        {
+            UseSession = useSession,
+            SessionId = sessionId,
+            HttpClient = httpClient,
+        };
+        return new ClickHouseConnection(settings);
     }
 
     [Test]
@@ -81,5 +96,21 @@ public class SessionConnectionTest
         catch (ClickHouseServerException e) when (e.ErrorCode == 60) // Error 60 means the table does not exist
         {
         }
+    }
+
+    [Test]
+    public async Task Session_WithCustomHttpClient_ShouldWork()
+    {
+        var sessionId = "TEST-" + Guid.NewGuid().ToString();
+        var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+        };
+        
+        using var httpClient = new HttpClient(handler);
+
+        using var connection = CreateConnectionWithHttpClient(httpClient, useSession: true, sessionId);
+        await connection.ExecuteStatementAsync("CREATE TEMPORARY TABLE test_temp_table (value UInt8)");
+        await connection.ExecuteScalarAsync("SELECT COUNT(*) from test_temp_table");
     }
 }

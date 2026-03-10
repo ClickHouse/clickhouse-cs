@@ -7,6 +7,7 @@ using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
+#pragma warning disable CS0618 // Type or member is obsolete
 
 namespace ClickHouse.Driver.Tests.BulkCopy;
 
@@ -43,7 +44,6 @@ public class BulkCopyWithDefaultsTests : AbstractConnectionTestFixture
             BatchSize = 100
         };
 
-        await bulkCopyWithDefaults.InitAsync();
         await bulkCopyWithDefaults.WriteToServerAsync(Enumerable.Repeat(new[] { insertValue }, 1));
 
         Assert.That(bulkCopyWithDefaults.RowsWritten, Is.EqualTo(1));

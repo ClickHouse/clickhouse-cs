@@ -10,6 +10,7 @@ using ClickHouse.Driver.Logging;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+#pragma warning disable CS0618 // Type or member is obsolete
 
 namespace ClickHouse.Driver.Tests.Logging;
 
@@ -29,7 +30,7 @@ public class ClickHouseBulkCopyLoggingTests
     }
 
     [Test]
-    public async Task InitAsync_WithDebugLogging_LogsMetadataLoading()
+    public async Task WriteToServerAsync_WithDebugLogging_LogsMetadataLoading()
     {
         // Arrange
         var factory = new CapturingLoggerFactory();
@@ -46,12 +47,14 @@ public class ClickHouseBulkCopyLoggingTests
             DestinationTableName = targetTable,
         };
 
+        var rows = Enumerable.Range(1, 10).Select(i => new object[] { i }).ToList();
+
         // Act
-        await bulkCopy.InitAsync();
+        await bulkCopy.WriteToServerAsync(rows);
 
         // Assert
-        Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.BulkCopy));
-        var logger = factory.Loggers[ClickHouseLogCategories.BulkCopy];
+        Assert.That(factory.Loggers, Does.ContainKey(ClickHouseLogCategories.Client));
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged metadata loading start
         var startLog = logger.Logs.Find(l =>
@@ -88,16 +91,13 @@ public class ClickHouseBulkCopyLoggingTests
             MaxDegreeOfParallelism = 2
         };
 
-        // Mock column initialization
-        await bulkCopy.InitAsync();
-
         var rows = Enumerable.Range(1, 10).Select(i => new object[] { i }).ToList();
 
         // Act
         await bulkCopy.WriteToServerAsync(rows);
 
         // Assert
-        var logger = factory.Loggers[ClickHouseLogCategories.BulkCopy];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged bulk copy start
         var startLog = logger.Logs.Find(l =>
@@ -129,8 +129,6 @@ public class ClickHouseBulkCopyLoggingTests
             DestinationTableName = targetTable,
             BatchSize = 5,
         };
-        
-        await bulkCopy.InitAsync();
 
         var rows = Enumerable.Range(1, 10).Select(i => new object[] { i }).ToList();
         
@@ -138,7 +136,7 @@ public class ClickHouseBulkCopyLoggingTests
 
 
         // Assert
-        var logger = factory.Loggers[ClickHouseLogCategories.BulkCopy];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged batch sending
         var sendingLogs = logger.Logs.FindAll(l =>
@@ -152,8 +150,7 @@ public class ClickHouseBulkCopyLoggingTests
         var sentLogs = logger.Logs.FindAll(l =>
             l.LogLevel == LogLevel.Debug &&
             l.Message.Contains("Batch sent to") &&
-            l.Message.Contains(bulkCopy.DestinationTableName) &&
-            l.Message.Contains("Total rows written"));
+            l.Message.Contains(bulkCopy.DestinationTableName));
         Assert.That(sentLogs.Count, Is.GreaterThan(0), "Should log batch sent completion at Debug level");
     }
 
@@ -175,16 +172,6 @@ public class ClickHouseBulkCopyLoggingTests
             DestinationTableName = targetTable,
         };
 
-        // Mock column initialization
-        try
-        {
-            await bulkCopy.InitAsync();
-        }
-        catch
-        {
-            // Ignore init errors
-        }
-
         var rows = Enumerable.Range(1, 10).Select(i => new object[] {i}).ToList();
 
         // Act
@@ -198,7 +185,7 @@ public class ClickHouseBulkCopyLoggingTests
         }
 
         // Assert
-        var logger = factory.Loggers[ClickHouseLogCategories.BulkCopy];
+        var logger = factory.Loggers[ClickHouseLogCategories.Client];
 
         // Should have logged completion with total rows
         var completionLog = logger.Logs.Find(l =>

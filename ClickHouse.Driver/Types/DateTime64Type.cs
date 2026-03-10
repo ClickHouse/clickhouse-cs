@@ -34,7 +34,6 @@ internal class DateTime64Type : AbstractDateTimeType
             var timeZoneName = node.ChildNodes[1].Value.Trim('\'');
             timeZone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(timeZoneName);
         }
-        timeZone ??= DateTimeZoneProviders.Tzdb.GetZoneOrNull(settings.timezone);
 
         return new DateTime64Type
         {

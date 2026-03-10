@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Net.Http;
 using System.Reflection;
 
@@ -9,6 +10,7 @@ using System.Runtime.CompilerServices;
 
 namespace ClickHouse.Driver.Http;
 
+[SuppressMessage("Performance", "CA1859:Use concrete types when possible for improved performance", Justification = "Side-effect of multi-framework targeting")]
 internal static class HttpClientExtensions
 {
     internal static HttpMessageHandler GetHandler(this HttpClient source)

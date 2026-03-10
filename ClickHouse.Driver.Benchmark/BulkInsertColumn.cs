@@ -9,13 +9,14 @@ using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Benchmark;
 
+[Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class BulkInsertColumn
 {
     private readonly ClickHouseConnection connection;
     private readonly ClickHouseBulkCopy bulkCopy;
 
-    [Params(100000)]
+    [Params(500000)]
     public int Count { get; set; }
 
     private IEnumerable<object[]> Rows
@@ -46,7 +47,6 @@ public class BulkInsertColumn
             MaxDegreeOfParallelism = 1,
             ColumnNames = new[] { "col1" }
         };
-        bulkCopy.InitAsync().Wait();
     }
 
     [Benchmark]

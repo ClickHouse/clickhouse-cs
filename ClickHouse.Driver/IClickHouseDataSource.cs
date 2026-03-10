@@ -13,5 +13,7 @@ public interface IClickHouseDataSource
     IClickHouseConnection OpenConnection();
 
     Task<IClickHouseConnection> OpenConnectionAsync(CancellationToken cancellationToken = default);
+
+    IClickHouseClient GetClient();
 }
 #endif

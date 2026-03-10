@@ -26,9 +26,9 @@ internal static class ActivitySourceHelper
 
     internal static ActivitySource ActivitySource { get; } = CreateActivitySource();
 
-    internal static Activity StartActivity(this ClickHouseConnection connection, string name)
+    internal static Activity StartActivity(this ClickHouseClient client, string name)
     {
-        if (connection is null) throw new ArgumentNullException(nameof(connection));
+        if (client is null) throw new ArgumentNullException(nameof(client));
         if (string.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
 
         var activity = ActivitySource.StartActivity(name, ActivityKind.Client);
@@ -37,10 +37,10 @@ internal static class ActivitySourceHelper
         {
             activity.SetTag(TagThreadId, Environment.CurrentManagedThreadId.ToString(CultureInfo.InvariantCulture));
             activity.SetTag(TagDbSystem, "clickhouse");
-            activity.SetTag(TagDbConnectionString, connection.RedactedConnectionString);
-            activity.SetTag(TagDbName, connection.Database);
-            activity.SetTag(TagUser, connection.Username);
-            activity.SetTag(TagService, $"{connection.ServerUri.Host}:{connection.ServerUri.Port}{connection.ServerUri.AbsolutePath}");
+            activity.SetTag(TagDbConnectionString, client.RedactedConnectionString);
+            activity.SetTag(TagDbName, client.Settings.Database);
+            activity.SetTag(TagUser, client.Settings.Username);
+            activity.SetTag(TagService, $"{client.ServerUri.Host}:{client.ServerUri.Port}{client.ServerUri.AbsolutePath}");
         }
 
         return activity;

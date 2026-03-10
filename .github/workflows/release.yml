@@ -18,20 +18,14 @@ jobs:
     runs-on: windows-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Setup .NET Core
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: |
-          10.x
+      uses: actions/checkout@v6
 
     - name: Build & pack
       id: build_pack
       run: dotnet build ClickHouse.Driver\ClickHouse.Driver.csproj --configuration Release /p:Version=${{ inputs.version }}
 
     - name: Upload unsigned package
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: package-unsigned-${{ inputs.version }}
         path: ClickHouse.Driver/bin/Release/ClickHouse.Driver.*nupkg
@@ -48,7 +42,7 @@ jobs:
         New-Item ${{ github.workspace }}\package -ItemType directory
 
     - name: Download unsigned package
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: package-unsigned-${{ inputs.version }}
         path: ${{ github.workspace }}/package
@@ -122,7 +116,7 @@ jobs:
         dotnet nuget verify --all "${{ github.workspace }}\package\*.nupkg"
 
     - name: Upload signed package
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: package
         path: ${{ github.workspace }}/package/ClickHouse.Driver.*nupkg
@@ -133,7 +127,7 @@ jobs:
     name: Upload to NuGet.org
     steps:
     - name: Download Artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: package
       
@@ -150,7 +144,7 @@ jobs:
       contents: write
     steps:
     - name: Download Artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: package
     - name: Create Release

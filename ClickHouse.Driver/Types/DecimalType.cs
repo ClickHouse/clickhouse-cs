@@ -101,7 +101,7 @@ internal class DecimalType : ParameterizedType
         }
     }
 
-    protected virtual bool UseBigDecimal { get; init; }
+    internal virtual bool UseBigDecimal { get; init; }
 
     private static int GetSizeFromPrecision(int precision) => precision switch
     {

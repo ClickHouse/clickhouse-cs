@@ -16,9 +16,9 @@ public readonly struct ClickHouseDecimal
     : IComparable, IComparable<ClickHouseDecimal>, IFormattable, IConvertible, IEquatable<ClickHouseDecimal>, IComparable<decimal>
 {
     /// <summary>
-    /// Sets the global maximum precision of division operations.
+    /// Gets or sets the global maximum precision of division operations.
     /// </summary>
-    public static int MaxDivisionPrecision = 50;
+    public static int MaxDivisionPrecision { get; set; } = 50;
 
     public ClickHouseDecimal(decimal value)
         : this()
@@ -47,7 +47,6 @@ public readonly struct ClickHouseDecimal
         if (scale < 0)
             throw new ArgumentException("Scale cannot be <0", nameof(scale));
         // Normalize(ref mantissa, ref scale);
-
         Mantissa = mantissa;
         Scale = scale;
     }

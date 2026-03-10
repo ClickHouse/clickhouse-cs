@@ -2,7 +2,7 @@
 
 namespace ClickHouse.Driver.Utility;
 
-public static class MathUtils
+internal static class MathUtils
 {
     public static long ToPower(int value, int power)
     {

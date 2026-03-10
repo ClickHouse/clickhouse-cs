@@ -1,10 +1,14 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data.Common;
 using System.Globalization;
+using System.Linq;
 
 namespace ClickHouse.Driver.ADO;
 
+#pragma warning disable CA1010 // Type inherits ICollection without implementing generic version - inherent to DbConnectionStringBuilder
 public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
+#pragma warning restore CA1010
 {
     public ClickHouseConnectionStringBuilder()
     {
@@ -75,16 +79,44 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["Port"] = value;
     }
 
-    public bool UseServerTimezone
-    {
-        get => GetBooleanOrDefault("UseServerTimezone", true);
-        set => this["UseServerTimezone"] = value;
-    }
-
     public bool UseCustomDecimals
     {
         get => GetBooleanOrDefault("UseCustomDecimals", true);
         set => this["UseCustomDecimals"] = value;
+    }
+
+    public bool ReadStringsAsByteArrays
+    {
+        get => GetBooleanOrDefault("ReadStringsAsByteArrays", ClickHouseDefaults.ReadStringsAsByteArrays);
+        set => this["ReadStringsAsByteArrays"] = value;
+    }
+
+    /// <summary>
+    /// Gets or sets the ClickHouse roles to use for queries.
+    /// Multiple roles can be specified as a comma-separated string.
+    /// </summary>
+    public IReadOnlyList<string> Roles
+    {
+        get
+        {
+            var rolesString = GetStringOrDefault("Roles", null);
+            if (string.IsNullOrEmpty(rolesString))
+                return Array.Empty<string>();
+
+            return rolesString
+                .Split(',')
+                .Select(r => r.Trim())
+                .Where(r => !string.IsNullOrEmpty(r))
+                .ToArray();
+        }
+
+        set
+        {
+            if (value == null || value.Count == 0)
+                Remove("Roles");
+            else
+                this["Roles"] = string.Join(",", value);
+        }
     }
 
     public TimeSpan Timeout
@@ -96,6 +128,26 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
                 : TimeSpan.FromMinutes(2);
         }
         set => this["Timeout"] = value.TotalSeconds;
+    }
+
+    /// <summary>
+    /// Gets or sets how JSON columns are returned when reading data.
+    /// Default: Binary
+    /// </summary>
+    public JsonReadMode JsonReadMode
+    {
+        get => GetEnumOrDefault("JsonReadMode", JsonReadMode.Binary);
+        set => this["JsonReadMode"] = value.ToString();
+    }
+
+    /// <summary>
+    /// Gets or sets how JSON data is sent when writing.
+    /// Default: String
+    /// </summary>
+    public JsonWriteMode JsonWriteMode
+    {
+        get => GetEnumOrDefault("JsonWriteMode", JsonWriteMode.String);
+        set => this["JsonWriteMode"] = value.ToString();
     }
 
     private bool GetBooleanOrDefault(string name, bool @default)
@@ -120,6 +172,14 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             return @int;
         else
             return @default;
+    }
+
+    private T GetEnumOrDefault<T>(string name, T @default)
+        where T : struct, Enum
+    {
+        if (TryGetValue(name, out var value) && value is string s && Enum.TryParse<T>(s, ignoreCase: true, out var result))
+            return result;
+        return @default;
     }
 
     /// <summary>
@@ -154,8 +214,11 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             UseSession = settings.UseSession,
             SessionId = settings.SessionId,
             Timeout = settings.Timeout,
-            UseServerTimezone = settings.UseServerTimezone,
             UseCustomDecimals = settings.UseCustomDecimals,
+            ReadStringsAsByteArrays = settings.ReadStringsAsByteArrays,
+            Roles = settings.Roles,
+            JsonReadMode = settings.JsonReadMode,
+            JsonWriteMode = settings.JsonWriteMode,
         };
 
         // Add custom settings with the set_ prefix

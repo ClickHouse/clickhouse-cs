@@ -6,7 +6,7 @@ using ClickHouse.Driver.Types;
 
 namespace ClickHouse.Driver.Utility;
 
-public static class DataReaderExtensions
+internal static class DataReaderExtensions
 {
     public static string[] GetColumnNames(this IDataReader reader)
     {
@@ -42,7 +42,6 @@ public static class DataReaderExtensions
         }
     }
 
-#if !NET462
     internal static IEnumerable<object> AsEnumerable(this ITuple tuple)
     {
         for (int i = 0; i < tuple.Length; i++)
@@ -50,5 +49,4 @@ public static class DataReaderExtensions
             yield return tuple[i];
         }
     }
-#endif
 }

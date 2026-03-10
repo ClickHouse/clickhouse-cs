@@ -46,6 +46,8 @@ public class TypeMappingTests
     [TestCase("DateTime('Etc/UTC')", ExpectedResult = typeof(DateTime))]
     [TestCase("DateTime64(3)", ExpectedResult = typeof(DateTime))]
     [TestCase("DateTime64(3, 'Etc/UTC')", ExpectedResult = typeof(DateTime))]
+    [TestCase("Time", ExpectedResult = typeof(TimeSpan))]
+    [TestCase("Time64(6)", ExpectedResult = typeof(TimeSpan))]
 
     [TestCase("Map(String, Int32)", ExpectedResult = typeof(Dictionary<string, int>))]
     [TestCase("Map(Tuple(Int32, Int32), Int32)", ExpectedResult = typeof(Dictionary<Tuple<int,int>, int>))]
@@ -76,6 +78,7 @@ public class TypeMappingTests
     [TestCase(typeof(string), ExpectedResult = "String")]
 
     [TestCase(typeof(DateTime), ExpectedResult = "DateTime")]
+    [TestCase(typeof(TimeSpan), ExpectedResult = "Time64(7)")]
 
     [TestCase(typeof(IPAddress), ExpectedResult = "IPv4")]
     [TestCase(typeof(Guid), ExpectedResult = "UUID")]
