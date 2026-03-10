@@ -39,7 +39,7 @@ See the [ClickHouse website](https://clickhouse.com/docs/integrations/csharp) fo
 
 We have a wide range of [examples](./examples), aiming to cover typical scenarios of client usage.
 
-## ClickHouse Versions
+## ClickHouse versions
 
 The supported versions of the ClickHouse database server coincide with the versions currently receiving security updates.
 
@@ -52,6 +52,12 @@ If you have any questions or need help, feel free to reach out to us in the [Com
 ## Contributing
 
 Contributions are welcome and highly appreciated! Check out our [contributing guide](./CONTRIBUTING.md).
+
+## Official integrations
+
+* **Serilog**: [Serilog.Sinks.ClickHouse](https://github.com/ClickHouse/Serilog.Sinks.ClickHouse)
+* **Entity Framework Core**: [ClickHouse.EntityFrameworkCore](https://github.com/ClickHouse/ClickHouse.EntityFrameworkCore)
+* **Aspire**: [ClickHouse.Aspire](https://github.com/ClickHouse/ClickHouse.Aspire/)
 
 ## Acknowledgements
 Originally created by [Oleg V. Kozlyuk](https://github.com/DarkWanderer)
