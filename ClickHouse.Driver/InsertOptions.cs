@@ -23,4 +23,23 @@ public sealed class InsertOptions : QueryOptions
     /// Gets or sets the row binary format to use. Default is RowBinary.
     /// </summary>
     public RowBinaryFormat Format { get; init; } = RowBinaryFormat.RowBinary;
+
+    internal new InsertOptions WithQueryId(string queryId)
+    {
+        return new InsertOptions
+        {
+            QueryId = queryId,
+            Database = Database,
+            Roles = Roles,
+            CustomSettings = CustomSettings,
+            CustomHeaders = CustomHeaders,
+            UseSession = UseSession,
+            SessionId = SessionId,
+            BearerToken = BearerToken,
+            MaxExecutionTime = MaxExecutionTime,
+            BatchSize = BatchSize,
+            MaxDegreeOfParallelism = MaxDegreeOfParallelism,
+            Format = Format,
+        };
+    }
 }

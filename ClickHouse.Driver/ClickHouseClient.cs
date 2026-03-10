@@ -447,6 +447,10 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         var serializer = BatchSerializer.GetByRowBinaryFormat(options.Format);
 
+        // Resolve base query ID upfront; derive unique IDs for each sub-request
+        var baseQueryId = options.QueryId ?? Guid.NewGuid().ToString();
+        int queryIdCounter = 0;
+
         // Load table structure
         var logger = GetLogger(ClickHouseLogCategories.Client);
         logger?.LogDebug("Loading metadata for table {Table}.", table);
@@ -483,7 +487,8 @@ public sealed class ClickHouseClient : IClickHouseClient
             },
             async (batch, ct) =>
             {
-                var count = await SendBatchAsync(table, batch, serializer, options, onBatchSent, ct).ConfigureAwait(false);
+                var batchOptions = options.WithQueryId($"{baseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
+                var count = await SendBatchAsync(table, batch, serializer, batchOptions, onBatchSent, ct).ConfigureAwait(false);
                 Interlocked.Add(ref totalRowsWritten, count);
             }).ConfigureAwait(false);
 

@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using System.Web;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Tests.Utilities;
@@ -899,12 +900,118 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
             await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
 
             var count = await client.ExecuteScalarAsync(
-                $"SELECT count() FROM system.query_log WHERE query_id = '{customQueryId}'");
+                $"SELECT count() FROM system.query_log WHERE query_id LIKE '{customQueryId}%'");
             Assert.That(count, Is.GreaterThan(0UL), "Custom query ID should appear in query_log");
         }
         finally
         {
             await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithQueryId_SchemaProbeAndBatchesHaveUniqueQueryIds()
+    {
+        var tableName = await CreateSimpleTestTableAsync();
+        try
+        {
+            var (trackedClient, handler) = CreateClientWithTracking();
+            using (trackedClient)
+            {
+                var customQueryId = $"insert_unique_qid_{Guid.NewGuid():N}";
+                var options = new InsertOptions
+                {
+                    QueryId = customQueryId,
+                    BatchSize = 5,
+                };
+                var rows = GenerateTestRows(15).ToList(); // 3 batches of 5
+
+                await trackedClient.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
+
+                // Extract query_id from all captured requests
+                var queryIds = handler.Requests
+                    .Select(r => HttpUtility.ParseQueryString(r.RequestUri.Query).Get("query_id"))
+                    .Where(id => id != null)
+                    .ToList();
+
+                // Should have 4 requests: 1 schema probe + 3 batch inserts
+                Assert.That(queryIds, Has.Count.EqualTo(4),
+                    $"Expected 4 requests (1 schema + 3 batches), got {queryIds.Count}");
+
+                // All query IDs must be unique
+                Assert.That(queryIds, Is.Unique,
+                    "All requests within InsertBinaryAsync must have unique query IDs to avoid QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING");
+            }
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Test]
+    public void WithQueryId_CopiesAllPropertiesExceptQueryId()
+    {
+        var source = new QueryOptions
+        {
+            QueryId = "original-id",
+            Database = "my_db",
+            Roles = new[] { "role1", "role2" },
+            CustomSettings = new Dictionary<string, object> { { "max_threads", 4 } },
+            CustomHeaders = new Dictionary<string, string> { { "X-Custom", "value" } },
+            UseSession = true,
+            SessionId = "session-123",
+            BearerToken = "token-abc",
+            MaxExecutionTime = TimeSpan.FromSeconds(30),
+        };
+
+        var derived = source.WithQueryId("derived-id");
+
+        Assert.That(derived.QueryId, Is.EqualTo("derived-id"));
+
+        // Use reflection to verify all other properties are copied.
+        // This will catch any new properties added to QueryOptions in the future.
+        var properties = typeof(QueryOptions).GetProperties()
+            .Where(p => p.Name != nameof(QueryOptions.QueryId));
+        foreach (var prop in properties)
+        {
+            Assert.That(prop.GetValue(derived), Is.EqualTo(prop.GetValue(source)),
+                $"Property '{prop.Name}' was not copied by WithQueryId");
+        }
+    }
+
+    [Test]
+    public void InsertOptions_WithQueryId_CopiesAllPropertiesExceptQueryId()
+    {
+        var source = new InsertOptions
+        {
+            QueryId = "original-id",
+            Database = "my_db",
+            Roles = new[] { "role1", "role2" },
+            CustomSettings = new Dictionary<string, object> { { "max_threads", 4 } },
+            CustomHeaders = new Dictionary<string, string> { { "X-Custom", "value" } },
+            UseSession = true,
+            SessionId = "session-123",
+            BearerToken = "token-abc",
+            MaxExecutionTime = TimeSpan.FromSeconds(30),
+            BatchSize = 500,
+            MaxDegreeOfParallelism = 4,
+            Format = RowBinaryFormat.RowBinaryWithDefaults,
+        };
+
+        var derived = source.WithQueryId("derived-id");
+
+        Assert.That(derived, Is.InstanceOf<InsertOptions>());
+        Assert.That(derived.QueryId, Is.EqualTo("derived-id"));
+
+        // Use reflection to verify all other properties are copied.
+        // This will catch any new properties added to InsertOptions in the future.
+        var properties = typeof(InsertOptions).GetProperties()
+            .Where(p => p.Name != nameof(QueryOptions.QueryId));
+        foreach (var prop in properties)
+        {
+            Assert.That(prop.GetValue(derived), Is.EqualTo(prop.GetValue(source)),
+                $"Property '{prop.Name}' was not copied by WithQueryId");
         }
     }
 
