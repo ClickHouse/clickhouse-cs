@@ -12,6 +12,8 @@ public class QueryOptions
 {
     /// <summary>
     /// Gets or sets the query identifier for tracking and logging purposes.
+    /// If not provided, a GUID will be generated.
+    /// For batch inserts, each batch gets a unique suffixed ID ({queryId}-1, {queryId}-2, etc.).
     /// </summary>
     public string? QueryId { get; init; }
 
@@ -68,4 +70,23 @@ public class QueryOptions
     /// Default: null (no limit)
     /// </summary>
     public TimeSpan? MaxExecutionTime { get; init; }
+
+    /// <summary>
+    /// Creates a new <see cref="QueryOptions"/> with the same settings but a different <see cref="QueryId"/>.
+    /// </summary>
+    internal QueryOptions WithQueryId(string queryId)
+    {
+        return new QueryOptions
+        {
+            QueryId = queryId,
+            Database = Database,
+            Roles = Roles,
+            CustomSettings = CustomSettings,
+            CustomHeaders = CustomHeaders,
+            UseSession = UseSession,
+            SessionId = SessionId,
+            BearerToken = BearerToken,
+            MaxExecutionTime = MaxExecutionTime,
+        };
+    }
 }
