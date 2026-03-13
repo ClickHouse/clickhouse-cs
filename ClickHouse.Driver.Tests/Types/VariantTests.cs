@@ -84,6 +84,7 @@ public class VariantTests : AbstractConnectionTestFixture
 
     [Test]
     [RequiredFeature(Feature.Variant)]
+    [FromVersion(25, 4)]
     public async Task ParameterizedSelect_ArrayWithNullElement_ShouldRoundTrip()
     {
         using var command = connection.CreateCommand();
