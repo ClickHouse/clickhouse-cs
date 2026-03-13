@@ -26,6 +26,9 @@ internal class VariantType : ParameterizedType
     public override object Read(ExtendedBinaryReader reader)
     {
         var typeIndex = reader.ReadByte();
+        if (typeIndex == 0xFF)
+            return DBNull.Value;
+
         var type = UnderlyingTypes[typeIndex];
 
         return type.Read(reader);
@@ -47,6 +50,12 @@ internal class VariantType : ParameterizedType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
+        if (value is null or DBNull)
+        {
+            writer.Write((byte)0xFF);
+            return;
+        }
+
         var (index, type) = GetMatchingType(value);
         writer.Write((byte)index);
         type.Write(writer, value);

@@ -28,13 +28,16 @@ internal static class HttpParameterFormatter
     /// <returns>The formatted parameter value string.</returns>
     public static string Format(ClickHouseDbParameter parameter, TypeSettings settings, string sqlTypeHint = null)
     {
-        if (parameter.Value is null or DBNull)
-        {
-            return NullValueString;
-        }
-
         // Explicit parameter type takes precedence, then SQL type hint, then inference
         var effectiveType = parameter.ClickHouseType ?? sqlTypeHint;
+
+        if (parameter.Value is null or DBNull)
+        {
+            // Variant requires \\N (double-escaped) for NULL; \N is misinterpreted by the server
+            if (effectiveType != null && effectiveType.StartsWith("Variant", StringComparison.Ordinal))
+                return "\\\\N";
+            return NullValueString;
+        }
 
         if (string.IsNullOrWhiteSpace(effectiveType))
         {
@@ -146,6 +149,8 @@ internal static class HttpParameterFormatter
                 return $"{{{string.Join(",", strings)}}}";
 
             case VariantType variantType:
+                if (value is null or DBNull)
+                    return quote ? "null" : "\\\\N";
                 var (_, chType) = variantType.GetMatchingType(value);
                 return Format(chType, value, quote);
 
