@@ -34,7 +34,7 @@ internal static class HttpParameterFormatter
         if (parameter.Value is null or DBNull)
         {
             // Variant requires \\N (double-escaped) for NULL; \N is misinterpreted by the server
-            if (effectiveType != null && effectiveType.StartsWith("Variant"))
+            if (effectiveType != null && effectiveType.StartsWith("Variant", StringComparison.Ordinal))
                 return "\\\\N";
             return NullValueString;
         }
