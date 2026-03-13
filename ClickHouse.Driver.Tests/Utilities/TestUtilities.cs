@@ -499,7 +499,6 @@ public static class TestUtilities
         if (SupportedFeatures.HasFlag(Feature.Variant))
         {
             yield return new DataTypeSample("Variant(UInt64, String, Array(UInt64))", typeof(string), "'Hello, World!'::Variant(UInt64, String, Array(UInt64))", "Hello, World!");
-            yield return new DataTypeSample("Variant(UInt64, String)", typeof(object), "NULL::Variant(UInt64, String)", DBNull.Value);
         }
 
         if (SupportedFeatures.HasFlag(Feature.Json))

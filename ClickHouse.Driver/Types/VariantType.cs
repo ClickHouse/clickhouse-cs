@@ -50,6 +50,12 @@ internal class VariantType : ParameterizedType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
+        if (value is null or DBNull)
+        {
+            writer.Write((byte)0xFF);
+            return;
+        }
+
         var (index, type) = GetMatchingType(value);
         writer.Write((byte)index);
         type.Write(writer, value);
