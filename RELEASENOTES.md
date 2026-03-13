@@ -1,3 +1,9 @@
+v1.0.3
+---
+
+**Bug Fixes:**
+* Fixed `IndexOutOfRangeException` when reading NULL values from `Variant` columns. The Variant `None` discriminator (used for NULLs) was not handled, causing an out-of-bounds array access instead of returning `DBNull.Value`.
+
 v1.0.2
 ---
 

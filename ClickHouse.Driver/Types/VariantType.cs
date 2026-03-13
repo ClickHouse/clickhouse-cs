@@ -26,6 +26,9 @@ internal class VariantType : ParameterizedType
     public override object Read(ExtendedBinaryReader reader)
     {
         var typeIndex = reader.ReadByte();
+        if (typeIndex == 0xFF)
+            return DBNull.Value;
+
         var type = UnderlyingTypes[typeIndex];
 
         return type.Read(reader);
