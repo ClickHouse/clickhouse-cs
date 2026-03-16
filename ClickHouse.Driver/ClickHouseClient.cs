@@ -445,6 +445,18 @@ public sealed class ClickHouseClient : IClickHouseClient
         if (options.MaxDegreeOfParallelism <= 0)
             throw new ArgumentOutOfRangeException(nameof(options), "MaxDegreeOfParallelism must be greater than zero");
 
+        // ClickHouse only allows one concurrent query per session.
+        // Multiple parallel batches on the same session will cause SESSION_IS_LOCKED errors,
+        // potentially leaving the table in a partially-written state.
+        var useSession = options.UseSession ?? Settings.UseSession;
+        if (useSession && options.MaxDegreeOfParallelism > 1)
+        {
+            throw new InvalidOperationException(
+                $"InsertBinaryAsync is configured with MaxDegreeOfParallelism={options.MaxDegreeOfParallelism} while sessions are enabled. " +
+                "ClickHouse only allows one concurrent query per session. " +
+                "Set MaxDegreeOfParallelism to 1, or disable sessions for this insert by setting InsertOptions.UseSession to false.");
+        }
+
         var serializer = BatchSerializer.GetByRowBinaryFormat(options.Format);
 
         // Resolve base query ID upfront; derive unique IDs for each sub-request

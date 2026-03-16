@@ -1,3 +1,9 @@
+v1.0.3
+---
+
+**Breaking Changes:**
+* `InsertBinaryAsync` now throws `InvalidOperationException` when sessions are enabled and `MaxDegreeOfParallelism > 1`. ClickHouse only allows one concurrent query per session, so parallel batch inserts would cause `SESSION_IS_LOCKED` errors and partial writes. This also affects the deprecated `ClickHouseBulkCopy`, which defaults to `MaxDegreeOfParallelism = 4`. To fix, set `MaxDegreeOfParallelism` to 1, or disable sessions for the insert via `InsertOptions.UseSession = false`.
+
 v1.0.2
 ---
 
