@@ -72,6 +72,7 @@ var users = connection.Query<User>("SELECT * FROM users");
 - **Type mapping**: ClickHouse has 60+ specialized types - ensure correct mapping, no data loss
 - **Thread safety**: Database client must handle concurrent operations safely
 - **Async patterns**: Maintain proper async/await, `CancellationToken` support, no sync-over-async
+- **Read and write**: When making changes to types, consider both the binary read and write paths in the type class itself, as well as the HTTP parameter write path in HttpParameterFormatter.cs
 
 ### Stability & Backward Compatibility
 - **ClickHouse version support**: Respect `FeatureSwitch`, `ClickHouseFeatureMap` for multi-version compatibility
