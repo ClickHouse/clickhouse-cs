@@ -25,6 +25,8 @@ ClickHouse.Driver.sln
 └── ClickHouse.Driver.Benchmark/        # BenchmarkDotNet performance tests
 ```
 
+Prefer using LSP to grep when navigating the codebase.
+
 ### Key Files
 - **Primary API**: `ClickHouseClient.cs` - main entry point for most applications
 - **Type system**: `Types/TypeConverter.cs` (14KB, complex), `Types/Grammar/` (type parsing)
