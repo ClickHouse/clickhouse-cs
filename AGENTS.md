@@ -190,6 +190,10 @@ Then read the uncovered lines in the source file to understand what's missing. I
 
 After completing a unit of work and making sure code coverage is good, launch a sub-agent to perform a thorough review on the changes. The result of the review should be a prioritized list of issues (if any exist). Before fixing them, make sure to double-check that the issues are valid and prompt the user for the next steps.
 
+## Changelog and release notes
+
+After completing a unit of work, if it should be included in the changelog (any behavioral change in the client should be), then update CHANGELOG.md and RELEASENOTES.md.
+
 ---
 
 ## Running Examples
