@@ -73,6 +73,7 @@ var users = connection.Query<User>("SELECT * FROM users");
 - **Thread safety**: Database client must handle concurrent operations safely
 - **Async patterns**: Maintain proper async/await, `CancellationToken` support, no sync-over-async
 - **Read and write**: When making changes to types, consider both the binary read and write paths in the type class itself, as well as the HTTP parameter write path in HttpParameterFormatter.cs
+- **Culture invariance**: Make sure string and number comparisons are culture-invariant
 
 ### Stability & Backward Compatibility
 - **ClickHouse version support**: Respect `FeatureSwitch`, `ClickHouseFeatureMap` for multi-version compatibility
