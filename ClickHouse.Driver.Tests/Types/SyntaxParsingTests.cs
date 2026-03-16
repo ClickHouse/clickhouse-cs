@@ -15,6 +15,6 @@ public class TypeGrammarParsingTests
         Assert.That(output.ToString(), Is.EqualTo(input));
     }
 
-    public static IList<string> Types => TestUtilities.GetDataTypeSamples().Select(s => s.ClickHouseType).Distinct().OrderBy(t => t).ToList();
+    public static IList<string> Types => TestCases.GetDataTypeSamples().Select(s => s.ClickHouseType).Distinct().OrderBy(t => t).ToList();
 }
 

@@ -12,13 +12,13 @@ public class SerialisationTests
 {
     // Json type is excluded because it has mode-dependent serialization behavior
     // that doesn't fit the simple binary round-trip model. Json is tested separately.
-    public static IEnumerable<TestCaseData> TestCases => TestUtilities.GetDataTypeSamples()
+    public static IEnumerable<TestCaseData> JsonCases => TestCases.GetDataTypeSamples()
         .Where(sample => !sample.ClickHouseType.StartsWith("Json"))
         .Select(sample => new TestCaseData(sample.ExampleValue, sample.ClickHouseType)
         { TestName = $"ShouldRoundtripSerialisation({sample.ExampleExpression}, {sample.ClickHouseType})" });
 
     [Test]
-    [TestCaseSource(nameof(TestCases))]
+    [TestCaseSource(nameof(JsonCases))]
     public void ShouldRoundtripSerialisation(object original, string clickHouseType)
     {
         var type = TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default);

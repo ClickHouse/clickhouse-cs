@@ -25,7 +25,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
 {
     public static IEnumerable<TestCaseData> GetInsertSingleValueTestCases()
     {
-        foreach (var sample in TestUtilities.GetDataTypeSamples())
+        foreach (var sample in TestCases.GetDataTypeSamples())
         {
             if (new[] { "Enum8", "Nothing" }.Contains(sample.ClickHouseType))
                 continue;

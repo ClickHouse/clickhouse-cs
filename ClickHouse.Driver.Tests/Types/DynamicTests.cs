@@ -56,7 +56,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     {
         get
         {
-            foreach (var sample in TestUtilities.GetDataTypeSamples().Where(s => ShouldBeSupportedInDynamic(s.ClickHouseType)))
+            foreach (var sample in TestCases.GetDataTypeSamples().Where(s => ShouldBeSupportedInDynamic(s.ClickHouseType)))
             {
                 yield return new TestCaseData(sample.ExampleExpression, sample.ClickHouseType, sample.ExampleValue)
                     .SetName($"Direct_{sample.ClickHouseType}_{sample.ExampleValue}");
@@ -105,7 +105,7 @@ public class DynamicTests : AbstractConnectionTestFixture
         return true;
     }
 
-    public static IEnumerable<TestCaseData> SimpleSelectQueries => TestUtilities.GetDataTypeSamples()
+    public static IEnumerable<TestCaseData> SimpleSelectQueries => TestCases.GetDataTypeSamples()
         .Where(s => ShouldBeSupportedInJson(s.ClickHouseType))
         .Select(sample => GetTestCaseData(sample.ExampleExpression, sample.ClickHouseType, sample.ExampleValue))
         .Where(x => x != null);

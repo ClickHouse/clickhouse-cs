@@ -18,12 +18,12 @@ namespace ClickHouse.Driver.Tests.ORM;
 
 public class DapperTests : AbstractConnectionTestFixture
 {
-    public static IEnumerable<TestCaseData> SimpleSelectQueries => TestUtilities.GetDataTypeSamples()
+    public static IEnumerable<TestCaseData> SimpleSelectQueries => TestCases.GetDataTypeSamples()
         .Where(s => ShouldBeSupportedByDapper(s.ClickHouseType))
         .Where(s => s.ExampleValue != DBNull.Value)
         .Select(sample => new TestCaseData($"SELECT {{value:{sample.ClickHouseType}}}", sample.ExampleValue));
 
-    public static IEnumerable<TestCaseData> SimpleSelectQueriesForStringConversion => TestUtilities.GetDataTypeSamples()
+    public static IEnumerable<TestCaseData> SimpleSelectQueriesForStringConversion => TestCases.GetDataTypeSamples()
         .Where(s => ShouldBeSupportedByDapper(s.ClickHouseType))
         .Where(s => ShouldSupportStringConversion(s.ClickHouseType))
         .Where(s => s.ExampleValue != DBNull.Value)
