@@ -1041,4 +1041,63 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
             await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         }
     }
+
+    [Test]
+    public void InsertBinaryAsync_WithSessionInOptionsAndParallelism_ThrowsInvalidOperationException()
+    {
+        var options = new InsertOptions
+        {
+            UseSession = true,
+            MaxDegreeOfParallelism = 2,
+        };
+        var rows = GenerateTestRows(10).ToList();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await client.InsertBinaryAsync("test.dummy", new[] { "id", "value" }, rows, options));
+
+        Assert.That(ex!.Message, Does.Contain("MaxDegreeOfParallelism"));
+        Assert.That(ex.Message, Does.Contain("sessions"));
+    }
+
+    [Test]
+    public void InsertBinaryAsync_WithSessionInSettingsAndParallelism_ThrowsInvalidOperationException()
+    {
+        using var sessionClient = TestUtilities.GetTestClickHouseClient(session: true);
+        var options = new InsertOptions
+        {
+            MaxDegreeOfParallelism = 2,
+        };
+        var rows = GenerateTestRows(10).ToList();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await sessionClient.InsertBinaryAsync("test.dummy", new[] { "id", "value" }, rows, options));
+
+        Assert.That(ex!.Message, Does.Contain("MaxDegreeOfParallelism"));
+        Assert.That(ex.Message, Does.Contain("sessions"));
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithSessionAndSingleParallelism_Succeeds()
+    {
+        var tableName = await CreateSimpleTestTableAsync();
+        try
+        {
+            var options = new InsertOptions
+            {
+                UseSession = true,
+                MaxDegreeOfParallelism = 1,
+                BatchSize = 5,
+            };
+            var rows = GenerateTestRows(10).ToList();
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName, new[] { "id", "value" }, rows, options);
+
+            Assert.That(inserted, Is.EqualTo(10));
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
 }
