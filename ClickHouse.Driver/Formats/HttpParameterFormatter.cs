@@ -146,6 +146,8 @@ internal static class HttpParameterFormatter
                 return $"{{{string.Join(",", strings)}}}";
 
             case VariantType variantType:
+                if (value is null or DBNull)
+                    return quote ? "null" : NullValueString;
                 var (_, chType) = variantType.GetMatchingType(value);
                 return Format(chType, value, quote);
 
