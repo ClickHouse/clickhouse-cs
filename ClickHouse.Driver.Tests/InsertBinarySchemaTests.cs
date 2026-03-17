@@ -347,6 +347,48 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task InsertBinaryAsync_WithSchemaCache_NullColumns_ShouldInsertAllColumns()
+    {
+        var tableName = CreateTestTableName();
+        await client.ExecuteNonQueryAsync($@"
+            CREATE TABLE IF NOT EXISTS test.{tableName}
+            (id UInt64, value String)
+            ENGINE = MergeTree() ORDER BY id");
+        try
+        {
+            var options = new InsertOptions
+            {
+                Database = "test",
+                UseSchemaCache = true,
+            };
+
+            // Insert with null columns — should use all columns from cached SELECT *
+            await client.InsertBinaryAsync(
+                tableName,
+                null,
+                new List<object[]> { new object[] { 1UL, "hello" }, new object[] { 2UL, "world" } },
+                options);
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT id, value FROM test.{tableName} ORDER BY id");
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(1UL));
+            Assert.That(reader.GetString(1), Is.EqualTo("hello"));
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(2UL));
+            Assert.That(reader.GetString(1), Is.EqualTo("world"));
+
+            Assert.That(reader.Read(), Is.False);
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
     public async Task InsertBinaryAsync_DefaultBehavior_ShouldQueryEveryTime()
     {
         var tableName = await CreateSimpleTestTableAsync();
