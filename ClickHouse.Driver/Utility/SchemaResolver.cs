@@ -20,10 +20,10 @@ namespace ClickHouse.Driver.Utility;
 internal class SchemaResolver
 {
     /// <summary>
-    /// Cached table schema: stores the server-ordered column arrays (for the all-columns case)
-    /// plus a dictionary for O(1) lookups when filtering to a column subset.
+    /// Per-table schema cache. Uses <c>Lazy&lt;Task&gt;</c> so that concurrent inserts to the
+    /// same table coalesce into a single schema probe query rather than racing independently.
     /// </summary>
-    private readonly ConcurrentDictionary<string, CachedSchema> cache = new();
+    private readonly ConcurrentDictionary<string, Lazy<Task<CachedSchema>>> cache = new();
     private readonly ClickHouseClient client;
 
     internal SchemaResolver(ClickHouseClient client)
@@ -52,12 +52,25 @@ internal class SchemaResolver
         if (options.UseSchemaCache)
         {
             var cacheKey = BuildCacheKey(table, options);
-            if (!cache.TryGetValue(cacheKey, out var cached))
-            {
-                var (names, types) = await LoadAsync(table, options).ConfigureAwait(false);
-                cached = new CachedSchema(names, types);
-                cache.TryAdd(cacheKey, cached);
-            }
+            var lazy = cache.GetOrAdd(
+                cacheKey,
+                _ => new Lazy<Task<CachedSchema>>(
+                    async () =>
+                    {
+                        try
+                        {
+                            var (names, types) = await LoadAsync(table, options).ConfigureAwait(false);
+                            return new CachedSchema(names, types);
+                        }
+                        catch
+                        {
+                            // Do not cache failures; allow subsequent calls to retry schema probe.
+                            cache.TryRemove(cacheKey, out Lazy<Task<CachedSchema>> _);
+                            throw;
+                        }
+                    },
+                    isThreadSafe: true));
+            var cached = await lazy.Value.ConfigureAwait(false);
 
             return cached.Select(columns);
         }
@@ -73,7 +86,9 @@ internal class SchemaResolver
     private async Task<(string[] names, ClickHouseType[] types)> LoadAsync(
         string table, QueryOptions options, IEnumerable<string> columns = null)
     {
-        var columnsExpr = columns == null || !columns.Any() ? "*" : string.Join(",", columns);
+        var columnsExpr = columns == null || !columns.Any()
+            ? "*"
+            : string.Join(",", columns.Select(c => c.EncloseColumnName()));
         using var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(
             $"SELECT {columnsExpr} FROM {table} WHERE 1=0", null, options).ConfigureAwait(false);
         var types = reader.GetClickHouseColumnTypes();
