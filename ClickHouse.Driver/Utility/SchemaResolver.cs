@@ -120,7 +120,10 @@ internal class SchemaResolver
     private string BuildCacheKey(string table, InsertOptions options)
     {
         var database = options.Database ?? client.Settings.Database ?? string.Empty;
-        return $"`{database}`.`{table}`";
+
+        var enclosedDatabase = database.EncloseColumnName();
+        var enclosedTable = table.EncloseColumnName();
+        return $"{enclosedDatabase}.{enclosedTable}";
     }
 
     /// <summary>
