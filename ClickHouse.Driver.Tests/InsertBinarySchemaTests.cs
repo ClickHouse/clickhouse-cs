@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Tests.Utilities;
 using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests;
@@ -381,6 +383,120 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             Assert.That(reader.GetString(1), Is.EqualTo("world"));
 
             Assert.That(reader.Read(), Is.False);
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithSchemaCache_NullColumns_ShouldPreserveServerColumnOrder()
+    {
+        // All columns are the same type (String), so a wrong order would silently swap values
+        // rather than causing a type error
+        var tableName = CreateTestTableName();
+        await client.ExecuteNonQueryAsync($@"
+            CREATE TABLE IF NOT EXISTS test.{tableName}
+            (first String, second String, third String)
+            ENGINE = MergeTree() ORDER BY first");
+        try
+        {
+            var options = new InsertOptions
+            {
+                Database = "test",
+                UseSchemaCache = true,
+            };
+
+            await client.InsertBinaryAsync(
+                tableName,
+                null,
+                new List<object[]> { new object[] { "aaa", "bbb", "ccc" } },
+                options);
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT first, second, third FROM test.{tableName}");
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetString(0), Is.EqualTo("aaa"), "first column");
+            Assert.That(reader.GetString(1), Is.EqualTo("bbb"), "second column");
+            Assert.That(reader.GetString(2), Is.EqualTo("ccc"), "third column");
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithSchemaCache_OptionsDatabaseOverridesClientDatabase()
+    {
+        // Create a table in the "test" database
+        var tableName = CreateTestTableName();
+        await client.ExecuteNonQueryAsync($@"
+            CREATE TABLE IF NOT EXISTS test.{tableName}
+            (id UInt64, value String)
+            ENGINE = MergeTree() ORDER BY id");
+        try
+        {
+            // Create a client whose Settings.Database = "default"
+            var builder = TestUtilities.GetConnectionStringBuilder();
+            builder.Database = "default";
+            using var clientWithDefaultDb = new ClickHouseClient(new ClickHouseClientSettings(builder));
+
+            var options = new InsertOptions
+            {
+                // InsertOptions.Database should override the client's "default" database
+                Database = "test",
+                UseSchemaCache = true,
+            };
+
+            await clientWithDefaultDb.InsertBinaryAsync(
+                tableName,
+                new[] { "id", "value" },
+                new List<object[]> { new object[] { 1UL, "overridden" } },
+                options);
+
+            var value = await client.ExecuteScalarAsync(
+                $"SELECT value FROM test.{tableName} WHERE id = 1");
+            Assert.That(value, Is.EqualTo("overridden"),
+                "InsertOptions.Database should override ClickHouseClientSettings.Database");
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithSchemaCache_FallsBackToClientDatabase()
+    {
+        // Create a table in the "test" database
+        var tableName = CreateTestTableName();
+        await client.ExecuteNonQueryAsync($@"
+            CREATE TABLE IF NOT EXISTS test.{tableName}
+            (id UInt64, value String)
+            ENGINE = MergeTree() ORDER BY id");
+        try
+        {
+            // Create a client whose Settings.Database = "test"
+            var builder = TestUtilities.GetConnectionStringBuilder();
+            builder.Database = "test";
+            using var clientWithTestDb = new ClickHouseClient(new ClickHouseClientSettings(builder));
+
+            // No Database on InsertOptions — should fall back to client's "test"
+            var options = new InsertOptions { UseSchemaCache = true };
+
+            await clientWithTestDb.InsertBinaryAsync(
+                tableName,
+                new[] { "id", "value" },
+                new List<object[]> { new object[] { 1UL, "fallback" } },
+                options);
+
+            var value = await client.ExecuteScalarAsync(
+                $"SELECT value FROM test.{tableName} WHERE id = 1");
+            Assert.That(value, Is.EqualTo("fallback"),
+                "Should fall back to ClickHouseClientSettings.Database when InsertOptions.Database is null");
         }
         finally
         {

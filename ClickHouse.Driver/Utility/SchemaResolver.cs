@@ -20,10 +20,10 @@ namespace ClickHouse.Driver.Utility;
 internal class SchemaResolver
 {
     /// <summary>
-    /// Per-table schema cache. Keyed by <c>`database`.`table`</c>, stores the full
-    /// column-name-to-type mapping so any column subset can be served from a single entry.
+    /// Cached table schema: stores the server-ordered column arrays (for the all-columns case)
+    /// plus a dictionary for O(1) lookups when filtering to a column subset.
     /// </summary>
-    private readonly ConcurrentDictionary<string, Dictionary<string, ClickHouseType>> cache = new();
+    private readonly ConcurrentDictionary<string, CachedSchema> cache = new();
     private readonly ClickHouseClient client;
 
     internal SchemaResolver(ClickHouseClient client)
@@ -52,16 +52,14 @@ internal class SchemaResolver
         if (options.UseSchemaCache)
         {
             var cacheKey = BuildCacheKey(table, options);
-            if (!cache.TryGetValue(cacheKey, out var cachedSchema))
+            if (!cache.TryGetValue(cacheKey, out var cached))
             {
-                var (allNames, allTypes) = await LoadAsync(table, options).ConfigureAwait(false);
-                cachedSchema = new Dictionary<string, ClickHouseType>(allNames.Length, StringComparer.Ordinal);
-                for (var i = 0; i < allNames.Length; i++)
-                    cachedSchema[allNames[i]] = allTypes[i];
-                cache.TryAdd(cacheKey, cachedSchema);
+                var (names, types) = await LoadAsync(table, options).ConfigureAwait(false);
+                cached = new CachedSchema(names, types);
+                cache.TryAdd(cacheKey, cached);
             }
 
-            return SelectColumns(cachedSchema, columns);
+            return cached.Select(columns);
         }
 
         // Priority 3: Default, query every time
@@ -69,7 +67,7 @@ internal class SchemaResolver
     }
 
     /// <summary>
-    /// Executes a <c>SELECT … FROM `table` WHERE 1=0</c> probe query to retrieve column metadata
+    /// Executes a <c>SELECT … FROM table WHERE 1=0</c> probe query to retrieve column metadata
     /// from the server without transferring any row data.
     /// </summary>
     private async Task<(string[] names, ClickHouseType[] types)> LoadAsync(
@@ -115,41 +113,60 @@ internal class SchemaResolver
     }
 
     /// <summary>
-    /// Filters a cached full-table schema down to the requested column subset,
-    /// preserving the order specified by <paramref name="columns"/>.
-    /// </summary>
-    /// <exception cref="ArgumentException">Thrown when a requested column is not present in the cached schema.</exception>
-    private static (string[] names, ClickHouseType[] types) SelectColumns(
-        Dictionary<string, ClickHouseType> schema, IEnumerable<string> columns)
-    {
-        if (columns == null || !columns.Any())
-            return (schema.Keys.ToArray(), schema.Values.ToArray());
-
-        var columnList = columns.ToArray();
-        var names = new string[columnList.Length];
-        var types = new ClickHouseType[columnList.Length];
-
-        for (var i = 0; i < columnList.Length; i++)
-        {
-            var enclosed = columnList[i].EncloseColumnName();
-            if (!schema.TryGetValue(enclosed, out var type))
-                throw new ArgumentException($"Column '{columnList[i]}' not found in table schema");
-
-            names[i] = enclosed;
-            types[i] = type;
-        }
-
-        return (names, types);
-    }
-
-    /// <summary>
     /// Builds a cache key from the resolved database and table name.
-    /// The database falls back to <see cref="InsertOptions.Database"/>,
-    /// then <see cref="ADO.ClickHouseClientSettings.Database"/>.
+    /// The database is resolved from <see cref="InsertOptions.Database"/> first,
+    /// falling back to <see cref="ADO.ClickHouseClientSettings.Database"/>.
     /// </summary>
     private string BuildCacheKey(string table, InsertOptions options)
     {
         var database = options.Database ?? client.Settings.Database ?? string.Empty;
         return $"`{database}`.`{table}`";
+    }
+
+    /// <summary>
+    /// Immutable snapshot of a table's full schema, preserving the server-reported column order.
+    /// Stores both ordered arrays (for the all-columns case) and a dictionary (for column subset lookups).
+    /// </summary>
+    private sealed class CachedSchema
+    {
+        private readonly string[] names;
+        private readonly ClickHouseType[] types;
+        private readonly Dictionary<string, int> index;
+
+        internal CachedSchema(string[] names, ClickHouseType[] types)
+        {
+            this.names = names;
+            this.types = types;
+            index = new Dictionary<string, int>(names.Length, StringComparer.Ordinal);
+            for (var i = 0; i < names.Length; i++)
+                index[names[i]] = i;
+        }
+
+        /// <summary>
+        /// Returns the schema filtered to the requested columns, preserving their order.
+        /// When <paramref name="columns"/> is null or empty, returns all columns in server order.
+        /// </summary>
+        /// <exception cref="ArgumentException">Thrown when a requested column is not present in the schema.</exception>
+        internal (string[] names, ClickHouseType[] types) Select(IEnumerable<string> columns)
+        {
+            if (columns == null || !columns.Any())
+                return (this.names, this.types);
+
+            var columnList = columns.ToArray();
+            var selectedNames = new string[columnList.Length];
+            var selectedTypes = new ClickHouseType[columnList.Length];
+
+            for (var i = 0; i < columnList.Length; i++)
+            {
+                var enclosed = columnList[i].EncloseColumnName();
+                if (!index.TryGetValue(enclosed, out var idx))
+                    throw new ArgumentException($"Column '{columnList[i]}' not found in table schema");
+
+                selectedNames[i] = enclosed;
+                selectedTypes[i] = this.types[idx];
+            }
+
+            return (selectedNames, selectedTypes);
+        }
     }
 }
