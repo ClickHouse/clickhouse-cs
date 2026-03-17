@@ -82,6 +82,7 @@ public class VariantTests : AbstractConnectionTestFixture
 
     [Test]
     [RequiredFeature(Feature.Variant)]
+    [FromVersion(26, 3)]
     public async Task ParameterizedSelect_Null_ShouldReturnDbNull()
     {
         using var command = connection.CreateCommand();
