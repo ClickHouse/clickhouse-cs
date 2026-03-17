@@ -51,6 +51,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
     private readonly List<IDisposable> disposables = new();
     private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
+    private readonly SchemaResolver schemaResolver;
     private readonly JsonTypeRegistry jsonTypeRegistry = new();
     private readonly IHttpClientFactory httpClientFactory;
     private readonly string httpClientName;
@@ -133,6 +134,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         httpClientFactory = CreateHttpClientFactory(settings);
+        schemaResolver = new SchemaResolver(this);
     }
 
     /// <summary>
@@ -375,16 +377,6 @@ public sealed class ClickHouseClient : IClickHouseClient
         return new ClickHouseRawResult(response.HttpResponseMessage);
     }
 
-    private static string GetColumnsExpression(IEnumerable<string> columns) => columns == null || !columns.Any() ? "*" : string.Join(",", columns);
-
-    private async Task<(string[] names, ClickHouseType[] types)> LoadNamesAndTypesAsync(string destinationTableName, QueryOptions options, IEnumerable<string> columns = null)
-    {
-        using var reader = (ClickHouseDataReader)await ExecuteReaderAsync($"SELECT {GetColumnsExpression(columns)} FROM {destinationTableName} WHERE 1=0", null, options).ConfigureAwait(false);
-        var types = reader.GetClickHouseColumnTypes();
-        var names = reader.GetColumnNames().Select(c => c.EncloseColumnName()).ToArray();
-        return (names, types);
-    }
-
     private async Task<int> SendBatchAsync(string destinationTable, Batch batch, BatchSerializer serializer, InsertOptions insertOptions, Action<long> onBatchSent, CancellationToken token)
     {
         var logger = GetLogger(ClickHouseLogCategories.Client);
@@ -467,7 +459,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         var logger = GetLogger(ClickHouseLogCategories.Client);
         logger?.LogDebug("Loading metadata for table {Table}.", table);
 
-        var (columnNames, columnTypes) = await LoadNamesAndTypesAsync(table, options, columns).ConfigureAwait(false);
+        var (columnNames, columnTypes) = await schemaResolver.ResolveAsync(table, columns, options).ConfigureAwait(false);
         if (columnNames == null || columnTypes == null)
             throw new InvalidOperationException("Column names not initialized. Initialization failed.");
 

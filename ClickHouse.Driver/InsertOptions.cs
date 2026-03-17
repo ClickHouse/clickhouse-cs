@@ -1,4 +1,5 @@
-﻿using System;
+﻿#nullable enable
+
 using System.Collections.Generic;
 using ClickHouse.Driver.Copy;
 
@@ -24,6 +25,23 @@ public sealed class InsertOptions : QueryOptions
     /// </summary>
     public RowBinaryFormat Format { get; init; } = RowBinaryFormat.RowBinary;
 
+    /// <summary>
+    /// Gets or sets explicit column type mappings (key: column name; value: ClickHouse type string).
+    /// When set, the schema probe query (<c>SELECT ... WHERE 1=0</c>) is skipped entirely.
+    /// Takes priority over <see cref="UseSchemaCache"/>.
+    /// <br/>
+    /// If this is used, a list of columns <b>must</b> be provided to InsertBinaryAsync().
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? ColumnTypes { get; init; }
+
+    /// <summary>
+    /// Gets or sets whether to cache the table schema per (database, table) combination.
+    /// When <c>true</c>, the full table schema is fetched once and reused for subsequent
+    /// inserts on the same <see cref="ClickHouseClient"/> instance, regardless of which columns are selected.
+    /// Schema changes (e.g. <c>ALTER TABLE</c>) are not detected while cached.
+    /// </summary>
+    public bool UseSchemaCache { get; init; }
+
     internal new InsertOptions WithQueryId(string queryId)
     {
         return new InsertOptions
@@ -40,6 +58,8 @@ public sealed class InsertOptions : QueryOptions
             BatchSize = BatchSize,
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
             Format = Format,
+            ColumnTypes = ColumnTypes,
+            UseSchemaCache = UseSchemaCache,
         };
     }
 }
