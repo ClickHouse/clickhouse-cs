@@ -1,5 +1,3 @@
-using ClickHouse.Driver.Utility;
-
 namespace ClickHouse.Driver.Examples;
 
 /// <summary>
