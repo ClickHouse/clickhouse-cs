@@ -32,6 +32,9 @@ cd clickhouse-cs
 dotnet build ClickHouse.Driver.sln -c Release
 ```
 
+### Agentic development
+
+It is recommended to have the C# LSP server and plugin installed and enabled if using Claude Code. See [here](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/csharp-lsp) for more information.
 
 ## Style Guide
 

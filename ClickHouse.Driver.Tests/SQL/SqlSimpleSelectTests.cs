@@ -23,10 +23,10 @@ public class SqlSimpleSelectTests : IDisposable
         connection = TestUtilities.GetTestClickHouseConnection(useCompression);
     }
 
-    public static IEnumerable<TestCaseData> SimpleSelectQueries => TestUtilities.GetDataTypeSamples()
+    public static IEnumerable<TestCaseData> SimpleSelectQueries => TestCases.GetDataTypeSamples()
         .Select(sample => new TestCaseData($"SELECT {sample.ExampleExpression}", sample.ExampleValue));
 
-    public static IEnumerable<TestCaseData> SimpleSelectTypes => TestUtilities.GetDataTypeSamples()
+    public static IEnumerable<TestCaseData> SimpleSelectTypes => TestCases.GetDataTypeSamples()
         .Select(sample => new TestCaseData(sample.ClickHouseType));
 
     [Test]

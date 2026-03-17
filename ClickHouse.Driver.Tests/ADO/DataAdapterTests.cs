@@ -64,7 +64,7 @@ public class DataAdapterTests : AbstractConnectionTestFixture
         table.Load(reader);
     }
 
-    public static IEnumerable<TestCaseData> SimpleSelectQueries => TestUtilities.GetDataTypeSamples()
+    public static IEnumerable<TestCaseData> SimpleSelectQueries => TestCases.GetDataTypeSamples()
         .Where(sample => sample.ExampleValue != DBNull.Value)
         .Select(sample => new TestCaseData($"SELECT {sample.ExampleExpression} AS col"));
 

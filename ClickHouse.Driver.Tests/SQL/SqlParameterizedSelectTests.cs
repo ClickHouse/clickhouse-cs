@@ -22,7 +22,7 @@ public class SqlParameterizedSelectTests : IDisposable
         connection.Open();
     }
 
-    public static IEnumerable<TestCaseData> TypedQueryParameters => TestUtilities.GetDataTypeSamples()
+    public static IEnumerable<TestCaseData> TypedQueryParameters => TestCases.GetDataTypeSamples()
         // DB::Exception: There are no UInt128 literals in SQL
         .Where(sample => !sample.ClickHouseType.Contains("UUID") || TestUtilities.SupportedFeatures.HasFlag(Feature.UUIDParameters))
         // DB::Exception: Serialization is not implemented
