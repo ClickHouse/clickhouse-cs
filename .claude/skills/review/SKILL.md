@@ -20,7 +20,7 @@ allowed-tools: Task, Bash, Read, Glob, Grep, WebFetch, AskUserQuestion
 - Note the PR title, description, and linked issues
 
 **If a branch name is given:**
-- Get the diff against `master`
+- Get the diff against `main`
 - Use the branch name as context
 
 **If a diff spec is given (e.g., `HEAD~3..HEAD`) or otherwise specified (e.g. uncommitted changes):**
@@ -114,7 +114,7 @@ LOCAL VALIDATION
 REQUESTED OUTPUT FORMAT
 Respond with the following sections. Be terse but specific. Include code suggestions as minimal diffs/patches where helpful.
 Focus on problems — do not describe what was checked and found to be fine. Use emojis (❌ ⚠️ ✅ 💡) to make findings scannable.
-**Omit any section entirely if there is nothing notable to report in it** — do not include a section just to say "looks good" or "no concerns". The only mandatory sections are Summary, ClickHouse Compliance, and Final Verdict.
+**Omit any section entirely if there is nothing notable to report in it** — do not include a section just to say "looks good" or "no concerns". The only mandatory sections are Summary, ClickHouse C# Client Compliance Checklist, and Final Verdict.
 
 ### 1) Summary
 One paragraph: what the PR does and your high-level verdict.
@@ -168,7 +168,7 @@ Example:
 - Errors/logs actionable for developers and operators?
 - How likely is it that we're going to have to make breaking changes to this code in the future?
 
-### 7) Code Coverage
+### 8) Code Coverage
 - Do the tests cover the key parts of the changed code?
 - If not, what is missing? Propose concrete test cases.
 
