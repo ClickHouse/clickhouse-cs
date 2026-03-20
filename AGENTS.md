@@ -139,7 +139,7 @@ await client.ExecuteReaderAsync("SELECT * FROM t WHERE id = {id:UInt64}", parame
 
 ## PR Review Guidelines
 
-Use the guidelines in .github/copilot-instructions.md
+Use review skill.
 
 ---
 
