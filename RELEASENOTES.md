@@ -1,5 +1,9 @@
-v1.0.3
+v1.1.0
 ---
+
+**New Features:**
+* `InsertOptions.ColumnTypes`: provide a dictionary of column name → ClickHouse type string to skip the schema probe query (`SELECT ... WHERE 1=0`) entirely. Ideal when the table schema is known at compile time.
+* `InsertOptions.UseSchemaCache`: when `true`, the full table schema is cached per (database, table) for the lifetime of the `ClickHouseClient` instance. Subsequent inserts to the same table reuse the cached schema regardless of which columns are selected, eliminating redundant round-trips.
 
 **Breaking Changes:**
 * `InsertBinaryAsync` now throws `InvalidOperationException` when sessions are enabled and `MaxDegreeOfParallelism > 1`. ClickHouse only allows one concurrent query per session, so parallel batch inserts would cause `SESSION_IS_LOCKED` errors and partial writes. This also affects the deprecated `ClickHouseBulkCopy`, which defaults to `MaxDegreeOfParallelism = 4`. To fix, set `MaxDegreeOfParallelism` to 1, or disable sessions for the insert via `InsertOptions.UseSession = false`.

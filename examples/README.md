@@ -40,6 +40,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Insert_005_InsertFromSelect.cs](Insert/Insert_005_InsertFromSelect.cs) - Using INSERT FROM SELECT for ETL, data transformation, and loading from external sources (S3, URL, remote servers)
 - [Insert_006_EphemeralColumns.cs](Insert/Insert_006_EphemeralColumns.cs) - Using EPHEMERAL columns to transform input data before storage
 - [Insert_007_UpsertsWithReplacingMergeTree.cs](Insert/Insert_007_UpsertsWithReplacingMergeTree.cs) - Upsert patterns using ReplacingMergeTree with version and deleted columns
+- [Insert_008_SchemaOptimization.cs](Insert/Insert_008_SchemaOptimization.cs) - Skipping the schema probe query with `ColumnTypes` or `UseSchemaCache`
 
 ### Selecting Data
 
