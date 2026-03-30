@@ -337,10 +337,10 @@ internal static class TypeConverter
     /// Resolution priority:
     /// <list type="number">
     ///   <item>Value-based inference: inspect the value to resolve ambiguous types (e.g. IPAddress.AddressFamily)</item>
-    ///   <item>Collection element peeking: for arrays, lists, tuples, and dictionaries, recurse into the first
-    ///         non-null element so that value-based inference propagates through nested structures</item>
-    ///   <item>Type-based fallback: if the collection is empty or all elements are null, fall back to
-    ///         <see cref="ToClickHouseType(Type)"/> using the collection's generic type argument</item>
+    ///   <item>Collection element peeking: for arrays, lists, tuples, and dictionaries, check the first
+    ///         element so that value-based inference propagates through nested structures</item>
+    ///   <item>Type-based fallback: if it's not a collection, or if the collection is empty or all elements are null,
+    ///         fall back to <see cref="ToClickHouseType(Type)"/> using the collection's generic type argument</item>
     /// </list>
     /// </para>
     /// </summary>
