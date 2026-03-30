@@ -37,11 +37,10 @@ jobs:
       matrix:
         version:
           - "latest"
+          - "26.3"
           - "26.2"
           - "26.1"
-          - "25.12"
           - "25.8"
-          - "25.3"
 
   regress-dotnet:
     name: .NET regression
