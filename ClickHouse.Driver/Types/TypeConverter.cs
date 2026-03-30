@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using ClickHouse.Driver.Numerics;
@@ -322,5 +324,99 @@ internal static class TypeConverter
         }
 
         throw new ArgumentOutOfRangeException(nameof(type), "Unknown type: " + type.ToString());
+    }
+
+    /// <summary>
+    /// Infer ClickHouse type from a .NET value, inspecting the value itself for ambiguous types.
+    /// <para>
+    /// Some .NET types map to multiple ClickHouse types (e.g. <see cref="IPAddress"/> can be IPv4 or IPv6).
+    /// The type-only overload <see cref="ToClickHouseType(Type)"/> cannot distinguish these cases.
+    /// This overload resolves the ambiguity by inspecting the actual value.
+    /// </para>
+    /// <para>
+    /// Resolution priority:
+    /// <list type="number">
+    ///   <item>Value-based inference: inspect the value to resolve ambiguous types (e.g. IPAddress.AddressFamily)</item>
+    ///   <item>Collection element peeking: for arrays, lists, tuples, and dictionaries, recurse into the first
+    ///         non-null element so that value-based inference propagates through nested structures</item>
+    ///   <item>Type-based fallback: if the collection is empty or all elements are null, fall back to
+    ///         <see cref="ToClickHouseType(Type)"/> using the collection's generic type argument</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    /// <param name="value">The value to infer the ClickHouse type from.</param>
+    /// <returns>Corresponding ClickHouse type.</returns>
+    public static ClickHouseType ToClickHouseType(object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        // 1. Value-based inference for ambiguous types
+        // IPAddress maps to both IPv4 and IPv6
+        if (value is IPAddress ip)
+            return ip.AddressFamily == AddressFamily.InterNetwork ? new IPv4Type() : new IPv6Type();
+
+        var type = value.GetType();
+
+        // 2. Collection handling: peek at the first element so value-based inference propagates
+        // through nested structures (e.g. List<IPAddress> or Dictionary<string, IPAddress>).
+        // If the collection is empty or the first element is null, fall back to type-based inference.
+        if (type.IsArray)
+        {
+            var array = (Array)value;
+            if (array.Length > 0 && array.GetValue(0) is { } firstElement)
+                return new ArrayType { UnderlyingType = ToClickHouseType(firstElement) };
+            return new ArrayType { UnderlyingType = ToClickHouseType(type.GetElementType()!) };
+        }
+
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
+        {
+            var list = (System.Collections.IList)value;
+            if (list.Count > 0 && list[0] is { } firstElement)
+                return new ArrayType { UnderlyingType = ToClickHouseType(firstElement) };
+            return new ArrayType { UnderlyingType = ToClickHouseType(type.GetGenericArguments()[0]) };
+        }
+
+        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName!.StartsWith("System.Tuple", StringComparison.InvariantCulture))
+        {
+            // Each tuple item is inferred independently; null items fall back to type-based inference
+            var tuple = (ITuple)value;
+            var genericArgs = type.GetGenericArguments();
+            var items = new ClickHouseType[tuple.Length];
+            for (var i = 0; i < tuple.Length; i++)
+            {
+                items[i] = tuple[i] is { } itemValue ? ToClickHouseType(itemValue) : ToClickHouseType(genericArgs[i]);
+            }
+
+            return new TupleType { UnderlyingTypes = items };
+        }
+
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
+        {
+            // Peek at the first entry; null keys/values fall back to type-based inference
+            var dict = (System.Collections.IDictionary)value;
+            if (dict.Count > 0)
+            {
+                var enumerator = dict.GetEnumerator();
+                try
+                {
+                    enumerator.MoveNext();
+                    var key = enumerator.Key;
+                    var val = enumerator.Value;
+                    var keyType = key != null ? ToClickHouseType(key) : ToClickHouseType(type.GetGenericArguments()[0]);
+                    var valType = val != null ? ToClickHouseType(val) : ToClickHouseType(type.GetGenericArguments()[1]);
+                    return new MapType { UnderlyingTypes = Tuple.Create(keyType, valType) };
+                }
+                finally
+                {
+                    (enumerator as IDisposable)?.Dispose();
+                }
+            }
+
+            var argTypes = type.GetGenericArguments().Select(ToClickHouseType).ToArray();
+            return new MapType { UnderlyingTypes = Tuple.Create(argTypes[0], argTypes[1]) };
+        }
+
+        // 3. No ambiguity for this type; delegate to type-based inference
+        return ToClickHouseType(type);
     }
 }

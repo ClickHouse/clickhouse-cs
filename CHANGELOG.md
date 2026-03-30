@@ -1,3 +1,9 @@
+v1.1.1
+---
+
+**Improvements:**
+* Type inference now inspects `IPAddress.AddressFamily` to correctly distinguish between IPv4 and IPv6 types. Previously, all `IPAddress` values were inferred as IPv4. This also works for collections, tuples, and maps containing `IPAddress` values.
+
 v1.1.0
 ---
 

@@ -39,7 +39,7 @@ internal static class HttpParameterFormatter
         if (string.IsNullOrWhiteSpace(effectiveType))
         {
             // Infer type and format accordingly
-            var type = TypeConverter.ToClickHouseType(parameter.Value.GetType());
+            var type = TypeConverter.ToClickHouseType(parameter.Value);
             return Format(type, parameter.Value, false);
         }
 
