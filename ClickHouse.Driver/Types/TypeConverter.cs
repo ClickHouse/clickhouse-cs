@@ -339,8 +339,8 @@ internal static class TypeConverter
     ///   <item>Value-based inference: inspect the value to resolve ambiguous types (e.g. IPAddress.AddressFamily)</item>
     ///   <item>Collection element peeking: for arrays, lists, tuples, and dictionaries, check the first
     ///         element so that value-based inference propagates through nested structures</item>
-    ///   <item>Type-based fallback: if it's not a collection, or if the collection is empty or all elements are null,
-    ///         fall back to <see cref="ToClickHouseType(Type)"/> using the collection's generic type argument</item>
+    ///   <item>Type-based fallback: if it's not a collection, or if the collection is empty or if the first element is null,
+    ///         fall back to <see cref="ToClickHouseType(Type)"/>.</item>
     /// </list>
     /// </para>
     /// </summary>
@@ -353,7 +353,7 @@ internal static class TypeConverter
         // 1. Value-based inference for ambiguous types
         // IPAddress maps to both IPv4 and IPv6
         if (value is IPAddress ip)
-            return ip.AddressFamily == AddressFamily.InterNetwork ? new IPv4Type() : new IPv6Type();
+            return SimpleTypes[ip.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6"];
 
         var type = value.GetType();
 
