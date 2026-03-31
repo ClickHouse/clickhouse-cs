@@ -53,12 +53,23 @@ internal class PocoBatchSerializer
         }
         catch (Exception e)
         {
-            // Materialize the failing row for diagnostics (rare error path)
+            // Best-effort: materialize the failing row for diagnostics.
+            // Getters may throw again, so swallow secondary failures to preserve
+            // the original exception in the wrapper.
             var failedRow = new object[getters.Length];
             if (current != null)
             {
                 for (int col = 0; col < getters.Length; col++)
-                    failedRow[col] = getters[col](current);
+                {
+                    try
+                    {
+                        failedRow[col] = getters[col](current);
+                    }
+                    catch
+                    {
+                        // Ignore, we don't want to throw again inside the catch. Keep the info we got.
+                    }
+                }
             }
 
             throw new ClickHouseBulkCopySerializationException(failedRow, e);
