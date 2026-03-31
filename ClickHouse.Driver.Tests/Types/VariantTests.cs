@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Tests.Attributes;
@@ -111,5 +112,50 @@ public class VariantTests : AbstractConnectionTestFixture
         Assert.That(result[1], Is.Null);
         Assert.That(result[2], Is.EqualTo("hello"));
         ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_VariantIPv4IPv6_ShouldRoundTrip()
+    {
+        var targetTable = "test.test_variant_ip";
+        try
+        {
+            await client.ExecuteNonQueryAsync(
+                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, addr Variant(IPv4, IPv6)) ENGINE = Memory");
+
+            var ipv4 = IPAddress.Parse("10.0.0.1");
+            var ipv6 = IPAddress.Parse("2001:db8::1");
+
+            await client.InsertBinaryAsync(targetTable, ["id", "addr"], [
+                new object[] { 1u, ipv4 },
+                new object[] { 2u, ipv6 },
+                new object[] { 3u, null },
+            ]);
+
+            using var reader = await connection.ExecuteReaderAsync(
+                $"SELECT id, addr, variantType(addr) FROM {targetTable} ORDER BY id");
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(0), Is.EqualTo(1u));
+            Assert.That(reader.GetValue(1), Is.EqualTo(ipv4));
+            Assert.That(reader.GetString(2), Is.EqualTo("IPv4"));
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(0), Is.EqualTo(2u));
+            Assert.That(reader.GetValue(1), Is.EqualTo(ipv6));
+            Assert.That(reader.GetString(2), Is.EqualTo("IPv6"));
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(0), Is.EqualTo(3u));
+            Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
+            Assert.That(reader.GetString(2), Is.EqualTo("None"));
+
+            ClassicAssert.IsFalse(reader.Read());
+        }
+        finally
+        {
+            await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        }
     }
 }
