@@ -20,6 +20,7 @@ v1.1.0
 ---
 
 **New Features:**
+* **POCO binary inserts**: new `InsertBinaryAsync<T>` overload on `ClickHouseClient` accepts `IEnumerable<T>` directly, mapping public properties to columns automatically. Register types upfront with `RegisterBinaryInsertType<T>()`. Customize column names and ClickHouse types with `[ClickHouseColumn(Name = "...", Type = "...")]`, or exclude properties with `[ClickHouseNotMapped]`. When all properties specify explicit types via the attribute, the schema probe is skipped entirely.
 * `InsertOptions.ColumnTypes`: provide a dictionary of column name → ClickHouse type string to skip the schema probe query (`SELECT ... WHERE 1=0`) entirely. Ideal when the table schema is known at compile time.
 * `InsertOptions.UseSchemaCache`: when `true`, the full table schema is cached per (database, table) for the lifetime of the `ClickHouseClient` instance. Subsequent inserts to the same table reuse the cached schema regardless of which columns are selected, eliminating redundant round-trips.
 
