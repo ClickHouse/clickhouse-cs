@@ -41,6 +41,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Insert_006_EphemeralColumns.cs](Insert/Insert_006_EphemeralColumns.cs) - Using EPHEMERAL columns to transform input data before storage
 - [Insert_007_UpsertsWithReplacingMergeTree.cs](Insert/Insert_007_UpsertsWithReplacingMergeTree.cs) - Upsert patterns using ReplacingMergeTree with version and deleted columns
 - [Insert_008_SchemaOptimization.cs](Insert/Insert_008_SchemaOptimization.cs) - Skipping the schema probe query with `ColumnTypes` or `UseSchemaCache`
+- [Insert_009_PocoInsert.cs](Insert/Insert_009_PocoInsert.cs) - Inserting strongly-typed POCO objects with `InsertBinaryAsync<T>`, attribute mapping, and schema probe optimization
 
 ### Selecting Data
 
