@@ -68,7 +68,7 @@ jobs:
           CLICKHOUSE_VERSION: ${{ inputs.clickhouse-version }}
           CLICKHOUSE_TEST_ENVIRONMENT: local_single_node
 
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v6
         if: inputs.coverage
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
