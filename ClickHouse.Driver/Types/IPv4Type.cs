@@ -17,6 +17,9 @@ internal class IPv4Type : ClickHouseType
 
     public override string ToString() => "IPv4";
 
+    public override bool CanWrite(object value)
+        => value is IPAddress ip && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
+
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
         var address4 = value is IPAddress a ? a : IPAddress.Parse((string)value);
