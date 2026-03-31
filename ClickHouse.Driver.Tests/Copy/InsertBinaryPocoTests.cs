@@ -85,6 +85,16 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         public ulong Id { get; set; }
     }
 
+    // Declares Value as UInt64 but the property is actually a string — type mismatch at serialization time
+    private class PocoWithWrongExplicitType
+    {
+        [ClickHouseColumn(Type = "UInt64")]
+        public ulong Id { get; set; }
+
+        [ClickHouseColumn(Type = "UInt64")]
+        public string Value { get; set; }
+    }
+
     // Deliberately never registered — used only by the unregistered type test
     private class UnregisteredPoco
     {
@@ -117,6 +127,38 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
 
         Assert.ThrowsAsync<ArgumentNullException>(async () =>
             await client.InsertBinaryAsync<SimplePoco>("test_table", (IEnumerable<SimplePoco>)null));
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithWrongExplicitType_ShouldThrowSerializationException()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync($@"
+                CREATE TABLE IF NOT EXISTS test.{tableName}
+                (Id UInt64, Value UInt64)
+                ENGINE = MergeTree() ORDER BY Id");
+
+            client.RegisterBinaryInsertType<PocoWithWrongExplicitType>();
+
+            var rows = new[]
+            {
+                new PocoWithWrongExplicitType { Id = 1, Value = "not_a_number" },
+            };
+
+            // The type mismatch (string → UInt64) should fail during serialization
+            // and be wrapped in ClickHouseBulkCopySerializationException with row context
+            var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+                await client.InsertBinaryAsync(tableName, rows, new InsertOptions { Database = "test" }));
+
+            Assert.That(ex.Row, Is.Not.Null);
+            Assert.That(ex.InnerException, Is.Not.Null);
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
     }
 
     [Test]
@@ -380,16 +422,18 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
 
             client.RegisterBinaryInsertType<PocoWithExplicitTypes>();
 
+            var queryId = $"test_poco_explicit_skip_{Guid.NewGuid():N}";
             var rows = new[]
             {
                 new PocoWithExplicitTypes { Id = 42, Value = "explicit" },
             };
 
             var inserted = await client.InsertBinaryAsync(
-                tableName, rows, new InsertOptions { Database = "test" });
+                tableName, rows, new InsertOptions { Database = "test", QueryId = queryId });
 
             Assert.That(inserted, Is.EqualTo(1));
 
+            // Verify data round-tripped correctly
             using var reader = await client.ExecuteReaderAsync(
                 $"SELECT Id, Value FROM test.{tableName}",
                 options: new QueryOptions { Database = "test" });
@@ -397,6 +441,16 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
             Assert.That(reader.Read(), Is.True);
             Assert.That(reader.GetValue(0), Is.EqualTo(42UL));
             Assert.That(reader.GetValue(1), Is.EqualTo("explicit"));
+
+            // Verify no schema probe query was sent
+            await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+            var probeCount = await client.ExecuteScalarAsync(
+                $"SELECT count() FROM system.query_log " +
+                $"WHERE query_id LIKE '{queryId}%' " +
+                $"AND query LIKE '%WHERE 1=0%' " +
+                $"AND type = 'QueryFinish'");
+            Assert.That(probeCount, Is.EqualTo(0UL),
+                "No schema probe query should be sent when all properties have explicit types");
         }
         finally
         {
