@@ -103,6 +103,7 @@ SEVERITY MODEL – WHAT DESERVES A COMMENT
 - Hidden magic constants that should be settings.
 - Confusing or incomplete user-visible behavior/docs.
 - Missing or unclear comments in complex logic that future maintainers must understand.
+- Unused variables
 
 **Do not report** as nits:
 - Minor naming preferences unrelated to typos.
@@ -140,14 +141,13 @@ If there are **no Blockers or Majors**, you may omit the "Nits" section entirely
 - Are error-handling tests present?
 - Which additional tests to add (exact cases, scenarios, data sizes)
 
-**Checklist**
+### 5) **Checklist**
 Render as a Markdown table.
 
 Example:
 | Check | Status | Notes |
 |-------|--------|-------|
 | Protocol compatibility preserved? | ☐ Yes ☐ No | |
-| Multi-framework compatibility verified? | ☐ Yes ☐ No | |
 | Type system changes tested comprehensively? | ☐ Yes ☐ No | |
 | Async patterns correct (no sync-over-async)? | ☐ Yes ☐ No | |
 | Existing tests untouched (only additions)? | ☐ Yes ☐ No | |
