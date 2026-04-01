@@ -36,13 +36,11 @@ internal class VariantType : ParameterizedType
 
     public (int, ClickHouseType) GetMatchingType(object value)
     {
-        var valueType = value?.GetType() ?? typeof(DBNull);
         for (int i = 0; i < UnderlyingTypes.Length; i++)
         {
-            var type = UnderlyingTypes[i];
-            if (type.FrameworkType == valueType)
+            if (UnderlyingTypes[i].CanWrite(value))
             {
-                return (i, type);
+                return (i, UnderlyingTypes[i]);
             }
         }
         throw new ArgumentException("Could not find matching type for variant", nameof(value));

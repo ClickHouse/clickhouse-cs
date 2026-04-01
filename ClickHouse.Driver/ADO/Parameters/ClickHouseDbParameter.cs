@@ -74,7 +74,7 @@ public class ClickHouseDbParameter : DbParameter
                 return $"{{{ParameterName}:Decimal128({scale})}}";
             }
 
-            var chType = TypeConverter.ToClickHouseType(Value?.GetType() ?? typeof(DBNull)).ToString();
+            var chType = TypeConverter.ToClickHouseType(Value ?? DBNull.Value).ToString();
             return $"{{{ParameterName}:{chType}}}";
         }
     }

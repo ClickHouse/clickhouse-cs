@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types;
 using Dapper;
@@ -95,6 +97,108 @@ public class TypeMappingTests
 #endif
     [TestCase(typeof(Tuple<int, byte, float?, string[]>), ExpectedResult = "Tuple(Int32,UInt8,Nullable(Float32),Array(String))")]
     public string ShouldConvertToClickHouseType(Type type) => TypeConverter.ToClickHouseType(type).ToString();
+
+    private static IEnumerable<TestCaseData> ValueToClickHouseTypeCases()
+    {
+        // Scalar
+        yield return new TestCaseData(IPAddress.Parse("127.0.0.1")).Returns("IPv4");
+        yield return new TestCaseData(IPAddress.Parse("::1")).Returns("IPv6");
+
+        // Array (non-empty)
+        yield return new TestCaseData((object)new[] { IPAddress.Parse("127.0.0.1") }).Returns("Array(IPv4)");
+        yield return new TestCaseData((object)new[] { IPAddress.Parse("::1") }).Returns("Array(IPv6)");
+
+        // Array (empty — falls back to type-based default)
+        yield return new TestCaseData((object)Array.Empty<IPAddress>()).Returns("Array(IPv4)");
+
+        // List (non-empty)
+        yield return new TestCaseData(new List<IPAddress> { IPAddress.Parse("127.0.0.1") }).Returns("Array(IPv4)");
+        yield return new TestCaseData(new List<IPAddress> { IPAddress.Parse("::1") }).Returns("Array(IPv6)");
+
+        // List (empty)
+        yield return new TestCaseData(new List<IPAddress>()).Returns("Array(IPv4)");
+
+        // Tuple
+        yield return new TestCaseData(Tuple.Create("hello", IPAddress.Parse("::1"))).Returns("Tuple(String,IPv6)");
+        yield return new TestCaseData(Tuple.Create(IPAddress.Parse("1.2.3.4"), IPAddress.Parse("::1"))).Returns("Tuple(IPv4,IPv6)");
+
+        // Map (IP as value, non-empty)
+        yield return new TestCaseData(new Dictionary<string, IPAddress> { ["k"] = IPAddress.Parse("127.0.0.1") }).Returns("Map(String, IPv4)");
+        yield return new TestCaseData(new Dictionary<string, IPAddress> { ["k"] = IPAddress.Parse("::1") }).Returns("Map(String, IPv6)");
+
+        // Map (IP as key, non-empty)
+        yield return new TestCaseData(new Dictionary<IPAddress, string> { [IPAddress.Parse("127.0.0.1")] = "v" }).Returns("Map(IPv4, String)");
+        yield return new TestCaseData(new Dictionary<IPAddress, string> { [IPAddress.Parse("::1")] = "v" }).Returns("Map(IPv6, String)");
+
+        // Map (empty)
+        yield return new TestCaseData(new Dictionary<string, IPAddress>()).Returns("Map(String, IPv4)");
+        yield return new TestCaseData(new Dictionary<IPAddress, string>()).Returns("Map(IPv4, String)");
+
+        // Nested
+        yield return new TestCaseData((object)new IPAddress[][] { new[] { IPAddress.Parse("::1") } }).Returns("Array(Array(IPv6))");
+
+        // Collections with null first element (falls back to type-based default)
+        yield return new TestCaseData((object)new[] { null, IPAddress.Parse("::1") }).Returns("Array(IPv4)");
+        yield return new TestCaseData(new List<IPAddress> { null, IPAddress.Parse("::1") }).Returns("Array(IPv4)");
+
+        // Tuple with null item (falls back to type-based inference for that item)
+        yield return new TestCaseData(Tuple.Create((IPAddress)null, IPAddress.Parse("::1"))).Returns("Tuple(IPv4,IPv6)");
+
+        // Map with null value (falls back to type-based inference for value)
+        yield return new TestCaseData(new Dictionary<string, IPAddress> { ["k"] = null }).Returns("Map(String, IPv4)");
+    }
+
+    [TestCaseSource(nameof(ValueToClickHouseTypeCases))]
+    public string ShouldConvertValueToClickHouseType(object value) => TypeConverter.ToClickHouseType(value).ToString();
+
+    private static IEnumerable<TestCaseData> HttpParameterFormatterIpCases()
+    {
+        // Scalar IPv4/IPv6
+        yield return new TestCaseData(IPAddress.Parse("192.168.1.1")).Returns("192.168.1.1");
+        yield return new TestCaseData(IPAddress.Parse("::1")).Returns("::1");
+        yield return new TestCaseData(IPAddress.Parse("2001:db8::1")).Returns("2001:db8::1");
+
+        // Array of IPv4
+        yield return new TestCaseData((object)new[] { IPAddress.Parse("10.0.0.1"), IPAddress.Parse("10.0.0.2") })
+            .Returns("['10.0.0.1','10.0.0.2']");
+
+        // Array of IPv6
+        yield return new TestCaseData((object)new[] { IPAddress.Parse("::1"), IPAddress.Parse("::2") })
+            .Returns("['::1','::2']");
+
+        // Tuple with mixed IP types
+        yield return new TestCaseData(Tuple.Create(IPAddress.Parse("10.0.0.1"), IPAddress.Parse("::1")))
+            .Returns("('10.0.0.1','::1')");
+
+        // Map with IP value
+        yield return new TestCaseData(new Dictionary<string, IPAddress> { ["host"] = IPAddress.Parse("::1") })
+            .Returns("{'host' : '::1'}");
+
+        // Map with IP key
+        yield return new TestCaseData(new Dictionary<IPAddress, string> { [IPAddress.Parse("::1")] = "loopback" })
+            .Returns("{'::1' : 'loopback'}");
+    }
+
+    [TestCaseSource(nameof(HttpParameterFormatterIpCases))]
+    public string ShouldFormatIpParameterViaHttpFormatter(object value)
+    {
+        var parameter = new ClickHouseDbParameter { ParameterName = "p", Value = value };
+        return HttpParameterFormatter.Format(parameter, TypeSettings.Default);
+    }
+
+    [Test]
+    public void ShouldInferCorrectQueryFormForIPv4Parameter()
+    {
+        var parameter = new ClickHouseDbParameter { ParameterName = "addr", Value = IPAddress.Parse("10.0.0.1") };
+        Assert.That(parameter.QueryForm, Is.EqualTo("{addr:IPv4}"));
+    }
+
+    [Test]
+    public void ShouldInferCorrectQueryFormForIPv6Parameter()
+    {
+        var parameter = new ClickHouseDbParameter { ParameterName = "addr", Value = IPAddress.Parse("::1") };
+        Assert.That(parameter.QueryForm, Is.EqualTo("{addr:IPv6}"));
+    }
 
     [Test, Explicit]
     public void ShouldConvertClickHouseType()
