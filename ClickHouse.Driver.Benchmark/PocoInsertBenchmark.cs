@@ -30,15 +30,15 @@ public class PocoInsertBenchmark
     public int Count { get; set; }
 
     [GlobalSetup]
-    public void Setup()
+    public async Task Setup()
     {
         var connectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION")
             ?? "Host=localhost";
         client = new ClickHouseClient(connectionString);
 
-        client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test").Wait();
-        client.ExecuteNonQueryAsync(
-            $"CREATE TABLE IF NOT EXISTS {TableName} (Id Int64, Name String, Value Float64) ENGINE Null").Wait();
+        await client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test");
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE IF NOT EXISTS {TableName} (Id Int64, Name String, Value Float64) ENGINE Null");
 
         client.RegisterBinaryInsertType<SensorReading>();
     }

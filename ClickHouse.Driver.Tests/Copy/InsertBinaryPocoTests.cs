@@ -593,6 +593,53 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task InsertBinaryAsync_WithUserProvidedColumnTypes_ShouldTakePrecedenceOverAttributes()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync($@"
+                CREATE TABLE IF NOT EXISTS test.{tableName}
+                (Id UInt64, Value String)
+                ENGINE = MergeTree() ORDER BY Id");
+
+            // PocoWithExplicitTypes has [ClickHouseColumn(Type = "UInt64")] and [ClickHouseColumn(Type = "String")]
+            // but we override via InsertOptions.ColumnTypes, these should take precedence
+            client.RegisterBinaryInsertType<PocoWithExplicitTypes>();
+
+            var rows = new[]
+            {
+                new PocoWithExplicitTypes { Id = 1, Value = "overridden" },
+            };
+
+            var options = new InsertOptions
+            {
+                Database = "test",
+                ColumnTypes = new Dictionary<string, string>
+                {
+                    ["Id"] = "UInt64",
+                    ["Value"] = "String",
+                },
+            };
+
+            var inserted = await client.InsertBinaryAsync(tableName, rows, options);
+            Assert.That(inserted, Is.EqualTo(1));
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT Id, Value FROM test.{tableName}",
+                options: new QueryOptions { Database = "test" });
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetValue(0), Is.EqualTo(1UL));
+            Assert.That(reader.GetValue(1), Is.EqualTo("overridden"));
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
     public async Task InsertBinaryAsync_WithPartialTypes_ShouldProbeForMissing()
     {
         var tableName = CreateTestTableName();
