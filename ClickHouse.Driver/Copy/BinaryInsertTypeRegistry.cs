@@ -17,7 +17,7 @@ internal sealed class BinaryInsertTypeRegistry
 
     /// <summary>
     /// Registers a POCO type for binary insert operations.
-    /// Validates that all mapped properties have types supported by ClickHouse.
+    /// Builds the property-to-column mapping and validates basic mapping constraints.
     /// </summary>
     internal void RegisterType<T>()
         where T : class
@@ -60,16 +60,29 @@ internal sealed class BinaryInsertTypeRegistry
             var columnAttr = property.GetCustomAttribute<ClickHouseColumnAttribute>();
             var columnName = columnAttr?.Name ?? property.Name;
 
+            if (string.IsNullOrWhiteSpace(columnName))
+            {
+                throw new InvalidOperationException(
+                    $"Failed to register type '{type.Name}': property '{property.Name}' has an empty or whitespace column name.");
+            }
+
             if (!usedColumnNames.Add(columnName))
             {
                 throw new InvalidOperationException(
                     $"Failed to register type '{type.Name}': multiple properties map to column '{columnName}'.");
             }
 
+            var explicitType = columnAttr?.Type;
+            if (explicitType != null && string.IsNullOrWhiteSpace(explicitType))
+            {
+                throw new InvalidOperationException(
+                    $"Failed to register type '{type.Name}': property '{property.Name}' has an empty or whitespace ClickHouse type.");
+            }
+
             propInfos.Add(new BinaryInsertPropertyInfo
             {
                 ColumnName = columnName,
-                ExplicitClickHouseType = columnAttr?.Type,
+                ExplicitClickHouseType = explicitType,
             });
 
             getters.Add(CompileGetter<T>(property));

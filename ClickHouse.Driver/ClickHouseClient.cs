@@ -560,7 +560,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         long totalRowsWritten = 0;
-        var batches = IntoPocoBatches(rows, plan.Query, plan.ColumnTypes, properties, getters, plan.Options.BatchSize);
+        var batches = IntoPocoBatches(rows, plan);
 
         await Parallel.ForEachAsync(
             batches,
@@ -571,8 +571,8 @@ public sealed class ClickHouseClient : IClickHouseClient
             },
             async (batch, ct) =>
             {
-                var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
-                var count = await SendPocoBatchAsync(table, batch, serializer, batchOptions, ct).ConfigureAwait(false);
+                var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}"); // Avoid duplicate query ids across batches
+                var count = await SendPocoBatchAsync(table, batch, getters, serializer, batchOptions, ct).ConfigureAwait(false);
                 Interlocked.Add(ref totalRowsWritten, count);
             }).ConfigureAwait(false);
 
@@ -585,14 +585,14 @@ public sealed class ClickHouseClient : IClickHouseClient
         return totalRowsWritten;
     }
 
-    private async Task<int> SendPocoBatchAsync<T>(string destinationTable, PocoBatch<T> batch, PocoBatchSerializer serializer, InsertOptions insertOptions, CancellationToken token)
+    private async Task<int> SendPocoBatchAsync<T>(string destinationTable, PocoBatch<T> batch, Func<T, object>[] getters, PocoBatchSerializer serializer, InsertOptions insertOptions, CancellationToken token)
     {
         var logger = GetLogger(ClickHouseLogCategories.Client);
 
         using (batch)
         {
             using var stream = MemoryStreamManager.GetStream(nameof(SendPocoBatchAsync), 128 * 1024);
-            await Task.Run(() => serializer.Serialize(batch, stream), token).ConfigureAwait(false);
+            await Task.Run(() => serializer.Serialize(batch, getters, stream), token).ConfigureAwait(false);
 
             stream.Seek(0, SeekOrigin.Begin);
 
@@ -604,11 +604,11 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
     }
 
-    private static IEnumerable<PocoBatch<T>> IntoPocoBatches<T>(IEnumerable<T> rows, string query, ClickHouseType[] types, BinaryInsertPropertyInfo[] properties, Func<T, object>[] getters, int batchSize)
+    private static IEnumerable<PocoBatch<T>> IntoPocoBatches<T>(IEnumerable<T> rows, InsertPlan plan)
     {
-        foreach (var (batch, size) in rows.BatchRented(batchSize))
+        foreach (var (batch, size) in rows.BatchRented(plan.Options.BatchSize))
         {
-            yield return new PocoBatch<T> { Rows = batch, Size = size, Query = query, Types = types, Properties = properties, Getters = getters };
+            yield return new PocoBatch<T> { Rows = batch, Size = size, Query = plan.Query, Types = plan.ColumnTypes };
         }
     }
 

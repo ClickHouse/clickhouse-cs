@@ -27,6 +27,30 @@ public class BinaryInsertTypeRegistryTests
         public string Name { get; set; }
     }
 
+    private class PocoWithEmptyColumnName
+    {
+        [ClickHouseColumn(Name = "")]
+        public int Id { get; set; }
+    }
+
+    private class PocoWithWhitespaceColumnName
+    {
+        [ClickHouseColumn(Name = "   ")]
+        public int Id { get; set; }
+    }
+
+    private class PocoWithEmptyTypeName
+    {
+        [ClickHouseColumn(Type = "")]
+        public int Id { get; set; }
+    }
+
+    private class PocoWithWhitespaceTypeName
+    {
+        [ClickHouseColumn(Type = "   ")]
+        public int Id { get; set; }
+    }
+
     private class PocoWithDuplicateColumnNames
     {
         [ClickHouseColumn(Name = "shared_col")]
@@ -59,6 +83,44 @@ public class BinaryInsertTypeRegistryTests
     public void TearDown()
     {
         client?.Dispose();
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_WithEmptyColumnName_ShouldThrow()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterBinaryInsertType<PocoWithEmptyColumnName>());
+
+        Assert.That(ex.Message, Does.Contain("empty or whitespace"));
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_WithWhitespaceColumnName_ShouldThrow()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterBinaryInsertType<PocoWithWhitespaceColumnName>());
+
+        Assert.That(ex.Message, Does.Contain("empty or whitespace"));
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_WithEmptyTypeName_ShouldThrow()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterBinaryInsertType<PocoWithEmptyTypeName>());
+
+        Assert.That(ex.Message, Does.Contain("empty or whitespace"));
+        Assert.That(ex.Message, Does.Contain("ClickHouse type"));
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_WithWhitespaceTypeName_ShouldThrow()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterBinaryInsertType<PocoWithWhitespaceTypeName>());
+
+        Assert.That(ex.Message, Does.Contain("empty or whitespace"));
+        Assert.That(ex.Message, Does.Contain("ClickHouse type"));
     }
 
     [Test]

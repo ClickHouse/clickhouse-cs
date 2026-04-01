@@ -10,8 +10,6 @@ internal struct PocoBatch<T> : IDisposable
     public int Size;
     public string Query;
     public ClickHouseType[] Types;
-    public BinaryInsertPropertyInfo[] Properties;
-    public Func<T, object>[] Getters;
 
     public void Dispose()
     {

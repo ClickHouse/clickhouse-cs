@@ -29,7 +29,14 @@ internal class PocoBatchSerializer
         this.rowSerializer = rowSerializer;
     }
 
-    public void Serialize<T>(PocoBatch<T> batch, Stream stream)
+    /// <summary>
+    /// Serializes a batch of POCO rows into the target stream using GZip compression.
+    /// </summary>
+    /// <typeparam name="T">The POCO type.</typeparam>
+    /// <param name="batch">The batch of rows, query text, and resolved column types.</param>
+    /// <param name="getters">Compiled property accessors, ordered to match the batch's column types.</param>
+    /// <param name="stream">The output stream (typically a recyclable memory stream).</param>
+    public void Serialize<T>(PocoBatch<T> batch, Func<T, object>[] getters, Stream stream)
     {
         using var gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
         using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
@@ -39,7 +46,6 @@ internal class PocoBatchSerializer
 
         using var writer = new ExtendedBinaryWriter(gzipStream);
 
-        var getters = batch.Getters;
         var types = batch.Types;
 
         T current = default;
