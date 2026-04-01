@@ -53,7 +53,7 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         [ClickHouseColumn(Type = "UInt64")]
         public ulong Id { get; set; }
 
-        // No explicit type — requires schema probe
+        // No explicit type, requires schema probe
         public string Value { get; set; }
     }
 
@@ -71,6 +71,27 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         public string this[int index] => null;
     }
 
+    // Internal getter, should be excluded (property visible via public setter, but getter isn't public)
+    private class PocoWithInternalGetter
+    {
+        public ulong Id { get; set; }
+        public string Value { internal get; set; }
+    }
+
+    // Protected getter
+    private class PocoWithProtectedGetter
+    {
+        public ulong Id { get; set; }
+        public string Value { protected get; set; }
+    }
+
+    // Private getter
+    private class PocoWithPrivateGetter
+    {
+        public ulong Id { get; set; }
+        public string Value { private get; set; }
+    }
+
     private class PocoWithNullable
     {
         public ulong Id { get; set; }
@@ -85,7 +106,7 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         public ulong Id { get; set; }
     }
 
-    // Declares Value as UInt64 but the property is actually a string — type mismatch at serialization time
+    // Declares Value as UInt64 but the property is actually a string, type mismatch at serialization time
     private class PocoWithWrongExplicitType
     {
         [ClickHouseColumn(Type = "UInt64")]
@@ -95,7 +116,7 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         public string Value { get; set; }
     }
 
-    // Deliberately never registered — used only by the unregistered type test
+    // Deliberately never registered
     private class UnregisteredPoco
     {
         public ulong Id { get; set; }
@@ -154,6 +175,119 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
 
             Assert.That(ex.Row, Is.Not.Null);
             Assert.That(ex.InnerException, Is.Not.Null);
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithInternalGetter_ShouldExcludeProperty()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            // Table has a Value column with DEFAULT — if the internal-getter property
+            // were included, it would either serialize wrong or fail.
+            await client.ExecuteNonQueryAsync($@"
+                CREATE TABLE IF NOT EXISTS test.{tableName}
+                (Id UInt64, Value String DEFAULT 'default_val')
+                ENGINE = MergeTree() ORDER BY Id");
+
+            client.RegisterBinaryInsertType<PocoWithInternalGetter>();
+
+            var rows = new[]
+            {
+                new PocoWithInternalGetter { Id = 1, Value = "hidden" },
+            };
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName, rows, new InsertOptions { Database = "test", Format = RowBinaryFormat.RowBinaryWithDefaults });
+
+            Assert.That(inserted, Is.EqualTo(1));
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT Id, Value FROM test.{tableName}",
+                options: new QueryOptions { Database = "test" });
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetValue(0), Is.EqualTo(1UL));
+            Assert.That(reader.GetValue(1), Is.EqualTo("default_val"));
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithProtectedGetter_ShouldExcludeProperty()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync($@"
+                CREATE TABLE IF NOT EXISTS test.{tableName}
+                (Id UInt64, Value String DEFAULT 'default_val')
+                ENGINE = MergeTree() ORDER BY Id");
+
+            client.RegisterBinaryInsertType<PocoWithProtectedGetter>();
+
+            var rows = new[]
+            {
+                new PocoWithProtectedGetter { Id = 1, Value = "hidden" },
+            };
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName, rows, new InsertOptions { Database = "test", Format = RowBinaryFormat.RowBinaryWithDefaults });
+
+            Assert.That(inserted, Is.EqualTo(1));
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT Id, Value FROM test.{tableName}",
+                options: new QueryOptions { Database = "test" });
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetValue(0), Is.EqualTo(1UL));
+            Assert.That(reader.GetValue(1), Is.EqualTo("default_val"));
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithPrivateGetter_ShouldExcludeProperty()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync($@"
+                CREATE TABLE IF NOT EXISTS test.{tableName}
+                (Id UInt64, Value String DEFAULT 'default_val')
+                ENGINE = MergeTree() ORDER BY Id");
+
+            client.RegisterBinaryInsertType<PocoWithPrivateGetter>();
+
+            var rows = new[]
+            {
+                new PocoWithPrivateGetter { Id = 1, Value = "hidden" },
+            };
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName, rows, new InsertOptions { Database = "test", Format = RowBinaryFormat.RowBinaryWithDefaults });
+
+            Assert.That(inserted, Is.EqualTo(1));
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT Id, Value FROM test.{tableName}",
+                options: new QueryOptions { Database = "test" });
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetValue(0), Is.EqualTo(1UL));
+            Assert.That(reader.GetValue(1), Is.EqualTo("default_val"));
         }
         finally
         {

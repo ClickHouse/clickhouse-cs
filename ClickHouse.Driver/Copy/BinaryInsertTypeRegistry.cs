@@ -46,7 +46,7 @@ internal sealed class BinaryInsertTypeRegistry
 
         foreach (var property in properties)
         {
-            if (!property.CanRead)
+            if (!property.CanRead || !property.GetMethod.IsPublic)
                 continue;
 
             // Skip indexers
