@@ -10,7 +10,7 @@ allowed-tools: Task, Bash, Read, Glob, Grep, WebFetch, AskUserQuestion
 
 ## Arguments
 
-- `$0` (required): PR number, branch name, or diff spec (e.g., `12345`, `my-feature-branch`, `HEAD~3..HEAD`)
+- `$0` (optional): PR number, branch name, or diff spec (e.g., `12345`, `my-feature-branch`, `HEAD~3..HEAD`)
 
 ## Obtaining the Diff
 
@@ -37,6 +37,10 @@ ROLE
 You are performing a **strict, high-signal code review** of a Pull Request (PR) in a large C# codebase.
 
 Your job is to catch **real problems** and provide concise, actionable feedback. You avoid noisy comments about style or minor cleanups.
+
+If reviewing a PR on GitHub, do not change its title or description.
+
+If running in an environment where CLICKHOUSE_CONNECTION is not set, do not attempt to run tests. If reviewing a GitHub PR, check the results of the CI test runs if necessary.
 
 PRIORITIES
 

@@ -10,7 +10,7 @@ allowed-tools: Task, Bash, Read, Glob, Grep, WebFetch, AskUserQuestion
 
 ## Arguments
 
-- `$0` (required): PR number, branch name, or diff spec (e.g., `12345`, `my-feature-branch`, `HEAD~3..HEAD`)
+- `$0` (optional): PR number, branch name, or diff spec (e.g., `12345`, `my-feature-branch`, `HEAD~3..HEAD`)
 
 ## Obtaining the Diff
 
@@ -37,6 +37,10 @@ ROLE
 You are performing a **strict, high-signal code review** of a Pull Request (PR) in a large C# codebase.
 
 Your job is to catch **real problems** and provide concise, actionable feedback. You avoid noisy comments about style or minor cleanups.
+
+If reviewing a PR on GitHub, do not change its title or description.
+
+If running in an environment where CLICKHOUSE_CONNECTION is not set, do not attempt to run tests. If reviewing a GitHub PR, check the results of the CI test runs if necessary.
 
 PRIORITIES
 
@@ -125,14 +129,14 @@ Bullet list of critical information you lacked.
 
 ### 3) Findings (omit if no findings)
 - **❌ Blockers**
-  - `[File:Line(s)]` Clear description of issue and impact.
-  - Suggested fix (code snippet or steps).
+    - `[File:Line(s)]` Clear description of issue and impact.
+    - Suggested fix (code snippet or steps).
 - **⚠️ Majors**
-  - `[File:Line(s)]` Issue + rationale.
-  - Suggested fix.
+    - `[File:Line(s)]` Issue + rationale.
+    - Suggested fix.
 - **💡 Nits** (only if they reduce bug risk or user confusion)
-  - `[File:Line(s)]` Issue + quick fix.
-  - Use this section for changelog-template quality issues (`Changelog category` mismatch, missing/unclear required `Changelog entry`).
+    - `[File:Line(s)]` Issue + quick fix.
+    - Use this section for changelog-template quality issues (`Changelog category` mismatch, missing/unclear required `Changelog entry`).
 
 If there are **no Blockers or Majors**, you may omit the "Nits" section entirely and just say the PR looks good.
 
