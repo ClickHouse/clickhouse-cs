@@ -296,14 +296,14 @@ public sealed class ClickHouseClient : IClickHouseClient
     {
         if (parameters != null)
         {
-            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
-            sqlQuery = parameters.ReplacePlaceholders(sqlQuery);
+            var resolvedTypeNames = ResolveParameterTypes(sqlQuery, parameters);
+            sqlQuery = parameters.ReplacePlaceholders(sqlQuery, resolvedTypeNames);
             foreach (ClickHouseDbParameter parameter in parameters)
             {
-                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
+                resolvedTypeNames.TryGetValue(parameter.ParameterName, out var resolvedTypeName);
                 uriBuilder.AddSqlQueryParameter(
                     parameter.ParameterName,
-                    HttpParameterFormatter.Format(parameter, TypeSettings, sqlTypeHint));
+                    HttpParameterFormatter.Format(parameter, resolvedTypeName, TypeSettings));
             }
         }
 
@@ -330,14 +330,14 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         if (parameters != null)
         {
-            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
-            sqlQuery = parameters.ReplacePlaceholders(sqlQuery);
+            var resolvedTypeNames = ResolveParameterTypes(sqlQuery, parameters);
+            sqlQuery = parameters.ReplacePlaceholders(sqlQuery, resolvedTypeNames);
 
             foreach (ClickHouseDbParameter parameter in parameters)
             {
-                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
+                resolvedTypeNames.TryGetValue(parameter.ParameterName, out var resolvedTypeName);
                 content.Add(
-                    content: new StringContent(HttpParameterFormatter.Format(parameter, TypeSettings, sqlTypeHint)),
+                    content: new StringContent(HttpParameterFormatter.Format(parameter, resolvedTypeName, TypeSettings)),
                     name: $"param_{parameter.ParameterName}");
             }
         }
@@ -355,6 +355,28 @@ public sealed class ClickHouseClient : IClickHouseClient
         postMessage.Content = content;
 
         return postMessage;
+    }
+
+    /// <summary>
+    /// Resolves the ClickHouse type name for each parameter exactly once.
+    /// The returned dictionary is then used for both SQL placeholder generation and HTTP value formatting,
+    /// ensuring consistency even with stateful or non-idempotent resolvers.
+    /// </summary>
+    private Dictionary<string, string> ResolveParameterTypes(string sqlQuery, ClickHouseParameterCollection parameters)
+    {
+        var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
+        var resolved = new Dictionary<string, string>(parameters.Count);
+
+        foreach (ClickHouseDbParameter parameter in parameters)
+        {
+            typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
+            // TryAdd: parameter collection can in theory contain duplicate names
+            resolved.TryAdd(
+                parameter.ParameterName,
+                ParameterTypeInference.ResolveTypeName(parameter, sqlTypeHint, Settings.ParameterTypeResolver));
+        }
+
+        return resolved;
     }
 
     private static void LogQuerySuccess(Stopwatch stopwatch, string queryId, ILogger logger, QueryStats queryStats)

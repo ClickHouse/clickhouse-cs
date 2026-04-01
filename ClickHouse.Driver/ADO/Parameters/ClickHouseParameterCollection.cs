@@ -68,7 +68,13 @@ public class ClickHouseParameterCollection : DbParameterCollection
 
     public override string ToString() => string.Join(";", parameters);
 
-    internal string ReplacePlaceholders(string sqlQuery)
+    /// <summary>
+    /// Replaces @-style parameter placeholders with {name:Type} ClickHouse native syntax
+    /// using pre-resolved type names.
+    /// </summary>
+    /// <param name="sqlQuery">The SQL query with @-style placeholders.</param>
+    /// <param name="resolvedTypeNames">Pre-resolved type names per parameter (keyed by parameter name).</param>
+    internal string ReplacePlaceholders(string sqlQuery, IReadOnlyDictionary<string, string> resolvedTypeNames)
     {
         if (FeatureSwitch.DisableReplacingParameters || parameters.Count == 0)
             return sqlQuery;
@@ -76,7 +82,10 @@ public class ClickHouseParameterCollection : DbParameterCollection
         var replacements = new Dictionary<string, string>();
         // Using foreach+TryAdd as parameter collection can in theory contain duplicate names
         foreach (var p in parameters)
-            replacements.TryAdd("@" + p.ParameterName, p.QueryForm);
+        {
+            resolvedTypeNames.TryGetValue(p.ParameterName, out var typeName);
+            replacements.TryAdd("@" + p.ParameterName, $"{{{p.ParameterName}:{typeName}}}");
+        }
 
         return sqlQuery.ReplaceMultipleWords(replacements);
     }

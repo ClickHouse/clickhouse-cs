@@ -77,6 +77,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Advanced_009_ReadOnlyUsers.cs](Advanced/Advanced_009_ReadOnlyUsers.cs) - Working with READONLY = 1 users and their limitations
 - [Advanced_010_RetriesAndDeduplication.cs](Advanced/Advanced_010_RetriesAndDeduplication.cs) - Retry patterns with Polly and ReplacingMergeTree for exactly-once insert semantics
 - [Advanced_011_Compression.cs](Advanced/Advanced_011_Compression.cs) - Understanding the UseCompression setting: how it works, when to disable it, and custom HttpClient requirements
+- [Advanced_012_ParameterTypeResolver.cs](Advanced/Advanced_012_ParameterTypeResolver.cs) - Customizing default type mappings for @-style parameters (DateTime→DateTime64, decimal precision, custom resolvers)
 
 ### Troubleshooting
 

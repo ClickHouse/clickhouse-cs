@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Data;
 using System.Data.Common;
-using ClickHouse.Driver.Types;
 
 namespace ClickHouse.Driver.ADO.Parameters;
 
@@ -60,22 +59,17 @@ public class ClickHouseDbParameter : DbParameter
     /// Gets the ClickHouse parameter placeholder string to embed in SQL queries.
     /// Format: <c>{name:Type}</c> (e.g., <c>{id:Int32}</c>).
     /// </summary>
+    /// <remarks>
+    /// Uses default type inference only (explicit <see cref="ClickHouseType"/>, then built-in mapping).
+    /// Does not account for <see cref="IParameterTypeResolver"/> or SQL type hints — those are
+    /// applied internally by <c>ClickHouseClient</c> during query execution.
+    /// </remarks>
     public string QueryForm
     {
         get
         {
-            if (ClickHouseType != null)
-                return $"{{{ParameterName}:{ClickHouseType}}}";
-
-            if (Value is decimal d)
-            {
-                var parts = decimal.GetBits(d);
-                int scale = (parts[3] >> 16) & 0x7F;
-                return $"{{{ParameterName}:Decimal128({scale})}}";
-            }
-
-            var chType = TypeConverter.ToClickHouseType(Value ?? DBNull.Value).ToString();
-            return $"{{{ParameterName}:{chType}}}";
+            var typeName = ParameterTypeInference.ResolveTypeName(this, null, null);
+            return $"{{{ParameterName}:{typeName}}}";
         }
     }
 }
