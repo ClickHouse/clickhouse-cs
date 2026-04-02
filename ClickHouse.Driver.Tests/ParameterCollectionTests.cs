@@ -41,9 +41,7 @@ public class ParameterCollectionTests
         });
 
         var sql = "SELECT @param1, @param2, @param3, @param4";
-        var resolvedTypes = new Dictionary<string, string>();
-        foreach (ClickHouseDbParameter p in collection)
-            resolvedTypes[p.ParameterName] = ParameterTypeInference.ResolveTypeName(p, null, null);
+        var resolvedTypes = collection.ResolveTypeNames(sql, null);
         Assert.That(collection.ReplacePlaceholders(sql, resolvedTypes), Is.EqualTo("SELECT {param1:Int32}, {param2:Int32}, {param3:String}, {param4:Nothing}"));
 
         collection.RemoveAt("param4");

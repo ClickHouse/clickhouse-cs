@@ -25,11 +25,12 @@ public sealed class DictionaryParameterTypeResolver : IParameterTypeResolver
         if (mappings == null)
             throw new ArgumentNullException(nameof(mappings));
 
-        foreach (var (_, chTypeName) in mappings)
+        foreach (var (clrType, chTypeName) in mappings)
         {
             if (string.IsNullOrWhiteSpace(chTypeName))
             {
-                throw new ArgumentException($"Parameter {chTypeName} cannot be null or whitespace.", nameof(mappings));
+                throw new ArgumentException(
+                    $"ClickHouse type name for {clrType} cannot be null or whitespace.", nameof(mappings));
             }
         }
 

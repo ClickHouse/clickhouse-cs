@@ -201,13 +201,42 @@ public class ParameterTypeInferenceIntegrationTests
         Assert.That(reader.GetString(1), Is.EqualTo("FixedString(10)"));
     }
 
-private class AlwaysInt64Resolver : IParameterTypeResolver
+    [Test]
+    public async Task ExecuteReaderAsync_CountingResolver_CalledExactlyOncePerParameter()
+    {
+        var resolver = new CountingResolver();
+        using var client = CreateClientWithResolver(resolver);
+
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("a", 42);
+        parameters.AddParameter("b", 123);
+
+        using var reader = await client.ExecuteReaderAsync("SELECT @a, @b", parameters);
+        Assert.That(reader.Read(), Is.True);
+
+        // Resolver should be called exactly once per parameter, not twice
+        // (once for SQL placeholder, once for HTTP formatting would be a bug)
+        Assert.That(resolver.CallCount, Is.EqualTo(2));
+    }
+
+    private class AlwaysInt64Resolver : IParameterTypeResolver
     {
         public string ResolveType(Type clrType, object value, string parameterName)
         {
             if (clrType == typeof(int))
                 return "Int64";
             return null;
+        }
+    }
+
+    private class CountingResolver : IParameterTypeResolver
+    {
+        public int CallCount { get; private set; }
+
+        public string ResolveType(Type clrType, object value, string parameterName)
+        {
+            CallCount++;
+            return clrType == typeof(int) ? "Int64" : null;
         }
     }
 }

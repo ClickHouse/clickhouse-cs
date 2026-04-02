@@ -69,6 +69,30 @@ public class ClickHouseParameterCollection : DbParameterCollection
     public override string ToString() => string.Join(";", parameters);
 
     /// <summary>
+    /// Resolves the ClickHouse type name for each parameter exactly once.
+    /// The returned dictionary is used for both SQL placeholder generation and HTTP value formatting,
+    /// ensuring consistency.
+    /// </summary>
+    /// <param name="sqlQuery">The SQL query, used to extract {name:Type} hints.</param>
+    /// <param name="resolver">Custom resolver from settings, or null.</param>
+    internal IReadOnlyDictionary<string, string> ResolveTypeNames(string sqlQuery, IParameterTypeResolver resolver)
+    {
+        var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
+        var resolved = new Dictionary<string, string>(parameters.Count);
+
+        foreach (var parameter in parameters)
+        {
+            typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
+            // TryAdd: parameter collection can in theory contain duplicate names
+            resolved.TryAdd(
+                parameter.ParameterName,
+                ParameterTypeInference.ResolveTypeName(parameter, sqlTypeHint, resolver));
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
     /// Replaces @-style parameter placeholders with {name:Type} ClickHouse native syntax
     /// using pre-resolved type names.
     /// </summary>
