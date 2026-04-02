@@ -1,4 +1,5 @@
-﻿using ClickHouse.Driver.ADO.Parameters;
+﻿using System.Collections.Generic;
+using ClickHouse.Driver.ADO.Parameters;
 using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests;
@@ -40,7 +41,8 @@ public class ParameterCollectionTests
         });
 
         var sql = "SELECT @param1, @param2, @param3, @param4";
-        Assert.That(collection.ReplacePlaceholders(sql), Is.EqualTo("SELECT {param1:Int32}, {param2:Int32}, {param3:String}, {param4:Nothing}"));
+        var resolvedTypes = collection.ResolveTypeNames(sql, null);
+        Assert.That(collection.ReplacePlaceholders(sql, resolvedTypes), Is.EqualTo("SELECT {param1:Int32}, {param2:Int32}, {param3:String}, {param4:Nothing}"));
 
         collection.RemoveAt("param4");
         collection.RemoveAt(3);

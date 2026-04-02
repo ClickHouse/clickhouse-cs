@@ -183,7 +183,8 @@ public class TypeMappingTests
     public string ShouldFormatIpParameterViaHttpFormatter(object value)
     {
         var parameter = new ClickHouseDbParameter { ParameterName = "p", Value = value };
-        return HttpParameterFormatter.Format(parameter, TypeSettings.Default);
+        var typeName = ParameterTypeResolution.ResolveTypeName(parameter, null, null);
+        return HttpParameterFormatter.Format(parameter, typeName, TypeSettings.Default);
     }
 
     [Test]

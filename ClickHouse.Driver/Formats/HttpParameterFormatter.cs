@@ -17,33 +17,20 @@ internal static class HttpParameterFormatter
     private const string NullValueString = "\\N";
 
     /// <summary>
-    /// Formats a parameter value for HTTP transport.
+    /// Formats a parameter value for HTTP transport
     /// </summary>
     /// <param name="parameter">The parameter to format.</param>
+    /// <param name="typeName">The ClickHouse type name (e.g., "DateTime64(3)") for this parameter.</param>
     /// <param name="settings">Type settings for parsing.</param>
-    /// <param name="sqlTypeHint">
-    /// Optional type hint extracted from the SQL query (e.g., from <c>{name:Type}</c>).
-    /// The parameter's explicit <see cref="ClickHouseDbParameter.ClickHouseType"/> takes precedence over this hint.
-    /// </param>
     /// <returns>The formatted parameter value string.</returns>
-    public static string Format(ClickHouseDbParameter parameter, TypeSettings settings, string sqlTypeHint = null)
+    public static string Format(ClickHouseDbParameter parameter, string typeName, TypeSettings settings)
     {
         if (parameter.Value is null or DBNull)
         {
             return NullValueString;
         }
 
-        // Explicit parameter type takes precedence, then SQL type hint, then inference
-        var effectiveType = parameter.ClickHouseType ?? sqlTypeHint;
-
-        if (string.IsNullOrWhiteSpace(effectiveType))
-        {
-            // Infer type and format accordingly
-            var type = TypeConverter.ToClickHouseType(parameter.Value);
-            return Format(type, parameter.Value, false);
-        }
-
-        var parsedType = TypeConverter.ParseClickHouseType(effectiveType, settings);
+        var parsedType = TypeConverter.ParseClickHouseType(typeName, settings);
         return Format(parsedType, parameter.Value, false);
     }
 
