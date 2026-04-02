@@ -5,7 +5,7 @@ using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests;
 
-public class ParameterTypeInferenceTests
+public class ParameterTypeResolutionTests
 {
     [Test]
     public void ResolveTypeName_ExplicitClickHouseType_WinsOverEverything()
@@ -21,7 +21,7 @@ public class ParameterTypeInferenceTests
             [typeof(DateTime)] = "DateTime64(6)",
         });
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, "DateTime64(3)", resolver);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, "DateTime64(3)", resolver);
 
         Assert.That(result, Is.EqualTo("DateTime"));
     }
@@ -39,7 +39,7 @@ public class ParameterTypeInferenceTests
             [typeof(DateTime)] = "DateTime64(6)",
         });
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, "DateTime64(3)", resolver);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, "DateTime64(3)", resolver);
 
         Assert.That(result, Is.EqualTo("DateTime64(3)"));
     }
@@ -57,7 +57,7 @@ public class ParameterTypeInferenceTests
             [typeof(DateTime)] = "DateTime64(6)",
         });
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, null, resolver);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, null, resolver);
 
         Assert.That(result, Is.EqualTo("DateTime64(6)"));
     }
@@ -76,7 +76,7 @@ public class ParameterTypeInferenceTests
             [typeof(DateTime)] = "DateTime64(6)",
         });
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, null, resolver);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, null, resolver);
 
         Assert.That(result, Is.EqualTo("Int32"));
     }
@@ -90,7 +90,7 @@ public class ParameterTypeInferenceTests
             Value = 42,
         };
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, null, null);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, null, null);
 
         Assert.That(result, Is.EqualTo("Int32"));
     }
@@ -104,7 +104,7 @@ public class ParameterTypeInferenceTests
             Value = 123.456m, // scale = 3
         };
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, null, null);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, null, null);
 
         Assert.That(result, Is.EqualTo("Decimal128(3)"));
     }
@@ -122,7 +122,7 @@ public class ParameterTypeInferenceTests
             [typeof(decimal)] = "Decimal64(4)",
         });
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, null, resolver);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, null, resolver);
 
         Assert.That(result, Is.EqualTo("Decimal64(4)"));
     }
@@ -136,7 +136,7 @@ public class ParameterTypeInferenceTests
             Value = null,
         };
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, null, null);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, null, null);
 
         Assert.That(result, Is.EqualTo("Nullable(Nothing)"));
     }
@@ -155,7 +155,7 @@ public class ParameterTypeInferenceTests
         });
 
         // Resolver should be skipped for DBNull values
-        var result = ParameterTypeInference.ResolveTypeName(parameter, null, resolver);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, null, resolver);
 
         Assert.That(result, Is.EqualTo("Nullable(Nothing)"));
     }
@@ -182,7 +182,7 @@ public class ParameterTypeInferenceTests
             Value = 123.45678m, // scale = 5
         };
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, null, resolver);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, null, resolver);
 
         Assert.That(result, Is.EqualTo("Decimal128(5)"));
     }
@@ -197,7 +197,7 @@ public class ParameterTypeInferenceTests
             Value = DateTime.UtcNow,
         };
 
-        var result = ParameterTypeInference.ResolveTypeName(parameter, null, resolver);
+        var result = ParameterTypeResolution.ResolveTypeName(parameter, null, resolver);
 
         Assert.That(result, Is.EqualTo("DateTime64(3)"));
     }

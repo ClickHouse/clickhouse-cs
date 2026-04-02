@@ -8,7 +8,7 @@ namespace ClickHouse.Driver.ADO.Parameters;
 /// Called once per parameter per request by <see cref="ClickHouseClient"/>, which reuses the
 /// result for both purposes.
 /// </summary>
-internal static class ParameterTypeInference
+internal static class ParameterTypeResolution
 {
     /// <summary>
     /// Resolves the effective ClickHouse type name for a parameter.

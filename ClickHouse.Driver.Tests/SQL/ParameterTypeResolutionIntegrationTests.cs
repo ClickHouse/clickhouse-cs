@@ -15,11 +15,11 @@ namespace ClickHouse.Driver.Tests.SQL;
 /// </summary>
 [TestFixture(false)]
 [TestFixture(true)]
-public class ParameterTypeInferenceIntegrationTests
+public class ParameterTypeResolutionIntegrationTests
 {
     private readonly bool useFormDataParameters;
 
-    public ParameterTypeInferenceIntegrationTests(bool useFormDataParameters)
+    public ParameterTypeResolutionIntegrationTests(bool useFormDataParameters)
     {
         this.useFormDataParameters = useFormDataParameters;
     }

@@ -86,7 +86,7 @@ public class ClickHouseParameterCollection : DbParameterCollection
             // TryAdd: parameter collection can in theory contain duplicate names
             resolved.TryAdd(
                 parameter.ParameterName,
-                ParameterTypeInference.ResolveTypeName(parameter, sqlTypeHint, resolver));
+                ParameterTypeResolution.ResolveTypeName(parameter, sqlTypeHint, resolver));
         }
 
         return resolved;

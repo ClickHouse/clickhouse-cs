@@ -68,7 +68,7 @@ public class ClickHouseDbParameter : DbParameter
     {
         get
         {
-            var typeName = ParameterTypeInference.ResolveTypeName(this, null, null);
+            var typeName = ParameterTypeResolution.ResolveTypeName(this, null, null);
             return $"{{{ParameterName}:{typeName}}}";
         }
     }
