@@ -1,3 +1,12 @@
+v1.2.0
+---
+
+**New Features:**
+* `IParameterTypeResolver`: configurable default type mapping for `@`-style parameterized queries. Set `ParameterTypeResolver` on `ClickHouseClientSettings` to override how .NET types are mapped to ClickHouse types (e.g., `DateTime` → `DateTime64(3)`, `decimal` → `Decimal64(4)`). Includes one implementation, `DictionaryParameterTypeResolver` for simple type→type mappings, and supports custom implementations for value-aware or name-based resolution.
+
+**Internal improvements:**
+* Centralized parameter type resolution into `ParameterTypeResolution`, replacing previously scattered logic in `ClickHouseDbParameter.QueryForm` and `HttpParameterFormatter`. Each parameter's type is now resolved exactly once per request, ensuring consistency between SQL placeholder generation and HTTP value formatting.
+
 v1.1.1
 ---
 

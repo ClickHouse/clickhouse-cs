@@ -237,6 +237,10 @@ class Program
         await Compression.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(ParameterTypeResolver)}");
+        await ParameterTypeResolver.Run();
+        WaitForUser(isInteractive);
+
         // Troubleshooting
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("TROUBLESHOOTING");

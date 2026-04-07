@@ -68,7 +68,37 @@ public class ClickHouseParameterCollection : DbParameterCollection
 
     public override string ToString() => string.Join(";", parameters);
 
-    internal string ReplacePlaceholders(string sqlQuery)
+    /// <summary>
+    /// Resolves the ClickHouse type name for each parameter exactly once.
+    /// The returned dictionary is used for both SQL placeholder generation and HTTP value formatting,
+    /// ensuring consistency.
+    /// </summary>
+    /// <param name="sqlQuery">The SQL query, used to extract {name:Type} hints.</param>
+    /// <param name="resolver">Custom resolver from settings, or null.</param>
+    internal IReadOnlyDictionary<string, string> ResolveTypeNames(string sqlQuery, IParameterTypeResolver resolver)
+    {
+        var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
+        var resolved = new Dictionary<string, string>(parameters.Count);
+
+        foreach (var parameter in parameters)
+        {
+            typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
+            // TryAdd: parameter collection can in theory contain duplicate names
+            resolved.TryAdd(
+                parameter.ParameterName,
+                ParameterTypeResolution.ResolveTypeName(parameter, sqlTypeHint, resolver));
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// Replaces @-style parameter placeholders with {name:Type} ClickHouse native syntax
+    /// using pre-resolved type names.
+    /// </summary>
+    /// <param name="sqlQuery">The SQL query with @-style placeholders.</param>
+    /// <param name="resolvedTypeNames">Pre-resolved type names per parameter (keyed by parameter name).</param>
+    internal string ReplacePlaceholders(string sqlQuery, IReadOnlyDictionary<string, string> resolvedTypeNames)
     {
         if (FeatureSwitch.DisableReplacingParameters || parameters.Count == 0)
             return sqlQuery;
@@ -76,7 +106,10 @@ public class ClickHouseParameterCollection : DbParameterCollection
         var replacements = new Dictionary<string, string>();
         // Using foreach+TryAdd as parameter collection can in theory contain duplicate names
         foreach (var p in parameters)
-            replacements.TryAdd("@" + p.ParameterName, p.QueryForm);
+        {
+            resolvedTypeNames.TryGetValue(p.ParameterName, out var typeName);
+            replacements.TryAdd("@" + p.ParameterName, $"{{{p.ParameterName}:{typeName}}}");
+        }
 
         return sqlQuery.ReplaceMultipleWords(replacements);
     }

@@ -296,14 +296,14 @@ public sealed class ClickHouseClient : IClickHouseClient
     {
         if (parameters != null)
         {
-            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
-            sqlQuery = parameters.ReplacePlaceholders(sqlQuery);
+            var resolvedTypeNames = parameters.ResolveTypeNames(sqlQuery, Settings.ParameterTypeResolver);
+            sqlQuery = parameters.ReplacePlaceholders(sqlQuery, resolvedTypeNames);
             foreach (ClickHouseDbParameter parameter in parameters)
             {
-                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
+                resolvedTypeNames.TryGetValue(parameter.ParameterName, out var resolvedTypeName);
                 uriBuilder.AddSqlQueryParameter(
                     parameter.ParameterName,
-                    HttpParameterFormatter.Format(parameter, TypeSettings, sqlTypeHint));
+                    HttpParameterFormatter.Format(parameter, resolvedTypeName, TypeSettings));
             }
         }
 
@@ -330,14 +330,14 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         if (parameters != null)
         {
-            var typeHints = SqlParameterTypeExtractor.ExtractTypeHints(sqlQuery);
-            sqlQuery = parameters.ReplacePlaceholders(sqlQuery);
+            var resolvedTypeNames = parameters.ResolveTypeNames(sqlQuery, Settings.ParameterTypeResolver);
+            sqlQuery = parameters.ReplacePlaceholders(sqlQuery, resolvedTypeNames);
 
             foreach (ClickHouseDbParameter parameter in parameters)
             {
-                typeHints.TryGetValue(parameter.ParameterName, out var sqlTypeHint);
+                resolvedTypeNames.TryGetValue(parameter.ParameterName, out var resolvedTypeName);
                 content.Add(
-                    content: new StringContent(HttpParameterFormatter.Format(parameter, TypeSettings, sqlTypeHint)),
+                    content: new StringContent(HttpParameterFormatter.Format(parameter, resolvedTypeName, TypeSettings)),
                     name: $"param_{parameter.ParameterName}");
             }
         }
