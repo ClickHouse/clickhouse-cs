@@ -15,9 +15,10 @@ using NUnit.Framework.Legacy;
 namespace ClickHouse.Driver.Tests.Types;
 
 [TestFixture]
+[Category("Cloud")]
 public class JsonModeTests
 {
-    private ClickHouseConnection GetConnectionWithJsonMode(JsonReadMode readMode = JsonReadMode.Binary, JsonWriteMode writeMode = JsonWriteMode.Binary)
+    private ClickHouseClientSettings GetSettingsWithJsonMode(JsonReadMode readMode = JsonReadMode.Binary, JsonWriteMode writeMode = JsonWriteMode.Binary)
     {
         var builder = TestUtilities.GetConnectionStringBuilder();
         builder.JsonReadMode = readMode;
@@ -28,9 +29,20 @@ public class JsonModeTests
         // Add experimental JSON type support
         settings.CustomSettings["allow_experimental_json_type"] = 1;
 
+        return settings;
+    }
+
+    private ClickHouseConnection GetConnectionWithJsonMode(JsonReadMode readMode = JsonReadMode.Binary, JsonWriteMode writeMode = JsonWriteMode.Binary)
+    {
+        var settings = GetSettingsWithJsonMode(readMode, writeMode);
         var connection = new ClickHouseConnection(settings);
         connection.Open();
         return connection;
+    }
+
+    private ClickHouseClient GetClientWithJsonMode(JsonReadMode readMode = JsonReadMode.Binary, JsonWriteMode writeMode = JsonWriteMode.Binary)
+    {
+        return new ClickHouseClient(GetSettingsWithJsonMode(readMode, writeMode));
     }
 
     [Test]
@@ -501,6 +513,89 @@ public class JsonModeTests
 
         Assert.That(settings.JsonReadMode, Is.EqualTo(JsonReadMode.Binary));
         Assert.That(settings.JsonWriteMode, Is.EqualTo(JsonWriteMode.String));
+    }
+
+    [Test]
+    public async Task JsonWriteMode_String_ShouldSetInputFormatSetting()
+    {
+        using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
+
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT value FROM system.settings WHERE name = 'input_format_binary_read_json_as_string'");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("1"));
+    }
+
+    [Test]
+    public async Task JsonWriteMode_Binary_ShouldExplicitlyDisableInputFormatSetting()
+    {
+        using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.Binary);
+
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT value FROM system.settings WHERE name = 'input_format_binary_read_json_as_string'");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("0"));
+    }
+
+    [Test]
+    public async Task JsonWriteMode_None_ShouldNotSetInputFormatSetting()
+    {
+        using var client = GetClientWithJsonMode(writeMode: JsonWriteMode.None);
+
+        // Run a query with a known query ID so we can find it in the query log
+        var queryId = $"json_write_none_test_{Guid.NewGuid():N}";
+        var options = new QueryOptions { QueryId = queryId };
+        await client.ExecuteScalarAsync("SELECT 1", options: options);
+
+        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+
+        var result = await client.ExecuteScalarAsync(
+            $"SELECT Settings['input_format_binary_read_json_as_string'] FROM system.query_log " +
+            $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
+
+        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
+    }
+
+    [Test]
+    public async Task JsonReadMode_String_ShouldSetOutputFormatSetting()
+    {
+        using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.String);
+
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT value FROM system.settings WHERE name = 'output_format_binary_write_json_as_string'");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("1"));
+    }
+
+    [Test]
+    public async Task JsonReadMode_Binary_ShouldExplicitlyDisableOutputFormatSetting()
+    {
+        using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.Binary);
+
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT value FROM system.settings WHERE name = 'output_format_binary_write_json_as_string'");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("0"));
+    }
+
+    [Test]
+    public async Task JsonReadMode_None_ShouldNotSetOutputFormatSetting()
+    {
+        using var client = GetClientWithJsonMode(readMode: JsonReadMode.None);
+
+        // Run a query with a known query ID so we can find it in the query log
+        var queryId = $"json_read_none_test_{Guid.NewGuid():N}";
+        var options = new QueryOptions { QueryId = queryId };
+        await client.ExecuteScalarAsync("SELECT 1", options: options);
+
+        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+
+        // The query_log Settings map should NOT contain output_format_binary_write_json_as_string
+        var result = await client.ExecuteScalarAsync(
+            $"SELECT Settings['output_format_binary_write_json_as_string'] FROM system.query_log " +
+            $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
+
+        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
     }
 
     #region JSON Roundtrip Tests

@@ -7,6 +7,7 @@ public enum JsonReadMode
 {
     /// <summary>
     /// JSON is returned in binary format from the server and parsed into JsonObject.
+    /// Explicitly sets output_format_binary_write_json_as_string=0.
     /// </summary>
     Binary = 0,
 
