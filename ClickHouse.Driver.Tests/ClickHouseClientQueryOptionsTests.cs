@@ -1100,4 +1100,24 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
             await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         }
     }
+
+    [Test]
+    public async Task ExecuteScalarAsync_CustomSettingOverridesAutoJsonSetting_SettingValueReflectedInQuery()
+    {
+        // Default JsonWriteMode is String, which auto-sets input_format_binary_read_json_as_string=1
+        // Verify that a user can override it via QueryOptions.CustomSettings
+        var options = new QueryOptions
+        {
+            CustomSettings = new Dictionary<string, object>
+            {
+                ["input_format_binary_read_json_as_string"] = 0,
+            },
+        };
+
+        var result = await client.ExecuteScalarAsync(
+            "SELECT value FROM system.settings WHERE name = 'input_format_binary_read_json_as_string'",
+            options: options);
+
+        Assert.That(result, Is.EqualTo("0"));
+    }
 }

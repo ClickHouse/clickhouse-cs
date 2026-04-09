@@ -15,9 +15,10 @@ using NUnit.Framework.Legacy;
 namespace ClickHouse.Driver.Tests.Types;
 
 [TestFixture]
+[Category("Cloud")]
 public class JsonModeTests
 {
-    private ClickHouseConnection GetConnectionWithJsonMode(JsonReadMode readMode = JsonReadMode.Binary, JsonWriteMode writeMode = JsonWriteMode.Binary)
+    private ClickHouseClientSettings GetSettingsWithJsonMode(JsonReadMode readMode = JsonReadMode.Binary, JsonWriteMode writeMode = JsonWriteMode.Binary)
     {
         var builder = TestUtilities.GetConnectionStringBuilder();
         builder.JsonReadMode = readMode;
@@ -28,9 +29,20 @@ public class JsonModeTests
         // Add experimental JSON type support
         settings.CustomSettings["allow_experimental_json_type"] = 1;
 
+        return settings;
+    }
+
+    private ClickHouseConnection GetConnectionWithJsonMode(JsonReadMode readMode = JsonReadMode.Binary, JsonWriteMode writeMode = JsonWriteMode.Binary)
+    {
+        var settings = GetSettingsWithJsonMode(readMode, writeMode);
         var connection = new ClickHouseConnection(settings);
         connection.Open();
         return connection;
+    }
+
+    private ClickHouseClient GetClientWithJsonMode(JsonReadMode readMode = JsonReadMode.Binary, JsonWriteMode writeMode = JsonWriteMode.Binary)
+    {
+        return new ClickHouseClient(GetSettingsWithJsonMode(readMode, writeMode));
     }
 
     [Test]
@@ -51,11 +63,8 @@ public class JsonModeTests
         var parsed = JsonNode.Parse(jsonString);
         Assert.That((string)parsed["name"], Is.EqualTo("John"));
 
-        // ClickHouse 25.3 returns numbers as strings in this scenario
-        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
-            Assert.That(int.Parse(parsed["age"].ToString()), Is.EqualTo(30));
-        else
-            Assert.That(parsed["age"].GetValue<int>(), Is.EqualTo(30));
+        // In string read mode, the server may return numbers as quoted strings
+        Assert.That(int.Parse(parsed["age"].ToString()), Is.EqualTo(30));
     }
 
     [Test]
@@ -214,11 +223,8 @@ public class JsonModeTests
         var parsed = JsonNode.Parse((string)result);
         Assert.That((string)parsed["key"], Is.EqualTo("value"));
 
-        // ClickHouse 25.3 returns numbers as strings in this scenario
-        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
-            Assert.That(int.Parse(parsed["num"].ToString()), Is.EqualTo(42));
-        else
-            Assert.That((int)parsed["num"], Is.EqualTo(42));
+        // In string read mode, the server may return numbers as quoted strings
+        Assert.That(int.Parse(parsed["num"].ToString()), Is.EqualTo(42));
     }
 
     [Test]
@@ -503,6 +509,89 @@ public class JsonModeTests
         Assert.That(settings.JsonWriteMode, Is.EqualTo(JsonWriteMode.String));
     }
 
+    [Test]
+    public async Task JsonWriteMode_String_ShouldSetInputFormatSetting()
+    {
+        using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
+
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT value FROM system.settings WHERE name = 'input_format_binary_read_json_as_string'");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("1"));
+    }
+
+    [Test]
+    public async Task JsonWriteMode_Binary_ShouldExplicitlyDisableInputFormatSetting()
+    {
+        using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.Binary);
+
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT value FROM system.settings WHERE name = 'input_format_binary_read_json_as_string'");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("0"));
+    }
+
+    [Test]
+    public async Task JsonWriteMode_None_ShouldNotSetInputFormatSetting()
+    {
+        using var client = GetClientWithJsonMode(writeMode: JsonWriteMode.None);
+
+        // Run a query with a known query ID so we can find it in the query log
+        var queryId = $"json_write_none_test_{Guid.NewGuid():N}";
+        var options = new QueryOptions { QueryId = queryId };
+        await client.ExecuteScalarAsync("SELECT 1", options: options);
+
+        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+
+        var result = await client.ExecuteScalarAsync(
+            $"SELECT Settings['input_format_binary_read_json_as_string'] FROM system.query_log " +
+            $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
+
+        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
+    }
+
+    [Test]
+    public async Task JsonReadMode_String_ShouldSetOutputFormatSetting()
+    {
+        using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.String);
+
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT value FROM system.settings WHERE name = 'output_format_binary_write_json_as_string'");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("1"));
+    }
+
+    [Test]
+    public async Task JsonReadMode_Binary_ShouldExplicitlyDisableOutputFormatSetting()
+    {
+        using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.Binary);
+
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT value FROM system.settings WHERE name = 'output_format_binary_write_json_as_string'");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("0"));
+    }
+
+    [Test]
+    public async Task JsonReadMode_None_ShouldNotSetOutputFormatSetting()
+    {
+        using var client = GetClientWithJsonMode(readMode: JsonReadMode.None);
+
+        // Run a query with a known query ID so we can find it in the query log
+        var queryId = $"json_read_none_test_{Guid.NewGuid():N}";
+        var options = new QueryOptions { QueryId = queryId };
+        await client.ExecuteScalarAsync("SELECT 1", options: options);
+
+        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+
+        // The query_log Settings map should NOT contain output_format_binary_write_json_as_string
+        var result = await client.ExecuteScalarAsync(
+            $"SELECT Settings['output_format_binary_write_json_as_string'] FROM system.query_log " +
+            $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
+
+        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
+    }
+
     #region JSON Roundtrip Tests
 
     /// <summary>
@@ -572,11 +661,8 @@ public class JsonModeTests
         var resultParsed = JsonNode.Parse(result);
         Assert.That(resultParsed["name"].GetValue<string>(), Is.EqualTo(originalParsed["name"].GetValue<string>()));
 
-        // ClickHouse 25.3 returns numbers as strings in this scenario
-        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
-            Assert.That(long.Parse(resultParsed["value"].ToString()), Is.EqualTo(originalParsed["value"].GetValue<long>()));
-        else
-            Assert.That(resultParsed["value"].GetValue<long>(), Is.EqualTo(originalParsed["value"].GetValue<long>()));
+        // In string read mode, the server may return numbers as quoted strings
+        Assert.That(long.Parse(resultParsed["value"].ToString()), Is.EqualTo(long.Parse(originalParsed["value"].ToString())));
 
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
