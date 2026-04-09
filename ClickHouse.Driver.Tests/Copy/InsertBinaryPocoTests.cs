@@ -719,6 +719,64 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task InsertBinaryAsync_AfterAlterTableAddsColumn_ShouldInsertSuccessfully()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync($@"
+                CREATE TABLE IF NOT EXISTS test.{tableName}
+                (Id UInt64, Value String)
+                ENGINE = MergeTree() ORDER BY Id");
+
+            client.RegisterBinaryInsertType<SimplePoco>();
+
+            var firstBatch = new[]
+            {
+                new SimplePoco { Id = 1, Value = "before_alter" },
+            };
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName, firstBatch, new InsertOptions { Database = "test" });
+
+            Assert.That(inserted, Is.EqualTo(1));
+
+            // Add a new column with a default value
+            await client.ExecuteNonQueryAsync(
+                $"ALTER TABLE test.{tableName} ADD COLUMN Extra String DEFAULT 'default_extra'");
+
+            // Insert again with the same POCO (which doesn't have the new column)
+            var secondBatch = new[]
+            {
+                new SimplePoco { Id = 2, Value = "after_alter" },
+            };
+
+            inserted = await client.InsertBinaryAsync(
+                tableName, secondBatch, new InsertOptions { Database = "test" });
+
+            Assert.That(inserted, Is.EqualTo(1));
+
+            // Verify both rows exist and the new column got its default value
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT Id, Value, Extra FROM test.{tableName} ORDER BY Id",
+                options: new QueryOptions { Database = "test" });
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetValue(0), Is.EqualTo(1UL));
+            Assert.That(reader.GetValue(1), Is.EqualTo("before_alter"));
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetValue(0), Is.EqualTo(2UL));
+            Assert.That(reader.GetValue(1), Is.EqualTo("after_alter"));
+            Assert.That(reader.GetValue(2), Is.EqualTo("default_extra"));
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
     public async Task InsertBinaryAsync_WithMultipleBatches_ShouldInsertAll()
     {
         var tableName = CreateTestTableName();
