@@ -63,11 +63,8 @@ public class JsonModeTests
         var parsed = JsonNode.Parse(jsonString);
         Assert.That((string)parsed["name"], Is.EqualTo("John"));
 
-        // ClickHouse 25.3 returns numbers as strings in this scenario
-        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
-            Assert.That(int.Parse(parsed["age"].ToString()), Is.EqualTo(30));
-        else
-            Assert.That(parsed["age"].GetValue<int>(), Is.EqualTo(30));
+        // In string read mode, the server may return numbers as quoted strings
+        Assert.That(int.Parse(parsed["age"].ToString()), Is.EqualTo(30));
     }
 
     [Test]
@@ -226,11 +223,8 @@ public class JsonModeTests
         var parsed = JsonNode.Parse((string)result);
         Assert.That((string)parsed["key"], Is.EqualTo("value"));
 
-        // ClickHouse 25.3 returns numbers as strings in this scenario
-        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
-            Assert.That(int.Parse(parsed["num"].ToString()), Is.EqualTo(42));
-        else
-            Assert.That((int)parsed["num"], Is.EqualTo(42));
+        // In string read mode, the server may return numbers as quoted strings
+        Assert.That(int.Parse(parsed["num"].ToString()), Is.EqualTo(42));
     }
 
     [Test]
@@ -667,11 +661,8 @@ public class JsonModeTests
         var resultParsed = JsonNode.Parse(result);
         Assert.That(resultParsed["name"].GetValue<string>(), Is.EqualTo(originalParsed["name"].GetValue<string>()));
 
-        // ClickHouse 25.3 returns numbers as strings in this scenario
-        if (TestUtilities.ServerVersion == Version.Parse("25.3"))
-            Assert.That(long.Parse(resultParsed["value"].ToString()), Is.EqualTo(originalParsed["value"].GetValue<long>()));
-        else
-            Assert.That(resultParsed["value"].GetValue<long>(), Is.EqualTo(originalParsed["value"].GetValue<long>()));
+        // In string read mode, the server may return numbers as quoted strings
+        Assert.That(long.Parse(resultParsed["value"].ToString()), Is.EqualTo(long.Parse(originalParsed["value"].ToString())));
 
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
