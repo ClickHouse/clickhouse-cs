@@ -8,6 +8,7 @@ public enum JsonWriteMode
     /// <summary>
     /// JSON is written in binary format. Only registered POCO types are supported.
     /// Use RegisterJsonSerializationType to register types with custom path mappings.
+    /// Explicitly sets input_format_binary_read_json_as_string=0.
     /// </summary>
     Binary = 0,
 
@@ -22,7 +23,7 @@ public enum JsonWriteMode
 
     /// <summary>
     /// No server settings are automatically applied. Use this for readonly connections
-    /// where setting server parameters is not allowed. Behavior is same as Binary.
+    /// where setting server parameters is not allowed. Write behavior is same as Binary.
     /// Does not set input_format_binary_read_json_as_string.
     /// </summary>
     None = 2,

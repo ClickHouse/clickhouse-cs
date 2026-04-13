@@ -80,10 +80,15 @@ internal class ClickHouseUriBuilder
         parameters.Set("query_id", GetEffectiveQueryId());
 
         // Inject JSON format settings based on mode - do this before sqlQueryParameters to allow for overrides
-        if (JsonReadMode == JsonReadMode.String)
+        // None skips the setting entirely (for readonly connections or older servers)
+        if (JsonReadMode == JsonReadMode.Binary)
+            parameters.Set("output_format_binary_write_json_as_string", "0");
+        else if (JsonReadMode == JsonReadMode.String)
             parameters.Set("output_format_binary_write_json_as_string", "1");
 
-        if (JsonWriteMode == JsonWriteMode.String)
+        if (JsonWriteMode == JsonWriteMode.Binary)
+            parameters.Set("input_format_binary_read_json_as_string", "0");
+        else if (JsonWriteMode == JsonWriteMode.String)
             parameters.Set("input_format_binary_read_json_as_string", "1");
 
         foreach (var parameter in sqlQueryParameters)
