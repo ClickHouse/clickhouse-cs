@@ -128,6 +128,15 @@ const ClickHouse.Driver.ADO.ClickHouseDefaults.UseSession = false -> bool
 const ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.ActivitySourceName = "ClickHouse.Driver" -> string
 Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.Equals(object obj) -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ParameterTypeResolver.get -> ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ParameterTypeResolver.init -> void
+ClickHouse.Driver.ADO.Parameters.DictionaryParameterTypeResolver
+ClickHouse.Driver.ADO.Parameters.DictionaryParameterTypeResolver.DictionaryParameterTypeResolver(System.Collections.Generic.IDictionary<System.Type, string> mappings) -> void
+ClickHouse.Driver.ADO.Parameters.DictionaryParameterTypeResolver.ResolveType(System.Type clrType, object value, string parameterName) -> string
+ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver
+ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver.ResolveType(System.Type clrType, object value, string parameterName) -> string
+ClickHouse.Driver.QueryOptions.ParameterTypeResolver.get -> ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver?
+ClickHouse.Driver.QueryOptions.ParameterTypeResolver.init -> void
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.GetHashCode() -> int
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.ToString() -> string
 override ClickHouse.Driver.ADO.ClickHouseConnectionFactory.CreateDataSource(string connectionString) -> System.Data.Common.DbDataSource

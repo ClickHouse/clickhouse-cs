@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using ClickHouse.Driver.ADO.Parameters;
 using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.ADO;
@@ -81,6 +82,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         // Copy JSON mode settings
         JsonReadMode = other.JsonReadMode;
         JsonWriteMode = other.JsonWriteMode;
+
+        // Copy parameter type resolver
+        ParameterTypeResolver = other.ParameterTypeResolver;
     }
 
     /// <summary>
@@ -274,6 +278,14 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public JsonWriteMode JsonWriteMode { get; init; } = JsonWriteMode.String;
 
     /// <summary>
+    /// Gets or sets a custom resolver for mapping .NET types to ClickHouse types
+    /// during @-style parameter substitution. When set, this resolver is consulted
+    /// after explicit ClickHouseType/SQL type hints but before default type inference.
+    /// Default: null (use built-in type inference)
+    /// </summary>
+    public IParameterTypeResolver ParameterTypeResolver { get; init; }
+
+    /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
     /// Values not specified in the connection string will use default values.
     /// </summary>
@@ -368,6 +380,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                EnableDebugMode == other.EnableDebugMode &&
                JsonReadMode == other.JsonReadMode &&
                JsonWriteMode == other.JsonWriteMode &&
+               ParameterTypeResolver == other.ParameterTypeResolver &&
                Roles.SequenceEqual(other.Roles) &&
                CustomHeaders.Count == other.CustomHeaders.Count &&
                CustomHeaders.All(kvp => other.CustomHeaders.TryGetValue(kvp.Key, out var value) && kvp.Value == value);
@@ -406,6 +419,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(EnableDebugMode);
         hash.Add(JsonReadMode);
         hash.Add(JsonWriteMode);
+        hash.Add(ParameterTypeResolver);
         foreach (var kvp in CustomSettings)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));

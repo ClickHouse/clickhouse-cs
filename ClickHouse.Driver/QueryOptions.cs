@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Parameters;
 
 namespace ClickHouse.Driver;
 
@@ -64,6 +65,14 @@ public class QueryOptions
     public string? BearerToken { get; init; }
 
     /// <summary>
+    /// Gets or sets a custom resolver for mapping .NET types to ClickHouse types for this query,
+    /// overriding <see cref="ClickHouseClientSettings.ParameterTypeResolver"/>.
+    /// Return null from the resolver to fall through to default behavior.
+    /// Default: null (use client-level resolver)
+    /// </summary>
+    public IParameterTypeResolver? ParameterTypeResolver { get; init; }
+
+    /// <summary>
     /// Gets or sets the maximum execution time for this query.
     /// When set, this value is passed to ClickHouse as the max_execution_time setting,
     /// which causes the server to cancel the query if it exceeds this duration.
@@ -86,6 +95,7 @@ public class QueryOptions
             UseSession = UseSession,
             SessionId = SessionId,
             BearerToken = BearerToken,
+            ParameterTypeResolver = ParameterTypeResolver,
             MaxExecutionTime = MaxExecutionTime,
         };
     }
