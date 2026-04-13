@@ -776,6 +776,66 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         }
     }
 
+    private class PocoWithReservedWords
+    {
+        public ulong Id { get; set; }
+
+        [ClickHouseColumn(Name = "index")]
+        public uint Index { get; set; }
+
+        [ClickHouseColumn(Name = "key")]
+        public string Key { get; set; }
+
+        [ClickHouseColumn(Name = "order")]
+        public int Order { get; set; }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_WithReservedWordColumns_ShouldRoundTripData()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync($@"
+                CREATE TABLE IF NOT EXISTS test.{tableName}
+                (Id UInt64, `index` UInt32, `key` String, `order` Int32)
+                ENGINE = MergeTree() ORDER BY Id");
+
+            client.RegisterBinaryInsertType<PocoWithReservedWords>();
+
+            var rows = new[]
+            {
+                new PocoWithReservedWords { Id = 1, Index = 10, Key = "first", Order = 100 },
+                new PocoWithReservedWords { Id = 2, Index = 20, Key = "second", Order = 200 },
+            };
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName, rows, new InsertOptions { Database = "test" });
+
+            Assert.That(inserted, Is.EqualTo(2));
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT Id, `index`, `key`, `order` FROM test.{tableName} ORDER BY Id",
+                options: new QueryOptions { Database = "test" });
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetValue(0), Is.EqualTo(1UL));
+            Assert.That(reader.GetValue(1), Is.EqualTo(10u));
+            Assert.That(reader.GetValue(2), Is.EqualTo("first"));
+            Assert.That(reader.GetValue(3), Is.EqualTo(100));
+
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetValue(0), Is.EqualTo(2UL));
+            Assert.That(reader.GetValue(1), Is.EqualTo(20u));
+            Assert.That(reader.GetValue(2), Is.EqualTo("second"));
+            Assert.That(reader.GetValue(3), Is.EqualTo(200));
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
     [Test]
     public async Task InsertBinaryAsync_WithMultipleBatches_ShouldInsertAll()
     {
