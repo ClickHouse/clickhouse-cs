@@ -2,7 +2,11 @@ v1.2.0
 ---
 
 **New Features:**
-* `IParameterTypeResolver`: configurable default type mapping for `@`-style parameterized queries. Set `ParameterTypeResolver` on `ClickHouseClientSettings` to override how .NET types are mapped to ClickHouse types (e.g., `DateTime` → `DateTime64(3)`, `decimal` → `Decimal64(4)`). Includes one implementation, `DictionaryParameterTypeResolver` for simple type→type mappings, and supports custom implementations for value-aware or name-based resolution. Can also be set per-query via `QueryOptions.ParameterTypeResolver`.
+* **POCO binary inserts**: new `InsertBinaryAsync<T>` overload on `ClickHouseClient` accepts `IEnumerable<T>` directly, mapping public properties to columns automatically. Register types upfront with `RegisterBinaryInsertType<T>()`. Customize column names and ClickHouse types with `[ClickHouseColumn(Name = "...", Type = "...")]`, or exclude properties with `[ClickHouseNotMapped]`. When all properties specify explicit types via the attribute, the schema probe is skipped entirely.
+* **Configurable parameter type resolution**: new `IParameterTypeResolver` interface allowing configuration of type mapping for `@`-style parameterized queries. Set `ParameterTypeResolver` on `ClickHouseClientSettings` to override how .NET types are mapped to ClickHouse types (e.g., `DateTime` → `DateTime64(3)`, `decimal` → `Decimal64(4)`). Includes one implementation, `DictionaryParameterTypeResolver` for simple type→type mappings, and supports custom implementations for value-aware or name-based resolution. Can also be set per-query via `QueryOptions.ParameterTypeResolver`.
+
+**Improvements:**
+* Type inference now inspects `IPAddress.AddressFamily` to correctly distinguish between IPv4 and IPv6 types. Previously, all `IPAddress` values were inferred as IPv4. This also works for collections, tuples, and maps containing `IPAddress` values.
 
 **Internal Improvements:**
 * Centralized parameter type resolution into `ParameterTypeResolution`, replacing previously scattered logic in `ClickHouseDbParameter.QueryForm` and `HttpParameterFormatter`. Each parameter's type is now resolved exactly once per request, ensuring consistency between SQL placeholder generation and HTTP value formatting.
@@ -10,17 +14,10 @@ v1.2.0
 **Bug Fixes:**
 * `JsonReadMode` and `JsonWriteMode` will now correcly set the corresponding settings when set to `Binary` mode.
 
-v1.1.1
----
-
-**Improvements:**
-* Type inference now inspects `IPAddress.AddressFamily` to correctly distinguish between IPv4 and IPv6 types. Previously, all `IPAddress` values were inferred as IPv4. This also works for collections, tuples, and maps containing `IPAddress` values.
-
 v1.1.0
 ---
 
 **New Features:**
-* **POCO binary inserts**: new `InsertBinaryAsync<T>` overload on `ClickHouseClient` accepts `IEnumerable<T>` directly, mapping public properties to columns automatically. Register types upfront with `RegisterBinaryInsertType<T>()`. Customize column names and ClickHouse types with `[ClickHouseColumn(Name = "...", Type = "...")]`, or exclude properties with `[ClickHouseNotMapped]`. When all properties specify explicit types via the attribute, the schema probe is skipped entirely.
 * `InsertOptions.ColumnTypes`: provide a dictionary of column name → ClickHouse type string to skip the schema probe query (`SELECT ... WHERE 1=0`) entirely. Ideal when the table schema is known at compile time.
 * `InsertOptions.UseSchemaCache`: when `true`, the full table schema is cached per (database, table) for the lifetime of the `ClickHouseClient` instance. Subsequent inserts to the same table reuse the cached schema regardless of which columns are selected, eliminating redundant round-trips.
 
