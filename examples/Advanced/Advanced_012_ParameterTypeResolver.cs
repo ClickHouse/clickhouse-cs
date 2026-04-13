@@ -25,6 +25,9 @@ public static class ParameterTypeResolver
 
         // The resolver works through the ADO.NET ClickHouseConnection path too
         await AdoNetExample();
+
+        // Override the resolver for a specific query via QueryOptions
+        await PerQueryResolverExample();
     }
 
     /// <summary>
@@ -155,6 +158,51 @@ public static class ParameterTypeResolver
         while (reader.Read())
         {
             Console.WriteLine($"   DateTime type via ADO.NET: {reader.GetString(0)}");
+        }
+    }
+
+    /// <summary>
+    /// QueryOptions.ParameterTypeResolver overrides the client-level resolver for a single query.
+    /// </summary>
+    private static async Task PerQueryResolverExample()
+    {
+        Console.WriteLine("\n5. Per-query resolver via QueryOptions:");
+
+        // Client-level: int → Int64
+        var settings = new ClickHouseClientSettings("Host=localhost")
+        {
+            ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string>
+            {
+                [typeof(int)] = "Int64",
+            }),
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("val", 42);
+
+        // Without query options: uses client resolver (Int64)
+        using (var reader = await client.ExecuteReaderAsync(
+            "SELECT toTypeName(@val) as type_name", parameters))
+        {
+            while (reader.Read())
+                Console.WriteLine($"   Client resolver:  {reader.GetString(0)}");
+        }
+
+        // With query options: overrides to UInt16
+        var options = new QueryOptions
+        {
+            ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string>
+            {
+                [typeof(int)] = "UInt16",
+            }),
+        };
+
+        using (var reader = await client.ExecuteReaderAsync(
+            "SELECT toTypeName(@val) as type_name", parameters, options))
+        {
+            while (reader.Read())
+                Console.WriteLine($"   Query resolver:   {reader.GetString(0)}");
         }
     }
 

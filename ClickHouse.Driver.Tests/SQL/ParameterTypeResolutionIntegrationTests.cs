@@ -229,6 +229,103 @@ public class ParameterTypeResolutionIntegrationTests
         }
     }
 
+    [Test]
+    public async Task ExecuteReaderAsync_QueryOptionsResolver_OverridesClientResolver()
+    {
+        // Client maps int → Int64
+        using var client = CreateClientWithMappings(new Dictionary<Type, string>
+        {
+            [typeof(int)] = "Int64",
+        });
+
+        // Query options maps int → UInt32, should win
+        var options = new QueryOptions
+        {
+            ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string>
+            {
+                [typeof(int)] = "UInt32",
+            }),
+        };
+
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("val", 42);
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toTypeName(@val) as type_name", parameters, options);
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("UInt32"));
+    }
+
+    [Test]
+    public async Task ExecuteReaderAsync_QueryOptionsResolverNull_FallsToClientResolver()
+    {
+        // Client maps int → Int64
+        using var client = CreateClientWithMappings(new Dictionary<Type, string>
+        {
+            [typeof(int)] = "Int64",
+        });
+
+        // Query options has no resolver — client resolver should apply
+        var options = new QueryOptions();
+
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("val", 42);
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toTypeName(@val) as type_name", parameters, options);
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("Int64"));
+    }
+
+    [Test]
+    public async Task ExecuteReaderAsync_QueryOptionsResolverWithNoClientResolver_Works()
+    {
+        // No client-level resolver
+        var settings = TestUtilities.GetTestClickHouseClientSettings(useFormDataParameters: useFormDataParameters);
+        using var client = new ClickHouseClient(settings);
+
+        // Query options provides the resolver
+        var options = new QueryOptions
+        {
+            ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string>
+            {
+                [typeof(int)] = "Int64",
+            }),
+        };
+
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("val", 42);
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toTypeName(@val) as type_name", parameters, options);
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("Int64"));
+    }
+
+    [Test]
+    public async Task ExecuteReaderAsync_ExplicitClickHouseType_WinsOverQueryOptionsResolver()
+    {
+        var settings = TestUtilities.GetTestClickHouseClientSettings(useFormDataParameters: useFormDataParameters);
+        using var client = new ClickHouseClient(settings);
+
+        var options = new QueryOptions
+        {
+            ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string>
+            {
+                [typeof(int)] = "Int64",
+            }),
+        };
+
+        var parameters = new ClickHouseParameterCollection();
+        parameters.Add(new ClickHouseDbParameter
+        {
+            ParameterName = "val",
+            Value = 42,
+            ClickHouseType = "UInt8", // explicit type wins over everything
+        });
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toTypeName(@val) as type_name", parameters, options);
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("UInt8"));
+    }
+
     private class CountingResolver : IParameterTypeResolver
     {
         public int CallCount { get; private set; }

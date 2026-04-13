@@ -54,6 +54,7 @@ public sealed class InsertOptions : QueryOptions
             UseSession = UseSession,
             SessionId = SessionId,
             BearerToken = BearerToken,
+            ParameterTypeResolver = ParameterTypeResolver,
             MaxExecutionTime = MaxExecutionTime,
             BatchSize = BatchSize,
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,

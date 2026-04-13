@@ -296,7 +296,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     {
         if (parameters != null)
         {
-            var resolvedTypeNames = parameters.ResolveTypeNames(sqlQuery, Settings.ParameterTypeResolver);
+            var resolvedTypeNames = parameters.ResolveTypeNames(sqlQuery, queryOptions?.ParameterTypeResolver ?? Settings.ParameterTypeResolver);
             sqlQuery = parameters.ReplacePlaceholders(sqlQuery, resolvedTypeNames);
             foreach (ClickHouseDbParameter parameter in parameters)
             {
@@ -330,7 +330,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         if (parameters != null)
         {
-            var resolvedTypeNames = parameters.ResolveTypeNames(sqlQuery, Settings.ParameterTypeResolver);
+            var resolvedTypeNames = parameters.ResolveTypeNames(sqlQuery, queryOptions?.ParameterTypeResolver ?? Settings.ParameterTypeResolver);
             sqlQuery = parameters.ReplacePlaceholders(sqlQuery, resolvedTypeNames);
 
             foreach (ClickHouseDbParameter parameter in parameters)
