@@ -53,6 +53,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
     private readonly SchemaResolver schemaResolver;
     private readonly JsonTypeRegistry jsonTypeRegistry = new();
+    private readonly BinaryInsertTypeRegistry binaryInsertTypeRegistry = new();
     private readonly IHttpClientFactory httpClientFactory;
     private readonly string httpClientName;
     private readonly Uri serverUri;
@@ -191,6 +192,11 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <inheritdoc />
     public void RegisterJsonSerializationType(Type type)
         => jsonTypeRegistry.RegisterType(type);
+
+    /// <inheritdoc />
+    public void RegisterBinaryInsertType<T>()
+        where T : class
+        => binaryInsertTypeRegistry.RegisterType<T>();
 
     /// <inheritdoc/>
     public ClickHouseConnection CreateConnection()
@@ -412,6 +418,200 @@ public sealed class ClickHouseClient : IClickHouseClient
         return InsertBinaryAsync(table, columns, rows, options, onBatchSent: null, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task<long> InsertBinaryAsync<T>(
+        string table,
+        IEnumerable<T> rows,
+        InsertOptions options = default,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        if (table is null)
+            throw new InvalidOperationException($"{nameof(table)} is null");
+        if (rows is null)
+            throw new ArgumentNullException(nameof(rows));
+
+        var mapping = binaryInsertTypeRegistry.GetMapping<T>()
+            ?? throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' is not registered for binary insert. " +
+                $"Call RegisterBinaryInsertType<{typeof(T).Name}>() first.");
+
+        var properties = mapping.Properties;
+
+        options = ApplyPocoColumnAttributes(mapping, options);
+
+        if (mapping.ColumnTypes == null && Array.Exists(properties, p => p.ExplicitClickHouseType != null))
+        {
+            GetLogger(ClickHouseLogCategories.Client)?.LogWarning(
+                "Type '{TypeName}' has [ClickHouseColumn(Type)] on some properties but not all. " +
+                "The schema probe will not be skipped. To skip it, add explicit types to all mapped properties.",
+                typeof(T).Name);
+        }
+
+        return InsertBinaryPocoAsync(table, rows, properties, mapping.Getters, options, cancellationToken);
+    }
+
+    /// <summary>
+    /// Applies column types from the POCO attribute mapping to the insert options,
+    /// allowing the schema probe to be skipped when all properties declare explicit ClickHouse types.
+    /// User-provided <see cref="InsertOptions.ColumnTypes"/> always takes precedence over attribute-derived types.
+    /// </summary>
+    private static InsertOptions ApplyPocoColumnAttributes(PocoTypeMapping mapping, InsertOptions options)
+    {
+        // User-provided ColumnTypes on InsertOptions always takes precedence
+        if (options?.ColumnTypes is { Count: > 0 })
+            return options;
+
+        // Apply pre-built column types (non-null only when ALL properties have explicit types)
+        if (mapping.ColumnTypes != null)
+            return (options ?? new InsertOptions()).WithColumnTypes(mapping.ColumnTypes);
+
+        // Otherwise we're gonna get the schema with a probe query
+        return options;
+    }
+
+    /// <summary>
+    /// Resolved insert metadata shared by both the <c>object[]</c> and POCO insert paths.
+    /// Produced by <see cref="PrepareInsertAsync"/> after validation and schema resolution.
+    /// </summary>
+    private readonly struct InsertPlan
+    {
+        /// <summary>The finalized options (defaulted and validated).</summary>
+        public InsertOptions Options { get; init; }
+
+        /// <summary>The resolved ClickHouse column types, ordered to match the INSERT column list.</summary>
+        public ClickHouseType[] ColumnTypes { get; init; }
+
+        /// <summary>The full INSERT query including column list and FORMAT clause.</summary>
+        public string Query { get; init; }
+
+        /// <summary>Base query ID from which per-batch IDs are derived.</summary>
+        public string BaseQueryId { get; init; }
+    }
+
+    /// <summary>
+    /// Validates insert options, resolves table schema, and builds the INSERT query.
+    /// Shared setup for both <see cref="InsertBinaryAsync(string, IEnumerable{string}, IEnumerable{object[]}, InsertOptions, CancellationToken)"/>
+    /// and <see cref="InsertBinaryAsync{T}(string, IEnumerable{T}, InsertOptions, CancellationToken)"/>.
+    /// </summary>
+    private async Task<InsertPlan> PrepareInsertAsync(
+        string table, IEnumerable<string> columns, InsertOptions options)
+    {
+        options ??= new InsertOptions();
+
+        if (options.BatchSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "BatchSize must be greater than zero");
+        if (options.MaxDegreeOfParallelism <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "MaxDegreeOfParallelism must be greater than zero");
+
+        var useSession = options.UseSession ?? Settings.UseSession;
+        if (useSession && options.MaxDegreeOfParallelism > 1)
+        {
+            throw new InvalidOperationException(
+                $"InsertBinaryAsync is configured with MaxDegreeOfParallelism={options.MaxDegreeOfParallelism} while sessions are enabled. " +
+                "ClickHouse only allows one concurrent query per session. " +
+                "Set MaxDegreeOfParallelism to 1, or disable sessions for this insert by setting InsertOptions.UseSession to false.");
+        }
+
+        var logger = GetLogger(ClickHouseLogCategories.Client);
+        logger?.LogDebug("Loading metadata for table {Table}.", table);
+
+        var (columnNames, columnTypes) = await schemaResolver.ResolveAsync(table, columns, options).ConfigureAwait(false);
+        if (columnNames == null || columnTypes == null)
+            throw new InvalidOperationException("Column names not initialized. Initialization failed.");
+
+        if (logger?.IsEnabled(LogLevel.Debug) ?? false)
+        {
+            logger.LogDebug("Metadata loaded for table {Table}. Columns: {Columns}.", table, string.Join(", ", columnNames ?? Array.Empty<string>()));
+        }
+
+        var query = $"INSERT INTO {table} ({string.Join(", ", columnNames)}) FORMAT {options.Format.ToString()}";
+        var baseQueryId = options.QueryId ?? Guid.NewGuid().ToString();
+
+        return new InsertPlan
+        {
+            Options = options,
+            ColumnTypes = columnTypes,
+            Query = query,
+            BaseQueryId = baseQueryId,
+        };
+    }
+
+    private async Task<long> InsertBinaryPocoAsync<T>(
+        string table,
+        IEnumerable<T> rows,
+        BinaryInsertPropertyInfo[] properties,
+        Func<T, object>[] getters,
+        InsertOptions options,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        var plan = await PrepareInsertAsync(table, properties.Select(x => x.ColumnName), options).ConfigureAwait(false);
+        var serializer = PocoBatchSerializer.GetByRowBinaryFormat(plan.Options.Format);
+        int queryIdCounter = 0;
+
+        var logger = GetLogger(ClickHouseLogCategories.Client);
+        var isDebugLoggingEnabled = logger?.IsEnabled(LogLevel.Debug) ?? false;
+        Stopwatch stopwatch = null;
+        if (isDebugLoggingEnabled)
+        {
+            stopwatch = Stopwatch.StartNew();
+            logger.LogDebug("Starting bulk copy into {Table} with batch size {BatchSize} and degree {Degree}.", table, plan.Options.BatchSize, plan.Options.MaxDegreeOfParallelism);
+        }
+
+        long totalRowsWritten = 0;
+        var batches = IntoPocoBatches(rows, plan);
+
+        await Parallel.ForEachAsync(
+            batches,
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = plan.Options.MaxDegreeOfParallelism,
+                CancellationToken = cancellationToken,
+            },
+            async (batch, ct) =>
+            {
+                var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}"); // Avoid duplicate query ids across batches
+                var count = await SendPocoBatchAsync(table, batch, getters, serializer, batchOptions, ct).ConfigureAwait(false);
+                Interlocked.Add(ref totalRowsWritten, count);
+            }).ConfigureAwait(false);
+
+        if (isDebugLoggingEnabled)
+        {
+            stopwatch.Stop();
+            logger.LogDebug("Bulk copy into {Table} completed in {ElapsedMilliseconds:F2} ms. Total rows: {Rows}.", table, stopwatch.Elapsed.TotalMilliseconds, totalRowsWritten);
+        }
+
+        return totalRowsWritten;
+    }
+
+    private async Task<int> SendPocoBatchAsync<T>(string destinationTable, PocoBatch<T> batch, Func<T, object>[] getters, PocoBatchSerializer serializer, InsertOptions insertOptions, CancellationToken token)
+    {
+        var logger = GetLogger(ClickHouseLogCategories.Client);
+
+        using (batch)
+        {
+            using var stream = MemoryStreamManager.GetStream(nameof(SendPocoBatchAsync), 128 * 1024);
+            await Task.Run(() => serializer.Serialize(batch, getters, stream), token).ConfigureAwait(false);
+
+            stream.Seek(0, SeekOrigin.Begin);
+
+            logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
+            await PostStreamAsync(null, stream, true, token, insertOptions).ConfigureAwait(false);
+
+            logger?.LogDebug("Batch sent to {Table}. Rows in batch: {BatchRows}.", destinationTable, batch.Size);
+            return batch.Size;
+        }
+    }
+
+    private static IEnumerable<PocoBatch<T>> IntoPocoBatches<T>(IEnumerable<T> rows, InsertPlan plan)
+    {
+        foreach (var (batch, size) in rows.BatchRented(plan.Options.BatchSize))
+        {
+            yield return new PocoBatch<T> { Rows = batch, Size = size, Query = plan.Query, Types = plan.ColumnTypes };
+        }
+    }
+
     /// <summary>
     /// Internal version which takes a callback method, to allow us to maintain backwards
     /// compat with the BatchSent event in BulkCopy.
@@ -429,69 +629,32 @@ public sealed class ClickHouseClient : IClickHouseClient
         if (rows is null)
             throw new ArgumentNullException(nameof(rows));
 
-        // Use default values if none provided
-        options ??= new InsertOptions();
-
-        if (options.BatchSize <= 0)
-            throw new ArgumentOutOfRangeException(nameof(options), "BatchSize must be greater than zero");
-        if (options.MaxDegreeOfParallelism <= 0)
-            throw new ArgumentOutOfRangeException(nameof(options), "MaxDegreeOfParallelism must be greater than zero");
-
-        // ClickHouse only allows one concurrent query per session.
-        // Multiple parallel batches on the same session will cause SESSION_IS_LOCKED errors,
-        // potentially leaving the table in a partially-written state.
-        var useSession = options.UseSession ?? Settings.UseSession;
-        if (useSession && options.MaxDegreeOfParallelism > 1)
-        {
-            throw new InvalidOperationException(
-                $"InsertBinaryAsync is configured with MaxDegreeOfParallelism={options.MaxDegreeOfParallelism} while sessions are enabled. " +
-                "ClickHouse only allows one concurrent query per session. " +
-                "Set MaxDegreeOfParallelism to 1, or disable sessions for this insert by setting InsertOptions.UseSession to false.");
-        }
-
-        var serializer = BatchSerializer.GetByRowBinaryFormat(options.Format);
-
-        // Resolve base query ID upfront; derive unique IDs for each sub-request
-        var baseQueryId = options.QueryId ?? Guid.NewGuid().ToString();
+        var plan = await PrepareInsertAsync(table, columns, options).ConfigureAwait(false);
+        var serializer = BatchSerializer.GetByRowBinaryFormat(plan.Options.Format);
         int queryIdCounter = 0;
 
-        // Load table structure
         var logger = GetLogger(ClickHouseLogCategories.Client);
-        logger?.LogDebug("Loading metadata for table {Table}.", table);
-
-        var (columnNames, columnTypes) = await schemaResolver.ResolveAsync(table, columns, options).ConfigureAwait(false);
-        if (columnNames == null || columnTypes == null)
-            throw new InvalidOperationException("Column names not initialized. Initialization failed.");
-
-        if (logger?.IsEnabled(LogLevel.Debug) ?? false)
-        {
-            logger.LogDebug("Metadata loaded for table {Table}. Columns: {Columns}.", table, string.Join(", ", columnNames ?? Array.Empty<string>()));
-        }
-
-        // Insert
-        var query = $"INSERT INTO {table} ({string.Join(", ", columnNames)}) FORMAT {options.Format.ToString()}";
-
         var isDebugLoggingEnabled = logger?.IsEnabled(LogLevel.Debug) ?? false;
         Stopwatch stopwatch = null;
         if (isDebugLoggingEnabled)
         {
             stopwatch = Stopwatch.StartNew();
-            logger.LogDebug("Starting bulk copy into {Table} with batch size {BatchSize} and degree {Degree}.", table, options.BatchSize, options.MaxDegreeOfParallelism);
+            logger.LogDebug("Starting bulk copy into {Table} with batch size {BatchSize} and degree {Degree}.", table, plan.Options.BatchSize, plan.Options.MaxDegreeOfParallelism);
         }
 
         long totalRowsWritten = 0;
-        var batches = IntoBatches(rows, query, columnTypes, options.BatchSize);
+        var batches = IntoBatches(rows, plan.Query, plan.ColumnTypes, plan.Options.BatchSize);
 
         await Parallel.ForEachAsync(
             batches,
             new ParallelOptions
             {
-                MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
+                MaxDegreeOfParallelism = plan.Options.MaxDegreeOfParallelism,
                 CancellationToken = cancellationToken,
             },
             async (batch, ct) =>
             {
-                var batchOptions = options.WithQueryId($"{baseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
+                var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
                 var count = await SendBatchAsync(table, batch, serializer, batchOptions, onBatchSent, ct).ConfigureAwait(false);
                 Interlocked.Add(ref totalRowsWritten, count);
             }).ConfigureAwait(false);

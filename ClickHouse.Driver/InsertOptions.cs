@@ -63,4 +63,25 @@ public sealed class InsertOptions : QueryOptions
             UseSchemaCache = UseSchemaCache,
         };
     }
+
+    internal InsertOptions WithColumnTypes(IReadOnlyDictionary<string, string> columnTypes)
+    {
+        return new InsertOptions
+        {
+            QueryId = QueryId,
+            Database = Database,
+            Roles = Roles,
+            CustomSettings = CustomSettings,
+            CustomHeaders = CustomHeaders,
+            UseSession = UseSession,
+            SessionId = SessionId,
+            BearerToken = BearerToken,
+            MaxExecutionTime = MaxExecutionTime,
+            BatchSize = BatchSize,
+            MaxDegreeOfParallelism = MaxDegreeOfParallelism,
+            Format = Format,
+            ColumnTypes = columnTypes,
+            UseSchemaCache = UseSchemaCache,
+        };
+    }
 }

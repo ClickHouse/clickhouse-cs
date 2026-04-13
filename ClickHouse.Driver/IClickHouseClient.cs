@@ -142,6 +142,35 @@ public interface IClickHouseClient : IDisposable
     Task<bool> PingAsync(QueryOptions queryOptions = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Inserts POCO objects into a table using the binary protocol.
+    /// The type must be registered via <see cref="RegisterBinaryInsertType{T}"/> first.
+    /// Column names are derived from public properties (or overridden via <see cref="ClickHouseColumnAttribute"/>).
+    /// Unlike the <c>object[]</c> overload, this method does not accept an explicit column list —
+    /// columns are always determined by the registered type's mapped properties. To exclude
+    /// properties, use <see cref="ClickHouseNotMappedAttribute"/>.
+    /// </summary>
+    /// <typeparam name="T">The registered POCO type.</typeparam>
+    /// <param name="table">The destination table name.</param>
+    /// <param name="rows">The POCO instances to insert.</param>
+    /// <param name="options">Optional insert options.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The number of rows inserted.</returns>
+    Task<long> InsertBinaryAsync<T>(
+        string table,
+        IEnumerable<T> rows,
+        InsertOptions options = null,
+        CancellationToken cancellationToken = default)
+        where T : class;
+
+    /// <summary>
+    /// Registers a POCO type for binary insert operations.
+    /// Types must be registered before they can be inserted via <see cref="InsertBinaryAsync{T}"/>.
+    /// </summary>
+    /// <typeparam name="T">The POCO type to register.</typeparam>
+    void RegisterBinaryInsertType<T>()
+        where T : class;
+
+    /// <summary>
     /// Registers a POCO type for JSON column serialization.
     /// Types must be registered before they can be used in operations with JSON or Dynamic columns.
     /// </summary>
