@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.ADO.Readers;
 
 namespace ClickHouse.Driver;
 
@@ -73,6 +74,13 @@ public class QueryOptions
     public IParameterTypeResolver? ParameterTypeResolver { get; init; }
 
     /// <summary>
+    /// Gets or sets a custom converter for same-type transformation of values returned by the data reader
+    /// for this query, overriding <see cref="ClickHouseClientSettings.ReadValueConverter"/>.
+    /// Default: null (use client-level converter)
+    /// </summary>
+    public IReadValueConverter? ReadValueConverter { get; init; }
+
+    /// <summary>
     /// Gets or sets the maximum execution time for this query.
     /// When set, this value is passed to ClickHouse as the max_execution_time setting,
     /// which causes the server to cancel the query if it exceeds this duration.
@@ -96,6 +104,7 @@ public class QueryOptions
             SessionId = SessionId,
             BearerToken = BearerToken,
             ParameterTypeResolver = ParameterTypeResolver,
+            ReadValueConverter = ReadValueConverter,
             MaxExecutionTime = MaxExecutionTime,
         };
     }
