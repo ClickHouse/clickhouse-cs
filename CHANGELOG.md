@@ -1,3 +1,9 @@
+v1.3.0
+---
+
+**New Features:**
+* **ValueTuple support on write path**: `System.ValueTuple` values (C# tuple literals like `(1, "hello")`) are now supported in binary inserts, HTTP parameterized queries, and automatic type inference. Tuples with more than 7 elements are correctly flattened from the compiler-generated rest-nesting structure.
+
 v1.2.0
 ---
 

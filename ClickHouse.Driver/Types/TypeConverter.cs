@@ -317,6 +317,11 @@ internal static class TypeConverter
             return new TupleType { UnderlyingTypes = type.GetGenericArguments().Select(ToClickHouseType).ToArray() };
         }
 
+        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple", StringComparison.InvariantCulture))
+        {
+            return new TupleType { UnderlyingTypes = FlattenValueTupleTypes(type).Select(ToClickHouseType).ToArray() };
+        }
+
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
         {
             var types = type.GetGenericArguments().Select(ToClickHouseType).ToArray();
@@ -390,6 +395,21 @@ internal static class TypeConverter
             return new TupleType { UnderlyingTypes = items };
         }
 
+        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple", StringComparison.InvariantCulture))
+        {
+            // ValueTuple implements ITuple which already flattens the >7 element "rest" nesting,
+            // but the generic type arguments still contain the nested ValueTuple<TRest> structure.
+            var tuple = (ITuple)value;
+            var genericArgs = FlattenValueTupleTypes(type);
+            var items = new ClickHouseType[tuple.Length];
+            for (var i = 0; i < tuple.Length; i++)
+            {
+                items[i] = tuple[i] is { } itemValue ? ToClickHouseType(itemValue) : ToClickHouseType(genericArgs[i]);
+            }
+
+            return new TupleType { UnderlyingTypes = items };
+        }
+
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
         {
             // Peek at the first entry; null keys/values fall back to type-based inference
@@ -418,5 +438,37 @@ internal static class TypeConverter
 
         // 3. No ambiguity for this type; delegate to type-based inference
         return ToClickHouseType(type);
+    }
+
+    /// <summary>
+    /// Flattens the generic type arguments of a ValueTuple type, unwrapping the "rest" nesting
+    /// that the C# compiler generates for tuples with more than 7 elements.
+    /// <para>
+    /// For example, <c>(int, int, int, int, int, int, int, int, string)</c> compiles to
+    /// <c>ValueTuple&lt;int, int, int, int, int, int, int, ValueTuple&lt;int, string&gt;&gt;</c>.
+    /// This method returns <c>[int, int, int, int, int, int, int, int, string]</c>.
+    /// </para>
+    /// </summary>
+    private static Type[] FlattenValueTupleTypes(Type type)
+    {
+        var result = new List<Type>();
+        while (type.IsGenericType && type.GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple", StringComparison.InvariantCulture))
+        {
+            var args = type.GetGenericArguments();
+            if (args.Length == 8)
+            {
+                // The 8th argument is TRest — another ValueTuple holding the remaining elements
+                for (int i = 0; i < 7; i++)
+                    result.Add(args[i]);
+                type = args[7];
+            }
+            else
+            {
+                result.AddRange(args);
+                break;
+            }
+        }
+
+        return result.ToArray();
     }
 }
