@@ -149,8 +149,7 @@ public class TupleTypeTests : AbstractConnectionTestFixture
                 data Array(Tuple(Int32, String))
             ) ENGINE = MergeTree() ORDER BY id");
 
-        // Use ITuple[] so the array element type is known to be tuple-compatible
-        var tuples = new ITuple[] { (1, "one"), (2, "two") };
+        var tuples = new (int, string)[] { (1, "one"), (2, "two") };
         await client.InsertBinaryAsync(targetTable, ["id", "data"], [
             new object[] { 1u, tuples },
         ]);
