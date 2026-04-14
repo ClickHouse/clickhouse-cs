@@ -401,6 +401,8 @@ internal static class TypeConverter
             // but the generic type arguments still contain the nested ValueTuple<TRest> structure.
             var tuple = (ITuple)value;
             var genericArgs = FlattenValueTupleTypes(type);
+            if (genericArgs.Length != tuple.Length)
+                throw new ArgumentException($"ValueTuple shape mismatch: expected {genericArgs.Length} generic args but ITuple reports {tuple.Length} elements");
             var items = new ClickHouseType[tuple.Length];
             for (var i = 0; i < tuple.Length; i++)
             {
