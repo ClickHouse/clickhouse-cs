@@ -28,18 +28,31 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly HttpResponseMessage httpResponse; // Used to dispose at the end of reader
     private readonly ExtendedBinaryReader reader;
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
+    private readonly IReadValueConverter readValueConverter; // Can be null
+    private readonly Type[] columnFrameworkTypes; // Cached for converter calls, null when no converter
 
-    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, ExceptionTagAwareStream exceptionTagStream = null)
+    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
     {
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
         this.exceptionTagStream = exceptionTagStream;
+        this.readValueConverter = readValueConverter;
         RawTypes = types;
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
+
+        if (readValueConverter != null)
+        {
+            columnFrameworkTypes = new Type[types.Length];
+            for (var i = 0; i < types.Length; i++)
+            {
+                var rawType = types[i];
+                columnFrameworkTypes[i] = rawType is NullableType nt ? nt.UnderlyingType.FrameworkType : rawType.FrameworkType;
+            }
+        }
     }
 
-    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
+    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, IReadValueConverter readValueConverter = null)
     {
         if (httpResponse is null) throw new ArgumentNullException(nameof(httpResponse));
 
@@ -65,7 +78,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
             reader = new ExtendedBinaryReader(streamForReader); // will dispose of stream
             var (names, types) = ReadHeaders(reader, settings);
-            return new ClickHouseDataReader(httpResponse, reader, names, types, exceptionStream);
+            return new ClickHouseDataReader(httpResponse, reader, names, types, exceptionStream, readValueConverter);
         }
         catch (Exception)
         {
@@ -159,7 +172,13 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override string GetString(int ordinal) => GetValue(ordinal)?.ToString();
 
-    public override object GetValue(int ordinal) => CurrentRow[ordinal];
+    public override object GetValue(int ordinal)
+    {
+        var value = CurrentRow[ordinal];
+        if (readValueConverter != null)
+            return readValueConverter.ConvertValue(value, FieldNames[ordinal], columnFrameworkTypes[ordinal]);
+        return value;
+    }
 
     public override int GetValues(object[] values)
     {
@@ -168,8 +187,19 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             throw new InvalidOperationException();
         }
 
-        CurrentRow.CopyTo(values, 0);
-        return CurrentRow.Length;
+        var count = Math.Min(CurrentRow.Length, values.Length);
+
+        if (readValueConverter != null)
+        {
+            for (var i = 0; i < count; i++)
+                values[i] = readValueConverter.ConvertValue(CurrentRow[i], FieldNames[i], columnFrameworkTypes[i]);
+        }
+        else
+        {
+            Array.Copy(CurrentRow, values, count);
+        }
+
+        return count;
     }
 
     public override bool IsDBNull(int ordinal)
@@ -182,7 +212,13 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override void Close() => Dispose();
 
-    public override T GetFieldValue<T>(int ordinal) => (T)GetValue(ordinal);
+    public override T GetFieldValue<T>(int ordinal)
+    {
+        var value = (T)CurrentRow[ordinal];
+        if (readValueConverter != null)
+            return readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnFrameworkTypes[ordinal]);
+        return value;
+    }
 
     public override DataTable GetSchemaTable() => SchemaDescriber.DescribeSchema(this);
 
