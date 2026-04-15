@@ -191,6 +191,12 @@ public class TestCases
         yield return new DataTypeSample("Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))", typeof(ValueTuple<int, ValueTuple<byte, string, int?>>), "tuple(123, tuple(5, 'a', 7))", (123, ((byte)5, "a", (int?)7)));
         // Named tuple with ValueTuple
         yield return new DataTypeSample("Tuple(a Int32, b Int32)", typeof(ValueTuple<int, int>), "tuple(123, 456)", (123, 456));
+        // 9-element ValueTuple — tests TRest nesting (compiler generates ValueTuple<T1..T7, ValueTuple<T8, T9>>)
+        yield return new DataTypeSample(
+            "Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, String, String)",
+            typeof(ValueTuple<int, int, int, int, int, int, int, ValueTuple<string, string>>),
+            "tuple(1, 2, 3, 4, 5, 6, 7, 'eight', 'nine')",
+            (1, 2, 3, 4, 5, 6, 7, "eight", "nine"));
 
         yield return new DataTypeSample("Date", typeof(DateTime), "toDateOrNull('1999-11-12')", new DateTime(1999, 11, 12, 0, 0, 0, DateTimeKind.Unspecified));
         yield return new DataTypeSample("DateTime('UTC')", typeof(DateTime), "toDateTime('1988-08-28 11:22:33', 'UTC')", new DateTime(1988, 08, 28, 11, 22, 33, DateTimeKind.Unspecified));
