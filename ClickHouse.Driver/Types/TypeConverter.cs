@@ -457,7 +457,7 @@ internal static class TypeConverter
         while (type.IsGenericType && type.GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple", StringComparison.InvariantCulture))
         {
             var args = type.GetGenericArguments();
-            if (args.Length == 8)
+            if (args.Length == 8 && args[7].IsGenericType && args[7].GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple", StringComparison.InvariantCulture))
             {
                 // The 8th argument is TRest — another ValueTuple holding the remaining elements
                 for (int i = 0; i < 7; i++)

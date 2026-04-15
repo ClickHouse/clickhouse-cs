@@ -4,6 +4,7 @@ using System.Data.Common;
 using System.Linq;
 using System.Net;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -92,6 +93,13 @@ public static class TestUtilities
         {
             // Necessary because the ordering of the fields is not guaranteed to be the same
             Assert.That(result, Is.EqualTo(expected).Using<JsonObject, JsonObject>(JsonNode.DeepEquals));
+        }
+        else if (expected is ITuple expectedTuple && result is ITuple resultTuple)
+        {
+            // Handle Tuple vs ValueTuple comparison element-by-element via ITuple interface
+            Assert.That(resultTuple.Length, Is.EqualTo(expectedTuple.Length), "Tuple length mismatch");
+            for (int i = 0; i < expectedTuple.Length; i++)
+                AssertEqual(expectedTuple[i], resultTuple[i]);
         }
         else
         {

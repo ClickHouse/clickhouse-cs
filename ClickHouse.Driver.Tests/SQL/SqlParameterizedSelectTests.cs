@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Types;
@@ -207,57 +206,6 @@ public class SqlParameterizedSelectTests : IDisposable
 
         var result = await command.ExecuteReaderAsync();
         result.GetEnsureSingleRow();
-    }
-
-    [Test]
-    public async Task ShouldExecuteSelectWithValueTupleParameter()
-    {
-        var sql = @"
-                SELECT 1
-                FROM (SELECT tuple(1, 'a', NULL) AS res)
-                WHERE res.1 = tupleElement({var:Tuple(Int32, String, Nullable(Int32))}, 1)
-                  AND res.2 = tupleElement({var:Tuple(Int32, String, Nullable(Int32))}, 2)
-                  AND res.3 is NULL
-                  AND tupleElement({var:Tuple(Int32, String, Nullable(Int32))}, 3) is NULL";
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-
-        command.AddParameter("var", (1, "a", (int?)null));
-
-        var result = await command.ExecuteReaderAsync();
-        result.GetEnsureSingleRow();
-    }
-
-    [Test]
-    public async Task ShouldExecuteSelectWithNestedValueTupleParameter()
-    {
-        var sql = @"
-                SELECT 1
-                FROM (SELECT tuple(123, tuple(5, 'a', 7)) AS res)
-                WHERE res.1 = tupleElement({var:Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))}, 1)
-                  AND res.2.1 = tupleElement(tupleElement({var:Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))}, 2), 1)
-                  AND res.2.2 = tupleElement(tupleElement({var:Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))}, 2), 2)
-                  AND res.2.3 = tupleElement(tupleElement({var:Tuple(Int32, Tuple(UInt8, String, Nullable(Int32)))}, 2), 3)";
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-
-        command.AddParameter("var", (123, ((byte)5, "a", (int?)7)));
-
-        var result = await command.ExecuteReaderAsync();
-        result.GetEnsureSingleRow();
-    }
-
-    [Test]
-    public async Task ShouldExecuteSelectWithValueTupleParameterAndExplicitType()
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT {var:Tuple(Int32, String)} as res";
-        command.AddParameter("var", (42, "hello"));
-
-        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
-        var tuple = (ITuple)result;
-        Assert.That(tuple[0], Is.EqualTo(42));
-        Assert.That(tuple[1], Is.EqualTo("hello"));
     }
 
     public void Dispose() => connection?.Dispose();
