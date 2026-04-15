@@ -425,6 +425,11 @@ internal static class TypeConverter
         return ToClickHouseType(type);
     }
 
+    private static bool IsTupleType(Type type) =>
+        type.IsGenericType && (
+            type.GetGenericTypeDefinition().FullName!.StartsWith("System.Tuple", StringComparison.InvariantCulture) ||
+            type.GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple", StringComparison.InvariantCulture));
+
     /// <summary>
     /// Flattens the generic type arguments of a Tuple or ValueTuple type, unwrapping the TRest
     /// nesting that both System.Tuple and System.ValueTuple use for more than 7 elements.
@@ -433,11 +438,6 @@ internal static class TypeConverter
     /// is flattened to <c>[int, int, int, int, int, int, int, int, string]</c>.
     /// </para>
     /// </summary>
-    private static bool IsTupleType(Type type) =>
-        type.IsGenericType && (
-            type.GetGenericTypeDefinition().FullName!.StartsWith("System.Tuple", StringComparison.InvariantCulture) ||
-            type.GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple", StringComparison.InvariantCulture));
-
     private static Type[] FlattenTupleGenericArgs(Type type)
     {
         var result = new List<Type>();
