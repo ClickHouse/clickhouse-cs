@@ -29,9 +29,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly ExtendedBinaryReader reader;
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
     private readonly IReadValueConverter readValueConverter; // Can be null
-    private readonly string[] columnTypeNames; // Cached for converter calls, null when no converter
+    private readonly string[] columnTypeNames; // Raw server-sent type strings; null when no converter
 
-    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
+    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, string[] rawTypeNames, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
     {
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
@@ -42,11 +42,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         CurrentRow = new object[FieldNames.Length];
 
         if (readValueConverter != null)
-        {
-            columnTypeNames = new string[types.Length];
-            for (var i = 0; i < types.Length; i++)
-                columnTypeNames[i] = types[i].ToString();
-        }
+            columnTypeNames = rawTypeNames;
     }
 
     internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, IReadValueConverter readValueConverter = null)
@@ -74,8 +70,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             }
 
             reader = new ExtendedBinaryReader(streamForReader); // will dispose of stream
-            var (names, types) = ReadHeaders(reader, settings);
-            return new ClickHouseDataReader(httpResponse, reader, names, types, exceptionStream, readValueConverter);
+            var (names, types, rawTypeNames) = ReadHeaders(reader, settings);
+            return new ClickHouseDataReader(httpResponse, reader, names, types, rawTypeNames, exceptionStream, readValueConverter);
         }
         catch (Exception)
         {
@@ -273,11 +269,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 #pragma warning restore CA2215 // Dispose methods should call base class dispose
 
-    private static (string[], ClickHouseType[]) ReadHeaders(ExtendedBinaryReader reader, TypeSettings settings)
+    private static (string[], ClickHouseType[], string[]) ReadHeaders(ExtendedBinaryReader reader, TypeSettings settings)
     {
         if (reader.PeekChar() == -1)
         {
-            return ([], []);
+            return ([], [], []);
         }
 
         var count = reader.Read7BitEncodedInt();
@@ -291,6 +287,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
         var names = new string[count];
         var types = new ClickHouseType[count];
+        var rawTypeNames = new string[count];
 
         for (var i = 0; i < count; i++)
         {
@@ -300,9 +297,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         for (var i = 0; i < count; i++)
         {
             var chType = reader.ReadString();
+            rawTypeNames[i] = chType;
             types[i] = TypeConverter.ParseClickHouseType(chType, settings);
         }
-        return (names, types);
+        return (names, types, rawTypeNames);
     }
 
     public bool MoveNext() => Read();
