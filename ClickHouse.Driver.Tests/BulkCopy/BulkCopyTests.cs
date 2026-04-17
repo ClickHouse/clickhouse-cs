@@ -102,7 +102,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         ClassicAssert.IsTrue(reader.Read(), "Cannot read inserted data");
         reader.AssertHasFieldCount(1);
         var data = reader.GetValue(0);
-        Assert.That(data, Is.EqualTo(insertedValue).Using<JsonObject>(new JsonNodeEqualityComparer()), "Original and actually inserted values differ");
+        TestUtilities.AssertEqual(insertedValue, data);
     }
 
 

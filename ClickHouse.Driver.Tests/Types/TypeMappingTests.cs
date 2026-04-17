@@ -96,6 +96,21 @@ public class TypeMappingTests
     [TestCase(typeof(DateOnly), ExpectedResult = "Date")]
 #endif
     [TestCase(typeof(Tuple<int, byte, float?, string[]>), ExpectedResult = "Tuple(Int32,UInt8,Nullable(Float32),Array(String))")]
+    // System.Tuple with >7 elements (TRest nesting, same as ValueTuple)
+    [TestCase(typeof(Tuple<int, int, int, int, int, int, int, Tuple<string>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
+    [TestCase(typeof(Tuple<int, int, int, int, int, int, int, Tuple<int, string>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
+
+    // ValueTuple → ClickHouse Tuple
+    [TestCase(typeof(ValueTuple<int, string>), ExpectedResult = "Tuple(Int32,String)")]
+    [TestCase(typeof(ValueTuple<int, byte, float?, string[]>), ExpectedResult = "Tuple(Int32,UInt8,Nullable(Float32),Array(String))")]
+    [TestCase(typeof(ValueTuple<int, ValueTuple<string, byte>>), ExpectedResult = "Tuple(Int32,Tuple(String,UInt8))")]
+    [TestCase(typeof(ValueTuple<int>), ExpectedResult = "Tuple(Int32)")]
+    [TestCase(typeof(ValueTuple<int, string, float, double, byte, long, short>), ExpectedResult = "Tuple(Int32,String,Float32,Float64,UInt8,Int64,Int16)")]
+    // ValueTuple with >7 elements (compiler generates nested TRest)
+    [TestCase(typeof(ValueTuple<int, int, int, int, int, int, int, ValueTuple<string>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
+    [TestCase(typeof(ValueTuple<int, int, int, int, int, int, int, ValueTuple<int, string>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
+    // Double rest-nesting (15 elements)
+    [TestCase(typeof(ValueTuple<int, int, int, int, int, int, int, ValueTuple<int, int, int, int, int, int, int, ValueTuple<string>>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
     public string ShouldConvertToClickHouseType(Type type) => TypeConverter.ToClickHouseType(type).ToString();
 
     private static IEnumerable<TestCaseData> ValueToClickHouseTypeCases()
@@ -146,6 +161,17 @@ public class TypeMappingTests
 
         // Map with null value (falls back to type-based inference for value)
         yield return new TestCaseData(new Dictionary<string, IPAddress> { ["k"] = null }).Returns("Map(String, IPv4)");
+
+        // ValueTuple
+        yield return new TestCaseData((object)ValueTuple.Create("hello", IPAddress.Parse("::1"))).Returns("Tuple(String,IPv6)");
+        yield return new TestCaseData((object)ValueTuple.Create(IPAddress.Parse("1.2.3.4"), IPAddress.Parse("::1"))).Returns("Tuple(IPv4,IPv6)");
+
+        // ValueTuple with null item (falls back to type-based inference for that item)
+        yield return new TestCaseData((object)ValueTuple.Create((IPAddress)null, IPAddress.Parse("::1"))).Returns("Tuple(IPv4,IPv6)");
+
+        // ValueTuple with >7 elements (flattening)
+        yield return new TestCaseData((object)(1, 2, 3, 4, 5, 6, 7, "eight")).Returns("Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)");
+        yield return new TestCaseData((object)(1, 2, 3, 4, 5, 6, 7, 8, "nine")).Returns("Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)");
     }
 
     [TestCaseSource(nameof(ValueToClickHouseTypeCases))]
@@ -177,6 +203,10 @@ public class TypeMappingTests
         // Map with IP key
         yield return new TestCaseData(new Dictionary<IPAddress, string> { [IPAddress.Parse("::1")] = "loopback" })
             .Returns("{'::1' : 'loopback'}");
+
+        // ValueTuple with mixed IP types
+        yield return new TestCaseData((object)ValueTuple.Create(IPAddress.Parse("10.0.0.1"), IPAddress.Parse("::1")))
+            .Returns("('10.0.0.1','::1')");
     }
 
     [TestCaseSource(nameof(HttpParameterFormatterIpCases))]

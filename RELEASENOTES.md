@@ -1,3 +1,12 @@
+v1.3.0
+---
+
+**New Features:**
+* **ValueTuple support on write path**: `System.ValueTuple` values (C# tuple literals like `(1, "hello")`) are now supported in binary inserts, HTTP parameterized queries, and automatic type inference. Tuples with more than 7 elements are correctly flattened from the compiler-generated rest-nesting structure. Note: if you need exactly 7 scalar elements followed by a nested tuple as the 8th element, wrap the inner tuple in an extra layer (e.g., `Tuple.Create(1,...,7, Tuple.Create(Tuple.Create("a","b")))`) so the driver can distinguish it from TRest nesting.
+
+**Bug Fixes:**
+* Fixed type inference for `System.Tuple` with more than 7 elements. The TRest nesting was not being flattened, causing the 8th+ elements to be inferred as nested tuple types instead of their actual flat types. This could lead to incorrect ClickHouse type inference and serialization errors.
+
 v1.2.0
 ---
 

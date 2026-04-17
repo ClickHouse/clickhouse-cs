@@ -312,9 +312,11 @@ internal static class TypeConverter
             return new NullableType() { UnderlyingType = ToClickHouseType(underlyingType) };
         }
 
-        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName.StartsWith("System.Tuple", StringComparison.InvariantCulture))
+        // FlattenTupleGenericArgs unwraps TRest nesting for >7 elements so the inferred
+        // ClickHouse types match ITuple indexing, which also flattens TRest.
+        if (IsTupleType(type))
         {
-            return new TupleType { UnderlyingTypes = type.GetGenericArguments().Select(ToClickHouseType).ToArray() };
+            return new TupleType { UnderlyingTypes = FlattenTupleGenericArgs(type).Select(ToClickHouseType).ToArray() };
         }
 
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
@@ -376,11 +378,14 @@ internal static class TypeConverter
             return new ArrayType { UnderlyingType = ToClickHouseType(type.GetGenericArguments()[0]) };
         }
 
-        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName!.StartsWith("System.Tuple", StringComparison.InvariantCulture))
+        if (IsTupleType(type))
         {
-            // Each tuple item is inferred independently; null items fall back to type-based inference
+            // Both System.Tuple and ValueTuple use TRest nesting for >7 elements.
+            // ITuple flattens this, so we must flatten the generic args to match.
             var tuple = (ITuple)value;
-            var genericArgs = type.GetGenericArguments();
+            var genericArgs = FlattenTupleGenericArgs(type);
+            if (genericArgs.Length != tuple.Length)
+                throw new ArgumentException($"Tuple shape mismatch: expected {genericArgs.Length} generic args but ITuple reports {tuple.Length} elements");
             var items = new ClickHouseType[tuple.Length];
             for (var i = 0; i < tuple.Length; i++)
             {
@@ -418,5 +423,42 @@ internal static class TypeConverter
 
         // 3. No ambiguity for this type; delegate to type-based inference
         return ToClickHouseType(type);
+    }
+
+    private static bool IsTupleType(Type type) =>
+        type.IsGenericType && (
+            type.GetGenericTypeDefinition().FullName!.StartsWith("System.Tuple", StringComparison.InvariantCulture) ||
+            type.GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple", StringComparison.InvariantCulture));
+
+    /// <summary>
+    /// Flattens the generic type arguments of a Tuple or ValueTuple type, unwrapping the TRest
+    /// nesting that both System.Tuple and System.ValueTuple use for more than 7 elements.
+    /// <para>
+    /// For example, <c>Tuple&lt;int, int, int, int, int, int, int, Tuple&lt;int, string&gt;&gt;</c>
+    /// is flattened to <c>[int, int, int, int, int, int, int, int, string]</c>.
+    /// </para>
+    /// </summary>
+    private static Type[] FlattenTupleGenericArgs(Type type)
+    {
+        var result = new List<Type>();
+        while (IsTupleType(type))
+        {
+            var args = type.GetGenericArguments();
+            // Both System.Tuple`8 and System.ValueTuple`8 use the 8th generic arg as TRest.
+            // TRest is itself a Tuple/ValueTuple holding the remaining elements.
+            if (args.Length == 8 && IsTupleType(args[7]))
+            {
+                for (int i = 0; i < 7; i++)
+                    result.Add(args[i]);
+                type = args[7];
+            }
+            else
+            {
+                result.AddRange(args);
+                break;
+            }
+        }
+
+        return result.ToArray();
     }
 }

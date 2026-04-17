@@ -29,11 +29,8 @@ public class SerialisationTests
         type.Write(writer, original);
         stream.Seek(0, SeekOrigin.Begin);
         var read = type.Read(reader);
-        Assert.Multiple(() =>
-        {
-            Assert.That(read, Is.EqualTo(original).UsingPropertiesComparer(), "Different value read from stream");
-            Assert.That(stream.Position, Is.EqualTo(stream.Length), "Read underflow");
-        });
+        TestUtilities.AssertEqual(original, read);
+        Assert.That(stream.Position, Is.EqualTo(stream.Length), "Read underflow");
     }
 
     [Test]

@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -55,4 +54,5 @@ public class TupleTypeTests : AbstractConnectionTestFixture
             Assert.That(tupleType.UnderlyingTypes.Length, Is.EqualTo(2));
         });
     }
+
 }
