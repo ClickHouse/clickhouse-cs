@@ -7,3 +7,10 @@ ClickHouse.Driver.ADO.Parameters.DictionaryParameterTypeResolver.DictionaryParam
 ClickHouse.Driver.ADO.Parameters.DictionaryParameterTypeResolver.ResolveType(System.Type clrType, object value, string parameterName) -> string
 ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver
 ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver.ResolveType(System.Type clrType, object value, string parameterName) -> string
+ClickHouse.Driver.ADO.Readers.IReadValueConverter
+ClickHouse.Driver.ADO.Readers.IReadValueConverter.ConvertValue(object value, string columnName, string clickHouseType) -> object
+ClickHouse.Driver.ADO.Readers.IReadValueConverter.ConvertValue<T>(T value, string columnName, string clickHouseType) -> T
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ReadValueConverter.get -> ClickHouse.Driver.ADO.Readers.IReadValueConverter
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ReadValueConverter.init -> void
+ClickHouse.Driver.QueryOptions.ReadValueConverter.get -> ClickHouse.Driver.ADO.Readers.IReadValueConverter?
+ClickHouse.Driver.QueryOptions.ReadValueConverter.init -> void
