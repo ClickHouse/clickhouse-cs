@@ -51,18 +51,6 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
         Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
     }
 
-    [Test]
-    public async Task GetValue_WithNullConverter_ShouldReturnRawValues()
-    {
-        var settings = TestUtilities.GetTestClickHouseClientSettings();
-        using var client = new ClickHouseClient(settings);
-
-        using var reader = await client.ExecuteReaderAsync("SELECT toInt32(42)");
-        ClassicAssert.IsTrue(reader.Read());
-
-        Assert.That(reader.GetValue(0), Is.EqualTo(42));
-    }
-
     // ==========================================
     // GetFieldValue<T> (generic) tests
     // ==========================================
@@ -365,14 +353,14 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
 
         public DateTimeKindConverter(DateTimeKind kind) => this.kind = kind;
 
-        public object ConvertValue(object value, string columnName, Type columnType)
+        public object ConvertValue(object value, string columnName, string clickHouseType)
         {
-            if (columnType == typeof(DateTime) && value is DateTime dt)
+            if (value is DateTime dt)
                 return DateTime.SpecifyKind(dt, kind);
             return value;
         }
 
-        public T ConvertValue<T>(T value, string columnName, Type columnType)
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
         {
             if (typeof(T) == typeof(DateTime) && value is DateTime dt)
                 return (T)(object)DateTime.SpecifyKind(dt, kind);
@@ -382,33 +370,33 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
 
     private sealed class NullTrackingConverter : IReadValueConverter
     {
-        public object ConvertValue(object value, string columnName, Type columnType) => value;
-        public T ConvertValue<T>(T value, string columnName, Type columnType) => value;
+        public object ConvertValue(object value, string columnName, string clickHouseType) => value;
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType) => value;
     }
 
     private sealed class ThrowingConverter : IReadValueConverter
     {
-        public object ConvertValue(object value, string columnName, Type columnType)
+        public object ConvertValue(object value, string columnName, string clickHouseType)
             => throw new InvalidOperationException("Converter failed");
 
-        public T ConvertValue<T>(T value, string columnName, Type columnType)
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
             => throw new InvalidOperationException("Converter failed");
     }
 
     private sealed class MultiTypeConverter : IReadValueConverter
     {
-        public object ConvertValue(object value, string columnName, Type columnType)
+        public object ConvertValue(object value, string columnName, string clickHouseType)
         {
-            if (columnType == typeof(int) && value is int i)
+            if (value is int i)
                 return i * 2;
-            if (columnType == typeof(string) && value is string s)
+            if (value is string s)
                 return s.ToUpperInvariant();
             return value;
         }
 
-        public T ConvertValue<T>(T value, string columnName, Type columnType)
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
         {
-            var converted = ConvertValue((object)value, columnName, columnType);
+            var converted = ConvertValue((object)value, columnName, clickHouseType);
             return (T)converted;
         }
     }

@@ -13,8 +13,8 @@ namespace ClickHouse.Driver.Benchmark;
 /// </summary>
 internal sealed class PassthroughConverter : IReadValueConverter
 {
-    public object ConvertValue(object value, string columnName, Type columnType) => value;
-    public T ConvertValue<T>(T value, string columnName, Type columnType) => value;
+    public object ConvertValue(object value, string columnName, string clickHouseType) => value;
+    public T ConvertValue<T>(T value, string columnName, string clickHouseType) => value;
 }
 
 /// <summary>
@@ -23,14 +23,14 @@ internal sealed class PassthroughConverter : IReadValueConverter
 /// </summary>
 internal sealed class DateTimeKindConverter : IReadValueConverter
 {
-    public object ConvertValue(object value, string columnName, Type columnType)
+    public object ConvertValue(object value, string columnName, string clickHouseType)
     {
-        if (columnType == typeof(DateTime) && value is DateTime dt)
+        if (value is DateTime dt)
             return DateTime.SpecifyKind(dt, DateTimeKind.Utc);
         return value;
     }
 
-    public T ConvertValue<T>(T value, string columnName, Type columnType)
+    public T ConvertValue<T>(T value, string columnName, string clickHouseType)
     {
         if (typeof(T) == typeof(DateTime) && value is DateTime dt)
             return (T)(object)DateTime.SpecifyKind(dt, DateTimeKind.Utc);
