@@ -29,7 +29,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly ExtendedBinaryReader reader;
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
     private readonly IReadValueConverter readValueConverter; // Can be null
-    private readonly Type[] columnFrameworkTypes; // Cached for converter calls, null when no converter
+    private readonly string[] columnTypeNames; // Cached for converter calls, null when no converter
 
     private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
     {
@@ -43,12 +43,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
         if (readValueConverter != null)
         {
-            columnFrameworkTypes = new Type[types.Length];
+            columnTypeNames = new string[types.Length];
             for (var i = 0; i < types.Length; i++)
-            {
-                var rawType = types[i];
-                columnFrameworkTypes[i] = rawType is NullableType nt ? nt.UnderlyingType.FrameworkType : rawType.FrameworkType;
-            }
+                columnTypeNames[i] = types[i].ToString();
         }
     }
 
@@ -173,12 +170,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     public override string GetString(int ordinal) => GetValue(ordinal)?.ToString();
 
     public override object GetValue(int ordinal)
-    {
-        var value = CurrentRow[ordinal];
-        if (readValueConverter != null)
-            return readValueConverter.ConvertValue(value, FieldNames[ordinal], columnFrameworkTypes[ordinal]);
-        return value;
-    }
+        => readValueConverter == null
+            ? CurrentRow[ordinal]
+            : readValueConverter.ConvertValue(CurrentRow[ordinal], FieldNames[ordinal], columnTypeNames[ordinal]);
 
     public override int GetValues(object[] values)
     {
@@ -192,7 +186,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         if (readValueConverter != null)
         {
             for (var i = 0; i < count; i++)
-                values[i] = readValueConverter.ConvertValue(CurrentRow[i], FieldNames[i], columnFrameworkTypes[i]);
+                values[i] = readValueConverter.ConvertValue(CurrentRow[i], FieldNames[i], columnTypeNames[i]);
         }
         else
         {
@@ -256,7 +250,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
         var value = (T)CurrentRow[ordinal];
         if (readValueConverter != null)
-            return readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnFrameworkTypes[ordinal]);
+            return readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
         return value;
     }
 

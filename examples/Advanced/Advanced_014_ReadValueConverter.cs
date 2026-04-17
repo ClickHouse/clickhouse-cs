@@ -54,8 +54,8 @@ public static class ReadValueConverter
     }
 
     /// <summary>
-    /// A converter can transform multiple types. Here we normalize strings
-    /// to uppercase and double all integer values (contrived, but demonstrates the pattern).
+    /// A converter can transform multiple types. Here we trim + uppercase strings,
+    /// double integers, and leave other types alone (contrived, but demonstrates the pattern).
     /// </summary>
     private static async Task MultiTypeConverterExample()
     {
@@ -63,17 +63,18 @@ public static class ReadValueConverter
 
         var settings = new ClickHouseClientSettings("Host=localhost")
         {
-            ReadValueConverter = new StringNormalizingConverter(),
+            ReadValueConverter = new MultiTypeConverter(),
         };
         using var client = new ClickHouseClient(settings);
 
         using var reader = await client.ExecuteReaderAsync(
-            "SELECT '  hello world  ' as raw_string, toFloat64(3.14) as pi");
+            "SELECT '  hello world  ' as raw_string, toInt32(21) as n, toFloat64(3.14) as pi");
 
         while (reader.Read())
         {
-            Console.WriteLine($"   String (trimmed): '{reader.GetFieldValue<string>(0)}'");
-            Console.WriteLine($"   Float64 (unaffected): {reader.GetFieldValue<double>(1)}");
+            Console.WriteLine($"   String (trim + upper): '{reader.GetFieldValue<string>(0)}'");
+            Console.WriteLine($"   Int32 (doubled):        {reader.GetFieldValue<int>(1)}");
+            Console.WriteLine($"   Float64 (unaffected):   {reader.GetFieldValue<double>(2)}");
         }
     }
 
@@ -151,14 +152,14 @@ public static class ReadValueConverter
 
         public DateTimeKindConverter(DateTimeKind kind) => this.kind = kind;
 
-        public object ConvertValue(object value, string columnName, Type columnType)
+        public object ConvertValue(object value, string columnName, string clickHouseType)
         {
-            if (columnType == typeof(DateTime) && value is DateTime dt)
+            if (value is DateTime dt)
                 return DateTime.SpecifyKind(dt, kind);
             return value;
         }
 
-        public T ConvertValue<T>(T value, string columnName, Type columnType)
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
         {
             if (typeof(T) == typeof(DateTime) && value is DateTime dt)
                 return (T)(object)DateTime.SpecifyKind(dt, kind);
@@ -167,21 +168,26 @@ public static class ReadValueConverter
     }
 
     /// <summary>
-    /// A converter that trims whitespace from all string values.
+    /// A converter that handles multiple types in a single implementation:
+    /// trims and uppercases strings, doubles integers, passes everything else through.
     /// </summary>
-    private class StringNormalizingConverter : IReadValueConverter
+    private class MultiTypeConverter : IReadValueConverter
     {
-        public object ConvertValue(object value, string columnName, Type columnType)
+        public object ConvertValue(object value, string columnName, string clickHouseType)
         {
-            if (columnType == typeof(string) && value is string s)
-                return s.Trim();
+            if (value is string s)
+                return s.Trim().ToUpperInvariant();
+            if (value is int i)
+                return i * 2;
             return value;
         }
 
-        public T ConvertValue<T>(T value, string columnName, Type columnType)
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
         {
             if (typeof(T) == typeof(string) && value is string s)
-                return (T)(object)s.Trim();
+                return (T)(object)s.Trim().ToUpperInvariant();
+            if (typeof(T) == typeof(int) && value is int i)
+                return (T)(object)(i * 2);
             return value;
         }
     }

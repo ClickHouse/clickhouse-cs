@@ -1,5 +1,3 @@
-using System;
-
 namespace ClickHouse.Driver.ADO.Readers;
 
 /// <summary>
@@ -20,9 +18,9 @@ public interface IReadValueConverter
     /// </summary>
     /// <param name="value">The deserialized value (may be null or DBNull).</param>
     /// <param name="columnName">The column name.</param>
-    /// <param name="columnType">The .NET type of the column as reported by the ClickHouse type system.</param>
+    /// <param name="clickHouseType">The ClickHouse-side type name exactly as reported by the server (e.g., <c>"DateTime64(3, 'UTC')"</c>, <c>"Nullable(String)"</c>, <c>"LowCardinality(String)"</c>, <c>"Array(Int32)"</c>). Stable across client settings; parse if you need structured info.</param>
     /// <returns>The converted value.</returns>
-    object ConvertValue(object value, string columnName, Type columnType);
+    object ConvertValue(object value, string columnName, string clickHouseType);
 
     /// <summary>
     /// Converts a deserialized value before it is returned by <see cref="ClickHouseDataReader.GetFieldValue{T}"/>.
@@ -32,7 +30,7 @@ public interface IReadValueConverter
     /// <typeparam name="T">The target type requested by the caller.</typeparam>
     /// <param name="value">The deserialized value, already cast to <typeparamref name="T"/>.</param>
     /// <param name="columnName">The column name.</param>
-    /// <param name="columnType">The .NET type of the column as reported by the ClickHouse type system.</param>
+    /// <param name="clickHouseType">The ClickHouse-side type name exactly as reported by the server (e.g., <c>"DateTime64(3, 'UTC')"</c>, <c>"Nullable(String)"</c>, <c>"LowCardinality(String)"</c>, <c>"Array(Int32)"</c>). Stable across client settings; parse if you need structured info.</param>
     /// <returns>The converted value.</returns>
-    T ConvertValue<T>(T value, string columnName, Type columnType);
+    T ConvertValue<T>(T value, string columnName, string clickHouseType);
 }
