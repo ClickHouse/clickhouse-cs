@@ -344,6 +344,63 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
     }
 
     // ==========================================
+    // ClickHouse type string forwarded to the converter
+    // ==========================================
+
+    [Test]
+    public async Task Converter_ShouldReceiveRawServerTypeStrings()
+    {
+        var capturing = new CapturingConverter();
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings)
+        {
+            ReadValueConverter = capturing,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = await client.ExecuteReaderAsync(@"
+            SELECT
+                toInt32(42) AS i,
+                'hi' AS s,
+                toDateTime64(now(), 3, 'UTC') AS dt,
+                CAST(NULL AS LowCardinality(Nullable(String))) AS nlc,
+                [1, 2, 3] AS arr");
+        ClassicAssert.IsTrue(reader.Read());
+
+        // Force the converter to fire on every column
+        var values = new object[5];
+        reader.GetValues(values);
+
+        Assert.That(capturing.Captures, Has.Count.EqualTo(5));
+        Assert.That(capturing.Captures[0], Is.EqualTo(("i", "Int32")));
+        Assert.That(capturing.Captures[1], Is.EqualTo(("s", "String")));
+        Assert.That(capturing.Captures[2], Is.EqualTo(("dt", "DateTime64(3, 'UTC')")));
+        Assert.That(capturing.Captures[3], Is.EqualTo(("nlc", "LowCardinality(Nullable(String))")));
+        Assert.That(capturing.Captures[4], Is.EqualTo(("arr", "Array(UInt8)")));
+    }
+
+    [Test]
+    public async Task Converter_ShouldReceiveRawServerTypeStrings_ViaGetFieldValue()
+    {
+        var capturing = new CapturingConverter();
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings)
+        {
+            ReadValueConverter = capturing,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toDateTime64(now(), 6, 'Europe/Berlin') AS dt");
+        ClassicAssert.IsTrue(reader.Read());
+
+        _ = reader.GetFieldValue<DateTime>(0);
+
+        Assert.That(capturing.Captures, Has.Count.EqualTo(1));
+        Assert.That(capturing.Captures[0], Is.EqualTo(("dt", "DateTime64(6, 'Europe/Berlin')")));
+    }
+
+    // ==========================================
     // Test converter implementations
     // ==========================================
 
@@ -398,6 +455,23 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
         {
             var converted = ConvertValue((object)value, columnName, clickHouseType);
             return (T)converted;
+        }
+    }
+
+    private sealed class CapturingConverter : IReadValueConverter
+    {
+        public System.Collections.Generic.List<(string Column, string ClickHouseType)> Captures { get; } = new();
+
+        public object ConvertValue(object value, string columnName, string clickHouseType)
+        {
+            Captures.Add((columnName, clickHouseType));
+            return value;
+        }
+
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
+        {
+            Captures.Add((columnName, clickHouseType));
+            return value;
         }
     }
 }
