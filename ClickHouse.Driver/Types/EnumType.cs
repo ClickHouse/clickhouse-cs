@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
 
@@ -36,8 +37,8 @@ internal class EnumType : ParameterizedType
     {
         var parameters = node.ChildNodes
             .Select(cn => cn.Value)
-            .Select(p => p.Split('='))
-            .ToDictionary(kvp => kvp[0].Trim().Trim('\''), kvp => Convert.ToInt32(kvp[1].Trim(), CultureInfo.InvariantCulture));
+            .Select(ParseEnumMember)
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
 
         string typeName = TypeConverter.ExtractTypeName(node);
 
@@ -61,4 +62,26 @@ internal class EnumType : ParameterizedType
     public override object Read(ExtendedBinaryReader reader) => throw new NotImplementedException();
 
     public override void Write(ExtendedBinaryWriter writer, object value) => throw new NotImplementedException();
+
+    private static KeyValuePair<string, int> ParseEnumMember(string value)
+    {
+        var separatorIndex = value.LastIndexOf('=');
+        if (separatorIndex < 0)
+            throw new FormatException($"Invalid enum member definition: {value}");
+
+        var rawLabel = value[..separatorIndex].Trim();
+        var rawValue = value[(separatorIndex + 1)..].Trim();
+
+        if (rawLabel.Length >= 2 && rawLabel[0] == '\'' && rawLabel[^1] == '\'')
+        {
+            rawLabel = rawLabel[1..^1];
+        }
+
+        return new KeyValuePair<string, int>(
+            UnescapeEnumLabel(rawLabel),
+            Convert.ToInt32(rawValue, CultureInfo.InvariantCulture));
+    }
+
+    private static string UnescapeEnumLabel(string value)
+        => Regex.Unescape(value);
 }

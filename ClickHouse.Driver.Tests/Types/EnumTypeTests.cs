@@ -71,4 +71,17 @@ public class EnumTypeTests
             Assert.That(enumType.Lookup(1), Is.EqualTo("Inactive"));
         });
     }
+
+    [Test]
+    public void ShouldParseEnumLabelWithEscapedQuotesAndParentheses()
+    {
+        var typeString = "Enum8('None' = -1, 'DateTime(\\'UTC\\')' = 0, 'String' = 1)";
+        var type = (EnumType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(type.Lookup("DateTime('UTC')"), Is.EqualTo(0));
+            Assert.That(type.Lookup(0), Is.EqualTo("DateTime('UTC')"));
+        });
+    }
 }
