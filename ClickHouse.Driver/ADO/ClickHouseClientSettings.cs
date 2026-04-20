@@ -85,6 +85,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Copy parameter type resolver
         ParameterTypeResolver = other.ParameterTypeResolver;
+
+        // Copy parameter formatter
+        ParameterFormatter = other.ParameterFormatter;
     }
 
     /// <summary>
@@ -286,6 +289,14 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public IParameterTypeResolver ParameterTypeResolver { get; init; }
 
     /// <summary>
+    /// Gets or sets a custom formatter for serializing parameter values for HTTP transport.
+    /// When set, this formatter is consulted before the built-in value formatting logic.
+    /// Return null from the formatter to fall through to default formatting.
+    /// Default: null (use built-in formatting)
+    /// </summary>
+    public IParameterFormatter ParameterFormatter { get; init; }
+
+    /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
     /// Values not specified in the connection string will use default values.
     /// </summary>
@@ -381,6 +392,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                JsonReadMode == other.JsonReadMode &&
                JsonWriteMode == other.JsonWriteMode &&
                ParameterTypeResolver == other.ParameterTypeResolver &&
+               ParameterFormatter == other.ParameterFormatter &&
                Roles.SequenceEqual(other.Roles) &&
                CustomHeaders.Count == other.CustomHeaders.Count &&
                CustomHeaders.All(kvp => other.CustomHeaders.TryGetValue(kvp.Key, out var value) && kvp.Value == value);
@@ -420,6 +432,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(JsonReadMode);
         hash.Add(JsonWriteMode);
         hash.Add(ParameterTypeResolver);
+        hash.Add(ParameterFormatter);
         foreach (var kvp in CustomSettings)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));

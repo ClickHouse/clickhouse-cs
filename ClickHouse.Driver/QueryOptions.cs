@@ -73,6 +73,14 @@ public class QueryOptions
     public IParameterTypeResolver? ParameterTypeResolver { get; init; }
 
     /// <summary>
+    /// Gets or sets a custom formatter for serializing parameter values for this query,
+    /// overriding <see cref="ClickHouseClientSettings.ParameterFormatter"/>.
+    /// Return null from the formatter to fall through to default formatting.
+    /// Default: null (use client-level formatter)
+    /// </summary>
+    public IParameterFormatter? ParameterFormatter { get; init; }
+
+    /// <summary>
     /// Gets or sets the maximum execution time for this query.
     /// When set, this value is passed to ClickHouse as the max_execution_time setting,
     /// which causes the server to cancel the query if it exceeds this duration.
@@ -96,6 +104,7 @@ public class QueryOptions
             SessionId = SessionId,
             BearerToken = BearerToken,
             ParameterTypeResolver = ParameterTypeResolver,
+            ParameterFormatter = ParameterFormatter,
             MaxExecutionTime = MaxExecutionTime,
         };
     }
