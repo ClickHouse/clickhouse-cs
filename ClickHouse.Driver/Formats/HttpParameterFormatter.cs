@@ -53,16 +53,16 @@ internal static class HttpParameterFormatter
                 return Convert.ToDecimal(value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
 
             case DateType dt when value is DateTimeOffset @dto:
-                return @dto.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                return QuoteIfNeeded(@dto.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
 #if NET6_0_OR_GREATER
             case DateType dt when value is DateOnly @do:
-                return @do.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                return QuoteIfNeeded(@do.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
 #endif
             case DateType dt:
-                return Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                return QuoteIfNeeded(Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
 
             case FixedStringType tt when value is byte[] fsb:
-                return quote ? Encoding.UTF8.GetString(fsb).Escape().QuoteSingle() : Encoding.UTF8.GetString(fsb).Escape();
+                return QuoteIfNeeded(Encoding.UTF8.GetString(fsb).Escape(), quote);
 
             case StringType st:
             case FixedStringType tt:
@@ -71,7 +71,7 @@ internal static class HttpParameterFormatter
             case IPv4Type ip4:
             case IPv6Type ip6:
             case UuidType uuidType:
-                return quote ? value.ToString().Escape().QuoteSingle() : value.ToString().Escape();
+                return QuoteIfNeeded(value.ToString().Escape(), quote);
 
             case LowCardinalityType lt:
                 return Format(lt.UnderlyingType, value, quote);
@@ -81,24 +81,24 @@ internal static class HttpParameterFormatter
                 // Unspecified: send as-is so ClickHouse interprets in parameter timezone
                 // UTC/Local: convert to parameter timezone (or UTC if not specified) to preserve instant
                 if (dt.Kind == DateTimeKind.Unspecified)
-                    return dt.ToString("s", CultureInfo.InvariantCulture);
-                return FormatDateTimeInTargetTimezone(new DateTimeOffset(dt), dtt.TimeZoneOrUtc);
+                    return QuoteIfNeeded(dt.ToString("s", CultureInfo.InvariantCulture), quote);
+                return QuoteIfNeeded(FormatDateTimeInTargetTimezone(new DateTimeOffset(dt), dtt.TimeZoneOrUtc), quote);
 
             case DateTimeType dtt when value is DateTimeOffset dto:
                 // DateTimeOffset: convert to parameter timezone (or UTC if not specified) to preserve instant
-                return FormatDateTimeInTargetTimezone(dto, dtt.TimeZoneOrUtc);
+                return QuoteIfNeeded(FormatDateTimeInTargetTimezone(dto, dtt.TimeZoneOrUtc), quote);
 
             case DateTime64Type d64t when value is DateTime dtv:
                 // ClickHouse HTTP parameters expect DateTime64 as ISO-formatted strings.
                 // Unspecified: send as-is so ClickHouse interprets in parameter timezone
                 // UTC/Local: convert to parameter timezone (or UTC if not specified) to preserve instant
                 if (dtv.Kind == DateTimeKind.Unspecified)
-                    return $"{dtv:yyyy-MM-dd HH:mm:ss.fffffff}";
-                return FormatDateTime64InTargetTimezone(new DateTimeOffset(dtv), d64t.TimeZoneOrUtc);
+                    return QuoteIfNeeded($"{dtv:yyyy-MM-dd HH:mm:ss.fffffff}", quote);
+                return QuoteIfNeeded(FormatDateTime64InTargetTimezone(new DateTimeOffset(dtv), d64t.TimeZoneOrUtc), quote);
 
             case DateTime64Type d64t when value is DateTimeOffset dto:
                 // DateTimeOffset: convert to parameter timezone (or UTC if not specified) to preserve instant
-                return FormatDateTime64InTargetTimezone(dto, d64t.TimeZoneOrUtc);
+                return QuoteIfNeeded(FormatDateTime64InTargetTimezone(dto, d64t.TimeZoneOrUtc), quote);
 
             case TimeType tt when value is TimeSpan ts:
                 return TimeType.FormatTimeString(ts);
@@ -148,6 +148,9 @@ internal static class HttpParameterFormatter
                 throw new ArgumentException($"Cannot convert {value} to {type}");
         }
     }
+
+    private static string QuoteIfNeeded(string value, bool quote)
+        => quote ? value.QuoteSingle() : value;
 
     /// <summary>
     /// Formats a DateTimeOffset as an ISO string in the target timezone.

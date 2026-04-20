@@ -396,12 +396,9 @@ public class TestCases
             // 0x31: BFloat16
             new DataTypeSample("BFloat16", typeof(float), "toBFloat16(1.25)", 1.25f),
             // 0x0F: Date
-            // 0x10: Date32
+            new DataTypeSample("Date", typeof(DateTime), "toDate('2024-01-15')", new DateTime(2024, 1, 15)),
             // 0x11: DateTime (UTC)
-            //new DataTypeSample("Date", typeof(DateTime), "toDate('2024-01-15')", new DateTime(2024, 1, 15)),
-            //new DataTypeSample("DateTime('UTC')", typeof(DateTime), "toDateTime('2024-01-15 10:30:00', 'UTC')", new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Unspecified)),
-            //baseTypesToTest.Add(new DataTypeSample("Date32", typeof(DateTime), "toDate32('2024-01-15')", new DateTime(2024, 1, 15)));
-            // No dates or datetimes here because automatic type mapping tests are problematic
+            new DataTypeSample("DateTime('UTC')", typeof(DateTime), "toDateTime('2024-01-15 10:30:00', 'UTC')", new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc)),
             // 0x15: String
             new DataTypeSample("String", typeof(string), "'test'", "test"),
             // 0x16: FixedString
@@ -435,6 +432,12 @@ public class TestCases
         {
             // 0x2D: Bool
             baseTypesToTest.Add(new DataTypeSample("Bool", typeof(bool), "CAST(1, 'Bool')", true));
+        }
+
+        if (TestUtilities.SupportedFeatures.HasFlag(Feature.Date32))
+        {
+            // 0x10: Date32
+            baseTypesToTest.Add(new DataTypeSample("Date32", typeof(DateTime), "toDate32('2024-01-15')", new DateTime(2024, 1, 15)));
         }
 
 

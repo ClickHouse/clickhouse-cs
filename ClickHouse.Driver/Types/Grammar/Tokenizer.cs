@@ -9,26 +9,55 @@ public static class Tokenizer
     public static IEnumerable<string> GetTokens(string input)
     {
         var start = 0;
-        var len = input.Length;
+        var inQuotes = false;
+        var escaped = false;
 
-        while (start < len)
+        for (var i = 0; i < input.Length; i++)
         {
-            var nextBreak = input.IndexOfAny(Breaks, start);
-            if (nextBreak == start)
+            var c = input[i];
+            if (inQuotes)
             {
-                start++;
-                yield return input.Substring(nextBreak, 1);
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    inQuotes = false;
+                }
+
+                continue;
             }
-            else if (nextBreak == -1)
+
+            if (c == '\'')
             {
-                yield return input.Substring(start).Trim();
-                yield break;
+                inQuotes = true;
+                continue;
             }
-            else
+
+            if (System.Array.IndexOf(Breaks, c) >= 0)
             {
-                yield return input.Substring(start, nextBreak - start).Trim();
-                start = nextBreak;
+                if (i > start)
+                {
+                    yield return input.Substring(start, i - start).Trim();
+                }
+
+                yield return input.Substring(i, 1);
+                start = i + 1;
             }
+        }
+
+        if (start < input.Length)
+        {
+            yield return input.Substring(start).Trim();
         }
     }
 }

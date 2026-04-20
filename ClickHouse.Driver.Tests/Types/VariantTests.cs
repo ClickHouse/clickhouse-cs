@@ -116,6 +116,24 @@ public class VariantTests : AbstractConnectionTestFixture
 
     [Test]
     [RequiredFeature(Feature.Variant)]
+    [FromVersion(25, 4)]
+    public async Task ParameterizedSelect_VariantStringDateTimeUtc_WithDateTimeValue_ShouldRoundTrip()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {var:Variant(String, DateTime('UTC'))}, variantType({var:Variant(String, DateTime('UTC'))})";
+        command.AddParameter("var", new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc));
+
+        using var reader = await command.ExecuteReaderAsync();
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (DateTime)reader.GetValue(0);
+        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc)));
+        Assert.That(result.Kind, Is.EqualTo(DateTimeKind.Utc));
+        Assert.That(reader.GetString(1), Is.EqualTo("DateTime('UTC')"));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Variant)]
     public async Task InsertBinaryAsync_VariantIPv4IPv6_ShouldRoundTrip()
     {
         var targetTable = "test.test_variant_ip";
