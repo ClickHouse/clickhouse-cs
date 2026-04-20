@@ -62,7 +62,7 @@ internal static class HttpParameterFormatter
                 return QuoteIfNeeded(Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
 
             case FixedStringType tt when value is byte[] fsb:
-                return quote ? Encoding.UTF8.GetString(fsb).Escape().QuoteSingle() : Encoding.UTF8.GetString(fsb).Escape();
+                return QuoteIfNeeded(Encoding.UTF8.GetString(fsb).Escape(), quote);
 
             case StringType st:
             case FixedStringType tt:
@@ -71,7 +71,7 @@ internal static class HttpParameterFormatter
             case IPv4Type ip4:
             case IPv6Type ip6:
             case UuidType uuidType:
-                return quote ? value.ToString().Escape().QuoteSingle() : value.ToString().Escape();
+                return QuoteIfNeeded(value.ToString().Escape(), quote);
 
             case LowCardinalityType lt:
                 return Format(lt.UnderlyingType, value, quote);
