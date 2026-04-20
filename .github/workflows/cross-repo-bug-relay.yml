@@ -11,5 +11,5 @@ permissions: {}
 
 jobs:
   relay:
-    uses: ClickHouse/integrations-ai-playground/.github/workflows/cross-repo-bug-relay.yml@main
+    uses: ClickHouse/integrations-shared-workflows/.github/workflows/cross-repo-bug-relay.yml@main
     secrets: inherit
