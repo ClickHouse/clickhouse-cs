@@ -84,4 +84,17 @@ public class EnumTypeTests
             Assert.That(type.Lookup(0), Is.EqualTo("DateTime('UTC')"));
         });
     }
+
+    [Test]
+    public void ShouldParseEnumLabelWithEqualsSign()
+    {
+        var typeString = "Enum8('a=b' = 1, 'plain' = 2)";
+        var type = (EnumType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(type.Lookup("a=b"), Is.EqualTo(1));
+            Assert.That(type.Lookup(1), Is.EqualTo("a=b"));
+        });
+    }
 }
