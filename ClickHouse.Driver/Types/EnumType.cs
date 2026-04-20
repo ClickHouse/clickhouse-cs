@@ -78,10 +78,7 @@ internal class EnumType : ParameterizedType
         }
 
         return new KeyValuePair<string, int>(
-            UnescapeEnumLabel(rawLabel),
+            Regex.Unescape(rawLabel),
             Convert.ToInt32(rawValue, CultureInfo.InvariantCulture));
     }
-
-    private static string UnescapeEnumLabel(string value)
-        => Regex.Unescape(value);
 }
