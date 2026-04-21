@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.ADO.Readers;
 using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.ADO;
@@ -85,6 +86,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Copy parameter type resolver
         ParameterTypeResolver = other.ParameterTypeResolver;
+
+        // Copy read value converter
+        ReadValueConverter = other.ReadValueConverter;
     }
 
     /// <summary>
@@ -286,6 +290,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public IParameterTypeResolver ParameterTypeResolver { get; init; }
 
     /// <summary>
+    /// Gets or sets a custom converter for same-type transformation of values returned by the data reader.
+    /// When set, this converter is called on every GetValue/GetFieldValue call,
+    /// allowing same-type transformations (e.g., setting DateTime.Kind, trimming strings).
+    /// The converter must not change the runtime type of values.
+    /// Default: null (no conversion)
+    /// </summary>
+    public IReadValueConverter ReadValueConverter { get; init; }
+
+    /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
     /// Values not specified in the connection string will use default values.
     /// </summary>
@@ -381,6 +394,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                JsonReadMode == other.JsonReadMode &&
                JsonWriteMode == other.JsonWriteMode &&
                ParameterTypeResolver == other.ParameterTypeResolver &&
+               ReadValueConverter == other.ReadValueConverter &&
                Roles.SequenceEqual(other.Roles) &&
                CustomHeaders.Count == other.CustomHeaders.Count &&
                CustomHeaders.All(kvp => other.CustomHeaders.TryGetValue(kvp.Key, out var value) && kvp.Value == value);
@@ -420,6 +434,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(JsonReadMode);
         hash.Add(JsonWriteMode);
         hash.Add(ParameterTypeResolver);
+        hash.Add(ReadValueConverter);
         foreach (var kvp in CustomSettings)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));

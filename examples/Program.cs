@@ -245,6 +245,10 @@ class Program
         await ParameterTypeResolver.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(ReadValueConverter)}");
+        await ReadValueConverter.Run();
+        WaitForUser(isInteractive);
+
         // Troubleshooting
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("TROUBLESHOOTING");
