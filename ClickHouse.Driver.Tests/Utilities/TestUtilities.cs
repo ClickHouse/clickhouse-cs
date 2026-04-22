@@ -12,6 +12,7 @@ using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Utility;
 using System.Text.Json.Nodes;
 using NUnit.Framework.Constraints;
+using Testcontainers.ClickHouse;
 
 namespace ClickHouse.Driver.Tests;
 
@@ -184,11 +185,55 @@ public static class TestUtilities
 
     public static ClickHouseConnectionStringBuilder GetConnectionStringBuilder()
     {
-        // Connection string must be provided pointing to a test ClickHouse server
-        var devConnectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION") ??
-            throw new InvalidOperationException("Must set CLICKHOUSE_CONNECTION environment variable pointing at ClickHouse server");
+        var envConnectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION");
+        if (!string.IsNullOrEmpty(envConnectionString))
+            return new ClickHouseConnectionStringBuilder(envConnectionString);
 
-        return new ClickHouseConnectionStringBuilder(devConnectionString);
+        var container = _container.Value ??
+            throw new InvalidOperationException(
+                "Must set CLICKHOUSE_CONNECTION environment variable pointing at ClickHouse server, " +
+                "or run with Docker available so Testcontainers can start a container automatically.");
+
+        return new ClickHouseConnectionStringBuilder
+        {
+            Host = container.Hostname,
+            Port = (ushort)container.GetMappedPublicPort(ClickHouseHttpPort),
+            Username = ContainerUsername,
+            Password = ContainerPassword,
+        };
+    }
+
+    // Lazily starts a ClickHouse container when CLICKHOUSE_CONNECTION is not provided.
+    // Must be lazy (not a [SetUpFixture]) because IApplyToTest attributes (FromVersion,
+    // RequiredFeature) touch ServerVersion during test-building, before any OneTimeSetUp runs.
+    internal const int ClickHouseHttpPort = 8123;
+    private const string ContainerUsername = "default";
+    private const string ContainerPassword = "clickhouse";
+
+    private static readonly Lazy<ClickHouseContainer?> _container = new(StartContainerIfNeeded);
+
+    internal static ClickHouseContainer? TestContainer => _container.IsValueCreated ? _container.Value : null;
+
+    private static ClickHouseContainer? StartContainerIfNeeded()
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION")))
+            return null;
+
+        if (GetClickHouseTestEnvironment() != TestEnv.LocalSingleNode)
+            return null;
+
+        var version = Environment.GetEnvironmentVariable("CLICKHOUSE_VERSION");
+        var tag = string.IsNullOrEmpty(version) ? "latest" : version;
+
+        var container = new ClickHouseBuilder()
+            .WithImage($"clickhouse/clickhouse-server:{tag}")
+            .WithUsername(ContainerUsername)
+            .WithPassword(ContainerPassword)
+            .WithEnvironment("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1")
+            .Build();
+
+        container.StartAsync().GetAwaiter().GetResult();
+        return container;
     }
 
     /// <summary>
