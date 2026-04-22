@@ -212,7 +212,7 @@ public static class TestUtilities
 
     private static readonly Lazy<ClickHouseContainer?> _container = new(StartContainerIfNeeded);
 
-    internal static ClickHouseContainer? TestContainer => _container.IsValueCreated ? _container.Value : null;
+    public static ClickHouseContainer? TestContainer => _container.IsValueCreated ? _container.Value : null;
 
     private static ClickHouseContainer? StartContainerIfNeeded()
     {
@@ -232,7 +232,19 @@ public static class TestUtilities
             .WithEnvironment("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1")
             .Build();
 
-        container.StartAsync().GetAwaiter().GetResult();
+        try
+        {
+            container.StartAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "Failed to start a ClickHouse container via Testcontainers. " +
+                "Ensure Docker is installed and running, or set CLICKHOUSE_CONNECTION " +
+                "to point at an existing ClickHouse instance.",
+                ex);
+        }
+
         return container;
     }
 
