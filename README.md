@@ -58,6 +58,7 @@ Contributions are welcome and highly appreciated! Check out our [contributing gu
 * **Serilog**: [Serilog.Sinks.ClickHouse](https://github.com/ClickHouse/Serilog.Sinks.ClickHouse)
 * **Entity Framework Core**: [ClickHouse.EntityFrameworkCore](https://github.com/ClickHouse/ClickHouse.EntityFrameworkCore)
 * **Aspire**: [ClickHouse.Aspire](https://github.com/ClickHouse/ClickHouse.Aspire/)
+* **Semantic Kernel**: [ClickHouse.SemanticKernel](https://github.com/ClickHouse/ClickHouse.SemanticKernel/)
 
 ## Acknowledgements
 Originally created by [Oleg V. Kozlyuk](https://github.com/DarkWanderer)
