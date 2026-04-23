@@ -23,18 +23,7 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-22.04
-    timeout-minutes: 5
-
-    services:
-      clickhouse:
-        image: clickhouse/clickhouse-server:${{ inputs.clickhouse-version }}
-        ports:
-          - 8123:8123
-        env:
-          CLICKHOUSE_DB: test
-          CLICKHOUSE_USER: test
-          CLICKHOUSE_PASSWORD: test1234
-          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -64,9 +53,7 @@ jobs:
       - name: Test
         run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework ${{ inputs.framework }} --configuration Release --verbosity normal --logger GitHubActions /clp:ErrorsOnly ${{ inputs.coverage && '/p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true' || '' }}
         env:
-          CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
           CLICKHOUSE_VERSION: ${{ inputs.clickhouse-version }}
-          CLICKHOUSE_TEST_ENVIRONMENT: local_single_node
 
       - uses: codecov/codecov-action@v6
         if: inputs.coverage

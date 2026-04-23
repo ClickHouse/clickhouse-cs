@@ -56,7 +56,15 @@ The solution includes three test projects:
 
 ### Running unit tests
 
-Tests require a running ClickHouse server. The easiest way is to use Docker. Running the tests requires setting up an environment variable with a valid connection string, eg
+Tests require a ClickHouse server. By default, the test suite uses [Testcontainers](https://testcontainers.com/) to automatically start and manage a ClickHouse container for you - all you need is a running Docker daemon.
+
+```bash
+dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework net9.0 -c Release
+```
+
+#### Using an existing ClickHouse instance
+
+If you'd rather point the tests at an already-running ClickHouse instance, set `CLICKHOUSE_CONNECTION` to a valid connection string. When this variable is set, Testcontainers is skipped:
 
 ```bash
 # Windows (PowerShell)
@@ -66,29 +74,13 @@ $env:CLICKHOUSE_CONNECTION="Host=localhost;Port=8123;Username=default"
 export CLICKHOUSE_CONNECTION="Host=localhost;Port=8123;Username=default"
 ```
 
-#### Start ClickHouse in Docker
+A matching Docker command, if you want to run your own instance:
 
 ```bash
 docker run --rm -d \
   -p 8123:8123 \
   -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
   --name clickhouse-dev clickhouse/clickhouse-server:latest
-```
-
-
-#### Run the tests
-
-Run all tests on .NET 9.0:
-
-```bash
-dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework net9.0 -c Release
-```
-
-
-#### Stop the ClickHouse container
-
-```bash
-docker stop clickhouse-dev
 ```
 
 ### Running integration tests
@@ -133,20 +125,14 @@ Results will be saved in the `results/` directory.
 
 ### Testing against different ClickHouse versions
 
-To test against a specific ClickHouse version:
+To pin tests to a specific ClickHouse version, set `CLICKHOUSE_VERSION`. Testcontainers will pull the matching `clickhouse/clickhouse-server:<version>` image:
 
 ```bash
-docker run --rm -d \
-  -p 8123:8123 \
-  -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
-  --name clickhouse-dev clickhouse/clickhouse-server:25.3
-
-# Set the version environment variable
 export CLICKHOUSE_VERSION="25.3"
-
-# Run tests
 dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework net9.0 -c Release
 ```
+
+If you're using your own ClickHouse instance via `CLICKHOUSE_CONNECTION`, `CLICKHOUSE_VERSION` is still honored for feature-flag detection — otherwise the server version is queried at startup.
 
 ## CI/CD
 
