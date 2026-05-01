@@ -127,7 +127,7 @@ To keep one triage comment per PR across pushes:
    ```
    gh pr view <n> --json comments --jq '.comments[] | select(.body | startswith("<!-- claude-triage-comment -->")) | .url'
    ```
-2. If the query returns a URL, extract the numeric comment ID from the URL (`.../pull/<n>#issuecomment-<id>`) and update it:
+2. If the query returns a URL, extract the numeric comment ID from the URL (`.../pull/<n>#issuecomment-<id>`) and update it. Use the long-form `--method PATCH` flag (the workflow allow-list does not match the `-X PATCH` short form):
    ```
    gh api --method PATCH "/repos/<owner>/<repo>/issues/comments/<id>" -f body="$BODY"
    ```
@@ -148,22 +148,19 @@ Before posting the comment:
 
 If a label add fails because the label doesn't exist in the repo, note it in Concerns and continue. Do not attempt to create labels.
 
-## Things to call out in Concerns (non-exhaustive)
+## What belongs in Concerns
 
-Anchored to AGENTS.md guidance:
+**Concerns is a risk justification, not a code review.** Only include items that explain *why* the risk level was assigned or that would change the assignment if addressed. Code quality issues, bugs, etc. do not belong here.
 
-- Public API surface change without a corresponding `PublicAPI/*.txt` update.
-- Missing tests on a bug fix or new feature.
-- `CHANGELOG.md` / `RELEASENOTES.md` not updated for a behavioral change.
-- Allocations, boxing, or `async void` introduced on hot paths (`ADO/`, `Types/`, `Utility/`).
-- Missing `CancellationToken` propagation on a new public async method.
-- Sync-over-async (`.Result`, `.Wait()`, `GetAwaiter().GetResult()`).
-- New connection-string setting without docs / example.
-- Thread-safety regression on `ClickHouseClient` (intended-singleton class).
-- Type binary read path changed without the matching write path (or vice versa).
-- HttpParameterFormatter not updated to match a `Types/*` change.
-- Failing required checks visible in `gh pr view`.
-- Coverage shortfall flagged elsewhere (do not fetch coverage; only mention if `gh pr view` exposes it).
+Include only:
+
+1. **Which rubric rule fired** — name the specific high/medium rule that drove the level (e.g. "Risk: high — `TypeConverter.cs` is in the listed type-system hot zone").
+2. **Intent drift** — files touched outside the issue/description scope, or unrelated concerns bundled together.
+3. **Missing artifact that the rubric depends on** — e.g. `PublicAPI/PublicAPI.Shipped.txt` was renamed but `Unshipped.txt` wasn't updated; type read path moved without write path; `FeatureSwitch` change without a test on the supported-version matrix. Only when this directly affects the risk read.
+4. **Failing required checks** visible in `gh pr view` — don't promote risk because of them.
+5. **Uncertainty** that drove a borderline risk choice — "could be high if the algorithm change touches the streaming path; mark medium pending benchmark."
+
+If none of these apply, omit the Concerns section entirely. Empty bullet padding is worse than silence.
 
 ## What this skill does NOT do
 

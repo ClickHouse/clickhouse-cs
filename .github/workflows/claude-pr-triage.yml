@@ -50,7 +50,7 @@ jobs:
           # (see modes/agent/index.ts: `claudeCommentId: undefined`). We post
           # comments via `gh pr comment` directly instead.
           claude_args: |
-            --allowedTools "Read,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(gh label list:*),Bash(gh issue view:*)"
+            --allowedTools "Read,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh api --method PATCH /repos/*/issues/comments/*:*),Bash(gh label list:*),Bash(gh issue view:*)"
             --disallowedTools "WebFetch,WebSearch,Edit,Write,MultiEdit,NotebookEdit"
             --max-turns 8
           prompt: |
