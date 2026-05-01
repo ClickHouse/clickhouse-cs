@@ -46,6 +46,9 @@ jobs:
           # fully controlled by the workflow's `permissions:` block above.
           github_token: ${{ github.token }}
           use_sticky_comment: true
+          # DEBUG: temporarily exposes Claude's full message stream (including tool I/O)
+          # to the workflow log. Disable once comment-posting is confirmed working.
+          show_full_output: true
           claude_args: |
             --allowedTools "Read,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh label list:*),Bash(gh issue view:*),mcp__github_comment__update_claude_comment"
             --disallowedTools "WebFetch,WebSearch,Edit,Write,MultiEdit,NotebookEdit"
