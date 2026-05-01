@@ -92,7 +92,9 @@ Default if neither set fires:
 
 ## Output contract
 
-Your final assistant message becomes the sticky comment. Use exactly this structure (omit empty sections):
+Post the report by calling the MCP tool `mcp__github_comment__update_claude_comment` with the body parameter set to the markdown below. The assistant's final text message is **not** shown to the user — only the MCP tool call updates the visible comment.
+
+Use exactly this structure (omit empty sections):
 
 ```markdown
 ## Triage
@@ -150,4 +152,4 @@ Anchored to AGENTS.md guidance:
 - Does not perform a deep correctness review — that's `.claude/skills/review/SKILL.md`, invoked manually.
 - Does not run tests, fetch coverage, or download artifacts.
 - Does not write to source files, push commits, or open PRs.
-- Does not comment via `gh pr comment` — the GitHub Action's sticky comment handles posting.
+- Does not comment via `gh pr comment` — use `mcp__github_comment__update_claude_comment` instead.
