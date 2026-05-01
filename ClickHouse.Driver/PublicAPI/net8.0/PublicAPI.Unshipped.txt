@@ -1,9 +1,16 @@
 ﻿
 
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ParameterFormatter.get -> ClickHouse.Driver.ADO.Parameters.IParameterFormatter
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ParameterFormatter.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ParameterTypeResolver.get -> ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ParameterTypeResolver.init -> void
+ClickHouse.Driver.ADO.Parameters.DictionaryParameterFormatter
+ClickHouse.Driver.ADO.Parameters.DictionaryParameterFormatter.DictionaryParameterFormatter(System.Collections.Generic.IDictionary<System.Type, System.Func<object, string>> mappings) -> void
+ClickHouse.Driver.ADO.Parameters.DictionaryParameterFormatter.Format(object value, string typeName, string parameterName) -> string
 ClickHouse.Driver.ADO.Parameters.DictionaryParameterTypeResolver
 ClickHouse.Driver.ADO.Parameters.DictionaryParameterTypeResolver.DictionaryParameterTypeResolver(System.Collections.Generic.IDictionary<System.Type, string> mappings) -> void
 ClickHouse.Driver.ADO.Parameters.DictionaryParameterTypeResolver.ResolveType(System.Type clrType, object value, string parameterName) -> string
+ClickHouse.Driver.ADO.Parameters.IParameterFormatter
+ClickHouse.Driver.ADO.Parameters.IParameterFormatter.Format(object value, string typeName, string parameterName) -> string
 ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver
 ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver.ResolveType(System.Type clrType, object value, string parameterName) -> string

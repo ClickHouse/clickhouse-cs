@@ -303,13 +303,14 @@ public sealed class ClickHouseClient : IClickHouseClient
         if (parameters != null)
         {
             var resolvedTypeNames = parameters.ResolveTypeNames(sqlQuery, queryOptions?.ParameterTypeResolver ?? Settings.ParameterTypeResolver);
+            var customFormatter = queryOptions?.ParameterFormatter ?? Settings.ParameterFormatter;
             sqlQuery = parameters.ReplacePlaceholders(sqlQuery, resolvedTypeNames);
             foreach (ClickHouseDbParameter parameter in parameters)
             {
                 resolvedTypeNames.TryGetValue(parameter.ParameterName, out var resolvedTypeName);
                 uriBuilder.AddSqlQueryParameter(
                     parameter.ParameterName,
-                    HttpParameterFormatter.Format(parameter, resolvedTypeName, TypeSettings));
+                    HttpParameterFormatter.Format(parameter, resolvedTypeName, TypeSettings, customFormatter));
             }
         }
 
@@ -337,13 +338,14 @@ public sealed class ClickHouseClient : IClickHouseClient
         if (parameters != null)
         {
             var resolvedTypeNames = parameters.ResolveTypeNames(sqlQuery, queryOptions?.ParameterTypeResolver ?? Settings.ParameterTypeResolver);
+            var customFormatter = queryOptions?.ParameterFormatter ?? Settings.ParameterFormatter;
             sqlQuery = parameters.ReplacePlaceholders(sqlQuery, resolvedTypeNames);
 
             foreach (ClickHouseDbParameter parameter in parameters)
             {
                 resolvedTypeNames.TryGetValue(parameter.ParameterName, out var resolvedTypeName);
                 content.Add(
-                    content: new StringContent(HttpParameterFormatter.Format(parameter, resolvedTypeName, TypeSettings)),
+                    content: new StringContent(HttpParameterFormatter.Format(parameter, resolvedTypeName, TypeSettings, customFormatter)),
                     name: $"param_{parameter.ParameterName}");
             }
         }

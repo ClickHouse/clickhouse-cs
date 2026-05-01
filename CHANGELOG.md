@@ -3,9 +3,12 @@ v1.3.0
 
 **New Features:**
 * **ValueTuple support on write path**: `System.ValueTuple` values (C# tuple literals like `(1, "hello")`) are now supported in binary inserts, HTTP parameterized queries, and automatic type inference. Tuples with more than 7 elements are correctly flattened from the compiler-generated rest-nesting structure. Note: if you need exactly 7 scalar elements followed by a nested tuple as the 8th element, wrap the inner tuple in an extra layer (e.g., `Tuple.Create(1,...,7, Tuple.Create(Tuple.Create("a","b")))`) so the driver can distinguish it from TRest nesting.
+* **Configurable parameter value formatting**: new `IParameterFormatter` interface allowing configuration of how parameter values are serialized for HTTP transport (sibling to `IParameterTypeResolver`, which governs type resolution). Set `ParameterFormatter` on `ClickHouseClientSettings` to override the built-in serialization logic for any CLR type (e.g., custom `DateTime` precision, decimal culture, string escaping). Includes one implementation, `DictionaryParameterFormatter`, for simple CLR-type → format-function mappings. Return `null` from the formatter to fall through to the built-in formatter. Can also be set per-query via `QueryOptions.ParameterFormatter`. The formatter is also invoked for every element inside composite values (Array, Tuple, Map, Nested); see docs for quoting caveats when formatting string-like types inside composites.
 
 **Bug Fixes:**
 * Fixed type inference for `System.Tuple` with more than 7 elements. The TRest nesting was not being flattened, causing the 8th+ elements to be inferred as nested tuple types instead of their actual flat types. This could lead to incorrect ClickHouse type inference and serialization errors.
+* Fixed HTTP parameter serialization for `Date`, `DateTime`, and `DateTime64` values inside composite types such as `Array`, `Tuple`, `Map`, and `Variant`. These values are now quoted correctly when sent over HTTP.
+* Fixed parsing of enum labels containing escaped quotes, parentheses, and `=` characters. This fixes cases like `variantType()` on `Variant(String, DateTime('UTC'))`, which could previously round-trip through the driver as an empty string.
 
 v1.2.0
 ---
