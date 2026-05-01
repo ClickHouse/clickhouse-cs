@@ -92,11 +92,10 @@ Default if neither set fires:
 
 ## Output contract
 
-Post the report by calling the MCP tool `mcp__github_comment__update_claude_comment` with the body parameter set to the markdown below. The assistant's final text message is **not** shown to the user — only the MCP tool call updates the visible comment.
-
-Use exactly this structure (omit empty sections):
+The body of the comment must be exactly this structure (omit empty sections), and **must start with the literal HTML marker `<!-- claude-triage-comment -->` on its own line** so that subsequent runs can find and update the existing comment instead of duplicating:
 
 ```markdown
+<!-- claude-triage-comment -->
 ## Triage
 
 **Category:** `<category>`  •  **Risk:** `<low|medium|high>`
@@ -119,6 +118,25 @@ Use exactly this structure (omit empty sections):
 ```
 
 Show only the line under "Required reviewer action" that matches the assigned risk.
+
+### Upsert the comment (post or edit)
+
+To keep one triage comment per PR across pushes:
+
+1. List existing comments:
+   ```
+   gh pr view <n> --json comments --jq '.comments[] | select(.body | startswith("<!-- claude-triage-comment -->")) | .url'
+   ```
+2. If the query returns a URL, extract the numeric comment ID from the URL (`.../pull/<n>#issuecomment-<id>`) and update it:
+   ```
+   gh api --method PATCH "/repos/<owner>/<repo>/issues/comments/<id>" -f body="$BODY"
+   ```
+3. If no existing triage comment, post a fresh one:
+   ```
+   gh pr comment <n> --body "$BODY"
+   ```
+
+Repo and owner come from the `REPO:` line at the top of the workflow prompt.
 
 ## Applying labels
 
@@ -152,4 +170,4 @@ Anchored to AGENTS.md guidance:
 - Does not perform a deep correctness review — that's `.claude/skills/review/SKILL.md`, invoked manually.
 - Does not run tests, fetch coverage, or download artifacts.
 - Does not write to source files, push commits, or open PRs.
-- Does not comment via `gh pr comment` — use `mcp__github_comment__update_claude_comment` instead.
+- Does not run tools beyond the allow-list — `gh pr view/diff/edit/comment`, `gh issue view`, `gh api` for comment-edit, and `gh label list` are sufficient.
