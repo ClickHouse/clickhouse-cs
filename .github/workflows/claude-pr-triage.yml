@@ -41,6 +41,10 @@ jobs:
         uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1.0.111
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Use the runner-injected GITHUB_TOKEN instead of letting the action mint
+          # its own via OIDC. Avoids needing `id-token: write`; capabilities are
+          # fully controlled by the workflow's `permissions:` block above.
+          github_token: ${{ github.token }}
           use_sticky_comment: true
           claude_args: |
             --allowedTools "Read,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh label list:*),Bash(gh issue view:*)"
