@@ -2,7 +2,7 @@
 name: triage-pr
 description: Triage a pull request — classify, assess risk, apply labels, and post a single sticky comment. Two passes (summarize+categorize, then risk-assess). C# / ClickHouse.Driver specific.
 argument-hint: "<PR-number>"
-allowed-tools: Read, Glob, Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr edit:*), Bash(gh label list:*), Bash(gh issue view:*)
+allowed-tools: Read, Glob, Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr edit:*), Bash(gh pr comment:*), Bash(gh api --method PATCH /repos/*/*/issues/comments/*:*), Bash(gh label list:*), Bash(gh issue view:*)
 ---
 
 # Triage a pull request
@@ -127,9 +127,9 @@ To keep one triage comment per PR across pushes:
    ```
    gh pr view <n> --json comments --jq '.comments[] | select(.body | startswith("<!-- claude-triage-comment -->")) | .url'
    ```
-2. If the query returns a URL, extract the numeric comment ID from the URL (`.../pull/<n>#issuecomment-<id>`) and update it. Use the long-form `--method PATCH` flag (the workflow allow-list does not match the `-X PATCH` short form):
+2. If the query returns a URL, extract the numeric comment ID from the URL (`.../pull/<n>#issuecomment-<id>`) and update it. The workflow allow-list pattern is matched against the literal command line — invoke it exactly like this, **without quotes around the path** and using long-form `--method PATCH` (the matcher does not accept `-X PATCH` or a quoted path):
    ```
-   gh api --method PATCH "/repos/<owner>/<repo>/issues/comments/<id>" -f body="$BODY"
+   gh api --method PATCH /repos/<owner>/<repo>/issues/comments/<id> -f body="$BODY"
    ```
 3. If no existing triage comment, post a fresh one:
    ```
