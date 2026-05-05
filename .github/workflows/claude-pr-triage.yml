@@ -50,9 +50,14 @@ jobs:
           # (see modes/agent/index.ts: `claudeCommentId: undefined`). We post
           # comments via `gh pr comment` directly instead.
           claude_args: |
-            --allowedTools "Read,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh api --method PATCH /repos/*/*/issues/comments/*:*),Bash(gh label list:*),Bash(gh issue view:*)"
+            # gh api is locked to PATCH only. Path restriction was tried but the
+            # bash matcher doesn't reliably match multi-segment globs in paths, so
+            # we rely on the GITHUB_TOKEN scope (`pull-requests: write, issues: write`)
+            # as the real security boundary — Claude cannot PATCH user/, orgs/, or
+            # repo-admin endpoints with that token regardless of the verb allowance.
+            --allowedTools "Read,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh api --method PATCH:*),Bash(gh label list:*),Bash(gh issue view:*)"
             --disallowedTools "WebFetch,WebSearch,Edit,Write,MultiEdit,NotebookEdit"
-            --max-turns 8
+            --max-turns 10
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.inputs.pr_number || github.event.pull_request.number }}
