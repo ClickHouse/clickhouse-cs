@@ -1,8 +1,8 @@
 ---
 name: triage-pr
-description: Triage a pull request — classify, assess risk, apply labels, and post a single sticky comment. Two passes (summarize+categorize, then risk-assess). C# / ClickHouse.Driver specific.
+description: Triage a pull request — classify and assess risk in two passes (summarize+categorize, then risk-assess), and emit a JSON document. The workflow applies labels and posts the comment from that JSON. C# / ClickHouse.Driver specific.
 argument-hint: "<PR-number>"
-allowed-tools: Read, Glob, Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr edit:*), Bash(gh pr comment:*), Bash(gh api:*), Bash(gh label list:*), Bash(gh issue view:*)
+allowed-tools: Read, Glob, Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh issue view:*), Bash(gh label list:*)
 ---
 
 # Triage a pull request
@@ -90,9 +90,19 @@ Default if neither set fires:
 - Test-only additions (no source changes).
 - CI-only tweaks that don't change build/release output.
 
-## Output contract
+## Final answer
 
-The body of the comment must be exactly this structure (omit empty sections), and **must start with the literal HTML marker `<!-- claude-triage-comment -->` on its own line** so that subsequent runs can find and update the existing comment instead of duplicating:
+Your final answer is a single JSON object — do not call any tool to apply labels or post a comment, the workflow does that from this JSON. Schema:
+
+```json
+{
+  "category": "<one of: bugfix | feature | refactor | perf | deps | docs | tests | infra>",
+  "risk": "<one of: low | medium | high>",
+  "body": "<full markdown for the PR comment, see template below>"
+}
+```
+
+The `body` field must be exactly this structure (omit empty sections), and **must start with the literal HTML marker `<!-- claude-triage-comment -->` on its own line** so subsequent runs can find and update the existing comment instead of duplicating:
 
 ```markdown
 <!-- claude-triage-comment -->
@@ -112,41 +122,16 @@ The body of the comment must be exactly this structure (omit empty sections), an
 - <bullet>
 
 **Required reviewer action**
+- <one line corresponding to the assigned risk; see below>
+```
+
+Show only the "Required reviewer action" line that matches the assigned risk:
+
 - Low: AI review with no comments → eligible for auto-merge per repo policy.
 - Medium: at least one human reviewer.
 - High: PR body must include an architectural description before review.
-```
 
-Show only the line under "Required reviewer action" that matches the assigned risk.
-
-### Upsert the comment (post or edit)
-
-To keep one triage comment per PR across pushes:
-
-1. List existing comments:
-   ```
-   gh pr view <n> --json comments --jq '.comments[] | select(.body | startswith("<!-- claude-triage-comment -->")) | .url'
-   ```
-2. If the query returns a URL, extract the numeric comment ID from the URL (`.../pull/<n>#issuecomment-<id>`) and update it:
-   ```
-   gh api --method PATCH /repos/<owner>/<repo>/issues/comments/<id> -f body="$BODY"
-   ```
-3. If no existing triage comment, post a fresh one:
-   ```
-   gh pr comment <n> --body "$BODY"
-   ```
-
-Repo and owner come from the `REPO:` line at the top of the workflow prompt.
-
-## Applying labels
-
-Before posting the comment:
-
-1. Read existing labels from the `gh pr view` output.
-2. For each existing label that starts with `triage:` or `risk:`, run `gh pr edit <n> --remove-label "<exact-name>"` (one call per label — GitHub does not accept globs).
-3. Add the new labels: `gh pr edit <n> --add-label "triage:<category>" --add-label "risk:<level>"`.
-
-If a label add fails because the label doesn't exist in the repo, note it in Concerns and continue. Do not attempt to create labels.
+If `category` is invalid or `body` does not start with the required marker, the workflow will fail — produce them exactly as specified.
 
 ## What belongs in Concerns
 
@@ -167,4 +152,5 @@ If none of these apply, omit the Concerns section entirely. Empty bullet padding
 - Does not perform a deep correctness review — that's `.claude/skills/review/SKILL.md`, invoked manually.
 - Does not run tests, fetch coverage, or download artifacts.
 - Does not write to source files, push commits, or open PRs.
-- Does not run tools beyond the allow-list — `gh pr view/diff/edit/comment`, `gh issue view`, `gh api` for comment-edit, and `gh label list` are sufficient.
+- Does not apply labels or post comments — those are write actions performed by the workflow's follow-up step from your JSON output. You have no tools to do them and should not try.
+- Does not run tools beyond the allow-list — `gh pr view`, `gh pr diff`, `gh issue view`, `gh label list` are the only `gh` commands available, and all are read-only.
