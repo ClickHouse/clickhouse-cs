@@ -49,15 +49,18 @@ jobs:
           # the sticky-comment / MCP-update path is disabled by the action itself
           # (see modes/agent/index.ts: `claudeCommentId: undefined`). We post
           # comments via `gh pr comment` directly instead.
+          #
+          # `gh api` is allowed broadly (any verb, any path) because the literal-prefix
+          # bash matcher rejects common variations the model emits (`-X PATCH`, path-first
+          # ordering, `gh issue comment` fallback) and we'd rather one well-scoped pattern
+          # than three brittle ones. The real security boundary is the GITHUB_TOKEN scope
+          # (`contents: read, pull-requests: write, issues: write`) declared above —
+          # Claude cannot reach user-level, org-level, secrets, releases, deployments,
+          # branch-protection, or repo-admin endpoints with that token regardless of verb.
           claude_args: |
-            # gh api is locked to PATCH only. Path restriction was tried but the
-            # bash matcher doesn't reliably match multi-segment globs in paths, so
-            # we rely on the GITHUB_TOKEN scope (`pull-requests: write, issues: write`)
-            # as the real security boundary — Claude cannot PATCH user/, orgs/, or
-            # repo-admin endpoints with that token regardless of the verb allowance.
-            --allowedTools "Read,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh api --method PATCH:*),Bash(gh label list:*),Bash(gh issue view:*)"
+            --allowedTools "Read,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(gh label list:*),Bash(gh issue view:*)"
             --disallowedTools "WebFetch,WebSearch,Edit,Write,MultiEdit,NotebookEdit"
-            --max-turns 10
+            --max-turns 15
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.inputs.pr_number || github.event.pull_request.number }}
