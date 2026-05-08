@@ -37,9 +37,9 @@ jobs:
       matrix:
         version:
           - "latest"
+          - "26.4"
           - "26.3"
           - "26.2"
-          - "26.1"
           - "25.8"
 
   regress-dotnet:
