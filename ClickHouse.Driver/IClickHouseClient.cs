@@ -190,8 +190,8 @@ public interface IClickHouseClient : IDisposable
 
     /// <summary>
     /// Convenience: registers a POCO type for both binary insert and read materialization.
-    /// Read registration runs first (its rules are stricter); insert registration only commits
-    /// if read succeeds, so a thrown exception leaves the registry untouched.
+    /// Both mappings are validated up front; if either validation throws, neither mapping is
+    /// committed and the registry is left untouched.
     /// On the read side, init-only, read-only, and non-public-setter properties are silently
     /// skipped — they keep their default value even if a matching result column is present.
     /// </summary>

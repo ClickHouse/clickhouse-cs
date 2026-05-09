@@ -71,6 +71,13 @@ public class PocoRegistrationTests
         public int Id { get; set; }
     }
 
+    // Public setter (read-mappable) + private getter (not insert-mappable). Used to exercise
+    // the case where read validation passes but insert validation throws "no mapped properties".
+    private class PrivateGetterOnlyPoco
+    {
+        public int Id { private get; set; }
+    }
+
     [Test]
     public void RegisterPocoType_NoMappedProperties_ThrowsInvalidOperation()
     {
@@ -161,6 +168,26 @@ public class PocoRegistrationTests
             "Failed RegisterPocoType<T> must not leave an insert mapping behind.");
         Assert.That(
             client.PocoRegistry.GetReadMapping<PocoWithoutParameterlessConstructor>(),
+            Is.Null,
+            "Failed RegisterPocoType<T> must not leave a read mapping behind.");
+    }
+
+    [Test]
+    public void RegisterPocoType_FailedInsertRegistration_LeavesReadUnregistered()
+    {
+        // PrivateGetterOnlyPoco passes read validation (public non-init setter is present) but
+        // fails insert validation (the only property's getter is private, so insert finds zero
+        // mappable properties). The convenience method must build both mappings up front so
+        // the failed insert validation cannot leave a tentative read commit behind.
+        Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<PrivateGetterOnlyPoco>());
+
+        Assert.That(
+            client.PocoRegistry.GetInsertMapping<PrivateGetterOnlyPoco>(),
+            Is.Null,
+            "Failed RegisterPocoType<T> must not leave an insert mapping behind.");
+        Assert.That(
+            client.PocoRegistry.GetReadMapping<PrivateGetterOnlyPoco>(),
             Is.Null,
             "Failed RegisterPocoType<T> must not leave a read mapping behind.");
     }

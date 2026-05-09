@@ -213,10 +213,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <inheritdoc />
     public void RegisterPocoType<T>()
         where T : class
-    {
-        pocoTypeRegistry.RegisterForRead<T>();
-        pocoTypeRegistry.RegisterForInsert<T>();
-    }
+        => pocoTypeRegistry.RegisterForBoth<T>();
 
     /// <inheritdoc/>
     public ClickHouseConnection CreateConnection()
