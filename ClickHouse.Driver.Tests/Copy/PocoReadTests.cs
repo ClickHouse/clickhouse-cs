@@ -229,6 +229,41 @@ public class PocoReadTests : AbstractConnectionTestFixture
         Assert.That(poco.Score, Is.Null);
     }
 
+    public class NullableTriplePoco
+    {
+        public ulong Id { get; set; }
+        public int? NullableNull { get; set; }
+        public int? NullableValue { get; set; }
+        public int? Plain { get; set; }
+    }
+
+    [Test]
+    public async Task MapTo_NullableProperty_HandlesNullableAndPlainColumns()
+    {
+        // Exercise all three rows of the int? property matrix in a single query:
+        //   Nullable(Int32) NULL        → null
+        //   Nullable(Int32) non-null    → unwrapped value boxed into int?
+        //   Int32 (non-nullable)        → value boxed into int?
+        client.RegisterPocoType<NullableTriplePoco>();
+
+        using var reader = await client.ExecuteReaderAsync(@"
+            SELECT toUInt64(1)                          AS Id,
+                   CAST(NULL, 'Nullable(Int32)')        AS NullableNull,
+                   CAST(toInt32(42), 'Nullable(Int32)') AS NullableValue,
+                   toInt32(7)                           AS Plain");
+
+        Assert.That(reader.Read(), Is.True);
+        var poco = reader.MapTo<NullableTriplePoco>();
+
+        Assert.That(poco.Id, Is.EqualTo(1UL));
+        Assert.That(poco.NullableNull, Is.Null,
+            "Nullable(Int32) NULL → int? should be null");
+        Assert.That(poco.NullableValue, Is.EqualTo(42),
+            "Nullable(Int32) non-null → int? should unwrap to the underlying value");
+        Assert.That(poco.Plain, Is.EqualTo(7),
+            "plain Int32 → int? should box and wrap into the nullable");
+    }
+
     [Test]
     public async Task MapTo_NullForNonNullableValueType_ThrowsInvalidOperation()
     {
