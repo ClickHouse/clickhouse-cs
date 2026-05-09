@@ -215,4 +215,4 @@ ClickHouse.Driver.ADO.ClickHouseConnection.RegisterPocoType<T>() -> void
 ClickHouse.Driver.IClickHouseClient.RegisterPocoReadType<T>() -> void
 ClickHouse.Driver.IClickHouseClient.RegisterPocoType<T>() -> void
 ClickHouse.Driver.IClickHouseClient.QueryAsync<T>(string sql, ClickHouse.Driver.ADO.Parameters.ClickHouseParameterCollection parameters = null, ClickHouse.Driver.QueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>
-ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetRecord<T>() -> T
+ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.MapTo<T>() -> T

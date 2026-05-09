@@ -2,7 +2,13 @@ v1.4.0
 ---
 
 **New Features:**
-* **POCO reads**: new `ClickHouseClient.QueryAsync<T>(...)` streams query results as registered POCOs via `IAsyncEnumerable<T>`. New `ClickHouseDataReader.GetRecord<T>()` materializes the current row into a registered POCO without advancing the reader. Register types once with `ClickHouseClient.RegisterPocoType<T>()` (or `ClickHouseConnection.RegisterPocoType<T>()` for ADO.NET callers); the same registration produces both insert getters and read setters. `RegisterBinaryInsertType<T>()` is preserved as a backward-compatible alias for the unified registration path. Column matching is case-sensitive (`StringComparer.Ordinal`); missing result columns leave properties at their default value, extra result columns are ignored, and v1 performs no automatic conversions — type mismatches throw `InvalidOperationException` with the POCO type, property, column, and returned CLR type so the failure is actionable. Unsupported POCO shapes (records with primary constructors, `init`-only or required properties, types without a public parameterless constructor, types with no mapped read/write property) are rejected at registration time.
+* **POCO read materialization**: stream query results directly into your own classes.
+    - `ClickHouseClient.QueryAsync<T>(...)` returns `IAsyncEnumerable<T>`; rows are materialized lazily and the underlying reader is disposed when enumeration completes, faults, or stops early.
+    - `ClickHouseDataReader.MapTo<T>()` materializes the current row into a registered POCO without advancing the reader.
+    - **Registration**: use `RegisterPocoReadType<T>()` for read-only, or `RegisterPocoType<T>()` for read + insert (a convenience that runs both registrations). `RegisterBinaryInsertType<T>()` is unchanged and remains insert-only.
+    - **Type requirements**: a public parameterless constructor and at least one public property with a public non-init setter. `required` properties are supported (the compiled constructor uses raw `newobj` and bypasses required-member enforcement).
+    - **Column matching** is case-sensitive (`StringComparer.Ordinal`); missing result columns leave properties at their default value, extra result columns are ignored.
+    - **No automatic conversions**: type mismatches throw `InvalidOperationException` with the POCO type, property, column, and returned CLR type. Static mismatches fail fast at first `MapTo<T>()` call (or first iteration of `QueryAsync<T>()`) before any rows are materialized.
 
 v1.3.0
 ---

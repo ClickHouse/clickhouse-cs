@@ -78,7 +78,7 @@ public class PocoReadTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task GetRecord_ExactColumnNames_MapsProperties()
+    public async Task MapTo_ExactColumnNames_MapsProperties()
     {
         client.RegisterPocoType<SimplePoco>();
 
@@ -86,14 +86,14 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(7) AS Id, 'hello' AS Value");
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<SimplePoco>();
+        var poco = reader.MapTo<SimplePoco>();
 
         Assert.That(poco.Id, Is.EqualTo(7UL));
         Assert.That(poco.Value, Is.EqualTo("hello"));
     }
 
     [Test]
-    public async Task GetRecord_DoesNotAdvanceReader()
+    public async Task MapTo_DoesNotAdvanceReader()
     {
         client.RegisterPocoType<SimplePoco>();
 
@@ -101,8 +101,8 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, 'a' AS Value");
 
         Assert.That(reader.Read(), Is.True);
-        var first = reader.GetRecord<SimplePoco>();
-        var second = reader.GetRecord<SimplePoco>();
+        var first = reader.MapTo<SimplePoco>();
+        var second = reader.MapTo<SimplePoco>();
 
         Assert.That(first.Id, Is.EqualTo(1UL));
         Assert.That(second.Id, Is.EqualTo(1UL));
@@ -110,7 +110,7 @@ public class PocoReadTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task GetRecord_ClickHouseColumnNameAttribute_MapsAlias()
+    public async Task MapTo_ClickHouseColumnNameAttribute_MapsAlias()
     {
         client.RegisterPocoType<AliasedPoco>();
 
@@ -118,14 +118,14 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(42) AS id, 'alice' AS value");
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<AliasedPoco>();
+        var poco = reader.MapTo<AliasedPoco>();
 
         Assert.That(poco.UserId, Is.EqualTo(42UL));
         Assert.That(poco.UserName, Is.EqualTo("alice"));
     }
 
     [Test]
-    public async Task GetRecord_MissingColumns_LeavesDefaults()
+    public async Task MapTo_MissingColumns_LeavesDefaults()
     {
         client.RegisterPocoType<ExtraPropertyPoco>();
 
@@ -133,7 +133,7 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, 'present' AS Value");
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<ExtraPropertyPoco>();
+        var poco = reader.MapTo<ExtraPropertyPoco>();
 
         Assert.That(poco.Id, Is.EqualTo(1UL));
         Assert.That(poco.Value, Is.EqualTo("present"));
@@ -141,7 +141,7 @@ public class PocoReadTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task GetRecord_ExtraColumns_IgnoresExtras()
+    public async Task MapTo_ExtraColumns_IgnoresExtras()
     {
         client.RegisterPocoType<SimplePoco>();
 
@@ -149,14 +149,14 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, 'kept' AS Value, 'extra' AS Extra");
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<SimplePoco>();
+        var poco = reader.MapTo<SimplePoco>();
 
         Assert.That(poco.Id, Is.EqualTo(1UL));
         Assert.That(poco.Value, Is.EqualTo("kept"));
     }
 
     [Test]
-    public async Task GetRecord_CaseMismatch_DoesNotMap()
+    public async Task MapTo_CaseMismatch_DoesNotMap()
     {
         client.RegisterPocoType<CaseSensitivePoco>();
 
@@ -165,27 +165,27 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(99) AS Id, 'kept' AS Value");
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<CaseSensitivePoco>();
+        var poco = reader.MapTo<CaseSensitivePoco>();
 
         Assert.That(poco.id, Is.EqualTo(0UL)); // not mapped, default
         Assert.That(poco.Value, Is.EqualTo("kept"));
     }
 
     [Test]
-    public async Task GetRecord_UnregisteredType_ThrowsInvalidOperation()
+    public async Task MapTo_UnregisteredType_ThrowsInvalidOperation()
     {
         using var reader = await client.ExecuteReaderAsync(
             "SELECT toUInt64(1) AS Id");
 
         Assert.That(reader.Read(), Is.True);
-        var ex = Assert.Throws<InvalidOperationException>(() => reader.GetRecord<UnregisteredPoco>());
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<UnregisteredPoco>());
 
         Assert.That(ex.Message, Does.Contain("UnregisteredPoco"));
         Assert.That(ex.Message, Does.Contain("RegisterPocoType"));
     }
 
     [Test]
-    public async Task GetRecord_NullForReferenceProperty_AssignsNull()
+    public async Task MapTo_NullForReferenceProperty_AssignsNull()
     {
         client.RegisterPocoType<SimplePoco>();
 
@@ -193,14 +193,14 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, CAST(NULL, 'Nullable(String)') AS Value");
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<SimplePoco>();
+        var poco = reader.MapTo<SimplePoco>();
 
         Assert.That(poco.Id, Is.EqualTo(1UL));
         Assert.That(poco.Value, Is.Null);
     }
 
     [Test]
-    public async Task GetRecord_NonNullForNullableProperty_AssignsValue()
+    public async Task MapTo_NonNullForNullableProperty_AssignsValue()
     {
         client.RegisterPocoType<NullablePoco>();
 
@@ -208,14 +208,14 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, toInt32(42) AS Score");
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<NullablePoco>();
+        var poco = reader.MapTo<NullablePoco>();
 
         Assert.That(poco.Id, Is.EqualTo(1UL));
         Assert.That(poco.Score, Is.EqualTo(42));
     }
 
     [Test]
-    public async Task GetRecord_NullForNullableProperty_AssignsNull()
+    public async Task MapTo_NullForNullableProperty_AssignsNull()
     {
         client.RegisterPocoType<NullablePoco>();
 
@@ -223,14 +223,14 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, CAST(NULL, 'Nullable(Int32)') AS Score");
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<NullablePoco>();
+        var poco = reader.MapTo<NullablePoco>();
 
         Assert.That(poco.Id, Is.EqualTo(1UL));
         Assert.That(poco.Score, Is.Null);
     }
 
     [Test]
-    public async Task GetRecord_NullForNonNullableValueType_ThrowsInvalidOperation()
+    public async Task MapTo_NullForNonNullableValueType_ThrowsInvalidOperation()
     {
         client.RegisterPocoType<NonNullablePoco>();
 
@@ -238,13 +238,13 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, CAST(NULL, 'Nullable(Int32)') AS Score");
 
         Assert.That(reader.Read(), Is.True);
-        var ex = Assert.Throws<InvalidOperationException>(() => reader.GetRecord<NonNullablePoco>());
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<NonNullablePoco>());
 
         Assert.That(ex.Message, Does.Contain("Score"));
     }
 
     [Test]
-    public async Task GetRecord_TypeMismatch_ThrowsInvalidOperation()
+    public async Task MapTo_TypeMismatch_ThrowsInvalidOperation()
     {
         client.RegisterPocoType<StringIdPoco>();
 
@@ -253,14 +253,14 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, 'v' AS Value");
 
         Assert.That(reader.Read(), Is.True);
-        var ex = Assert.Throws<InvalidOperationException>(() => reader.GetRecord<StringIdPoco>());
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<StringIdPoco>());
 
         Assert.That(ex.Message, Does.Contain("Id"));
         Assert.That(ex.Message, Does.Contain("System.String"));
     }
 
     [Test]
-    public async Task GetRecord_ClickHouseDecimalReturnedForDecimalProperty_ThrowsInvalidOperation()
+    public async Task MapTo_ClickHouseDecimalReturnedForDecimalProperty_ThrowsInvalidOperation()
     {
         // With UseCustomDecimals=true (default), ClickHouseDecimal columns surface as
         // ClickHouseDecimal, which is not assignable to System.Decimal. v1 must throw.
@@ -271,7 +271,7 @@ public class PocoReadTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, toDecimal128('123.45', 2) AS Amount");
 
         Assert.That(reader.Read(), Is.True);
-        var ex = Assert.Throws<InvalidOperationException>(() => reader.GetRecord<DecimalPoco>());
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<DecimalPoco>());
 
         Assert.That(ex.Message, Does.Contain("Amount"));
         Assert.That(ex.Message, Does.Contain(nameof(ClickHouseDecimal)));
@@ -369,7 +369,7 @@ public class PocoReadTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task ClickHouseConnection_RegisterPocoType_AllowsCommandReaderGetRecord()
+    public async Task ClickHouseConnection_RegisterPocoType_AllowsCommandReaderMapTo()
     {
         using var conn = TestUtilities.GetTestClickHouseConnection();
         conn.RegisterPocoType<SimplePoco>();
@@ -378,7 +378,7 @@ public class PocoReadTests : AbstractConnectionTestFixture
         using var reader = (ClickHouseDataReader)await cmd.ExecuteReaderAsync();
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<SimplePoco>();
+        var poco = reader.MapTo<SimplePoco>();
 
         Assert.That(poco.Id, Is.EqualTo(11UL));
         Assert.That(poco.Value, Is.EqualTo("cmd"));

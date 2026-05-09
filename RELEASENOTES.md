@@ -2,7 +2,11 @@ v1.4.0
 ---
 
 **New Features:**
-* **POCO reads**: register a class once with `ClickHouseClient.RegisterPocoType<T>()` and stream query results via `client.QueryAsync<T>(sql)` (returns `IAsyncEnumerable<T>`) or materialize the current row of a `ClickHouseDataReader` with `reader.GetRecord<T>()`. Column matching is case-sensitive; missing columns default and extra columns are ignored. `[ClickHouseColumn(Name = "...")]` and `[ClickHouseNotMapped]` are honored on the read path the same way as on the existing `InsertBinaryAsync<T>` write path. v1 performs no automatic conversions — when a column's CLR value is not assignable to the target property, an `InvalidOperationException` is thrown that names the type, property, column, and returned value type. `RegisterBinaryInsertType<T>()` continues to work as a backward-compatible alias; it now also enables read materialization.
+* **POCO read materialization**: stream query results directly into your own classes.
+    - Register types with `RegisterPocoReadType<T>()` (read-only) or `RegisterPocoType<T>()` (read + insert). `RegisterBinaryInsertType<T>()` remains insert-only and unchanged.
+    - Stream rows via `client.QueryAsync<T>(sql)` (returns `IAsyncEnumerable<T>`), or materialize the current row of a `ClickHouseDataReader` with `reader.MapTo<T>()`.
+    - Column matching is case-sensitive; missing columns default and extra columns are ignored. `[ClickHouseColumn(Name = "...")]` and `[ClickHouseNotMapped]` are honored on the read path the same way as on the existing `InsertBinaryAsync<T>` write path.
+    - No automatic conversions in v1: when a column's CLR value is not assignable to the target property, an `InvalidOperationException` is thrown that names the type, property, column, and returned value type.
 
 v1.3.0
 ---

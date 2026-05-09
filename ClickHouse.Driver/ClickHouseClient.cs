@@ -408,7 +408,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             while (reader.Read())
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                yield return reader.GetRecord<T>();
+                yield return reader.MapTo<T>();
             }
         }
         finally

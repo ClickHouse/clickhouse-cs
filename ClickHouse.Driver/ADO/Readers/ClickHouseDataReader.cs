@@ -221,20 +221,21 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// Materializes the current row into a new instance of <typeparamref name="T"/>.
     /// Does not call <see cref="Read"/> and does not advance the reader.
     /// </summary>
-    /// <typeparam name="T">The registered POCO type. Must have been registered via
-    /// <c>RegisterPocoType&lt;T&gt;</c> on the owning client or connection.</typeparam>
+    /// <typeparam name="T">The registered POCO type. Must have been registered for read via
+    /// <c>RegisterPocoReadType&lt;T&gt;</c> or <c>RegisterPocoType&lt;T&gt;</c> on the owning
+    /// client or connection.</typeparam>
     /// <exception cref="InvalidOperationException">
     /// Thrown if <typeparamref name="T"/> is not registered, or if a column value cannot
     /// be assigned to the corresponding property under the strict v1 assignment rules
     /// (no conversions, no widening, no enum coercion).
     /// </exception>
-    public T GetRecord<T>()
+    public T MapTo<T>()
         where T : class
     {
         if (!hasCurrentRow)
         {
             throw new InvalidOperationException(
-                "GetRecord<T> requires a current row. Call Read() and verify it returned true before calling GetRecord<T>.");
+                "MapTo<T> requires a current row. Call Read() and verify it returned true before calling MapTo<T>.");
         }
 
         var mapping = pocoRegistry.GetReadMapping<T>()
@@ -264,17 +265,15 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                     typeof(T), propInfo, FieldNames[col], RawTypes[col].ToString(), null));
             }
 
-            var valueType = value.GetType();
-            var assignable = propInfo.PropertyType.IsAssignableFrom(valueType)
-                || (propInfo.NullableUnderlyingType != null && propInfo.NullableUnderlyingType.IsAssignableFrom(valueType));
-
-            if (!assignable)
+            try
+            {
+                setter(instance, value);
+            }
+            catch (InvalidCastException)
             {
                 throw new InvalidOperationException(BuildAssignmentErrorMessage(
-                    typeof(T), propInfo, FieldNames[col], RawTypes[col].ToString(), valueType));
+                    typeof(T), propInfo, FieldNames[col], RawTypes[col].ToString(), value.GetType()));
             }
-
-            setter(instance, value);
         }
 
         return instance;
@@ -289,12 +288,41 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         var matched = new List<(int, int)>(mapping.Properties.Length);
         for (var i = 0; i < FieldNames.Length; i++)
         {
-            if (mapping.ColumnNameToPropertyIndex.TryGetValue(FieldNames[i], out var idx))
-                matched.Add((i, idx));
+            if (!mapping.ColumnNameToPropertyIndex.TryGetValue(FieldNames[i], out var idx))
+                continue;
+
+            ValidateBinding(typeof(T), mapping.Properties[idx], i);
+            matched.Add((i, idx));
         }
         var plan = matched.ToArray();
         bindingPlanCache[typeof(T)] = plan;
         return plan;
+    }
+
+    /// <summary>
+    /// Fail-fast static check at plan build: if a column's declared <see cref="ClickHouseType.FrameworkType"/>
+    /// is not assignable to the target property's CLR type (or its nullable underlying type), throw before
+    /// any rows are read so users see the diagnostic up front.
+    /// Polymorphic columns (FrameworkType=object — e.g. Variant/Dynamic/JSON/Object) skip the static check;
+    /// their actual per-row CLR type can vary, so any mismatch surfaces via the per-row catch in MapTo{T}.
+    /// </summary>
+    private void ValidateBinding(Type pocoType, Copy.BinaryInsertPropertyInfo propInfo, int columnOrdinal)
+    {
+        var colType = RawTypes[columnOrdinal];
+        var colFrameworkType = colType.FrameworkType;
+        var unwrappedColFrameworkType = Nullable.GetUnderlyingType(colFrameworkType) ?? colFrameworkType;
+
+        if (unwrappedColFrameworkType == typeof(object))
+            return;
+
+        var assignable = propInfo.PropertyType.IsAssignableFrom(unwrappedColFrameworkType)
+            || (propInfo.NullableUnderlyingType != null && propInfo.NullableUnderlyingType.IsAssignableFrom(unwrappedColFrameworkType));
+
+        if (!assignable)
+        {
+            throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                pocoType, propInfo, FieldNames[columnOrdinal], colType.ToString(), unwrappedColFrameworkType));
+        }
     }
 
     private static string BuildAssignmentErrorMessage(

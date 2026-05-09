@@ -338,7 +338,7 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task GetRecord_NumericWideningInt16ToInt32_ThrowsInvalidOperation()
+    public async Task MapTo_NumericWideningInt16ToInt32_ThrowsInvalidOperation()
     {
         client.RegisterPocoType<WidenedIntPoco>();
 
@@ -346,14 +346,14 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
         using var reader = await client.ExecuteReaderAsync("SELECT toInt16(7) AS Id");
         Assert.That(reader.Read(), Is.True);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => reader.GetRecord<WidenedIntPoco>());
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<WidenedIntPoco>());
         Assert.That(ex.Message, Does.Contain("Id"));
         Assert.That(ex.Message, Does.Contain("System.Int32"));
         Assert.That(ex.Message, Does.Contain("System.Int16"));
     }
 
     [Test]
-    public async Task GetRecord_StringIntoObjectProperty_AssignsValue()
+    public async Task MapTo_StringIntoObjectProperty_AssignsValue()
     {
         // `object` is assignable from any reference type — should succeed without conversion.
         client.RegisterPocoType<ObjectPropertyPoco>();
@@ -362,13 +362,13 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, 'hello' AS Value");
         Assert.That(reader.Read(), Is.True);
 
-        var poco = reader.GetRecord<ObjectPropertyPoco>();
+        var poco = reader.MapTo<ObjectPropertyPoco>();
         Assert.That(poco.Id, Is.EqualTo(1UL));
         Assert.That(poco.Value, Is.EqualTo("hello"));
     }
 
     [Test]
-    public async Task GetRecord_DerivedTypeInheritedProperty_MapsCorrectly()
+    public async Task MapTo_DerivedTypeInheritedProperty_MapsCorrectly()
     {
         client.RegisterPocoType<DerivedReadPoco>();
 
@@ -376,13 +376,13 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
             "SELECT toUInt64(42) AS Id, 'derived' AS OwnValue");
         Assert.That(reader.Read(), Is.True);
 
-        var poco = reader.GetRecord<DerivedReadPoco>();
+        var poco = reader.MapTo<DerivedReadPoco>();
         Assert.That(poco.Id, Is.EqualTo(42UL));
         Assert.That(poco.OwnValue, Is.EqualTo("derived"));
     }
 
     [Test]
-    public async Task GetRecord_MultipleTypesOnSameReader_MaterializeIndependently()
+    public async Task MapTo_MultipleTypesOnSameReader_MaterializeIndependently()
     {
         // Two POCO types should both work against the same reader (binding plan caches per type).
         client.RegisterPocoType<SimplePoco>();
@@ -392,8 +392,8 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, 'a' AS Value, 'b' AS Other");
         Assert.That(reader.Read(), Is.True);
 
-        var first = reader.GetRecord<SimplePoco>();
-        var second = reader.GetRecord<SecondPoco>();
+        var first = reader.MapTo<SimplePoco>();
+        var second = reader.MapTo<SecondPoco>();
 
         Assert.That(first.Id, Is.EqualTo(1UL));
         Assert.That(first.Value, Is.EqualTo("a"));
@@ -402,20 +402,20 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task GetRecord_BeforeRead_ThrowsInvalidOperation()
+    public async Task MapTo_BeforeRead_ThrowsInvalidOperation()
     {
         client.RegisterPocoType<SimplePoco>();
 
         using var reader = await client.ExecuteReaderAsync("SELECT toUInt64(1) AS Id, 'a' AS Value");
 
-        // No Read() yet — there is no current row. GetRecord must surface that precondition
+        // No Read() yet — there is no current row. MapTo must surface that precondition
         // rather than silently materializing a default-filled instance.
-        var ex = Assert.Throws<InvalidOperationException>(() => reader.GetRecord<SimplePoco>());
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<SimplePoco>());
         Assert.That(ex.Message, Does.Contain("Read()"));
     }
 
     [Test]
-    public async Task GetRecord_AfterEndOfStream_ThrowsInvalidOperation()
+    public async Task MapTo_AfterEndOfStream_ThrowsInvalidOperation()
     {
         client.RegisterPocoType<SimplePoco>();
 
@@ -426,12 +426,12 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
         // Drain the stream — the next Read() returns false.
         Assert.That(reader.Read(), Is.False);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => reader.GetRecord<SimplePoco>());
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<SimplePoco>());
         Assert.That(ex.Message, Does.Contain("Read()"));
     }
 
     [Test]
-    public async Task GetRecord_RequiredMembers_MaterializesInstance()
+    public async Task MapTo_RequiredMembers_MaterializesInstance()
     {
 #if NET7_0_OR_GREATER
         client.RegisterPocoType<EndToEndRequiredPoco>();
@@ -440,7 +440,7 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
             "SELECT toInt32(7) AS Id, 'alice' AS Name");
 
         Assert.That(reader.Read(), Is.True);
-        var poco = reader.GetRecord<EndToEndRequiredPoco>();
+        var poco = reader.MapTo<EndToEndRequiredPoco>();
 
         Assert.That(poco.Id, Is.EqualTo(7));
         Assert.That(poco.Name, Is.EqualTo("alice"));
@@ -458,7 +458,7 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
 #endif
 
     [Test]
-    public async Task GetRecord_DecimalWithUseCustomDecimalsFalse_AssignsValue()
+    public async Task MapTo_DecimalWithUseCustomDecimalsFalse_AssignsValue()
     {
         // With UseCustomDecimals=false, Decimal columns are returned as System.Decimal directly,
         // so a System.Decimal property is assignable. This complements the v1 "no implicit conversion"
@@ -470,7 +470,7 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
             "SELECT toUInt64(1) AS Id, toDecimal128('123.45', 2) AS Amount");
         Assert.That(reader.Read(), Is.True);
 
-        var poco = reader.GetRecord<PocoReadTests.DecimalPoco>();
+        var poco = reader.MapTo<PocoReadTests.DecimalPoco>();
         Assert.That(poco.Id, Is.EqualTo(1UL));
         Assert.That(poco.Amount, Is.EqualTo(123.45m));
     }
@@ -478,7 +478,7 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
     [Test]
     public async Task QueryAsync_UnregisteredType_ThrowsOnFirstYield()
     {
-        // Enumeration starts the query; the first MoveNextAsync calls GetRecord<T> which throws
+        // Enumeration starts the query; the first MoveNextAsync calls MapTo<T> which throws
         // because the type is not registered. The exception surfaces from the foreach.
         var enumerator = client.QueryAsync<UnregisteredQueryPoco>("SELECT toUInt64(1) AS Id").GetAsyncEnumerator();
         try

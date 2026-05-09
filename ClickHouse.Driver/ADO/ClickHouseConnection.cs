@@ -270,7 +270,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// Registers a POCO type for read materialization on the underlying client. Forwards to
     /// <see cref="ClickHouseClient.RegisterPocoReadType{T}"/> so readers obtained from this
     /// connection's commands can materialize <typeparamref name="T"/> via
-    /// <see cref="Readers.ClickHouseDataReader.GetRecord{T}"/>.
+    /// <see cref="Readers.ClickHouseDataReader.MapTo{T}"/>.
     /// </summary>
     /// <typeparam name="T">The POCO type to register. Must have a public parameterless constructor.</typeparam>
     public void RegisterPocoReadType<T>()
