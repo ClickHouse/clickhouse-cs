@@ -165,8 +165,10 @@ public interface IClickHouseClient : IDisposable
     /// <summary>
     /// Registers a POCO type for binary insert operations.
     /// Types must be registered before they can be inserted via <see cref="InsertBinaryAsync{T}"/>.
-    /// Forwards to the same shared registration as <see cref="RegisterPocoType{T}"/>; the unified
-    /// POCO registration rules apply.
+    /// Registration is recorded in the shared per-client POCO registry; only the insert side is
+    /// registered. To enable read materialization for the same type, call
+    /// <see cref="RegisterPocoReadType{T}"/> separately or use the convenience
+    /// <see cref="RegisterPocoType{T}"/>.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
     void RegisterBinaryInsertType<T>()
@@ -185,9 +187,8 @@ public interface IClickHouseClient : IDisposable
 
     /// <summary>
     /// Convenience: registers a POCO type for both binary insert and read materialization.
-    /// Equivalent to calling <see cref="RegisterBinaryInsertType{T}"/> followed by
-    /// <see cref="RegisterPocoReadType{T}"/>; both registrations apply their own validation
-    /// independently.
+    /// Read registration runs first (its rules are stricter); insert registration only commits
+    /// if read succeeds, so a thrown exception leaves the registry untouched.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
     void RegisterPocoType<T>()

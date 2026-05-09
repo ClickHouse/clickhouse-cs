@@ -350,6 +350,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         var count = RawTypes.Length;
         var data = CurrentRow;
 
+        // Clear before the per-column loop so a mid-row throw cannot leave a stale
+        // CurrentRow visible to MapTo<T> if the caller catches and continues.
+        hasCurrentRow = false;
         try
         {
             for (var i = 0; i < count; i++)

@@ -213,8 +213,8 @@ public sealed class ClickHouseClient : IClickHouseClient
     public void RegisterPocoType<T>()
         where T : class
     {
-        pocoTypeRegistry.RegisterForInsert<T>();
         pocoTypeRegistry.RegisterForRead<T>();
+        pocoTypeRegistry.RegisterForInsert<T>();
     }
 
     /// <inheritdoc/>
@@ -405,6 +405,8 @@ public sealed class ClickHouseClient : IClickHouseClient
         var reader = await ExecuteReaderAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
         try
         {
+            // reader.Read() is sync because ClickHouseDataReader has no async overload — the
+            // underlying HTTP stream is buffered, so per-row reads do not perform real I/O.
             while (reader.Read())
             {
                 cancellationToken.ThrowIfCancellationRequested();

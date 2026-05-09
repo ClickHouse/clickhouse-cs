@@ -495,4 +495,68 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
     {
         public ulong Id { get; set; }
     }
+
+    [Test]
+    public void QueryAsync_CancellationMidIteration_ThrowsAndAllowsFollowupQuery()
+    {
+        client.RegisterPocoType<SimplePoco>();
+
+        using var cts = new System.Threading.CancellationTokenSource();
+        int seen = 0;
+
+        Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<SimplePoco>(
+                "SELECT toUInt64(number) AS Id, toString(number) AS Value FROM numbers(1000000)",
+                cancellationToken: cts.Token).ConfigureAwait(false))
+            {
+                if (++seen == 5)
+                    cts.Cancel();
+            }
+        });
+
+        Assert.That(seen, Is.GreaterThanOrEqualTo(5));
+
+        // A follow-up query must succeed — cancellation must not have left the client in a
+        // bad state (e.g. leaked HTTP handler, lingering reader on the connection).
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            var rows = new System.Collections.Generic.List<SimplePoco>();
+            await foreach (var row in client.QueryAsync<SimplePoco>(
+                "SELECT toUInt64(1) AS Id, 'hi' AS Value").ConfigureAwait(false))
+            {
+                rows.Add(row);
+            }
+            Assert.That(rows, Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
+    [Tests.Attributes.FromVersion(25, 11)]
+    public void QueryAsync_ServerErrorMidStream_SurfacesServerException()
+    {
+        client.RegisterPocoType<SimplePoco>();
+
+        // Enable mid-stream exception tagging so the server can flag the point at which a
+        // query started failing. Without this the failure surfaces as EndOfStreamException
+        // (or worse, silent truncation); the driver must propagate it as ClickHouseServerException.
+        var options = new QueryOptions
+        {
+            CustomSettings = new System.Collections.Generic.Dictionary<string, object>
+            {
+                ["http_write_exception_in_output_format"] = 1,
+            },
+        };
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<SimplePoco>(
+                "SELECT toUInt64(number) AS Id, throwIf(number = 10, 'boom') AS Value " +
+                "FROM system.numbers LIMIT 10000000", options: options).ConfigureAwait(false))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("boom"));
+    }
 }

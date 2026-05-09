@@ -145,4 +145,23 @@ public class PocoRegistrationTests
 
         Assert.That(ex.Message, Does.Contain("parameterless constructor"));
     }
+
+    [Test]
+    public void RegisterPocoType_FailedReadRegistration_LeavesInsertUnregistered()
+    {
+        // PocoWithoutParameterlessConstructor passes insert validation (no ctor needed) but
+        // fails read validation. The convenience method must be atomic: a thrown exception
+        // must leave neither side registered.
+        Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<PocoWithoutParameterlessConstructor>());
+
+        Assert.That(
+            client.PocoRegistry.GetInsertMapping<PocoWithoutParameterlessConstructor>(),
+            Is.Null,
+            "Failed RegisterPocoType<T> must not leave an insert mapping behind.");
+        Assert.That(
+            client.PocoRegistry.GetReadMapping<PocoWithoutParameterlessConstructor>(),
+            Is.Null,
+            "Failed RegisterPocoType<T> must not leave a read mapping behind.");
+    }
 }
