@@ -38,7 +38,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
         this.exceptionTagStream = exceptionTagStream;
-        this.pocoRegistry = pocoRegistry;
+        this.pocoRegistry = pocoRegistry ?? throw new ArgumentNullException(nameof(pocoRegistry));
         RawTypes = types;
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
