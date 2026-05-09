@@ -306,7 +306,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// Polymorphic columns (FrameworkType=object — e.g. Variant/Dynamic/JSON/Object) skip the static check;
     /// their actual per-row CLR type can vary, so any mismatch surfaces via the per-row catch in MapTo{T}.
     /// </summary>
-    private void ValidateBinding(Type pocoType, Copy.BinaryInsertPropertyInfo propInfo, int columnOrdinal)
+    private void ValidateBinding(Type pocoType, BinaryInsertPropertyInfo propInfo, int columnOrdinal)
     {
         var colType = RawTypes[columnOrdinal];
         var colFrameworkType = colType.FrameworkType;
@@ -327,7 +327,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     private static string BuildAssignmentErrorMessage(
         Type targetType,
-        Copy.BinaryInsertPropertyInfo propInfo,
+        BinaryInsertPropertyInfo propInfo,
         string columnName,
         string clickHouseType,
         Type returnedType)

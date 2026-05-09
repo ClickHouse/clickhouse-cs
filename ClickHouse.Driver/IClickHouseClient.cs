@@ -180,6 +180,9 @@ public interface IClickHouseClient : IDisposable
     /// or <see cref="ClickHouseDataReader.MapTo{T}"/>.
     /// The type must have a public parameterless constructor and at least one public instance
     /// property with a public non-init setter; this is validated at registration time.
+    /// Init-only, read-only, and non-public-setter properties are silently skipped on the read
+    /// path — they will keep their default value even if a result column with a matching name
+    /// is present.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
     void RegisterPocoReadType<T>()
@@ -189,6 +192,8 @@ public interface IClickHouseClient : IDisposable
     /// Convenience: registers a POCO type for both binary insert and read materialization.
     /// Read registration runs first (its rules are stricter); insert registration only commits
     /// if read succeeds, so a thrown exception leaves the registry untouched.
+    /// On the read side, init-only, read-only, and non-public-setter properties are silently
+    /// skipped — they keep their default value even if a matching result column is present.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
     void RegisterPocoType<T>()

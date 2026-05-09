@@ -337,6 +337,37 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
         public ulong Id { get; set; }
     }
 
+    public class MixedAccessorReadPoco
+    {
+        public int Id { get; set; }
+        public string SkippedInit { get; init; }
+        public string SkippedReadOnly { get; }
+        public int SkippedPrivate { get; private set; }
+    }
+
+    [Test]
+    public async Task MapTo_InitReadOnlyAndPrivateSetterProperties_AreSkipped()
+    {
+        // Registration-time tests already prove these properties are excluded from the read
+        // mapping. This integration test pins the runtime guarantee: even when the result
+        // contains columns whose names match the skipped properties, those properties stay at
+        // their CLR default after MapTo<T> — only the public non-init-setter property is filled.
+        client.RegisterPocoReadType<MixedAccessorReadPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toInt32(7) AS Id, 'a' AS SkippedInit, 'b' AS SkippedReadOnly, toInt32(99) AS SkippedPrivate");
+        Assert.That(reader.Read(), Is.True);
+
+        var poco = reader.MapTo<MixedAccessorReadPoco>();
+        Assert.That(poco.Id, Is.EqualTo(7));
+        Assert.That(poco.SkippedInit, Is.Null,
+            "init-only property must not be filled even when a matching column is present");
+        Assert.That(poco.SkippedReadOnly, Is.Null,
+            "get-only property must not be filled even when a matching column is present");
+        Assert.That(poco.SkippedPrivate, Is.EqualTo(0),
+            "private-setter property must not be filled even when a matching column is present");
+    }
+
     [Test]
     public async Task MapTo_NumericWideningInt16ToInt32_ThrowsInvalidOperation()
     {
