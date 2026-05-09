@@ -127,6 +127,36 @@ parameters.AddParameter("id", 42UL);
 await client.ExecuteReaderAsync("SELECT * FROM t WHERE id = {id:UInt64}", parameters);
 ```
 
+### Query Parameters
+
+Two parameter syntaxes are supported:
+
+- **ClickHouse-native `{name:Type}`** — sent verbatim to the server. Preferred when writing queries by hand.
+- **ADO.NET-style `@name`** — purely client-side. Rewritten to `{name:ResolvedType}` before the request is sent (ClickHouse never sees `@`). Required for ORMs like Dapper that emit `@`-style placeholders.
+
+Both refer to parameters by name in `ClickHouseParameterCollection`. A `{name:Type}` hint and an `@name` placeholder for the same parameter are compatible — the hint informs type resolution.
+
+**Type resolution precedence** (first match wins, in `ADO/Parameters/ParameterTypeResolution.cs`):
+
+1. Explicit `ClickHouseDbParameter.ClickHouseType` on the parameter object
+2. SQL type hint from `{name:Type}` in the query
+3. Custom `IParameterTypeResolver` (per-query `QueryOptions.ParameterTypeResolver`, then client-level `ClickHouseClientSettings.ParameterTypeResolver`)
+4. `decimal` special case — `Decimal128(scale)` where scale is read from the value's bits
+5. `TypeConverter.ToClickHouseType(value)` — inferred from the .NET runtime value (not just the static type, so e.g. `IPAddress` is disambiguated into `IPv4`/`IPv6` by `AddressFamily`)
+
+If the value is null/`DBNull` and no explicit type or hint is provided, resolution falls through to `Nullable(Nothing)`. Whether the server accepts that null sentinel depends on the expected column/type context; non-nullable targets may reject it. For nullable parameters, set `ClickHouseType` explicitly or include a `{name:Nullable(T)}` hint.
+
+`DbType` on `ClickHouseDbParameter` is **not** part of the precedence chain — only `ClickHouseType` is. Setting `DbType` alone does not influence the resolved ClickHouse type.
+
+**Data flow** (in `ClickHouseClient.PostSqlQueryAsync`):
+
+1. `ClickHouseParameterCollection.ResolveTypeNames(sql, resolver)` — extracts `{name:Type}` hints via `SqlParameterTypeExtractor` (string/comment-aware), then runs the precedence chain once per parameter. Conflicting hints for the same name throw.
+2. `ClickHouseParameterCollection.ReplacePlaceholders(sql, resolved)` — rewrites every `@name` to `{name:ResolvedType}`. Bypassable via the `ClickHouse.Driver.DisableReplacingParameters` AppContext switch.
+3. `HttpParameterFormatter.Format(parameter, resolvedType, settings, customFormatter)` — culture-invariant value formatting for all 60+ types. Top-level `null`/`DBNull` parameter values become `\N` and skip the custom formatter; nullable values inside composite contexts may instead be emitted as the literal `null` by the type-specific formatter. `IParameterFormatter` (per-query or client-level) can override formatting; transparent wrappers (`Nullable`, `LowCardinality`, `Variant`) are unwrapped before the formatter is called.
+4. Values are sent as `param_<name>` either in the URI query string (default) or as multipart form fields when `ClickHouseClientSettings.UseFormDataParameters` is true.
+
+**When changing parameter behavior**, update both the read and write paths: the type's binary serialization in `Types/` and the HTTP write path in `Formats/HttpParameterFormatter.cs`.
+
 ### Observability & Diagnostics
 - **Error messages**: Must be clear, actionable, include context (connection string, query, server version)
 - **OpenTelemetry**: Changes to diagnostic paths should maintain telemetry integration
