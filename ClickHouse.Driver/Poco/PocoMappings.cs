@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ClickHouse.Driver.Copy;
+namespace ClickHouse.Driver.Poco;
 
 /// <summary>
 /// Pre-computed mapping for a registered POCO type used during binary insert.
@@ -9,7 +9,7 @@ namespace ClickHouse.Driver.Copy;
 internal abstract class PocoInsertMapping
 {
     /// <summary>The properties mapped on the insert side.</summary>
-    internal BinaryInsertPropertyInfo[] Properties { get; init; }
+    internal PocoPropertyInfo[] Properties { get; init; }
 
     /// <summary>
     /// Pre-built column name → ClickHouse type dictionary, or null if not all properties have
@@ -35,7 +35,7 @@ internal sealed class PocoInsertMapping<T> : PocoInsertMapping
 internal abstract class PocoReadMapping
 {
     /// <summary>The properties mapped on the read side.</summary>
-    internal BinaryInsertPropertyInfo[] Properties { get; init; }
+    internal PocoPropertyInfo[] Properties { get; init; }
 
     /// <summary>
     /// Lookup from mapped column name (case-sensitive, <see cref="StringComparer.Ordinal"/>) to

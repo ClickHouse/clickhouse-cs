@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
 
-namespace ClickHouse.Driver.Copy;
+namespace ClickHouse.Driver.Poco;
 
 /// <summary>
 /// Per-client registry of POCO types used with binary insert and read materialization.
@@ -51,7 +51,7 @@ internal sealed class PocoTypeRegistry
     {
         var type = typeof(T);
         var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-        var propInfos = new List<BinaryInsertPropertyInfo>(properties.Length);
+        var propInfos = new List<PocoPropertyInfo>(properties.Length);
         var getters = new List<Func<T, object>>(properties.Length);
         var usedColumnNames = new HashSet<string>(StringComparer.Ordinal);
 
@@ -111,7 +111,7 @@ internal sealed class PocoTypeRegistry
         }
 
         var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-        var propInfos = new List<BinaryInsertPropertyInfo>(properties.Length);
+        var propInfos = new List<PocoPropertyInfo>(properties.Length);
         var setters = new List<Action<T, object>>(properties.Length);
         var usedColumnNames = new HashSet<string>(StringComparer.Ordinal);
 
@@ -184,13 +184,13 @@ internal sealed class PocoTypeRegistry
         return (columnName, explicitType);
     }
 
-    private static BinaryInsertPropertyInfo BuildPropertyInfo(PropertyInfo property, string columnName, string explicitType)
+    private static PocoPropertyInfo BuildPropertyInfo(PropertyInfo property, string columnName, string explicitType)
     {
         var propertyType = property.PropertyType;
         var nullableUnderlying = Nullable.GetUnderlyingType(propertyType);
         var canAssignNull = !propertyType.IsValueType || nullableUnderlying != null;
 
-        return new BinaryInsertPropertyInfo
+        return new PocoPropertyInfo
         {
             ColumnName = columnName,
             ExplicitClickHouseType = explicitType,

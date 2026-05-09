@@ -1,11 +1,11 @@
 using System;
 
-namespace ClickHouse.Driver.Copy;
+namespace ClickHouse.Driver.Poco;
 
 /// <summary>
 /// Cached metadata for a single POCO property used in binary insert and read operations.
 /// </summary>
-internal sealed class BinaryInsertPropertyInfo
+internal sealed class PocoPropertyInfo
 {
     /// <summary>
     /// Gets the ClickHouse column name this property maps to.

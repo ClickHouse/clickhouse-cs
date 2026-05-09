@@ -12,7 +12,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Copy;
+using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types;
@@ -306,7 +306,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// Polymorphic columns (FrameworkType=object — e.g. Variant/Dynamic/JSON/Object) skip the static check;
     /// their actual per-row CLR type can vary, so any mismatch surfaces via the per-row catch in MapTo{T}.
     /// </summary>
-    private void ValidateBinding(Type pocoType, BinaryInsertPropertyInfo propInfo, int columnOrdinal)
+    private void ValidateBinding(Type pocoType, PocoPropertyInfo propInfo, int columnOrdinal)
     {
         var colType = RawTypes[columnOrdinal];
         var colFrameworkType = colType.FrameworkType;
@@ -327,7 +327,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     private static string BuildAssignmentErrorMessage(
         Type targetType,
-        BinaryInsertPropertyInfo propInfo,
+        PocoPropertyInfo propInfo,
         string columnName,
         string clickHouseType,
         Type returnedType)

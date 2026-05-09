@@ -16,6 +16,7 @@ using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Copy.Serializer;
+using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Diagnostic;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Http;
@@ -586,7 +587,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     private async Task<long> InsertBinaryPocoAsync<T>(
         string table,
         IEnumerable<T> rows,
-        BinaryInsertPropertyInfo[] properties,
+        PocoPropertyInfo[] properties,
         Func<T, object>[] getters,
         InsertOptions options,
         CancellationToken cancellationToken)
