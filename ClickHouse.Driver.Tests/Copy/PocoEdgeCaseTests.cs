@@ -345,6 +345,41 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
         public int SkippedPrivate { get; private set; }
     }
 
+    // Dedicated type used only by the RegisterPocoReadType happy-path test below so the
+    // "insert mapping must remain null" assertion is not polluted by other tests in the
+    // shared fixture that register their POCOs via RegisterPocoType.
+    public class ReadOnlyRegisteredPoco
+    {
+        public ulong Id { get; set; }
+        public string Label { get; set; }
+    }
+
+    [Test]
+    public async Task RegisterPocoReadType_HappyPath_QueryAsyncMaterializesAndDoesNotRegisterInsert()
+    {
+        client.RegisterPocoReadType<ReadOnlyRegisteredPoco>();
+
+        var rows = new System.Collections.Generic.List<ReadOnlyRegisteredPoco>();
+        await foreach (var row in client.QueryAsync<ReadOnlyRegisteredPoco>(
+            "SELECT toUInt64(number + 1) AS Id, concat('row_', toString(number)) AS Label FROM numbers(3)"))
+        {
+            rows.Add(row);
+        }
+
+        Assert.That(rows, Has.Count.EqualTo(3));
+        Assert.That(rows[0].Id, Is.EqualTo(1UL));
+        Assert.That(rows[0].Label, Is.EqualTo("row_0"));
+        Assert.That(rows[2].Id, Is.EqualTo(3UL));
+        Assert.That(rows[2].Label, Is.EqualTo("row_2"));
+
+        // Pin that read-only registration is exactly that — it must not also register the
+        // type for binary insert.
+        Assert.That(
+            client.PocoRegistry.GetInsertMapping<ReadOnlyRegisteredPoco>(),
+            Is.Null,
+            "RegisterPocoReadType<T> must not register the type for insert.");
+    }
+
     [Test]
     public async Task MapTo_InitReadOnlyAndPrivateSetterProperties_AreSkipped()
     {
