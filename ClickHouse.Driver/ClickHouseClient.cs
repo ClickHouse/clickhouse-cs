@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -812,11 +813,15 @@ public sealed class ClickHouseClient : IClickHouseClient
             sessionId = queryOverride.UseSession.Value ? queryOverride.SessionId : null;
         }
 
+        // A per-query Accept-Encoding override is meaningless unless the server is also told to
+        // honour it via enable_http_compression. Force it on when the caller asks for compression.
+        var useCompression = Settings.UseCompression || !string.IsNullOrEmpty(queryOverride?.AcceptEncoding);
+
         return new ClickHouseUriBuilder(serverUri)
         {
             Database = queryOverride?.Database ?? Settings.Database,
             SessionId = sessionId,
-            UseCompression = Settings.UseCompression,
+            UseCompression = useCompression,
             ConnectionQueryStringParameters = Settings.CustomSettings,
             CommandQueryStringParameters = queryOverride?.CustomSettings,
             ConnectionRoles = Settings.Roles,
@@ -866,6 +871,24 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         // Override
         ApplyCustomHeaders(headers, queryOverride?.CustomHeaders);
+
+        // Per-query Accept-Encoding override replaces whatever was attached above
+        // (settings defaults and any value injected via CustomHeaders).
+        ApplyAcceptEncodingOverride(headers, queryOverride?.AcceptEncoding);
+    }
+
+    private static void ApplyAcceptEncodingOverride(HttpRequestHeaders headers, string acceptEncoding)
+    {
+        if (string.IsNullOrEmpty(acceptEncoding))
+            return;
+
+        headers.AcceptEncoding.Clear();
+        foreach (var entry in acceptEncoding.Split(','))
+        {
+            var trimmed = entry.Trim();
+            if (trimmed.Length > 0)
+                headers.AcceptEncoding.TryParseAdd(trimmed);
+        }
     }
 
     private static void ApplyCustomHeaders(HttpRequestHeaders requestHeaders, IReadOnlyDictionary<string, string> customHeaders)
@@ -894,10 +917,59 @@ public sealed class ClickHouseClient : IClickHouseClient
             return response;
         }
 
-        var error = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        var error = await ReadErrorBodyAsync(response).ConfigureAwait(false);
         var ex = ClickHouseServerException.FromServerResponse(error, query);
         activity?.SetException(ex);
         throw ex;
+    }
+
+    /// <summary>
+    /// Reads the error body of a non-success HTTP response as a string. When the response is
+    /// transport-compressed (because the caller asked for <c>Accept-Encoding</c>), the server
+    /// compresses error bodies the same way it would compress data — so we decompress here
+    /// using whichever algorithm .NET's BCL ships with natively, and fall back to a placeholder
+    /// for codecs we can't decode (zstd, xz, lz4, snappy, …) rather than handing back garbled
+    /// binary bytes as a string.
+    /// </summary>
+    private static async Task<string> ReadErrorBodyAsync(HttpResponseMessage response)
+    {
+        if (response.Content.Headers.ContentEncoding.Count == 0)
+        {
+            return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        }
+
+        var encoding = response.Content.Headers.ContentEncoding.First();
+        var rawStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+        Stream decompressed;
+        switch (encoding.ToLowerInvariant())
+        {
+            case "gzip":
+                decompressed = new GZipStream(rawStream, CompressionMode.Decompress, leaveOpen: false);
+                break;
+            case "deflate":
+                decompressed = new DeflateStream(rawStream, CompressionMode.Decompress, leaveOpen: false);
+                break;
+            case "br":
+            case "brotli":
+                decompressed = new BrotliStream(rawStream, CompressionMode.Decompress, leaveOpen: false);
+                break;
+            default:
+                // Unknown codec — surfacing the raw compressed bytes as a string is worse than
+                // a placeholder. Callers can re-run without compression to see the real error,
+                // or inspect the server's system.query_log for the actual exception text.
+                rawStream.Dispose();
+                return
+                    $"<server returned HTTP {(int)response.StatusCode} {response.ReasonPhrase} with unsupported Content-Encoding: {encoding}. " +
+                    "The error body is compressed with a codec this client cannot decode (zstd, xz, lz4, snappy, …); " +
+                    "please re-run the request without compression or inspect 'system.query_log' on the ClickHouse server to read the original error message.>";
+        }
+
+        using (decompressed)
+        using (var reader = new StreamReader(decompressed))
+        {
+            return await reader.ReadToEndAsync().ConfigureAwait(false);
+        }
     }
 
     private IHttpClientFactory CreateHttpClientFactory(ClickHouseClientSettings settings)
