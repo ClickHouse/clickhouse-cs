@@ -1,8 +1,10 @@
+using System;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -108,13 +110,16 @@ public class AcceptEncodingTests
         });
     }
 
-    [Test]
-    public async Task HandleError_WithGzipEncodedBody_DecompressesIntoExceptionMessage()
+    [TestCase("gzip")]
+    [TestCase("deflate")]
+    [TestCase("br")]
+    [TestCase("brotli")]
+    public async Task HandleError_WithSupportedContentEncoding_DecompressesIntoExceptionMessage(string contentEncoding)
     {
         var serverMessage = "Code: 62. DB::Exception: Syntax error: failed at position 1";
         var fakeHandler = new TrackingHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
         {
-            Content = BuildGzipContent(serverMessage),
+            Content = BuildCompressedContent(serverMessage, contentEncoding),
         });
         using var httpClient = new HttpClient(fakeHandler);
         var settings = new ClickHouseClientSettings
@@ -131,7 +136,51 @@ public class AcceptEncodingTests
     }
 
     [Test]
-    public void HandleError_WithUnsupportedContentEncoding_ReturnsPlaceholderMessageWithoutThrowing()
+    public async Task HandleError_WithCompressedNonUtf8Body_UsesContentTypeCharset()
+    {
+        var serverMessage = "Code: 62. DB::Exception: Неверный синтаксис";
+        var fakeHandler = new TrackingHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            Content = BuildCompressedContent(serverMessage, "gzip", Encoding.Unicode, "utf-16"),
+        });
+        using var httpClient = new HttpClient(fakeHandler);
+        var settings = new ClickHouseClientSettings
+        {
+            HttpClient = httpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("SELECT bad_syntax",
+                options: new QueryOptions { AcceptEncoding = "gzip" }));
+
+        Assert.That(ex.Message, Does.Contain("Неверный синтаксис"));
+    }
+
+    [Test]
+    public async Task HandleError_WithCompressedBodyAndInvalidCharset_FallsBackToUtf8()
+    {
+        var serverMessage = "Code: 62. DB::Exception: Syntax error";
+        var fakeHandler = new TrackingHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            Content = BuildCompressedContent(serverMessage, "gzip", charset: "invalid-charset"),
+        });
+        using var httpClient = new HttpClient(fakeHandler);
+        var settings = new ClickHouseClientSettings
+        {
+            HttpClient = httpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("SELECT bad_syntax",
+                options: new QueryOptions { AcceptEncoding = "gzip" }));
+
+        Assert.That(ex.Message, Does.Contain("Syntax error"));
+    }
+
+    [Test]
+    public void HandleError_WithUnsupportedContentEncoding_ThrowsExceptionWithPlaceholderMessage()
     {
         var fakeHandler = new TrackingHandler(_ =>
         {
@@ -158,6 +207,40 @@ public class AcceptEncodingTests
         {
             Assert.That(ex.Message, Does.Contain("unsupported Content-Encoding: zstd"));
             Assert.That(ex.Message, Does.Contain("system.query_log"));
+        });
+    }
+
+    [Test]
+    public void HandleError_WithUnsupportedContentEncoding_DrainsBodyBeforeReturningPlaceholderMessage()
+    {
+        var body = new byte[] { 0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x01 };
+        var trackingStream = new TrackingReadStream(body);
+        var fakeHandler = new TrackingHandler(_ =>
+        {
+            var content = new StreamContent(trackingStream);
+            content.Headers.ContentEncoding.Add("zstd");
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                ReasonPhrase = "Internal Server Error",
+                Content = content,
+            };
+        });
+        using var httpClient = new HttpClient(fakeHandler);
+        var settings = new ClickHouseClientSettings
+        {
+            HttpClient = httpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("SELECT 1",
+                options: new QueryOptions { AcceptEncoding = "zstd" }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Does.Contain("unsupported Content-Encoding: zstd"));
+            Assert.That(trackingStream.BytesRead, Is.EqualTo(body.Length));
+            Assert.That(trackingStream.IsDisposed, Is.True);
         });
     }
 
@@ -216,17 +299,98 @@ public class AcceptEncodingTests
         Assert.That(raw.ContentEncoding, Is.Null);
     }
 
-    private static ByteArrayContent BuildGzipContent(string text)
+    private static ByteArrayContent BuildCompressedContent(
+        string text,
+        string contentEncoding,
+        Encoding textEncoding = null,
+        string charset = null)
     {
+        textEncoding ??= Encoding.UTF8;
         using var buffer = new MemoryStream();
-        using (var gzip = new GZipStream(buffer, CompressionLevel.Fastest, leaveOpen: true))
+        using (var compressed = CreateCompressionStream(buffer, contentEncoding))
         {
-            var bytes = Encoding.UTF8.GetBytes(text);
-            gzip.Write(bytes, 0, bytes.Length);
+            var bytes = textEncoding.GetBytes(text);
+            compressed.Write(bytes, 0, bytes.Length);
         }
 
         var content = new ByteArrayContent(buffer.ToArray());
-        content.Headers.ContentEncoding.Add("gzip");
+        if (charset != null)
+        {
+            content.Headers.ContentType = new MediaTypeHeaderValue("text/plain")
+            {
+                CharSet = charset,
+            };
+        }
+
+        content.Headers.ContentEncoding.Add(contentEncoding);
         return content;
+    }
+
+    private static Stream CreateCompressionStream(Stream stream, string contentEncoding)
+    {
+        return contentEncoding switch
+        {
+            "gzip" => new GZipStream(stream, CompressionLevel.Fastest, leaveOpen: true),
+            "deflate" => new DeflateStream(stream, CompressionLevel.Fastest, leaveOpen: true),
+            "br" or "brotli" => new BrotliStream(stream, CompressionLevel.Fastest, leaveOpen: true),
+            _ => throw new ArgumentOutOfRangeException(nameof(contentEncoding), contentEncoding, null),
+        };
+    }
+
+    private sealed class TrackingReadStream : Stream
+    {
+        private readonly MemoryStream inner;
+
+        public TrackingReadStream(byte[] bytes)
+        {
+            inner = new MemoryStream(bytes);
+        }
+
+        public int BytesRead { get; private set; }
+
+        public bool IsDisposed { get; private set; }
+
+        public override bool CanRead => inner.CanRead;
+
+        public override bool CanSeek => inner.CanSeek;
+
+        public override bool CanWrite => false;
+
+        public override long Length => inner.Length;
+
+        public override long Position
+        {
+            get => inner.Position;
+            set => inner.Position = value;
+        }
+
+        public override void Flush() => inner.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var bytesRead = inner.Read(buffer, offset, count);
+            BytesRead += bytesRead;
+            return bytesRead;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var bytesRead = inner.Read(buffer.Span);
+            BytesRead += bytesRead;
+            return ValueTask.FromResult(bytesRead);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+
+        public override void SetLength(long value) => inner.SetLength(value);
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            inner.Dispose();
+            base.Dispose(disposing);
+        }
     }
 }

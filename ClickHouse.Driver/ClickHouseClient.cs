@@ -956,9 +956,9 @@ public sealed class ClickHouseClient : IClickHouseClient
                 break;
             default:
                 // Unknown codec — surfacing the raw compressed bytes as a string is worse than
-                // a placeholder. Callers can re-run without compression to see the real error,
-                // or inspect the server's system.query_log for the actual exception text.
-                rawStream.Dispose();
+                // a placeholder. Best-effort drain the body first so HttpClient can reuse the
+                // connection when the transport stream supports it.
+                await DrainAndDisposeAsync(rawStream).ConfigureAwait(false);
                 return
                     $"<server returned HTTP {(int)response.StatusCode} {response.ReasonPhrase} with unsupported Content-Encoding: {encoding}. " +
                     "The error body is compressed with a codec this client cannot decode (zstd, xz, lz4, snappy, …); " +
@@ -966,9 +966,47 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         using (decompressed)
-        using (var reader = new StreamReader(decompressed))
+        using (var reader = new StreamReader(decompressed, GetErrorBodyEncoding(response), detectEncodingFromByteOrderMarks: true))
         {
             return await reader.ReadToEndAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static Encoding GetErrorBodyEncoding(HttpResponseMessage response)
+    {
+        var charset = response.Content.Headers.ContentType?.CharSet;
+        if (string.IsNullOrWhiteSpace(charset))
+        {
+            return Encoding.UTF8;
+        }
+
+        try
+        {
+            return Encoding.GetEncoding(charset.Trim('"'));
+        }
+        catch (ArgumentException)
+        {
+            return Encoding.UTF8;
+        }
+    }
+
+    private static async Task DrainAndDisposeAsync(Stream stream)
+    {
+        try
+        {
+            await stream.CopyToAsync(Stream.Null).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            // The placeholder is still more actionable than replacing the server error with
+            // a transport-read failure. The connection will not be reusable in this case.
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        finally
+        {
+            stream.Dispose();
         }
     }
 
