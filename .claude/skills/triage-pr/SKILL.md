@@ -38,7 +38,7 @@ Then pick **exactly one** primary category:
 | `deps` | Dependency bump (NuGet, GitHub Actions). |
 | `docs` | README / XML doc / CHANGELOG / RELEASENOTES only. |
 | `tests` | Test-only changes, no source change. |
-| `infra` | CI, build scripts, tooling. |
+| `infra` | CI, build scripts, tooling, llm workflows. |
 
 If multiple apply, pick the most consequential (`bugfix`/`feature` outrank `refactor`; `perf` outranks `refactor` if measurable).
 
@@ -60,6 +60,7 @@ Any one is sufficient:
 - **Binary protocol / `Copy/`** — serialization layout or framing changes.
 - **Connection pool / `Http/`** — lifecycle, pooling, streaming-vs-buffering changes.
 - **Concurrency** — new locks, atomics, `Interlocked`, `lock`, `SemaphoreSlim`, `Volatile`, `Memory<T>` aliasing, or any change that could introduce a deadlock or race.
+- **Performance** — slow code in the hot path, new allocations, or any use of reflection.
 - **Recursion** introduced into hot paths or applied to unbounded inputs (e.g. nested type parsing).
 - **Cross-module refactor** — touches three or more of `ADO/`, `Types/`, `Utility/`, `Http/`, `Copy/`.
 - **Security** — auth, certificate, credential, or trust-boundary handling change; potential SQL injection; logging that could leak PII or secrets (URLs, headers, query parameters).
@@ -75,7 +76,7 @@ Any one (only if no High rule fired):
 - **Algorithm change with measurable performance implication** — flag a benchmark request against `ClickHouse.Driver.Benchmark`.
 - **Logging changes** — level promotion, hot-path logging, message-format change.
 - **Test-infra changes** that affect how the matrix runs.
-- **Major version dependency bump** — verify CVE history, changelog, publish date, and downstream usage; call out any unknowns.
+- **Major version dependency bump**
 - **Minor dependency bump** on a security-sensitive package.
 - **Large diff** without obvious reason (~500+ LoC across ~15+ files).
 - **Multi-framework guard** added (`#if NET10_0_OR_GREATER` etc.) on non-trivial code path.

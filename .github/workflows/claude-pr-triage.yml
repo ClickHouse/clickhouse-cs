@@ -103,12 +103,23 @@ jobs:
             exit 1
           fi
 
-          # Strip prior triage:* / risk:* labels.
-          while IFS= read -r LABEL; do
-            [[ -n "$LABEL" ]] && gh pr edit "$PR" --remove-label "$LABEL" || true
-          done < <(gh pr view "$PR" --json labels --jq '.labels[].name | select(startswith("triage:") or startswith("risk:"))')
+          # Reconcile triage:* / risk:* labels: remove only stale ones, add only
+          # missing ones. If the desired pair is already applied, no API calls.
+          mapfile -t CURRENT < <(gh pr view "$PR" --json labels \
+            --jq '.labels[].name | select(startswith("triage:") or startswith("risk:"))')
+          DESIRED=("triage:$CATEGORY" "risk:$RISK")
 
-          gh pr edit "$PR" --add-label "triage:$CATEGORY" --add-label "risk:$RISK"
+          for L in "${CURRENT[@]}"; do
+            keep=0
+            for D in "${DESIRED[@]}"; do [[ "$L" == "$D" ]] && keep=1 && break; done
+            [[ "$keep" -eq 0 ]] && gh pr edit "$PR" --remove-label "$L"
+          done
+
+          for D in "${DESIRED[@]}"; do
+            have=0
+            for L in "${CURRENT[@]}"; do [[ "$L" == "$D" ]] && have=1 && break; done
+            [[ "$have" -eq 0 ]] && gh pr edit "$PR" --add-label "$D"
+          done
 
           # Upsert the comment.
           URL=$(gh pr view "$PR" --json comments \
