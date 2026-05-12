@@ -298,7 +298,14 @@ internal static class TypeConverter
 
         if (type.IsArray)
         {
-            return new ArrayType() { UnderlyingType = ToClickHouseType(type.GetElementType()) };
+            // Rank>1 (e.g. byte[,]) wraps in N nested ArrayType layers; the wire format is jagged.
+            ClickHouseType result = ToClickHouseType(type.GetElementType());
+            var rank = type.GetArrayRank();
+            for (var i = 0; i < rank; i++)
+            {
+                result = new ArrayType { UnderlyingType = result };
+            }
+            return result;
         }
 
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
@@ -365,9 +372,22 @@ internal static class TypeConverter
         if (type.IsArray)
         {
             var array = (Array)value;
-            if (array.Length > 0 && array.GetValue(0) is { } firstElement)
-                return new ArrayType { UnderlyingType = ToClickHouseType(firstElement) };
-            return new ArrayType { UnderlyingType = ToClickHouseType(type.GetElementType()!) };
+            var rank = type.GetArrayRank();
+            // Rank-aware first-element peek; Array.GetValue(int) throws for rank > 1.
+            object firstElement = null;
+            if (array.Length > 0)
+            {
+                var indices = new int[rank];
+                firstElement = array.GetValue(indices);
+            }
+            ClickHouseType inner = firstElement is not null
+                ? ToClickHouseType(firstElement)
+                : ToClickHouseType(type.GetElementType()!);
+            for (var i = 0; i < rank; i++)
+            {
+                inner = new ArrayType { UnderlyingType = inner };
+            }
+            return inner;
         }
 
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))

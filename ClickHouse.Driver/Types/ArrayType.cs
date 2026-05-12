@@ -42,6 +42,19 @@ internal class ArrayType : ParameterizedType
             return;
         }
 
+        // Rank>1 CLR arrays (e.g. byte[,]) iterate flattened via IEnumerable/IList, so slice along
+        // the outermost rank into sub-arrays before delegating to the inner type's writer.
+        if (value is Array multidim && multidim.Rank > 1)
+        {
+            var outerLength = multidim.GetLength(0);
+            writer.Write7BitEncodedInt(outerLength);
+            foreach (var slice in MultiDimArrayHelper.EnumerateOutermostRank(multidim))
+            {
+                UnderlyingType.Write(writer, slice);
+            }
+            return;
+        }
+
         var collection = (IList)value;
         writer.Write7BitEncodedInt(collection.Count);
         for (var i = 0; i < collection.Count; i++)

@@ -32,7 +32,23 @@ internal static class HttpParameterFormatter
         }
 
         var parsedType = TypeConverter.ParseClickHouseType(typeName, settings);
-        return Format(parsedType, parameter.Value, false, customFormatter, parameter.ParameterName);
+        try
+        {
+            return Format(parsedType, parameter.Value, false, customFormatter, parameter.ParameterName);
+        }
+        catch (ArgumentException ex) when (!ReferenceEquals(ex.Data["__ch_outerType__"], parsedType))
+        {
+            // Recursive Format calls (Array, Tuple, Map, etc.) report the inner type they were
+            // dispatched with. Re-throw with the outer type so nested-array mismatches are
+            // diagnosable from the user's perspective. The Data sentinel prevents nested rethrow.
+            var wrapped = new ArgumentException(
+                parameter.ParameterName is null
+                    ? $"Cannot format parameter as {parsedType}: {ex.Message}"
+                    : $"Parameter '{parameter.ParameterName}' (type {parsedType}): {ex.Message}",
+                ex);
+            wrapped.Data["__ch_outerType__"] = parsedType;
+            throw wrapped;
+        }
     }
 
     internal static string Format(ClickHouseType type, object value, bool quote, IParameterFormatter customFormatter = null, string parameterName = null)
@@ -124,6 +140,10 @@ internal static class HttpParameterFormatter
             case NullableType nt:
                 return value is null || value is DBNull ? quote ? "null" : NullValueString : Format(nt.UnderlyingType, value, quote, customFormatter, parameterName);
 
+            // Multidim must beat IEnumerable: a rank>1 CLR Array iterates flattened, not row-by-row.
+            case ArrayType arrayType when value is Array multidim && multidim.Rank > 1:
+                return $"[{string.Join(",", MultiDimArrayHelper.EnumerateOutermostRank(multidim).Select(obj => Format(arrayType.UnderlyingType, obj, true, customFormatter, parameterName)))}]";
+
             case ArrayType arrayType when value is IEnumerable enumerable:
                 return $"[{string.Join(",", enumerable.Cast<object>().Select(obj => Format(arrayType.UnderlyingType, obj, true, customFormatter, parameterName)))}]";
 
@@ -157,7 +177,11 @@ internal static class HttpParameterFormatter
                     return JsonSerializer.Serialize(value);
 
             default:
-                throw new ArgumentException($"Cannot convert {value} to {type}");
+                var valueTypeName = value?.GetType().FullName ?? "null";
+                throw new ArgumentException(
+                    parameterName is null
+                        ? $"Cannot convert value of type '{valueTypeName}' ({value}) to ClickHouse type {type}"
+                        : $"Parameter '{parameterName}': cannot convert value of type '{valueTypeName}' ({value}) to ClickHouse type {type}");
         }
     }
 
