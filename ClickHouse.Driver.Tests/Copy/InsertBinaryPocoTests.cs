@@ -949,4 +949,78 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
             await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
         }
     }
+
+    // ----- Registration smokes for POCO shapes that are insert-mappable but not read-mappable.
+    // The insert path requires only public getters, so shapes that read registration rejects
+    // (positional records with no parameterless ctor, all-init-only, all-private-setter,
+    // all-read-only, abstract types) are still acceptable for RegisterBinaryInsertType.
+
+    private record PositionalRecord(int Id, string Name);
+
+    private record class RecordWithInitProperties
+    {
+        public int Id { get; init; }
+        public string Name { get; init; }
+    }
+
+    private class InitOnlyOnly
+    {
+        public int Id { get; init; }
+        public string Name { get; init; }
+    }
+
+    private class AllPrivateSettersPoco
+    {
+        public int Id { get; private set; }
+        public string Name { get; private set; }
+    }
+
+    private class ReadOnlyOnlyPoco
+    {
+        public int Id { get; }
+        public string Name { get; }
+    }
+
+    private abstract class AbstractPoco
+    {
+        public int Id { get; set; }
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_PositionalRecord_RegistersSuccessfully()
+    {
+        Assert.DoesNotThrow(() => client.RegisterBinaryInsertType<PositionalRecord>());
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_RecordWithInitProperties_RegistersSuccessfully()
+    {
+        Assert.DoesNotThrow(() => client.RegisterBinaryInsertType<RecordWithInitProperties>());
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_AllInitOnlyProperties_RegistersSuccessfully()
+    {
+        Assert.DoesNotThrow(() => client.RegisterBinaryInsertType<InitOnlyOnly>());
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_AllPrivateSetters_RegistersSuccessfully()
+    {
+        Assert.DoesNotThrow(() => client.RegisterBinaryInsertType<AllPrivateSettersPoco>());
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_AllReadOnlyProperties_RegistersSuccessfully()
+    {
+        Assert.DoesNotThrow(() => client.RegisterBinaryInsertType<ReadOnlyOnlyPoco>());
+    }
+
+    [Test]
+    public void RegisterBinaryInsertType_AbstractType_RegistersSuccessfully()
+    {
+        // Insert-only registration doesn't construct instances. Users still need to supply
+        // concrete-derived instances at insert time, but registration itself is permissive.
+        Assert.DoesNotThrow(() => client.RegisterBinaryInsertType<AbstractPoco>());
+    }
 }

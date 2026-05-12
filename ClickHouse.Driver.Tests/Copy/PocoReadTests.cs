@@ -418,4 +418,489 @@ public class PocoReadTests : AbstractConnectionTestFixture
         Assert.That(poco.Id, Is.EqualTo(11UL));
         Assert.That(poco.Value, Is.EqualTo("cmd"));
     }
+
+    // ----- Registration validation: read side ------------------------------------------------
+    // Throws tests for POCO shapes that cannot satisfy read-side validation. The throw fires at
+    // RegisterPocoType<T> time; the integration fixture is fine for these because the throw
+    // happens entirely client-side, before any network call.
+
+    private record PositionalRecord(int Id, string Name);
+
+    private record class RecordWithInitProperties
+    {
+        public int Id { get; init; }
+        public string Name { get; init; }
+    }
+
+    private class InitOnlyOnly
+    {
+        public int Id { get; init; }
+        public string Name { get; init; }
+    }
+
+    private class AllPrivateSettersPoco
+    {
+        public int Id { get; private set; }
+        public string Name { get; private set; }
+    }
+
+    private class ReadOnlyOnlyPoco
+    {
+        public int Id { get; }
+        public string Name { get; }
+    }
+
+    private abstract class AbstractPoco
+    {
+        public int Id { get; set; }
+    }
+
+    private class FieldsOnlyPoco
+    {
+        public int Id;
+        public string Name;
+    }
+
+    private class StaticPropertyOnlyPoco
+    {
+        public static int Counter { get; set; }
+    }
+
+    private class WriteOnlyPropertyPoco
+    {
+        public int Id { get; set; }
+
+        private string backingName;
+        public string Name { set => backingName = value; }
+    }
+
+    [Test]
+    public void RegisterPocoType_PositionalRecord_ThrowsInvalidOperation()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<PositionalRecord>());
+
+        Assert.That(ex.Message, Does.Contain("parameterless constructor"));
+    }
+
+    [Test]
+    public void RegisterPocoType_RecordWithInitProperties_ThrowsBecauseNoMappedProperties()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<RecordWithInitProperties>());
+
+        Assert.That(ex.Message, Does.Contain("RecordWithInitProperties"));
+        Assert.That(ex.Message, Does.Contain("no public properties"));
+    }
+
+    [Test]
+    public void RegisterPocoType_AllInitOnlyProperties_ThrowsBecauseNoMappedProperties()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<InitOnlyOnly>());
+
+        Assert.That(ex.Message, Does.Contain("InitOnlyOnly"));
+    }
+
+    [Test]
+    public void RegisterPocoType_AllPrivateSetters_ThrowsBecauseNoMappedProperties()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<AllPrivateSettersPoco>());
+
+        Assert.That(ex.Message, Does.Contain("AllPrivateSettersPoco"));
+    }
+
+    [Test]
+    public void RegisterPocoType_AllReadOnlyProperties_ThrowsBecauseNoMappedProperties()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<ReadOnlyOnlyPoco>());
+
+        Assert.That(ex.Message, Does.Contain("ReadOnlyOnlyPoco"));
+    }
+
+    [Test]
+    public void RegisterPocoType_AbstractType_ThrowsInvalidOperation()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<AbstractPoco>());
+
+        Assert.That(ex.Message, Does.Contain("parameterless constructor"));
+    }
+
+    [Test]
+    public void RegisterPocoType_FieldsOnly_ThrowsBecauseNoMappedProperties()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<FieldsOnlyPoco>());
+
+        Assert.That(ex.Message, Does.Contain("FieldsOnlyPoco"));
+    }
+
+    [Test]
+    public void RegisterPocoType_StaticPropertiesOnly_ThrowsBecauseNoMappedProperties()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<StaticPropertyOnlyPoco>());
+
+        Assert.That(ex.Message, Does.Contain("StaticPropertyOnlyPoco"));
+    }
+
+    [Test]
+    public void RegisterPocoType_WriteOnlyProperty_IgnoresPropertyButRegistersOthers()
+    {
+        // Write-only property has no public getter, so it is excluded from the insert side; the
+        // regular Id property satisfies both sides, so registration succeeds.
+        Assert.DoesNotThrow(() => client.RegisterPocoType<WriteOnlyPropertyPoco>());
+    }
+
+    // ----- Materialization edge cases --------------------------------------------------------
+
+    public class SecondPoco
+    {
+        public ulong Id { get; set; }
+        public string Other { get; set; }
+    }
+
+    public class ObjectPropertyPoco
+    {
+        public ulong Id { get; set; }
+        public object Value { get; set; }
+    }
+
+    public class WidenedIntPoco
+    {
+        // Column will be Int16; property is Int32 — strict v1 disallows widening.
+        public int Id { get; set; }
+    }
+
+    public class ReadBasePoco
+    {
+        public ulong Id { get; set; }
+    }
+
+    public class DerivedReadPoco : ReadBasePoco
+    {
+        public string OwnValue { get; set; }
+    }
+
+    public class MixedAccessorReadPoco
+    {
+        public int Id { get; set; }
+        public string SkippedInit { get; init; }
+        public string SkippedReadOnly { get; }
+        public int SkippedPrivate { get; private set; }
+    }
+
+    public class NotMappedReadPoco
+    {
+        public ulong Id { get; set; }
+        public string Value { get; set; }
+
+        [ClickHouseNotMapped]
+        public string IgnoreMe { get; set; }
+    }
+
+    public class IndexerReadPoco
+    {
+        public ulong Id { get; set; }
+        public string Value { get; set; }
+
+        public string this[int i] => null;
+    }
+
+    // Passes read validation (public non-init setter) but fails insert validation (only
+    // property has a private getter). Exercises the read-side of registration atomicity.
+    public class PrivateGetterOnlyReadPoco
+    {
+        public int Id { private get; set; }
+    }
+
+    private class UnregisteredQueryPoco
+    {
+        public ulong Id { get; set; }
+    }
+
+#if NET7_0_OR_GREATER
+    public class EndToEndRequiredPoco
+    {
+        public required int Id { get; set; }
+        public required string Name { get; set; }
+    }
+#endif
+
+    [Test]
+    public async Task MapTo_NotMappedProperty_StaysAtDefault()
+    {
+        client.RegisterPocoType<NotMappedReadPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toUInt64(1) AS Id, 'kept' AS Value, 'should_be_ignored' AS IgnoreMe");
+        Assert.That(reader.Read(), Is.True);
+
+        var poco = reader.MapTo<NotMappedReadPoco>();
+        Assert.That(poco.Id, Is.EqualTo(1UL));
+        Assert.That(poco.Value, Is.EqualTo("kept"));
+        Assert.That(poco.IgnoreMe, Is.Null,
+            "[ClickHouseNotMapped] property must stay at default even when a matching result column is present.");
+    }
+
+    [Test]
+    public async Task MapTo_PocoWithIndexer_MaterializesProperties()
+    {
+        client.RegisterPocoType<IndexerReadPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toUInt64(42) AS Id, 'with_indexer' AS Value");
+        Assert.That(reader.Read(), Is.True);
+
+        var poco = reader.MapTo<IndexerReadPoco>();
+        Assert.That(poco.Id, Is.EqualTo(42UL));
+        Assert.That(poco.Value, Is.EqualTo("with_indexer"));
+    }
+
+    [Test]
+    public void RegisterPocoType_FailedInsertValidation_LeavesReadUnregistered_QueryAsyncThrows()
+    {
+        // PrivateGetterOnlyReadPoco passes read validation but fails insert validation. The
+        // failed RegisterPocoType<T> must build both mappings up front so the read commit never
+        // happens. Prove it via QueryAsync: it must throw the "not registered for POCO read"
+        // error, not silently succeed against a tentative read mapping.
+        Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<PrivateGetterOnlyReadPoco>());
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<PrivateGetterOnlyReadPoco>(
+                "SELECT toInt32(1) AS Id"))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("not registered for POCO read"));
+    }
+
+    [Test]
+    public async Task MapTo_InitReadOnlyAndPrivateSetterProperties_AreSkipped()
+    {
+        client.RegisterPocoType<MixedAccessorReadPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toInt32(7) AS Id, 'a' AS SkippedInit, 'b' AS SkippedReadOnly, toInt32(99) AS SkippedPrivate");
+        Assert.That(reader.Read(), Is.True);
+
+        var poco = reader.MapTo<MixedAccessorReadPoco>();
+        Assert.That(poco.Id, Is.EqualTo(7));
+        Assert.That(poco.SkippedInit, Is.Null,
+            "init-only property must not be filled even when a matching column is present");
+        Assert.That(poco.SkippedReadOnly, Is.Null,
+            "get-only property must not be filled even when a matching column is present");
+        Assert.That(poco.SkippedPrivate, Is.EqualTo(0),
+            "private-setter property must not be filled even when a matching column is present");
+    }
+
+    [Test]
+    public async Task MapTo_NumericWideningInt16ToInt32_ThrowsInvalidOperation()
+    {
+        client.RegisterPocoType<WidenedIntPoco>();
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toInt16(7) AS Id");
+        Assert.That(reader.Read(), Is.True);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<WidenedIntPoco>());
+        Assert.That(ex.Message, Does.Contain("Id"));
+        Assert.That(ex.Message, Does.Contain("System.Int32"));
+        Assert.That(ex.Message, Does.Contain("System.Int16"));
+    }
+
+    [Test]
+    public async Task MapTo_StringIntoObjectProperty_AssignsValue()
+    {
+        client.RegisterPocoType<ObjectPropertyPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toUInt64(1) AS Id, 'hello' AS Value");
+        Assert.That(reader.Read(), Is.True);
+
+        var poco = reader.MapTo<ObjectPropertyPoco>();
+        Assert.That(poco.Id, Is.EqualTo(1UL));
+        Assert.That(poco.Value, Is.EqualTo("hello"));
+    }
+
+    [Test]
+    public async Task MapTo_DerivedTypeInheritedProperty_MapsCorrectly()
+    {
+        client.RegisterPocoType<DerivedReadPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toUInt64(42) AS Id, 'derived' AS OwnValue");
+        Assert.That(reader.Read(), Is.True);
+
+        var poco = reader.MapTo<DerivedReadPoco>();
+        Assert.That(poco.Id, Is.EqualTo(42UL));
+        Assert.That(poco.OwnValue, Is.EqualTo("derived"));
+    }
+
+    [Test]
+    public async Task MapTo_MultipleTypesOnSameReader_MaterializeIndependently()
+    {
+        client.RegisterPocoType<SimplePoco>();
+        client.RegisterPocoType<SecondPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toUInt64(1) AS Id, 'a' AS Value, 'b' AS Other");
+        Assert.That(reader.Read(), Is.True);
+
+        var first = reader.MapTo<SimplePoco>();
+        var second = reader.MapTo<SecondPoco>();
+
+        Assert.That(first.Id, Is.EqualTo(1UL));
+        Assert.That(first.Value, Is.EqualTo("a"));
+        Assert.That(second.Id, Is.EqualTo(1UL));
+        Assert.That(second.Other, Is.EqualTo("b"));
+    }
+
+    [Test]
+    public async Task MapTo_BeforeRead_ThrowsInvalidOperation()
+    {
+        client.RegisterPocoType<SimplePoco>();
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toUInt64(1) AS Id, 'a' AS Value");
+
+        // No Read() yet — there is no current row. MapTo must surface that precondition rather
+        // than silently materializing a default-filled instance.
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<SimplePoco>());
+        Assert.That(ex.Message, Does.Contain("Read()"));
+    }
+
+    [Test]
+    public async Task MapTo_AfterEndOfStream_ThrowsInvalidOperation()
+    {
+        client.RegisterPocoType<SimplePoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toUInt64(1) AS Id, 'a' AS Value");
+
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.Read(), Is.False);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => reader.MapTo<SimplePoco>());
+        Assert.That(ex.Message, Does.Contain("Read()"));
+    }
+
+    [Test]
+    public async Task MapTo_RequiredMembers_MaterializesInstance()
+    {
+#if NET7_0_OR_GREATER
+        client.RegisterPocoType<EndToEndRequiredPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toInt32(7) AS Id, 'alice' AS Name");
+
+        Assert.That(reader.Read(), Is.True);
+        var poco = reader.MapTo<EndToEndRequiredPoco>();
+
+        Assert.That(poco.Id, Is.EqualTo(7));
+        Assert.That(poco.Name, Is.EqualTo("alice"));
+#else
+        Assert.Ignore("`required` members require .NET 7+");
+#endif
+    }
+
+    [Test]
+    public async Task MapTo_DecimalWithUseCustomDecimalsFalse_AssignsValue()
+    {
+        // With UseCustomDecimals=false, Decimal columns are returned as System.Decimal directly,
+        // so a System.Decimal property is assignable. Complements the v1 "no implicit conversion"
+        // rule: callers who want decimal interop today must opt out of ClickHouseDecimal.
+        using var customClient = TestUtilities.GetTestClickHouseClient(customDecimals: false);
+        customClient.RegisterPocoType<DecimalPoco>();
+
+        using var reader = await customClient.ExecuteReaderAsync(
+            "SELECT toUInt64(1) AS Id, toDecimal128('123.45', 2) AS Amount");
+        Assert.That(reader.Read(), Is.True);
+
+        var poco = reader.MapTo<DecimalPoco>();
+        Assert.That(poco.Id, Is.EqualTo(1UL));
+        Assert.That(poco.Amount, Is.EqualTo(123.45m));
+    }
+
+    [Test]
+    public async Task QueryAsync_UnregisteredType_ThrowsOnFirstYield()
+    {
+        var enumerator = client.QueryAsync<UnregisteredQueryPoco>("SELECT toUInt64(1) AS Id").GetAsyncEnumerator();
+        try
+        {
+            Assert.ThrowsAsync<InvalidOperationException>(async () => await enumerator.MoveNextAsync());
+        }
+        finally
+        {
+            await enumerator.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public void QueryAsync_CancellationMidIteration_ThrowsAndAllowsFollowupQuery()
+    {
+        client.RegisterPocoType<SimplePoco>();
+
+        using var cts = new System.Threading.CancellationTokenSource();
+        int seen = 0;
+
+        Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<SimplePoco>(
+                "SELECT toUInt64(number) AS Id, toString(number) AS Value FROM numbers(1000000)",
+                cancellationToken: cts.Token).ConfigureAwait(false))
+            {
+                if (++seen == 5)
+                    cts.Cancel();
+            }
+        });
+
+        Assert.That(seen, Is.GreaterThanOrEqualTo(5));
+
+        // A follow-up query must succeed — cancellation must not have left the client in a bad
+        // state (leaked HTTP handler, lingering reader on the connection).
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            var rows = new List<SimplePoco>();
+            await foreach (var row in client.QueryAsync<SimplePoco>(
+                "SELECT toUInt64(1) AS Id, 'hi' AS Value").ConfigureAwait(false))
+            {
+                rows.Add(row);
+            }
+            Assert.That(rows, Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
+    [Tests.Attributes.FromVersion(25, 11)]
+    public void QueryAsync_ServerErrorMidStream_SurfacesServerException()
+    {
+        client.RegisterPocoType<SimplePoco>();
+
+        // Enable mid-stream exception tagging so the server can flag the point at which the
+        // query started failing. Without this, the failure surfaces as EndOfStreamException
+        // (or silent truncation); the driver must propagate it as ClickHouseServerException.
+        var options = new QueryOptions
+        {
+            CustomSettings = new Dictionary<string, object>
+            {
+                ["http_write_exception_in_output_format"] = 1,
+            },
+        };
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<SimplePoco>(
+                "SELECT toUInt64(number) AS Id, throwIf(number = 10, 'boom') AS Value " +
+                "FROM system.numbers LIMIT 10000000", options: options).ConfigureAwait(false))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("boom"));
+    }
 }
