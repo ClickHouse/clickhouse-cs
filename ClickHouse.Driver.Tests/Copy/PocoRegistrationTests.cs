@@ -109,27 +109,66 @@ public class PocoRegistrationTests
     }
 
     [Test]
-    public void RegisterPocoType_NotMappedProperty_IgnoresProperty()
+    public void RegisterPocoType_NotMappedProperty_ExcludesPropertyFromBothMappings()
     {
-        // Should not throw — the [ClickHouseNotMapped] property is excluded and the remaining
-        // property satisfies the "at least one mapped property" requirement.
-        Assert.DoesNotThrow(() => client.RegisterPocoType<PocoWithNotMapped>());
+        client.RegisterPocoType<PocoWithNotMapped>();
+
+        var insertMapping = client.PocoRegistry.GetInsertMapping<PocoWithNotMapped>();
+        Assert.That(insertMapping, Is.Not.Null);
+        Assert.That(
+            insertMapping.Properties.Length, Is.EqualTo(1),
+            "[ClickHouseNotMapped] property must not appear in the insert mapping.");
+        Assert.That(insertMapping.Properties[0].PropertyName, Is.EqualTo("Id"));
+
+        var readMapping = client.PocoRegistry.GetReadMapping<PocoWithNotMapped>();
+        Assert.That(readMapping, Is.Not.Null);
+        Assert.That(
+            readMapping.Properties.Length, Is.EqualTo(1),
+            "[ClickHouseNotMapped] property must not appear in the read mapping.");
+        Assert.That(readMapping.Properties[0].PropertyName, Is.EqualTo("Id"));
+        Assert.That(
+            readMapping.ColumnNameToPropertyIndex.ContainsKey("IgnoreMe"), Is.False,
+            "[ClickHouseNotMapped] column name must not be in the read lookup.");
     }
 
     [Test]
-    public void RegisterPocoType_IndexerProperty_IgnoresProperty()
+    public void RegisterPocoType_IndexerProperty_ExcludesIndexerFromBothMappings()
     {
-        // Indexer doesn't count toward mapped properties; Id alone is sufficient.
-        Assert.DoesNotThrow(() => client.RegisterPocoType<PocoWithIndexer>());
+        client.RegisterPocoType<PocoWithIndexer>();
+
+        var insertMapping = client.PocoRegistry.GetInsertMapping<PocoWithIndexer>();
+        Assert.That(insertMapping, Is.Not.Null);
+        Assert.That(
+            insertMapping.Properties.Length, Is.EqualTo(1),
+            "Indexer must not be counted as a mapped property on the insert side.");
+        Assert.That(insertMapping.Properties[0].PropertyName, Is.EqualTo("Id"));
+
+        var readMapping = client.PocoRegistry.GetReadMapping<PocoWithIndexer>();
+        Assert.That(readMapping, Is.Not.Null);
+        Assert.That(
+            readMapping.Properties.Length, Is.EqualTo(1),
+            "Indexer must not be counted as a mapped property on the read side.");
+        Assert.That(readMapping.Properties[0].PropertyName, Is.EqualTo("Id"));
     }
 
     [Test]
-    public void RegisterBinaryInsertType_TypeWithoutParameterlessConstructor_RegistersSuccessfully()
+    public void RegisterBinaryInsertType_TypeWithoutParameterlessConstructor_RegistersInsertOnly()
     {
         // Insert-only registration does not need to construct instances, so the absence of a
-        // public parameterless constructor is fine — the user supplies fully-built instances.
-        Assert.DoesNotThrow(() =>
-            client.RegisterBinaryInsertType<PocoWithoutParameterlessConstructor>());
+        // public parameterless constructor must not block registration. Pin both that the
+        // insert mapping is produced and that nothing is registered on the read side.
+        client.RegisterBinaryInsertType<PocoWithoutParameterlessConstructor>();
+
+        var insertMapping = client.PocoRegistry.GetInsertMapping<PocoWithoutParameterlessConstructor>();
+        Assert.That(insertMapping, Is.Not.Null);
+        Assert.That(insertMapping.Properties.Length, Is.EqualTo(1));
+        Assert.That(insertMapping.Properties[0].PropertyName, Is.EqualTo("Id"));
+        Assert.That(insertMapping.Getters.Length, Is.EqualTo(1));
+
+        Assert.That(
+            client.PocoRegistry.GetReadMapping<PocoWithoutParameterlessConstructor>(),
+            Is.Null,
+            "RegisterBinaryInsertType<T> must not register the type for read.");
     }
 
     [Test]
