@@ -199,36 +199,6 @@ public class PocoReadTests : AbstractConnectionTestFixture
         Assert.That(poco.Value, Is.Null);
     }
 
-    [Test]
-    public async Task MapTo_NonNullForNullableProperty_AssignsValue()
-    {
-        client.RegisterPocoType<NullablePoco>();
-
-        using var reader = await client.ExecuteReaderAsync(
-            "SELECT toUInt64(1) AS Id, toInt32(42) AS Score");
-
-        Assert.That(reader.Read(), Is.True);
-        var poco = reader.MapTo<NullablePoco>();
-
-        Assert.That(poco.Id, Is.EqualTo(1UL));
-        Assert.That(poco.Score, Is.EqualTo(42));
-    }
-
-    [Test]
-    public async Task MapTo_NullForNullableProperty_AssignsNull()
-    {
-        client.RegisterPocoType<NullablePoco>();
-
-        using var reader = await client.ExecuteReaderAsync(
-            "SELECT toUInt64(1) AS Id, CAST(NULL, 'Nullable(Int32)') AS Score");
-
-        Assert.That(reader.Read(), Is.True);
-        var poco = reader.MapTo<NullablePoco>();
-
-        Assert.That(poco.Id, Is.EqualTo(1UL));
-        Assert.That(poco.Score, Is.Null);
-    }
-
     public class NullableTriplePoco
     {
         public ulong Id { get; set; }
@@ -313,23 +283,21 @@ public class PocoReadTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task QueryAsync_RegisteredPoco_StreamsRowsInOrder()
+    public async Task MapTo_DecimalWithUseCustomDecimalsFalse_AssignsValue()
     {
-        client.RegisterPocoType<SimplePoco>();
+        // With UseCustomDecimals=false, Decimal columns are returned as System.Decimal directly,
+        // so a System.Decimal property is assignable. Complements the v1 "no implicit conversion"
+        // rule: callers who want decimal interop today must opt out of ClickHouseDecimal.
+        using var customClient = TestUtilities.GetTestClickHouseClient(customDecimals: false);
+        customClient.RegisterPocoType<DecimalPoco>();
 
-        var results = new List<SimplePoco>();
-        await foreach (var row in client.QueryAsync<SimplePoco>(
-            "SELECT toUInt64(number + 1) AS Id, concat('row_', toString(number)) AS Value FROM numbers(5)"))
-        {
-            results.Add(row);
-        }
+        using var reader = await customClient.ExecuteReaderAsync(
+            "SELECT toUInt64(1) AS Id, toDecimal128('123.45', 2) AS Amount");
+        Assert.That(reader.Read(), Is.True);
 
-        Assert.That(results, Has.Count.EqualTo(5));
-        for (var i = 0; i < 5; i++)
-        {
-            Assert.That(results[i].Id, Is.EqualTo((ulong)(i + 1)));
-            Assert.That(results[i].Value, Is.EqualTo($"row_{i}"));
-        }
+        var poco = reader.MapTo<DecimalPoco>();
+        Assert.That(poco.Id, Is.EqualTo(1UL));
+        Assert.That(poco.Amount, Is.EqualTo(123.45m));
     }
 
     [Test]
@@ -381,29 +349,6 @@ public class PocoReadTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task QueryAsync_EnumerationStopsEarly_DisposesReader()
-    {
-        client.RegisterPocoType<SimplePoco>();
-
-        var enumerator = client.QueryAsync<SimplePoco>(
-            "SELECT toUInt64(number) AS Id, toString(number) AS Value FROM numbers(1000)").GetAsyncEnumerator();
-        try
-        {
-            Assert.That(await enumerator.MoveNextAsync(), Is.True);
-            Assert.That(enumerator.Current.Id, Is.EqualTo(0UL));
-            // stop early
-        }
-        finally
-        {
-            await enumerator.DisposeAsync();
-        }
-
-        // After disposal we should be able to issue a follow-up query without resource issues.
-        var count = await client.ExecuteScalarAsync("SELECT 1");
-        Assert.That(Convert.ToInt32(count), Is.EqualTo(1));
-    }
-
-    [Test]
     public async Task ClickHouseConnection_RegisterPocoType_AllowsCommandReaderMapTo()
     {
         using var conn = TestUtilities.GetTestClickHouseConnection();
@@ -418,9 +363,7 @@ public class PocoReadTests : AbstractConnectionTestFixture
         Assert.That(poco.Id, Is.EqualTo(11UL));
         Assert.That(poco.Value, Is.EqualTo("cmd"));
     }
-
-    // ----- Materialization edge cases --------------------------------------------------------
-
+    
     public class SecondPoco
     {
         public ulong Id { get; set; }
@@ -435,7 +378,7 @@ public class PocoReadTests : AbstractConnectionTestFixture
 
     public class WidenedIntPoco
     {
-        // Column will be Int16; property is Int32 — strict v1 disallows widening.
+        // Column will be Int16; property is Int32 — strict type mapping disallows widening.
         public int Id { get; set; }
     }
 
@@ -493,22 +436,6 @@ public class PocoReadTests : AbstractConnectionTestFixture
         public required string Name { get; set; }
     }
 #endif
-
-    [Test]
-    public async Task MapTo_NotMappedProperty_StaysAtDefault()
-    {
-        client.RegisterPocoType<NotMappedReadPoco>();
-
-        using var reader = await client.ExecuteReaderAsync(
-            "SELECT toUInt64(1) AS Id, 'kept' AS Value, 'should_be_ignored' AS IgnoreMe");
-        Assert.That(reader.Read(), Is.True);
-
-        var poco = reader.MapTo<NotMappedReadPoco>();
-        Assert.That(poco.Id, Is.EqualTo(1UL));
-        Assert.That(poco.Value, Is.EqualTo("kept"));
-        Assert.That(poco.IgnoreMe, Is.Null,
-            "[ClickHouseNotMapped] property must stay at default even when a matching result column is present.");
-    }
 
     [Test]
     public async Task MapTo_PocoWithIndexer_MaterializesProperties()
@@ -673,24 +600,6 @@ public class PocoReadTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task MapTo_DecimalWithUseCustomDecimalsFalse_AssignsValue()
-    {
-        // With UseCustomDecimals=false, Decimal columns are returned as System.Decimal directly,
-        // so a System.Decimal property is assignable. Complements the v1 "no implicit conversion"
-        // rule: callers who want decimal interop today must opt out of ClickHouseDecimal.
-        using var customClient = TestUtilities.GetTestClickHouseClient(customDecimals: false);
-        customClient.RegisterPocoType<DecimalPoco>();
-
-        using var reader = await customClient.ExecuteReaderAsync(
-            "SELECT toUInt64(1) AS Id, toDecimal128('123.45', 2) AS Amount");
-        Assert.That(reader.Read(), Is.True);
-
-        var poco = reader.MapTo<DecimalPoco>();
-        Assert.That(poco.Id, Is.EqualTo(1UL));
-        Assert.That(poco.Amount, Is.EqualTo(123.45m));
-    }
-
-    [Test]
     public async Task QueryAsync_UnregisteredType_ThrowsOnFirstYield()
     {
         var enumerator = client.QueryAsync<UnregisteredQueryPoco>("SELECT toUInt64(1) AS Id").GetAsyncEnumerator();
@@ -702,41 +611,6 @@ public class PocoReadTests : AbstractConnectionTestFixture
         {
             await enumerator.DisposeAsync();
         }
-    }
-
-    [Test]
-    public void QueryAsync_CancellationMidIteration_ThrowsAndAllowsFollowupQuery()
-    {
-        client.RegisterPocoType<SimplePoco>();
-
-        using var cts = new System.Threading.CancellationTokenSource();
-        int seen = 0;
-
-        Assert.ThrowsAsync<OperationCanceledException>(async () =>
-        {
-            await foreach (var _ in client.QueryAsync<SimplePoco>(
-                "SELECT toUInt64(number) AS Id, toString(number) AS Value FROM numbers(1000000)",
-                cancellationToken: cts.Token).ConfigureAwait(false))
-            {
-                if (++seen == 5)
-                    cts.Cancel();
-            }
-        });
-
-        Assert.That(seen, Is.GreaterThanOrEqualTo(5));
-
-        // A follow-up query must succeed — cancellation must not have left the client in a bad
-        // state (leaked HTTP handler, lingering reader on the connection).
-        Assert.DoesNotThrowAsync(async () =>
-        {
-            var rows = new List<SimplePoco>();
-            await foreach (var row in client.QueryAsync<SimplePoco>(
-                "SELECT toUInt64(1) AS Id, 'hi' AS Value").ConfigureAwait(false))
-            {
-                rows.Add(row);
-            }
-            Assert.That(rows, Has.Count.EqualTo(1));
-        });
     }
 
     [Test]

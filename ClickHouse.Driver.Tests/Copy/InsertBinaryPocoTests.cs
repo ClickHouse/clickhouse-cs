@@ -161,9 +161,7 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
     [Test]
     public async Task InsertBinaryAsync_NoParameterlessConstructor_InsertsSuccessfully()
     {
-        // RegisterBinaryInsertType<T> does not need to construct instances — the user supplies
-        // them — so the absence of a public parameterless ctor must not block insert. Prove
-        // end-to-end that a row inserted from such a POCO actually lands in the table.
+        // RegisterBinaryInsertType<T> does not need to construct instances, so the absence of a public parameterless ctor must not block insert.
         var tableName = CreateTestTableName();
         try
         {
@@ -194,10 +192,7 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
     [Test]
     public void RegisterPocoType_FailedReadValidation_LeavesInsertUnregistered_InsertBinaryThrows()
     {
-        // NoCtorPoco passes insert validation but fails read validation (no public parameterless
-        // ctor). RegisterPocoType<T> must build both mappings up front so the insert commit
-        // never happens. Prove it through the public API: InsertBinaryAsync must throw the
-        // "not registered" error, not silently succeed against a tentative insert mapping.
+        // NoCtorPoco passes insert validation but fails read validation (no public parameterless ctor). Insert shouldn't work.
         Assert.Throws<InvalidOperationException>(() =>
             client.RegisterPocoType<AtomicityNoCtorPoco>());
 
