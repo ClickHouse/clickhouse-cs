@@ -187,12 +187,9 @@ public interface IClickHouseClient : IDisposable
         where T : class;
 
     /// <summary>
-    /// Executes a SQL query and streams results as registered POCO instances.
-    /// The reader is opened, rows are streamed lazily, and the reader is disposed when
-    /// enumeration completes, faults, or is stopped early.
+    /// Executes a SQL query and returns an enumerable of the results mapped to the given type.
     /// </summary>
-    /// <typeparam name="T">The registered POCO type. Must have been registered via
-    /// <see cref="RegisterPocoType{T}"/> first.</typeparam>
+    /// <typeparam name="T">The POCO type. Must have been registered via <see cref="RegisterPocoType{T}"/> first.</typeparam>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="parameters">Optional parameters for the query.</param>
     /// <param name="options">Optional query options to override client defaults.</param>
