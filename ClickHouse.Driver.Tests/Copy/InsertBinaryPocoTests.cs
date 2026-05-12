@@ -122,6 +122,32 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         public ulong Id { get; set; }
     }
 
+    private class NoCtorPoco
+    {
+        public NoCtorPoco(ulong id, string value)
+        {
+            Id = id;
+            Value = value;
+        }
+
+        public ulong Id { get; set; }
+        public string Value { get; set; }
+    }
+
+    // Same shape as NoCtorPoco, but a distinct type to keep the registration-atomicity test
+    // isolated from the happy-path insert test in this shared fixture.
+    private class AtomicityNoCtorPoco
+    {
+        public AtomicityNoCtorPoco(ulong id, string value)
+        {
+            Id = id;
+            Value = value;
+        }
+
+        public ulong Id { get; set; }
+        public string Value { get; set; }
+    }
+
     [Test]
     public void InsertBinaryAsync_WithUnregisteredType_ShouldThrow()
     {
@@ -129,6 +155,58 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
             await client.InsertBinaryAsync<UnregisteredPoco>("test_table", Array.Empty<UnregisteredPoco>()));
 
         Assert.That(ex.Message, Does.Contain("UnregisteredPoco"));
+        Assert.That(ex.Message, Does.Contain("RegisterBinaryInsertType"));
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_NoParameterlessConstructor_InsertsSuccessfully()
+    {
+        // RegisterBinaryInsertType<T> does not need to construct instances — the user supplies
+        // them — so the absence of a public parameterless ctor must not block insert. Prove
+        // end-to-end that a row inserted from such a POCO actually lands in the table.
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync(
+                $"CREATE TABLE IF NOT EXISTS test.{tableName} (Id UInt64, Value String) ENGINE = MergeTree() ORDER BY Id");
+
+            client.RegisterBinaryInsertType<NoCtorPoco>();
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName,
+                new[] { new NoCtorPoco(7, "kept") },
+                new InsertOptions { Database = "test" });
+
+            Assert.That(inserted, Is.EqualTo(1));
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT Id, Value FROM test.{tableName}");
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(7UL));
+            Assert.That(reader.GetFieldValue<string>(1), Is.EqualTo("kept"));
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    [Test]
+    public void RegisterPocoType_FailedReadValidation_LeavesInsertUnregistered_InsertBinaryThrows()
+    {
+        // NoCtorPoco passes insert validation but fails read validation (no public parameterless
+        // ctor). RegisterPocoType<T> must build both mappings up front so the insert commit
+        // never happens. Prove it through the public API: InsertBinaryAsync must throw the
+        // "not registered" error, not silently succeed against a tentative insert mapping.
+        Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<AtomicityNoCtorPoco>());
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await client.InsertBinaryAsync<AtomicityNoCtorPoco>(
+                "test_table",
+                new[] { new AtomicityNoCtorPoco(1, "x") }));
+
+        Assert.That(ex.Message, Does.Contain("AtomicityNoCtorPoco"));
         Assert.That(ex.Message, Does.Contain("RegisterBinaryInsertType"));
     }
 

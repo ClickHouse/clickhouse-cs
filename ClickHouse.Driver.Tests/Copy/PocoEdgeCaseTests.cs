@@ -345,6 +345,85 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
         public int SkippedPrivate { get; private set; }
     }
 
+    public class NotMappedReadPoco
+    {
+        public ulong Id { get; set; }
+        public string Value { get; set; }
+
+        [ClickHouseNotMapped]
+        public string IgnoreMe { get; set; }
+    }
+
+    public class IndexerReadPoco
+    {
+        public ulong Id { get; set; }
+        public string Value { get; set; }
+
+        public string this[int i] => null;
+    }
+
+    // Passes read validation (public non-init setter) but fails insert validation (only
+    // property has a private getter). Used to exercise the read-side of registration
+    // atomicity through the public API.
+    public class PrivateGetterOnlyReadPoco
+    {
+        public int Id { private get; set; }
+    }
+
+    [Test]
+    public async Task MapTo_NotMappedProperty_StaysAtDefault()
+    {
+        client.RegisterPocoType<NotMappedReadPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toUInt64(1) AS Id, 'kept' AS Value, 'should_be_ignored' AS IgnoreMe");
+        Assert.That(reader.Read(), Is.True);
+
+        var poco = reader.MapTo<NotMappedReadPoco>();
+        Assert.That(poco.Id, Is.EqualTo(1UL));
+        Assert.That(poco.Value, Is.EqualTo("kept"));
+        Assert.That(poco.IgnoreMe, Is.Null,
+            "[ClickHouseNotMapped] property must stay at default even when a matching result column is present.");
+    }
+
+    [Test]
+    public async Task MapTo_PocoWithIndexer_MaterializesProperties()
+    {
+        // Indexers are not properties in the binding sense; they must not interfere with
+        // registration or materialization. Pin the end-to-end happy path.
+        client.RegisterPocoType<IndexerReadPoco>();
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toUInt64(42) AS Id, 'with_indexer' AS Value");
+        Assert.That(reader.Read(), Is.True);
+
+        var poco = reader.MapTo<IndexerReadPoco>();
+        Assert.That(poco.Id, Is.EqualTo(42UL));
+        Assert.That(poco.Value, Is.EqualTo("with_indexer"));
+    }
+
+    [Test]
+    public void RegisterPocoType_FailedInsertValidation_LeavesReadUnregistered_QueryAsyncThrows()
+    {
+        // PrivateGetterOnlyReadPoco passes read validation but fails insert validation. The
+        // failed RegisterPocoType<T> must build both mappings up front so the read commit
+        // never happens. Prove it through the public API: QueryAsync<T> must throw the
+        // "not registered for POCO read" error, not silently succeed against a tentative
+        // read mapping.
+        Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<PrivateGetterOnlyReadPoco>());
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<PrivateGetterOnlyReadPoco>(
+                "SELECT toInt32(1) AS Id"))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("not registered for POCO read"));
+    }
+
     [Test]
     public async Task MapTo_InitReadOnlyAndPrivateSetterProperties_AreSkipped()
     {
