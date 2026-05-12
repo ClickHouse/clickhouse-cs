@@ -120,8 +120,7 @@ internal sealed class PocoTypeRegistry
         }
 
         var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-        var propInfos = new List<PocoPropertyInfo>(properties.Length);
-        var setters = new List<Action<T, object>>(properties.Length);
+        var bindings = new Dictionary<string, ColumnBinding<T>>(properties.Length, StringComparer.Ordinal);
         var usedColumnNames = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var property in properties)
@@ -138,27 +137,23 @@ internal sealed class PocoTypeRegistry
 
             var (columnName, explicitType) = ResolveColumnAttributes(type, property, usedColumnNames);
 
-            propInfos.Add(BuildPropertyInfo(property, columnName, explicitType));
-            setters.Add(CompileSetter<T>(property));
+            bindings[columnName] = new ColumnBinding<T>
+            {
+                PropInfo = BuildPropertyInfo(property, columnName, explicitType),
+                Setter = CompileSetter<T>(property),
+            };
         }
 
-        if (propInfos.Count == 0)
+        if (bindings.Count == 0)
         {
             throw new InvalidOperationException(
                 $"Type '{type.Name}' has no public properties with a public non-init setter that map to ClickHouse columns. " +
                 $"POCO read registration requires at least one mapped property usable as a setter (init-only and read-only properties are ignored).");
         }
 
-        var props = propInfos.ToArray();
-        var nameToIndex = new Dictionary<string, int>(props.Length, StringComparer.Ordinal);
-        for (var i = 0; i < props.Length; i++)
-            nameToIndex[props[i].ColumnName] = i;
-
         return new PocoReadMapping<T>
         {
-            Properties = props,
-            Setters = setters.ToArray(),
-            ColumnNameToPropertyIndex = nameToIndex,
+            Bindings = bindings,
             Constructor = CompileConstructor<T>(ctor),
         };
     }

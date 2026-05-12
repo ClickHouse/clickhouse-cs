@@ -250,51 +250,49 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         for (var i = 0; i < plan.Length; i++)
         {
             var col = plan[i].ColumnOrdinal;
-            var propIndex = plan[i].PropertyIndex;
+            var binding = plan[i].Binding;
             var value = CurrentRow[col];
-            var propInfo = mapping.Properties[propIndex];
-            var setter = mapping.Setters[propIndex];
 
             if (value is null || value is DBNull)
             {
-                if (propInfo.CanAssignNull)
+                if (binding.PropInfo.CanAssignNull)
                 {
-                    setter(instance, null);
+                    binding.Setter(instance, null);
                     continue;
                 }
 
                 throw new InvalidOperationException(BuildAssignmentErrorMessage(
-                    typeof(T), propInfo, FieldNames[col], RawTypes[col].ToString(), null));
+                    typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), null));
             }
 
             try
             {
-                setter(instance, value);
+                binding.Setter(instance, value);
             }
             catch (InvalidCastException)
             {
                 throw new InvalidOperationException(BuildAssignmentErrorMessage(
-                    typeof(T), propInfo, FieldNames[col], RawTypes[col].ToString(), value.GetType()));
+                    typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), value.GetType()));
             }
         }
 
         return instance;
     }
 
-    private (int ColumnOrdinal, int PropertyIndex)[] GetOrBuildBindingPlan<T>(PocoReadMapping<T> mapping)
+    private (int ColumnOrdinal, ColumnBinding<T> Binding)[] GetOrBuildBindingPlan<T>(PocoReadMapping<T> mapping)
         where T : class
     {
         if (bindingPlanCache.TryGetValue(typeof(T), out var cached))
-            return ((int, int)[])cached;
+            return ((int, ColumnBinding<T>)[])cached;
 
-        var matched = new List<(int, int)>(mapping.Properties.Length);
+        var matched = new List<(int, ColumnBinding<T>)>(mapping.Bindings.Count);
         for (var i = 0; i < FieldNames.Length; i++)
         {
-            if (!mapping.ColumnNameToPropertyIndex.TryGetValue(FieldNames[i], out var idx))
+            if (!mapping.Bindings.TryGetValue(FieldNames[i], out var binding))
                 continue;
 
-            ValidateBinding(typeof(T), mapping.Properties[idx], i);
-            matched.Add((i, idx));
+            ValidateBinding(typeof(T), binding.PropInfo, i);
+            matched.Add((i, binding));
         }
         var plan = matched.ToArray();
         bindingPlanCache[typeof(T)] = plan;
