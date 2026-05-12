@@ -12,9 +12,9 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
+using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 
