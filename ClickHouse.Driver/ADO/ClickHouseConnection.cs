@@ -267,19 +267,10 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 #pragma warning restore CS0109 // Member does not hide an inherited member; new keyword is not required
 
     /// <summary>
-    /// Registers a POCO type for read materialization on the underlying client. Forwards to
-    /// <see cref="ClickHouseClient.RegisterPocoReadType{T}"/> so readers obtained from this
-    /// connection's commands can materialize <typeparamref name="T"/> via
+    /// Registers a POCO type for both binary insert and read materialization on the underlying
+    /// client. Forwards to <see cref="ClickHouseClient.RegisterPocoType{T}"/> so readers
+    /// obtained from this connection's commands can materialize <typeparamref name="T"/> via
     /// <see cref="Readers.ClickHouseDataReader.MapTo{T}"/>.
-    /// </summary>
-    /// <typeparam name="T">The POCO type to register. Must have a public parameterless constructor.</typeparam>
-    public void RegisterPocoReadType<T>()
-        where T : class
-        => ClickHouseClient.RegisterPocoReadType<T>();
-
-    /// <summary>
-    /// Convenience: registers a POCO type for both binary insert and read materialization on the
-    /// underlying client.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
     public void RegisterPocoType<T>()

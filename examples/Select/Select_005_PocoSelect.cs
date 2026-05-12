@@ -44,8 +44,7 @@ public static class PocoSelect
             ORDER BY Id
         ");
 
-        // RegisterPocoType<T> covers both insert and read; if you only need to read,
-        // use RegisterPocoReadType<T>() instead.
+        // RegisterPocoType<T> sets up both the insert and read mappings on the client.
         client.RegisterPocoType<SensorReading>();
 
         var seedRows = Enumerable.Range(1, 5).Select(i => new SensorReading
@@ -136,7 +135,7 @@ public static class PocoSelect
     {
         Console.WriteLine("3. ClickHouseDataReader.MapTo<T> on the current row:");
 
-        client.RegisterPocoReadType<SensorReading>();
+        client.RegisterPocoType<SensorReading>();
 
         using var reader = await client.ExecuteReaderAsync(@"
             SELECT toUInt64(number + 1)             AS Id,

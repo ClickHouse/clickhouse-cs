@@ -26,13 +26,6 @@ internal sealed class PocoTypeRegistry
         => insertMappings.GetOrAdd(typeof(T), static _ => BuildInsertMapping<T>());
 
     /// <summary>
-    /// Registers a POCO type for read materialization. Idempotent and thread-safe.
-    /// </summary>
-    internal void RegisterForRead<T>()
-        where T : class
-        => readMappings.GetOrAdd(typeof(T), static _ => BuildReadMapping<T>());
-
-    /// <summary>
     /// Registers a POCO type for both binary insert and read materialization. Both mappings are
     /// validated up front; if either validation throws, neither mapping is committed, so the
     /// registry is left in its prior state.

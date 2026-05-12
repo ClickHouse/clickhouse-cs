@@ -221,9 +221,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// Materializes the current row into a new instance of <typeparamref name="T"/>.
     /// Does not call <see cref="Read"/> and does not advance the reader.
     /// </summary>
-    /// <typeparam name="T">The registered POCO type. Must have been registered for read via
-    /// <c>RegisterPocoReadType&lt;T&gt;</c> or <c>RegisterPocoType&lt;T&gt;</c> on the owning
-    /// client or connection.</typeparam>
+    /// <typeparam name="T">The registered POCO type. Must have been registered via
+    /// <c>RegisterPocoType&lt;T&gt;</c> on the owning client or connection.</typeparam>
     /// <exception cref="InvalidOperationException">
     /// Thrown if <typeparamref name="T"/> is not registered, or if a column value cannot
     /// be assigned to the corresponding property under the strict v1 assignment rules
@@ -241,7 +240,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         var mapping = pocoRegistry.GetReadMapping<T>()
             ?? throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' is not registered for POCO read. " +
-                $"Call RegisterPocoReadType<{typeof(T).Name}>() (read-only) or RegisterPocoType<{typeof(T).Name}>() (read + insert) on the client or connection first.");
+                $"Call RegisterPocoType<{typeof(T).Name}>() on the client or connection first.");
 
         var plan = GetOrBuildBindingPlan(mapping);
         var instance = mapping.Constructor();

@@ -166,8 +166,7 @@ public interface IClickHouseClient : IDisposable
     /// Registers a POCO type for binary insert operations.
     /// Types must be registered before they can be inserted via <see cref="InsertBinaryAsync{T}"/>.
     /// Registration is recorded in the shared per-client POCO registry; only the insert side is
-    /// registered. To enable read materialization for the same type, call
-    /// <see cref="RegisterPocoReadType{T}"/> separately or use the convenience
+    /// registered. To enable read materialization for the same type, use the canonical
     /// <see cref="RegisterPocoType{T}"/>.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
@@ -175,21 +174,9 @@ public interface IClickHouseClient : IDisposable
         where T : class;
 
     /// <summary>
-    /// Registers a POCO type for read materialization only.
-    /// Types must be registered before they can be materialized via <see cref="QueryAsync{T}"/>
-    /// or <see cref="ClickHouseDataReader.MapTo{T}"/>.
-    /// The type must have a public parameterless constructor and at least one public instance
-    /// property with a public non-init setter; this is validated at registration time.
-    /// Init-only, read-only, and non-public-setter properties are silently skipped on the read
-    /// path — they will keep their default value even if a result column with a matching name
-    /// is present.
-    /// </summary>
-    /// <typeparam name="T">The POCO type to register.</typeparam>
-    void RegisterPocoReadType<T>()
-        where T : class;
-
-    /// <summary>
-    /// Convenience: registers a POCO type for both binary insert and read materialization.
+    /// Registers a POCO type for both binary insert and read materialization. Types must be
+    /// registered before they can be inserted via <see cref="InsertBinaryAsync{T}"/> or
+    /// materialized via <see cref="QueryAsync{T}"/> / <see cref="ClickHouseDataReader.MapTo{T}"/>.
     /// Both mappings are validated up front; if either validation throws, neither mapping is
     /// committed and the registry is left untouched.
     /// On the read side, init-only, read-only, and non-public-setter properties are silently
@@ -204,8 +191,8 @@ public interface IClickHouseClient : IDisposable
     /// The reader is opened, rows are streamed lazily, and the reader is disposed when
     /// enumeration completes, faults, or is stopped early.
     /// </summary>
-    /// <typeparam name="T">The registered POCO type. Must have been registered for read via
-    /// <see cref="RegisterPocoReadType{T}"/> or <see cref="RegisterPocoType{T}"/> first.</typeparam>
+    /// <typeparam name="T">The registered POCO type. Must have been registered via
+    /// <see cref="RegisterPocoType{T}"/> first.</typeparam>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="parameters">Optional parameters for the query.</param>
     /// <param name="options">Optional query options to override client defaults.</param>

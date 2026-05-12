@@ -138,11 +138,11 @@ public class PocoEdgeCaseTests
     }
 
     [Test]
-    public void RegisterPocoReadType_PositionalRecord_ThrowsInvalidOperation()
+    public void RegisterPocoType_PositionalRecord_ThrowsInvalidOperation()
     {
         // Read registration requires a public parameterless ctor — positional records lack one.
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            client.RegisterPocoReadType<PositionalRecord>());
+            client.RegisterPocoType<PositionalRecord>());
 
         Assert.That(ex.Message, Does.Contain("parameterless constructor"));
     }
@@ -155,11 +155,11 @@ public class PocoEdgeCaseTests
     }
 
     [Test]
-    public void RegisterPocoReadType_RecordWithInitProperties_ThrowsBecauseNoMappedProperties()
+    public void RegisterPocoType_RecordWithInitProperties_ThrowsBecauseNoMappedProperties()
     {
         // All properties are init-only, so no public non-init setter exists for the read path.
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            client.RegisterPocoReadType<RecordWithInitProperties>());
+            client.RegisterPocoType<RecordWithInitProperties>());
 
         Assert.That(ex.Message, Does.Contain("RecordWithInitProperties"));
         Assert.That(ex.Message, Does.Contain("no public properties"));
@@ -174,10 +174,10 @@ public class PocoEdgeCaseTests
     }
 
     [Test]
-    public void RegisterPocoReadType_AllInitOnlyProperties_ThrowsBecauseNoMappedProperties()
+    public void RegisterPocoType_AllInitOnlyProperties_ThrowsBecauseNoMappedProperties()
     {
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            client.RegisterPocoReadType<InitOnlyOnly>());
+            client.RegisterPocoType<InitOnlyOnly>());
 
         Assert.That(ex.Message, Does.Contain("InitOnlyOnly"));
     }
@@ -190,17 +190,17 @@ public class PocoEdgeCaseTests
     }
 
     [Test]
-    public void RegisterPocoReadType_PrivateSetter_IgnoresPropertyButRegistersOthers()
+    public void RegisterPocoType_PrivateSetter_IgnoresPropertyButRegistersOthers()
     {
         // Id has a private setter and is excluded from the read path; Name is mapped.
-        Assert.DoesNotThrow(() => client.RegisterPocoReadType<PrivateSetterPoco>());
+        Assert.DoesNotThrow(() => client.RegisterPocoType<PrivateSetterPoco>());
     }
 
     [Test]
-    public void RegisterPocoReadType_AllPrivateSetters_ThrowsBecauseNoMappedProperties()
+    public void RegisterPocoType_AllPrivateSetters_ThrowsBecauseNoMappedProperties()
     {
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            client.RegisterPocoReadType<AllPrivateSettersPoco>());
+            client.RegisterPocoType<AllPrivateSettersPoco>());
 
         Assert.That(ex.Message, Does.Contain("AllPrivateSettersPoco"));
     }
@@ -213,10 +213,10 @@ public class PocoEdgeCaseTests
     }
 
     [Test]
-    public void RegisterPocoReadType_AllReadOnlyProperties_ThrowsBecauseNoMappedProperties()
+    public void RegisterPocoType_AllReadOnlyProperties_ThrowsBecauseNoMappedProperties()
     {
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            client.RegisterPocoReadType<ReadOnlyOnlyPoco>());
+            client.RegisterPocoType<ReadOnlyOnlyPoco>());
 
         Assert.That(ex.Message, Does.Contain("ReadOnlyOnlyPoco"));
     }
@@ -243,11 +243,11 @@ public class PocoEdgeCaseTests
     }
 
     [Test]
-    public void RegisterPocoReadType_AbstractType_ThrowsInvalidOperation()
+    public void RegisterPocoType_AbstractType_ThrowsInvalidOperation()
     {
         // Abstract classes have no public parameterless constructor — read registration fails.
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            client.RegisterPocoReadType<AbstractPoco>());
+            client.RegisterPocoType<AbstractPoco>());
 
         Assert.That(ex.Message, Does.Contain("parameterless constructor"));
     }
@@ -345,41 +345,6 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
         public int SkippedPrivate { get; private set; }
     }
 
-    // Dedicated type used only by the RegisterPocoReadType happy-path test below so the
-    // "insert mapping must remain null" assertion is not polluted by other tests in the
-    // shared fixture that register their POCOs via RegisterPocoType.
-    public class ReadOnlyRegisteredPoco
-    {
-        public ulong Id { get; set; }
-        public string Label { get; set; }
-    }
-
-    [Test]
-    public async Task RegisterPocoReadType_HappyPath_QueryAsyncMaterializesAndDoesNotRegisterInsert()
-    {
-        client.RegisterPocoReadType<ReadOnlyRegisteredPoco>();
-
-        var rows = new System.Collections.Generic.List<ReadOnlyRegisteredPoco>();
-        await foreach (var row in client.QueryAsync<ReadOnlyRegisteredPoco>(
-            "SELECT toUInt64(number + 1) AS Id, concat('row_', toString(number)) AS Label FROM numbers(3)"))
-        {
-            rows.Add(row);
-        }
-
-        Assert.That(rows, Has.Count.EqualTo(3));
-        Assert.That(rows[0].Id, Is.EqualTo(1UL));
-        Assert.That(rows[0].Label, Is.EqualTo("row_0"));
-        Assert.That(rows[2].Id, Is.EqualTo(3UL));
-        Assert.That(rows[2].Label, Is.EqualTo("row_2"));
-
-        // Pin that read-only registration is exactly that — it must not also register the
-        // type for binary insert.
-        Assert.That(
-            client.PocoRegistry.GetInsertMapping<ReadOnlyRegisteredPoco>(),
-            Is.Null,
-            "RegisterPocoReadType<T> must not register the type for insert.");
-    }
-
     [Test]
     public async Task MapTo_InitReadOnlyAndPrivateSetterProperties_AreSkipped()
     {
@@ -387,7 +352,7 @@ public class PocoReadEdgeCaseTests : AbstractConnectionTestFixture
         // mapping. This integration test pins the runtime guarantee: even when the result
         // contains columns whose names match the skipped properties, those properties stay at
         // their CLR default after MapTo<T> — only the public non-init-setter property is filled.
-        client.RegisterPocoReadType<MixedAccessorReadPoco>();
+        client.RegisterPocoType<MixedAccessorReadPoco>();
 
         using var reader = await client.ExecuteReaderAsync(
             "SELECT toInt32(7) AS Id, 'a' AS SkippedInit, 'b' AS SkippedReadOnly, toInt32(99) AS SkippedPrivate");

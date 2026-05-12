@@ -35,7 +35,7 @@ public class PocoReadBenchmark
         var connectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION")
             ?? "Host=localhost";
         client = new ClickHouseClient(connectionString);
-        client.RegisterPocoReadType<SensorReading>();
+        client.RegisterPocoType<SensorReading>();
     }
 
     [GlobalCleanup]

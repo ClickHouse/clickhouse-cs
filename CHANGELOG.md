@@ -5,7 +5,7 @@ v1.4.0
 * **POCO read materialization**: stream query results directly into your own classes.
     - `ClickHouseClient.QueryAsync<T>(...)` returns `IAsyncEnumerable<T>`; rows are materialized lazily and the underlying reader is disposed when enumeration completes, faults, or stops early.
     - `ClickHouseDataReader.MapTo<T>()` materializes the current row into a registered POCO without advancing the reader.
-    - **Registration**: use `RegisterPocoReadType<T>()` for read-only, or `RegisterPocoType<T>()` for read + insert (a convenience that runs both registrations). `RegisterBinaryInsertType<T>()` is unchanged and remains insert-only.
+    - **Registration**: use `RegisterPocoType<T>()` — it sets up both the insert and read mappings, validating both up front so a thrown exception leaves the registry untouched. `RegisterBinaryInsertType<T>()` is unchanged and remains insert-only for backwards compatibility.
     - **Type requirements**: a public parameterless constructor and at least one public property with a public non-init setter. `required` properties are supported (the compiled constructor uses raw `newobj` and bypasses required-member enforcement).
     - **Column matching** is case-sensitive (`StringComparer.Ordinal`); missing result columns leave properties at their default value, extra result columns are ignored.
     - **No automatic conversions**: type mismatches throw `InvalidOperationException` with the POCO type, property, column, and returned CLR type. Static mismatches fail fast at first `MapTo<T>()` call (or first iteration of `QueryAsync<T>()`) before any rows are materialized.

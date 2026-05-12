@@ -133,17 +133,6 @@ public class PocoRegistrationTests
     }
 
     [Test]
-    public void RegisterPocoReadType_TypeWithoutParameterlessConstructor_ThrowsInvalidOperation()
-    {
-        // Read registration must construct instances during materialization, so a public
-        // parameterless constructor is required.
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            client.RegisterPocoReadType<PocoWithoutParameterlessConstructor>());
-
-        Assert.That(ex.Message, Does.Contain("parameterless constructor"));
-    }
-
-    [Test]
     public void RegisterPocoType_TypeWithoutParameterlessConstructor_ThrowsInvalidOperation()
     {
         // The convenience method registers both insert and read; the read leg fails on the missing ctor.
