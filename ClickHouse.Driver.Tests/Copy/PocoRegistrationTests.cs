@@ -129,6 +129,20 @@ public class PocoRegistrationTests
         public int Id { get; set; }
     }
 
+    // Abstract class with an explicit public parameterless ctor. The ctor itself is callable
+    // from derived classes via base(), so GetConstructor(Type.EmptyTypes) returns it; without
+    // the IsAbstract guard, the read registration would succeed and only fail on first MapTo.
+    private abstract class AbstractPocoWithPublicCtor
+    {
+        public AbstractPocoWithPublicCtor() { }
+        public int Id { get; set; }
+    }
+
+    private interface IPocoInterface
+    {
+        int Id { get; set; }
+    }
+
     private class FieldsOnlyPoco
     {
         public int Id;
@@ -202,7 +216,31 @@ public class PocoRegistrationTests
         var ex = Assert.Throws<InvalidOperationException>(() =>
             client.RegisterPocoType<AbstractPoco>());
 
-        Assert.That(ex.Message, Does.Contain("parameterless constructor"));
+        Assert.That(ex.Message, Does.Contain("abstract"));
+    }
+
+    [Test]
+    public void RegisterPocoType_AbstractTypeWithPublicParameterlessCtor_ThrowsInvalidOperation()
+    {
+        // The ctor lookup alone would not catch this — abstract types can declare a public
+        // parameterless ctor that is only callable via base() from derived classes. The
+        // IsAbstract guard must reject the type at registration time so the failure is not
+        // deferred to the first MapTo<T> call.
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<AbstractPocoWithPublicCtor>());
+
+        Assert.That(ex.Message, Does.Contain("abstract"));
+    }
+
+    [Test]
+    public void RegisterPocoType_Interface_ThrowsInvalidOperation()
+    {
+        // Interfaces satisfy the `where T : class` constraint but cannot be instantiated.
+        // The IsAbstract check covers them (Type.IsAbstract is true for interfaces).
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            client.RegisterPocoType<IPocoInterface>());
+
+        Assert.That(ex.Message, Does.Contain("abstract"));
     }
 
     [Test]

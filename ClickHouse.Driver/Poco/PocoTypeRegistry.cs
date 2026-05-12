@@ -112,6 +112,16 @@ internal sealed class PocoTypeRegistry
     {
         var type = typeof(T);
 
+        // IsAbstract is true for both abstract classes and interfaces. A public parameterless
+        // ctor on an abstract class is still uninstantiable at runtime (Expression.New would
+        // succeed at registration but the compiled delegate would throw at first invocation),
+        // so we reject these up front instead of leaving a registration that explodes on use.
+        if (type.IsAbstract)
+        {
+            throw new InvalidOperationException(
+                $"Failed to register type '{type.Name}' for POCO read: abstract classes and interfaces cannot be instantiated.");
+        }
+
         var ctor = type.GetConstructor(Type.EmptyTypes);
         if (ctor == null)
         {
