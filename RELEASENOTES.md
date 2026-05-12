@@ -2,12 +2,13 @@ v1.4.0
 ---
 
 **New Features:**
-* **POCO read materialization**: stream query results directly into your own classes.
-    - Register types with `RegisterPocoType<T>()` (sets up both insert and read mappings). `RegisterBinaryInsertType<T>()` is unchanged and remains insert-only for backwards compatibility.
-    - Stream rows via `client.QueryAsync<T>(sql)` (returns `IAsyncEnumerable<T>`), or materialize the current row of a `ClickHouseDataReader` with `reader.MapTo<T>()`.
-    - Column matching is case-sensitive; missing columns default and extra columns are ignored. `[ClickHouseColumn(Name = "...")]` and `[ClickHouseNotMapped]` are honored on the read path the same way as on the existing `InsertBinaryAsync<T>` write path.
-    - No automatic conversions in v1: when a column's CLR value is not assignable to the target property, an `InvalidOperationException` is thrown that names the type, property, column, and returned value type.
-
+* **POCO reads**: stream query results directly into your own classes.
+    - `ClickHouseClient.QueryAsync<T>(...)` returns `IAsyncEnumerable<T>`; rows are materialized lazily and the underlying reader is disposed when enumeration completes, faults, or stops early.
+    - `ClickHouseDataReader.MapTo<T>()` materializes the current row into a registered POCO without advancing the reader.
+    - **Registration**: use `RegisterPocoType<T>()`, it sets up both the insert and read mappings, validating both up front. `RegisterBinaryInsertType<T>()` is unchanged and remains insert-only for backwards compatibility.
+    - **Type requirements**: a public parameterless constructor and at least one public property with a public non-init setter. `required` properties are supported.
+    - **Column matching** is case-sensitive (`StringComparer.Ordinal`); missing result columns leave properties at their default value, extra result columns are ignored.
+    - **No automatic conversions**: type mismatches throw `InvalidOperationException` with the POCO type, property, column, and returned CLR type. Static mismatches fail fast at first `MapTo<T>()` call (or first iteration of `QueryAsync<T>()`) before any rows are materialized.
 v1.3.0
 ---
 
