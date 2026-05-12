@@ -302,7 +302,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// <summary>
     /// Fail-fast static check at plan build: if a column's declared <see cref="ClickHouseType.FrameworkType"/>
     /// is not assignable to the target property's CLR type (or its nullable underlying type), throw before
-    /// any rows are read so users see the diagnostic up front.
+    /// any rows are materialized into POCOs so users see the diagnostic up front.
     /// Polymorphic columns (FrameworkType=object — e.g. Variant/Dynamic/JSON/Object) skip the static check;
     /// their actual per-row CLR type can vary, so any mismatch surfaces via the per-row catch in MapTo{T}.
     /// </summary>
