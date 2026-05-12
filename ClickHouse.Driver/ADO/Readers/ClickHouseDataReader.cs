@@ -38,14 +38,17 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
         this.exceptionTagStream = exceptionTagStream;
-        this.pocoRegistry = pocoRegistry ?? throw new ArgumentNullException(nameof(pocoRegistry));
+        // pocoRegistry may be null when the reader is used purely for ADO.NET-style access
+        // (GetValue / typed accessors) — MapTo<T> guards against null and surfaces the standard
+        // "not registered" error.
+        this.pocoRegistry = pocoRegistry;
         RawTypes = types;
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
     }
 
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
-        => FromHttpResponseAsync(httpResponse, settings, new PocoTypeRegistry());
+        => FromHttpResponseAsync(httpResponse, settings, pocoRegistry: null);
 
     internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, PocoTypeRegistry pocoRegistry)
     {
@@ -237,7 +240,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                 "MapTo<T> requires a current row. Call Read() and verify it returned true before calling MapTo<T>.");
         }
 
-        var mapping = pocoRegistry.GetReadMapping<T>()
+        var mapping = pocoRegistry?.GetReadMapping<T>()
             ?? throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' is not registered for POCO read. " +
                 $"Call RegisterPocoType<{typeof(T).Name}>() on the client or connection first.");
