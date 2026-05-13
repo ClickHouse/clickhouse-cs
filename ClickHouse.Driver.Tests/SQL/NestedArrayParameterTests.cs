@@ -787,6 +787,7 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
     public async Task GetFieldValueMultidim_RaggedServerData_ThrowsInvalidOperationException()
     {
         // Server returns a ragged value; the caller asked for rectangular materialisation.
+        // Shape-validation failure (data, not type) -> InvalidOperationException.
         var raggedInput = new int[][] { new[] { 1, 2, 3 }, new[] { 4 } };
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT {p:Array(Array(Int32))} as result";
@@ -797,6 +798,31 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
         var ex = Assert.Throws<InvalidOperationException>(
             () => reader.GetFieldValue<int[,]>(0));
         Assert.That(ex!.Message, Does.Contain("rectangular"));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_NullColumn_ThrowsInvalidCastExceptionPerDbDataReaderContract()
+    {
+        // Type-mismatch case (null where T[,] expected) must match DbDataReader contract: InvalidCastException,
+        // not InvalidOperationException. Mirrors how other typed getters like GetDateTime behave.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT CAST(NULL AS Nullable(Int32)) as result";
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        Assert.Throws<InvalidCastException>(() => reader.GetFieldValue<int[,]>(0));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_ScalarColumn_ThrowsInvalidCastExceptionPerDbDataReaderContract()
+    {
+        // A scalar (non-list) value asked for as T[,] is a type mismatch, not a shape problem.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 42 as result";
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        Assert.Throws<InvalidCastException>(() => reader.GetFieldValue<int[,]>(0));
     }
 
     [Test]

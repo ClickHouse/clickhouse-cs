@@ -79,7 +79,7 @@ internal static class MultiDimArrayHelper
 
         var result = Array.CreateInstance(elementType, dims);
         var indices = new int[rank];
-        CopyJaggedToMultidim(jagged, result, indices, depth: 0, rank: rank, elementType);
+        CopyJaggedToMultidim(jagged, result, indices, depth: 0, rank: rank);
         return (T)(object)result;
     }
 
@@ -135,7 +135,7 @@ internal static class MultiDimArrayHelper
         }
     }
 
-    private static void CopyJaggedToMultidim(object level, Array dst, int[] indices, int depth, int rank, Type elementType)
+    private static void CopyJaggedToMultidim(object level, Array dst, int[] indices, int depth, int rank)
     {
         var list = (IList)level;
         if (depth + 1 == rank)
@@ -151,7 +151,7 @@ internal static class MultiDimArrayHelper
         for (var i = 0; i < list.Count; i++)
         {
             indices[depth] = i;
-            CopyJaggedToMultidim(list[i]!, dst, indices, depth + 1, rank, elementType);
+            CopyJaggedToMultidim(list[i]!, dst, indices, depth + 1, rank);
         }
     }
 

@@ -185,15 +185,30 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// <summary>
     /// Returns the value of the specified column typed as <typeparamref name="T"/>.
     /// For rectangular multidimensional CLR array types (<c>T[,]</c>, <c>T[,,]</c>, …) the
-    /// jagged ClickHouse value is materialised in place; every row at every depth must have the
-    /// same length, otherwise an <see cref="InvalidOperationException"/> is thrown. For every
-    /// other <typeparamref name="T"/> this is a plain cast.
+    /// jagged ClickHouse value is materialised in place. Type mismatches (null, DBNull, or a
+    /// value that isn't a jagged collection) throw <see cref="InvalidCastException"/> to match
+    /// the ADO.NET <see cref="DbDataReader.GetFieldValue{T}"/> contract; shape-validation
+    /// failures (the value is jagged but not rectangular) throw
+    /// <see cref="InvalidOperationException"/>. For every other <typeparamref name="T"/> this is
+    /// a plain cast and follows the standard ADO.NET behaviour.
     /// </summary>
     public override T GetFieldValue<T>(int ordinal)
     {
         var raw = GetValue(ordinal);
         if (FieldValueDispatcher<T>.RequiresMultidimConversion)
+        {
+            // Pre-check the type-mismatch cases the helper would otherwise report as
+            // InvalidOperationException, and rethrow them as InvalidCastException so this
+            // override honours the DbDataReader.GetFieldValue<T> contract. The helper still
+            // owns shape-validation failures (ragged data, null intermediate rows).
+            if (raw is null || raw is DBNull || raw is not IList)
+            {
+                throw new InvalidCastException(
+                    $"Column [{ordinal}] value '{raw?.GetType().FullName ?? "null"}' " +
+                    $"cannot be converted to '{typeof(T)}'.");
+            }
             return MultiDimArrayHelper.ToMultidimensional<T>(raw);
+        }
         return (T)raw;
     }
 
