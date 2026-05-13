@@ -92,4 +92,151 @@ public class MultiDimArrayHelperTests
         Assert.That(slice[0], Is.EqualTo("x"));
         Assert.That(slice[1], Is.Null);
     }
+
+    // ----- ToMultidimensional<T> -----
+
+    [Test]
+    public void ToMultidimensional_Rank2RectangularJaggedInt_ReturnsMatchingMultidim()
+    {
+        var jagged = new int[][] { new[] { 1, 2, 3 }, new[] { 4, 5, 6 } };
+        var result = MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged);
+        Assert.That(result.Rank, Is.EqualTo(2));
+        Assert.That(result.GetLength(0), Is.EqualTo(2));
+        Assert.That(result.GetLength(1), Is.EqualTo(3));
+        Assert.That(result[0, 0], Is.EqualTo(1));
+        Assert.That(result[0, 2], Is.EqualTo(3));
+        Assert.That(result[1, 1], Is.EqualTo(5));
+        Assert.That(result[1, 2], Is.EqualTo(6));
+    }
+
+    [Test]
+    public void ToMultidimensional_Rank2SingleRow_ReturnsRank2WithOneOuter()
+    {
+        var jagged = new int[][] { new[] { 7, 8, 9 } };
+        var result = MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged);
+        Assert.That(result.GetLength(0), Is.EqualTo(1));
+        Assert.That(result.GetLength(1), Is.EqualTo(3));
+        Assert.That(result[0, 2], Is.EqualTo(9));
+    }
+
+    [Test]
+    public void ToMultidimensional_Rank2EmptyOuter_ReturnsZeroSizedRank2()
+    {
+        var jagged = Array.Empty<int[]>();
+        var result = MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged);
+        Assert.That(result.GetLength(0), Is.EqualTo(0));
+        Assert.That(result.GetLength(1), Is.EqualTo(0));
+        Assert.That(result.Length, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void ToMultidimensional_Rank2AllEmptyInner_ReturnsRectangularZeroInner()
+    {
+        var jagged = new int[][] { new int[0], new int[0], new int[0] };
+        var result = MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged);
+        Assert.That(result.GetLength(0), Is.EqualTo(3));
+        Assert.That(result.GetLength(1), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void ToMultidimensional_Rank3RectangularJagged_ReturnsMatchingMultidim()
+    {
+        var jagged = new int[][][]
+        {
+            new int[][] { new[] { 1, 2 }, new[] { 3, 4 } },
+            new int[][] { new[] { 5, 6 }, new[] { 7, 8 } },
+        };
+        var result = MultiDimArrayHelper.ToMultidimensional<int[,,]>(jagged);
+        Assert.That(result.GetLength(0), Is.EqualTo(2));
+        Assert.That(result.GetLength(1), Is.EqualTo(2));
+        Assert.That(result.GetLength(2), Is.EqualTo(2));
+        Assert.That(result[0, 0, 0], Is.EqualTo(1));
+        Assert.That(result[0, 1, 1], Is.EqualTo(4));
+        Assert.That(result[1, 0, 0], Is.EqualTo(5));
+        Assert.That(result[1, 1, 1], Is.EqualTo(8));
+    }
+
+    [Test]
+    public void ToMultidimensional_StringElementType_ReturnsRank2OfString()
+    {
+        var jagged = new string[][] { new[] { "a", "b" }, new[] { "c", "d" } };
+        var result = MultiDimArrayHelper.ToMultidimensional<string[,]>(jagged);
+        Assert.That(result[0, 0], Is.EqualTo("a"));
+        Assert.That(result[1, 1], Is.EqualTo("d"));
+    }
+
+    [Test]
+    public void ToMultidimensional_NullableElementType_PreservesNullElements()
+    {
+        var jagged = new int?[][] { new int?[] { 1, null }, new int?[] { null, 4 } };
+        var result = MultiDimArrayHelper.ToMultidimensional<int?[,]>(jagged);
+        Assert.That(result[0, 0], Is.EqualTo(1));
+        Assert.That(result[0, 1], Is.Null);
+        Assert.That(result[1, 0], Is.Null);
+        Assert.That(result[1, 1], Is.EqualTo(4));
+    }
+
+    [Test]
+    public void ToMultidimensional_RaggedRowLengths_ThrowsInvalidOperationException()
+    {
+        var jagged = new int[][] { new[] { 1, 2, 3 }, new[] { 4, 5 } };
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged));
+        Assert.That(ex!.Message, Does.Contain("rectangular"));
+        Assert.That(ex.Message, Does.Contain("length"));
+    }
+
+    [Test]
+    public void ToMultidimensional_NullInnerRow_ThrowsInvalidOperationException()
+    {
+        var jagged = new int[][] { new[] { 1, 2 }, null };
+        Assert.Throws<InvalidOperationException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged));
+    }
+
+    [Test]
+    public void ToMultidimensional_NullValue_ThrowsInvalidOperationException()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,]>(null!));
+    }
+
+    [Test]
+    public void ToMultidimensional_Rank1Target_ThrowsArgumentException()
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[]>(new int[] { 1, 2, 3 }));
+        Assert.That(ex!.Message, Does.Contain("rank >= 2"));
+    }
+
+    [Test]
+    public void ToMultidimensional_NonArrayTarget_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(
+            () => MultiDimArrayHelper.ToMultidimensional<string>("not an array"));
+    }
+
+    [Test]
+    public void ToMultidimensional_Rank3RaggedAtMiddleDepth_ThrowsInvalidOperationException()
+    {
+        var jagged = new int[][][]
+        {
+            new int[][] { new[] { 1, 2 }, new[] { 3, 4 } },
+            new int[][] { new[] { 5, 6 } }, // outer row 2 has 1 sub-row instead of 2
+        };
+        Assert.Throws<InvalidOperationException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,,]>(jagged));
+    }
+
+    [Test]
+    public void ToMultidimensional_RoundTripWithEnumerateOutermostRank_ReturnsOriginalValues()
+    {
+        // Round-trip: multidim → outermost-rank slices → jagged-shaped List → multidim again.
+        var original = new int[2, 3] { { 1, 2, 3 }, { 4, 5, 6 } };
+        var jagged = MultiDimArrayHelper.EnumerateOutermostRank(original)
+            .Cast<int[]>()
+            .ToArray();
+        var result = MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged);
+        Assert.That(result, Is.EqualTo(original));
+    }
 }

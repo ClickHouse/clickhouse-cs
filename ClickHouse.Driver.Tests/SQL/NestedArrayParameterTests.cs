@@ -700,6 +700,141 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
         }
     }
 
+    // ----- GetFieldValue<T> with multidim T (materialises jagged result as rectangular) -----
+
+    [Test]
+    public async Task GetFieldValueMultidim_Rank2RectangularByteArray_MaterialisesAsMultidim()
+    {
+        var input = new byte[][] { new byte[] { 1, 2, 3 }, new byte[] { 4, 5, 6 } };
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {p:Array(Array(UInt8))} as result";
+        command.AddParameter("p", input);
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var result = reader.GetFieldValue<byte[,]>(0);
+        Assert.That(result.Rank, Is.EqualTo(2));
+        Assert.That(result.GetLength(0), Is.EqualTo(2));
+        Assert.That(result.GetLength(1), Is.EqualTo(3));
+        Assert.That(result[0, 0], Is.EqualTo(1));
+        Assert.That(result[0, 2], Is.EqualTo(3));
+        Assert.That(result[1, 1], Is.EqualTo(5));
+        Assert.That(result[1, 2], Is.EqualTo(6));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_RoundTripMultidimInsertReadAsMultidim_PreservesShape()
+    {
+        // Insert as multidim, read back as multidim — both ends are T[,].
+        var inserted = new int[2, 3] { { 10, 20, 30 }, { 40, 50, 60 } };
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {p:Array(Array(Int32))} as result";
+        command.AddParameter("p", inserted);
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var result = reader.GetFieldValue<int[,]>(0);
+        Assert.That(result, Is.EqualTo(inserted));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_Rank3RectangularInt32_MaterialisesAsRank3()
+    {
+        var input = new int[2, 2, 2] { { { 1, 2 }, { 3, 4 } }, { { 5, 6 }, { 7, 8 } } };
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {p:Array(Array(Array(Int32)))} as result";
+        command.AddParameter("p", input);
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var result = reader.GetFieldValue<int[,,]>(0);
+        Assert.That(result, Is.EqualTo(input));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_StringElementType_MaterialisesAsRank2OfString()
+    {
+        var input = new string[2, 2] { { "a", "b" }, { "c", "d" } };
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {p:Array(Array(String))} as result";
+        command.AddParameter("p", input);
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var result = reader.GetFieldValue<string[,]>(0);
+        Assert.That(result, Is.EqualTo(input));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_NullableInner_PreservesNullsAndShape()
+    {
+        var input = new int?[][] { new int?[] { 1, null, 3 }, new int?[] { null, 5, 6 } };
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {p:Array(Array(Nullable(Int32)))} as result";
+        command.AddParameter("p", input);
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var result = reader.GetFieldValue<int?[,]>(0);
+        Assert.That(result.GetLength(0), Is.EqualTo(2));
+        Assert.That(result.GetLength(1), Is.EqualTo(3));
+        Assert.That(result[0, 1], Is.Null);
+        Assert.That(result[1, 0], Is.Null);
+        Assert.That(result[1, 2], Is.EqualTo(6));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_RaggedServerData_ThrowsInvalidOperationException()
+    {
+        // Server returns a ragged value; the caller asked for rectangular materialisation.
+        var raggedInput = new int[][] { new[] { 1, 2, 3 }, new[] { 4 } };
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {p:Array(Array(Int32))} as result";
+        command.AddParameter("p", raggedInput);
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => reader.GetFieldValue<int[,]>(0));
+        Assert.That(ex!.Message, Does.Contain("rectangular"));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_EmptyOuter_ReturnsEmptyRectangular()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {p:Array(Array(Int32))} as result";
+        command.AddParameter("p", Array.Empty<int[]>());
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var result = reader.GetFieldValue<int[,]>(0);
+        Assert.That(result.GetLength(0), Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_InsertedAsMultidimReadAsMultidim_FullRoundTrip()
+    {
+        // The headline use case: schema is rectangular by construction, so both ends use T[,].
+        const string table = "test.nested_multidim_roundtrip";
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
+        await connection.ExecuteStatementAsync(
+            $"CREATE TABLE {table} (id Int32, m Array(Array(UInt8))) ENGINE Memory");
+
+        var multidim = new byte[,] { { 100, 101, 102 }, { 200, 201, 202 } };
+        using (var insert = connection.CreateCommand())
+        {
+            insert.CommandText = $"INSERT INTO {table} VALUES (0, {{m:Array(Array(UInt8))}})";
+            insert.AddParameter("m", multidim);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT m FROM {table}");
+        Assert.That(reader.Read(), Is.True);
+        var result = reader.GetFieldValue<byte[,]>(0);
+        Assert.That(result, Is.EqualTo(multidim));
+    }
+
     // ----- Negative tests -----
 
     [Test]

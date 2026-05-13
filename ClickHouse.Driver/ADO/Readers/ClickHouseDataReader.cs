@@ -182,7 +182,33 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override void Close() => Dispose();
 
-    public override T GetFieldValue<T>(int ordinal) => (T)GetValue(ordinal);
+    /// <summary>
+    /// Returns the value of the specified column typed as <typeparamref name="T"/>.
+    /// For rectangular multidimensional CLR array types (<c>T[,]</c>, <c>T[,,]</c>, …) the
+    /// jagged ClickHouse value is materialised in place; every row at every depth must have the
+    /// same length, otherwise an <see cref="InvalidOperationException"/> is thrown. For every
+    /// other <typeparamref name="T"/> this is a plain cast.
+    /// </summary>
+    public override T GetFieldValue<T>(int ordinal)
+    {
+        var raw = GetValue(ordinal);
+        if (FieldValueDispatcher<T>.RequiresMultidimConversion)
+            return MultiDimArrayHelper.ToMultidimensional<T>(raw);
+        return (T)raw;
+    }
+
+    /// <summary>
+    /// Per-<typeparamref name="T"/> cached predicate driving <see cref="GetFieldValue{T}"/>'s
+    /// dispatch. The .NET runtime instantiates this generic exactly once per closed
+    /// <typeparamref name="T"/>, so the <c>typeof</c> + <c>IsArray</c> + <c>GetArrayRank</c>
+    /// work runs once on first use; thereafter the hot path is a single static <see cref="bool"/>
+    /// load and branch.
+    /// </summary>
+    private static class FieldValueDispatcher<T>
+    {
+        public static readonly bool RequiresMultidimConversion =
+            typeof(T).IsArray && typeof(T).GetArrayRank() >= 2;
+    }
 
     public override DataTable GetSchemaTable() => SchemaDescriber.DescribeSchema(this);
 
