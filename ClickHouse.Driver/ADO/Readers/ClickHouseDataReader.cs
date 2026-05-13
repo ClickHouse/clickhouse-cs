@@ -205,7 +205,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             {
                 throw new InvalidCastException(
                     $"Column [{ordinal}] value '{raw?.GetType().FullName ?? "null"}' " +
-                    $"cannot be converted to '{typeof(T)}'.");
+                    $"cannot be converted to '{typeof(T)}'. " +
+                    $"Use a jagged target type (e.g. T[][]) for ragged data.");
             }
             return MultiDimArrayHelper.ToMultidimensional<T>(raw);
         }

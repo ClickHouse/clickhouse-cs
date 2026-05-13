@@ -88,7 +88,8 @@ internal static class MultiDimArrayHelper
         if (level is null)
         {
             throw new InvalidOperationException(
-                $"Cannot materialise a rectangular array: null encountered at depth {depth}.");
+                $"Cannot materialise a rectangular array: null encountered at depth {depth}. " +
+                $"Use a jagged target type (e.g. T[][]) to allow null intermediate rows.");
         }
 
         if (level is not IList list)
@@ -106,12 +107,22 @@ internal static class MultiDimArrayHelper
         {
             throw new InvalidOperationException(
                 $"Cannot materialise a rectangular array: row at depth {depth} has length {length}, " +
-                $"expected {dims[depth]} to match sibling rows.");
+                $"expected {dims[depth]} to match sibling rows. " +
+                $"Use a jagged target type (e.g. T[][]) for ragged data.");
         }
 
         if (depth + 1 == rank)
         {
-            // Innermost row reached; its elements are scalars, no further descent needed.
+            // Innermost row reached; its elements must be scalars. If they're lists, the source
+            // value is deeper than the target rank — fail with a clear message instead of letting
+            // CopyJaggedToMultidim throw an opaque ArgumentException from Array.SetValue.
+            if (length > 0 && list[0] is IList)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot materialise a rectangular array: source is deeper than the target rank " +
+                    $"(target rank {rank}, source has a nested list at depth {depth + 1}). " +
+                    $"Use a jagged target type (e.g. T[][]) for deeper sources.");
+            }
             return;
         }
 
@@ -128,7 +139,8 @@ internal static class MultiDimArrayHelper
                 else
                 {
                     throw new InvalidOperationException(
-                        $"Cannot materialise a rectangular array: expected a nested list at depth {depth + 1}, got '{child?.GetType()?.ToString() ?? "null"}'.");
+                        $"Cannot materialise a rectangular array: expected a nested list at depth {depth + 1}, got '{child?.GetType()?.ToString() ?? "null"}'. " +
+                        $"Use a jagged target type (e.g. T[][]) for ragged data.");
                 }
             }
             MeasureRectangular(child!, dims, depth + 1, rank);

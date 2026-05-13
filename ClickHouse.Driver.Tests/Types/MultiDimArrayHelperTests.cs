@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using ClickHouse.Driver.Types;
 using NUnit.Framework;
@@ -184,14 +185,16 @@ public class MultiDimArrayHelperTests
             () => MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged));
         Assert.That(ex!.Message, Does.Contain("rectangular"));
         Assert.That(ex.Message, Does.Contain("length"));
+        Assert.That(ex.Message, Does.Contain("T[][]"));
     }
 
     [Test]
     public void ToMultidimensional_NullInnerRow_ThrowsInvalidOperationException()
     {
         var jagged = new int[][] { new[] { 1, 2 }, null };
-        Assert.Throws<InvalidOperationException>(
+        var ex = Assert.Throws<InvalidOperationException>(
             () => MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged));
+        Assert.That(ex!.Message, Does.Contain("T[][]"));
     }
 
     [Test]
@@ -224,8 +227,26 @@ public class MultiDimArrayHelperTests
             new int[][] { new[] { 1, 2 }, new[] { 3, 4 } },
             new int[][] { new[] { 5, 6 } }, // outer row 2 has 1 sub-row instead of 2
         };
-        Assert.Throws<InvalidOperationException>(
+        var ex = Assert.Throws<InvalidOperationException>(
             () => MultiDimArrayHelper.ToMultidimensional<int[,,]>(jagged));
+        Assert.That(ex!.Message, Does.Contain("T[][]"));
+    }
+
+    [Test]
+    public void ToMultidimensional_SourceDeeperThanTarget_ThrowsInvalidOperationException()
+    {
+        // Rank-3 source, rank-2 target — measurement must catch this rather than letting
+        // CopyJaggedToMultidim throw an opaque ArgumentException from Array.SetValue.
+        var deep = new List<List<List<int>>>
+        {
+            new() { new() { 1, 2 }, new() { 3, 4 } },
+            new() { new() { 5, 6 }, new() { 7, 8 } },
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,]>(deep));
+        Assert.That(ex!.Message, Does.Contain("deeper than the target rank"));
+        Assert.That(ex.Message, Does.Contain("T[][]"));
     }
 
     [Test]
