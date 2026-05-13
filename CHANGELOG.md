@@ -8,6 +8,8 @@ v1.3.0
 
 **Improvements:**
 * HTTP parameter mismatch errors now include the parameter name and the full ClickHouse type. The previous message (`"Cannot convert 219 to Array(UInt8)"`) collapsed the outer type and omitted which parameter failed, making nested-array problems hard to diagnose.
+* `GetFieldValue<T>` and the multidim array materialiser now point users at jagged target types (e.g. `T[][]`) when they fail on ragged data, null intermediate rows, or rank-mismatched columns, so the path to a working alternative is in the exception message itself.
+* `GetFieldValue<int[,]>()` against an `Array(Array(Array(Int32)))` (source deeper than the target rank) now throws a clear `InvalidOperationException` from shape validation instead of an opaque `ArgumentException` from `Array.SetValue`.
 
 **Bug Fixes:**
 * Fixed type inference for `System.Tuple` with more than 7 elements. The TRest nesting was not being flattened, causing the 8th+ elements to be inferred as nested tuple types instead of their actual flat types. This could lead to incorrect ClickHouse type inference and serialization errors.

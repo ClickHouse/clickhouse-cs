@@ -140,7 +140,12 @@ internal static class HttpParameterFormatter
             case NullableType nt:
                 return value is null || value is DBNull ? quote ? "null" : NullValueString : Format(nt.UnderlyingType, value, quote, customFormatter, parameterName);
 
-            // Multidim must beat IEnumerable: a rank>1 CLR Array iterates flattened, not row-by-row.
+            // DO NOT REORDER: this arm must precede the `IEnumerable` arm below.
+            // A rank>1 CLR Array implements IEnumerable/IList by iterating flattened
+            // (e.g. byte[,] yields scalars, not rows), so the IEnumerable arm would
+            // serialise [[1,2],[3,4]] as [1,2,3,4]. Slice along the outermost rank
+            // via MultiDimArrayHelper.EnumerateOutermostRank before delegating to
+            // the inner type's formatter.
             case ArrayType arrayType when value is Array multidim && multidim.Rank > 1:
                 return $"[{string.Join(",", MultiDimArrayHelper.EnumerateOutermostRank(multidim).Select(obj => Format(arrayType.UnderlyingType, obj, true, customFormatter, parameterName)))}]";
 

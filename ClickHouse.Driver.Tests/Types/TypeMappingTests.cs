@@ -283,6 +283,14 @@ public class TypeMappingTests
         yield return new TestCaseData(
             (object)new int[][] { new int[0], new[] { 1 } },
             "Array(Array(Int32))").Returns("[[],[1]]");
+        // Multidim with zero outer dim — EnumerateOutermostRank yields nothing
+        yield return new TestCaseData(
+            (object)new int[0, 5],
+            "Array(Array(Int32))").Returns("[]");
+        // Multidim with zero inner dim — each outer row is an empty slice
+        yield return new TestCaseData(
+            (object)new int[3, 0],
+            "Array(Array(Int32))").Returns("[[],[],[]]");
         // List<List<int>>
         yield return new TestCaseData(
             (object)new List<List<int>> { new() { 1, 2 }, new() { 3 } },
