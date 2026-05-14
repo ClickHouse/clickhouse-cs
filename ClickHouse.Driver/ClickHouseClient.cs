@@ -1023,9 +1023,16 @@ public sealed class ClickHouseClient : IClickHouseClient
             stream.Seek(0, SeekOrigin.Begin);
 
             // Async sending
-            var content = new StreamContent(stream);
-            var batchOptions = insertPlan.Options.WithQueryId($"{insertPlan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
-            await clickHouseClient.PostStreamAsync(null, content, true, batchOptions, token).ConfigureAwait(false);
+            try
+            {
+                var content = new StreamContent(stream);
+                var batchOptions = insertPlan.Options.WithQueryId($"{insertPlan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
+                await clickHouseClient.PostStreamAsync(null, content, true, batchOptions, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                batchData.Clear();
+            }
         }
 
         public interface IBatchData
