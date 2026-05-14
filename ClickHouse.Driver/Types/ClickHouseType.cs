@@ -3,7 +3,7 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal abstract class ClickHouseType
+public abstract class ClickHouseType
 {
     public abstract Type FrameworkType { get; }
 

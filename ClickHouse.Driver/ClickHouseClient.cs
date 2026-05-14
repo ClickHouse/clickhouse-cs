@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -453,6 +454,19 @@ public sealed class ClickHouseClient : IClickHouseClient
         return InsertBinaryPocoAsync(table, rows, properties, mapping.Getters, options, cancellationToken);
     }
 
+    public async Task<BinaryImport> StartInsertAsync(
+        string table,
+        IEnumerable<string> columns,
+        InsertOptions options = default)
+    {
+        if (table is null)
+            throw new InvalidOperationException($"{nameof(table)} is null");
+
+        var plan = await PrepareInsertAsync(table, columns, options).ConfigureAwait(false);
+
+        return new BinaryImport(this, plan);
+    }
+
     /// <summary>
     /// Applies column types from the POCO attribute mapping to the insert options,
     /// allowing the schema probe to be skipped when all properties declare explicit ClickHouse types.
@@ -476,7 +490,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// Resolved insert metadata shared by both the <c>object[]</c> and POCO insert paths.
     /// Produced by <see cref="PrepareInsertAsync"/> after validation and schema resolution.
     /// </summary>
-    private readonly struct InsertPlan
+    internal readonly struct InsertPlan
     {
         /// <summary>The finalized options (defaulted and validated).</summary>
         public InsertOptions Options { get; init; }
@@ -943,5 +957,45 @@ public sealed class ClickHouseClient : IClickHouseClient
         return string.Equals(headerName, "Connection", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(headerName, "Authorization", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(headerName, "User-Agent", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public class BinaryImport
+    {
+        private readonly ClickHouseClient clickHouseClient;
+        private readonly InsertPlan insertPlan;
+
+        private int queryIdCounter;
+
+        internal BinaryImport(
+            ClickHouseClient clickHouseClient,
+            InsertPlan insertPlan)
+        {
+            this.clickHouseClient = clickHouseClient;
+            this.insertPlan = insertPlan;
+        }
+
+        public async Task SendBatchAsync(
+            Action<ExtendedBinaryWriter, ClickHouseType[]> writeBatchAction,
+            CancellationToken token)
+        {
+            using var stream = clickHouseClient.MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
+            using var gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
+            using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
+            {
+                textWriter.WriteLine(insertPlan.Query);
+            }
+
+            using var writer = new ExtendedBinaryWriter(gzipStream);
+            writeBatchAction(writer, insertPlan.ColumnTypes);
+
+            // Seek to beginning as after writing it's at end
+            stream.Seek(0, SeekOrigin.Begin);
+
+            var batchOptions = insertPlan.Options.WithQueryId($"{insertPlan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
+
+            // Async sending
+            var content = new StreamContent(stream);
+            await clickHouseClient.PostStreamAsync(null, content, true, batchOptions, token).ConfigureAwait(false);
+        }
     }
 }

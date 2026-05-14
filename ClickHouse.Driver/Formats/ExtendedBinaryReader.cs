@@ -3,7 +3,7 @@ using System.Text;
 
 namespace ClickHouse.Driver.Formats;
 
-internal class ExtendedBinaryReader : BinaryReader
+public class ExtendedBinaryReader : BinaryReader
 {
     private readonly PeekableStreamWrapper streamWrapper;
 
