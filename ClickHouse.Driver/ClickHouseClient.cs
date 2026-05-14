@@ -1011,6 +1011,8 @@ public sealed class ClickHouseClient : IClickHouseClient
             }
 
             var batchData = new BatchData(stream, gzipStream, writer);
+            batchData.SetColumns(insertPlan.ColumnTypes);
+
             return batchData;
         }
 
@@ -1035,7 +1037,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         public class BatchData : IBatchData, IDisposable
         {
-            private readonly ClickHouseType[] columnTypes;
+            private ClickHouseType[] columnTypes;
 
             private bool disposed;
 
@@ -1056,6 +1058,11 @@ public sealed class ClickHouseClient : IClickHouseClient
             ~BatchData()
             {
                 Dispose(false);
+            }
+
+            internal void SetColumns(ClickHouseType[] columnTypes)
+            {
+                this.columnTypes = columnTypes;
             }
 
             public void WriteData(int columnIndex, object value)
