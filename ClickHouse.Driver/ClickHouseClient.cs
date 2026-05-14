@@ -1018,22 +1018,23 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         public async Task SendBatchAsync(BatchData batchData, CancellationToken token)
         {
-            batchData.CompleteWrite();
-            var stream = batchData.GetStream();
-
-            // Seek to beginning as after writing it's at end
-            stream.Seek(0, SeekOrigin.Begin);
-
-            // Async sending
             try
             {
+                batchData.CompleteWrite();
+                using var stream = batchData.GetStream();
+
+                // Seek to beginning as after writing it's at end
+                stream.Seek(0, SeekOrigin.Begin);
+
                 var content = new StreamContent(stream);
                 var batchOptions = insertPlan.Options.WithQueryId($"{insertPlan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
+
+                // Async sending
                 await clickHouseClient.PostStreamAsync(null, content, true, batchOptions, token).ConfigureAwait(false);
             }
             finally
             {
-                batchData.Clear();
+                batchData.Dispose();
             }
         }
 
@@ -1107,7 +1108,10 @@ public sealed class ClickHouseClient : IClickHouseClient
                     throw new InvalidOperationException($"Call {nameof(CompleteWrite)} before get Stream");
                 }
 
-                return this.stream;
+                var stream = this.stream;
+                this.stream = null;
+
+                return stream;
             }
 
             public void Clear()
