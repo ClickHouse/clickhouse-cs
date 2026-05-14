@@ -961,9 +961,9 @@ public sealed class ClickHouseClient : IClickHouseClient
 
     public class BinaryImport
     {
-        private readonly ClickHouseClient clickHouseClient;
         private readonly InsertPlan insertPlan;
 
+        private ClickHouseClient clickHouseClient;
         private int queryIdCounter;
 
         internal BinaryImport(
@@ -974,28 +974,125 @@ public sealed class ClickHouseClient : IClickHouseClient
             this.insertPlan = insertPlan;
         }
 
-        public async Task SendBatchAsync(
-            Action<ExtendedBinaryWriter, ClickHouseType[]> writeBatchAction,
-            CancellationToken token)
+        public BatchData StartNewBatch()
         {
-            using var stream = clickHouseClient.MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
-            using var gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
-            using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
+            RecyclableMemoryStream stream = null;
+            BufferedStream gzipStream = null;
+            ExtendedBinaryWriter writer = null;
+            try
             {
-                textWriter.WriteLine(insertPlan.Query);
+                stream = clickHouseClient.MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
+                gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
+                using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
+                {
+                    textWriter.WriteLine(insertPlan.Query);
+                }
+
+                writer = new ExtendedBinaryWriter(gzipStream);
+            }
+            catch
+            {
+                if (writer != null)
+                {
+                    writer.Dispose();
+                }
+
+                if (gzipStream != null)
+                {
+                    gzipStream.Dispose();
+                }
+
+                if (stream != null)
+                {
+                    stream.Dispose();
+                }
+
+                throw;
             }
 
-            using var writer = new ExtendedBinaryWriter(gzipStream);
-            writeBatchAction(writer, insertPlan.ColumnTypes);
+            var batchData = new BatchData(stream, gzipStream, writer);
+            return batchData;
+        }
 
+        public async Task SendBatchAsync(IBatchData batchData, CancellationToken token)
+        {
             // Seek to beginning as after writing it's at end
+            var stream = ((BatchData)batchData).GetStream();
             stream.Seek(0, SeekOrigin.Begin);
-
-            var batchOptions = insertPlan.Options.WithQueryId($"{insertPlan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
 
             // Async sending
             var content = new StreamContent(stream);
+            var batchOptions = insertPlan.Options.WithQueryId($"{insertPlan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
             await clickHouseClient.PostStreamAsync(null, content, true, batchOptions, token).ConfigureAwait(false);
+        }
+
+        public interface IBatchData
+        {
+            void WriteData(int columnIndex, object value);
+
+            void Clear();
+        }
+
+        public class BatchData : IBatchData, IDisposable
+        {
+            private readonly ClickHouseType[] columnTypes;
+
+            private bool disposed;
+
+            private RecyclableMemoryStream stream;
+            private BufferedStream gzipStream;
+            private ExtendedBinaryWriter writer;
+
+            public BatchData(
+                RecyclableMemoryStream stream,
+                BufferedStream gzipStream,
+                ExtendedBinaryWriter writer)
+            {
+                this.stream = stream;
+                this.gzipStream = gzipStream;
+                this.writer = writer;
+            }
+
+            ~BatchData()
+            {
+                Dispose(false);
+            }
+
+            public void WriteData(int columnIndex, object value)
+            {
+                columnTypes[columnIndex].Write(this.writer, value);
+            }
+
+            public RecyclableMemoryStream GetStream()
+            {
+                return this.stream;
+            }
+
+            public void Clear()
+            {
+                this.writer?.Dispose();
+                this.writer = null;
+
+                this.gzipStream?.Dispose();
+                this.gzipStream = null;
+
+                this.stream?.Dispose();
+                this.stream = null;
+            }
+
+            public void Dispose()
+            {
+                Dispose(true);
+                GC.SuppressFinalize(this);
+            }
+
+            public void Dispose(bool disposing)
+            {
+                if (disposed) return;
+
+                Clear();
+                disposed = true;
+            }
         }
     }
 }
