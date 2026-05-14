@@ -1010,8 +1010,7 @@ public sealed class ClickHouseClient : IClickHouseClient
                 throw;
             }
 
-            var batchData = new BatchData(stream, gzipStream, writer);
-            batchData.SetColumns(insertPlan.ColumnTypes);
+            var batchData = new BatchData(insertPlan.ColumnTypes, stream, gzipStream, writer);
 
             return batchData;
         }
@@ -1040,7 +1039,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         public sealed class BatchData : IDisposable
         {
-            private ClickHouseType[] columnTypes;
+            private readonly ClickHouseType[] columnTypes;
 
             private bool disposed;
 
@@ -1048,11 +1047,17 @@ public sealed class ClickHouseClient : IClickHouseClient
             private BufferedStream gzipStream;
             private ExtendedBinaryWriter writer;
 
-            public BatchData(
+            private BatchData()
+            {
+            }
+
+            internal BatchData(
+                ClickHouseType[] columnTypes,
                 RecyclableMemoryStream stream,
                 BufferedStream gzipStream,
                 ExtendedBinaryWriter writer)
             {
+                this.columnTypes = columnTypes;
                 this.stream = stream;
                 this.gzipStream = gzipStream;
                 this.writer = writer;
@@ -1091,11 +1096,6 @@ public sealed class ClickHouseClient : IClickHouseClient
                 this.gzipStream = null;
             }
 
-            internal void SetColumns(ClickHouseType[] columnTypes)
-            {
-                this.columnTypes = columnTypes;
-            }
-
             private bool WriteIsComplete()
             {
                 return this.writer == null && this.gzipStream == null;
@@ -1114,18 +1114,6 @@ public sealed class ClickHouseClient : IClickHouseClient
                 return stream;
             }
 
-            public void Clear()
-            {
-                this.writer?.Dispose();
-                this.writer = null;
-
-                this.gzipStream?.Dispose();
-                this.gzipStream = null;
-
-                this.stream?.Dispose();
-                this.stream = null;
-            }
-
             public void Dispose()
             {
                 Dispose(true);
@@ -1136,7 +1124,18 @@ public sealed class ClickHouseClient : IClickHouseClient
             {
                 if (disposed) return;
 
-                Clear();
+                if (disposing)
+                {
+                    this.writer?.Dispose();
+                    this.writer = null;
+
+                    this.gzipStream?.Dispose();
+                    this.gzipStream = null;
+
+                    this.stream?.Dispose();
+                    this.stream = null;
+                }
+
                 disposed = true;
             }
         }
