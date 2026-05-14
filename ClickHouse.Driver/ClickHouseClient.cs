@@ -1019,7 +1019,10 @@ public sealed class ClickHouseClient : IClickHouseClient
         public async Task SendBatchAsync(IBatchData batchData, CancellationToken token)
         {
             // Seek to beginning as after writing it's at end
-            var stream = ((BatchData)batchData).GetStream();
+            var bd = (BatchData)batchData;
+            bd.CompleteWrite();
+
+            var stream = bd.GetStream();
             stream.Seek(0, SeekOrigin.Begin);
 
             // Async sending
@@ -1042,7 +1045,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             void Clear();
         }
 
-        public class BatchData : IBatchData, IDisposable
+        public sealed class BatchData : IBatchData, IDisposable
         {
             private ClickHouseType[] columnTypes;
 
@@ -1067,18 +1070,51 @@ public sealed class ClickHouseClient : IClickHouseClient
                 Dispose(false);
             }
 
+            public void WriteData(int columnIndex, object value)
+            {
+#pragma warning disable CA1513 // Use ObjectDisposedException throw helper
+                if (disposed)
+                {
+                    throw new ObjectDisposedException(nameof(BatchData));
+                }
+#pragma warning restore CA1513 // Use ObjectDisposedException throw helper
+
+                columnTypes[columnIndex].Write(this.writer, value);
+            }
+
+            internal void CompleteWrite()
+            {
+#pragma warning disable CA1513 // Use ObjectDisposedException throw helper
+                if (disposed)
+                {
+                    throw new ObjectDisposedException(nameof(BatchData));
+                }
+#pragma warning restore CA1513 // Use ObjectDisposedException throw helper
+
+                this.writer?.Dispose();
+                this.writer = null;
+
+                this.gzipStream?.Dispose();
+                this.gzipStream = null;
+            }
+
             internal void SetColumns(ClickHouseType[] columnTypes)
             {
                 this.columnTypes = columnTypes;
             }
 
-            public void WriteData(int columnIndex, object value)
+            private bool WriteIsComplete()
             {
-                columnTypes[columnIndex].Write(this.writer, value);
+                return this.writer == null && this.gzipStream == null;
             }
 
-            public RecyclableMemoryStream GetStream()
+            internal RecyclableMemoryStream GetStream()
             {
+                if (!WriteIsComplete())
+                {
+                    throw new InvalidOperationException($"Call {nameof(CompleteWrite)} before get Stream");
+                }
+
                 return this.stream;
             }
 
