@@ -1016,13 +1016,12 @@ public sealed class ClickHouseClient : IClickHouseClient
             return batchData;
         }
 
-        public async Task SendBatchAsync(IBatchData batchData, CancellationToken token)
+        public async Task SendBatchAsync(BatchData batchData, CancellationToken token)
         {
-            // Seek to beginning as after writing it's at end
-            var bd = (BatchData)batchData;
-            bd.CompleteWrite();
+            batchData.CompleteWrite();
+            var stream = batchData.GetStream();
 
-            var stream = bd.GetStream();
+            // Seek to beginning as after writing it's at end
             stream.Seek(0, SeekOrigin.Begin);
 
             // Async sending
@@ -1038,14 +1037,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             }
         }
 
-        public interface IBatchData
-        {
-            void WriteData(int columnIndex, object value);
-
-            void Clear();
-        }
-
-        public sealed class BatchData : IBatchData, IDisposable
+        public sealed class BatchData : IDisposable
         {
             private ClickHouseType[] columnTypes;
 
