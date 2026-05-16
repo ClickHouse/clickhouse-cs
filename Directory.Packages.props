@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
-    <ClickHouseDriverVersion Condition="'$(ClickHouseDriverVersion)' == ''">0.9.0</ClickHouseDriverVersion>
+    <ClickHouseDriverVersion Condition="'$(ClickHouseDriverVersion)' == ''">1.*</ClickHouseDriverVersion>
   </PropertyGroup>
 
   <ItemGroup>
