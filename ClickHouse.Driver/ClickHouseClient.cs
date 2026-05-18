@@ -392,8 +392,8 @@ public sealed class ClickHouseClient : IClickHouseClient
         using (batch) // Dispose object regardless whether sending succeeds
         {
             using var stream = MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
-            // Async serialization
-            await Task.Run(() => serializer.Serialize(batch, stream), token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            serializer.Serialize(batch, stream);
 
             // Seek to beginning as after writing it's at end
             stream.Seek(0, SeekOrigin.Begin);
@@ -594,7 +594,8 @@ public sealed class ClickHouseClient : IClickHouseClient
         using (batch)
         {
             using var stream = MemoryStreamManager.GetStream(nameof(SendPocoBatchAsync), 128 * 1024);
-            await Task.Run(() => serializer.Serialize(batch, getters, stream), token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            serializer.Serialize(batch, getters, stream);
 
             stream.Seek(0, SeekOrigin.Begin);
 
