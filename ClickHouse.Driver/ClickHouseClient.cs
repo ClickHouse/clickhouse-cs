@@ -1068,7 +1068,7 @@ public sealed class ClickHouseClient : IClickHouseClient
                 Dispose(false);
             }
 
-            public void WriteData(int columnIndex, object value)
+            public void WriteData<T>(int columnIndex, T value)
             {
 #pragma warning disable CA1513 // Use ObjectDisposedException throw helper
                 if (disposed)

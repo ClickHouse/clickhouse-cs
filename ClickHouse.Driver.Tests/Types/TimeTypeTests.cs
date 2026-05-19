@@ -150,7 +150,7 @@ public class TimeTypeTests
         using var stream = new MemoryStream();
         using var writer = new ExtendedBinaryWriter(stream);
 
-        Assert.Throws<NotSupportedException>(() => type.Write(writer, null));
+        Assert.Throws<NotSupportedException>(() => type.Write<object>(writer, null));
     }
 
     [Test]

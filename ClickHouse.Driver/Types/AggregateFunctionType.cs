@@ -22,7 +22,7 @@ internal class AggregateFunctionType : ParameterizedType
 
     public override string ToString() => throw new AggregateFunctionException(Function);
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => throw new AggregateFunctionException(Function);
+    public override void Write<T>(ExtendedBinaryWriter writer, T value) => throw new AggregateFunctionException(Function);
 
     [Serializable]
     public class AggregateFunctionException : Exception

@@ -56,7 +56,7 @@ public class FixedStringTypeTests
         using var stream = new MemoryStream();
         using var writer = new ExtendedBinaryWriter(stream);
 
-        var ex = Assert.Throws<ArgumentException>(() => type.Write(writer, null));
+        var ex = Assert.Throws<ArgumentException>(() => type.Write<object>(writer, null));
 
         Assert.That(ex.Message, Does.Contain("null"));
     }

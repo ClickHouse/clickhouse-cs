@@ -12,5 +12,13 @@ internal class Float64Type : FloatType
 
     public override string ToString() => "Float64";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToDouble(value, CultureInfo.InvariantCulture));
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        if (value is not double doubleValue)
+        {
+            doubleValue = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+        }
+
+        writer.Write(doubleValue);
+    }
 }

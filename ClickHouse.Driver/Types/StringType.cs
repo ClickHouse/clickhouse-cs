@@ -25,7 +25,7 @@ internal class StringType : ClickHouseType
 
     public override string ToString() => "String";
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         if (value is string s)
         {

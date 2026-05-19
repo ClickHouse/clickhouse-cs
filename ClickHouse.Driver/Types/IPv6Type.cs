@@ -12,12 +12,16 @@ internal class IPv6Type : ClickHouseType
 
     public override string ToString() => "IPv6";
 
-    public override bool CanWrite(object value)
+    public override bool CanWrite<T>(T value)
         => value is IPAddress ip && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6;
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
-        var address6 = value is IPAddress a ? a : IPAddress.Parse((string)value);
+        if (value is not IPAddress address6)
+        {
+            address6 = IPAddress.Parse((string)(object)value);
+        }
+
         if (address6.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6)
         {
             throw new ArgumentException($"Expected IPv6, got {address6.AddressFamily}");

@@ -87,7 +87,7 @@ internal class DecimalType : ParameterizedType
 
     public override string ToString() => $"{Name}({Precision}, {Scale})";
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         try
         {

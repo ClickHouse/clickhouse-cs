@@ -27,5 +27,5 @@ internal class SimpleAggregateFunctionType : ParameterizedType
 
     public override string ToString() => $"{Name}({AggregateFunction}, {UnderlyingType})";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => UnderlyingType.Write(writer, value);
+    public override void Write<T>(ExtendedBinaryWriter writer, T value) => UnderlyingType.Write(writer, value);
 }

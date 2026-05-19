@@ -12,5 +12,13 @@ internal class Float32Type : FloatType
 
     public override string ToString() => "Float32";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToSingle(value, CultureInfo.InvariantCulture));
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        if (value is not float floatValue)
+        {
+            floatValue = Convert.ToSingle(value, CultureInfo.InvariantCulture);
+        }
+
+        writer.Write(floatValue);
+    }
 }

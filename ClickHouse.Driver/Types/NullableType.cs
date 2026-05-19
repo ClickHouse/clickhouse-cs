@@ -31,7 +31,7 @@ internal class NullableType : ParameterizedType
 
     public override string ToString() => $"{Name}({UnderlyingType})";
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         if (value == null || value is DBNull)
         {

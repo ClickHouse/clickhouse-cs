@@ -60,7 +60,7 @@ internal class QBitType : ParameterizedType
         return data;
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         // QBit wire format is just Array(ElementType)
         UnderlyingArrayType.Write(writer, value);

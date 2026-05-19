@@ -23,7 +23,7 @@ internal class DateTimeType : AbstractDateTimeType
 
     public override object Read(ExtendedBinaryReader reader) => ToDateTime(Instant.FromUnixTimeSeconds(reader.ReadUInt32()));
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         writer.Write((int)CoerceToDateTimeOffset(value).ToUnixTimeSeconds());
     }

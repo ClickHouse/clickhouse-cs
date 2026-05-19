@@ -26,13 +26,14 @@ internal class DynamicType : ClickHouseType
     /// Writes a value with its type header for dynamic type encoding.
     /// The type is inferred from the value's .NET type and cached.
     /// </summary>
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         if (value is null || value is DBNull)
         {
             writer.Write(BinaryTypeIndex.Nothing);
             return;
         }
+
         var inferredType = GetCachedInferredType(value.GetType());
         BinaryTypeDescriptionWriter.WriteTypeHeader(writer, inferredType);
         inferredType.Write(writer, value);

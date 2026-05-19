@@ -11,5 +11,15 @@ internal class BooleanType : ClickHouseType
 
     public override string ToString() => "Bool";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write((bool)value);
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        if (value is bool bValue)
+        {
+            writer.Write(bValue);
+        }
+        else
+        {
+            writer.Write((bool)(object)value);
+        }
+    }
 }

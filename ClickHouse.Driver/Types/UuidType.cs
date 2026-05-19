@@ -21,9 +21,13 @@ internal class UuidType : ClickHouseType
 
     public override string ToString() => "UUID";
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
-        var guid = ExtractGuid(value);
+        if (value is not Guid guid)
+        {
+            guid = new Guid((string)(object)value);
+        }
+
         var bytes = guid.ToByteArray();
         Array.Reverse(bytes, 8, 8);
         writer.Write(bytes, 6, 2);
@@ -31,6 +35,4 @@ internal class UuidType : ClickHouseType
         writer.Write(bytes, 0, 4);
         writer.Write(bytes, 8, 8);
     }
-
-    private static Guid ExtractGuid(object data) => data is Guid g ? g : new Guid((string)data);
 }

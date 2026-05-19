@@ -14,7 +14,7 @@ internal class Date32Type : DateType
 
     public override ParameterizedType Parse(SyntaxTreeNode typeName, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings) => throw new NotImplementedException();
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         writer.Write(CoerceToDateTimeOffset(value).ToUnixTimeDays());
     }

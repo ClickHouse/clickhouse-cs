@@ -24,5 +24,8 @@ internal class LowCardinalityType : ParameterizedType
 
     public override object Read(ExtendedBinaryReader reader) => UnderlyingType.Read(reader);
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => UnderlyingType.Write(writer, value);
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        UnderlyingType.Write(writer, value);
+    }
 }
