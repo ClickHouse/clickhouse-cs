@@ -459,9 +459,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         IEnumerable<string> columns,
         InsertOptions options = default)
     {
-        if (table is null)
-            throw new InvalidOperationException($"{nameof(table)} is null");
-
+        ArgumentNullException.ThrowIfNull(table);
         var plan = await PrepareInsertAsync(table, columns, options).ConfigureAwait(false);
 
         return new BinaryImport(this, plan);
