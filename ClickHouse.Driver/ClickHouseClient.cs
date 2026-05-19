@@ -1015,7 +1015,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             return batchData;
         }
 
-        public async Task SendBatchAsync(BatchData batchData, CancellationToken token)
+        public async Task SendBatchAsync(BatchData batchData, CancellationToken token = default)
         {
             try
             {
@@ -1080,7 +1080,7 @@ public sealed class ClickHouseClient : IClickHouseClient
                 columnTypes[columnIndex].Write(this.writer, value);
             }
 
-            internal void CompleteWrite()
+            public void CompleteWrite()
             {
 #pragma warning disable CA1513 // Use ObjectDisposedException throw helper
                 if (disposed)
