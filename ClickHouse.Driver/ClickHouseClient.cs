@@ -982,7 +982,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             ExtendedBinaryWriter writer = null;
             try
             {
-                stream = clickHouseClient.MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
+                stream = clickHouseClient.MemoryStreamManager.GetStream(nameof(StartNewBatch), 128 * 1024);
                 gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
                 using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
                 {

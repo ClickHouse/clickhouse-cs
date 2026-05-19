@@ -34,7 +34,8 @@ public class BinaryImportBenchmark
     [GlobalSetup]
     public async Task Setup()
     {
-        var connectionString = "Host=127.0.0.1;Port=59264;Database=default;Username=clickhouse;Password=f8Nkn2sDe56rw";
+        var connectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION")
+            ?? "Host=localhost";
         client = new ClickHouseClient(connectionString);
 
         await client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test");
