@@ -1062,11 +1062,6 @@ public sealed class ClickHouseClient : IClickHouseClient
                 this.writer = writer;
             }
 
-            ~BatchData()
-            {
-                Dispose(false);
-            }
-
             public void WriteData<T>(int columnIndex, T value)
             {
 #pragma warning disable CA1513 // Use ObjectDisposedException throw helper
