@@ -1,51 +1,130 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
+using System.Text;
+using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
 /// <summary>
-/// Helpers for emitting a rectangular multidimensional <see cref="Array"/> as a sequence of jagged
-/// slices. ClickHouse's wire format for <c>Array(Array(T))</c> is structurally jagged, so a CLR
-/// <c>T[,]</c> passed by the user is sliced along its outermost rank into <c>T[,...]</c> values of
-/// rank N-1 before being serialised one row at a time.
+/// Helpers for emitting and materialising rectangular multidimensional <see cref="Array"/> values
+/// against ClickHouse's jagged <c>Array(Array(T))</c> wire format. Write-side walks are in-place:
+/// no intermediate sub-array allocations, only the unavoidable per-leaf box on <see cref="Array.GetValue(int[])"/>.
 /// </summary>
 internal static class MultiDimArrayHelper
 {
     /// <summary>
-    /// Enumerates the outermost-rank slices of <paramref name="array"/>.
-    /// For a rank-1 array each element is yielded directly. For higher ranks, each yielded value
-    /// is a freshly-allocated <see cref="Array"/> of rank N-1 containing the corresponding row.
+    /// Walks the <see cref="ArrayType"/> chain of <paramref name="outer"/> and returns the
+    /// innermost (non-<see cref="ArrayType"/>) leaf type that sits at exactly <paramref name="rank"/>
+    /// levels of nesting. Throws <see cref="ArgumentException"/> if no leaf exists at that depth —
+    /// either the chain is shallower or deeper than <paramref name="rank"/>. The message names
+    /// both numbers, the outer type, and the parameter name where available.
     /// </summary>
-    public static IEnumerable<object> EnumerateOutermostRank(Array array)
+    public static ClickHouseType ResolveLeafType(ArrayType outer, int rank, string parameterName = null)
     {
-        if (array.Rank == 1)
+        ClickHouseType t = outer;
+        var depth = 0;
+        while (t is ArrayType at)
         {
-            foreach (var item in array)
+            depth++;
+            t = at.UnderlyingType;
+        }
+
+        if (depth == rank)
+            return t;
+
+        var prefix = parameterName is null ? string.Empty : $"Parameter '{parameterName}': ";
+        var suggestion = rank > depth ? "shallower" : "deeper";
+        throw new ArgumentException(
+            $"{prefix}CLR array rank {rank} does not match ClickHouse type '{outer}' " +
+            $"(nested array depth {depth}). Provide a {suggestion} array or change the type hint.");
+    }
+
+    /// <summary>
+    /// Writes a multidimensional <paramref name="array"/> in ClickHouse binary format. Honours
+    /// <see cref="Array.GetLowerBound(int)"/> per axis so non-zero-bound arrays serialise
+    /// identically to zero-bound ones.
+    /// </summary>
+    public static void WriteMultidimensional(ExtendedBinaryWriter writer, Array array, ClickHouseType leafType)
+    {
+        var indices = new int[array.Rank];
+        WriteAxis(writer, array, indices, dim: 0, leafType);
+    }
+
+    private static void WriteAxis(ExtendedBinaryWriter writer, Array array, int[] indices, int dim, ClickHouseType leafType)
+    {
+        var length = array.GetLength(dim);
+        var lower = array.GetLowerBound(dim);
+        writer.Write7BitEncodedInt(length);
+
+        if (dim == array.Rank - 1)
+        {
+            for (var i = 0; i < length; i++)
             {
-                yield return item;
+                indices[dim] = lower + i;
+                leafType.Write(writer, array.GetValue(indices));
             }
-            yield break;
+            return;
         }
 
-        var outerLength = array.GetLength(0);
-        var innerLengths = new int[array.Rank - 1];
-        for (var r = 1; r < array.Rank; r++)
+        for (var i = 0; i < length; i++)
         {
-            innerLengths[r - 1] = array.GetLength(r);
+            indices[dim] = lower + i;
+            WriteAxis(writer, array, indices, dim + 1, leafType);
         }
+    }
 
-        var elementType = array.GetType().GetElementType();
-        var srcIndices = new int[array.Rank];
-        var dstIndices = new int[innerLengths.Length];
+    /// <summary>
+    /// Appends a multidimensional <paramref name="array"/> in ClickHouse HTTP-parameter text
+    /// format (<c>[[1,2],[3,4]]</c>) to <paramref name="sb"/>. Honours
+    /// <see cref="Array.GetLowerBound(int)"/> per axis. Leaf scalars dispatch directly to
+    /// <see cref="HttpParameterFormatter.Format(ClickHouseType, object, bool, IParameterFormatter, string)"/>
+    /// — no closure allocation per call.
+    /// </summary>
+    public static void AppendMultidimensional(
+        StringBuilder sb,
+        Array array,
+        ClickHouseType leafType,
+        IParameterFormatter customFormatter,
+        string parameterName)
+    {
+        var indices = new int[array.Rank];
+        AppendAxis(sb, array, indices, dim: 0, leafType, customFormatter, parameterName);
+    }
 
-        for (var i = 0; i < outerLength; i++)
+    private static void AppendAxis(
+        StringBuilder sb,
+        Array array,
+        int[] indices,
+        int dim,
+        ClickHouseType leafType,
+        IParameterFormatter customFormatter,
+        string parameterName)
+    {
+        sb.Append('[');
+        var length = array.GetLength(dim);
+        var lower = array.GetLowerBound(dim);
+
+        if (dim == array.Rank - 1)
         {
-            var slice = Array.CreateInstance(elementType, innerLengths);
-            srcIndices[0] = i;
-            CopySlice(array, srcIndices, 1, slice, dstIndices, 0);
-            yield return slice;
+            for (var i = 0; i < length; i++)
+            {
+                if (i > 0) sb.Append(',');
+                indices[dim] = lower + i;
+                sb.Append(HttpParameterFormatter.Format(leafType, array.GetValue(indices), quote: true, customFormatter, parameterName));
+            }
         }
+        else
+        {
+            for (var i = 0; i < length; i++)
+            {
+                if (i > 0) sb.Append(',');
+                indices[dim] = lower + i;
+                AppendAxis(sb, array, indices, dim + 1, leafType, customFormatter, parameterName);
+            }
+        }
+
+        sb.Append(']');
     }
 
     /// <summary>
@@ -164,29 +243,6 @@ internal static class MultiDimArrayHelper
         {
             indices[depth] = i;
             CopyJaggedToMultidim(list[i]!, dst, indices, depth + 1, rank);
-        }
-    }
-
-    private static void CopySlice(
-        Array src,
-        int[] srcIndices,
-        int srcDim,
-        Array dst,
-        int[] dstIndices,
-        int dstDim)
-    {
-        if (srcDim == src.Rank)
-        {
-            dst.SetValue(src.GetValue(srcIndices), dstIndices);
-            return;
-        }
-
-        var length = src.GetLength(srcDim);
-        for (var k = 0; k < length; k++)
-        {
-            srcIndices[srcDim] = k;
-            dstIndices[dstDim] = k;
-            CopySlice(src, srcIndices, srcDim + 1, dst, dstIndices, dstDim + 1);
         }
     }
 }

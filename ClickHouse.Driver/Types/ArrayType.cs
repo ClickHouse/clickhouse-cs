@@ -42,16 +42,14 @@ internal class ArrayType : ParameterizedType
             return;
         }
 
-        // Rank>1 CLR arrays (e.g. byte[,]) iterate flattened via IEnumerable/IList, so slice along
-        // the outermost rank into sub-arrays before delegating to the inner type's writer.
+        // Rank>1 CLR arrays (e.g. byte[,]) iterate flattened via IEnumerable/IList. Walk the
+        // axes directly via MultiDimArrayHelper so leaf scalars are written without per-row
+        // sub-array allocation. Rank-1 arrays (including jagged outer T[][]) keep the IList
+        // path because the outer rank is 1 even though the element type is itself an array.
         if (value is Array multidim && multidim.Rank > 1)
         {
-            var outerLength = multidim.GetLength(0);
-            writer.Write7BitEncodedInt(outerLength);
-            foreach (var slice in MultiDimArrayHelper.EnumerateOutermostRank(multidim))
-            {
-                UnderlyingType.Write(writer, slice);
-            }
+            var leaf = MultiDimArrayHelper.ResolveLeafType(this, multidim.Rank);
+            MultiDimArrayHelper.WriteMultidimensional(writer, multidim, leaf);
             return;
         }
 

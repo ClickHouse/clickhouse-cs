@@ -143,11 +143,16 @@ internal static class HttpParameterFormatter
             // DO NOT REORDER: this arm must precede the `IEnumerable` arm below.
             // A rank>1 CLR Array implements IEnumerable/IList by iterating flattened
             // (e.g. byte[,] yields scalars, not rows), so the IEnumerable arm would
-            // serialise [[1,2],[3,4]] as [1,2,3,4]. Slice along the outermost rank
-            // via MultiDimArrayHelper.EnumerateOutermostRank before delegating to
-            // the inner type's formatter.
+            // serialise [[1,2],[3,4]] as [1,2,3,4]. Rank-1 arrays (including jagged
+            // T[][]) keep falling through to the IEnumerable arm because their outer
+            // rank is 1 even though they're semantically depth>1.
             case ArrayType arrayType when value is Array multidim && multidim.Rank > 1:
-                return $"[{string.Join(",", MultiDimArrayHelper.EnumerateOutermostRank(multidim).Select(obj => Format(arrayType.UnderlyingType, obj, true, customFormatter, parameterName)))}]";
+                {
+                    var leaf = MultiDimArrayHelper.ResolveLeafType(arrayType, multidim.Rank, parameterName);
+                    var sb = new StringBuilder();
+                    MultiDimArrayHelper.AppendMultidimensional(sb, multidim, leaf, customFormatter, parameterName);
+                    return sb.ToString();
+                }
 
             case ArrayType arrayType when value is IEnumerable enumerable:
                 return $"[{string.Join(",", enumerable.Cast<object>().Select(obj => Format(arrayType.UnderlyingType, obj, true, customFormatter, parameterName)))}]";
