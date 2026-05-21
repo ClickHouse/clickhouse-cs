@@ -1,6 +1,8 @@
 using System;
 using System.Threading.Tasks;
+using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Copy;
+using ClickHouse.Driver.Tests.Attributes;
 
 namespace ClickHouse.Driver.Tests.Types;
 
@@ -30,7 +32,8 @@ public class DateTimeBinaryRangeTests : AbstractConnectionTestFixture
         await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {Date32Table}");
         await client.ExecuteNonQueryAsync($"CREATE TABLE {DateTimeTable} (t DateTime('UTC')) ENGINE = Memory");
         await client.ExecuteNonQueryAsync($"CREATE TABLE {DateTable} (d Date) ENGINE = Memory");
-        await client.ExecuteNonQueryAsync($"CREATE TABLE {Date32Table} (d Date32) ENGINE = Memory");
+        if (TestUtilities.SupportedFeatures.HasFlag(Feature.Date32))
+            await client.ExecuteNonQueryAsync($"CREATE TABLE {Date32Table} (d Date32) ENGINE = Memory");
     }
 
     [TearDown]
@@ -160,6 +163,7 @@ public class DateTimeBinaryRangeTests : AbstractConnectionTestFixture
     // Date32: ClickHouse range is [1900-01-01, 2299-12-31].
 
     [Test]
+    [RequiredFeature(Feature.Date32)]
     public async Task InsertBinaryAsync_Date32_AtLowerBound_RoundTrips()
     {
         var value = new DateTime(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -171,6 +175,7 @@ public class DateTimeBinaryRangeTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [RequiredFeature(Feature.Date32)]
     public async Task InsertBinaryAsync_Date32_AtUpperBound_RoundTrips()
     {
         var value = new DateTime(2299, 12, 31, 0, 0, 0, DateTimeKind.Utc);
@@ -182,6 +187,7 @@ public class DateTimeBinaryRangeTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [RequiredFeature(Feature.Date32)]
     public void InsertBinaryAsync_Date32_BelowRange_ThrowsArgumentOutOfRangeException()
     {
         var value = new DateTime(1899, 12, 31, 0, 0, 0, DateTimeKind.Utc);
@@ -193,6 +199,7 @@ public class DateTimeBinaryRangeTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [RequiredFeature(Feature.Date32)]
     public void InsertBinaryAsync_Date32_AboveRange_ThrowsArgumentOutOfRangeException()
     {
         var value = new DateTime(2300, 1, 1, 0, 0, 0, DateTimeKind.Utc);
