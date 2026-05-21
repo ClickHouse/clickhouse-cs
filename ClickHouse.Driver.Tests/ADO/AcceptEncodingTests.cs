@@ -299,6 +299,50 @@ public class AcceptEncodingTests
         Assert.That(raw.ContentEncoding, Is.Null);
     }
 
+    [Test]
+    public async Task AcceptEncodingGzip_AgainstRealServer_ResponseIsActuallyGzipCompressed()
+    {
+        using var rawHandler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
+        using var rawHttpClient = new HttpClient(rawHandler);
+        var settings = new ClickHouseClientSettings(TestUtilities.GetTestClickHouseClientSettings())
+        {
+            HttpClient = rawHttpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var result = await client.ExecuteRawResultAsync(
+            "SELECT number FROM numbers(5) FORMAT TSV",
+            options: new QueryOptions { AcceptEncoding = "gzip" });
+
+        Assert.That(result.ContentEncoding, Is.EqualTo("gzip"));
+
+        await using var compressed = await result.ReadAsStreamAsync();
+        await using var decompressor = new GZipStream(compressed, CompressionMode.Decompress);
+        using var reader = new StreamReader(decompressor, Encoding.UTF8);
+        var body = await reader.ReadToEndAsync();
+
+        Assert.That(body, Is.EqualTo("0\n1\n2\n3\n4\n"));
+    }
+
+    [Test]
+    public void AcceptEncodingZstd_AgainstRealServer_ErrorBodyYieldsUnsupportedCodecPlaceholder()
+    {
+        using var rawHandler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
+        using var rawHttpClient = new HttpClient(rawHandler);
+        var settings = new ClickHouseClientSettings(TestUtilities.GetTestClickHouseClientSettings())
+        {
+            HttpClient = rawHttpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync(
+                "SELECT * FROM no_such_table_for_acceptencoding_test",
+                options: new QueryOptions { AcceptEncoding = "zstd" }));
+
+        Assert.That(ex.Message, Does.Contain("unsupported Content-Encoding: zstd"));
+    }
+
     private static ByteArrayContent BuildCompressedContent(
         string text,
         string contentEncoding,

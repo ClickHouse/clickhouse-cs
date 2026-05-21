@@ -109,6 +109,18 @@ public class QueryOptions
     /// and <see cref="ADO.ClickHouseRawResult.ContentEncoding"/> reflect what the consumer
     /// actually receives after that step.
     /// </para>
+    /// <para>
+    /// <b>Warning:</b> selecting a codec the underlying <see cref="System.Net.Http.HttpClient"/>
+    /// cannot decode (e.g. <c>zstd</c>, <c>lz4</c>) is only meaningful with
+    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/>, where the caller decodes the body
+    /// themselves after inspecting <see cref="ADO.ClickHouseRawResult.ContentEncoding"/>. The
+    /// parsing reader APIs (<c>ExecuteReaderAsync</c>, <c>ExecuteScalarAsync</c>,
+    /// <c>ExecuteNonQueryAsync</c>) will read the still-compressed bytes as if they were the
+    /// ClickHouse wire format and return garbage or throw. To use such a codec end-to-end you
+    /// also need an <see cref="System.Net.Http.HttpClient"/> configured without
+    /// <c>AutomaticDecompression</c>; otherwise the framework strips
+    /// <c>Content-Encoding</c> before the body reaches the driver.
+    /// </para>
     /// </remarks>
     public string? AcceptEncoding { get; init; }
 
