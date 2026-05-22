@@ -13,7 +13,7 @@ internal class DateTime64Type : AbstractDateTimeType
 
     public override string Name => "DateTime64";
 
-    public override string ToString() => TimeZone == null ? $"DateTime64({Scale})" : $"DateTime64({Scale}, {TimeZone.Id})";
+    public override string ToString() => TimeZone == null ? $"DateTime64({Scale})" : $"DateTime64({Scale}, '{TimeZone.Id}')";
 
     public DateTime FromClickHouseTicks(long clickHouseTicks)
     {

@@ -48,7 +48,7 @@ internal abstract class AbstractDateTimeType : ParameterizedType
 
     public DateTimeZone TimeZoneOrUtc => TimeZone ?? DateTimeZone.Utc;
 
-    public override string ToString() => TimeZone == null ? $"{Name}" : $"{Name}({TimeZone.Id})";
+    public override string ToString() => TimeZone == null ? $"{Name}" : $"{Name}('{TimeZone.Id}')";
 
     private DateTimeOffset ToDateTimeOffset(Instant instant) => instant.InZone(TimeZoneOrUtc).ToDateTimeOffset();
 

@@ -357,6 +357,15 @@ internal static class TypeConverter
         if (value is IPAddress ip)
             return SimpleTypes[ip.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6"];
 
+        // Instant-bearing DateTime values infer as DateTime('UTC') so the wire wall-clock
+        // formatted in UTC is parsed unambiguously by the server in UTC, not session_timezone (issue #350).
+        // Unspecified DateTime falls through to bare DateTime (wall-clock semantics).
+        // This applies inside composite structures too: e.g. an array of UTC DateTime values
+        // infers as Array(DateTime('UTC')) via the recursive element peek below.
+        if (value is DateTime { Kind: DateTimeKind.Utc or DateTimeKind.Local }
+            || value is DateTimeOffset)
+            return new DateTimeType { TimeZone = NodaTime.DateTimeZone.Utc };
+
         var type = value.GetType();
 
         // 2. Collection handling: peek at the first element so value-based inference propagates
