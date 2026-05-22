@@ -15,7 +15,6 @@ public abstract class AbstractConnectionTestFixture : IDisposable
     {
         client = TestUtilities.GetTestClickHouseClient();
         connection = client.CreateConnection();
-        client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test;").GetAwaiter().GetResult();
     }
 
     protected static string SanitizeTableName(string input)
