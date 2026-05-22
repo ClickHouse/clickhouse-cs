@@ -374,10 +374,14 @@ internal static class TypeConverter
             var array = (Array)value;
             var rank = type.GetArrayRank();
             // Rank-aware first-element peek; Array.GetValue(int) throws for rank > 1.
+            // Honour per-axis lower bounds so non-zero-bound arrays (Array.CreateInstance
+            // with lowerBounds) don't throw IndexOutOfRangeException on the [0,0,...] peek.
             object firstElement = null;
             if (array.Length > 0)
             {
                 var indices = new int[rank];
+                for (var d = 0; d < rank; d++)
+                    indices[d] = array.GetLowerBound(d);
                 firstElement = array.GetValue(indices);
             }
             ClickHouseType inner = firstElement is not null

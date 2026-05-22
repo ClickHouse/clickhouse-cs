@@ -345,18 +345,25 @@ public class MultiDimArrayHelperTests
     {
         var outer = (ArrayType)TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default);
         var ex = Assert.Throws<ArgumentException>(
-            () => MultiDimArrayHelper.ResolveLeafType(outer, rank, parameterName: "p"));
+            () => MultiDimArrayHelper.ResolveLeafType(outer, rank));
         Assert.That(ex!.Message, Does.Contain($"rank {rank}"));
         Assert.That(ex.Message, Does.Contain($"depth {depth}"));
         Assert.That(ex.Message, Does.Contain(clickHouseType));
-        Assert.That(ex.Message, Does.Contain("'p'"));
+        // Parameter-name context is owned by the HttpParameterFormatter wrap, not this helper.
+        // See HttpFormat_RankMismatch_RoutesThroughResolveLeafType for the wrapped-message contract.
     }
 
     [Test]
     public void HttpFormat_RankMismatch_RoutesThroughResolveLeafType()
     {
-        Assert.Throws<ArgumentException>(
+        var ex = Assert.Throws<ArgumentException>(
             () => FormatViaHttp("Array(Int32)", new int[2, 2]));
+        // Outer wrap must add parameter-name + outer-type context once (and only once).
+        Assert.That(ex!.Message, Does.Contain("'p'"));
+        Assert.That(ex.Message, Does.Contain("Array(Int32)"));
+        // Inner helper message must still describe the rank/depth mismatch.
+        Assert.That(ex.Message, Does.Contain("rank 2"));
+        Assert.That(ex.Message, Does.Contain("depth 1"));
     }
 
     [Test]

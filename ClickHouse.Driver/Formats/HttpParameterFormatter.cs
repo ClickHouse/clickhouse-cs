@@ -36,18 +36,15 @@ internal static class HttpParameterFormatter
         {
             return Format(parsedType, parameter.Value, false, customFormatter, parameter.ParameterName);
         }
-        catch (ArgumentException ex) when (!ReferenceEquals(ex.Data["__ch_outerType__"], parsedType))
+        catch (ArgumentException ex)
         {
-            // Recursive Format calls (Array, Tuple, Map, etc.) report the inner type they were
-            // dispatched with. Re-throw with the outer type so nested-array mismatches are
-            // diagnosable from the user's perspective. The Data sentinel prevents nested rethrow.
-            var wrapped = new ArgumentException(
+            // Inner formatters describe only the leaf type/value they were dispatched with;
+            // this is the single place that owns parameter-name + outer-type context.
+            throw new ArgumentException(
                 parameter.ParameterName is null
                     ? $"Cannot format parameter as {parsedType}: {ex.Message}"
                     : $"Parameter '{parameter.ParameterName}' (type {parsedType}): {ex.Message}",
                 ex);
-            wrapped.Data["__ch_outerType__"] = parsedType;
-            throw wrapped;
         }
     }
 
@@ -148,7 +145,7 @@ internal static class HttpParameterFormatter
             // rank is 1 even though they're semantically depth>1.
             case ArrayType arrayType when value is Array multidim && multidim.Rank > 1:
                 {
-                    var leaf = MultiDimArrayHelper.ResolveLeafType(arrayType, multidim.Rank, parameterName);
+                    var leaf = MultiDimArrayHelper.ResolveLeafType(arrayType, multidim.Rank);
                     var sb = new StringBuilder();
                     MultiDimArrayHelper.AppendMultidimensional(sb, multidim, leaf, customFormatter, parameterName);
                     return sb.ToString();
@@ -189,9 +186,7 @@ internal static class HttpParameterFormatter
             default:
                 var valueTypeName = value?.GetType().FullName ?? "null";
                 throw new ArgumentException(
-                    parameterName is null
-                        ? $"Cannot convert value of type '{valueTypeName}' ({value}) to ClickHouse type {type}"
-                        : $"Parameter '{parameterName}': cannot convert value of type '{valueTypeName}' ({value}) to ClickHouse type {type}");
+                    $"Cannot convert value of type '{valueTypeName}' ({value}) to ClickHouse type {type}");
         }
     }
 

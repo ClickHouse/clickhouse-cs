@@ -197,6 +197,37 @@ public class TypeMappingTests
     [TestCaseSource(nameof(ValueToClickHouseTypeCases))]
     public string ShouldConvertValueToClickHouseType(object value) => TypeConverter.ToClickHouseType(value).ToString();
 
+    private static IEnumerable<TestCaseData> NonZeroBoundMultidimCases()
+    {
+        // Rank 2, single non-zero lower bound
+        var rank2OneAxis = Array.CreateInstance(typeof(int), new[] { 2, 3 }, new[] { 0, 10 });
+        rank2OneAxis.SetValue(42, 0, 10);
+        yield return new TestCaseData(rank2OneAxis).Returns("Array(Array(Int32))")
+            .SetName("ToClickHouseType_NonZeroBoundRank2OneAxis_InfersNestedArrayType");
+
+        // Rank 2, non-zero lower bound on both axes
+        var rank2BothAxes = Array.CreateInstance(typeof(int), new[] { 2, 3 }, new[] { 5, 10 });
+        rank2BothAxes.SetValue(42, 5, 10);
+        yield return new TestCaseData(rank2BothAxes).Returns("Array(Array(Int32))")
+            .SetName("ToClickHouseType_NonZeroBoundRank2BothAxes_InfersNestedArrayType");
+
+        // Rank 3, non-zero lower bound on all axes
+        var rank3 = Array.CreateInstance(typeof(byte), new[] { 2, 2, 2 }, new[] { 100, 200, 300 });
+        rank3.SetValue((byte)1, 100, 200, 300);
+        yield return new TestCaseData(rank3).Returns("Array(Array(Array(UInt8)))")
+            .SetName("ToClickHouseType_NonZeroBoundRank3_InfersNestedArrayType");
+
+        // Value-based propagation: inner IPv6 should still be picked up via the first-element peek
+        var ipMatrix = (IPAddress[,])Array.CreateInstance(typeof(IPAddress), new[] { 1, 1 }, new[] { 5, 10 });
+        ipMatrix.SetValue(IPAddress.Parse("::1"), 5, 10);
+        yield return new TestCaseData(ipMatrix).Returns("Array(Array(IPv6))")
+            .SetName("ToClickHouseType_NonZeroBoundIpMatrix_PropagatesIPv6FromFirstElement");
+    }
+
+    [TestCaseSource(nameof(NonZeroBoundMultidimCases))]
+    public string ToClickHouseType_NonZeroBoundMultidimArray_InfersNestedArrayType(object value)
+        => TypeConverter.ToClickHouseType(value).ToString();
+
     private static IEnumerable<TestCaseData> HttpParameterFormatterIpCases()
     {
         // Scalar IPv4/IPv6

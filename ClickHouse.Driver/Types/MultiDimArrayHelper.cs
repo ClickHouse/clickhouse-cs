@@ -18,9 +18,10 @@ internal static class MultiDimArrayHelper
     /// innermost (non-<see cref="ArrayType"/>) leaf type that sits at exactly <paramref name="rank"/>
     /// levels of nesting. Throws <see cref="ArgumentException"/> if no leaf exists at that depth —
     /// either the chain is shallower or deeper than <paramref name="rank"/>. The message names
-    /// both numbers, the outer type, and the parameter name where available.
+    /// both numbers and the outer type; parameter-name context is added by the caller
+    /// (<see cref="HttpParameterFormatter"/>) so it isn't duplicated when wrapped.
     /// </summary>
-    public static ClickHouseType ResolveLeafType(ArrayType outer, int rank, string parameterName = null)
+    public static ClickHouseType ResolveLeafType(ArrayType outer, int rank)
     {
         ClickHouseType t = outer;
         var depth = 0;
@@ -33,10 +34,9 @@ internal static class MultiDimArrayHelper
         if (depth == rank)
             return t;
 
-        var prefix = parameterName is null ? string.Empty : $"Parameter '{parameterName}': ";
         var suggestion = rank > depth ? "shallower" : "deeper";
         throw new ArgumentException(
-            $"{prefix}CLR array rank {rank} does not match ClickHouse type '{outer}' " +
+            $"CLR array rank {rank} does not match ClickHouse type '{outer}' " +
             $"(nested array depth {depth}). Provide a {suggestion} array or change the type hint.");
     }
 
