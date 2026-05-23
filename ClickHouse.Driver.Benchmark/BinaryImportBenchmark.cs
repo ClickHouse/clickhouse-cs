@@ -89,10 +89,14 @@ public class BinaryImportBenchmark
             }
         }
 
-        if (batch != null && itemsInBatch != 0)
+        if (batch != null)
         {
-            batch.CompleteWrite();
-            await import.SendBatchAsync(batch);
+            if (itemsInBatch != 0)
+            {
+                batch.CompleteWrite();
+                await import.SendBatchAsync(batch);
+            }
+
             batch.Dispose();
         }
     }
