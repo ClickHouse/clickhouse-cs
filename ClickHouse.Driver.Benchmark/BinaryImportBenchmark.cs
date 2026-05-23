@@ -1,5 +1,4 @@
 using BenchmarkDotNet.Attributes;
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -17,9 +16,6 @@ public class BinaryImportBenchmark
 {
     private ClickHouseClient client;
     private const string TableName = "test.benchmark_binary_import";
-
-    private SensorReading[] _pocoRows;
-    private object[][] _objectRows;
 
     public class SensorReading
     {
@@ -42,49 +38,62 @@ public class BinaryImportBenchmark
         await client.ExecuteNonQueryAsync($"CREATE TABLE IF NOT EXISTS {TableName} (Id Int64, Name String, Value Float64) ENGINE Null");
 
         client.RegisterBinaryInsertType<SensorReading>();
-
-        _pocoRows = GeneratePocoRows(Count).ToArray();
-        _objectRows = GenerateObjectArrayRows(Count).ToArray();
     }
 
     [GlobalCleanup]
     public void Cleanup()
     {
         client?.Dispose();
-
-        _pocoRows = null;
-        _objectRows = null;
     }
 
     [Benchmark(Baseline = true)]
     public async Task ObjectArray()
     {
         var columns = new[] { "Id", "Name", "Value" };
-        await client.InsertBinaryAsync(TableName, columns, _objectRows);
+        var objectRows = GenerateObjectArrayRows(Count).ToArray();
+
+        await client.InsertBinaryAsync(TableName, columns, objectRows);
     }
 
     [Benchmark]
     public async Task Poco()
     {
-        await client.InsertBinaryAsync(TableName, _pocoRows);
+        var pocoRows = GeneratePocoRows(Count).ToArray();
+
+        await client.InsertBinaryAsync(TableName, pocoRows);
     }
 
     [Benchmark]
     public async Task BinaryImport()
     {
         var import = await client.StartInsertAsync(TableName, ["Id", "Name", "Value"]);
-        using var batch = import.StartNewBatch();
+        var batch = import.StartNewBatch();
 
-        foreach (var row in _pocoRows)
+        var itemsInBatch = 0;
+        for (int i = 0; i < Count; i++)
         {
-            batch.WriteData(0, row.Id);
-            batch.WriteData(1, row.Name);
-            batch.WriteData(2, row.Value);
+            itemsInBatch++;
+            batch.WriteData(0, (long)i);
+            batch.WriteData(1, $"sensor_{i % 10}");
+            batch.WriteData(2, (double)i * 0.1);
+
+            if (itemsInBatch == 100_000)
+            {
+                batch.CompleteWrite();
+                await import.SendBatchAsync(batch);
+
+                batch.Dispose();
+                batch = import.StartNewBatch();
+                itemsInBatch = 0;
+            }
         }
 
-        batch.CompleteWrite();
-
-        await import.SendBatchAsync(batch);
+        if (batch != null && itemsInBatch != 0)
+        {
+            batch.CompleteWrite();
+            await import.SendBatchAsync(batch);
+            batch.Dispose();
+        }
     }
 
     private static IEnumerable<object[]> GenerateObjectArrayRows(int count)
