@@ -87,6 +87,7 @@ var users = connection.Query<User>("SELECT * FROM users");
 - **Connection pooling**: Respect HTTP connection pool behavior, avoid connection leaks
 
 ### Testing Discipline
+- **Integration tests**: Strongly prefer tests that actually call the db over unit tests.
 - **Test utilities**: before writing tests, read TestUtilities.cs to understand existing config and utility patterns.
 - **Test matrix**: ADO provider, parameter binding, ORMs, multi-framework, multi-ClickHouse-version
 - **Negative tests**: Error handling, edge cases, concurrency scenarios
