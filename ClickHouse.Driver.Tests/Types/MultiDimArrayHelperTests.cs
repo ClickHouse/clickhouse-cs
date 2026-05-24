@@ -201,6 +201,9 @@ public class MultiDimArrayHelperTests
         var ex = Assert.Throws<ArgumentException>(
             () => MultiDimArrayHelper.ToMultidimensional<int[]>(new int[] { 1, 2, 3 }));
         Assert.That(ex!.Message, Does.Contain("rank >= 2"));
+        // ParamName must not be set: the failing constraint is the generic type T, not the
+        // `jagged` argument, so callers shouldn't see a misleading "jagged" in ex.ParamName.
+        Assert.That(ex.ParamName, Is.Null);
     }
 
     [Test]
@@ -221,6 +224,23 @@ public class MultiDimArrayHelperTests
         var ex = Assert.Throws<InvalidOperationException>(
             () => MultiDimArrayHelper.ToMultidimensional<int[,,]>(jagged));
         Assert.That(ex!.Message, Does.Contain("T[][]"));
+    }
+
+    [Test]
+    public void ToMultidimensional_Rank3RaggedAtInnerDepthInLaterSibling_ThrowsInvalidOperationException()
+    {
+        // Regression: dims[depth+1] used to be reset from each subtree's first child, so a later
+        // outer subtree could silently overwrite the inner length established by an earlier one,
+        // bypassing the rectangularity check and silently zero-padding short rows.
+        var jagged = new int[][][]
+        {
+            new int[][] { new[] { 1, 2 }, new[] { 3, 4 } },        // inner rows length 2
+            new int[][] { new[] { 5, 6, 7 }, new[] { 8, 9, 10 } }, // inner rows length 3 — ragged
+        };
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,,]>(jagged));
+        Assert.That(ex!.Message, Does.Contain("rectangular"));
+        Assert.That(ex.Message, Does.Contain("T[][]"));
     }
 
     [Test]

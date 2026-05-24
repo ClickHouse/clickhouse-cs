@@ -140,13 +140,12 @@ internal static class MultiDimArrayHelper
     {
         var targetType = typeof(T);
         if (!targetType.IsArray)
-            throw new ArgumentException($"Target type '{targetType}' must be an array.", nameof(jagged));
+            throw new ArgumentException($"Target type '{targetType}' must be an array.");
         var rank = targetType.GetArrayRank();
         if (rank < 2)
             throw new ArgumentException(
                 $"Target type '{targetType}' must be a multidimensional array (rank >= 2). " +
-                $"For jagged results use the standard reader methods.",
-                nameof(jagged));
+                $"For jagged results use the standard reader methods.");
         var elementType = targetType.GetElementType()!;
 
         if (jagged is null || jagged is DBNull)
@@ -154,7 +153,15 @@ internal static class MultiDimArrayHelper
                 $"Cannot materialise '{targetType}' from a null value.");
 
         var dims = new int[rank];
+        Array.Fill(dims, -1);
         MeasureRectangular(jagged, dims, depth: 0, rank: rank);
+
+        // Any dimension never visited (because a parent was empty) is unconstrained — collapse
+        // the sentinel to 0 so Array.CreateInstance accepts it. Matches the empty-outer contract.
+        for (var i = 0; i < rank; i++)
+        {
+            if (dims[i] == -1) dims[i] = 0;
+        }
 
         var result = Array.CreateInstance(elementType, dims);
         var indices = new int[rank];
@@ -178,9 +185,9 @@ internal static class MultiDimArrayHelper
         }
 
         var length = list.Count;
-        if (depth == 0)
+        if (dims[depth] == -1)
         {
-            dims[0] = length;
+            dims[depth] = length;
         }
         else if (dims[depth] != length)
         {
@@ -192,31 +199,15 @@ internal static class MultiDimArrayHelper
 
         if (depth + 1 == rank)
         {
-            // Innermost row reached. The "source-deeper-than-target-rank" check used to live here
-            // as a list[0] peek, which missed mismatches where a later sibling was the nested one.
-            // Detection moved into CopyJaggedToMultidim so every leaf element is validated and the
-            // error message can pinpoint the exact index.
+            // Innermost row reached. The "source-deeper-than-target-rank" check lives in
+            // CopyJaggedToMultidim so every leaf element is validated and the error message
+            // can pinpoint the exact index.
             return;
         }
 
         for (var i = 0; i < length; i++)
         {
-            var child = list[i];
-            if (i == 0 && depth + 1 < rank)
-            {
-                // Set the expected length for siblings at the next depth from the first child.
-                if (child is IList firstChild)
-                {
-                    dims[depth + 1] = firstChild.Count;
-                }
-                else
-                {
-                    throw new InvalidOperationException(
-                        $"Cannot materialise a rectangular array: expected a nested list at depth {depth + 1}, got '{child?.GetType()?.ToString() ?? "null"}'. " +
-                        $"Use a jagged target type (e.g. T[][]) for ragged data.");
-                }
-            }
-            MeasureRectangular(child!, dims, depth + 1, rank);
+            MeasureRectangular(list[i]!, dims, depth + 1, rank);
         }
     }
 
