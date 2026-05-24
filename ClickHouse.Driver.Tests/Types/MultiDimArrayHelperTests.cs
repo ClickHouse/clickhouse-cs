@@ -241,6 +241,24 @@ public class MultiDimArrayHelperTests
     }
 
     [Test]
+    public void ToMultidimensional_SourceDeeperThanTargetAtLaterSiblingOnly_ThrowsInvalidOperationException()
+    {
+        // Mismatched leaf siblings: first element is a scalar, a later one is a list. A list[0]-only
+        // peek would miss this and let Array.SetValue surface a worse BCL exception. The per-element
+        // guard in CopyJaggedToMultidim must catch it and report the exact offending index.
+        var mixed = new object[]
+        {
+            new object[] { 1, 2 },
+            new object[] { 3, new object[] { 99 } },
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,]>(mixed));
+        Assert.That(ex!.Message, Does.Contain("deeper than the target rank"));
+        Assert.That(ex.Message, Does.Contain("[1,1]"));
+    }
+
+    [Test]
     public void ToMultidimensional_RoundTripViaBinaryWriteAndRead_ReturnsOriginalValues()
     {
         // Multidim → binary write → reader produces jagged → ToMultidimensional → equivalent multidim.

@@ -192,16 +192,10 @@ internal static class MultiDimArrayHelper
 
         if (depth + 1 == rank)
         {
-            // Innermost row reached; its elements must be scalars. If they're lists, the source
-            // value is deeper than the target rank — fail with a clear message instead of letting
-            // CopyJaggedToMultidim throw an opaque ArgumentException from Array.SetValue.
-            if (length > 0 && list[0] is IList)
-            {
-                throw new InvalidOperationException(
-                    $"Cannot materialise a rectangular array: source is deeper than the target rank " +
-                    $"(target rank {rank}, source has a nested list at depth {depth + 1}). " +
-                    $"Use a jagged target type (e.g. T[][]) for deeper sources.");
-            }
+            // Innermost row reached. The "source-deeper-than-target-rank" check used to live here
+            // as a list[0] peek, which missed mismatches where a later sibling was the nested one.
+            // Detection moved into CopyJaggedToMultidim so every leaf element is validated and the
+            // error message can pinpoint the exact index.
             return;
         }
 
@@ -233,8 +227,16 @@ internal static class MultiDimArrayHelper
         {
             for (var i = 0; i < list.Count; i++)
             {
+                var item = list[i];
                 indices[depth] = i;
-                dst.SetValue(list[i], indices);
+                if (item is IList)
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot materialise a rectangular array: source is deeper than the target rank " +
+                        $"(target rank {rank}, nested list at indices [{string.Join(",", indices)}]). " +
+                        $"Use a jagged target type (e.g. T[][]) for deeper sources.");
+                }
+                dst.SetValue(item, indices);
             }
             return;
         }

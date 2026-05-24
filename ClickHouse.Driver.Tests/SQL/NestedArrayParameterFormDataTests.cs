@@ -1,4 +1,3 @@
-using System;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Tests.Attributes;
@@ -15,7 +14,7 @@ namespace ClickHouse.Driver.Tests.SQL;
 /// </summary>
 [TestFixture(true)]
 [TestFixture(false)]
-public class NestedArrayParameterFormDataTests : IDisposable
+public class NestedArrayParameterFormDataTests
 {
     private readonly ClickHouseConnection connection;
 
@@ -102,5 +101,5 @@ public class NestedArrayParameterFormDataTests : IDisposable
     }
 
     [OneTimeTearDown]
-    public void Dispose() => connection?.Dispose();
+    public void OneTimeTearDown() => connection?.Dispose();
 }
