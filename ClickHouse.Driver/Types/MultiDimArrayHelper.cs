@@ -216,6 +216,12 @@ internal static class MultiDimArrayHelper
         var list = (IList)level;
         if (depth + 1 == rank)
         {
+            var elementType = dst.GetType().GetElementType()!;
+            // A non-nullable value-type element silently accepts null via Array.SetValue
+            // (the slot is zeroed), which would corrupt data and bypass the contract.
+            // Capture once outside the hot loop.
+            var rejectNullLeaf = elementType.IsValueType && Nullable.GetUnderlyingType(elementType) is null;
+
             for (var i = 0; i < list.Count; i++)
             {
                 var item = list[i];
@@ -227,7 +233,29 @@ internal static class MultiDimArrayHelper
                         $"(target rank {rank}, nested list at indices [{string.Join(",", indices)}]). " +
                         $"Use a jagged target type (e.g. T[][]) for deeper sources.");
                 }
-                dst.SetValue(item, indices);
+                if (item is null && rejectNullLeaf)
+                {
+                    throw new InvalidCastException(
+                        $"Cannot materialise a rectangular array: null leaf at indices [{string.Join(",", indices)}] " +
+                        $"is not assignable to non-nullable target element type '{elementType}'. " +
+                        $"Use a nullable element type (e.g. {elementType}?[,]) to allow null leaves.");
+                }
+                try
+                {
+                    dst.SetValue(item, indices);
+                }
+                // Array.SetValue throws InvalidCastException for incompatible runtime types.
+                // ArgumentException is caught defensively; it isn't reachable on supported runtimes
+                // given indices.Length == rank, but a wrap keeps the GetFieldValue<T> contract
+                // (InvalidCastException for type mismatches, InvalidOperationException for shape)
+                // robust to future BCL changes.
+                catch (Exception ex) when (ex is InvalidCastException or ArgumentException)
+                {
+                    throw new InvalidCastException(
+                        $"Cannot materialise a rectangular array: leaf at indices [{string.Join(",", indices)}] " +
+                        $"of runtime type '{item?.GetType().FullName ?? "null"}' is not assignable to " +
+                        $"target element type '{elementType}'.", ex);
+                }
             }
             return;
         }

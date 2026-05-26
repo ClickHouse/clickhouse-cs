@@ -596,6 +596,39 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task GetFieldValueMultidim_WrongLeafType_ThrowsInvalidCastException()
+    {
+        // Server returns a well-shaped Array(Array(String)); caller asks for int[,]. The leaf
+        // mismatch must surface as InvalidCastException (not InvalidOperationException), with the
+        // column ordinal and target CLR type in the message — that's the GetFieldValue<T>
+        // contract this test pins.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT [['a','b'],['c','d']]::Array(Array(String)) as result";
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var ex = Assert.Throws<InvalidCastException>(() => reader.GetFieldValue<int[,]>(0));
+        Assert.That(ex!.Message, Does.Contain("[0]"));
+        Assert.That(ex.Message, Does.Contain("Int32[,]"));
+    }
+
+    [Test]
+    public async Task GetFieldValueMultidim_NullLeafIntoValueTypeTarget_ThrowsInvalidCastException()
+    {
+        // Server returns a rectangular Array(Array(Nullable(Int32))) with a NULL leaf; caller
+        // asks for a non-nullable int[,]. Null leaf into a value-type slot must surface as
+        // InvalidCastException with the ordinal and target type in the message.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT [[1, NULL], [3, 4]]::Array(Array(Nullable(Int32))) as result";
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var ex = Assert.Throws<InvalidCastException>(() => reader.GetFieldValue<int[,]>(0));
+        Assert.That(ex!.Message, Does.Contain("[0]"));
+        Assert.That(ex.Message, Does.Contain("Int32[,]"));
+    }
+
+    [Test]
     public async Task GetFieldValueMultidim_EmptyOuter_ReturnsEmptyRectangular()
     {
         using var command = connection.CreateCommand();

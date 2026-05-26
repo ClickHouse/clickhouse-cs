@@ -9,7 +9,7 @@ v1.3.0
 **Improvements:**
 * HTTP parameter mismatch errors now include the parameter name and the full ClickHouse type. The previous message (`"Cannot convert 219 to Array(UInt8)"`) collapsed the outer type and omitted which parameter failed.
 * Multidimensional CLR array writes walk the array in place — no per-row sub-array allocations — and validate rank against the ClickHouse type's nested-array depth up front, with both numbers named in the error on mismatch.
-* `GetFieldValue<T[,]>` shape errors (ragged data, null intermediate rows, source deeper than target rank) now throw `InvalidOperationException` with a message pointing at jagged target types as the alternative; type mismatches still throw `InvalidCastException` per the `DbDataReader` contract.
+* `GetFieldValue<T[,]>` errors are now categorised by cause: shape failures (ragged data, null intermediate rows, source deeper than target rank) throw `InvalidOperationException` with a message pointing at jagged target types as the alternative; type mismatches at the column level or at any leaf (wrong scalar type, or `null` into a non-nullable value-type target) throw `InvalidCastException` with the column ordinal, target CLR type, and offending indices in the message. Previously a `null` leaf into e.g. `int[,]` was silently coerced to `default(int)`.
 
 **Bug Fixes:**
 * Fixed type inference for `System.Tuple` with more than 7 elements. The TRest nesting was not being flattened, causing the 8th+ elements to be inferred as nested tuple types instead of their actual flat types. This could lead to incorrect ClickHouse type inference and serialization errors.

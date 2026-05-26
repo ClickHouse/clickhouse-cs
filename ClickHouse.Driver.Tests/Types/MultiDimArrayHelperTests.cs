@@ -279,6 +279,58 @@ public class MultiDimArrayHelperTests
     }
 
     [Test]
+    public void ToMultidimensional_WrongScalarLeafType_ThrowsInvalidCastException()
+    {
+        // Well-shaped jagged value, but the leaf scalars are the wrong runtime type for the
+        // target element. Must surface as InvalidCastException (per GetFieldValue<T> contract),
+        // not the BCL message, and must point at the first offending index.
+        var jagged = new object[]
+        {
+            new object[] { "a", "b" },
+            new object[] { "c", "d" },
+        };
+        var ex = Assert.Throws<InvalidCastException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged));
+        Assert.That(ex!.Message, Does.Contain("[0,0]"));
+        Assert.That(ex.Message, Does.Contain("Int32"));
+        Assert.That(ex.Message, Does.Contain("String"));
+    }
+
+    [Test]
+    public void ToMultidimensional_NullLeafIntoValueTypeTarget_ThrowsInvalidCastException()
+    {
+        // Contrast with NullableElementType_PreservesNullElements: a nullable element type
+        // accepts null leaves, but a non-nullable value-type target must reject them with a
+        // typed exception that pinpoints the offending index.
+        var jagged = new object[]
+        {
+            new object[] { 1, null },
+            new object[] { 3, 4 },
+        };
+        var ex = Assert.Throws<InvalidCastException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,]>(jagged));
+        Assert.That(ex!.Message, Does.Contain("[0,1]"));
+        Assert.That(ex.Message, Does.Contain("Int32"));
+        Assert.That(ex.Message, Does.Contain("null"));
+    }
+
+    [Test]
+    public void ToMultidimensional_NullLeafIntoReferenceTypeTarget_Succeeds()
+    {
+        // Regression guard: the new leaf-assignment wrap must not over-reject legitimate null
+        // leaves when the target element type is a reference type.
+        var jagged = new object[]
+        {
+            new object[] { "a", null },
+            new object[] { "c", "d" },
+        };
+        var result = MultiDimArrayHelper.ToMultidimensional<string[,]>(jagged);
+        Assert.That(result[0, 0], Is.EqualTo("a"));
+        Assert.That(result[0, 1], Is.Null);
+        Assert.That(result[1, 1], Is.EqualTo("d"));
+    }
+
+    [Test]
     public void ToMultidimensional_RoundTripViaBinaryWriteAndRead_ReturnsOriginalValues()
     {
         // Multidim → binary write → reader produces jagged → ToMultidimensional → equivalent multidim.

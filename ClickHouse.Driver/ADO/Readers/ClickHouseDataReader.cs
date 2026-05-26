@@ -207,7 +207,17 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                     $"Column [{ordinal}] value '{raw?.GetType().FullName ?? "null"}' " +
                     $"cannot be converted to '{typeof(T)}'.");
             }
-            return MultiDimArrayHelper.ToMultidimensional<T>(raw);
+            try
+            {
+                return MultiDimArrayHelper.ToMultidimensional<T>(raw);
+            }
+            catch (InvalidCastException ex)
+            {
+                // Leaf-type mismatch inside an otherwise well-shaped jagged value. Add column
+                // context to the helper's index/element-type message so callers see ordinal + T.
+                throw new InvalidCastException(
+                    $"Column [{ordinal}] cannot be converted to '{typeof(T)}': {ex.Message}", ex);
+            }
         }
         return (T)raw;
     }
