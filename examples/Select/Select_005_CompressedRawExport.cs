@@ -24,6 +24,11 @@ public static class CompressedRawExport
         using var client = new ClickHouseClient(new ClickHouseClientSettings(connectionString)
         {
             HttpClient = httpClient,
+            // UseCompression=true (the default) makes the driver attach Accept-Encoding: gzip
+            // to every request. Since this HttpClient won't decompress, the regular
+            // CREATE/INSERT/DROP responses would come back as raw gzip and fail to parse.
+            // Disable the client-wide default and negotiate compression per-query instead.
+            UseCompression = false,
         });
 
         // Create and populate a test table
