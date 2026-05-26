@@ -506,7 +506,6 @@ public class InferredDateTimeHttpParamTests : IDisposable
         var expected = ToUnixSeconds(dt);
 
         var command = connection.CreateCommand();
-        command.AddParameter("id", 1);
         command.AddParameter("created_at", dt);
         command.CommandText = $"INSERT INTO {tableName} (dt_no_tz, dt_utc) VALUES (@created_at, @created_at)";
         await command.ExecuteNonQueryAsync();
@@ -881,11 +880,9 @@ public class WriteDateTime64HttpParamTests : IDisposable
     protected readonly ClickHouseConnection connection;
     protected readonly ClickHouseClient client;
     private readonly string tableName;
-    private readonly string sessionTimezone;
 
     public WriteDateTime64HttpParamTests(string sessionTimezone)
     {
-        this.sessionTimezone = sessionTimezone;
         var settings = TestUtilities.GetTestClickHouseClientSettings();
         settings.CustomSettings["session_timezone"] = sessionTimezone;
         client = new ClickHouseClient(settings);
