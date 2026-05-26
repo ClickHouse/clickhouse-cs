@@ -89,6 +89,42 @@ public class QueryOptions
     public TimeSpan? MaxExecutionTime { get; init; }
 
     /// <summary>
+    /// Gets or sets the HTTP <c>Accept-Encoding</c> header value sent with this query's request.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When non-null and non-empty, this value <b>overrides</b> the default Accept-Encoding
+    /// (<c>gzip, deflate</c>) that the client adds when
+    /// <see cref="ADO.ClickHouseClientSettings.UseCompression"/> is true. The server is asked
+    /// to encode the response body with the negotiated algorithm. Multiple algorithms may be
+    /// quality-weighted per the HTTP spec, e.g. <c>"zstd, gzip;q=0.5"</c>.
+    /// </para>
+    /// <para>
+    /// Setting this property also forces <c>enable_http_compression=1</c> on the URL for the
+    /// request — ClickHouse only honours <c>Accept-Encoding</c> when that setting is on.
+    /// </para>
+    /// <para>
+    /// Note that the underlying <see cref="System.Net.Http.HttpClient"/> may transparently
+    /// decompress some algorithms (gzip/deflate/brotli by default in .NET); the resulting body
+    /// and <see cref="ADO.ClickHouseRawResult.ContentEncoding"/> reflect what the consumer
+    /// actually receives after that step.
+    /// </para>
+    /// <para>
+    /// <b>Warning:</b> selecting a codec the underlying <see cref="System.Net.Http.HttpClient"/>
+    /// cannot decode (e.g. <c>zstd</c>, <c>lz4</c>) is only meaningful with
+    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/>, where the caller decodes the body
+    /// themselves after inspecting <see cref="ADO.ClickHouseRawResult.ContentEncoding"/>. The
+    /// parsing reader APIs (<c>ExecuteReaderAsync</c>, <c>ExecuteScalarAsync</c>,
+    /// <c>ExecuteNonQueryAsync</c>) will read the still-compressed bytes as if they were the
+    /// ClickHouse wire format and return garbage or throw. To use such a codec end-to-end you
+    /// also need an <see cref="System.Net.Http.HttpClient"/> configured without
+    /// <c>AutomaticDecompression</c>; otherwise the framework strips
+    /// <c>Content-Encoding</c> before the body reaches the driver.
+    /// </para>
+    /// </remarks>
+    public string? AcceptEncoding { get; init; }
+
+    /// <summary>
     /// Creates a new <see cref="QueryOptions"/> with the same settings but a different <see cref="QueryId"/>.
     /// </summary>
     internal QueryOptions WithQueryId(string queryId)
@@ -106,6 +142,7 @@ public class QueryOptions
             ParameterTypeResolver = ParameterTypeResolver,
             ParameterFormatter = ParameterFormatter,
             MaxExecutionTime = MaxExecutionTime,
+            AcceptEncoding = AcceptEncoding,
         };
     }
 }

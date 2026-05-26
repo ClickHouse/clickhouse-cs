@@ -49,6 +49,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Select_002_SelectMetadata.cs](Select/Select_002_SelectMetadata.cs) - Column metadata overview
 - [Select_003_SelectWithParameterBinding.cs](Select/Select_003_SelectWithParameterBinding.cs) - Parameterized queries for safe and dynamic SQL construction
 - [Select_004_ExportToFile.cs](Select/Select_004_ExportToFile.cs) - Exporting query results to files (JSONEachRow, Parquet, etc.)
+- [Select_005_CompressedRawExport.cs](Select/Select_005_CompressedRawExport.cs) - Per-query `AcceptEncoding` override for raw exports (e.g. gzipped Parquet) using `ExecuteRawResultAsync`
 
 ### Data Types
 
