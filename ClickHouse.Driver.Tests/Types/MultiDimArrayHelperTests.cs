@@ -189,9 +189,10 @@ public class MultiDimArrayHelperTests
     }
 
     [Test]
-    public void ToMultidimensional_NullValue_ThrowsInvalidOperationException()
+    public void ToMultidimensional_NullValue_ThrowsInvalidCastException()
     {
-        Assert.Throws<InvalidOperationException>(
+        // Top-level null is a type-structure mismatch (no collection at all), not a shape issue.
+        Assert.Throws<InvalidCastException>(
             () => MultiDimArrayHelper.ToMultidimensional<int[,]>(null!));
     }
 
@@ -244,35 +245,49 @@ public class MultiDimArrayHelperTests
     }
 
     [Test]
-    public void ToMultidimensional_SourceDeeperThanTarget_ThrowsInvalidOperationException()
+    public void ToMultidimensional_SourceShallowerThanTarget_ThrowsInvalidCastException()
     {
-        // Rank-3 source, rank-2 target — measurement must catch this rather than letting
-        // CopyJaggedToMultidim throw an opaque ArgumentException from Array.SetValue.
+        // Rank-1 source asked for as rank-2 target — the source isn't structurally a 2D
+        // collection at all. By the type-vs-shape contract this is a type mismatch
+        // (InvalidCastException), not a shape failure, and the message must say so.
+        var shallow = new[] { 1, 2, 3 };
+        var ex = Assert.Throws<InvalidCastException>(
+            () => MultiDimArrayHelper.ToMultidimensional<int[,]>(shallow));
+        Assert.That(ex!.Message, Does.Contain("shallower"));
+        Assert.That(ex.Message, Does.Contain("depth 1"));
+    }
+
+    [Test]
+    public void ToMultidimensional_SourceDeeperThanTarget_ThrowsInvalidCastException()
+    {
+        // Rank-3 source, rank-2 target — the source's structural depth doesn't match the
+        // target rank, so this is a type mismatch (InvalidCastException) rather than a
+        // shape error (which would be ragged rows or null intermediate rows).
         var deep = new List<List<List<int>>>
         {
             new() { new() { 1, 2 }, new() { 3, 4 } },
             new() { new() { 5, 6 }, new() { 7, 8 } },
         };
 
-        var ex = Assert.Throws<InvalidOperationException>(
+        var ex = Assert.Throws<InvalidCastException>(
             () => MultiDimArrayHelper.ToMultidimensional<int[,]>(deep));
         Assert.That(ex!.Message, Does.Contain("deeper than the target rank"));
         Assert.That(ex.Message, Does.Contain("T[][]"));
     }
 
     [Test]
-    public void ToMultidimensional_SourceDeeperThanTargetAtLaterSiblingOnly_ThrowsInvalidOperationException()
+    public void ToMultidimensional_SourceDeeperThanTargetAtLaterSiblingOnly_ThrowsInvalidCastException()
     {
-        // Mismatched leaf siblings: first element is a scalar, a later one is a list. A list[0]-only
-        // peek would miss this and let Array.SetValue surface a worse BCL exception. The per-element
-        // guard in CopyJaggedToMultidim must catch it and report the exact offending index.
+        // Mismatched leaf siblings: first element is a scalar, a later one is a list. The
+        // per-element guard in CopyJaggedToMultidim must catch this and report the exact
+        // offending index — same type-mismatch category as a uniformly deeper source.
         var mixed = new object[]
         {
             new object[] { 1, 2 },
             new object[] { 3, new object[] { 99 } },
         };
 
-        var ex = Assert.Throws<InvalidOperationException>(
+        var ex = Assert.Throws<InvalidCastException>(
             () => MultiDimArrayHelper.ToMultidimensional<int[,]>(mixed));
         Assert.That(ex!.Message, Does.Contain("deeper than the target rank"));
         Assert.That(ex.Message, Does.Contain("[1,1]"));

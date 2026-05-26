@@ -596,6 +596,21 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task GetFieldValueMultidim_ShallowSource_ThrowsInvalidCastException()
+    {
+        // Server returns a 1D Array(Int32); caller asks for int[,]. The source's structural
+        // depth doesn't match the target rank — type mismatch, not shape failure.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT [1, 2, 3]::Array(Int32) as result";
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.That(reader.Read(), Is.True);
+
+        var ex = Assert.Throws<InvalidCastException>(() => reader.GetFieldValue<int[,]>(0));
+        Assert.That(ex!.Message, Does.Contain("[0]"));
+        Assert.That(ex.Message, Does.Contain("Int32[,]"));
+    }
+
+    [Test]
     public async Task GetFieldValueMultidim_WrongLeafType_ThrowsInvalidCastException()
     {
         // Server returns a well-shaped Array(Array(String)); caller asks for int[,]. The leaf

@@ -130,9 +130,12 @@ internal static class MultiDimArrayHelper
     /// <summary>
     /// Converts a jagged value (as produced by <see cref="ArrayType.Read"/> for an
     /// <c>Array(Array(T))</c> column) into a rectangular multidimensional <see cref="Array"/>
-    /// of the requested CLR type <typeparamref name="T"/>. The jagged value must be rectangular —
-    /// every nested level must be a fixed length at that level — otherwise an
-    /// <see cref="InvalidOperationException"/> is thrown.
+    /// of the requested CLR type <typeparamref name="T"/>. Errors are split by cause:
+    /// <see cref="InvalidCastException"/> for type-structure mismatches (the value is null,
+    /// its structural depth differs from the target rank, or a leaf can't be assigned to the
+    /// target element type); <see cref="InvalidOperationException"/> for shape-validation
+    /// failures (the value's structure matches <typeparamref name="T"/> but rows are ragged
+    /// or an intermediate row is null).
     /// </summary>
     /// <typeparam name="T">A multidimensional CLR array type, e.g. <c>int[,]</c> or <c>byte[,,]</c>.
     /// The rank and element type must match the structure of <paramref name="jagged"/>.</typeparam>
@@ -149,7 +152,7 @@ internal static class MultiDimArrayHelper
         var elementType = targetType.GetElementType()!;
 
         if (jagged is null || jagged is DBNull)
-            throw new InvalidOperationException(
+            throw new InvalidCastException(
                 $"Cannot materialise '{targetType}' from a null value.");
 
         var dims = new int[rank];
@@ -180,8 +183,11 @@ internal static class MultiDimArrayHelper
 
         if (level is not IList list)
         {
-            throw new InvalidOperationException(
-                $"Cannot materialise a rectangular array: expected a list-like value at depth {depth}, got '{level.GetType()}'.");
+            // A scalar where a sub-list was expected means the source's structural depth is
+            // shallower than the target rank — a type-structure mismatch, not a shape issue.
+            throw new InvalidCastException(
+                $"Cannot materialise a rectangular array: expected a list-like value at depth {depth}, " +
+                $"got '{level.GetType()}'. The source structure is shallower than the target rank.");
         }
 
         var length = list.Count;
@@ -228,7 +234,9 @@ internal static class MultiDimArrayHelper
                 indices[depth] = i;
                 if (item is IList)
                 {
-                    throw new InvalidOperationException(
+                    // A nested list where a leaf scalar was expected means the source's
+                    // structural depth is deeper than the target rank — type-structure mismatch.
+                    throw new InvalidCastException(
                         $"Cannot materialise a rectangular array: source is deeper than the target rank " +
                         $"(target rank {rank}, nested list at indices [{string.Join(",", indices)}]). " +
                         $"Use a jagged target type (e.g. T[][]) for deeper sources.");
