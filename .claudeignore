@@ -1,0 +1,12 @@
+# Secrets / credentials
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.snk
+credentials/
+secrets.yaml
+secrets.yml
+appsettings.*.Local.json
+appsettings.Development.json
