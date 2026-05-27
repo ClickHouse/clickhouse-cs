@@ -96,6 +96,16 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     /// <remarks>Not thread-safe.</remarks>
     public IList<string> Roles => roles ??= new List<string>();
 
+    /// <summary>
+    /// Gets or sets the HTTP <c>Accept-Encoding</c> header value sent with this command's
+    /// request, overriding the connection-level default of <c>gzip, deflate</c>.
+    /// </summary>
+    /// <remarks>
+    /// See <see cref="QueryOptions.AcceptEncoding"/> for full semantics. Setting this property
+    /// also forces <c>enable_http_compression=1</c> on the URL for the request.
+    /// </remarks>
+    public string AcceptEncoding { get; set; }
+
     protected override DbConnection DbConnection
     {
         get => connection;
@@ -219,6 +229,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             Database = connection?.Database,
             Roles = roles?.Count > 0 ? roles : null,
             CustomSettings = customSettings?.Count > 0 ? customSettings : null,
+            AcceptEncoding = AcceptEncoding,
         };
     }
 }

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 
@@ -19,6 +20,31 @@ public class ClickHouseRawResult : IDisposable
     internal ClickHouseRawResult(HttpResponseMessage response)
     {
         this.response = response;
+    }
+
+    /// <summary>
+    /// HTTP <c>Content-Encoding</c> the response body is encoded with (e.g. <c>"zstd"</c>,
+    /// <c>"gzip"</c>), or <see langword="null"/> when the body is not transport-compressed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When the underlying <see cref="HttpClient"/> has <c>AutomaticDecompression</c> enabled
+    /// for the negotiated algorithm (e.g. gzip/deflate by default), the framework strips
+    /// <c>Content-Encoding</c> after decompressing, so this property will be <see langword="null"/>
+    /// even though compression was used on the wire.
+    /// </para>
+    /// <para>
+    /// The HTTP-standard <c>identity</c> token (meaning "no encoding") is normalized to
+    /// <see langword="null"/> so callers don't have to special-case it.
+    /// </para>
+    /// </remarks>
+    public string ContentEncoding
+    {
+        get
+        {
+            var value = response.Content.Headers.ContentEncoding.FirstOrDefault();
+            return string.Equals(value, "identity", StringComparison.OrdinalIgnoreCase) ? null : value;
+        }
     }
 
     /// <summary>
