@@ -9,7 +9,15 @@ namespace ClickHouse.Driver.ADO.Readers;
 /// Return the value unchanged to pass through, or return a transformed value of the same type.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Implementations must be thread-safe, as they may be called concurrently from multiple readers.
+/// </para>
+/// <para>
+/// The converter is invoked once per column per row, with the entire
+/// deserialized cell value. It does <i>not</i> recurse into composite containers. For an
+/// <c>Array(Int32)</c> column the value is an <c>int[]</c>; Per-element transforms inside these containers must be performed
+/// inside the converter implementation itself.
+/// </para>
 /// </remarks>
 public interface IReadValueConverter
 {
