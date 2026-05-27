@@ -37,6 +37,11 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         yield return new TestCaseData("FixedString(4)", new byte[] { 121, 122, 123, 124 }); // Test both formats for FixedString
         yield return new TestCaseData("String", "asdf");
         yield return new TestCaseData("String", new byte[] { 121, 122, 123, 124 }); // Test both formats for String
+
+        // Nested arrays — jagged on the wire, both jagged and multidim CLR shapes accepted on write.
+        yield return new TestCaseData("Array(Array(Int32))", new int[][] { new[] { 1, 2 }, new[] { 3 } });
+        yield return new TestCaseData("Array(Array(String))", new string[][] { new[] { "a", "b" }, new[] { "c" } });
+        yield return new TestCaseData("Array(Array(Array(Int32)))", new int[][][] { new int[][] { new[] { 1, 2 } } });
     }
 
     public static IEnumerable<TestCaseData> GetStringInsertTestCases()
@@ -509,6 +514,96 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         }, CancellationToken.None);
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
+    }
+
+    [Test]
+    public async Task ShouldBulkInsertJaggedArrayColumn()
+    {
+        var targetTable = "test.bulk_jagged_array";
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, arr Array(Array(Int32))) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var row0 = new int[][] { new[] { 1, 2 }, new[] { 3 } };
+        var row1 = new int[][] { new int[0], new[] { 4, 5, 6 } };
+        await bulkCopy.WriteToServerAsync(new List<object[]>
+        {
+            new object[] { 0, row0 },
+            new object[] { 1, row1 },
+        }, CancellationToken.None);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT arr FROM {targetTable} ORDER BY id");
+        Assert.That(reader.Read(), Is.True);
+        var got0 = (int[][])reader.GetValue(0);
+        Assert.That(got0, Is.EqualTo(row0));
+        Assert.That(reader.Read(), Is.True);
+        var got1 = (int[][])reader.GetValue(0);
+        Assert.That(got1.Length, Is.EqualTo(row1.Length));
+        Assert.That(got1[0], Is.EqualTo(row1[0]));
+        Assert.That(got1[1], Is.EqualTo(row1[1]));
+    }
+
+    [Test]
+    public async Task ShouldBulkInsertMultidimArrayColumn()
+    {
+        var targetTable = "test.bulk_multidim_array";
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, arr Array(Array(UInt8))) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        // Rectangular CLR multidim — accepted on the write path and serialised as jagged on the wire.
+        var multidim = new byte[,] { { 1, 2, 3 }, { 4, 5, 6 } };
+        await bulkCopy.WriteToServerAsync(new List<object[]>
+        {
+            new object[] { 0, multidim },
+        }, CancellationToken.None);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT arr FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var got = (byte[][])reader.GetValue(0);
+        Assert.That(got.Length, Is.EqualTo(2));
+        Assert.That(got[0], Is.EqualTo(new byte[] { 1, 2, 3 }));
+        Assert.That(got[1], Is.EqualTo(new byte[] { 4, 5, 6 }));
+    }
+
+    [Test]
+    public async Task ShouldBulkInsertMultidim3DArrayColumn()
+    {
+        var targetTable = "test.bulk_multidim_3d_array";
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, arr Array(Array(Array(Int32)))) ENGINE Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection)
+        {
+            DestinationTableName = targetTable,
+        };
+
+        var cube = new int[2, 2, 2]
+        {
+            { { 1, 2 }, { 3, 4 } },
+            { { 5, 6 }, { 7, 8 } },
+        };
+        await bulkCopy.WriteToServerAsync(new List<object[]>
+        {
+            new object[] { 0, cube },
+        }, CancellationToken.None);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT arr FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        var got = (int[][][])reader.GetValue(0);
+        Assert.That(got.Length, Is.EqualTo(2));
+        Assert.That(got[0][0], Is.EqualTo(new[] { 1, 2 }));
+        Assert.That(got[0][1], Is.EqualTo(new[] { 3, 4 }));
+        Assert.That(got[1][0], Is.EqualTo(new[] { 5, 6 }));
+        Assert.That(got[1][1], Is.EqualTo(new[] { 7, 8 }));
     }
 
     [Test]
