@@ -194,7 +194,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override bool IsDBNull(int ordinal)
     {
-        var value = GetValue(ordinal);
+        // Read CurrentRow directly rather than going through GetValue so a configured
+        // IReadValueConverter does not run during a null check — it could throw, do
+        // expensive work, or change the nullness of the result.
+        var value = CurrentRow[ordinal];
         return value is DBNull || value is null;
     }
 

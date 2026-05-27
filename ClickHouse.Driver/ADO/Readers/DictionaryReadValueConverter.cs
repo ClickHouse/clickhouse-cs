@@ -47,8 +47,18 @@ public sealed class DictionaryReadValueConverter : IReadValueConverter
     /// <inheritdoc/>
     public T ConvertValue<T>(T value, string columnName, string clickHouseType)
     {
-        if (value == null)
+        if (value == null || value is DBNull)
             return value;
+
+        // GetFieldValue<object>(i) goes through this generic path with T == object and
+        // the value boxed to its runtime type. Dispatch by the runtime type so the result
+        // matches GetValue(i), which also dispatches by value.GetType().
+        if (typeof(T) == typeof(object))
+        {
+            return mappings.TryGetValue(value.GetType(), out var objEntry)
+                ? (T)objEntry.Boxed(value)
+                : value;
+        }
 
         if (mappings.TryGetValue(typeof(T), out var entry) && entry.Typed is Func<T, T> typed)
             return typed(value);
