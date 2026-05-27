@@ -34,7 +34,7 @@ internal class ArrayType : ParameterizedType
         return data;
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         if (value is null || value is DBNull)
         {

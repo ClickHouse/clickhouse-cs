@@ -32,7 +32,7 @@ internal class TimeType : ClickHouseType
         return TimeSpan.FromSeconds(seconds);
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         var seconds = CoerceToSeconds(value);
 
@@ -42,7 +42,7 @@ internal class TimeType : ClickHouseType
         writer.Write(seconds);
     }
 
-    private static int CoerceToSeconds(object value)
+    private static int CoerceToSeconds<T>(T value)
     {
         return value switch
         {

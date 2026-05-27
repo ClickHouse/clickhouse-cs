@@ -21,7 +21,7 @@ internal static class DateTimeConversions
 
 internal abstract class AbstractDateTimeType : ParameterizedType
 {
-    public DateTimeOffset CoerceToDateTimeOffset(object value)
+    public DateTimeOffset CoerceToDateTimeOffset<T>(T value)
     {
         return value switch
         {

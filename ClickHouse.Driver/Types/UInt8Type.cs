@@ -12,5 +12,13 @@ internal class UInt8Type : IntegerType
 
     public override string ToString() => "UInt8";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToByte(value, CultureInfo.InvariantCulture));
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        if (value is not byte byteValue)
+        {
+            byteValue = Convert.ToByte(value, CultureInfo.InvariantCulture);
+        }
+
+        writer.Write(byteValue);
+    }
 }

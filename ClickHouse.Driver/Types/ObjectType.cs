@@ -24,5 +24,5 @@ internal class ObjectType : ParameterizedType
 
     public override string ToString() => $"{Name}({UnderlyingType})";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => UnderlyingType.Write(writer, value);
+    public override void Write<T>(ExtendedBinaryWriter writer, T value) => UnderlyingType.Write(writer, value);
 }

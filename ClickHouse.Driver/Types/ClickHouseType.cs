@@ -9,7 +9,7 @@ internal abstract class ClickHouseType
 
     public abstract object Read(ExtendedBinaryReader reader);
 
-    public abstract void Write(ExtendedBinaryWriter writer, object value);
+    public abstract void Write<T>(ExtendedBinaryWriter writer, T value);
 
     public abstract override string ToString();
 
@@ -18,7 +18,7 @@ internal abstract class ClickHouseType
     /// The default checks exact type equality against <see cref="FrameworkType"/>.
     /// Override for types that share a FrameworkType but need value-based disambiguation (e.g. IPv4 vs IPv6).
     /// </summary>
-    public virtual bool CanWrite(object value) => FrameworkType == value?.GetType();
+    public virtual bool CanWrite<T>(T value) => FrameworkType == value?.GetType();
 
     protected static object ClearDBNull(object value) => value is DBNull ? null : value;
 }

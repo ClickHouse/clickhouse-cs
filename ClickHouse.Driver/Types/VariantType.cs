@@ -34,7 +34,7 @@ internal class VariantType : ParameterizedType
         return type.Read(reader);
     }
 
-    public (int, ClickHouseType) GetMatchingType(object value)
+    public (int, ClickHouseType) GetMatchingType<T>(T value)
     {
         for (int i = 0; i < UnderlyingTypes.Length; i++)
         {
@@ -46,7 +46,7 @@ internal class VariantType : ParameterizedType
         throw new ArgumentException("Could not find matching type for variant", nameof(value));
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         if (value is null or DBNull)
         {

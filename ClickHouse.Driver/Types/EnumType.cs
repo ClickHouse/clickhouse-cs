@@ -61,7 +61,7 @@ internal class EnumType : ParameterizedType
 
     public override object Read(ExtendedBinaryReader reader) => throw new NotImplementedException();
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => throw new NotImplementedException();
+    public override void Write<T>(ExtendedBinaryWriter writer, T value) => throw new NotImplementedException();
 
     private static KeyValuePair<string, int> ParseEnumMember(string value)
     {

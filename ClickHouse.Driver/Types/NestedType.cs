@@ -45,7 +45,7 @@ internal class NestedType : TupleType
         return data;
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         if (value is null || value is DBNull)
         {
@@ -57,7 +57,7 @@ internal class NestedType : TupleType
         writer.Write7BitEncodedInt(collection.Count);
         for (var i = 0; i < collection.Count; i++)
         {
-            base.Write(writer, collection[i]);
+            base.Write<object>(writer, collection[i]);
         }
     }
 }

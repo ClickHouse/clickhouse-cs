@@ -11,5 +11,5 @@ internal class NothingType : ClickHouseType
 
     public override string ToString() => "Nothing";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) { }
+    public override void Write<T>(ExtendedBinaryWriter writer, T value) { }
 }

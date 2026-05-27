@@ -12,5 +12,13 @@ internal class Int64Type : IntegerType
 
     public override string ToString() => "Int64";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToInt64(value, CultureInfo.InvariantCulture));
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        if (value is not long longValue)
+        {
+            longValue = Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+
+        writer.Write(longValue);
+    }
 }

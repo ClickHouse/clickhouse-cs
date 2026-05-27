@@ -12,5 +12,13 @@ internal class UInt16Type : IntegerType
 
     public override string ToString() => "UInt16";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToUInt16(value, CultureInfo.InvariantCulture));
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        if (value is not ushort ushortValue)
+        {
+            ushortValue = Convert.ToUInt16(value, CultureInfo.InvariantCulture);
+        }
+
+        writer.Write(ushortValue);
+    }
 }

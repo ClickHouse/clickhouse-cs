@@ -120,7 +120,7 @@ internal class Time64Type : ParameterizedType
         return Time64Type.FromClickHouseDecimal(fractionalSeconds);
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         var timeSpan = CoerceToTimeSpan(value);
         var fractionalSeconds = ToClickHouseDecimal(timeSpan);
@@ -133,7 +133,7 @@ internal class Time64Type : ParameterizedType
         decimalType.Write(writer, clickHouseDecimal);
     }
 
-    private static TimeSpan CoerceToTimeSpan(object value)
+    private static TimeSpan CoerceToTimeSpan<T>(T value)
     {
         return value switch
         {

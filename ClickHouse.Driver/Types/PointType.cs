@@ -10,11 +10,17 @@ internal class PointType : TupleType
         UnderlyingTypes = new[] { new Float64Type(), new Float64Type() };
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         if (value is System.Drawing.Point p)
-            value = Tuple.Create(p.X, p.Y);
-        base.Write(writer, value);
+        {
+            var tuple = Tuple.Create(p.X, p.Y);
+            base.Write(writer, tuple);
+        }
+        else
+        {
+            base.Write(writer, value);
+        }
     }
 
     public override string ToString() => "Point";

@@ -12,5 +12,13 @@ internal class Int8Type : IntegerType
 
     public override object Read(ExtendedBinaryReader reader) => reader.ReadSByte();
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToSByte(value, CultureInfo.InvariantCulture));
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        if (value is not sbyte sbyteValue)
+        {
+            sbyteValue = Convert.ToSByte(value, CultureInfo.InvariantCulture);
+        }
+
+        writer.Write(sbyteValue);
+    }
 }

@@ -12,5 +12,13 @@ internal class Int32Type : IntegerType
 
     public override string ToString() => "Int32";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToInt32(value, CultureInfo.InvariantCulture));
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        if (value is not int intValue)
+        {
+            intValue = Convert.ToInt32(value, CultureInfo.InvariantCulture);
+        }
+
+        writer.Write(intValue);
+    }
 }

@@ -145,7 +145,7 @@ internal class JsonType : ParameterizedType
 
     public override string ToString() => Name;
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         // String mode: serialize everything to JSON string, let server parse
         if (TypeSettings.jsonWriteMode == JsonWriteMode.String)
@@ -287,7 +287,7 @@ internal class JsonType : ParameterizedType
         if ((value is null || value is DBNull) && hintedType is NullableType)
         {
             // Nullable types handle null via their own Write method (writes byte 1)
-            hintedType.Write(writer, null);
+            hintedType.Write<object>(writer, null);
             return;
         }
 

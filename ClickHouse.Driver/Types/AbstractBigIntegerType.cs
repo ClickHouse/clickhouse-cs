@@ -25,7 +25,7 @@ internal abstract class AbstractBigIntegerType : IntegerType
 
     public abstract override string ToString();
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         var bigInt = value switch
         {

@@ -454,6 +454,17 @@ public sealed class ClickHouseClient : IClickHouseClient
         return InsertBinaryPocoAsync(table, rows, properties, mapping.Getters, options, cancellationToken);
     }
 
+    public async Task<BinaryImport> StartInsertAsync(
+        string table,
+        IEnumerable<string> columns,
+        InsertOptions options = default)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        var plan = await PrepareInsertAsync(table, columns, options).ConfigureAwait(false);
+
+        return new BinaryImport(this, plan);
+    }
+
     /// <summary>
     /// Applies column types from the POCO attribute mapping to the insert options,
     /// allowing the schema probe to be skipped when all properties declare explicit ClickHouse types.
@@ -477,7 +488,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// Resolved insert metadata shared by both the <c>object[]</c> and POCO insert paths.
     /// Produced by <see cref="PrepareInsertAsync"/> after validation and schema resolution.
     /// </summary>
-    private readonly struct InsertPlan
+    internal readonly struct InsertPlan
     {
         /// <summary>The finalized options (defaulted and validated).</summary>
         public InsertOptions Options { get; init; }
@@ -1054,5 +1065,182 @@ public sealed class ClickHouseClient : IClickHouseClient
         return string.Equals(headerName, "Connection", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(headerName, "Authorization", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(headerName, "User-Agent", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public class BinaryImport
+    {
+        private readonly InsertPlan insertPlan;
+
+        private ClickHouseClient clickHouseClient;
+        private int queryIdCounter;
+
+        internal BinaryImport(
+            ClickHouseClient clickHouseClient,
+            InsertPlan insertPlan)
+        {
+            this.clickHouseClient = clickHouseClient;
+            this.insertPlan = insertPlan;
+        }
+
+        public BatchData StartNewBatch()
+        {
+            RecyclableMemoryStream stream = null;
+            BufferedStream gzipStream = null;
+            ExtendedBinaryWriter writer = null;
+            try
+            {
+                stream = clickHouseClient.MemoryStreamManager.GetStream(nameof(StartNewBatch), 128 * 1024);
+                gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
+                using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
+                {
+                    textWriter.WriteLine(insertPlan.Query);
+                }
+
+                writer = new ExtendedBinaryWriter(gzipStream);
+            }
+            catch
+            {
+                if (writer != null)
+                {
+                    writer.Dispose();
+                }
+
+                if (gzipStream != null)
+                {
+                    gzipStream.Dispose();
+                }
+
+                if (stream != null)
+                {
+                    stream.Dispose();
+                }
+
+                throw;
+            }
+
+            var batchData = new BatchData(insertPlan.ColumnTypes, stream, gzipStream, writer);
+
+            return batchData;
+        }
+
+        public async Task SendBatchAsync(BatchData batchData, CancellationToken token = default)
+        {
+            try
+            {
+                batchData.CompleteWrite();
+                using var stream = batchData.GetStream();
+
+                // Seek to beginning as after writing it's at end
+                stream.Seek(0, SeekOrigin.Begin);
+
+                var content = new StreamContent(stream);
+                var batchOptions = insertPlan.Options.WithQueryId($"{insertPlan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
+
+                // Async sending
+                await clickHouseClient.PostStreamAsync(null, content, true, batchOptions, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                batchData.Dispose();
+            }
+        }
+
+        public sealed class BatchData : IDisposable
+        {
+            private readonly ClickHouseType[] columnTypes;
+
+            private bool disposed;
+
+            private RecyclableMemoryStream stream;
+            private BufferedStream gzipStream;
+            private ExtendedBinaryWriter writer;
+
+            private BatchData()
+            {
+            }
+
+            internal BatchData(
+                ClickHouseType[] columnTypes,
+                RecyclableMemoryStream stream,
+                BufferedStream gzipStream,
+                ExtendedBinaryWriter writer)
+            {
+                this.columnTypes = columnTypes;
+                this.stream = stream;
+                this.gzipStream = gzipStream;
+                this.writer = writer;
+            }
+
+            public void WriteData<T>(int columnIndex, T value)
+            {
+#pragma warning disable CA1513 // Use ObjectDisposedException throw helper
+                if (disposed)
+                {
+                    throw new ObjectDisposedException(nameof(BatchData));
+                }
+#pragma warning restore CA1513 // Use ObjectDisposedException throw helper
+
+                columnTypes[columnIndex].Write(this.writer, value);
+            }
+
+            public void CompleteWrite()
+            {
+#pragma warning disable CA1513 // Use ObjectDisposedException throw helper
+                if (disposed)
+                {
+                    throw new ObjectDisposedException(nameof(BatchData));
+                }
+#pragma warning restore CA1513 // Use ObjectDisposedException throw helper
+
+                this.writer?.Dispose();
+                this.writer = null;
+
+                this.gzipStream?.Dispose();
+                this.gzipStream = null;
+            }
+
+            private bool WriteIsComplete()
+            {
+                return this.writer == null && this.gzipStream == null;
+            }
+
+            internal RecyclableMemoryStream GetStream()
+            {
+                if (!WriteIsComplete())
+                {
+                    throw new InvalidOperationException($"Call {nameof(CompleteWrite)} before get Stream");
+                }
+
+                var stream = this.stream;
+                this.stream = null;
+
+                return stream;
+            }
+
+            public void Dispose()
+            {
+                Dispose(true);
+                GC.SuppressFinalize(this);
+            }
+
+            private void Dispose(bool disposing)
+            {
+                if (disposed) return;
+
+                if (disposing)
+                {
+                    this.writer?.Dispose();
+                    this.writer = null;
+
+                    this.gzipStream?.Dispose();
+                    this.gzipStream = null;
+
+                    this.stream?.Dispose();
+                    this.stream = null;
+                }
+
+                disposed = true;
+            }
+        }
     }
 }

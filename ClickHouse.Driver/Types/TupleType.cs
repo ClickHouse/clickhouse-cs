@@ -87,7 +87,7 @@ internal class TupleType : ParameterizedType
         return MakeTuple(contents);
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         if (value is ITuple tuple)
         {

@@ -59,7 +59,7 @@ internal class MapType : ParameterizedType
 
     public override string ToString() => $"{Name}({keyType}, {valueType})";
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
     {
         var dict = (IDictionary)value;
         writer.Write7BitEncodedInt(dict.Count);

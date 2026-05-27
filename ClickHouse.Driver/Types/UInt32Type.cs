@@ -12,5 +12,13 @@ internal class UInt32Type : IntegerType
 
     public override string ToString() => "UInt32";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToUInt32(value, CultureInfo.InvariantCulture));
+    public override void Write<T>(ExtendedBinaryWriter writer, T value)
+    {
+        if (value is not uint uintValue)
+        {
+            uintValue = Convert.ToUInt32(value, CultureInfo.InvariantCulture);
+        }
+
+        writer.Write(uintValue);
+    }
 }
