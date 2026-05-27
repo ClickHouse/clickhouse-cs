@@ -41,11 +41,13 @@ internal static class HttpParameterFormatter
             // Inner formatters describe only the leaf type/value they were dispatched with;
             // this is the single place that owns parameter-name + outer-type context. Filter
             // to the exact base type so subclasses (e.g. ArgumentNullException) propagate
-            // untouched rather than being downgraded to plain ArgumentException.
+            // untouched rather than being downgraded to plain ArgumentException. Forward
+            // ex.ParamName so a custom IParameterFormatter that set it isn't silently dropped.
             throw new ArgumentException(
                 parameter.ParameterName is null
                     ? $"Cannot format parameter as {parsedType}: {ex.Message}"
                     : $"Parameter '{parameter.ParameterName}' (type {parsedType}): {ex.Message}",
+                ex.ParamName,
                 ex);
         }
     }
