@@ -356,6 +356,44 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
     // ==========================================
 
     [Test]
+    public async Task IsDBNull_WithThrowingConverter_ShouldNotInvokeConverter()
+    {
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings)
+        {
+            ReadValueConverter = new ThrowingConverter(),
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT CAST(NULL AS Nullable(Int32)), toInt32(42)");
+        ClassicAssert.IsTrue(reader.Read());
+
+        // IsDBNull must not run the converter — it inspects the raw value.
+        ClassicAssert.IsTrue(reader.IsDBNull(0));
+        ClassicAssert.IsFalse(reader.IsDBNull(1));
+    }
+
+    [Test]
+    public async Task IsDBNull_WithConverter_ShouldReflectRawDbValueNotConvertedOutput()
+    {
+        // A converter that turns 42 into null would have masked a non-null cell as null
+        // if IsDBNull had run the converter.
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings)
+        {
+            ReadValueConverter = new NullReturningConverter(),
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toInt32(42)");
+        ClassicAssert.IsTrue(reader.Read());
+
+        ClassicAssert.IsFalse(reader.IsDBNull(0),
+            "IsDBNull must reflect the raw cell, not the converter's output");
+    }
+
+    [Test]
     public void GetValue_WithThrowingConverter_ShouldPropagateException()
     {
         var settings = TestUtilities.GetTestClickHouseClientSettings();
@@ -537,6 +575,40 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
 
         Assert.That(converter.ConvertValue(5, "c", "Int32"), Is.EqualTo(50));
         Assert.That(converter.ConvertValue<int>(5, "c", "Int32"), Is.EqualTo(50));
+    }
+
+    [Test]
+    public async Task DictionaryReadValueConverter_GetFieldValueOfObject_ShouldDispatchByRuntimeType()
+    {
+        var converter = new DictionaryReadValueConverter()
+            .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc));
+
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings) { ReadValueConverter = converter };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toDateTime('2025-01-15 12:00:00')");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var asObject = (DateTime)reader.GetFieldValue<object>(0);
+        var asValue = (DateTime)reader.GetValue(0);
+
+        Assert.That(asObject.Kind, Is.EqualTo(DateTimeKind.Utc),
+            "GetFieldValue<object> should apply the converter registered for the runtime type");
+        Assert.That(asObject.Kind, Is.EqualTo(asValue.Kind),
+            "GetFieldValue<object> and GetValue must agree for the same column");
+    }
+
+    [Test]
+    public void DictionaryReadValueConverter_ConvertValueOfObject_DispatchesByRuntimeType()
+    {
+        var converter = new DictionaryReadValueConverter()
+            .For<int>(i => i * 10);
+
+        // T = object but the actual value is an int — should dispatch via the boxed wrapper
+        Assert.That(converter.ConvertValue<object>(5, "c", "Int32"), Is.EqualTo(50));
+        // And still passes through when runtime type isn't registered
+        Assert.That(converter.ConvertValue<object>("hi", "c", "String"), Is.EqualTo("hi"));
     }
 
     // The converter fires once per column at the GetValue/GetFieldValue<T> boundary.
@@ -728,6 +800,12 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
 
         public T ConvertValue<T>(T value, string columnName, string clickHouseType)
             => throw new InvalidOperationException("Converter failed");
+    }
+
+    private sealed class NullReturningConverter : IReadValueConverter
+    {
+        public object ConvertValue(object value, string columnName, string clickHouseType) => null;
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType) => default;
     }
 
     private sealed class MultiTypeConverter : IReadValueConverter
