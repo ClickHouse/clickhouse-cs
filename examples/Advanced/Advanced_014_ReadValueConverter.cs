@@ -13,11 +13,11 @@ public static class ReadValueConverter
 {
     public static async Task Run()
     {
-        // Set DateTime.Kind to Utc for all DateTime columns
-        await DateTimeKindExample();
+        // Basic path: register per-CLR-type transforms with DictionaryReadValueConverter
+        await DictionaryConverterExample();
 
-        // Transform multiple types with a single converter
-        await MultiTypeConverterExample();
+        // Advanced: implement IReadValueConverter directly for full control
+        await CustomConverterExample();
 
         // Override the converter for a specific query via QueryOptions
         await PerQueryConverterExample();
@@ -27,54 +27,60 @@ public static class ReadValueConverter
     }
 
     /// <summary>
-    /// The most common use case: ClickHouse DateTime columns without an explicit timezone
-    /// return DateTime with Kind=Unspecified. Use a converter to set Kind=Utc globally.
+    /// The recommended way to use IReadValueConverter: register per-CLR-type transforms
+    /// with DictionaryReadValueConverter. Values whose runtime type is not registered
+    /// pass through unchanged, so columns you don't care about pay nothing.
     /// </summary>
-    private static async Task DateTimeKindExample()
+    private static async Task DictionaryConverterExample()
     {
-        Console.WriteLine("1. DateTimeKindConverter - Set Kind=Utc on all DateTime values:");
+        Console.WriteLine("1. DictionaryReadValueConverter - register transforms per CLR type:");
+
+        var converter = new DictionaryReadValueConverter()
+            .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc))
+            .For<string>(s => s.Trim());
 
         var settings = new ClickHouseClientSettings("Host=localhost")
         {
-            ReadValueConverter = new DateTimeKindConverter(DateTimeKind.Utc),
+            ReadValueConverter = converter,
         };
         using var client = new ClickHouseClient(settings);
 
-        // DateTime column without timezone returns Kind=Unspecified by default.
-        // With the converter, it returns Kind=Utc.
         using var reader = await client.ExecuteReaderAsync(
-            "SELECT toDateTime('2025-06-15 12:30:45') as dt, toInt32(42) as num");
+            "SELECT toDateTime('2025-06-15 12:30:45') as dt, '  hello  ' as s, toInt32(42) as n");
 
         while (reader.Read())
         {
             var dt = reader.GetFieldValue<DateTime>(0);
-            Console.WriteLine($"   DateTime: {dt:yyyy-MM-dd HH:mm:ss}, Kind: {dt.Kind}");
-            Console.WriteLine($"   Int32 (unaffected): {reader.GetFieldValue<int>(1)}");
+            Console.WriteLine($"   DateTime (Kind set to Utc): {dt:yyyy-MM-dd HH:mm:ss}, Kind={dt.Kind}");
+            Console.WriteLine($"   String (trimmed): '{reader.GetFieldValue<string>(1)}'");
+            Console.WriteLine($"   Int32 (unregistered, unchanged): {reader.GetFieldValue<int>(2)}");
         }
     }
 
     /// <summary>
-    /// A converter can transform multiple types. Here we trim + uppercase strings,
-    /// double integers, and leave other types alone (contrived, but demonstrates the pattern).
+    /// For cases that need more than CLR-type-keyed dispatch — for example, distinguishing
+    /// <c>DateTime</c> (no timezone) from <c>DateTime('UTC')</c> using the ClickHouse-side type
+    /// name — implement IReadValueConverter directly.
     /// </summary>
-    private static async Task MultiTypeConverterExample()
+    private static async Task CustomConverterExample()
     {
-        Console.WriteLine("\n2. MultiTypeConverter - Transform multiple types:");
+        Console.WriteLine("\n2. Custom IReadValueConverter - dispatch on ClickHouse-side type:");
 
         var settings = new ClickHouseClientSettings("Host=localhost")
         {
-            ReadValueConverter = new MultiTypeConverter(),
+            ReadValueConverter = new UtcOnlyForNoTzDateTimeConverter(),
         };
         using var client = new ClickHouseClient(settings);
 
         using var reader = await client.ExecuteReaderAsync(
-            "SELECT '  hello world  ' as raw_string, toInt32(21) as n, toFloat64(3.14) as pi");
+            "SELECT toDateTime('2025-06-15 12:30:45') as no_tz, toDateTime('2025-06-15 12:30:45', 'Europe/Berlin') as berlin");
 
         while (reader.Read())
         {
-            Console.WriteLine($"   String (trim + upper): '{reader.GetFieldValue<string>(0)}'");
-            Console.WriteLine($"   Int32 (doubled):        {reader.GetFieldValue<int>(1)}");
-            Console.WriteLine($"   Float64 (unaffected):   {reader.GetFieldValue<double>(2)}");
+            var noTz = reader.GetFieldValue<DateTime>(0);
+            var berlin = reader.GetFieldValue<DateTime>(1);
+            Console.WriteLine($"   no-tz column   -> Kind={noTz.Kind} (forced to Utc)");
+            Console.WriteLine($"   Europe/Berlin -> Kind={berlin.Kind} (left as-is)");
         }
     }
 
@@ -85,14 +91,13 @@ public static class ReadValueConverter
     {
         Console.WriteLine("\n3. Per-query converter override via QueryOptions:");
 
-        // Client-level: Kind=Utc
         var settings = new ClickHouseClientSettings("Host=localhost")
         {
-            ReadValueConverter = new DateTimeKindConverter(DateTimeKind.Utc),
+            ReadValueConverter = new DictionaryReadValueConverter()
+                .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
         };
         using var client = new ClickHouseClient(settings);
 
-        // Without query options: uses client converter (Kind=Utc)
         using (var reader = await client.ExecuteReaderAsync(
             "SELECT toDateTime('2025-06-15 12:30:45') as dt"))
         {
@@ -103,10 +108,10 @@ public static class ReadValueConverter
             }
         }
 
-        // With query options: overrides to Kind=Local
         var options = new QueryOptions
         {
-            ReadValueConverter = new DateTimeKindConverter(DateTimeKind.Local),
+            ReadValueConverter = new DictionaryReadValueConverter()
+                .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Local)),
         };
 
         using (var reader = await client.ExecuteReaderAsync(
@@ -129,7 +134,8 @@ public static class ReadValueConverter
 
         var settings = new ClickHouseClientSettings("Host=localhost")
         {
-            ReadValueConverter = new DateTimeKindConverter(DateTimeKind.Utc),
+            ReadValueConverter = new DictionaryReadValueConverter()
+                .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
         };
         using var connection = new ClickHouseConnection(settings);
 
@@ -143,51 +149,22 @@ public static class ReadValueConverter
     }
 
     /// <summary>
-    /// A converter that sets DateTime.Kind for all DateTime values.
-    /// This is the most common real-world use case.
+    /// Example custom converter: forces Kind=Utc only for DateTime columns that have no
+    /// timezone in the ClickHouse type, leaving zoned values untouched.
     /// </summary>
-    private class DateTimeKindConverter : IReadValueConverter
+    private class UtcOnlyForNoTzDateTimeConverter : IReadValueConverter
     {
-        private readonly DateTimeKind kind;
-
-        public DateTimeKindConverter(DateTimeKind kind) => this.kind = kind;
-
         public object ConvertValue(object value, string columnName, string clickHouseType)
         {
-            if (value is DateTime dt)
-                return DateTime.SpecifyKind(dt, kind);
+            if (value is DateTime dt && clickHouseType == "DateTime")
+                return DateTime.SpecifyKind(dt, DateTimeKind.Utc);
             return value;
         }
 
         public T ConvertValue<T>(T value, string columnName, string clickHouseType)
         {
-            if (typeof(T) == typeof(DateTime) && value is DateTime dt)
-                return (T)(object)DateTime.SpecifyKind(dt, kind);
-            return value;
-        }
-    }
-
-    /// <summary>
-    /// A converter that handles multiple types in a single implementation:
-    /// trims and uppercases strings, doubles integers, passes everything else through.
-    /// </summary>
-    private class MultiTypeConverter : IReadValueConverter
-    {
-        public object ConvertValue(object value, string columnName, string clickHouseType)
-        {
-            if (value is string s)
-                return s.Trim().ToUpperInvariant();
-            if (value is int i)
-                return i * 2;
-            return value;
-        }
-
-        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
-        {
-            if (typeof(T) == typeof(string) && value is string s)
-                return (T)(object)s.Trim().ToUpperInvariant();
-            if (typeof(T) == typeof(int) && value is int i)
-                return (T)(object)(i * 2);
+            if (typeof(T) == typeof(DateTime) && value is DateTime dt && clickHouseType == "DateTime")
+                return (T)(object)DateTime.SpecifyKind(dt, DateTimeKind.Utc);
             return value;
         }
     }
