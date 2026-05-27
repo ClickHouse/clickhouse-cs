@@ -55,6 +55,7 @@ Contributions are welcome and highly appreciated! Check out our [contributing gu
 
 ## Official integrations
 
+* **Dapper**: ships in this repository as the [`ClickHouse.Driver.Dapper`](./ClickHouse.Driver.Dapper/README.md) companion package — pre-registers type handlers and a Dapper.Contrib SQL adapter.
 * **Serilog**: [Serilog.Sinks.ClickHouse](https://github.com/ClickHouse/Serilog.Sinks.ClickHouse)
 * **Entity Framework Core**: [ClickHouse.EntityFrameworkCore](https://github.com/ClickHouse/ClickHouse.EntityFrameworkCore)
 * **Aspire**: [ClickHouse.Aspire](https://github.com/ClickHouse/ClickHouse.Aspire/)
