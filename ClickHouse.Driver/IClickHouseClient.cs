@@ -165,9 +165,41 @@ public interface IClickHouseClient : IDisposable
     /// <summary>
     /// Registers a POCO type for binary insert operations.
     /// Types must be registered before they can be inserted via <see cref="InsertBinaryAsync{T}"/>.
+    /// Registration is recorded in the shared per-client POCO registry; only the insert side is
+    /// registered. To enable read materialization for the same type, use the canonical
+    /// <see cref="RegisterPocoType{T}"/>.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
     void RegisterBinaryInsertType<T>()
+        where T : class;
+
+    /// <summary>
+    /// Registers a POCO type for both binary insert and read materialization. Types must be
+    /// registered before they can be inserted via <see cref="InsertBinaryAsync{T}"/> or
+    /// materialized via <see cref="QueryAsync{T}"/> / <see cref="ClickHouseDataReader.MapTo{T}"/>.
+    /// Both mappings are validated up front; if either validation throws, neither mapping is
+    /// committed and the registry is left untouched.
+    /// On the read side, init-only, read-only, and non-public-setter properties are silently
+    /// skipped — they keep their default value even if a matching result column is present.
+    /// </summary>
+    /// <typeparam name="T">The POCO type to register.</typeparam>
+    void RegisterPocoType<T>()
+        where T : class;
+
+    /// <summary>
+    /// Executes a SQL query and returns an enumerable of the results mapped to the given type.
+    /// </summary>
+    /// <typeparam name="T">The POCO type. Must have been registered via <see cref="RegisterPocoType{T}"/> first.</typeparam>
+    /// <param name="sql">The SQL query to execute.</param>
+    /// <param name="parameters">Optional parameters for the query.</param>
+    /// <param name="options">Optional query options to override client defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>An asynchronous stream of materialized POCOs.</returns>
+    IAsyncEnumerable<T> QueryAsync<T>(
+        string sql,
+        ClickHouseParameterCollection parameters = null,
+        QueryOptions options = null,
+        CancellationToken cancellationToken = default)
         where T : class;
 
     /// <summary>

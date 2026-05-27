@@ -8,6 +8,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,6 +22,7 @@ using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Http;
 using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Logging;
+using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.DependencyInjection;
@@ -54,7 +56,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
     private readonly SchemaResolver schemaResolver;
     private readonly JsonTypeRegistry jsonTypeRegistry = new();
-    private readonly BinaryInsertTypeRegistry binaryInsertTypeRegistry = new();
+    private readonly PocoTypeRegistry pocoTypeRegistry = new();
     private readonly IHttpClientFactory httpClientFactory;
     private readonly string httpClientName;
     private readonly Uri serverUri;
@@ -162,6 +164,11 @@ public sealed class ClickHouseClient : IClickHouseClient
     internal TypeSettings TypeSettings => new(Settings.UseCustomDecimals, Settings.ReadStringsAsByteArrays, jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode);
 
     /// <summary>
+    /// Gets the per-client POCO type registry shared by binary insert and read materialization.
+    /// </summary>
+    internal PocoTypeRegistry PocoRegistry => pocoTypeRegistry;
+
+    /// <summary>
     /// Gets the server URI.
     /// </summary>
     internal Uri ServerUri => serverUri;
@@ -197,7 +204,12 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <inheritdoc />
     public void RegisterBinaryInsertType<T>()
         where T : class
-        => binaryInsertTypeRegistry.RegisterType<T>();
+        => pocoTypeRegistry.RegisterForInsert<T>();
+
+    /// <inheritdoc />
+    public void RegisterPocoType<T>()
+        where T : class
+        => pocoTypeRegistry.RegisterForBoth<T>();
 
     /// <inheritdoc/>
     public ClickHouseConnection CreateConnection()
@@ -237,7 +249,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         CancellationToken cancellationToken = default)
     {
         var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
-        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings, pocoTypeRegistry).ConfigureAwait(false);
     }
 
     internal async Task<QueryResult> PostSqlQueryAsync(
@@ -377,6 +389,31 @@ public sealed class ClickHouseClient : IClickHouseClient
     }
 
     /// <inheritdoc />
+    public async IAsyncEnumerable<T> QueryAsync<T>(
+        string sql,
+        ClickHouseParameterCollection parameters = null,
+        QueryOptions options = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        where T : class
+    {
+        var reader = await ExecuteReaderAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // reader.Read() is sync because ClickHouseDataReader has no async overload — the
+            // underlying HTTP stream is buffered, so per-row reads do not perform real I/O.
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return reader.MapTo<T>();
+            }
+        }
+        finally
+        {
+            reader.Dispose();
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<ClickHouseRawResult> ExecuteRawResultAsync(
         string sql,
         QueryOptions options = null,
@@ -434,7 +471,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         if (rows is null)
             throw new ArgumentNullException(nameof(rows));
 
-        var mapping = binaryInsertTypeRegistry.GetMapping<T>()
+        var mapping = pocoTypeRegistry.GetInsertMapping<T>()
             ?? throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' is not registered for binary insert. " +
                 $"Call RegisterBinaryInsertType<{typeof(T).Name}>() first.");
@@ -459,7 +496,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// allowing the schema probe to be skipped when all properties declare explicit ClickHouse types.
     /// User-provided <see cref="InsertOptions.ColumnTypes"/> always takes precedence over attribute-derived types.
     /// </summary>
-    private static InsertOptions ApplyPocoColumnAttributes(PocoTypeMapping mapping, InsertOptions options)
+    private static InsertOptions ApplyPocoColumnAttributes(PocoInsertMapping mapping, InsertOptions options)
     {
         // User-provided ColumnTypes on InsertOptions always takes precedence
         if (options?.ColumnTypes is { Count: > 0 })
@@ -543,7 +580,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     private async Task<long> InsertBinaryPocoAsync<T>(
         string table,
         IEnumerable<T> rows,
-        BinaryInsertPropertyInfo[] properties,
+        PocoPropertyInfo[] properties,
         Func<T, object>[] getters,
         InsertOptions options,
         CancellationToken cancellationToken)
