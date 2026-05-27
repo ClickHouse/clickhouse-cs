@@ -146,6 +146,11 @@ ClickHouse.Driver.QueryOptions.ParameterFormatter.get -> ClickHouse.Driver.ADO.P
 ClickHouse.Driver.QueryOptions.ParameterFormatter.init -> void
 ClickHouse.Driver.QueryOptions.ParameterTypeResolver.get -> ClickHouse.Driver.ADO.Parameters.IParameterTypeResolver?
 ClickHouse.Driver.QueryOptions.ParameterTypeResolver.init -> void
+ClickHouse.Driver.QueryOptions.AcceptEncoding.get -> string?
+ClickHouse.Driver.QueryOptions.AcceptEncoding.init -> void
+ClickHouse.Driver.ADO.ClickHouseCommand.AcceptEncoding.get -> string
+ClickHouse.Driver.ADO.ClickHouseCommand.AcceptEncoding.set -> void
+ClickHouse.Driver.ADO.ClickHouseRawResult.ContentEncoding.get -> string
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.GetHashCode() -> int
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.ToString() -> string
 override ClickHouse.Driver.ADO.ClickHouseConnectionFactory.CreateDataSource(string connectionString) -> System.Data.Common.DbDataSource

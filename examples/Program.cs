@@ -154,6 +154,10 @@ class Program
         await ExportToFile.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(CompressedRawExport)}");
+        await CompressedRawExport.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine($"\n\nRunning: {nameof(PocoSelect)}");
         await PocoSelect.Run();
         WaitForUser(isInteractive);
