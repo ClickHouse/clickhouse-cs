@@ -1,3 +1,9 @@
+v1.4.0
+---
+
+**Bug Fixes:**
+* **Breaking Change**: Fixed timezone shift for `@`-style `DateTime`/`DateTimeOffset` parameters on non-UTC servers (issue #350). When a parameter's ClickHouse type was inferred (no explicit `{name:Type}` hint in SQL and no `parameter.ClickHouseType` set), the driver previously emitted a bare `DateTime` hint and the server parsed the wire wall-clock in `session_timezone`/server tz — silently shifting instant-bearing values by the server's offset. Inferred types for `DateTime { Kind: Utc or Local }` and `DateTimeOffset` are now sent as `DateTime('UTC')`, preserving the instant across any server timezone. Explicit hints (`{name:DateTime}` in SQL or `parameter.ClickHouseType`) are untouched, users who specify the type continue to own timezone correctness.
+
 v1.3.0
 ---
 
