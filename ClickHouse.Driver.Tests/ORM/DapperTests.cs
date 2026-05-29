@@ -6,9 +6,8 @@ using System.Linq;
 using System.Net;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Dapper;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Utility;
 using Dapper;
@@ -31,12 +30,7 @@ public class DapperTests : AbstractConnectionTestFixture
 
     static DapperTests()
     {
-        SqlMapper.AddTypeHandler(new ClickHouseDecimalHandler());
-        SqlMapper.AddTypeHandler(new DateTimeOffsetHandler());
-        SqlMapper.AddTypeHandler(new ITupleHandler());
-        SqlMapper.AddTypeMap(typeof(DateTime), DbType.DateTime2);
-        SqlMapper.AddTypeHandler(new ClickHouseIpHandler());
-        SqlMapper.AddTypeHandler(new BigIntegerHandler());
+        ClickHouseDapper.Register();
     }
 
     // "The member value of type <xxxxxxxx> cannot be used as a parameter value"
@@ -85,13 +79,6 @@ public class DapperTests : AbstractConnectionTestFixture
         return true;
     }
 
-    private class ITupleHandler : SqlMapper.TypeHandler<ITuple>
-    {
-        public override void SetValue(IDbDataParameter parameter, ITuple value) => parameter.Value = value;
-
-        public override ITuple Parse(object value) => value as ITuple ?? throw new NotSupportedException();
-    }
-
     [Test]
     public async Task ShouldExecuteSelectReturningTuple()
     {
@@ -99,64 +86,6 @@ public class DapperTests : AbstractConnectionTestFixture
         var result = (await connection.QueryAsync<ITuple>(sql)).Single();
         ClassicAssert.IsInstanceOf<ITuple>(result);
         Assert.That(result.AsEnumerable(), Is.EqualTo(new[] { 1, 2, 3 }).AsCollection);
-    }
-
-    private class DateTimeOffsetHandler : SqlMapper.TypeHandler<DateTimeOffset>
-    {
-        public override void SetValue(IDbDataParameter parameter, DateTimeOffset value) => parameter.Value = value.UtcDateTime;
-
-        public override DateTimeOffset Parse(object value)
-        {
-            switch (value)
-            {
-                case DateTimeOffset dt:
-                    return dt;
-                case string s:
-                    return DateTimeOffset.Parse(s);
-                default:
-                    throw new ArgumentException("Cannot convert value to DateTimeOffset", nameof(value));
-            }
-        }
-    }
-
-    private class ClickHouseDecimalHandler : SqlMapper.TypeHandler<ClickHouseDecimal>
-    {
-        public override void SetValue(IDbDataParameter parameter, ClickHouseDecimal value) => parameter.Value = value.ToString(CultureInfo.InvariantCulture);
-
-        public override ClickHouseDecimal Parse(object value) => value switch
-        {
-            ClickHouseDecimal chd => chd,
-            IConvertible ic => Convert.ToDecimal(ic),
-            _ => throw new ArgumentException(nameof(value))
-        };
-    }
-
-    private class BigIntegerHandler : SqlMapper.TypeHandler<BigInteger>
-    {
-        public override void SetValue(IDbDataParameter parameter, BigInteger value) => parameter.Value = value;
-
-        public override BigInteger Parse(object value) => value switch
-        {
-            BigInteger bi => bi,
-            long l => new BigInteger(l),
-            ulong ul => new BigInteger(ul),
-            decimal d => new BigInteger(d),
-            string s => BigInteger.Parse(s, CultureInfo.InvariantCulture),
-            _ => throw new ArgumentException($"Cannot convert {value.GetType()} to BigInteger", nameof(value)),
-        };
-    }
-
-    private class ClickHouseIpHandler : SqlMapper.TypeHandler<IPAddress>
-    {
-        public override void SetValue(IDbDataParameter parameter, IPAddress value)
-        {
-            parameter.Value = value;
-        }
-
-        public override IPAddress Parse(object value)
-        {
-            return IPAddress.Parse((string)value);
-        }
     }
 
     [Test]
@@ -448,11 +377,12 @@ public class DapperTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task ShouldSelectWithWhereInDapperExpansion()
+    public async Task ShouldSelectWithWhereInNativeArrayParam()
     {
-        // Test Dapper's native IN expansion: WHERE id IN @Ids
-        // Dapper rewrites this to WHERE id IN (@Ids1, @Ids2, ...) with individual params.
-        // Each @IdsN then gets replaced by {IdsN:Type} via ReplacePlaceholders.
+        // Dapper has explicit ClickHouseConnection support in its FeatureSupport that enables the
+        // native-array branch of PackListParameters, so `WHERE id IN @Ids` sends one Array(Int32)
+        // parameter rather than expanding client-side into (@Ids1, @Ids2, ...).
+        // The driver's ReplacePlaceholders then turns @Ids into {Ids:Array(Int32)}.
         await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_in2");
         await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_in2 (id Int32, name String) ENGINE Memory");
         await connection.ExecuteStatementAsync("INSERT INTO test.dapper_in2 VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
@@ -464,6 +394,187 @@ public class DapperTests : AbstractConnectionTestFixture
         Assert.That(rows, Has.Count.EqualTo(2));
         Assert.That(rows[0].Name, Is.EqualTo("alice"));
         Assert.That(rows[1].Name, Is.EqualTo("carol"));
+    }
+
+    [Test]
+    public async Task ShouldSelectWithWhereInNativeArrayParam_SingleElement()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_in_one");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_in_one (id Int32, name String) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_in_one VALUES (1, 'alice'), (2, 'bob')");
+
+        var rows = (await connection.QueryAsync<SimpleRow>(
+            "SELECT id, name FROM test.dapper_in_one WHERE id IN @Ids",
+            new { Ids = new[] { 2 } })).ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].Name, Is.EqualTo("bob"));
+    }
+
+    [Test]
+    public async Task ShouldSelectWithWhereInNativeArrayParam_LargeList()
+    {
+        // 200 elements — comfortable inside the default URI param size, big enough that any
+        // client-side IN expansion would generate noticeable churn. Functional sanity test;
+        // the "no expansion" guarantee comes from Dapper's FeatureSupport.ClickHouse.Arrays=true,
+        // exercised by every test in this file.
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_in_big");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_in_big (id Int32) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_in_big SELECT number FROM numbers(100)");
+
+        var ids = Enumerable.Range(0, 200).ToArray();
+        var count = await connection.ExecuteScalarAsync<long>(
+            "SELECT count() FROM test.dapper_in_big WHERE id IN @Ids",
+            new { Ids = ids });
+
+        Assert.That(count, Is.EqualTo(100));
+    }
+
+    [Test]
+    public async Task ShouldRoundTripIPAddressViaTypeHandler()
+    {
+        var addr = await connection.ExecuteScalarAsync<System.Net.IPAddress>("SELECT toIPv4('192.168.1.1')");
+        Assert.That(addr, Is.EqualTo(System.Net.IPAddress.Parse("192.168.1.1")));
+    }
+
+    [Test]
+    public async Task ShouldRoundTripBigIntegerViaTypeHandler()
+    {
+        var big = await connection.ExecuteScalarAsync<System.Numerics.BigInteger>("SELECT toInt128('170141183460469231731687303715884105727')");
+        Assert.That(big, Is.EqualTo(System.Numerics.BigInteger.Parse("170141183460469231731687303715884105727", CultureInfo.InvariantCulture)));
+    }
+
+    [Test]
+    public async Task ShouldRoundTripDateTimeOffsetViaTypeHandler()
+    {
+        var dto = await connection.ExecuteScalarAsync<DateTimeOffset>(
+            "SELECT toDateTime('2024-06-15 12:00:00', 'UTC')");
+        Assert.That(dto.UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public async Task ShouldRoundTripClickHouseDecimalViaTypeHandler()
+    {
+        var d = await connection.ExecuteScalarAsync<ClickHouseDecimal>("SELECT toDecimal128('12345.6789', 4)");
+        Assert.That(d.ToDecimal(CultureInfo.InvariantCulture), Is.EqualTo(12345.6789m));
+    }
+
+    [Test]
+    public async Task InsertAndSelect_IPAddressIPv4_RoundTripsCorrectly()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_rt_ipv4");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_rt_ipv4 (val IPv4) ENGINE Memory");
+
+        var expected = IPAddress.Parse("192.168.1.1");
+        await connection.ExecuteAsync("INSERT INTO test.dapper_rt_ipv4 (val) VALUES (@val)", new { val = expected });
+
+        var actual = await connection.ExecuteScalarAsync<IPAddress>("SELECT val FROM test.dapper_rt_ipv4");
+        Assert.That(actual, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task InsertAndSelect_IPAddressIPv6_RoundTripsCorrectly()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_rt_ipv6");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_rt_ipv6 (val IPv6) ENGINE Memory");
+
+        var expected = IPAddress.Parse("2001:db8:85a3::8a2e:370:7334");
+        await connection.ExecuteAsync("INSERT INTO test.dapper_rt_ipv6 (val) VALUES (@val)", new { val = expected });
+
+        var actual = await connection.ExecuteScalarAsync<IPAddress>("SELECT val FROM test.dapper_rt_ipv6");
+        Assert.That(actual, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task InsertAndSelect_DateTimeOffsetUTC_RoundTripsCorrectly()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_rt_dto_utc");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_rt_dto_utc (val DateTime('UTC')) ENGINE Memory");
+
+        var expected = new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero);
+        await connection.ExecuteAsync("INSERT INTO test.dapper_rt_dto_utc (val) VALUES (@val)", new { val = expected });
+
+        var actual = await connection.ExecuteScalarAsync<DateTimeOffset>("SELECT val FROM test.dapper_rt_dto_utc");
+        Assert.That(actual.UtcDateTime, Is.EqualTo(expected.UtcDateTime));
+    }
+
+    [Test]
+    public async Task InsertAndSelect_DateTimeOffsetWithOffset_RoundTripsCorrectly()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_rt_dto_offset");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_rt_dto_offset (val DateTime('UTC')) ENGINE Memory");
+
+        var input = new DateTimeOffset(2024, 6, 15, 14, 0, 0, TimeSpan.FromHours(2));
+        await connection.ExecuteAsync("INSERT INTO test.dapper_rt_dto_offset (val) VALUES (@val)", new { val = input });
+
+        var actual = await connection.ExecuteScalarAsync<DateTimeOffset>("SELECT val FROM test.dapper_rt_dto_offset");
+        Assert.That(actual.UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public async Task InsertAndSelect_BigIntegerInt128_RoundTripsCorrectly()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_rt_int128");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_rt_int128 (val Int128) ENGINE Memory");
+
+        var expected = BigInteger.Parse("170141183460469231731687303715884105727", CultureInfo.InvariantCulture);
+        await connection.ExecuteAsync("INSERT INTO test.dapper_rt_int128 (val) VALUES (@val)", new { val = expected });
+
+        var actual = await connection.ExecuteScalarAsync<BigInteger>("SELECT val FROM test.dapper_rt_int128");
+        Assert.That(actual, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task InsertAndSelect_BigIntegerInt128Negative_RoundTripsCorrectly()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_rt_int128_neg");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_rt_int128_neg (val Int128) ENGINE Memory");
+
+        var expected = BigInteger.Parse("-170141183460469231731687303715884105728", CultureInfo.InvariantCulture);
+        await connection.ExecuteAsync("INSERT INTO test.dapper_rt_int128_neg (val) VALUES (@val)", new { val = expected });
+
+        var actual = await connection.ExecuteScalarAsync<BigInteger>("SELECT val FROM test.dapper_rt_int128_neg");
+        Assert.That(actual, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task InsertAndSelect_ClickHouseDecimal128_RoundTripsCorrectly()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_rt_dec128");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_rt_dec128 (val Decimal128(4)) ENGINE Memory");
+
+        var expected = new ClickHouseDecimal(12345.6789m);
+        var parameters = new Dictionary<string, object> { { "val", expected } };
+        await connection.ExecuteAsync("INSERT INTO test.dapper_rt_dec128 (val) VALUES ({val:Decimal128(4)})", parameters);
+
+        var actual = await connection.ExecuteScalarAsync<ClickHouseDecimal>("SELECT val FROM test.dapper_rt_dec128");
+        Assert.That(actual.ToDecimal(CultureInfo.InvariantCulture), Is.EqualTo(12345.6789m));
+    }
+
+    [Test]
+    public async Task InsertAndSelect_ClickHouseDecimalNegative_RoundTripsCorrectly()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_rt_dec128_neg");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_rt_dec128_neg (val Decimal128(4)) ENGINE Memory");
+
+        var expected = new ClickHouseDecimal(-12345.6789m);
+        var parameters = new Dictionary<string, object> { { "val", expected } };
+        await connection.ExecuteAsync("INSERT INTO test.dapper_rt_dec128_neg (val) VALUES ({val:Decimal128(4)})", parameters);
+
+        var actual = await connection.ExecuteScalarAsync<ClickHouseDecimal>("SELECT val FROM test.dapper_rt_dec128_neg");
+        Assert.That(actual.ToDecimal(CultureInfo.InvariantCulture), Is.EqualTo(-12345.6789m));
+    }
+
+    [Test]
+    public async Task InsertAndSelect_Tuple_RoundTripsCorrectly()
+    {
+        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_rt_tuple");
+        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_rt_tuple (val Tuple(Int32, String)) ENGINE Memory");
+        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_rt_tuple VALUES ((42, 'hello'))");
+
+        var actual = await connection.ExecuteScalarAsync<ITuple>("SELECT val FROM test.dapper_rt_tuple");
+        Assert.That(actual[0], Is.EqualTo(42));
+        Assert.That(actual[1], Is.EqualTo("hello"));
     }
 
     [Test]

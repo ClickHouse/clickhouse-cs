@@ -9,6 +9,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
+        <ProjectReference Include="..\ClickHouse.Driver.Dapper\ClickHouse.Driver.Dapper.csproj" />
     </ItemGroup>
 
     <ItemGroup>
