@@ -151,6 +151,18 @@ ClickHouse.Driver.QueryOptions.AcceptEncoding.init -> void
 ClickHouse.Driver.ADO.ClickHouseCommand.AcceptEncoding.get -> string
 ClickHouse.Driver.ADO.ClickHouseCommand.AcceptEncoding.set -> void
 ClickHouse.Driver.ADO.ClickHouseRawResult.ContentEncoding.get -> string
+ClickHouse.Driver.ADO.Readers.IReadValueConverter
+ClickHouse.Driver.ADO.Readers.IReadValueConverter.ConvertValue(object value, string columnName, string clickHouseType) -> object
+ClickHouse.Driver.ADO.Readers.IReadValueConverter.ConvertValue<T>(T value, string columnName, string clickHouseType) -> T
+ClickHouse.Driver.ADO.Readers.DictionaryReadValueConverter
+ClickHouse.Driver.ADO.Readers.DictionaryReadValueConverter.DictionaryReadValueConverter() -> void
+ClickHouse.Driver.ADO.Readers.DictionaryReadValueConverter.For<T>(System.Func<T, T> converter) -> ClickHouse.Driver.ADO.Readers.DictionaryReadValueConverter
+ClickHouse.Driver.ADO.Readers.DictionaryReadValueConverter.ConvertValue(object value, string columnName, string clickHouseType) -> object
+ClickHouse.Driver.ADO.Readers.DictionaryReadValueConverter.ConvertValue<T>(T value, string columnName, string clickHouseType) -> T
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ReadValueConverter.get -> ClickHouse.Driver.ADO.Readers.IReadValueConverter
+ClickHouse.Driver.ADO.ClickHouseClientSettings.ReadValueConverter.init -> void
+ClickHouse.Driver.QueryOptions.ReadValueConverter.get -> ClickHouse.Driver.ADO.Readers.IReadValueConverter?
+ClickHouse.Driver.QueryOptions.ReadValueConverter.init -> void
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.GetHashCode() -> int
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.ToString() -> string
 override ClickHouse.Driver.ADO.ClickHouseConnectionFactory.CreateDataSource(string connectionString) -> System.Data.Common.DbDataSource
