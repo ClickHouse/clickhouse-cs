@@ -32,7 +32,24 @@ internal static class HttpParameterFormatter
         }
 
         var parsedType = TypeConverter.ParseClickHouseType(typeName, settings);
-        return Format(parsedType, parameter.Value, false, customFormatter, parameter.ParameterName);
+        try
+        {
+            return Format(parsedType, parameter.Value, false, customFormatter, parameter.ParameterName);
+        }
+        catch (ArgumentException ex) when (ex.GetType() == typeof(ArgumentException))
+        {
+            // Inner formatters describe only the leaf type/value they were dispatched with;
+            // this is the single place that owns parameter-name + outer-type context. Filter
+            // to the exact base type so subclasses (e.g. ArgumentNullException) propagate
+            // untouched rather than being downgraded to plain ArgumentException. Forward
+            // ex.ParamName so a custom IParameterFormatter that set it isn't silently dropped.
+            throw new ArgumentException(
+                parameter.ParameterName is null
+                    ? $"Cannot format parameter as {parsedType}: {ex.Message}"
+                    : $"Parameter '{parameter.ParameterName}' (type {parsedType}): {ex.Message}",
+                ex.ParamName,
+                ex);
+        }
     }
 
     internal static string Format(ClickHouseType type, object value, bool quote, IParameterFormatter customFormatter = null, string parameterName = null)
@@ -124,6 +141,20 @@ internal static class HttpParameterFormatter
             case NullableType nt:
                 return value is null || value is DBNull ? quote ? "null" : NullValueString : Format(nt.UnderlyingType, value, quote, customFormatter, parameterName);
 
+            // DO NOT REORDER: this arm must precede the `IEnumerable` arm below.
+            // A rank>1 CLR Array implements IEnumerable/IList by iterating flattened
+            // (e.g. byte[,] yields scalars, not rows), so the IEnumerable arm would
+            // serialise [[1,2],[3,4]] as [1,2,3,4]. Rank-1 arrays (including jagged
+            // T[][]) keep falling through to the IEnumerable arm because their outer
+            // rank is 1 even though they're semantically depth>1.
+            case ArrayType arrayType when value is Array multidim && multidim.Rank > 1:
+                {
+                    var leaf = MultiDimArrayHelper.ResolveLeafType(arrayType, multidim.Rank);
+                    var sb = new StringBuilder();
+                    MultiDimArrayHelper.AppendMultidimensional(sb, multidim, leaf, customFormatter, parameterName);
+                    return sb.ToString();
+                }
+
             case ArrayType arrayType when value is IEnumerable enumerable:
                 return $"[{string.Join(",", enumerable.Cast<object>().Select(obj => Format(arrayType.UnderlyingType, obj, true, customFormatter, parameterName)))}]";
 
@@ -157,7 +188,9 @@ internal static class HttpParameterFormatter
                     return JsonSerializer.Serialize(value);
 
             default:
-                throw new ArgumentException($"Cannot convert {value} to {type}");
+                var valueTypeName = value?.GetType().FullName ?? "null";
+                throw new ArgumentException(
+                    $"Cannot convert value of type '{valueTypeName}' ({value}) to ClickHouse type {type}");
         }
     }
 
