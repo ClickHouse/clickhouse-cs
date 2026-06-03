@@ -39,7 +39,7 @@ jobs:
 
       - name: Triage PR
         id: triage
-        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1.0.111
+        uses: anthropics/claude-code-action@36a69b6a90b850823f86de06fdfd56264772ad98  # v1.0.134
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # Use the runner-injected GITHUB_TOKEN instead of letting the action mint
