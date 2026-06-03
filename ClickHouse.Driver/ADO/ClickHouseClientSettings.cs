@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.ADO;
@@ -284,7 +285,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// <para>
     /// <b>Values</b> are sanitized to keep the header RFC 7230-compliant and capped at
     /// 256 characters (longer values are truncated). Non-ASCII characters are URL-encoded;
-    /// structural characters (<c>( ) \ ; , :</c>) and control characters become <c>|</c>.
+    /// structural characters (<c>( ) \ ; ,</c>) and control characters become <c>|</c>.
     /// Spaces are preserved. Entries whose value is empty after sanitization are skipped.
     /// </para>
     /// <para>
@@ -293,7 +294,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// dictionary you passed in <em>after</em> the client has been constructed has no effect
     /// on subsequent requests and is not supported, pass a fresh settings instance instead.
     /// </para>
-    /// Default: empty dictionary (no token appended).
+    /// Default: empty dictionary (no additional tags appended).
     /// </summary>
     public IReadOnlyDictionary<string, string> ApplicationInfo { get; init; } = new Dictionary<string, string>();
 
@@ -425,22 +426,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
                Roles.SequenceEqual(other.Roles) &&
-               DictionaryEquals(CustomHeaders, other.CustomHeaders) &&
-               DictionaryEquals(ApplicationInfo, other.ApplicationInfo);
-    }
-
-    private static bool DictionaryEquals<TKey, TValue>(IReadOnlyDictionary<TKey, TValue> a, IReadOnlyDictionary<TKey, TValue> b)
-    {
-        var countA = a?.Count ?? 0;
-        var countB = b?.Count ?? 0;
-        if (countA != countB) return false;
-
-        foreach (var kvp in a)
-        {
-            if (!b.TryGetValue(kvp.Key, out var v) || !EqualityComparer<TValue>.Default.Equals(kvp.Value, v))
-                return false;
-        }
-        return true;
+               CustomHeaders.EntriesEqual(other.CustomHeaders) &&
+               ApplicationInfo.EntriesEqual(other.ApplicationInfo);
     }
 
     /// <summary>
