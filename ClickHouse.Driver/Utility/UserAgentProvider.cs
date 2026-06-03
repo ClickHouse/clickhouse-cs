@@ -137,7 +137,6 @@ internal sealed class UserAgentProvider
                 case '\\':
                 case ';':
                 case ',':
-                case ':':
                     sb.Append('|');
                     continue;
             }

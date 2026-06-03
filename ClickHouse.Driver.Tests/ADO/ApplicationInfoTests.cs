@@ -71,7 +71,7 @@ public class ApplicationInfoTests : AbstractConnectionTestFixture
 
         var ua = UserAgentString(c);
 
-        Assert.That(ua, Does.Contain("raw:a|b|c|d|e|f|g|h i"));
+        Assert.That(ua, Does.Contain("raw:a|b|c|d|e|f:g|h i"));
         Assert.That(ua, Does.Not.Contain("a(b)"));
     }
 
