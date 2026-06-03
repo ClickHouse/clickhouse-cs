@@ -284,9 +284,10 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// </para>
     /// <para>
     /// <b>Values</b> are sanitized to keep the header RFC 7230-compliant and capped at
-    /// 256 characters (longer values are truncated). Non-ASCII characters are URL-encoded;
-    /// structural characters (<c>( ) \ ; ,</c>) and control characters become <c>|</c>.
-    /// Spaces are preserved. Entries whose value is empty after sanitization are skipped.
+    /// 256 characters (longer values are truncated). If a value contains non-ASCII characters,
+    /// the entire value is URL-encoded (which also encodes spaces as <c>+</c> and punctuation).
+    /// After that, any remaining structural characters (<c>( ) \ ; ,</c>) and control characters
+    /// are replaced with <c>|</c>.
     /// </para>
     /// <para>
     /// The dictionary's contents are read when <see cref="ClickHouseClient"/> is constructed
