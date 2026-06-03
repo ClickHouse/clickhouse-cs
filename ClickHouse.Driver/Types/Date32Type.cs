@@ -14,8 +14,21 @@ internal class Date32Type : DateType
 
     public override ParameterizedType Parse(SyntaxTreeNode typeName, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings) => throw new NotImplementedException();
 
+    // ClickHouse Date32 days-from-epoch range: [1900-01-01, 2299-12-31].
+    private const int Date32MinUnixDays = -25567;
+    private const int Date32MaxUnixDays = 120529;
+
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-        writer.Write(CoerceToDateTimeOffset(value).ToUnixTimeDays());
+        var days = CoerceToDateTimeOffset(value).ToUnixTimeDays();
+        if (days < Date32MinUnixDays || days > Date32MaxUnixDays)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(value),
+                value,
+                "Value is outside the supported range for ClickHouse Date32 (1900-01-01 to 2299-12-31).");
+        }
+
+        writer.Write(days);
     }
 }

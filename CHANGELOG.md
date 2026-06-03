@@ -1,6 +1,9 @@
 v1.4.0
 ---
 
+**New Features:**
+* **Application-identity tagging in User-Agent**: new `ClickHouseClientSettings.ApplicationInfo` property: an `IReadOnlyDictionary<string, string>` of free-form tags (e.g. `app`, `ver`, `env`) appended to the HTTP `User-Agent` header as a comment token (e.g. `(app:MyApp; ver:2.3.1; env:prod)`).
+
 **Bug Fixes:**
 * **Breaking Change**: Fixed timezone shift for `@`-style `DateTime`/`DateTimeOffset` parameters on non-UTC servers (issue #350). When a parameter's ClickHouse type was inferred (no explicit `{name:Type}` hint in SQL and no `parameter.ClickHouseType` set), the driver previously emitted a bare `DateTime` hint and the server parsed the wire wall-clock in `session_timezone`/server tz — silently shifting instant-bearing values by the server's offset. Inferred types for `DateTime { Kind: Utc or Local }` and `DateTimeOffset` are now sent as `DateTime('UTC')`, preserving the instant across any server timezone. Explicit hints (`{name:DateTime}` in SQL or `parameter.ClickHouseType`) are untouched, users who specify the type continue to own timezone correctness.
 
@@ -18,6 +21,7 @@ v1.3.0
 * Fixed HTTP parameter serialization for `Date`, `DateTime`, and `DateTime64` values inside composite types such as `Array`, `Tuple`, `Map`, and `Variant`. These values are now quoted correctly when sent over HTTP.
 * Fixed parsing of enum labels containing escaped quotes, parentheses, and `=` characters. This fixes cases like `variantType()` on `Variant(String, DateTime('UTC'))`, which could previously round-trip through the driver as an empty string.
 * Fixed `ClickHouseServerException.Message` returning compressed binary bytes when the server returned a non-2xx response with a `Content-Encoding` header. The driver now decompresses gzip / deflate / brotli error bodies before attaching them to the exception. Unknown codecs (zstd, lz4) yield a placeholder pointing at `system.query_log`.
+* Fixed silent 32-bit wraparound on the binary write path for `DateTime`/`DateTime32` values outside ClickHouse's supported range (1970-01-01 .. 2106-02-07 06:28:15 UTC). Out-of-range values, e.g. `new DateTime(1900, 1, 1)`, were being cast through a 32-bit signed int and reinterpreted as `UInt32` by the server, producing real-but-wrong timestamps (e.g. `2036-02-07`). The same audit fixed analogous silent out-of-range writes for `Date32` (server would clamp to `[1900-01-01, 2299-12-31]`) and tightened the existing `Date` `OverflowException` into a descriptive `ArgumentOutOfRangeException`. All four types now throw `ArgumentOutOfRangeException` at `Write` time naming the column type and supported range.
 
 v1.2.0
 ---

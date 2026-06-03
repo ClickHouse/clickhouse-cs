@@ -59,6 +59,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     private readonly string httpClientName;
     private readonly Uri serverUri;
     private readonly ILoggerFactory loggerFactory;
+    private readonly UserAgentProvider userAgentProvider;
 
     private static readonly RecyclableMemoryStreamManager CommonMemoryStreamManager = new(new RecyclableMemoryStreamManager.Options
     {
@@ -137,6 +138,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         httpClientFactory = CreateHttpClientFactory(settings);
         schemaResolver = new SchemaResolver(this);
+        userAgentProvider = new UserAgentProvider(Settings.ApplicationInfo);
     }
 
     /// <summary>
@@ -840,8 +842,6 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// </summary>
     internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, QueryOptions queryOverride = null)
     {
-        var userAgentInfo = UserAgentProvider.Info;
-
         // Priority: override > connection-level bearer token > basic auth
         var bearerToken = queryOverride?.BearerToken ?? Settings.BearerToken;
         if (!string.IsNullOrEmpty(bearerToken))
@@ -855,8 +855,8 @@ public sealed class ClickHouseClient : IClickHouseClient
                 Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Settings.Username}:{Settings.Password}")));
         }
 
-        headers.UserAgent.Add(userAgentInfo.DriverProductInfo);
-        headers.UserAgent.Add(userAgentInfo.SystemProductInfo);
+        headers.UserAgent.Add(userAgentProvider.DriverProductInfo);
+        headers.UserAgent.Add(userAgentProvider.MetadataProductInfo);
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/csv"));
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));

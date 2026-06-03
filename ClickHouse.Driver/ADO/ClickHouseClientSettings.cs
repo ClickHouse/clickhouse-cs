@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.ADO;
@@ -78,6 +79,11 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Deep copy the CustomHeaders dictionary
         CustomHeaders = new Dictionary<string, string>(other.CustomHeaders.ToDictionary(x => x.Key, x => x.Value));
+
+        // Deep copy the ApplicationInfo dictionary (null is treated as empty)
+        ApplicationInfo = other.ApplicationInfo == null
+            ? new Dictionary<string, string>()
+            : new Dictionary<string, string>(other.ApplicationInfo.ToDictionary(x => x.Key, x => x.Value));
 
         // Copy JSON mode settings
         JsonReadMode = other.JsonReadMode;
@@ -267,6 +273,33 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public IReadOnlyDictionary<string, string> CustomHeaders { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
+    /// Gets or sets application-identity tags appended to the HTTP User-Agent header as
+    /// a comment token (e.g. <c>(app:MyApp; ver:2.3.1; env:prod)</c>).
+    /// <para>
+    /// <b>Keys</b> must match <c>[A-Za-z0-9_.-]</c> and be 1–32 characters long; invalid keys
+    /// throw <see cref="ArgumentException"/> when the client is constructed. The driver
+    /// emits its own tags (<c>platform</c>, <c>os</c>, <c>lv</c>, <c>arch</c>) in the same
+    /// comment token; supplying any of these as keys here appends a second entry with the
+    /// same name rather than overriding the driver's value.
+    /// </para>
+    /// <para>
+    /// <b>Values</b> are sanitized to keep the header RFC 7230-compliant and capped at
+    /// 256 characters (longer values are truncated). If a value contains non-ASCII characters,
+    /// the entire value is URL-encoded (which also encodes spaces as <c>+</c> and punctuation).
+    /// After that, any remaining structural characters (<c>( ) \ ; ,</c>) and control characters
+    /// are replaced with <c>|</c>.
+    /// </para>
+    /// <para>
+    /// The dictionary's contents are read when <see cref="ClickHouseClient"/> is constructed
+    /// and the resulting <c>User-Agent</c> token is cached on the client. Mutating the
+    /// dictionary you passed in <em>after</em> the client has been constructed has no effect
+    /// on subsequent requests and is not supported, pass a fresh settings instance instead.
+    /// </para>
+    /// Default: empty dictionary (no additional tags appended).
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ApplicationInfo { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
     /// Gets or sets how JSON columns are returned when reading data.
     /// Binary (default): Returns System.Text.Json.Nodes.JsonObject
     /// String: Returns the raw JSON string (requires server setting output_format_binary_write_json_as_string=1)
@@ -394,8 +427,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
                Roles.SequenceEqual(other.Roles) &&
-               CustomHeaders.Count == other.CustomHeaders.Count &&
-               CustomHeaders.All(kvp => other.CustomHeaders.TryGetValue(kvp.Key, out var value) && kvp.Value == value);
+               CustomHeaders.EntriesEqual(other.CustomHeaders) &&
+               ApplicationInfo.EntriesEqual(other.ApplicationInfo);
     }
 
     /// <summary>
@@ -441,9 +474,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         {
             hash.Add(role);
         }
-        foreach (var kvp in CustomHeaders)
+        if (CustomHeaders != null)
         {
-            hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
+            foreach (var kvp in CustomHeaders)
+                hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
+        }
+        if (ApplicationInfo != null)
+        {
+            foreach (var kvp in ApplicationInfo)
+                hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
         }
         return hash.ToHashCode();
     }
