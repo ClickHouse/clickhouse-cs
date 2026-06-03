@@ -14,6 +14,7 @@ namespace ClickHouse.Driver.Tests.ADO;
 [TestFixture]
 [Category("Cloud")]
 [Category("JWT")]
+[Ignore("Temporarily disabled while JWT test environment is being repaired")]
 public class BearerAuthenticationTests
 {
     private string connectionString;
