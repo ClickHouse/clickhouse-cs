@@ -16,6 +16,12 @@ on:
         required: true
         type: string
 
+# Caller must grant necessary permissions here
+permissions:
+  contents: read
+  pull-requests: write   # apply triage:* / risk:* labels and upsert the sticky comment
+  issues: read           # let Claude `gh issue view` a linked issue
+
 jobs:
   triage:
     # Skip fork PRs — fork `pull_request` runs don't receive repository secrets,
