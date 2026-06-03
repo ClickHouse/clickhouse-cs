@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Tests.Attributes;
+using NUnit.Framework.Interfaces;
 
 namespace ClickHouse.Driver.Tests.Types;
 
@@ -20,16 +21,20 @@ namespace ClickHouse.Driver.Tests.Types;
 [TestFixture]
 public class DateTimeBinaryRangeTests : AbstractConnectionTestFixture
 {
-    private const string DateTimeTable = "test.dt_range";
-    private const string DateTable = "test.date_range";
-    private const string Date32Table = "test.date32_range";
+    private string DateTimeTable { get; set; }
+    private string DateTable { get; set; }
+    private string Date32Table { get; set; }
 
     [SetUp]
     public async Task SetUp()
     {
-        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {DateTimeTable}");
-        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {DateTable}");
-        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {Date32Table}");
+        var testName = SanitizeTableName(TestContext.CurrentContext.Test.Name);
+        var suffix = $"{testName}_{Guid.NewGuid():N}";
+        DateTimeTable = $"test.dt_range_{suffix}";
+        DateTable = $"test.date_range_{suffix}";
+        Date32Table = $"test.date32_range_{suffix}";
+
+        // Range validation happens in client-side RowBinary serialization; Memory is enough here.
         await client.ExecuteNonQueryAsync($"CREATE TABLE {DateTimeTable} (t DateTime('UTC')) ENGINE = Memory");
         await client.ExecuteNonQueryAsync($"CREATE TABLE {DateTable} (d Date) ENGINE = Memory");
         if (TestUtilities.SupportedFeatures.HasFlag(Feature.Date32))
@@ -39,6 +44,9 @@ public class DateTimeBinaryRangeTests : AbstractConnectionTestFixture
     [TearDown]
     public async Task TearDown()
     {
+        if (TestContext.CurrentContext.Result.Outcome.Status == TestStatus.Failed)
+            return;
+
         await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {DateTimeTable}");
         await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {DateTable}");
         await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {Date32Table}");
