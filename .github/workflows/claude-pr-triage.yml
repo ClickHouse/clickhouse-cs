@@ -18,6 +18,12 @@ on:
 
 jobs:
   triage:
+    # Skip fork PRs — fork `pull_request` runs don't receive repository secrets,
+    # so ANTHROPIC_API_KEY would be empty and triage would fail. Maintainers can
+    # run a fork PR via workflow_dispatch after a sanity look.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     uses: ClickHouse/integrations-shared-workflows/.github/workflows/claude-pr-triage.yml@main
     with:
       # The pull_request path reads the PR from the event; only workflow_dispatch
