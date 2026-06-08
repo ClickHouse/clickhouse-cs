@@ -55,7 +55,7 @@ jobs:
         env:
           CLICKHOUSE_VERSION: ${{ inputs.clickhouse-version }}
 
-      - uses: codecov/codecov-action@v6
+      - uses: codecov/codecov-action@v7
         if: inputs.coverage
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
