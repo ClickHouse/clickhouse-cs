@@ -115,6 +115,12 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public string Protocol { get; init; } = ClickHouseDefaults.Protocol;
 
     /// <summary>
+    /// Gets a value indicating whether the ClickHouse Native (TCP) protocol should be used
+    /// instead of HTTP. Enabled by setting Protocol=native (default port 9000).
+    /// </summary>
+    internal bool UseNativeProtocol => string.Equals(Protocol, "native", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Gets or sets the database name.
     /// Default: "" (if empty, will use the user's default database if it has been configured).
     /// </summary>
@@ -541,8 +547,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         if (string.IsNullOrWhiteSpace(Protocol))
             throw new InvalidOperationException("Protocol cannot be null or whitespace");
 
-        if (Protocol != "http" && Protocol != "https")
-            throw new InvalidOperationException($"Protocol must be 'http' or 'https', got '{Protocol}'");
+        if (Protocol != "http" && Protocol != "https" && Protocol != "native")
+            throw new InvalidOperationException($"Protocol must be 'http', 'https' or 'native', got '{Protocol}'");
 
         if (Timeout < TimeSpan.Zero)
             throw new InvalidOperationException("Timeout cannot be negative");

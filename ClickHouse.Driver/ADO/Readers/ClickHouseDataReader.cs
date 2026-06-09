@@ -29,6 +29,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly ExtendedBinaryReader reader;
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
 
+    // Buffered mode: non-null only when the rows have been fully materialized up front (e.g. by the
+    // Native TCP protocol). In that mode there is no underlying stream and Read() iterates this list.
+    private readonly IReadOnlyList<object[]> bufferedRows;
+    private int bufferedIndex = -1;
+
     private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, ExceptionTagAwareStream exceptionTagStream = null)
     {
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
@@ -38,6 +43,21 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
     }
+
+    private ClickHouseDataReader(string[] names, ClickHouseType[] types, IReadOnlyList<object[]> rows)
+    {
+        bufferedRows = rows ?? throw new ArgumentNullException(nameof(rows));
+        RawTypes = types ?? throw new ArgumentNullException(nameof(types));
+        FieldNames = names ?? throw new ArgumentNullException(nameof(names));
+        CurrentRow = new object[FieldNames.Length];
+    }
+
+    /// <summary>
+    /// Creates a reader over a fully-materialized, row-major result set. Used by transports that
+    /// buffer the entire response (e.g. the Native TCP protocol) rather than streaming it.
+    /// </summary>
+    internal static ClickHouseDataReader FromBufferedResult(string[] names, ClickHouseType[] types, IReadOnlyList<object[]> rows)
+        => new(names, types, rows);
 
     internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
     {
@@ -265,6 +285,14 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override bool Read()
     {
+        if (bufferedRows != null)
+        {
+            if (bufferedIndex + 1 >= bufferedRows.Count)
+                return false;
+            CurrentRow = bufferedRows[++bufferedIndex];
+            return true;
+        }
+
         if (reader.PeekChar() == -1)
             return false; // End of stream reached
 

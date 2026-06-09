@@ -21,6 +21,7 @@ using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Http;
 using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Logging;
+using ClickHouse.Driver.Native;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.DependencyInjection;
@@ -214,6 +215,12 @@ public sealed class ClickHouseClient : IClickHouseClient
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
+        if (Settings.UseNativeProtocol)
+        {
+            await RunNativeQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+
         var response = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
         using var reader = new ExtendedBinaryReader(await response.HttpResponseMessage.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false));
 
@@ -238,8 +245,41 @@ public sealed class ClickHouseClient : IClickHouseClient
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
+        if (Settings.UseNativeProtocol)
+        {
+            var native = await RunNativeQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+            return ClickHouseDataReader.FromBufferedResult(native.Names, native.Types, native.Rows);
+        }
+
         var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
         return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Executes a query over the Native (TCP) protocol and returns the fully-buffered result.
+    /// MVP: opens a fresh connection per query (no pooling), uncompressed, and does not support
+    /// query parameters or columns using custom serialization.
+    /// </summary>
+    private async Task<NativeQueryResult> RunNativeQueryAsync(string sql, ClickHouseParameterCollection parameters, QueryOptions options, CancellationToken cancellationToken)
+    {
+        if (parameters != null && parameters.Count > 0)
+            throw new NotSupportedException("Query parameters are not supported by the Native protocol yet. Use the HTTP protocol (Protocol=http) for parameterized queries.");
+
+        var database = options?.Database ?? Settings.Database;
+        var queryId = options?.QueryId ?? Guid.NewGuid().ToString();
+
+        var settings = new Dictionary<string, object>(Settings.CustomSettings);
+        if (options?.CustomSettings != null)
+        {
+            foreach (var kv in options.CustomSettings)
+                settings[kv.Key] = kv.Value;
+        }
+
+        using var connection = await NativeConnection
+            .ConnectAsync(Settings.Host, Settings.Port, database, Settings.Username, Settings.Password, cancellationToken)
+            .ConfigureAwait(false);
+
+        return connection.ExecuteQuery(sql, queryId, Settings.Username, settings, TypeSettings);
     }
 
     internal async Task<QueryResult> PostSqlQueryAsync(

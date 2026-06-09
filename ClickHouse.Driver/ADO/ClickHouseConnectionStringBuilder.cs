@@ -75,7 +75,12 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
 
     public ushort Port
     {
-        get => (ushort)GetIntOrDefault("Port", Protocol == "https" ? 8443 : 8123);
+        get => (ushort)GetIntOrDefault("Port", Protocol switch
+        {
+            "https" => 8443,
+            "native" => 9000,
+            _ => 8123,
+        });
         set => this["Port"] = value;
     }
 
