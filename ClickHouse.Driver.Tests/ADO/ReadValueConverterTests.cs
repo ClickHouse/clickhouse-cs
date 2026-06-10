@@ -90,6 +90,24 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
         Assert.That(reader.GetFieldValue<int>(0), Is.EqualTo(42));
     }
 
+    [Test]
+    public async Task GetFieldValueByName_WithConverter_ShouldTransformValue()
+    {
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings)
+        {
+            ReadValueConverter = new DateTimeKindConverter(DateTimeKind.Utc),
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toDateTime('2025-01-15 12:00:00') AS dt, toInt32(42) AS i");
+        ClassicAssert.IsTrue(reader.Read());
+
+        Assert.That(reader.GetFieldValue<DateTime>("dt").Kind, Is.EqualTo(DateTimeKind.Utc));
+        Assert.That(reader.GetFieldValue<int>("i"), Is.EqualTo(42));
+    }
+
     // ==========================================
     // GetValues consistency
     // ==========================================

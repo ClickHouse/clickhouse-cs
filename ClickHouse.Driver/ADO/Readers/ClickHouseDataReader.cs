@@ -266,6 +266,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             typeof(T).IsArray && typeof(T).GetArrayRank() >= 2;
     }
 
+    // Custom extension
+    public T GetFieldValue<T>(string name) => GetFieldValue<T>(GetOrdinal(name));
+
     public override DataTable GetSchemaTable() => SchemaDescriber.DescribeSchema(this);
 
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken) => Task.FromResult(false);

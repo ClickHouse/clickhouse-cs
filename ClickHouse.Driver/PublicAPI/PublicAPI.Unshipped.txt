@@ -94,6 +94,7 @@ ClickHouse.Driver.ADO.Feature.Time = 4096 -> ClickHouse.Driver.ADO.Feature
 ClickHouse.Driver.ADO.QueryStats.Deconstruct(out long ReadRows, out long ReadBytes, out long WrittenRows, out long WrittenBytes, out long TotalRowsToRead, out long ResultRows, out long ResultBytes, out long ElapsedNs) -> void
 ClickHouse.Driver.ADO.QueryStats.QueryStats(ClickHouse.Driver.ADO.QueryStats original) -> void
 ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetTuple(int ordinal) -> System.Runtime.CompilerServices.ITuple
+ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetFieldValue<T>(string name) -> T
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.get -> Microsoft.IO.RecyclableMemoryStreamManager
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.init -> void
 ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions
