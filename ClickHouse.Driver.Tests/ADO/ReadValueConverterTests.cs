@@ -687,6 +687,39 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task DictionaryReadValueConverter_GetFieldValueNullable_FiresOnUnderlyingType()
+    {
+        // A For<int>() registration must also fire for GetFieldValue<int?> on a Nullable(Int32)
+        // column, matching GetValue — non-null cells surface as the underlying type.
+        var converter = new DictionaryReadValueConverter()
+            .For<int>(i => i * 10);
+
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings) { ReadValueConverter = converter };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = await client.ExecuteReaderAsync("SELECT CAST(7 AS Nullable(Int32))");
+        ClassicAssert.IsTrue(reader.Read());
+
+        Assert.That(reader.GetFieldValue<int?>(0), Is.EqualTo(70));
+        Assert.That(reader.GetValue(0), Is.EqualTo(70),
+            "GetFieldValue<int?> and GetValue must agree for a nullable column");
+    }
+
+    [Test]
+    public void DictionaryReadValueConverter_ConvertValueNullable_FiresOnUnderlyingType()
+    {
+        var converter = new DictionaryReadValueConverter()
+            .For<int>(i => i * 10);
+
+        Assert.That(converter.ConvertValue<int?>(7, "c", "Nullable(Int32)"), Is.EqualTo(70));
+        // null still passes through untouched
+        Assert.That(converter.ConvertValue<int?>(null, "c", "Nullable(Int32)"), Is.Null);
+        // an unregistered underlying type is left alone
+        Assert.That(converter.ConvertValue<long?>(7L, "c", "Nullable(Int64)"), Is.EqualTo(7L));
+    }
+
+    [Test]
     public async Task DictionaryReadValueConverter_LowCardinalityString_FiresOnString()
     {
         var converter = new DictionaryReadValueConverter()

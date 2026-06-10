@@ -63,6 +63,14 @@ public sealed class DictionaryReadValueConverter : IReadValueConverter
         if (mappings.TryGetValue(typeof(T), out var entry) && entry.Typed is Func<T, T> typed)
             return typed(value);
 
+        // Nullable<U> columns surface non-null cells as the underlying U, so GetFieldValue<U?>
+        // must honour a For<U>() registration too — staying consistent with GetValue, which
+        // dispatches by the (already-unwrapped) runtime type. Apply via the boxed delegate since
+        // the registered Func<U, U> cannot be invoked directly as Func<U?, U?>.
+        var underlying = Nullable.GetUnderlyingType(typeof(T));
+        if (underlying != null && mappings.TryGetValue(underlying, out var nullableEntry))
+            return (T)nullableEntry.Boxed(value);
+
         return value;
     }
 
