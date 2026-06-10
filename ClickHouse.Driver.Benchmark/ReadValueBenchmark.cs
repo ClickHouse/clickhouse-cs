@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Engines;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Utility;
@@ -42,6 +43,7 @@ internal sealed class DateTimeKindConverter : IReadValueConverter
 [MemoryDiagnoser(true)]
 public class ReadValueBenchmark
 {
+    private readonly Consumer consumer = new Consumer();
     private ClickHouseConnection noConverterConn;
     private ClickHouseConnection passthroughConn;
     private ClickHouseConnection selectiveConn;
@@ -87,7 +89,7 @@ public class ReadValueBenchmark
     {
         using var reader = await noConverterConn.ExecuteReaderAsync($"SELECT toInt32(number) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetValue(0);
+            consumer.Consume(reader.GetValue(0));
     }
 
     [Benchmark]
@@ -95,7 +97,7 @@ public class ReadValueBenchmark
     {
         using var reader = await passthroughConn.ExecuteReaderAsync($"SELECT toInt32(number) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetValue(0);
+            consumer.Consume(reader.GetValue(0));
     }
 
     [Benchmark]
@@ -103,7 +105,7 @@ public class ReadValueBenchmark
     {
         using var reader = await selectiveConn.ExecuteReaderAsync($"SELECT toInt32(number) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetValue(0);
+            consumer.Consume(reader.GetValue(0));
     }
 
     // ==========================================
@@ -115,7 +117,7 @@ public class ReadValueBenchmark
     {
         using var reader = await noConverterConn.ExecuteReaderAsync($"SELECT toInt32(number) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetFieldValue<int>(0);
+            consumer.Consume(reader.GetFieldValue<int>(0));
     }
 
     [Benchmark]
@@ -123,7 +125,7 @@ public class ReadValueBenchmark
     {
         using var reader = await passthroughConn.ExecuteReaderAsync($"SELECT toInt32(number) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetFieldValue<int>(0);
+            consumer.Consume(reader.GetFieldValue<int>(0));
     }
 
     [Benchmark]
@@ -131,7 +133,7 @@ public class ReadValueBenchmark
     {
         using var reader = await selectiveConn.ExecuteReaderAsync($"SELECT toInt32(number) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetFieldValue<int>(0);
+            consumer.Consume(reader.GetFieldValue<int>(0));
     }
 
     // ==========================================
@@ -143,7 +145,7 @@ public class ReadValueBenchmark
     {
         using var reader = await noConverterConn.ExecuteReaderAsync($"SELECT toDateTime(18942+number,'UTC') FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetValue(0);
+            consumer.Consume(reader.GetValue(0));
     }
 
     [Benchmark]
@@ -151,7 +153,7 @@ public class ReadValueBenchmark
     {
         using var reader = await passthroughConn.ExecuteReaderAsync($"SELECT toDateTime(18942+number,'UTC') FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetValue(0);
+            consumer.Consume(reader.GetValue(0));
     }
 
     [Benchmark]
@@ -159,7 +161,7 @@ public class ReadValueBenchmark
     {
         using var reader = await selectiveConn.ExecuteReaderAsync($"SELECT toDateTime(18942+number,'UTC') FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetValue(0);
+            consumer.Consume(reader.GetValue(0));
     }
 
     // ==========================================
@@ -171,7 +173,7 @@ public class ReadValueBenchmark
     {
         using var reader = await noConverterConn.ExecuteReaderAsync($"SELECT toDateTime(18942+number,'UTC') FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetFieldValue<DateTime>(0);
+            consumer.Consume(reader.GetFieldValue<DateTime>(0));
     }
 
     [Benchmark]
@@ -179,7 +181,7 @@ public class ReadValueBenchmark
     {
         using var reader = await passthroughConn.ExecuteReaderAsync($"SELECT toDateTime(18942+number,'UTC') FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetFieldValue<DateTime>(0);
+            consumer.Consume(reader.GetFieldValue<DateTime>(0));
     }
 
     [Benchmark]
@@ -187,7 +189,7 @@ public class ReadValueBenchmark
     {
         using var reader = await selectiveConn.ExecuteReaderAsync($"SELECT toDateTime(18942+number,'UTC') FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetFieldValue<DateTime>(0);
+            consumer.Consume(reader.GetFieldValue<DateTime>(0));
     }
 
     // ==========================================
@@ -199,7 +201,7 @@ public class ReadValueBenchmark
     {
         using var reader = await noConverterConn.ExecuteReaderAsync($"SELECT concat('test',toString(number)) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetValue(0);
+            consumer.Consume(reader.GetValue(0));
     }
 
     [Benchmark]
@@ -207,7 +209,7 @@ public class ReadValueBenchmark
     {
         using var reader = await passthroughConn.ExecuteReaderAsync($"SELECT concat('test',toString(number)) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetValue(0);
+            consumer.Consume(reader.GetValue(0));
     }
 
     [Benchmark]
@@ -215,7 +217,7 @@ public class ReadValueBenchmark
     {
         using var reader = await selectiveConn.ExecuteReaderAsync($"SELECT concat('test',toString(number)) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetValue(0);
+            consumer.Consume(reader.GetValue(0));
     }
 
     // ==========================================
@@ -227,7 +229,7 @@ public class ReadValueBenchmark
     {
         using var reader = await noConverterConn.ExecuteReaderAsync($"SELECT concat('test',toString(number)) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetFieldValue<string>(0);
+            consumer.Consume(reader.GetFieldValue<string>(0));
     }
 
     [Benchmark]
@@ -235,7 +237,7 @@ public class ReadValueBenchmark
     {
         using var reader = await passthroughConn.ExecuteReaderAsync($"SELECT concat('test',toString(number)) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetFieldValue<string>(0);
+            consumer.Consume(reader.GetFieldValue<string>(0));
     }
 
     [Benchmark]
@@ -243,6 +245,6 @@ public class ReadValueBenchmark
     {
         using var reader = await selectiveConn.ExecuteReaderAsync($"SELECT concat('test',toString(number)) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
-            _ = reader.GetFieldValue<string>(0);
+            consumer.Consume(reader.GetFieldValue<string>(0));
     }
 }
