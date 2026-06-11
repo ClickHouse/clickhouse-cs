@@ -1,4 +1,5 @@
-﻿using System.Data;
+﻿using System;
+using System.Data;
 using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Readers;
@@ -179,6 +180,23 @@ public class DataReaderTests : AbstractConnectionTestFixture
         ClassicAssert.IsTrue(reader.Read());
         Assert.That(reader.GetFieldValue<string>(0), Is.EqualTo("ASD"));
         ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    public async Task ShouldGetFieldValueByName()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync("SELECT 'ASD' as value");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetFieldValue<string>("value"), Is.EqualTo("ASD"));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    public async Task ShouldThrowGettingFieldValueByUnknownName()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync("SELECT 'ASD' as value");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.Throws<ArgumentException>(() => reader.GetFieldValue<string>("nonexistent"));
     }
 
     [Test]
