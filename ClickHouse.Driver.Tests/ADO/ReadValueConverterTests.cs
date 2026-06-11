@@ -75,6 +75,34 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task GetFieldValue_NullableVsPlainTarget_DispatchByExactTypeOfT()
+    {
+        // The generic GetFieldValue<T> path dispatches on the exact typeof(T). A converter keyed on
+        // typeof(DateTime) (DateTimeKindConverter) therefore fires for GetFieldValue<DateTime> but NOT
+        // for GetFieldValue<DateTime?> (typeof(DateTime?) != typeof(DateTime)). The boxed GetValue path,
+        // which dispatches on the runtime type, still applies it — so the two paths differ on Nullable(T).
+        // This is the documented contract on IReadValueConverter.ConvertValue<T>; converters wanting
+        // consistency must handle Nullable<U> themselves (DictionaryReadValueConverter does).
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings)
+        {
+            ReadValueConverter = new DateTimeKindConverter(DateTimeKind.Utc),
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT CAST('2025-01-15 12:00:00' AS Nullable(DateTime))");
+        ClassicAssert.IsTrue(reader.Read());
+
+        // Plain target: typeof(T) == typeof(DateTime) → converter fires.
+        Assert.That(reader.GetFieldValue<DateTime>(0).Kind, Is.EqualTo(DateTimeKind.Utc));
+        // Nullable target: typeof(T) == typeof(DateTime?) → converter is skipped on the generic path.
+        Assert.That(reader.GetFieldValue<DateTime?>(0).Value.Kind, Is.Not.EqualTo(DateTimeKind.Utc));
+        // Boxed path dispatches on the runtime type and still converts, confirming the paths diverge.
+        Assert.That(((DateTime)reader.GetValue(0)).Kind, Is.EqualTo(DateTimeKind.Utc));
+    }
+
+    [Test]
     public async Task GetFieldValue_WithConverter_ShouldNotAffectNonTargetedTypes()
     {
         var settings = TestUtilities.GetTestClickHouseClientSettings();
