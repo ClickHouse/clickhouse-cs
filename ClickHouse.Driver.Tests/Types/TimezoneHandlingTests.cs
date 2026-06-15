@@ -1097,3 +1097,71 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
         Assert.That(unixMs, Is.EqualTo(expected));
     }
 }
+
+/// <summary>
+/// Regression tests for GitHub issue #370: DateTime columns declared with ClickHouse's
+/// synthetic fixed-offset timezone names (e.g. <c>Fixed/UTC+05:30:00</c>) were silently
+/// dropped because <c>DateTimeZoneProviders.Tzdb.GetZoneOrNull</c> returns null for them.
+/// This caused the wall-clock value to be shifted by the offset amount.
+/// </summary>
+[TestFixture]
+public class ReadDateTimeFixedUtcOffsetTests : AbstractConnectionTestFixture
+{
+    /// <summary>
+    /// Primary regression: DateTime('Fixed/UTC+05:30:00') must preserve the wall-clock
+    /// value that ClickHouse displays for the column, not the UTC projection.
+    /// Before the fix: GetZoneOrNull returned null → UTC fallback → wall-clock 5h30m off.
+    /// </summary>
+    [Test]
+    public async Task ReadDateTime_WithPositiveFixedUtcOffset_PreservesWallClock()
+    {
+        var result = (DateTime)await connection.ExecuteScalarAsync(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+05:30:00')");
+
+        // Wall-clock in Fixed/UTC+05:30:00 is 10:30:00; before fix, UTC fallback gave 05:00:00.
+        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)));
+    }
+
+    [Test]
+    public async Task ReadDateTime_WithNegativeFixedUtcOffset_PreservesWallClock()
+    {
+        var result = (DateTime)await connection.ExecuteScalarAsync(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC-07:00:00')");
+
+        // Wall-clock in Fixed/UTC-07:00:00 is 10:30:00; before fix, UTC fallback gave 17:30:00.
+        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)));
+    }
+
+    [Test]
+    public async Task ReadDateTime64_WithPositiveFixedUtcOffset_PreservesWallClock()
+    {
+        var result = (DateTime)await connection.ExecuteScalarAsync(
+            "SELECT toDateTime64('2024-01-15 10:30:00.123', 3, 'Fixed/UTC+05:30:00')");
+
+        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0, 123)));
+    }
+
+    [Test]
+    public async Task ReadDateTime64_WithNegativeFixedUtcOffset_PreservesWallClock()
+    {
+        var result = (DateTime)await connection.ExecuteScalarAsync(
+            "SELECT toDateTime64('2024-01-15 10:30:00.456', 3, 'Fixed/UTC-07:00:00')");
+
+        // Wall-clock in Fixed/UTC-07:00:00 is 10:30:00.456; before fix, UTC fallback gave 17:30:00.456.
+        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0, 456)));
+    }
+
+    /// <summary>
+    /// Contrast case: an IANA timezone that covers the same UTC+05:30 offset (Asia/Kolkata)
+    /// must continue to work correctly and is not affected by the Fixed/UTC parsing code.
+    /// </summary>
+    [Test]
+    public async Task ReadDateTime_WithIanaTimezone_IsUnaffectedByFix()
+    {
+        // Asia/Kolkata is UTC+05:30 — same offset as Fixed/UTC+05:30:00.
+        var result = (DateTime)await connection.ExecuteScalarAsync(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Asia/Kolkata')");
+
+        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)));
+    }
+}

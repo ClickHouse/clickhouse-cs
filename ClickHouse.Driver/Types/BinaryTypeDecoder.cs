@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using ClickHouse.Driver.Formats;
-using NodaTime;
 
 namespace ClickHouse.Driver.Types;
 
@@ -59,11 +58,11 @@ internal static class BinaryTypeDecoder
             case BinaryTypeIndex.DateTimeUTC:
                 return new DateTimeType();
             case BinaryTypeIndex.DateTimeWithTimezone:
-                return new DateTimeType { TimeZone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(reader.ReadString()) };
+                return new DateTimeType { TimeZone = AbstractDateTimeType.ResolveTimezone(reader.ReadString()) };
             case BinaryTypeIndex.DateTime64UTC:
                 return new DateTime64Type() { Scale = reader.ReadByte() };
             case BinaryTypeIndex.DateTime64WithTimezone:
-                return new DateTime64Type() { Scale = reader.ReadByte(), TimeZone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(reader.ReadString()) };
+                return new DateTime64Type() { Scale = reader.ReadByte(), TimeZone = AbstractDateTimeType.ResolveTimezone(reader.ReadString()) };
 
             case BinaryTypeIndex.String:
                 return new StringType() { ReadAsByteArray = typeSettings.readStringsAsByteArrays };

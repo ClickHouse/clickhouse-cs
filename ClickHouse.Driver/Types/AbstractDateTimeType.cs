@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using NodaTime;
 
 namespace ClickHouse.Driver.Types;
@@ -21,6 +23,42 @@ internal static class DateTimeConversions
 
 internal abstract class AbstractDateTimeType : ParameterizedType
 {
+    // ClickHouse emits synthetic fixed-offset timezone names like "Fixed/UTC+05:30:00" for columns
+    // declared with a fixed UTC offset. These names are not in the IANA TZDB so GetZoneOrNull
+    // returns null for them. This regex parses them into a NodaTime fixed-offset zone.
+    private static readonly Regex FixedUtcOffsetRegex = new(
+        @"^Fixed/UTC([+-])(\d{2}):(\d{2}):(\d{2})$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Resolves a ClickHouse timezone name to a <see cref="DateTimeZone"/>.
+    /// Handles both standard IANA names and ClickHouse's synthetic
+    /// <c>Fixed/UTC±HH:MM:SS</c> fixed-offset names.
+    /// Returns <see langword="null"/> if the name cannot be resolved.
+    /// </summary>
+    internal static DateTimeZone ResolveTimezone(string timeZoneName)
+    {
+        var zone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(timeZoneName);
+        if (zone != null)
+            return zone;
+
+        var match = FixedUtcOffsetRegex.Match(timeZoneName);
+        if (match.Success)
+        {
+            var sign = match.Groups[1].Value == "+" ? 1 : -1;
+            var hours = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+            var minutes = int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
+            var seconds = int.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
+            var totalSeconds = sign * (hours * 3600 + minutes * 60 + seconds);
+            // NodaTime Offset is capped at ±18 h (±64,800 s); return null for out-of-range values.
+            const int maxValidSeconds = 18 * 3600;
+            if (Math.Abs(totalSeconds) <= maxValidSeconds)
+                return DateTimeZone.ForOffset(Offset.FromSeconds(totalSeconds));
+        }
+
+        return null;
+    }
+
     public DateTimeOffset CoerceToDateTimeOffset(object value)
     {
         return value switch
