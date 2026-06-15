@@ -1152,6 +1152,36 @@ public class ReadDateTimeFixedUtcOffsetTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
+    /// Zero-offset Fixed/UTC: Fixed/UTC+00:00:00 must produce a wall-clock that matches UTC.
+    /// </summary>
+    [Test]
+    public async Task ReadDateTime_WithZeroFixedUtcOffset_PreservesWallClock()
+    {
+        var result = (DateTime)await connection.ExecuteScalarAsync(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+00:00:00')");
+
+        // Wall-clock in Fixed/UTC+00:00:00 equals UTC, so result must be 10:30:00.
+        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)));
+    }
+
+    /// <summary>
+    /// Out-of-range Fixed/UTC offset (>18 h) cannot be represented by NodaTime's Offset,
+    /// so ResolveTimezone returns null and the driver falls back to UTC wall-clock.
+    /// This test pins the fallback behaviour and covers the return-null code path.
+    /// </summary>
+    [Test]
+    public async Task ReadDateTime_WithOutOfRangeFixedUtcOffset_FallsBackToUtcWallClock()
+    {
+        // Fixed/UTC+19:00:00 exceeds NodaTime's ±18 h cap → ResolveTimezone returns null.
+        // The stored instant for wall-clock 2024-01-15 10:30:00 in UTC+19 is
+        // 2024-01-14 15:30:00 UTC; the null-timezone fallback returns that UTC time.
+        var result = (DateTime)await connection.ExecuteScalarAsync(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+19:00:00')");
+
+        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 14, 15, 30, 0)));
+    }
+
+    /// <summary>
     /// Contrast case: an IANA timezone that covers the same UTC+05:30 offset (Asia/Kolkata)
     /// must continue to work correctly and is not affected by the Fixed/UTC parsing code.
     /// </summary>
@@ -1163,5 +1193,40 @@ public class ReadDateTimeFixedUtcOffsetTests : AbstractConnectionTestFixture
             "SELECT toDateTime('2024-01-15 10:30:00', 'Asia/Kolkata')");
 
         Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)));
+    }
+}
+
+/// <summary>
+/// Unit tests for ResolveTimezone via type-string parsing. These exercise code paths that
+/// cannot be reached through integration tests (the server never emits unrecognised timezone
+/// names), but are needed to cover the fallback branches in AbstractDateTimeType.ResolveTimezone.
+/// </summary>
+[TestFixture]
+public class ResolveTimezoneParseTests
+{
+    /// <summary>
+    /// When the timezone name is not IANA and does not match the Fixed/UTC pattern,
+    /// ResolveTimezone returns null → DateTimeType.TimeZone is null.
+    /// This covers the regex-no-match branch of ResolveTimezone.
+    /// </summary>
+    [Test]
+    public void ParseDateTime_WithUnrecognizedTimezone_HasNullTimeZone()
+    {
+        var type = (DateTimeType)TypeConverter.ParseClickHouseType(
+            "DateTime('Unknown/TZ')", TypeSettings.Default);
+
+        Assert.That(type.TimeZone, Is.Null);
+    }
+
+    /// <summary>
+    /// DateTime64 with the same unrecognised name also produces null TimeZone.
+    /// </summary>
+    [Test]
+    public void ParseDateTime64_WithUnrecognizedTimezone_HasNullTimeZone()
+    {
+        var type = (DateTime64Type)TypeConverter.ParseClickHouseType(
+            "DateTime64(3, 'Unknown/TZ')", TypeSettings.Default);
+
+        Assert.That(type.TimeZone, Is.Null);
     }
 }
