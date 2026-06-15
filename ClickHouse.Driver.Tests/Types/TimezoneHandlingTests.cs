@@ -1229,4 +1229,34 @@ public class ResolveTimezoneParseTests
 
         Assert.That(type.TimeZone, Is.Null);
     }
+
+    /// <summary>
+    /// A Fixed/UTC name with minutes or seconds outside 00-59 is malformed (the server never emits
+    /// such a name). The tightened regex must reject it so ResolveTimezone returns null and the
+    /// driver uses its UTC-wall-clock fallback, instead of misreading e.g. 60 minutes as an extra
+    /// hour and silently resolving a different (wrong) offset. Covers the regex-no-match branch.
+    /// </summary>
+    [Test]
+    public void ParseDateTime_WithFixedUtcOffsetMinutesOutOfRange_HasNullTimeZone()
+    {
+        var type = (DateTimeType)TypeConverter.ParseClickHouseType(
+            "DateTime('Fixed/UTC+05:60:00')", TypeSettings.Default);
+
+        Assert.That(type.TimeZone, Is.Null);
+    }
+
+    /// <summary>
+    /// Contrast case: the maximum in-range minutes/seconds (59:59) is a well-formed Fixed/UTC name
+    /// and must still resolve to a fixed-offset zone with the exact offset, proving the tightened
+    /// MM/SS regex does not reject valid values.
+    /// </summary>
+    [Test]
+    public void ParseDateTime_WithMaxValidFixedUtcOffset_ResolvesToFixedOffsetZone()
+    {
+        var type = (DateTimeType)TypeConverter.ParseClickHouseType(
+            "DateTime('Fixed/UTC+05:59:59')", TypeSettings.Default);
+
+        Assert.That(type.TimeZone, Is.Not.Null);
+        Assert.That(type.TimeZone.MaxOffset, Is.EqualTo(Offset.FromSeconds((5 * 3600) + (59 * 60) + 59)));
+    }
 }

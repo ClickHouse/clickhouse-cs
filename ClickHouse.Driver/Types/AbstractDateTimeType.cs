@@ -26,8 +26,11 @@ internal abstract class AbstractDateTimeType : ParameterizedType
     // ClickHouse emits synthetic fixed-offset timezone names like "Fixed/UTC+05:30:00" for columns
     // declared with a fixed UTC offset. These names are not in the IANA TZDB so GetZoneOrNull
     // returns null for them. This regex parses them into a NodaTime fixed-offset zone.
+    // Minutes and seconds are restricted to 00-59 so a malformed name falls through to the null
+    // fallback instead of being misread as a different valid offset (e.g. 60 minutes as +1 h);
+    // out-of-range hours are rejected by the +/-18 h cap in ResolveTimezone.
     private static readonly Regex FixedUtcOffsetRegex = new(
-        @"^Fixed/UTC([+-])(\d{2}):(\d{2}):(\d{2})$",
+        @"^Fixed/UTC([+-])(\d{2}):([0-5]\d):([0-5]\d)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
