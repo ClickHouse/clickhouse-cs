@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
@@ -1099,75 +1100,75 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
 }
 
 /// <summary>
-/// Regression tests for GitHub issue #370: DateTime columns declared with ClickHouse's
-/// synthetic fixed-offset timezone names (e.g. <c>Fixed/UTC+05:30:00</c>) were silently
-/// dropped because <c>DateTimeZoneProviders.Tzdb.GetZoneOrNull</c> returns null for them.
-/// This caused the wall-clock value to be shifted by the offset amount.
+/// Regression tests for GitHub issue #370: DateTime/DateTime64 columns declared with
+/// ClickHouse's synthetic fixed-offset timezone names (e.g. <c>Fixed/UTC+05:30:00</c>) were
+/// silently dropped because <c>DateTimeZoneProviders.Tzdb.GetZoneOrNull</c> returns null for
+/// them, shifting the wall-clock value by the offset amount.
 /// </summary>
 [TestFixture]
 public class ReadDateTimeFixedUtcOffsetTests : AbstractConnectionTestFixture
 {
+    // (sql, expected wall-clock, expected DateTime.Kind, expected GetDateTimeOffset offset)
+    private static IEnumerable<TestCaseData> FixedUtcOffsetCases()
+    {
+        var wallClock = new DateTime(2024, 1, 15, 10, 30, 0);
+
+        // A non-zero fixed offset preserves the displayed wall-clock and yields Kind=Unspecified.
+        yield return new TestCaseData(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+05:30:00')",
+            wallClock, DateTimeKind.Unspecified, new TimeSpan(5, 30, 0))
+            .SetName("ReadDateTime_PositiveFixedUtcOffset");
+        yield return new TestCaseData(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC-07:00:00')",
+            wallClock, DateTimeKind.Unspecified, new TimeSpan(-7, 0, 0))
+            .SetName("ReadDateTime_NegativeFixedUtcOffset");
+
+        // A zero fixed offset resolves to a UTC-equivalent zone, so Kind=Utc and the offset is zero.
+        yield return new TestCaseData(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+00:00:00')",
+            wallClock, DateTimeKind.Utc, TimeSpan.Zero)
+            .SetName("ReadDateTime_ZeroFixedUtcOffset_IsUtc");
+
+        // DateTime64 uses the same offset handling and preserves sub-second precision.
+        yield return new TestCaseData(
+            "SELECT toDateTime64('2024-01-15 10:30:00.123', 3, 'Fixed/UTC+05:30:00')",
+            new DateTime(2024, 1, 15, 10, 30, 0, 123), DateTimeKind.Unspecified, new TimeSpan(5, 30, 0))
+            .SetName("ReadDateTime64_PositiveFixedUtcOffset");
+        yield return new TestCaseData(
+            "SELECT toDateTime64('2024-01-15 10:30:00.456', 3, 'Fixed/UTC-07:00:00')",
+            new DateTime(2024, 1, 15, 10, 30, 0, 456), DateTimeKind.Unspecified, new TimeSpan(-7, 0, 0))
+            .SetName("ReadDateTime64_NegativeFixedUtcOffset");
+    }
+
     /// <summary>
-    /// Primary regression: DateTime('Fixed/UTC+05:30:00') must preserve the wall-clock
-    /// value that ClickHouse displays for the column, not the UTC projection.
-    /// Before the fix: GetZoneOrNull returned null → UTC fallback → wall-clock 5h30m off.
+    /// A resolvable Fixed/UTC column must preserve the wall-clock value the server displays,
+    /// set DateTime.Kind from the offset (Utc when the offset is zero, otherwise Unspecified),
+    /// and expose the fixed offset through GetDateTimeOffset(). Before the fix the synthetic
+    /// name resolved to null and the value was silently shifted to the UTC projection.
     /// </summary>
-    [Test]
-    public async Task ReadDateTime_WithPositiveFixedUtcOffset_PreservesWallClock()
+    [TestCaseSource(nameof(FixedUtcOffsetCases))]
+    public async Task ReadDateTime_WithFixedUtcOffset_PreservesWallClockKindAndOffset(
+        string sql, DateTime expectedWallClock, DateTimeKind expectedKind, TimeSpan expectedOffset)
     {
-        var result = (DateTime)await connection.ExecuteScalarAsync(
-            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+05:30:00')");
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(sql);
+        Assert.That(reader.Read(), Is.True);
 
-        // Wall-clock in Fixed/UTC+05:30:00 is 10:30:00; before fix, UTC fallback gave 05:00:00.
-        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)));
-    }
+        var dateTime = reader.GetDateTime(0);
+        var dateTimeOffset = reader.GetDateTimeOffset(0);
 
-    [Test]
-    public async Task ReadDateTime_WithNegativeFixedUtcOffset_PreservesWallClock()
-    {
-        var result = (DateTime)await connection.ExecuteScalarAsync(
-            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC-07:00:00')");
-
-        // Wall-clock in Fixed/UTC-07:00:00 is 10:30:00; before fix, UTC fallback gave 17:30:00.
-        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)));
-    }
-
-    [Test]
-    public async Task ReadDateTime64_WithPositiveFixedUtcOffset_PreservesWallClock()
-    {
-        var result = (DateTime)await connection.ExecuteScalarAsync(
-            "SELECT toDateTime64('2024-01-15 10:30:00.123', 3, 'Fixed/UTC+05:30:00')");
-
-        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0, 123)));
-    }
-
-    [Test]
-    public async Task ReadDateTime64_WithNegativeFixedUtcOffset_PreservesWallClock()
-    {
-        var result = (DateTime)await connection.ExecuteScalarAsync(
-            "SELECT toDateTime64('2024-01-15 10:30:00.456', 3, 'Fixed/UTC-07:00:00')");
-
-        // Wall-clock in Fixed/UTC-07:00:00 is 10:30:00.456; before fix, UTC fallback gave 17:30:00.456.
-        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0, 456)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(dateTime, Is.EqualTo(expectedWallClock), "wall-clock value");
+            Assert.That(dateTime.Kind, Is.EqualTo(expectedKind), "DateTime.Kind");
+            Assert.That(dateTimeOffset.Offset, Is.EqualTo(expectedOffset), "GetDateTimeOffset offset");
+            Assert.That(dateTimeOffset.DateTime, Is.EqualTo(expectedWallClock), "GetDateTimeOffset wall-clock");
+        });
     }
 
     /// <summary>
-    /// Zero-offset Fixed/UTC: Fixed/UTC+00:00:00 must produce a wall-clock that matches UTC.
-    /// </summary>
-    [Test]
-    public async Task ReadDateTime_WithZeroFixedUtcOffset_PreservesWallClock()
-    {
-        var result = (DateTime)await connection.ExecuteScalarAsync(
-            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+00:00:00')");
-
-        // Wall-clock in Fixed/UTC+00:00:00 equals UTC, so result must be 10:30:00.
-        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)));
-    }
-
-    /// <summary>
-    /// Out-of-range Fixed/UTC offset (>18 h) cannot be represented by NodaTime's Offset,
-    /// so ResolveTimezone returns null and the driver falls back to UTC wall-clock.
-    /// This test pins the fallback behaviour and covers the return-null code path.
+    /// Out-of-range Fixed/UTC offset (>18 h) cannot be represented by NodaTime's Offset, so
+    /// ResolveTimezone returns null and the driver falls back to the UTC wall-clock with
+    /// Kind=Unspecified and a zero offset. Pins that fallback and covers the return-null branch.
     /// </summary>
     [Test]
     public async Task ReadDateTime_WithOutOfRangeFixedUtcOffset_FallsBackToUtcWallClock()
@@ -1175,88 +1176,101 @@ public class ReadDateTimeFixedUtcOffsetTests : AbstractConnectionTestFixture
         // Fixed/UTC+19:00:00 exceeds NodaTime's ±18 h cap → ResolveTimezone returns null.
         // The stored instant for wall-clock 2024-01-15 10:30:00 in UTC+19 is
         // 2024-01-14 15:30:00 UTC; the null-timezone fallback returns that UTC time.
-        var result = (DateTime)await connection.ExecuteScalarAsync(
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
             "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+19:00:00')");
+        Assert.That(reader.Read(), Is.True);
 
-        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 14, 15, 30, 0)));
+        var dateTime = reader.GetDateTime(0);
+        var dateTimeOffset = reader.GetDateTimeOffset(0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dateTime, Is.EqualTo(new DateTime(2024, 1, 14, 15, 30, 0)), "UTC-projected wall-clock");
+            Assert.That(dateTime.Kind, Is.EqualTo(DateTimeKind.Unspecified), "null-timezone fallback Kind");
+            Assert.That(dateTimeOffset.Offset, Is.EqualTo(TimeSpan.Zero), "UTC fallback offset");
+            Assert.That(dateTimeOffset.DateTime, Is.EqualTo(new DateTime(2024, 1, 14, 15, 30, 0)), "GetDateTimeOffset wall-clock");
+        });
     }
 
     /// <summary>
-    /// Contrast case: an IANA timezone that covers the same UTC+05:30 offset (Asia/Kolkata)
-    /// must continue to work correctly and is not affected by the Fixed/UTC parsing code.
+    /// Contrast case: a same-offset IANA zone (Asia/Kolkata, UTC+05:30) keeps its existing
+    /// behaviour and is unaffected by the Fixed/UTC parsing path, proving the fix is targeted.
     /// </summary>
     [Test]
     public async Task ReadDateTime_WithIanaTimezone_IsUnaffectedByFix()
     {
-        // Asia/Kolkata is UTC+05:30 — same offset as Fixed/UTC+05:30:00.
-        var result = (DateTime)await connection.ExecuteScalarAsync(
+        // Asia/Kolkata is UTC+05:30 — the same offset as Fixed/UTC+05:30:00.
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
             "SELECT toDateTime('2024-01-15 10:30:00', 'Asia/Kolkata')");
+        Assert.That(reader.Read(), Is.True);
 
-        Assert.That(result, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)));
+        var dateTime = reader.GetDateTime(0);
+        var dateTimeOffset = reader.GetDateTimeOffset(0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dateTime, Is.EqualTo(new DateTime(2024, 1, 15, 10, 30, 0)), "wall-clock value");
+            Assert.That(dateTime.Kind, Is.EqualTo(DateTimeKind.Unspecified), "DateTime.Kind");
+            Assert.That(dateTimeOffset.Offset, Is.EqualTo(new TimeSpan(5, 30, 0)), "Asia/Kolkata offset (UTC+05:30)");
+        });
     }
 }
 
 /// <summary>
-/// Unit tests for ResolveTimezone via type-string parsing. These exercise code paths that
-/// cannot be reached through integration tests (the server never emits unrecognised timezone
-/// names), but are needed to cover the fallback branches in AbstractDateTimeType.ResolveTimezone.
+/// Unit tests for ResolveTimezone via type-string parsing. These exercise branches that cannot
+/// be reached through integration tests (the server never emits unrecognised or malformed
+/// timezone names) but are needed to cover the fallback paths in
+/// AbstractDateTimeType.ResolveTimezone.
 /// </summary>
 [TestFixture]
 public class ResolveTimezoneParseTests
 {
-    /// <summary>
-    /// When the timezone name is not IANA and does not match the Fixed/UTC pattern,
-    /// ResolveTimezone returns null → DateTimeType.TimeZone is null.
-    /// This covers the regex-no-match branch of ResolveTimezone.
-    /// </summary>
-    [Test]
-    public void ParseDateTime_WithUnrecognizedTimezone_HasNullTimeZone()
+    private static IEnumerable<TestCaseData> UnresolvableTimezoneCases()
     {
-        var type = (DateTimeType)TypeConverter.ParseClickHouseType(
-            "DateTime('Unknown/TZ')", TypeSettings.Default);
+        // Not IANA and not a Fixed/UTC offset → regex no-match → null TimeZone.
+        yield return new TestCaseData("DateTime('Unknown/TZ')").SetName("ParseDateTime_UnrecognizedName");
+        yield return new TestCaseData("DateTime64(3, 'Unknown/TZ')").SetName("ParseDateTime64_UnrecognizedName");
+        // Malformed Fixed/UTC: minutes/seconds outside 00-59 must be rejected by the tightened
+        // regex rather than misread as a different valid offset (e.g. 60 minutes as an extra hour).
+        yield return new TestCaseData("DateTime('Fixed/UTC+05:60:00')").SetName("ParseDateTime_FixedUtcMinutesOutOfRange");
+        yield return new TestCaseData("DateTime('Fixed/UTC+05:00:60')").SetName("ParseDateTime_FixedUtcSecondsOutOfRange");
+    }
+
+    /// <summary>
+    /// Names that cannot be resolved (non-IANA, non-matching, or malformed Fixed/UTC) leave
+    /// TimeZone null so the driver uses its UTC-wall-clock fallback. Covers the regex-no-match
+    /// branch of ResolveTimezone for both DateTime and DateTime64.
+    /// </summary>
+    [TestCaseSource(nameof(UnresolvableTimezoneCases))]
+    public void Parse_WithUnresolvableTimezone_HasNullTimeZone(string typeString)
+    {
+        var type = (AbstractDateTimeType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
 
         Assert.That(type.TimeZone, Is.Null);
     }
 
-    /// <summary>
-    /// DateTime64 with the same unrecognised name also produces null TimeZone.
-    /// </summary>
-    [Test]
-    public void ParseDateTime64_WithUnrecognizedTimezone_HasNullTimeZone()
+    // (type string, expected fixed offset in seconds)
+    private static IEnumerable<TestCaseData> ValidFixedUtcOffsetCases()
     {
-        var type = (DateTime64Type)TypeConverter.ParseClickHouseType(
-            "DateTime64(3, 'Unknown/TZ')", TypeSettings.Default);
-
-        Assert.That(type.TimeZone, Is.Null);
+        yield return new TestCaseData("DateTime('Fixed/UTC+05:59:59')", (5 * 3600) + (59 * 60) + 59)
+            .SetName("ParseDateTime_FixedUtcMaxMinutesSeconds");
+        yield return new TestCaseData("DateTime('Fixed/UTC+18:00:00')", 18 * 3600)
+            .SetName("ParseDateTime_FixedUtcMaxInRangeHours");
+        yield return new TestCaseData("DateTime('Fixed/UTC-18:00:00')", -18 * 3600)
+            .SetName("ParseDateTime_FixedUtcMinInRangeHours");
     }
 
     /// <summary>
-    /// A Fixed/UTC name with minutes or seconds outside 00-59 is malformed (the server never emits
-    /// such a name). The tightened regex must reject it so ResolveTimezone returns null and the
-    /// driver uses its UTC-wall-clock fallback, instead of misreading e.g. 60 minutes as an extra
-    /// hour and silently resolving a different (wrong) offset. Covers the regex-no-match branch.
+    /// A well-formed Fixed/UTC name within NodaTime's ±18 h range resolves to a fixed-offset
+    /// zone with exactly that offset. The boundary cases (59:59 minutes/seconds and the ±18 h
+    /// cap) prove the tightened MM/SS regex and the range guard accept all valid values.
     /// </summary>
-    [Test]
-    public void ParseDateTime_WithFixedUtcOffsetMinutesOutOfRange_HasNullTimeZone()
+    [TestCaseSource(nameof(ValidFixedUtcOffsetCases))]
+    public void Parse_WithValidFixedUtcOffset_ResolvesToFixedOffsetZone(string typeString, int expectedOffsetSeconds)
     {
-        var type = (DateTimeType)TypeConverter.ParseClickHouseType(
-            "DateTime('Fixed/UTC+05:60:00')", TypeSettings.Default);
-
-        Assert.That(type.TimeZone, Is.Null);
-    }
-
-    /// <summary>
-    /// Contrast case: the maximum in-range minutes/seconds (59:59) is a well-formed Fixed/UTC name
-    /// and must still resolve to a fixed-offset zone with the exact offset, proving the tightened
-    /// MM/SS regex does not reject valid values.
-    /// </summary>
-    [Test]
-    public void ParseDateTime_WithMaxValidFixedUtcOffset_ResolvesToFixedOffsetZone()
-    {
-        var type = (DateTimeType)TypeConverter.ParseClickHouseType(
-            "DateTime('Fixed/UTC+05:59:59')", TypeSettings.Default);
+        var type = (AbstractDateTimeType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
 
         Assert.That(type.TimeZone, Is.Not.Null);
-        Assert.That(type.TimeZone.MaxOffset, Is.EqualTo(Offset.FromSeconds((5 * 3600) + (59 * 60) + 59)));
+        Assert.That(type.TimeZone.MaxOffset, Is.EqualTo(Offset.FromSeconds(expectedOffsetSeconds)));
     }
 }
