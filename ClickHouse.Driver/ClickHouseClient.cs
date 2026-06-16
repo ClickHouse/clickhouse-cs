@@ -204,12 +204,12 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <inheritdoc />
     public void RegisterBinaryInsertType<T>()
         where T : class
-        => pocoTypeRegistry.RegisterForInsert<T>();
+        => pocoTypeRegistry.RegisterForInsert<T>(GetLogger(ClickHouseLogCategories.Client));
 
     /// <inheritdoc />
     public void RegisterPocoType<T>()
         where T : class
-        => pocoTypeRegistry.RegisterForBoth<T>();
+        => pocoTypeRegistry.RegisterForBoth<T>(GetLogger(ClickHouseLogCategories.Client));
 
     /// <inheritdoc/>
     public ClickHouseConnection CreateConnection()

@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.Poco;
 
@@ -21,24 +23,30 @@ internal sealed class PocoTypeRegistry
     /// <summary>
     /// Registers a POCO type for binary insert. Idempotent and thread-safe.
     /// </summary>
-    internal void RegisterForInsert<T>()
+    internal void RegisterForInsert<T>(ILogger logger = null)
         where T : class
-        => insertMappings.GetOrAdd(typeof(T), static _ => BuildInsertMapping<T>());
+        => insertMappings.GetOrAdd(typeof(T), _ => BuildInsertMapping<T>(logger));
 
     /// <summary>
     /// Registers a POCO type for both binary insert and read materialization. Both mappings are
     /// validated up front; if either validation throws, neither mapping is committed, so the
     /// registry is left in its prior state.
     /// </summary>
-    internal void RegisterForBoth<T>()
+    internal void RegisterForBoth<T>(ILogger logger = null)
         where T : class
     {
+        var type = typeof(T);
+
+        // Already fully registered: nothing to (re)build
+        if (readMappings.ContainsKey(type) && insertMappings.ContainsKey(type))
+            return;
+
         // Build both before committing either — a validation throw here cannot leave a partial
         // registration behind.
-        var read = BuildReadMapping<T>();
-        var insert = BuildInsertMapping<T>();
-        readMappings.GetOrAdd(typeof(T), read);
-        insertMappings.GetOrAdd(typeof(T), insert);
+        var read = BuildReadMapping<T>(logger);
+        var insert = BuildInsertMapping<T>(logger);
+        readMappings.GetOrAdd(type, read);
+        insertMappings.GetOrAdd(type, insert);
     }
 
     /// <summary>
@@ -55,7 +63,7 @@ internal sealed class PocoTypeRegistry
         where T : class
         => readMappings.TryGetValue(typeof(T), out var mapping) ? (PocoReadMapping<T>)mapping : null;
 
-    private static PocoInsertMapping<T> BuildInsertMapping<T>()
+    private static PocoInsertMapping<T> BuildInsertMapping<T>(ILogger logger)
         where T : class
     {
         var type = typeof(T);
@@ -63,17 +71,27 @@ internal sealed class PocoTypeRegistry
         var propInfos = new List<PocoPropertyInfo>(properties.Length);
         var getters = new List<Func<T, object>>(properties.Length);
         var usedColumnNames = new HashSet<string>(StringComparer.Ordinal);
+        var skipped = IsDebugEnabled(logger) ? new List<string>() : null;
 
         foreach (var property in properties)
         {
             if (!property.CanRead || !property.GetMethod.IsPublic)
+            {
+                skipped?.Add($"{property.Name} (no public getter)");
                 continue;
+            }
 
             if (property.GetIndexParameters().Length > 0)
+            {
+                skipped?.Add($"{property.Name} (indexer)");
                 continue;
+            }
 
             if (property.GetCustomAttribute<ClickHouseNotMappedAttribute>() != null)
+            {
+                skipped?.Add($"{property.Name} ([ClickHouseNotMapped])");
                 continue;
+            }
 
             var (columnName, explicitType) = ResolveColumnAttributes(type, property, usedColumnNames);
 
@@ -99,6 +117,8 @@ internal sealed class PocoTypeRegistry
             columnTypes = dict;
         }
 
+        LogRegistration(logger, type, "insert", props, p => $"{p.PropertyName}->{p.ColumnName} ({p.PropertyType.Name})", skipped);
+
         return new PocoInsertMapping<T>
         {
             Properties = props,
@@ -107,7 +127,7 @@ internal sealed class PocoTypeRegistry
         };
     }
 
-    private static PocoReadMapping<T> BuildReadMapping<T>()
+    private static PocoReadMapping<T> BuildReadMapping<T>(ILogger logger)
         where T : class
     {
         var type = typeof(T);
@@ -132,18 +152,28 @@ internal sealed class PocoTypeRegistry
         var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
         var bindings = new Dictionary<string, ColumnBinding<T>>(properties.Length, StringComparer.Ordinal);
         var usedColumnNames = new HashSet<string>(StringComparer.Ordinal);
+        var skipped = IsDebugEnabled(logger) ? new List<string>() : null;
 
         foreach (var property in properties)
         {
             if (property.GetIndexParameters().Length > 0)
+            {
+                skipped?.Add($"{property.Name} (indexer)");
                 continue;
+            }
 
             if (property.GetCustomAttribute<ClickHouseNotMappedAttribute>() != null)
+            {
+                skipped?.Add($"{property.Name} ([ClickHouseNotMapped])");
                 continue;
+            }
 
             var setMethod = property.SetMethod;
             if (setMethod is null || !setMethod.IsPublic || IsInitOnly(setMethod))
+            {
+                skipped?.Add($"{property.Name} ({DescribeUnsettable(setMethod)})");
                 continue;
+            }
 
             var (columnName, explicitType) = ResolveColumnAttributes(type, property, usedColumnNames);
 
@@ -160,6 +190,8 @@ internal sealed class PocoTypeRegistry
                 $"Type '{type.Name}' has no public properties with a public non-init setter that map to ClickHouse columns. " +
                 $"POCO read registration requires at least one mapped property usable as a setter (init-only and read-only properties are ignored).");
         }
+
+        LogRegistration(logger, type, "read", bindings.Values, b => $"{b.PropInfo.PropertyName}->{b.PropInfo.ColumnName} ({b.PropInfo.PropertyType.Name})", skipped);
 
         return new PocoReadMapping<T>
         {
@@ -224,6 +256,42 @@ internal sealed class PocoTypeRegistry
                 return true;
         }
         return false;
+    }
+
+    private static bool IsDebugEnabled(ILogger logger) => logger != null && logger.IsEnabled(LogLevel.Debug);
+
+    private static string DescribeUnsettable(MethodInfo setMethod)
+    {
+        if (setMethod is null)
+            return "no setter";
+        if (IsInitOnly(setMethod))
+            return "init-only setter";
+        return "non-public setter";
+    }
+
+    // Emits a single Debug line summarizing what a registration mapped and what it skipped. The
+    // skipped list makes the otherwise-silent "property quietly left at its CLR default" failure
+    // mode (init-only/read-only/non-public-setter properties on the read side) diagnosable.
+    private static void LogRegistration<TItem>(
+        ILogger logger,
+        Type type,
+        string kind,
+        IEnumerable<TItem> mapped,
+        Func<TItem, string> describe,
+        List<string> skipped)
+    {
+        if (!IsDebugEnabled(logger))
+            return;
+
+        var mappedItems = mapped.Select(describe).ToArray();
+        logger.LogDebug(
+            "Registered POCO type '{PocoType}' for {RegistrationKind}: mapped {MappedCount} propert(ies) [{MappedProperties}]; skipped {SkippedCount} [{SkippedProperties}].",
+            type.Name,
+            kind,
+            mappedItems.Length,
+            mappedItems.Length == 0 ? "none" : string.Join(", ", mappedItems),
+            skipped.Count,
+            skipped.Count == 0 ? "none" : string.Join(", ", skipped));
     }
 
     private static Func<T, object> CompileGetter<T>(PropertyInfo property)
