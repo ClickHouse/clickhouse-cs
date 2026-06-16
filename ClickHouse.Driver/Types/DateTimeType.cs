@@ -15,7 +15,7 @@ internal class DateTimeType : AbstractDateTimeType
         if (node.ChildNodes.Count > 0)
         {
             var timeZoneName = node.ChildNodes[0].Value.Trim('\'');
-            timeZone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(timeZoneName);
+            timeZone = ResolveTimezone(timeZoneName);
         }
 
         return new DateTimeType { TimeZone = timeZone };

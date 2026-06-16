@@ -32,7 +32,7 @@ internal class DateTime64Type : AbstractDateTimeType
         if (node.ChildNodes.Count > 1)
         {
             var timeZoneName = node.ChildNodes[1].Value.Trim('\'');
-            timeZone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(timeZoneName);
+            timeZone = ResolveTimezone(timeZoneName);
         }
 
         return new DateTime64Type

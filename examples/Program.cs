@@ -158,6 +158,10 @@ class Program
         await CompressedRawExport.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(PocoSelect)}");
+        await PocoSelect.Run();
+        WaitForUser(isInteractive);
+
         // Data Types
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("DATA TYPES");

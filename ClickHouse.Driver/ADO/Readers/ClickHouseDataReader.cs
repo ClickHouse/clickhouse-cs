@@ -14,6 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
+using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 
@@ -30,13 +31,20 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
     private readonly IReadValueConverter readValueConverter; // Can be null
     private readonly string[] columnTypeNames; // Raw server-sent type strings; null when no converter
+    private readonly PocoTypeRegistry pocoRegistry;
+    private readonly Dictionary<Type, object> bindingPlanCache = new();
+    private bool hasCurrentRow;
 
-    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, string[] rawTypeNames, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
+    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
     {
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
         this.exceptionTagStream = exceptionTagStream;
         this.readValueConverter = readValueConverter;
+        // pocoRegistry may be null when the reader is used purely for ADO.NET-style access
+        // (GetValue / typed accessors) — MapTo<T> guards against null and surfaces the standard
+        // "not registered" error.
+        this.pocoRegistry = pocoRegistry;
         RawTypes = types;
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
@@ -45,7 +53,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             columnTypeNames = rawTypeNames;
     }
 
-    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, IReadValueConverter readValueConverter = null)
+    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, PocoTypeRegistry pocoRegistry = null, IReadValueConverter readValueConverter = null)
     {
         if (httpResponse is null) throw new ArgumentNullException(nameof(httpResponse));
 
@@ -71,7 +79,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
             reader = new ExtendedBinaryReader(streamForReader); // will dispose of stream
             var (names, types, rawTypeNames) = ReadHeaders(reader, settings, readValueConverter != null);
-            return new ClickHouseDataReader(httpResponse, reader, names, types, rawTypeNames, exceptionStream, readValueConverter);
+            return new ClickHouseDataReader(httpResponse, reader, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter);
         }
         catch (Exception)
         {
@@ -294,14 +302,139 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     // Custom extension
     public BigInteger GetBigInteger(int ordinal) => (BigInteger)GetValue(ordinal);
 
+    /// <summary>
+    /// Materializes the current row into a new instance of <typeparamref name="T"/>.
+    /// Does not call <see cref="Read"/> and does not advance the reader.
+    /// </summary>
+    /// <typeparam name="T">The registered POCO type. Must have been registered via
+    /// <c>RegisterPocoType&lt;T&gt;</c> on the owning client or connection.</typeparam>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if <typeparamref name="T"/> is not registered, or if a column value cannot
+    /// be assigned to the corresponding property under the strict v1 assignment rules
+    /// (no conversions, no widening, no enum coercion).
+    /// </exception>
+    public T MapTo<T>()
+        where T : class
+    {
+        if (!hasCurrentRow)
+        {
+            throw new InvalidOperationException(
+                "MapTo<T> requires a current row. Call Read() and verify it returned true before calling MapTo<T>.");
+        }
+
+        var mapping = pocoRegistry?.GetReadMapping<T>()
+            ?? throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' is not registered for POCO read. " +
+                $"Call RegisterPocoType<{typeof(T).Name}>() on the client or connection first.");
+
+        var plan = GetOrBuildBindingPlan(mapping);
+        var instance = mapping.Constructor();
+        for (var i = 0; i < plan.Length; i++)
+        {
+            var col = plan[i].ColumnOrdinal;
+            var binding = plan[i].Binding;
+            var value = CurrentRow[col];
+
+            if (value is null || value is DBNull)
+            {
+                if (binding.PropInfo.CanAssignNull)
+                {
+                    binding.Setter(instance, null);
+                    continue;
+                }
+
+                throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                    typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), null));
+            }
+
+            try
+            {
+                binding.Setter(instance, value);
+            }
+            catch (InvalidCastException)
+            {
+                throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                    typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), value.GetType()));
+            }
+        }
+
+        return instance;
+    }
+
+    private (int ColumnOrdinal, ColumnBinding<T> Binding)[] GetOrBuildBindingPlan<T>(PocoReadMapping<T> mapping)
+        where T : class
+    {
+        if (bindingPlanCache.TryGetValue(typeof(T), out var cached))
+            return ((int, ColumnBinding<T>)[])cached;
+
+        var matched = new List<(int, ColumnBinding<T>)>(mapping.Bindings.Count);
+        for (var i = 0; i < FieldNames.Length; i++)
+        {
+            if (!mapping.Bindings.TryGetValue(FieldNames[i], out var binding))
+                continue;
+
+            ValidateBinding(typeof(T), binding.PropInfo, i);
+            matched.Add((i, binding));
+        }
+        var plan = matched.ToArray();
+        bindingPlanCache[typeof(T)] = plan;
+        return plan;
+    }
+
+    /// <summary>
+    /// Fail-fast static check at plan build: if a column's declared <see cref="ClickHouseType.FrameworkType"/>
+    /// is not assignable to the target property's CLR type (or its nullable underlying type), throw before
+    /// any rows are materialized into POCOs so users see the diagnostic up front.
+    /// Polymorphic columns (FrameworkType=object — e.g. Variant/Dynamic/JSON/Object) skip the static check;
+    /// their actual per-row CLR type can vary, so any mismatch surfaces via the per-row catch in MapTo{T}.
+    /// </summary>
+    private void ValidateBinding(Type pocoType, PocoPropertyInfo propInfo, int columnOrdinal)
+    {
+        var colType = RawTypes[columnOrdinal];
+        var colFrameworkType = colType.FrameworkType;
+        var unwrappedColFrameworkType = Nullable.GetUnderlyingType(colFrameworkType) ?? colFrameworkType;
+
+        if (unwrappedColFrameworkType == typeof(object))
+            return;
+
+        var assignable = propInfo.PropertyType.IsAssignableFrom(unwrappedColFrameworkType)
+            || (propInfo.NullableUnderlyingType != null && propInfo.NullableUnderlyingType.IsAssignableFrom(unwrappedColFrameworkType));
+
+        if (!assignable)
+        {
+            throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                pocoType, propInfo, FieldNames[columnOrdinal], colType.ToString(), unwrappedColFrameworkType));
+        }
+    }
+
+    private static string BuildAssignmentErrorMessage(
+        Type targetType,
+        PocoPropertyInfo propInfo,
+        string columnName,
+        string clickHouseType,
+        Type returnedType)
+    {
+        var returnedDescription = returnedType is null ? "null" : returnedType.FullName;
+        return
+            $"Cannot map ClickHouse column '{columnName}' ({clickHouseType}) to property " +
+            $"{targetType.Name}.{propInfo.PropertyName} ({propInfo.PropertyType.FullName}). " +
+            $"The reader returned {returnedDescription}, which is not assignable to {propInfo.PropertyType.FullName}.";
+    }
+
     public override bool Read()
     {
         if (reader.PeekChar() == -1)
+        {
+            hasCurrentRow = false;
             return false; // End of stream reached
+        }
 
         var count = RawTypes.Length;
         var data = CurrentRow;
 
+        // Clear before the per-column loop so a mid-row throw cannot leave a stale
+        // CurrentRow visible to MapTo<T> if the caller catches and continues.
+        hasCurrentRow = false;
         try
         {
             for (var i = 0; i < count; i++)
@@ -309,6 +442,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                 var rawType = RawTypes[i];
                 data[i] = rawType.Read(reader);
             }
+            hasCurrentRow = true;
             return true;
         }
         catch (EndOfStreamException) when (exceptionTagStream != null)

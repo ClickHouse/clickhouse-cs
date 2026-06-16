@@ -266,6 +266,17 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     public new ClickHouseCommand CreateCommand(string commandText = null) => new (this) { CommandText = commandText };
 #pragma warning restore CS0109 // Member does not hide an inherited member; new keyword is not required
 
+    /// <summary>
+    /// Registers a POCO type for both binary insert and read materialization on the underlying
+    /// client. Forwards to <see cref="ClickHouseClient.RegisterPocoType{T}"/> so readers
+    /// obtained from this connection's commands can materialize <typeparamref name="T"/> via
+    /// <see cref="Readers.ClickHouseDataReader.MapTo{T}"/>.
+    /// </summary>
+    /// <typeparam name="T">The POCO type to register.</typeparam>
+    public void RegisterPocoType<T>()
+        where T : class
+        => ClickHouseClient.RegisterPocoType<T>();
+
     void IDisposable.Dispose()
     {
         DisposeClientIfOwned();
