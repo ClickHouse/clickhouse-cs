@@ -193,7 +193,61 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override void Close() => Dispose();
 
-    public override T GetFieldValue<T>(int ordinal) => (T)GetValue(ordinal);
+    /// <summary>
+    /// Returns the value of the specified column typed as <typeparamref name="T"/>.
+    /// For rectangular multidimensional CLR array types (<c>T[,]</c>, <c>T[,,]</c>, …) the
+    /// jagged ClickHouse value is materialised in place. <see cref="InvalidCastException"/>
+    /// signals a type-structure mismatch — the column is null/DBNull, the value isn't a
+    /// collection, its structural depth differs from the target rank, or a leaf can't be
+    /// assigned to the target element type (this matches the ADO.NET
+    /// <see cref="DbDataReader.GetFieldValue{T}"/> contract). <see cref="InvalidOperationException"/>
+    /// signals a shape-validation failure — the value's structure matches
+    /// <typeparamref name="T"/> but rows are ragged or an intermediate row is null. For every
+    /// other <typeparamref name="T"/> this is a plain cast and follows the standard ADO.NET
+    /// behaviour.
+    /// </summary>
+    public override T GetFieldValue<T>(int ordinal)
+    {
+        var raw = GetValue(ordinal);
+        if (FieldValueDispatcher<T>.RequiresMultidimConversion)
+        {
+            // Pre-check the column-level type-mismatch cases so the message names the column
+            // ordinal directly. Structural-depth and leaf-type mismatches caught by the helper
+            // are wrapped in the catch below to add the same ordinal context.
+            if (raw is null || raw is DBNull || raw is not IList)
+            {
+                throw new InvalidCastException(
+                    $"Column [{ordinal}] value '{raw?.GetType().FullName ?? "null"}' " +
+                    $"cannot be converted to '{typeof(T)}'.");
+            }
+            try
+            {
+                return MultiDimArrayHelper.ToMultidimensional<T>(raw);
+            }
+            catch (InvalidCastException ex)
+            {
+                // Helper-detected type mismatch (shallow/deep source, leaf-type mismatch, null
+                // into value-type leaf). Add column context so callers see ordinal + T alongside
+                // the helper's structural detail.
+                throw new InvalidCastException(
+                    $"Column [{ordinal}] cannot be converted to '{typeof(T)}': {ex.Message}", ex);
+            }
+        }
+        return (T)raw;
+    }
+
+    /// <summary>
+    /// Per-<typeparamref name="T"/> cached predicate driving <see cref="GetFieldValue{T}"/>'s
+    /// dispatch. The .NET runtime instantiates this generic exactly once per closed
+    /// <typeparamref name="T"/>, so the <c>typeof</c> + <c>IsArray</c> + <c>GetArrayRank</c>
+    /// work runs once on first use; thereafter the hot path is a single static <see cref="bool"/>
+    /// load and branch.
+    /// </summary>
+    private static class FieldValueDispatcher<T>
+    {
+        public static readonly bool RequiresMultidimConversion =
+            typeof(T).IsArray && typeof(T).GetArrayRank() >= 2;
+    }
 
     public override DataTable GetSchemaTable() => SchemaDescriber.DescribeSchema(this);
 

@@ -16,6 +16,15 @@ internal class DateType : AbstractDateTimeType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-        writer.Write(Convert.ToUInt16(CoerceToDateTimeOffset(value).ToUnixTimeDays()));
+        var days = CoerceToDateTimeOffset(value).ToUnixTimeDays();
+        if (days < 0 || days > ushort.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(value),
+                value,
+                "Value is outside the supported range for ClickHouse Date (1970-01-01 to 2149-06-06).");
+        }
+
+        writer.Write((ushort)days);
     }
 }

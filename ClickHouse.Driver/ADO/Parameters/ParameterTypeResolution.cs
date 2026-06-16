@@ -51,7 +51,7 @@ internal static class ParameterTypeResolution
             return $"Decimal128({scale})";
         }
 
-        // 5. Default: value-based TypeConverter mapping (inspects the value for ambiguous types like IPAddress)
+        // 5. Default: value-based TypeConverter mapping (inspects the value for ambiguous types like IPAddress or instant-bearing DateTimes)
         if (parameter.Value is not null and not DBNull)
             return TypeConverter.ToClickHouseType(parameter.Value).ToString();
 

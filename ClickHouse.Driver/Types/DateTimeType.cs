@@ -15,7 +15,7 @@ internal class DateTimeType : AbstractDateTimeType
         if (node.ChildNodes.Count > 0)
         {
             var timeZoneName = node.ChildNodes[0].Value.Trim('\'');
-            timeZone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(timeZoneName);
+            timeZone = ResolveTimezone(timeZoneName);
         }
 
         return new DateTimeType { TimeZone = timeZone };
@@ -25,6 +25,15 @@ internal class DateTimeType : AbstractDateTimeType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-        writer.Write((int)CoerceToDateTimeOffset(value).ToUnixTimeSeconds());
+        var seconds = CoerceToDateTimeOffset(value).ToUnixTimeSeconds();
+        if (seconds < 0L || seconds > uint.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(value),
+                value,
+                $"Value is outside the supported range for ClickHouse {Name} (1970-01-01 00:00:00 UTC to 2106-02-07 06:28:15 UTC).");
+        }
+
+        writer.Write((uint)seconds);
     }
 }

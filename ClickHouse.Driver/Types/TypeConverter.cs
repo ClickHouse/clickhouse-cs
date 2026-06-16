@@ -298,7 +298,14 @@ internal static class TypeConverter
 
         if (type.IsArray)
         {
-            return new ArrayType() { UnderlyingType = ToClickHouseType(type.GetElementType()) };
+            // Rank>1 (e.g. byte[,]) wraps in N nested ArrayType layers; the wire format is jagged.
+            ClickHouseType result = ToClickHouseType(type.GetElementType());
+            var rank = type.GetArrayRank();
+            for (var i = 0; i < rank; i++)
+            {
+                result = new ArrayType { UnderlyingType = result };
+            }
+            return result;
         }
 
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
@@ -357,6 +364,15 @@ internal static class TypeConverter
         if (value is IPAddress ip)
             return SimpleTypes[ip.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6"];
 
+        // Instant-bearing DateTime values infer as DateTime('UTC') so the wire wall-clock
+        // formatted in UTC is parsed unambiguously by the server in UTC, not session_timezone (issue #350).
+        // Unspecified DateTime falls through to bare DateTime (wall-clock semantics).
+        // This applies inside composite structures too: e.g. an array of UTC DateTime values
+        // infers as Array(DateTime('UTC')) via the recursive element peek below.
+        if (value is DateTime { Kind: DateTimeKind.Utc or DateTimeKind.Local }
+            || value is DateTimeOffset)
+            return new DateTimeType { TimeZone = NodaTime.DateTimeZone.Utc };
+
         var type = value.GetType();
 
         // 2. Collection handling: peek at the first element so value-based inference propagates
@@ -365,9 +381,26 @@ internal static class TypeConverter
         if (type.IsArray)
         {
             var array = (Array)value;
-            if (array.Length > 0 && array.GetValue(0) is { } firstElement)
-                return new ArrayType { UnderlyingType = ToClickHouseType(firstElement) };
-            return new ArrayType { UnderlyingType = ToClickHouseType(type.GetElementType()!) };
+            var rank = type.GetArrayRank();
+            // Rank-aware first-element peek; Array.GetValue(int) throws for rank > 1.
+            // Honour per-axis lower bounds so non-zero-bound arrays (Array.CreateInstance
+            // with lowerBounds) don't throw IndexOutOfRangeException on the [0,0,...] peek.
+            object firstElement = null;
+            if (array.Length > 0)
+            {
+                var indices = new int[rank];
+                for (var d = 0; d < rank; d++)
+                    indices[d] = array.GetLowerBound(d);
+                firstElement = array.GetValue(indices);
+            }
+            ClickHouseType inner = firstElement is not null
+                ? ToClickHouseType(firstElement)
+                : ToClickHouseType(type.GetElementType()!);
+            for (var i = 0; i < rank; i++)
+            {
+                inner = new ArrayType { UnderlyingType = inner };
+            }
+            return inner;
         }
 
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))

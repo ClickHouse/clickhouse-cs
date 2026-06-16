@@ -56,6 +56,9 @@ public class TypeMappingTests
     
     [TestCase("Nullable(UInt32)", ExpectedResult = typeof(uint?))]
     [TestCase("Array(Array(String))", ExpectedResult = typeof(string[][]))]
+    [TestCase("Array(Array(Array(UInt8)))", ExpectedResult = typeof(byte[][][]))]
+    [TestCase("Array(Array(Array(Array(Int32))))", ExpectedResult = typeof(int[][][][]))]
+    [TestCase("Array(Array(Nullable(Int32)))", ExpectedResult = typeof(int?[][]))]
     [TestCase("Array(Nullable(UInt32))", ExpectedResult = typeof(uint?[]))]
     [TestCase("SimpleAggregateFunction(anyLast,Nullable(UInt32))", ExpectedResult = typeof(uint?))]
     [TestCase("Tuple(Int32,UInt8,Nullable(Float32),Array(String))", ExpectedResult = typeof(Tuple<int, byte, float?, string[]>))]
@@ -88,6 +91,12 @@ public class TypeMappingTests
     [TestCase(typeof(uint?), ExpectedResult = "Nullable(UInt32)")]
     [TestCase(typeof(uint?[]), ExpectedResult = "Array(Nullable(UInt32))")]
     [TestCase(typeof(string[][]), ExpectedResult = "Array(Array(String))")]
+    [TestCase(typeof(int[][][]), ExpectedResult = "Array(Array(Array(Int32)))")]
+    // Multidimensional CLR arrays map to nested Array types — the wire format is jagged regardless.
+    [TestCase(typeof(byte[,]), ExpectedResult = "Array(Array(UInt8))")]
+    [TestCase(typeof(string[,]), ExpectedResult = "Array(Array(String))")]
+    [TestCase(typeof(int[,,]), ExpectedResult = "Array(Array(Array(Int32)))")]
+    [TestCase(typeof(double[,,,]), ExpectedResult = "Array(Array(Array(Array(Float64))))")]
     [TestCase(typeof(Dictionary<string,int>), ExpectedResult = "Map(String, Int32)")]
     [TestCase(typeof(Dictionary<Tuple<int,int>,int>), ExpectedResult = "Map(Tuple(Int32,Int32), Int32)")]
     [TestCase(typeof(List<string>), ExpectedResult = "Array(String)")]
@@ -151,6 +160,17 @@ public class TypeMappingTests
 
         // Nested
         yield return new TestCaseData((object)new IPAddress[][] { new[] { IPAddress.Parse("::1") } }).Returns("Array(Array(IPv6))");
+        yield return new TestCaseData((object)new IPAddress[][][] { new[] { new[] { IPAddress.Parse("::1") } } }).Returns("Array(Array(Array(IPv6)))");
+
+        // Multidimensional CLR arrays — rank propagates through nested ArrayType layers.
+        yield return new TestCaseData((object)new byte[2, 3]).Returns("Array(Array(UInt8))");
+        yield return new TestCaseData((object)new int[1, 1, 1]).Returns("Array(Array(Array(Int32)))");
+        // Multidim with non-empty value-peek; an inner IPv6 propagates.
+        var ipMatrix = new IPAddress[1, 1];
+        ipMatrix[0, 0] = IPAddress.Parse("::1");
+        yield return new TestCaseData((object)ipMatrix).Returns("Array(Array(IPv6))");
+        // Multidim with empty length (first dim 0) — falls back to element-type inference.
+        yield return new TestCaseData((object)new byte[0, 3]).Returns("Array(Array(UInt8))");
 
         // Collections with null first element (falls back to type-based default)
         yield return new TestCaseData((object)new[] { null, IPAddress.Parse("::1") }).Returns("Array(IPv4)");
@@ -176,6 +196,37 @@ public class TypeMappingTests
 
     [TestCaseSource(nameof(ValueToClickHouseTypeCases))]
     public string ShouldConvertValueToClickHouseType(object value) => TypeConverter.ToClickHouseType(value).ToString();
+
+    private static IEnumerable<TestCaseData> NonZeroBoundMultidimCases()
+    {
+        // Rank 2, single non-zero lower bound
+        var rank2OneAxis = Array.CreateInstance(typeof(int), new[] { 2, 3 }, new[] { 0, 10 });
+        rank2OneAxis.SetValue(42, 0, 10);
+        yield return new TestCaseData(rank2OneAxis).Returns("Array(Array(Int32))")
+            .SetName("ToClickHouseType_NonZeroBoundRank2OneAxis_InfersNestedArrayType");
+
+        // Rank 2, non-zero lower bound on both axes
+        var rank2BothAxes = Array.CreateInstance(typeof(int), new[] { 2, 3 }, new[] { 5, 10 });
+        rank2BothAxes.SetValue(42, 5, 10);
+        yield return new TestCaseData(rank2BothAxes).Returns("Array(Array(Int32))")
+            .SetName("ToClickHouseType_NonZeroBoundRank2BothAxes_InfersNestedArrayType");
+
+        // Rank 3, non-zero lower bound on all axes
+        var rank3 = Array.CreateInstance(typeof(byte), new[] { 2, 2, 2 }, new[] { 100, 200, 300 });
+        rank3.SetValue((byte)1, 100, 200, 300);
+        yield return new TestCaseData(rank3).Returns("Array(Array(Array(UInt8)))")
+            .SetName("ToClickHouseType_NonZeroBoundRank3_InfersNestedArrayType");
+
+        // Value-based propagation: inner IPv6 should still be picked up via the first-element peek
+        var ipMatrix = (IPAddress[,])Array.CreateInstance(typeof(IPAddress), new[] { 1, 1 }, new[] { 5, 10 });
+        ipMatrix.SetValue(IPAddress.Parse("::1"), 5, 10);
+        yield return new TestCaseData(ipMatrix).Returns("Array(Array(IPv6))")
+            .SetName("ToClickHouseType_NonZeroBoundIpMatrix_PropagatesIPv6FromFirstElement");
+    }
+
+    [TestCaseSource(nameof(NonZeroBoundMultidimCases))]
+    public string ToClickHouseType_NonZeroBoundMultidimArray_InfersNestedArrayType(object value)
+        => TypeConverter.ToClickHouseType(value).ToString();
 
     private static IEnumerable<TestCaseData> HttpParameterFormatterIpCases()
     {
@@ -215,6 +266,111 @@ public class TypeMappingTests
         var parameter = new ClickHouseDbParameter { ParameterName = "p", Value = value };
         var typeName = ParameterTypeResolution.ResolveTypeName(parameter, null, null);
         return HttpParameterFormatter.Format(parameter, typeName, TypeSettings.Default);
+    }
+
+    private static IEnumerable<TestCaseData> HttpParameterFormatterNestedArrayCases()
+    {
+        // Jagged 2D — int
+        yield return new TestCaseData(
+            (object)new int[][] { new[] { 1, 2 }, new[] { 3, 4 } },
+            "Array(Array(Int32))").Returns("[[1,2],[3,4]]");
+        // Multidim 2D — byte; must emit identical wire format
+        yield return new TestCaseData(
+            (object)new byte[,] { { 1, 2 }, { 3, 4 } },
+            "Array(Array(UInt8))").Returns("[[1,2],[3,4]]");
+        // Multidim 2D — int
+        yield return new TestCaseData(
+            (object)new int[,] { { 10, 20, 30 }, { 40, 50, 60 } },
+            "Array(Array(Int32))").Returns("[[10,20,30],[40,50,60]]");
+        // Jagged 3D
+        yield return new TestCaseData(
+            (object)new int[][][] { new int[][] { new[] { 1, 2 } } },
+            "Array(Array(Array(Int32)))").Returns("[[[1,2]]]");
+        // Multidim 3D
+        yield return new TestCaseData(
+            (object)new int[1, 1, 2] { { { 1, 2 } } },
+            "Array(Array(Array(Int32)))").Returns("[[[1,2]]]");
+        // Jagged strings — quoting and escaping inside nested array
+        yield return new TestCaseData(
+            (object)new string[][] { new[] { "a", "b'c" }, new[] { "d" } },
+            "Array(Array(String))").Returns(@"[['a','b\'c'],['d']]");
+        // Multidim strings (rectangular)
+        yield return new TestCaseData(
+            (object)new string[,] { { "a", "b" }, { "c", "d" } },
+            "Array(Array(String))").Returns("[['a','b'],['c','d']]");
+        // Ragged jagged — inner lengths differ; we must not require rectangularity
+        yield return new TestCaseData(
+            (object)new int[][] { new[] { 1, 2, 3 }, new[] { 4 } },
+            "Array(Array(Int32))").Returns("[[1,2,3],[4]]");
+        // Nullable inner — quote=true on the recursive call should emit `null` not `\N`
+        yield return new TestCaseData(
+            (object)new int?[][] { new int?[] { 1, null, 3 } },
+            "Array(Array(Nullable(Int32)))").Returns("[[1,null,3]]");
+        // Empty outer
+        yield return new TestCaseData(
+            (object)new int[0][],
+            "Array(Array(Int32))").Returns("[]");
+        // Outer with empty inner
+        yield return new TestCaseData(
+            (object)new int[][] { new int[0], new[] { 1 } },
+            "Array(Array(Int32))").Returns("[[],[1]]");
+        // Multidim with zero outer dim — emits empty brackets
+        yield return new TestCaseData(
+            (object)new int[0, 5],
+            "Array(Array(Int32))").Returns("[]");
+        // Multidim with zero inner dim — each outer row is an empty slice
+        yield return new TestCaseData(
+            (object)new int[3, 0],
+            "Array(Array(Int32))").Returns("[[],[],[]]");
+        // List<List<int>>
+        yield return new TestCaseData(
+            (object)new List<List<int>> { new() { 1, 2 }, new() { 3 } },
+            "Array(Array(Int32))").Returns("[[1,2],[3]]");
+        // List<int[]> — mixed List + array
+        yield return new TestCaseData(
+            (object)new List<int[]> { new[] { 1, 2 }, new[] { 3 } },
+            "Array(Array(Int32))").Returns("[[1,2],[3]]");
+    }
+
+    [TestCaseSource(nameof(HttpParameterFormatterNestedArrayCases))]
+    public string ShouldFormatNestedArrayParameterViaHttpFormatter(object value, string typeName)
+    {
+        var parameter = new ClickHouseDbParameter { ParameterName = "p", Value = value };
+        return HttpParameterFormatter.Format(parameter, typeName, TypeSettings.Default);
+    }
+
+    [Test]
+    public void HttpParameterFormatter_ScalarPassedToNestedArrayType_ThrowsArgumentExceptionMentioningParameterAndOuterType()
+    {
+        var parameter = new ClickHouseDbParameter { ParameterName = "m_value", Value = (byte)219 };
+        var ex = Assert.Throws<ArgumentException>(
+            () => HttpParameterFormatter.Format(parameter, "Array(Array(UInt8))", TypeSettings.Default));
+        Assert.That(ex!.Message, Does.Contain("m_value"));
+        // Must include the full outer type, not just the leaf where recursion bottomed out.
+        Assert.That(ex.Message, Does.Contain("Array(Array(UInt8))"));
+    }
+
+    [Test]
+    public void HttpParameterFormatter_FlatArrayPassedToNestedArrayType_ThrowsArgumentExceptionMentioningParameterAndOuterType()
+    {
+        // A single-level int[] cannot satisfy Array(Array(Int32)); each element is a scalar where an array is expected.
+        var parameter = new ClickHouseDbParameter { ParameterName = "p", Value = new[] { 1, 2, 3 } };
+        var ex = Assert.Throws<ArgumentException>(
+            () => HttpParameterFormatter.Format(parameter, "Array(Array(Int32))", TypeSettings.Default));
+        Assert.That(ex!.Message, Does.Contain("'p'"));
+        // Outer type must be preserved even though recursion bottoms out on the inner Array(Int32).
+        Assert.That(ex.Message, Does.Contain("Array(Array(Int32))"));
+    }
+
+    [Test]
+    public void HttpParameterFormatter_ScalarPassedToScalarMismatchedType_PreservesParameterAndType()
+    {
+        // Sanity: non-nested mismatch must still produce a useful message.
+        var parameter = new ClickHouseDbParameter { ParameterName = "x", Value = new object() };
+        var ex = Assert.Throws<ArgumentException>(
+            () => HttpParameterFormatter.Format(parameter, "Array(Int32)", TypeSettings.Default));
+        Assert.That(ex!.Message, Does.Contain("'x'"));
+        Assert.That(ex.Message, Does.Contain("Array(Int32)"));
     }
 
     [Test]

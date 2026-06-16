@@ -640,6 +640,12 @@ public class ClickHouseClientSettingsTests
                 var copyDict = copyValue as IDictionary<string, string>;
                 Assert.That(copyDict, Is.EquivalentTo(originalDict), "Custom headers should be copied");
             }
+            else if (property.Name == nameof(ClickHouseClientSettings.ApplicationInfo))
+            {
+                var originalDict = originalValue as IDictionary<string, string>;
+                var copyDict = copyValue as IDictionary<string, string>;
+                Assert.That(copyDict, Is.EquivalentTo(originalDict), "ApplicationInfo should be copied");
+            }
             else if (property.PropertyType.IsValueType || property.PropertyType == typeof(string))
             {
                 // Value types and strings should be equal
