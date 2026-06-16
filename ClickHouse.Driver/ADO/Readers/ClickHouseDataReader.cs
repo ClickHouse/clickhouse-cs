@@ -333,7 +333,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         {
             var col = plan[i].ColumnOrdinal;
             var binding = plan[i].Binding;
-            var value = CurrentRow[col];
+
+            // Reading through GetValue makes sure we also go through the value converter (if it exists)
+            var value = GetValue(col);
 
             if (value is null || value is DBNull)
             {
