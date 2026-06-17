@@ -208,5 +208,101 @@ public class SqlParameterizedSelectTests : IDisposable
         result.GetEnsureSingleRow();
     }
 
+    [Test]
+    public async Task AddParameter_IdentifierTypeBindsColumnName_ResolvesColumnValue()
+    {
+        // Regression for the missing server-side {name:Identifier} parameter type
+        // (https://github.com/ClickHouse/clickhouse-go/issues/1635). Identifier binds the value
+        // as a bare SQL identifier (here a column name), unlike String which binds a quoted literal.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {col:Identifier} FROM system.numbers LIMIT 1";
+        command.AddParameter("col", "number");
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(0UL)); // value of the `number` column, not the literal "number"
+    }
+
+    [Test]
+    public async Task AddParameter_IdentifierWithEmbeddedBacktick_ResolvesColumnSafely()
+    {
+        // Security/adversarial: an identifier containing a backtick must round-trip. The client sends
+        // the value verbatim and the server applies its own backtick quoting/escaping, so a backtick
+        // cannot break out. If the client escaped the value (e.g. via Escape()), this column would not
+        // resolve.
+        var table = $"poly_ident_{Guid.NewGuid():N}";
+        using (var createCmd = connection.CreateCommand())
+        {
+            // Column literally named  weird`col  (inner backtick doubled per ClickHouse DDL quoting).
+            createCmd.CommandText = $"CREATE TABLE {table} (`weird``col` Int32, normal Int32) ENGINE = Memory";
+            await createCmd.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            using (var insertCmd = connection.CreateCommand())
+            {
+                insertCmd.CommandText = $"INSERT INTO {table} VALUES (7, 9)";
+                await insertCmd.ExecuteNonQueryAsync();
+            }
+
+            using var selectCmd = connection.CreateCommand();
+            selectCmd.CommandText = $"SELECT {{c:Identifier}} FROM {table}";
+            selectCmd.AddParameter("c", "weird`col"); // raw value, single backtick, no client-side escaping
+
+            var result = (await selectCmd.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+            Assert.That(result, Is.EqualTo(7));
+        }
+        finally
+        {
+            using var dropCmd = connection.CreateCommand();
+            dropCmd.CommandText = $"DROP TABLE IF EXISTS {table}";
+            await dropCmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Test]
+    public async Task ExecuteNonQuery_CreateDatabaseWithIdentifierParameter_CreatesDatabase()
+    {
+        // The original use case from the source issue: bind a database name in DDL without falling
+        // back to string interpolation. {name:String} would substitute a quoted literal and fail.
+        var dbName = $"poly_ident_db_{Guid.NewGuid():N}";
+        try
+        {
+            using (var createCmd = connection.CreateCommand())
+            {
+                createCmd.CommandText = "CREATE DATABASE {name:Identifier}";
+                createCmd.AddParameter("name", dbName);
+                await createCmd.ExecuteNonQueryAsync();
+            }
+
+            using var checkCmd = connection.CreateCommand();
+            checkCmd.CommandText = "SELECT count() FROM system.databases WHERE name = {n:String}";
+            checkCmd.AddParameter("n", dbName);
+            var count = await checkCmd.ExecuteScalarAsync();
+            Assert.That(Convert.ToInt32(count), Is.EqualTo(1));
+        }
+        finally
+        {
+            using var dropCmd = connection.CreateCommand();
+            dropCmd.CommandText = "DROP DATABASE IF EXISTS {name:Identifier}";
+            dropCmd.AddParameter("name", dbName);
+            await dropCmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Test]
+    public async Task AddParameterWithTypeOverride_IdentifierViaExplicitTypeAndAdoPlaceholder_ResolvesColumnValue()
+    {
+        // Covers the other entry point named in the bug: the Identifier type set explicitly on the
+        // parameter object (not via a {col:Identifier} SQL hint). The SQL uses an ADO-style @col
+        // placeholder, which the driver rewrites to {col:Identifier} before sending the request.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT @col FROM system.numbers LIMIT 1";
+        command.AddParameterWithTypeOverride("col", "Identifier", "number");
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(0UL)); // value of the `number` column, not the literal "number"
+    }
+
     public void Dispose() => connection?.Dispose();
 }

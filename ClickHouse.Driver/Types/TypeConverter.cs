@@ -136,6 +136,12 @@ internal static class TypeConverter
         RegisterPlainType<StringType>();
         RegisterParameterizedType<FixedStringType>();
 
+        // 'Identifier' is ClickHouse's server-side query-parameter pseudo-type ({name:Identifier}),
+        // used to bind a database/table/column name. It is never a column data type, so it is
+        // registered for parameter type-name parsing only and intentionally excluded from
+        // ReverseMapping — a .NET string value must keep inferring as String, not Identifier.
+        RegisterParameterOnlyType<IdentifierType>();
+
         // DateTime types
         RegisterPlainType<DateType>();
         RegisterPlainType<Date32Type>();
@@ -219,6 +225,17 @@ internal static class TypeConverter
         var t = new T();
         var name = string.Intern(t.Name); // There is a limited number of types, interning them will help performance
         ParameterizedTypes.Add(name, t);
+    }
+
+    // Registers a type that can appear only as a query-parameter type hint (never a column type).
+    // Unlike RegisterPlainType, it is deliberately left out of ReverseMapping so that inferring a
+    // ClickHouse type from a .NET value is unaffected (e.g. a string still infers as String).
+    private static void RegisterParameterOnlyType<T>()
+        where T : ClickHouseType, new()
+    {
+        var type = new T();
+        var name = string.Intern(type.ToString());
+        SimpleTypes.Add(name, type);
     }
 
     public static ClickHouseType ParseClickHouseType(string type, TypeSettings settings)
