@@ -92,6 +92,16 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
     }
 
     /// <summary>
+    /// Gets or sets the size, in bytes, of the buffer used when reading HTTP query responses.
+    /// Default: 8 KiB
+    /// </summary>
+    public int ReadBufferSize
+    {
+        get => GetIntOrDefault("ReadBufferSize", ClickHouseDefaults.ReadBufferSize);
+        set => this["ReadBufferSize"] = value;
+    }
+
+    /// <summary>
     /// Gets or sets the ClickHouse roles to use for queries.
     /// Multiple roles can be specified as a comma-separated string.
     /// </summary>
@@ -216,6 +226,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Timeout = settings.Timeout,
             UseCustomDecimals = settings.UseCustomDecimals,
             ReadStringsAsByteArrays = settings.ReadStringsAsByteArrays,
+            ReadBufferSize = settings.ReadBufferSize,
             Roles = settings.Roles,
             JsonReadMode = settings.JsonReadMode,
             JsonWriteMode = settings.JsonWriteMode,

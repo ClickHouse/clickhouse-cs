@@ -251,7 +251,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         CancellationToken cancellationToken = default)
     {
         var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
-        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings, pocoTypeRegistry).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings, pocoTypeRegistry, Settings.ReadBufferSize).ConfigureAwait(false);
     }
 
     internal async Task<QueryResult> PostSqlQueryAsync(
