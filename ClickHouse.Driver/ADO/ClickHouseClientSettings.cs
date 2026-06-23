@@ -64,6 +64,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         SessionId = other.SessionId;
         SkipServerCertificateValidation = other.SkipServerCertificateValidation;
         UseFormDataParameters = other.UseFormDataParameters;
+        ReadBufferSize = other.ReadBufferSize;
         Timeout = other.Timeout;
         HttpClient = other.HttpClient;
         HttpClientFactory = other.HttpClientFactory;
@@ -207,6 +208,18 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Default: false
     /// </summary>
     public bool UseFormDataParameters { get; init; } = ClickHouseDefaults.UseFormDataParameters;
+
+    /// <summary>
+    /// Gets or sets the size, in bytes, of the buffer used when reading HTTP query responses.
+    /// <para>
+    /// A larger buffer reduces the number of refills for large responses,
+    /// but any value at or above 85,000 bytes is allocated on the LOH,
+    /// which is not compacted and only reclaimed by gen2 collections; under high query
+    /// throughput that can cause LOH fragmentation, inflated committed memory and longer GC pauses.
+    /// </para>
+    /// Default: 8192 (8 KiB)
+    /// </summary>
+    public int ReadBufferSize { get; init; } = ClickHouseDefaults.ReadBufferSize;
 
     /// <summary>
     /// Gets or sets the timeout for operations.
@@ -374,6 +387,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Timeout = builder.Timeout,
             UseCustomDecimals = builder.UseCustomDecimals,
             ReadStringsAsByteArrays = builder.ReadStringsAsByteArrays,
+            ReadBufferSize = builder.ReadBufferSize,
             Roles = builder.Roles,
             JsonReadMode = builder.JsonReadMode,
             JsonWriteMode = builder.JsonWriteMode,
@@ -417,6 +431,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                SessionId == other.SessionId &&
                SkipServerCertificateValidation == other.SkipServerCertificateValidation &&
                UseFormDataParameters == other.UseFormDataParameters &&
+               ReadBufferSize == other.ReadBufferSize &&
                Timeout == other.Timeout &&
                HttpClient == other.HttpClient &&
                HttpClientFactory == other.HttpClientFactory &&
@@ -460,6 +475,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(SessionId);
         hash.Add(SkipServerCertificateValidation);
         hash.Add(UseFormDataParameters);
+        hash.Add(ReadBufferSize);
         hash.Add(Timeout);
         hash.Add(EnableDebugMode);
         hash.Add(JsonReadMode);
@@ -512,6 +528,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"Username={Username};Password=****;Compression={UseCompression};" +
                $"UseCustomDecimals={UseCustomDecimals};ReadStringsAsByteArrays={ReadStringsAsByteArrays};" +
                $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s;" +
+               $"ReadBufferSize={ReadBufferSize};" +
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode}";
 
         if (Roles.Count > 0)
@@ -546,6 +563,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         if (Timeout < TimeSpan.Zero)
             throw new InvalidOperationException("Timeout cannot be negative");
+
+        if (ReadBufferSize < 1)
+            throw new InvalidOperationException($"ReadBufferSize must be greater than zero, got {ReadBufferSize}");
 
         if (HttpClient != null && HttpClientFactory != null)
             throw new InvalidOperationException("Cannot specify both HttpClient and HttpClientFactory");

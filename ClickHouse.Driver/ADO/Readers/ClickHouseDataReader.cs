@@ -23,7 +23,7 @@ namespace ClickHouse.Driver.ADO.Readers;
 // TODO: implement IDbColumnSchemaGenerator
 public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnumerable<IDataReader>, IDataRecord
 {
-    private const int BufferSize = 512 * 1024;
+    private const int DefaultBufferSize = ClickHouseDefaults.ReadBufferSize;
     private const string ExceptionTagHeader = "X-ClickHouse-Exception-Tag";
 
     private readonly HttpResponseMessage httpResponse; // Used to dispose at the end of reader
@@ -50,9 +50,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
         => FromHttpResponseAsync(httpResponse, settings, pocoRegistry: null);
 
-    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, PocoTypeRegistry pocoRegistry)
+    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, PocoTypeRegistry pocoRegistry, int readBufferSize = DefaultBufferSize)
     {
         if (httpResponse is null) throw new ArgumentNullException(nameof(httpResponse));
+        if (readBufferSize < 1) throw new ArgumentOutOfRangeException(nameof(readBufferSize), readBufferSize, "Read buffer size must be greater than zero");
 
         // Extract exception tag from header if present
         string exceptionTag = null;
@@ -64,7 +65,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         try
         {
             var rawStream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            var buffered = new BufferedStream(rawStream, BufferSize);
+            var buffered = new BufferedStream(rawStream, readBufferSize);
 
             // Conditionally wrap with exception-aware stream
             Stream streamForReader = buffered;

@@ -15,7 +15,18 @@ public class ConnectionStringBuilderTests
             Assert.That(new ClickHouseConnectionStringBuilder("Protocol=https").Port, Is.EqualTo(8443));
             Assert.That(new ClickHouseConnectionStringBuilder().Database, Is.EqualTo(""));
             Assert.That(new ClickHouseConnectionStringBuilder().Username, Is.EqualTo("default"));
+            Assert.That(new ClickHouseConnectionStringBuilder().ReadBufferSize, Is.EqualTo(8 * 1024));
         });
+    }
+
+    [Test]
+    public void ConnectionStringBuilder_ReadBufferSize_ShouldRoundTripThroughConnectionString()
+    {
+        var builder = new ClickHouseConnectionStringBuilder { ReadBufferSize = 65536 };
+
+        var reparsed = new ClickHouseConnectionStringBuilder(builder.ConnectionString);
+
+        Assert.That(reparsed.ReadBufferSize, Is.EqualTo(65536));
     }
     
     [Test]
