@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 
@@ -95,6 +96,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Copy parameter formatter
         ParameterFormatter = other.ParameterFormatter;
+
+        // Copy read value converter
+        ReadValueConverter = other.ReadValueConverter;
     }
 
     /// <summary>
@@ -343,6 +347,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public IParameterFormatter ParameterFormatter { get; init; }
 
     /// <summary>
+    /// Gets or sets a custom converter for same-type transformation of values returned by the data reader.
+    /// When set, this converter is called on every GetValue/GetFieldValue call,
+    /// allowing same-type transformations (e.g., setting DateTime.Kind, trimming strings).
+    /// The converter must not change the runtime type of values.
+    /// Default: null (no conversion)
+    /// </summary>
+    public IReadValueConverter ReadValueConverter { get; init; }
+
+    /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
     /// Values not specified in the connection string will use default values.
     /// </summary>
@@ -441,6 +454,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                JsonWriteMode == other.JsonWriteMode &&
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
+               ReadValueConverter == other.ReadValueConverter &&
                Roles.SequenceEqual(other.Roles) &&
                CustomHeaders.EntriesEqual(other.CustomHeaders) &&
                ApplicationInfo.EntriesEqual(other.ApplicationInfo);
@@ -482,6 +496,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(JsonWriteMode);
         hash.Add(ParameterTypeResolver);
         hash.Add(ParameterFormatter);
+        hash.Add(ReadValueConverter);
         foreach (var kvp in CustomSettings)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));

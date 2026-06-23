@@ -65,6 +65,12 @@ public class PocoReadTests : AbstractConnectionTestFixture
         public decimal Amount { get; set; }
     }
 
+    public class DateTimePoco
+    {
+        public ulong Id { get; set; }
+        public DateTime Timestamp { get; set; }
+    }
+
     public class StringIdPoco
     {
         // String property mapped to a UInt64 column — type mismatch.
@@ -640,5 +646,52 @@ public class PocoReadTests : AbstractConnectionTestFixture
         });
 
         Assert.That(ex.Message, Does.Contain("boom"));
+    }
+
+    [Test]
+    public async Task MapTo_WithClientReadValueConverter_AppliesConverterToMappedValues()
+    {
+        var settings = new ClickHouseClientSettings(TestUtilities.GetTestClickHouseClientSettings())
+        {
+            ReadValueConverter = new DictionaryReadValueConverter()
+                .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
+        };
+        using var converterClient = new ClickHouseClient(settings);
+        converterClient.RegisterPocoType<DateTimePoco>();
+
+        using var reader = await converterClient.ExecuteReaderAsync(
+            "SELECT toUInt64(1) AS Id, toDateTime('2025-01-15 12:00:00') AS Timestamp");
+
+        Assert.That(reader.Read(), Is.True);
+        var poco = reader.MapTo<DateTimePoco>();
+
+        Assert.That(poco.Id, Is.EqualTo(1UL));
+        // The converter routed through MapTo<T>: the DateTime kind is now Utc instead of the
+        // Unspecified kind the reader would otherwise return for a bare DateTime column.
+        Assert.That(poco.Timestamp.Kind, Is.EqualTo(DateTimeKind.Utc));
+        Assert.That(poco.Timestamp, Is.EqualTo(new DateTime(2025, 1, 15, 12, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public async Task QueryAsync_WithPerQueryReadValueConverter_AppliesConverterToMappedValues()
+    {
+        client.RegisterPocoType<DateTimePoco>();
+
+        var options = new QueryOptions
+        {
+            ReadValueConverter = new DictionaryReadValueConverter()
+                .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
+        };
+
+        var results = new List<DateTimePoco>();
+        await foreach (var poco in client.QueryAsync<DateTimePoco>(
+            "SELECT toUInt64(1) AS Id, toDateTime('2025-01-15 12:00:00') AS Timestamp",
+            options: options).ConfigureAwait(false))
+        {
+            results.Add(poco);
+        }
+
+        Assert.That(results, Has.Count.EqualTo(1));
+        Assert.That(results[0].Timestamp.Kind, Is.EqualTo(DateTimeKind.Utc));
     }
 }
