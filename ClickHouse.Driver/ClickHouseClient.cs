@@ -252,7 +252,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     {
         var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
         var converter = options?.ReadValueConverter ?? Settings.ReadValueConverter;
-        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings, pocoTypeRegistry, converter).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings, pocoTypeRegistry, Settings.ReadBufferSize, converter).ConfigureAwait(false);
     }
 
     internal async Task<QueryResult> PostSqlQueryAsync(

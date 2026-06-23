@@ -102,6 +102,16 @@ internal static class HttpParameterFormatter
             case UuidType uuidType:
                 return quote ? value.ToString().Escape().QuoteSingle() : value.ToString().Escape();
 
+            case IdentifierType:
+                // Server-side {name:Identifier} parameter: the value is sent verbatim as param_<name>
+                // and the server substitutes it as a bare SQL identifier, applying its own backtick
+                // quoting/escaping. The client must NOT quote or escape it — escaping here (Escape()/
+                // QuoteSingle()) would corrupt identifiers containing single quotes, backslashes or
+                // backticks, and is unnecessary for safety because the server never parses the value
+                // as SQL. Verified against ClickHouse server (e.g. a column named with an embedded
+                // backtick round-trips only when the raw value is sent).
+                return value.ToString();
+
             case LowCardinalityType lt:
                 return Format(lt.UnderlyingType, value, quote, customFormatter, parameterName);
 

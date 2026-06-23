@@ -866,6 +866,80 @@ public class ClickHouseClientSettingsTests
         Assert.That(str, Does.Not.Contain("secret-value"));
     }
 
+    [Test]
+    public void ReadBufferSize_WhenNotSpecified_ShouldDefaultToClickHouseDefault()
+    {
+        var settings = new ClickHouseClientSettings();
+
+        Assert.That(settings.ReadBufferSize, Is.EqualTo(ClickHouseDefaults.ReadBufferSize));
+        Assert.That(settings.ReadBufferSize, Is.EqualTo(8 * 1024));
+    }
+
+    [Test]
+    public void ReadBufferSize_FromConnectionString_ShouldBeParsed()
+    {
+        var settings = ClickHouseClientSettings.FromConnectionString("Host=localhost;ReadBufferSize=65536");
+
+        Assert.That(settings.ReadBufferSize, Is.EqualTo(65536));
+    }
+
+    [Test]
+    public void ReadBufferSize_RoundTripThroughConnectionStringBuilder_ShouldBePreserved()
+    {
+        var original = new ClickHouseClientSettings { ReadBufferSize = 81920 };
+
+        var roundTripped = ClickHouseConnectionStringBuilder.FromSettings(original).ToSettings();
+
+        Assert.That(roundTripped.ReadBufferSize, Is.EqualTo(81920));
+    }
+
+    [Test]
+    public void ReadBufferSize_CopyConstructor_ShouldCopyValue()
+    {
+        var original = new ClickHouseClientSettings { ReadBufferSize = 4096 };
+
+        var copy = new ClickHouseClientSettings(original);
+
+        Assert.That(copy.ReadBufferSize, Is.EqualTo(4096));
+    }
+
+    [Test]
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_WithNonPositiveReadBufferSize_ShouldThrow(int bufferSize)
+    {
+        var settings = new ClickHouseClientSettings { ReadBufferSize = bufferSize };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => settings.Validate());
+        Assert.That(ex.Message, Does.Contain("ReadBufferSize must be greater than zero"));
+    }
+
+    [Test]
+    public void Equals_ShouldReturnFalse_WhenReadBufferSizeDiffers()
+    {
+        var settings1 = new ClickHouseClientSettings { ReadBufferSize = 4096 };
+        var settings2 = new ClickHouseClientSettings { ReadBufferSize = 8192 };
+
+        Assert.That(settings1.Equals(settings2), Is.False);
+    }
+
+    [Test]
+    public void GetHashCode_ShouldIncludeReadBufferSize()
+    {
+        var settings1 = new ClickHouseClientSettings { ReadBufferSize = 4096 };
+        var settings2 = new ClickHouseClientSettings { ReadBufferSize = 8192 };
+
+        Assert.That(settings1.GetHashCode(), Is.Not.EqualTo(settings2.GetHashCode()));
+    }
+
+    [Test]
+    public void ToString_ShouldIncludeReadBufferSize()
+    {
+        var settings = new ClickHouseClientSettings { ReadBufferSize = 65536 };
+
+        Assert.That(settings.ToString(), Does.Contain("ReadBufferSize=65536"));
+    }
+
     private class TestLoggerFactory : ILoggerFactory
     {
         public void Dispose()

@@ -81,4 +81,9 @@ public static class ClickHouseDefaults
     /// Default timeout for operations (2 minutes)
     /// </summary>
     public static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Default size, in bytes, of the buffer used when reading HTTP query responses (8 KiB).
+    /// </summary>
+    public const int ReadBufferSize = 8 * 1024;
 }
