@@ -83,9 +83,12 @@ public class TypeMappingTests
     [TestCase(typeof(string), ExpectedResult = "String")]
 
     // DateTime/DateTimeOffset infer as DateTime64(7) to preserve .NET's 100ns sub-second precision
-    // (whole-second DateTime would silently truncate it; see clickhouse-go #1483).
+    // (whole-second DateTime would silently truncate it; see clickhouse-go #1483). DateTimeOffset is
+    // always instant-bearing, so its type-based mapping anchors to 'UTC' (matching the value-based path)
+    // to preserve the instant when inference falls back here (empty / null-first-element collections);
+    // a bare DateTime's Kind is unknown at the type level, so it stays tz-less (#350).
     [TestCase(typeof(DateTime), ExpectedResult = "DateTime64(7)")]
-    [TestCase(typeof(DateTimeOffset), ExpectedResult = "DateTime64(7)")]
+    [TestCase(typeof(DateTimeOffset), ExpectedResult = "DateTime64(7, 'UTC')")]
     [TestCase(typeof(TimeSpan), ExpectedResult = "Time64(7)")]
 
     [TestCase(typeof(IPAddress), ExpectedResult = "IPv4")]
@@ -141,6 +144,17 @@ public class TypeMappingTests
         yield return new TestCaseData(new DateTimeOffset(2024, 6, 15, 12, 30, 45, TimeSpan.FromHours(3))).Returns("DateTime64(7, 'UTC')");
         // Inference propagates through composites via the element peek.
         yield return new TestCaseData((object)new[] { new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc) }).Returns("Array(DateTime64(7, 'UTC'))");
+
+        // When value-based inference can't peek a concrete element (empty collection, or null first element)
+        // it falls back to the type-based mapping. DateTimeOffset is always instant-bearing, so that fallback
+        // must STILL anchor to 'UTC' — otherwise real DateTimeOffset values elsewhere in the collection are
+        // formatted as UTC wall-clock but parsed by the server in session_timezone, reintroducing the #350 shift.
+        yield return new TestCaseData((object)Array.Empty<DateTimeOffset>()).Returns("Array(DateTime64(7, 'UTC'))");
+        yield return new TestCaseData(new List<DateTimeOffset?> { null, new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero) }).Returns("Array(Nullable(DateTime64(7, 'UTC')))");
+        // The tuple-item and dictionary-key/value fallbacks route DateTimeOffset through the same type-based
+        // mapping, so they must stay UTC-anchored too (a future refactor of either branch must not regress #350).
+        yield return new TestCaseData(Tuple.Create((DateTimeOffset?)null, new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero))).Returns("Tuple(Nullable(DateTime64(7, 'UTC')),DateTime64(7, 'UTC'))");
+        yield return new TestCaseData(new Dictionary<string, DateTimeOffset?> { ["k"] = null }).Returns("Map(String, Nullable(DateTime64(7, 'UTC')))");
 
         // Array (non-empty)
         yield return new TestCaseData((object)new[] { IPAddress.Parse("127.0.0.1") }).Returns("Array(IPv4)");

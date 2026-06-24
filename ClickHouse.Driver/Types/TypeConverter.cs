@@ -200,8 +200,14 @@ internal static class TypeConverter
         // the sub-second component .NET carries (100ns ticks = 7 digits, matching the TimeSpan mapping
         // below); a bare DateTime would truncate to whole seconds and silently break equality filters
         // against DateTime64 columns (clickhouse-go #1483).
+        // DateTimeOffset is always instant-bearing, so — mirroring the value-based path in ToClickHouseType —
+        // it anchors to 'UTC'. This matters when value-based inference can't peek a concrete value and falls
+        // back to this type-based mapping (empty collection / null first element of e.g. List<DateTimeOffset?>):
+        // the formatter still renders the instant in UTC, so a tz-less type would have the server parse it in
+        // session_timezone and shift it, reintroducing #350. A bare DateTime's Kind is unknown at the type
+        // level (it may be Unspecified = wall-clock), so it stays tz-less, matching the value-based Unspecified branch.
         ReverseMapping[typeof(DateTime)] = new DateTime64Type { Scale = 7 };
-        ReverseMapping[typeof(DateTimeOffset)] = new DateTime64Type { Scale = 7 };
+        ReverseMapping[typeof(DateTimeOffset)] = new DateTime64Type { Scale = 7, TimeZone = NodaTime.DateTimeZone.Utc };
         ReverseMapping[typeof(TimeSpan)] = new Time64Type
         {
             Scale = 7, // Matches precision of TimeSpan

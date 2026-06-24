@@ -19,7 +19,7 @@ public class DateTime64InferredParameterTests : AbstractConnectionTestFixture
     [Test]
     public async Task ExecuteScalar_DateTime64EqualityFilterWithInferredUtcDateTime_MatchesRow()
     {
-        var table = "dt64_inferred_utc_datetime";
+        var table = "test.dt64_inferred_utc_datetime";
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
         await connection.ExecuteStatementAsync($"CREATE TABLE {table} (id UInt32, dt DateTime64(8, 'UTC')) ENGINE = MergeTree ORDER BY id");
         await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '1988-11-20 12:55:28.123456000')");
@@ -39,7 +39,7 @@ public class DateTime64InferredParameterTests : AbstractConnectionTestFixture
     [Test]
     public async Task ExecuteScalar_DateTime64EqualityFilterWithInferredDateTimeOffset_MatchesRow()
     {
-        var table = "dt64_inferred_datetimeoffset";
+        var table = "test.dt64_inferred_datetimeoffset";
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
         await connection.ExecuteStatementAsync($"CREATE TABLE {table} (id UInt32, dt DateTime64(8, 'UTC')) ENGINE = MergeTree ORDER BY id");
         await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '1988-11-20 12:55:28.123456000')");
@@ -61,7 +61,7 @@ public class DateTime64InferredParameterTests : AbstractConnectionTestFixture
         // The third value-axis: an Unspecified DateTime infers tz-less DateTime64(7). Against a tz-less
         // DateTime64 column both the stored literal and the parameter are parsed in the same (session)
         // timezone, so the wall-clock — including the sub-second digits — matches deterministically.
-        var table = "dt64_inferred_unspecified_datetime";
+        var table = "test.dt64_inferred_unspecified_datetime";
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
         await connection.ExecuteStatementAsync($"CREATE TABLE {table} (id UInt32, dt DateTime64(8)) ENGINE = MergeTree ORDER BY id");
         await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '1988-11-20 12:55:28.123456000')");
@@ -82,7 +82,7 @@ public class DateTime64InferredParameterTests : AbstractConnectionTestFixture
         // Contrast case: a whole-second value filtered against a plain DateTime column must KEEP matching.
         // The inferred DateTime64(7, 'UTC') parameter compares equal to a DateTime column after the server
         // promotes both to a common type — so widening inference to DateTime64 does not regress this path.
-        var table = "dt_inferred_wholesecond";
+        var table = "test.dt_inferred_wholesecond";
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
         await connection.ExecuteStatementAsync($"CREATE TABLE {table} (id UInt32, dt DateTime('UTC')) ENGINE = MergeTree ORDER BY id");
         await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '2024-01-15 12:00:00')");
