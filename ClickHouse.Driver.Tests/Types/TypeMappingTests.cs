@@ -82,7 +82,10 @@ public class TypeMappingTests
 
     [TestCase(typeof(string), ExpectedResult = "String")]
 
-    [TestCase(typeof(DateTime), ExpectedResult = "DateTime")]
+    // DateTime/DateTimeOffset infer as DateTime64(7) to preserve .NET's 100ns sub-second precision
+    // (whole-second DateTime would silently truncate it; see clickhouse-go #1483).
+    [TestCase(typeof(DateTime), ExpectedResult = "DateTime64(7)")]
+    [TestCase(typeof(DateTimeOffset), ExpectedResult = "DateTime64(7)")]
     [TestCase(typeof(TimeSpan), ExpectedResult = "Time64(7)")]
 
     [TestCase(typeof(IPAddress), ExpectedResult = "IPv4")]
@@ -127,6 +130,17 @@ public class TypeMappingTests
         // Scalar
         yield return new TestCaseData(IPAddress.Parse("127.0.0.1")).Returns("IPv4");
         yield return new TestCaseData(IPAddress.Parse("::1")).Returns("IPv6");
+
+        // DateTime/DateTimeOffset infer as DateTime64(7) (not whole-second DateTime) to preserve
+        // .NET's 100ns sub-second precision (clickhouse-go #1483). Instant-bearing values
+        // (Utc/Local/DateTimeOffset) anchor to 'UTC' for unambiguous parsing (issue #350); an
+        // Unspecified DateTime carries no timezone, so it stays tz-less (wall-clock semantics).
+        yield return new TestCaseData(new DateTime(2024, 6, 15, 12, 30, 45, DateTimeKind.Utc)).Returns("DateTime64(7, 'UTC')");
+        yield return new TestCaseData(new DateTime(2024, 6, 15, 12, 30, 45, DateTimeKind.Local)).Returns("DateTime64(7, 'UTC')");
+        yield return new TestCaseData(new DateTime(2024, 6, 15, 12, 30, 45, DateTimeKind.Unspecified)).Returns("DateTime64(7)");
+        yield return new TestCaseData(new DateTimeOffset(2024, 6, 15, 12, 30, 45, TimeSpan.FromHours(3))).Returns("DateTime64(7, 'UTC')");
+        // Inference propagates through composites via the element peek.
+        yield return new TestCaseData((object)new[] { new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc) }).Returns("Array(DateTime64(7, 'UTC'))");
 
         // Array (non-empty)
         yield return new TestCaseData((object)new[] { IPAddress.Parse("127.0.0.1") }).Returns("Array(IPv4)");

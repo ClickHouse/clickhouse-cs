@@ -196,8 +196,12 @@ internal static class TypeConverter
 #if NET6_0_OR_GREATER
         ReverseMapping.Add(typeof(DateOnly), new DateType());
 #endif
-        ReverseMapping[typeof(DateTime)] = new DateTimeType();
-        ReverseMapping[typeof(DateTimeOffset)] = new DateTimeType();
+        // DateTime/DateTimeOffset map to DateTime64(7) (not DateTime) so default inference preserves
+        // the sub-second component .NET carries (100ns ticks = 7 digits, matching the TimeSpan mapping
+        // below); a bare DateTime would truncate to whole seconds and silently break equality filters
+        // against DateTime64 columns (clickhouse-go #1483).
+        ReverseMapping[typeof(DateTime)] = new DateTime64Type { Scale = 7 };
+        ReverseMapping[typeof(DateTimeOffset)] = new DateTime64Type { Scale = 7 };
         ReverseMapping[typeof(TimeSpan)] = new Time64Type
         {
             Scale = 7, // Matches precision of TimeSpan
@@ -381,14 +385,16 @@ internal static class TypeConverter
         if (value is IPAddress ip)
             return SimpleTypes[ip.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6"];
 
-        // Instant-bearing DateTime values infer as DateTime('UTC') so the wire wall-clock
-        // formatted in UTC is parsed unambiguously by the server in UTC, not session_timezone (issue #350).
-        // Unspecified DateTime falls through to bare DateTime (wall-clock semantics).
+        // Instant-bearing DateTime values infer as DateTime64(7, 'UTC'): the 'UTC' anchor makes the
+        // wire wall-clock parse unambiguously in UTC, not session_timezone (issue #350), and scale 7
+        // preserves the sub-second component (.NET ticks are 100ns = 7 digits) that a bare DateTime
+        // would silently truncate, so equality against DateTime64 columns matches (clickhouse-go #1483).
+        // Unspecified DateTime falls through to bare DateTime64(7) (wall-clock semantics, no tz).
         // This applies inside composite structures too: e.g. an array of UTC DateTime values
-        // infers as Array(DateTime('UTC')) via the recursive element peek below.
+        // infers as Array(DateTime64(7, 'UTC')) via the recursive element peek below.
         if (value is DateTime { Kind: DateTimeKind.Utc or DateTimeKind.Local }
             || value is DateTimeOffset)
-            return new DateTimeType { TimeZone = NodaTime.DateTimeZone.Utc };
+            return new DateTime64Type { Scale = 7, TimeZone = NodaTime.DateTimeZone.Utc };
 
         var type = value.GetType();
 
