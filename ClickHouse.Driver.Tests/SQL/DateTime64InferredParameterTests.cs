@@ -22,7 +22,7 @@ public class DateTime64InferredParameterTests : AbstractConnectionTestFixture
         var table = "test.dt64_inferred_utc_datetime";
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
         await connection.ExecuteStatementAsync($"CREATE TABLE {table} (id UInt32, dt DateTime64(8, 'UTC')) ENGINE = MergeTree ORDER BY id");
-        await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '1988-11-20 12:55:28.123456000')");
+        await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '1988-11-20 12:55:28.12345600')");
 
         // Sub-second .NET DateTime (12:55:28 + 1234560 ticks = .1234560) passed WITHOUT a type hint:
         // the @p placeholder resolves via value-based inference, which must keep the fractional seconds.
@@ -42,7 +42,7 @@ public class DateTime64InferredParameterTests : AbstractConnectionTestFixture
         var table = "test.dt64_inferred_datetimeoffset";
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
         await connection.ExecuteStatementAsync($"CREATE TABLE {table} (id UInt32, dt DateTime64(8, 'UTC')) ENGINE = MergeTree ORDER BY id");
-        await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '1988-11-20 12:55:28.123456000')");
+        await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '1988-11-20 12:55:28.12345600')");
 
         // Same sub-second instant as a DateTimeOffset (UTC) — the other value-axis that infers DateTime64(7, 'UTC').
         var value = new DateTimeOffset(1988, 11, 20, 12, 55, 28, TimeSpan.Zero).AddTicks(1234560);
@@ -64,7 +64,7 @@ public class DateTime64InferredParameterTests : AbstractConnectionTestFixture
         var table = "test.dt64_inferred_unspecified_datetime";
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
         await connection.ExecuteStatementAsync($"CREATE TABLE {table} (id UInt32, dt DateTime64(8)) ENGINE = MergeTree ORDER BY id");
-        await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '1988-11-20 12:55:28.123456000')");
+        await connection.ExecuteStatementAsync($"INSERT INTO {table} VALUES (1, '1988-11-20 12:55:28.12345600')");
 
         var value = new DateTime(1988, 11, 20, 12, 55, 28, DateTimeKind.Unspecified).AddTicks(1234560);
         using var command = connection.CreateCommand();
