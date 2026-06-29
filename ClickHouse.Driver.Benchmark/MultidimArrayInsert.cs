@@ -19,7 +19,7 @@ public class MultidimArrayInsert
 {
     private const string TargetTable = "test.benchmark_multidim_int32";
 
-    private readonly ClickHouseClient client;
+    private ClickHouseClient client;
     private List<object[]> multidimRows;
     private List<object[]> jaggedRows;
 
@@ -29,18 +29,16 @@ public class MultidimArrayInsert
     [Params(100)]
     public int Side { get; set; }
 
-    public MultidimArrayInsert()
-    {
-        var connectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION");
-        client = new ClickHouseClient(connectionString);
-
-        client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test").Wait();
-        client.ExecuteNonQueryAsync($"CREATE TABLE IF NOT EXISTS {TargetTable} (arr Array(Array(Int32))) ENGINE Null").Wait();
-    }
-
     [GlobalSetup]
     public void Setup()
     {
+        var connectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION")
+            ?? "Host=localhost";
+        client = new ClickHouseClient(connectionString);
+
+        client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test").GetAwaiter().GetResult();
+        client.ExecuteNonQueryAsync($"CREATE TABLE IF NOT EXISTS {TargetTable} (arr Array(Array(Int32))) ENGINE Null").GetAwaiter().GetResult();
+
         multidimRows = new List<object[]>(Rows);
         jaggedRows = new List<object[]>(Rows);
         for (var n = 0; n < Rows; n++)
@@ -61,6 +59,12 @@ public class MultidimArrayInsert
             multidimRows.Add(new object[] { multi });
             jaggedRows.Add(new object[] { jagged });
         }
+    }
+
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        client?.Dispose();
     }
 
     [Benchmark(Baseline = true)]
