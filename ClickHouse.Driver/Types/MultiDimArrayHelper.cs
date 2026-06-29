@@ -1,5 +1,7 @@
 using System;
 using System.Collections;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Formats;
@@ -47,8 +49,90 @@ internal static class MultiDimArrayHelper
     /// </summary>
     public static void WriteMultidimensional(ExtendedBinaryWriter writer, Array array, ClickHouseType leafType)
     {
+        // Fast path: for a fixed-width primitive leaf the CLR backing store (contiguous, row-major)
+        // is byte-identical to ClickHouse's `varint(length) + raw little-endian bytes` per row, so each
+        // innermost row can be blitted in a single write instead of boxing every scalar through
+        // Array.GetValue(int[]) + a virtual leaf.Write. Gated on:
+        //   - little-endian host (CLR primitive layout == wire layout only on LE);
+        //   - a known fixed-width primitive leaf (TryGetBlittableElementSize);
+        //   - the CLR element type matching the leaf's framework type EXACTLY — the slow path
+        //     coerces mismatches (e.g. long[,] into Array(Int32)) via Convert.ToXxx, which blitting
+        //     would silently corrupt, so any mismatch falls through to WriteAxis.
+        // Non-zero GetLowerBound is handled implicitly: the blit walks flat memory offsets, which are
+        // independent of the logical index bounds.
+        if (BitConverter.IsLittleEndian
+            && TryGetBlittableElementSize(leafType, out var elementSize)
+            && array.GetType().GetElementType() == leafType.FrameworkType)
+        {
+            ref var origin = ref MemoryMarshal.GetArrayDataReference(array);
+            WriteBlittableAxis(writer, array, ref origin, flatElement: 0, dim: 0, elementSize);
+            return;
+        }
+
         var indices = new int[array.Rank];
         WriteAxis(writer, array, indices, dim: 0, leafType);
+    }
+
+    /// <summary>
+    /// Recursively emits the per-axis varint length prefixes, blitting each contiguous innermost row
+    /// in one <see cref="System.IO.BinaryWriter.Write(ReadOnlySpan{byte})"/>. <paramref name="flatElement"/>
+    /// is the running row-major element offset from <paramref name="origin"/>; it advances by the row
+    /// length at each leaf and is returned so siblings continue from the right offset.
+    /// </summary>
+    private static long WriteBlittableAxis(ExtendedBinaryWriter writer, Array array, ref byte origin, long flatElement, int dim, int elementSize)
+    {
+        var length = array.GetLength(dim);
+        writer.Write7BitEncodedInt(length);
+
+        if (dim == array.Rank - 1)
+        {
+            if (length > 0)
+            {
+                // All offset/size arithmetic is widened to long before multiplying: under
+                // gcAllowVeryLargeObjects an array can hold more than int.MaxValue total elements
+                // (so the running flatElement offset overflows int) and a single innermost row can
+                // exceed int.MaxValue bytes (e.g. a >2 GB Int64 row). A ReadOnlySpan length is
+                // int-capped, so an oversized row is emitted in int.MaxValue-sized chunks.
+                var byteOffset = flatElement * elementSize;
+                var byteCount = (long)length * elementSize;
+                for (var written = 0L; written < byteCount;)
+                {
+                    var chunk = (int)Math.Min(byteCount - written, int.MaxValue);
+                    ref var chunkStart = ref Unsafe.Add(ref origin, (nint)(byteOffset + written));
+                    writer.Write(MemoryMarshal.CreateReadOnlySpan(ref chunkStart, chunk));
+                    written += chunk;
+                }
+            }
+
+            return flatElement + length;
+        }
+
+        for (var i = 0; i < length; i++)
+        {
+            flatElement = WriteBlittableAxis(writer, array, ref origin, flatElement, dim + 1, elementSize);
+        }
+
+        return flatElement;
+    }
+
+    /// <summary>
+    /// Returns the wire size in bytes for leaf types whose CLR in-memory representation is byte-identical
+    /// to the ClickHouse little-endian wire format. Deliberately gated on the concrete leaf class (not just
+    /// <see cref="ClickHouseType.FrameworkType"/>) so only these exact fixed-width primitives qualify.
+    /// Int128/UInt128 are excluded: they are <see cref="System.Numerics.BigInteger"/>-backed here, not a
+    /// contiguous 16-byte struct. String/DateTime/Decimal/UUID/IP differ in wire layout and fall through.
+    /// </summary>
+    private static bool TryGetBlittableElementSize(ClickHouseType leaf, out int size)
+    {
+        size = leaf switch
+        {
+            Int8Type or UInt8Type or BooleanType => 1,
+            Int16Type or UInt16Type => 2,
+            Int32Type or UInt32Type or Float32Type => 4,
+            Int64Type or UInt64Type or Float64Type => 8,
+            _ => 0,
+        };
+        return size != 0;
     }
 
     private static void WriteAxis(ExtendedBinaryWriter writer, Array array, int[] indices, int dim, ClickHouseType leafType)

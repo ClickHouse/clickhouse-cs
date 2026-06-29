@@ -72,6 +72,117 @@ public class MultiDimArrayHelperTests
             Is.EqualTo(WriteToBinary(clickHouseType, jagged)));
     }
 
+    // ----- Blittable fast path: every fixed-width primitive leaf, fast (multidim) vs slow (jagged) -----
+    //
+    // A rank-1 jagged value (T[][]) writes through the boxing IList path in ArrayType.Write, which never
+    // touches WriteBlittableAxis — so it is an independent oracle. A rank>1 multidim value of a blittable
+    // leaf takes the new blit path. The two must produce byte-identical ClickHouse wire output.
+    // Non-blittable leaves (String, Nullable(Int32)) are included to lock in that the guard routes them
+    // through the unchanged slow path and they still match.
+
+    public static IEnumerable<TestCaseData> BlittableLeafEquivalenceCases()
+    {
+        // Rank 2, one case per blittable leaf type. Values stay inside every type's range (0..5).
+        yield return Rank2Case<sbyte>("Array(Array(Int8))", i => (sbyte)i);
+        yield return Rank2Case<byte>("Array(Array(UInt8))", i => (byte)i);
+        yield return Rank2Case<short>("Array(Array(Int16))", i => (short)i);
+        yield return Rank2Case<ushort>("Array(Array(UInt16))", i => (ushort)i);
+        yield return Rank2Case<int>("Array(Array(Int32))", i => i);
+        yield return Rank2Case<uint>("Array(Array(UInt32))", i => (uint)i);
+        yield return Rank2Case<long>("Array(Array(Int64))", i => i);
+        yield return Rank2Case<ulong>("Array(Array(UInt64))", i => (ulong)i);
+        yield return Rank2Case<float>("Array(Array(Float32))", i => i + 0.5f);
+        yield return Rank2Case<double>("Array(Array(Float64))", i => i + 0.5d);
+        yield return Rank2Case<bool>("Array(Array(Bool))", i => i % 2 == 0);
+
+        // Rank 3 across a representative spread of element widths exercises the recursive prefix walk
+        // between blitted leaf rows.
+        yield return Rank3Case<int>("Array(Array(Array(Int32)))", i => i);
+        yield return Rank3Case<double>("Array(Array(Array(Float64)))", i => i + 0.5d);
+        yield return Rank3Case<bool>("Array(Array(Array(Bool)))", i => i % 2 == 0);
+
+        // Non-blittable leaves must still route through the slow path and match.
+        yield return Rank2Case<string>("Array(Array(String))", i => i.ToString());
+        yield return Rank2Case<int?>("Array(Array(Nullable(Int32)))", i => i % 2 == 0 ? null : i);
+    }
+
+    [Test]
+    [TestCaseSource(nameof(BlittableLeafEquivalenceCases))]
+    public void BinaryWrite_BlittableLeaf_FastPathMatchesJaggedWire(string clickHouseType, object multidim, object jagged)
+    {
+        Assert.That(WriteToBinary(clickHouseType, multidim),
+            Is.EqualTo(WriteToBinary(clickHouseType, jagged)));
+    }
+
+    [Test]
+    public void BinaryWrite_BlittableMultidim_AllocatesFarLessThanBoxingPath()
+    {
+        // The blit path boxes nothing; the boxing path would allocate ~24 bytes per element
+        // (~6 MB of boxes for 250k ints). A generous 1 MB bound cleanly separates the two and
+        // guards against a future regression that silently reintroduces per-element boxing.
+        var type = TypeConverter.ParseClickHouseType("Array(Array(Int32))", TypeSettings.Default);
+        var matrix = new int[500, 500];
+
+        using var stream = new MemoryStream((500 * 500 * sizeof(int)) + (16 * 1024));
+        using var writer = new ExtendedBinaryWriter(stream);
+
+        // Warm up JIT and let the stream buffer settle so the measurement reflects only writes.
+        type.Write(writer, new int[2, 2]);
+        writer.Flush();
+        stream.Position = 0;
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        type.Write(writer, matrix);
+        writer.Flush();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.That(allocated, Is.LessThan(1_000_000),
+            $"Blit path should box nothing; allocated {allocated} bytes");
+    }
+
+    private static TestCaseData Rank2Case<T>(string clickHouseType, Func<int, T> gen)
+    {
+        var multidim = new T[2, 3];
+        var jagged = new T[2][];
+        for (var r = 0; r < 2; r++)
+        {
+            jagged[r] = new T[3];
+            for (var c = 0; c < 3; c++)
+            {
+                var v = gen((r * 3) + c);
+                multidim[r, c] = v;
+                jagged[r][c] = v;
+            }
+        }
+
+        return new TestCaseData(clickHouseType, (object)multidim, (object)jagged)
+            .SetName($"BlittableLeaf_Rank2_{typeof(T).Name}_FastMatchesJagged");
+    }
+
+    private static TestCaseData Rank3Case<T>(string clickHouseType, Func<int, T> gen)
+    {
+        var multidim = new T[2, 2, 2];
+        var jagged = new T[2][][];
+        var n = 0;
+        for (var a = 0; a < 2; a++)
+        {
+            jagged[a] = new T[2][];
+            for (var b = 0; b < 2; b++)
+            {
+                jagged[a][b] = new T[2];
+                for (var c = 0; c < 2; c++)
+                {
+                    var v = gen(n++);
+                    multidim[a, b, c] = v;
+                    jagged[a][b][c] = v;
+                }
+            }
+        }
+
+        return new TestCaseData(clickHouseType, (object)multidim, (object)jagged)
+            .SetName($"BlittableLeaf_Rank3_{typeof(T).Name}_FastMatchesJagged");
+    }
+
     // HTTP format string-output cases (Rank2/Rank3/EmptyOuter/EmptyInner/StringQuoting) live in
     // TypeMappingTests.HttpParameterFormatterNestedArrayCases — no value in duplicating them
     // here. We only need the multidim-vs-jagged equivalence which TypeMappingTests doesn't cover.
