@@ -85,6 +85,12 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["UseCustomDecimals"] = value;
     }
 
+    public bool UseFormDataParameters
+    {
+        get => GetBooleanOrDefault("UseFormDataParameters", ClickHouseDefaults.UseFormDataParameters);
+        set => this["UseFormDataParameters"] = value;
+    }
+
     public bool ReadStringsAsByteArrays
     {
         get => GetBooleanOrDefault("ReadStringsAsByteArrays", ClickHouseDefaults.ReadStringsAsByteArrays);
@@ -225,6 +231,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             SessionId = settings.SessionId,
             Timeout = settings.Timeout,
             UseCustomDecimals = settings.UseCustomDecimals,
+            UseFormDataParameters = settings.UseFormDataParameters,
             ReadStringsAsByteArrays = settings.ReadStringsAsByteArrays,
             ReadBufferSize = settings.ReadBufferSize,
             Roles = settings.Roles,
