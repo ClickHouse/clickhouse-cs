@@ -85,5 +85,5 @@ public static class ClickHouseDefaults
     /// <summary>
     /// Default size, in bytes, of the buffer used when reading HTTP query responses (8 KiB).
     /// </summary>
-    public const int ReadBufferSize = 8 * 1024;
+    public const int ReadBufferSize = 512 * 1024;
 }
