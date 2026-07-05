@@ -43,8 +43,6 @@ ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.Timeout.get -> System.Ti
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.Timeout.set -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.UseCustomDecimals.get -> bool
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.UseCustomDecimals.set -> void
-ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.UseFormDataParameters.get -> bool
-ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.UseFormDataParameters.set -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.UseSession.get -> bool
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.UseSession.set -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.Username.get -> string
