@@ -1,3 +1,13 @@
+Unreleased
+---
+
+**New Features:**
+
+**Improvements:**
+* You can now pass `UseFormDataParameters` through the connection string. Added `UseFormDataParameters` property to `ClickHouseConnectionStringBuilder`.
+
+**Bug Fixes:**
+
 v1.3.0
 ---
 
@@ -24,7 +34,6 @@ v1.3.0
 **Improvements:**
 * HTTP parameter mismatch errors now include the parameter name, the full ClickHouse type, and the value's runtime CLR type. The previous message (`"Cannot convert 219 to Array(UInt8)"`) collapsed the outer type, omitted which parameter failed, and didn't say what the value actually was.
 * `GetFieldValue<T[,]>` errors are now categorised by cause. `InvalidCastException` covers type-structure mismatches: the column is null/DBNull, the value isn't a collection, the source's structural depth differs from the target rank (shallower or deeper), or a leaf is the wrong scalar type or `null` into a non-nullable value-type target. Messages include the column ordinal, target CLR type, and offending indices where applicable. `InvalidOperationException` is reserved for shape-validation failures — the value's structure matches `T` but rows are ragged or an intermediate row is null. Previously, structural-depth mismatches and a `null` leaf into e.g. `int[,]` either threw `InvalidOperationException` or were silently coerced to `default(int)`.
-* Add a `UseFormDataParameters` property to `ClickHouseConnectionStringBuilder`.
 
 **Bug Fixes:**
 * **Breaking Change**: Fixed timezone shift for `@`-style `DateTime`/`DateTimeOffset` parameters on non-UTC servers (issue #350). When a parameter's ClickHouse type was inferred (no explicit `{name:Type}` hint in SQL and no `parameter.ClickHouseType` set), the driver previously emitted a bare `DateTime` hint and the server parsed the wire wall-clock in `session_timezone`/server tz — silently shifting instant-bearing values by the server's offset. Inferred types for `DateTime { Kind: Utc or Local }` and `DateTimeOffset` are now sent as `DateTime('UTC')`, preserving the instant across any server timezone. Explicit hints (`{name:DateTime}` in SQL or `parameter.ClickHouseType`) are untouched, users who specify the type continue to own timezone correctness.
