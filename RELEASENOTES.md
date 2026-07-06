@@ -1,3 +1,13 @@
+Unreleased
+---
+
+**New Features:**
+
+**Improvements:**
+* You can now pass `UseFormDataParameters` through the connection string. Added `UseFormDataParameters` property to `ClickHouseConnectionStringBuilder`.
+
+**Bug Fixes:**
+
 v1.3.0
 ---
 
