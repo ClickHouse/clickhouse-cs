@@ -21,6 +21,7 @@ on:
       pr_number:
         description: "PR number to benchmark and comment on."
         required: true
+        type: string
 
 jobs:
   benchmark:
