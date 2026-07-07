@@ -399,6 +399,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             SessionId = builder.SessionId,
             Timeout = builder.Timeout,
             UseCustomDecimals = builder.UseCustomDecimals,
+            UseFormDataParameters = builder.UseFormDataParameters,
             ReadStringsAsByteArrays = builder.ReadStringsAsByteArrays,
             ReadBufferSize = builder.ReadBufferSize,
             Roles = builder.Roles,
@@ -544,7 +545,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"UseCustomDecimals={UseCustomDecimals};ReadStringsAsByteArrays={ReadStringsAsByteArrays};" +
                $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s;" +
                $"ReadBufferSize={ReadBufferSize};" +
-               $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode}";
+               $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode};" +
+               $"UseFormDataParameters={UseFormDataParameters}";
 
         if (Roles.Count > 0)
         {

@@ -940,6 +940,16 @@ public class ClickHouseClientSettingsTests
         Assert.That(settings.ToString(), Does.Contain("ReadBufferSize=65536"));
     }
 
+    [Test]
+    [TestCase(true)]
+    [TestCase(false)]
+    public void UseFormDataParameters_FromConnectionString_ShouldBeParsed(bool useFormDataParameters)
+    {
+        var settings = ClickHouseClientSettings.FromConnectionString($"Host=localhost;UseFormDataParameters={useFormDataParameters}");
+
+        Assert.That(settings.UseFormDataParameters, Is.EqualTo(useFormDataParameters));
+    }
+
     private class TestLoggerFactory : ILoggerFactory
     {
         public void Dispose()

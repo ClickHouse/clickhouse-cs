@@ -16,6 +16,7 @@ public class ConnectionStringBuilderTests
             Assert.That(new ClickHouseConnectionStringBuilder().Database, Is.EqualTo(""));
             Assert.That(new ClickHouseConnectionStringBuilder().Username, Is.EqualTo("default"));
             Assert.That(new ClickHouseConnectionStringBuilder().ReadBufferSize, Is.EqualTo(8 * 1024));
+            Assert.That(new ClickHouseConnectionStringBuilder().UseFormDataParameters, Is.EqualTo(ClickHouseDefaults.UseFormDataParameters));
         });
     }
 
@@ -27,6 +28,28 @@ public class ConnectionStringBuilderTests
         var reparsed = new ClickHouseConnectionStringBuilder(builder.ConnectionString);
 
         Assert.That(reparsed.ReadBufferSize, Is.EqualTo(65536));
+    }
+    
+    [Test]
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ConnectionStringBuilder_UseFormDataParameters_ShouldRoundTripThroughConnectionString(bool useFormDataParameters)
+    {
+        var builder = new ClickHouseConnectionStringBuilder { UseFormDataParameters = useFormDataParameters };
+
+        var reparsed = new ClickHouseConnectionStringBuilder(builder.ConnectionString);
+
+        Assert.That(reparsed.UseFormDataParameters, Is.EqualTo(useFormDataParameters));
+    }
+    
+    [Test]
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ConnectionStringBuilder_UseFormDataParameters_ShouldParseUseFormDataParameters(bool useFormDataParameters)
+    {
+        var builder = new ClickHouseConnectionStringBuilder($"UseFormDataParameters={useFormDataParameters}");
+
+        Assert.That(builder.UseFormDataParameters, Is.EqualTo(useFormDataParameters));
     }
     
     [Test]
