@@ -23,6 +23,15 @@ on:
         required: true
         type: string
 
+# The reusable workflow posts a sticky results comment on the PR, so it declares
+# pull-requests: write. A reusable workflow can't use more than the caller grants,
+# and this repo's default GITHUB_TOKEN is read-only — so grant it explicitly here,
+# or the call is rejected at validation ("requesting 'pull-requests: write', but is
+# only allowed 'pull-requests: none'").
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   benchmark:
     # Comment path: only on PRs, only `/benchmark-compare`, only from someone
