@@ -23,6 +23,10 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   benchmark:
     # Comment path: only on PRs, only `/benchmark-compare`, only from someone
