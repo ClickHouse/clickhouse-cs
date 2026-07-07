@@ -1,0 +1,70 @@
+name: TCP Tests
+
+# Runs the ClickHouse.Driver.Tcp test suite, gated on changes to the TCP projects only.
+# The TCP project is standalone (no reference to ClickHouse.Driver), so its build/test closure is just
+# the two TCP projects plus the shared package versions.
+on:
+  push:
+    branches: [main, tcp-client] # tcp-client is the long-lived feature branch that the per-epic PRs stack onto
+    paths:
+      - "ClickHouse.Driver.Tcp/**"
+      - "ClickHouse.Driver.Tcp.Tests/**"
+      - "Directory.Packages.props"
+      - ".github/workflows/tests-tcp.yml"
+  pull_request:
+    branches: [main, tcp-client]
+    paths:
+      - "ClickHouse.Driver.Tcp/**"
+      - "ClickHouse.Driver.Tcp.Tests/**"
+      - "Directory.Packages.props"
+      - ".github/workflows/tests-tcp.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit SHA to run on"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: TCP Tests (${{ matrix.framework }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: ["net8.0", "net9.0", "net10.0"] # TCP library targets net8.0+ only
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/cache@v6
+        name: Cache NuGet
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'Directory.Packages.props') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.x
+            9.x
+            10.x
+
+      - name: Test
+        run: >
+          dotnet test ClickHouse.Driver.Tcp.Tests/ClickHouse.Driver.Tcp.Tests.csproj
+          --framework ${{ matrix.framework }}
+          --configuration Release
+          --verbosity normal
+          --logger GitHubActions
+          /clp:ErrorsOnly
