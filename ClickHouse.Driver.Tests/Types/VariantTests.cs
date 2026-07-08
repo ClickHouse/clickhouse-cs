@@ -132,6 +132,9 @@ public class VariantTests : AbstractConnectionTestFixture
         ClassicAssert.IsFalse(reader.Read());
     }
 
+    // Two-type variant: IPv4 and IPv6 share FrameworkType=IPAddress and must be disambiguated by
+    // AddressFamily. With < 3 types the write path resolves the subtype via the linear scan
+    // (VariantType.GetMatchingType, no lookup built). The 3+ variant below covers the lookup path.
     [Test]
     [RequiredFeature(Feature.Variant)]
     public async Task InsertBinaryAsync_VariantIPv4IPv6_ShouldRoundTrip()
@@ -168,6 +171,105 @@ public class VariantTests : AbstractConnectionTestFixture
             Assert.That(reader.GetValue(0), Is.EqualTo(3u));
             Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
             Assert.That(reader.GetString(2), Is.EqualTo("None"));
+
+            ClassicAssert.IsFalse(reader.Read());
+        }
+        finally
+        {
+            await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
+
+    // Three-type variant: exercises the write path's O(1) lookup (VariantType builds the lookup for
+    // 3+ types). IPv4 and IPv6 land in the same FrameworkType=IPAddress bucket and must still be
+    // disambiguated by AddressFamily, while String resolves from its own bucket.
+    [Test]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_ThreeTypeVariantIPv4IPv6String_ShouldRoundTrip()
+    {
+        var targetTable = "test.test_variant_ip3";
+        try
+        {
+            await client.ExecuteNonQueryAsync(
+                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(IPv4, IPv6, String)) ENGINE = Memory");
+
+            var ipv4 = IPAddress.Parse("10.0.0.1");
+            var ipv6 = IPAddress.Parse("2001:db8::1");
+
+            await client.InsertBinaryAsync(targetTable, ["id", "val"], [
+                new object[] { 1u, ipv4 },
+                new object[] { 2u, ipv6 },
+                new object[] { 3u, "hello" },
+                new object[] { 4u, null },
+            ]);
+
+            using var reader = await connection.ExecuteReaderAsync(
+                $"SELECT id, val, variantType(val) FROM {targetTable} ORDER BY id");
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(1), Is.EqualTo(ipv4));
+            Assert.That(reader.GetString(2), Is.EqualTo("IPv4"));
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(1), Is.EqualTo(ipv6));
+            Assert.That(reader.GetString(2), Is.EqualTo("IPv6"));
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
+            Assert.That(reader.GetString(2), Is.EqualTo("String"));
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
+            Assert.That(reader.GetString(2), Is.EqualTo("None"));
+
+            ClassicAssert.IsFalse(reader.Read());
+        }
+        finally
+        {
+            await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
+
+    // Multi-type variant with distinct FrameworkTypes: exercises the general lookup path (4 types,
+    // one candidate per bucket) to confirm each value resolves to the right subtype on write.
+    [Test]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_MultiTypeVariant_ShouldRoundTrip()
+    {
+        var targetTable = "test.test_variant_multi";
+        try
+        {
+            await client.ExecuteNonQueryAsync(
+                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(Int64, String, UUID, IPv4)) ENGINE = Memory");
+
+            var guid = new Guid("61f0c404-5cb3-11e7-907b-a6006ad3dba0");
+            var ipv4 = IPAddress.Parse("192.168.1.1");
+
+            await client.InsertBinaryAsync(targetTable, ["id", "val"], [
+                new object[] { 1u, 42L },
+                new object[] { 2u, "hello" },
+                new object[] { 3u, guid },
+                new object[] { 4u, ipv4 },
+            ]);
+
+            using var reader = await connection.ExecuteReaderAsync(
+                $"SELECT id, val, variantType(val) FROM {targetTable} ORDER BY id");
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(1), Is.EqualTo(42L));
+            Assert.That(reader.GetString(2), Is.EqualTo("Int64"));
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
+            Assert.That(reader.GetString(2), Is.EqualTo("String"));
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(1), Is.EqualTo(guid));
+            Assert.That(reader.GetString(2), Is.EqualTo("UUID"));
+
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetValue(1), Is.EqualTo(ipv4));
+            Assert.That(reader.GetString(2), Is.EqualTo("IPv4"));
 
             ClassicAssert.IsFalse(reader.Read());
         }
