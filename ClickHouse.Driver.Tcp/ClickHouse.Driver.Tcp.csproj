@@ -9,7 +9,7 @@
     <AnalysisMode>Recommended</AnalysisMode>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
-    <!-- SA0001: doc comments are present but the XML doc file isn't generated yet (deferred to Epic R). -->
+    <!-- SA0001: doc comments are present but the XML doc file isn't generated yet (deferred). -->
     <NoWarn>$(NoWarn);SA0001</NoWarn>
     <!-- Not published on its own; its assembly is packed into the ClickHouse.Driver package. -->
     <IsPackable>false</IsPackable>
