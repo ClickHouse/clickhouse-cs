@@ -8,10 +8,7 @@ namespace ClickHouse.Driver.Types;
 
 internal class VariantType : ParameterizedType
 {
-    // Below this many underlying types a linear scan beats a dictionary lookup: the hash + probe
-    // costs more than a couple of CanWrite calls. Benchmarks (issue #493, worst-case last-element
-    // match) put the crossover at 3 types, so 2-type variants (the common Variant(T, String) shape)
-    // stay on the linear path and only 3+ build the lookup.
+    // For 2 types, linear scan beats dictionary lookup. For 3 or more, use the HashMap.
     private const int MinTypesForMap = 3;
 
     private ClickHouseType[] underlyingTypes;
