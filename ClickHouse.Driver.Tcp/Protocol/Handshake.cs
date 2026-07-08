@@ -99,7 +99,7 @@ internal static class Handshake
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The decoded server handshake, including the negotiated version.</returns>
     /// <exception cref="ClickHouseServerException">The server rejected the handshake (e.g. authentication failure).</exception>
-    /// <exception cref="InvalidDataException">The server sent neither Hello nor Exception.</exception>
+    /// <exception cref="ClickHouseProtocolException">The server sent neither Hello nor Exception.</exception>
     public static async ValueTask<ServerHandshake> PerformAsync(
         ClickHouseBinaryReader reader,
         ClickHouseBinaryWriter writer,
@@ -117,7 +117,7 @@ internal static class Handshake
             case ServerPacketType.Exception:
                 throw await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
             default:
-                throw new InvalidDataException($"Unexpected packet type {reply} ({(ulong)reply}) during handshake; expected Hello or Exception.");
+                throw new ClickHouseProtocolException($"Unexpected packet type {reply} ({(ulong)reply}) during handshake; expected Hello or Exception.");
         }
 
         ServerHandshake server = await ReadServerHelloAsync(reader, cancellationToken).ConfigureAwait(false);
