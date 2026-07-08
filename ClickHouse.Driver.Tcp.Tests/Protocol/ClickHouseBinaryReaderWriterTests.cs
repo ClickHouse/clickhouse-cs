@@ -373,4 +373,67 @@ public class ClickHouseBinaryReaderWriterTests
         writer.Dispose();
         Assert.Throws<ObjectDisposedException>(() => writer.WriteByte(0x01));
     }
+
+    [Test]
+    public async Task WriteClientPacketType_EncodesCodeAsVarUInt()
+    {
+        // Every defined client code is below 128, so its VarUInt is a single byte equal to the numeric code.
+        foreach (ClientPacketType type in Enum.GetValues<ClientPacketType>())
+        {
+            byte[] bytes = await WriteAsync(w => w.WriteClientPacketType(type));
+            CollectionAssert.AreEqual(new[] { (byte)(ulong)type }, bytes);
+        }
+    }
+
+    [Test]
+    public async Task ReadServerPacketType_RoundTripsAllDefinedCodes()
+    {
+        foreach (ServerPacketType type in Enum.GetValues<ServerPacketType>())
+        {
+            byte[] bytes = await WriteAsync(w => w.WriteVarUInt((ulong)type));
+            using var reader = ReaderOver(bytes);
+            Assert.That(await reader.ReadServerPacketTypeAsync(None), Is.EqualTo(type));
+        }
+    }
+
+    [Test]
+    public async Task PacketTypeCodes_OverlapAcrossDirections_CarryDifferentMeaning()
+    {
+        // Code 2 is client Data but server Exception: the same wire byte read as each direction's enum.
+        byte[] bytes = await WriteAsync(w => w.WriteClientPacketType(ClientPacketType.Data));
+        Assert.That((ulong)ClientPacketType.Data, Is.EqualTo(2UL));
+
+        using var reader = ReaderOver(bytes);
+        Assert.That(await reader.ReadServerPacketTypeAsync(None), Is.EqualTo(ServerPacketType.Exception));
+    }
+
+    [Test]
+    public async Task ReadServerPacketType_UnknownMultiByteCode_PreservesExactValue()
+    {
+        // The reader does not validate the range (that is the dispatcher's job): a code outside the defined set
+        // is returned verbatim, and the ulong backing avoids any narrowing so the true value survives. 300 also
+        // exercises multi-byte VarUInt decoding of the type code.
+        byte[] bytes = await WriteAsync(w => w.WriteVarUInt(300));
+        using var reader = ReaderOver(bytes);
+
+        ServerPacketType type = await reader.ReadServerPacketTypeAsync(None);
+        Assert.That((ulong)type, Is.EqualTo(300UL));
+        Assert.That(Enum.IsDefined(type), Is.False);
+    }
+
+    [Test]
+    public async Task ServerPacketEnvelope_TypeThenBody_RoundTrips()
+    {
+        // Envelope = [VarUInt type][body]. Simulate a server Data packet with a UInt32 body field and read both
+        // back in order, confirming the type code and body compose on the same buffered stream.
+        byte[] bytes = await WriteAsync(w =>
+        {
+            w.WriteVarUInt((ulong)ServerPacketType.Data);
+            w.WriteUInt32(0xDEADBEEF);
+        });
+        using var reader = ReaderOver(bytes);
+
+        Assert.That(await reader.ReadServerPacketTypeAsync(None), Is.EqualTo(ServerPacketType.Data));
+        Assert.That(await reader.ReadUInt32Async(None), Is.EqualTo(0xDEADBEEF));
+    }
 }
