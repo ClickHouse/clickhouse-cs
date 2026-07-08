@@ -12,13 +12,13 @@ internal class VariantType : ParameterizedType
     // costs more than a couple of CanWrite calls. Benchmarks (issue #493, worst-case last-element
     // match) put the crossover at 3 types, so 2-type variants (the common Variant(T, String) shape)
     // stay on the linear path and only 3+ build the lookup.
-    private const int MinTypesForLookup = 3;
+    private const int MinTypesForMap = 3;
 
     private ClickHouseType[] underlyingTypes;
 
     // Maps a value's runtime type to the underlying variant candidates that share that FrameworkType,
     // in ascending index order. Lets GetMatchingType do an O(1) hash lookup instead of an O(n) scan.
-    // Null for small variants (see MinTypesForLookup) — GetMatchingType then uses the linear scan.
+    // Null for small variants (see MinTypesForMap) — GetMatchingType then uses the linear scan.
     private Dictionary<Type, (int Index, ClickHouseType Type)[]> writeLookup;
 
     public ClickHouseType[] UnderlyingTypes
@@ -87,7 +87,7 @@ internal class VariantType : ParameterizedType
 
     private static Dictionary<Type, (int Index, ClickHouseType Type)[]> BuildWriteLookup(ClickHouseType[] types)
     {
-        if (types is null || types.Length < MinTypesForLookup)
+        if (types is null || types.Length < MinTypesForMap)
         {
             return null;
         }
