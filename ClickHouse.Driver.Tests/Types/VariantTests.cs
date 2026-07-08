@@ -230,8 +230,11 @@ public class VariantTests : AbstractConnectionTestFixture
         }
     }
 
-    // Multi-type variant with distinct FrameworkTypes: exercises the general lookup path (4 types,
-    // one candidate per bucket) to confirm each value resolves to the right subtype on write.
+    // Multi-type variant with distinct FrameworkTypes: exercises the general lookup path (3 types,
+    // one candidate per bucket, no shared bucket) to confirm each value resolves to the right subtype
+    // on write. Uses at most one numeric-family type (Int64) so the variant is not "suspicious" — two
+    // integer-like types (e.g. Int64 + IPv4/UUID) are rejected by the server without
+    // allow_suspicious_variant_types on some versions.
     [Test]
     [RequiredFeature(Feature.Variant)]
     public async Task InsertBinaryAsync_MultiTypeVariant_ShouldRoundTrip()
@@ -240,16 +243,14 @@ public class VariantTests : AbstractConnectionTestFixture
         try
         {
             await client.ExecuteNonQueryAsync(
-                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(Int64, String, UUID, IPv4)) ENGINE = Memory");
+                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(Int64, String, Array(Int64))) ENGINE = Memory");
 
-            var guid = new Guid("61f0c404-5cb3-11e7-907b-a6006ad3dba0");
-            var ipv4 = IPAddress.Parse("192.168.1.1");
+            var array = new long[] { 10, 20, 30 };
 
             await client.InsertBinaryAsync(targetTable, ["id", "val"], [
                 new object[] { 1u, 42L },
                 new object[] { 2u, "hello" },
-                new object[] { 3u, guid },
-                new object[] { 4u, ipv4 },
+                new object[] { 3u, array },
             ]);
 
             using var reader = await connection.ExecuteReaderAsync(
@@ -264,12 +265,8 @@ public class VariantTests : AbstractConnectionTestFixture
             Assert.That(reader.GetString(2), Is.EqualTo("String"));
 
             ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(1), Is.EqualTo(guid));
-            Assert.That(reader.GetString(2), Is.EqualTo("UUID"));
-
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(1), Is.EqualTo(ipv4));
-            Assert.That(reader.GetString(2), Is.EqualTo("IPv4"));
+            Assert.That(reader.GetValue(1), Is.EqualTo(array));
+            Assert.That(reader.GetString(2), Is.EqualTo("Array(Int64)"));
 
             ClassicAssert.IsFalse(reader.Read());
         }
