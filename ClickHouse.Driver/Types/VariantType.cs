@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
@@ -7,7 +8,25 @@ namespace ClickHouse.Driver.Types;
 
 internal class VariantType : ParameterizedType
 {
-    public ClickHouseType[] UnderlyingTypes { get; internal set; }
+    // For 2 types, linear scan beats dictionary lookup. For 3 or more, use the HashMap.
+    private const int MinTypesForMap = 3;
+
+    private ClickHouseType[] underlyingTypes;
+
+    // Maps a value's runtime type to the underlying variant candidates that share that FrameworkType,
+    // in ascending index order. Lets GetMatchingType do an O(1) hash lookup instead of an O(n) scan.
+    // Null for small variants (see MinTypesForMap) — GetMatchingType then uses the linear scan.
+    private Dictionary<Type, (int Index, ClickHouseType Type)[]> writeLookup;
+
+    public ClickHouseType[] UnderlyingTypes
+    {
+        get => underlyingTypes;
+        internal set
+        {
+            underlyingTypes = value;
+            writeLookup = BuildWriteLookup(value);
+        }
+    }
 
     public override Type FrameworkType => typeof(object);
 
@@ -36,6 +55,23 @@ internal class VariantType : ParameterizedType
 
     public (int, ClickHouseType) GetMatchingType(object value)
     {
+        // Fast path: a ClickHouseType only accepts values whose runtime type equals its FrameworkType
+        // (the IPv4/IPv6 pair shares FrameworkType=IPAddress and is disambiguated within its bucket),
+        // so every candidate that CanWrite(value) lives in the bucket keyed by value.GetType(). The
+        // bucket is ordered by index, so the first match is the same one the linear scan would return.
+        if (value != null && writeLookup != null && writeLookup.TryGetValue(value.GetType(), out var candidates))
+        {
+            foreach (var (index, type) in candidates)
+            {
+                if (type.CanWrite(value))
+                {
+                    return (index, type);
+                }
+            }
+        }
+
+        // Small variants skip the lookup (writeLookup is null); this is also the fallback for any
+        // type whose CanWrite accepts a value whose runtime type differs from its FrameworkType.
         for (int i = 0; i < UnderlyingTypes.Length; i++)
         {
             if (UnderlyingTypes[i].CanWrite(value))
@@ -44,6 +80,34 @@ internal class VariantType : ParameterizedType
             }
         }
         throw new ArgumentException("Could not find matching type for variant", nameof(value));
+    }
+
+    private static Dictionary<Type, (int Index, ClickHouseType Type)[]> BuildWriteLookup(ClickHouseType[] types)
+    {
+        if (types is null || types.Length < MinTypesForMap)
+        {
+            return null;
+        }
+
+        var buckets = new Dictionary<Type, List<(int, ClickHouseType)>>();
+        for (int i = 0; i < types.Length; i++)
+        {
+            var key = types[i].FrameworkType;
+            if (key is null)
+            {
+                continue;
+            }
+
+            if (!buckets.TryGetValue(key, out var list))
+            {
+                list = new List<(int, ClickHouseType)>();
+                buckets[key] = list;
+            }
+
+            list.Add((i, types[i]));
+        }
+
+        return buckets.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray());
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
