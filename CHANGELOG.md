@@ -5,7 +5,7 @@ Unreleased
 
 **Improvements:**
 * You can now pass `UseFormDataParameters` through the connection string. Added `UseFormDataParameters` property to `ClickHouseConnectionStringBuilder`.
-* Faster `Variant` write-type resolution (issue #493): matching a value to its variant subtype now uses an O(1) hash lookup by runtime type instead of an O(n) linear scan for variants with 3 or more underlying types. Resolution time is now flat regardless of arity instead of growing with it (~2.6× faster to resolve an 8-type variant in the worst case, no extra allocations). Two-type variants keep the linear scan, which is faster at that size. Behavior is unchanged, including IPv4/IPv6 disambiguation.
+* Faster `Variant` write-type resolution: matching a value to its variant subtype now uses an O(1) hash lookup by runtime type instead of an O(n) linear scan for variants with 3 or more underlying types. Resolution time is now flat regardless of arity instead of growing with it (~2.6× faster to resolve an 8-type variant in the worst case, no extra allocations). Two-type variants keep the linear scan, which is faster at that size. Behavior is unchanged, including IPv4/IPv6 disambiguation.
 
 **Bug Fixes:**
 
