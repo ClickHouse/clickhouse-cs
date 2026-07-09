@@ -4,14 +4,14 @@ using ClickHouse.Driver.Tcp.Format;
 namespace ClickHouse.Driver.Tcp.Protocol;
 
 /// <summary>
-/// Optional per-query callbacks for the metadata packets the server interleaves with a query's Data blocks.
-/// Each handler is optional; where one is null the corresponding packet is still consumed to keep the stream
+/// Optional callbacks for the metadata packets the server interleaves into a query or insert response. Each
+/// handler is optional; where one is null the corresponding packet is still consumed to keep the stream
 /// aligned, but its contents are discarded.
 ///
 /// <para>
 /// Handlers run synchronously on the thread draining the response, in the order the packets arrive on the
 /// wire. Keep them fast: they sit on the read path between blocks. A handler that throws propagates out of the
-/// enumeration and terminates the connection, so a handler must not throw for control flow.
+/// operation and terminates the connection, so a handler must not throw for control flow.
 /// </para>
 ///
 /// <para>
@@ -24,7 +24,7 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 /// </summary>
 internal sealed class MetadataHandlers
 {
-    /// <summary>Invoked for each Progress packet, which the server sends repeatedly as the query advances.</summary>
+    /// <summary>Invoked for each Progress packet, which the server sends repeatedly as work advances.</summary>
     public Action<Progress> OnProgress { get; init; }
 
     /// <summary>Invoked for the ProfileInfo summary (rows/blocks/bytes read, limit application).</summary>

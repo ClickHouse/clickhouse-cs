@@ -21,6 +21,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 internal sealed class PrimitiveColumn<T> : IColumn<T>
     where T : unmanaged
 {
+    private readonly int byteOffset;
     private readonly int length;
     private readonly bool pooled;
     private byte[] buffer;
@@ -33,10 +34,16 @@ internal sealed class PrimitiveColumn<T> : IColumn<T>
     /// <param name="pooled">Whether <paramref name="buffer"/> was rented and should be returned on dispose.</param>
     /// <exception cref="ArgumentNullException"><paramref name="buffer"/> is null.</exception>
     public PrimitiveColumn(string name, string typeName, byte[] buffer, int length, bool pooled)
+        : this(name, typeName, buffer, byteOffset: 0, length, pooled)
+    {
+    }
+
+    private PrimitiveColumn(string name, string typeName, byte[] buffer, int byteOffset, int length, bool pooled)
     {
         Name = name;
         TypeName = typeName;
         this.buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
+        this.byteOffset = byteOffset;
         this.length = length;
         this.pooled = pooled;
     }
@@ -51,7 +58,7 @@ internal sealed class PrimitiveColumn<T> : IColumn<T>
     public int RowCount => length / Unsafe.SizeOf<T>();
 
     /// <inheritdoc/>
-    public ReadOnlySpan<T> Values => MemoryMarshal.Cast<byte, T>(buffer.AsSpan(0, length));
+    public ReadOnlySpan<T> Values => MemoryMarshal.Cast<byte, T>(buffer.AsSpan(byteOffset, length));
 
     /// <inheritdoc/>
     public T this[int row] => Values[row];
