@@ -8,8 +8,13 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 /// </summary>
 internal sealed class ClientHandshakeParameters
 {
-    /// <summary>Informational client identifier (ClientHello field 1). Does not affect negotiation.</summary>
-    required public string ClientName { get; init; }
+    /// <summary>The product identifier this driver reports on the wire, for both the handshake and every query.</summary>
+    public const string DefaultClientName = "clickhouse-cs-tcp";
+
+    /// <summary>Informational client identifier (ClientHello field 1). Pinned to <see cref="DefaultClientName"/>
+    /// and not caller-configurable, so the handshake and every query's ClientInfo report the same name. Does not
+    /// affect negotiation.</summary>
+    public string ClientName => DefaultClientName;
 
     /// <summary>Informational client major version (ClientHello field 2).</summary>
     public int VersionMajor { get; init; }

@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -100,6 +101,7 @@ internal static class Handshake
     /// <returns>The decoded server handshake, including the negotiated version.</returns>
     /// <exception cref="ClickHouseServerException">The server rejected the handshake (e.g. authentication failure).</exception>
     /// <exception cref="ClickHouseProtocolException">The server sent neither Hello nor Exception.</exception>
+    /// <exception cref="NotSupportedException">The server negotiated below the minimum protocol version this client supports.</exception>
     public static async ValueTask<ServerHandshake> PerformAsync(
         ClickHouseBinaryReader reader,
         ClickHouseBinaryWriter writer,
@@ -121,6 +123,16 @@ internal static class Handshake
         }
 
         ServerHandshake server = await ReadServerHelloAsync(reader, cancellationToken).ConfigureAwait(false);
+
+        // The write path assumes string-serialized settings (the form introduced at the floor). A server that
+        // negotiates below it would desync rather than merely lose features, so refuse it with a clear error
+        // instead of corrupting the connection.
+        if (server.Negotiated.Version < NegotiatedProtocol.MinimumTcpProtocolVersion)
+        {
+            throw new NotSupportedException(
+                $"The ClickHouse server's protocol revision {server.Revision} is older than the minimum " +
+                $"{NegotiatedProtocol.MinimumTcpProtocolVersion} this client supports.");
+        }
 
         if (server.Negotiated.Supports(ProtocolFeature.Addendum))
         {
