@@ -1,3 +1,4 @@
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -33,9 +34,20 @@ internal sealed class StringColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column)
+    public long MeasureRowBytes(IColumn column, int row)
     {
-        foreach (string value in ((IColumn<string>)column).Values)
+        // Mirrors WriteString: a VarUInt byte-length prefix followed by the UTF-8 bytes.
+        int byteCount = Encoding.UTF8.GetByteCount(((IColumn<string>)column)[row]);
+        return ClickHouseBinaryWriter.MeasureVarUInt((ulong)byteCount) + byteCount;
+    }
+
+    /// <inheritdoc/>
+    public bool CanWrite(IColumn column) => column is IColumn<string>;
+
+    /// <inheritdoc/>
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        foreach (string value in ((IColumn<string>)column).Values.Slice(start, length))
         {
             writer.WriteString(value);
         }
