@@ -434,14 +434,15 @@ public sealed class ClickHouseClient : IClickHouseClient
         {
             using var stream = MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
             token.ThrowIfCancellationRequested();
-            serializer.Serialize(batch, stream);
+            var compressor = insertOptions.Compressor;
+            serializer.Serialize(batch, stream, compressor);
 
             // Seek to beginning as after writing it's at end
             stream.Seek(0, SeekOrigin.Begin);
 
             // Async sending
             logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
-            await PostStreamAsync(null, stream, true, token, insertOptions).ConfigureAwait(false);
+            await PostStreamAsync(null, new StreamContent(stream), compressor?.ContentEncoding, insertOptions, token).ConfigureAwait(false);
 
             onBatchSent?.Invoke(batch.Size);
 
@@ -636,12 +637,13 @@ public sealed class ClickHouseClient : IClickHouseClient
         {
             using var stream = MemoryStreamManager.GetStream(nameof(SendPocoBatchAsync), 128 * 1024);
             token.ThrowIfCancellationRequested();
-            serializer.Serialize(batch, getters, stream);
+            var compressor = insertOptions.Compressor;
+            serializer.Serialize(batch, getters, stream, compressor);
 
             stream.Seek(0, SeekOrigin.Begin);
 
             logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
-            await PostStreamAsync(null, stream, true, token, insertOptions).ConfigureAwait(false);
+            await PostStreamAsync(null, new StreamContent(stream), compressor?.ContentEncoding, insertOptions, token).ConfigureAwait(false);
 
             logger?.LogDebug("Batch sent to {Table}. Rows in batch: {BatchRows}.", destinationTable, batch.Size);
             return batch.Size;
@@ -747,10 +749,10 @@ public sealed class ClickHouseClient : IClickHouseClient
             content = new CompressedContent(content, System.Net.DecompressionMethods.GZip);
         }
 
-        // Pass isCompressed=false since CompressedContent already adds the Content-Encoding header
+        // Pass contentEncoding=null since CompressedContent already adds the Content-Encoding header
         try
         {
-            return await PostStreamAsync(query, content, isCompressed: false, options, cancellationToken).ConfigureAwait(false);
+            return await PostStreamAsync(query, content, contentEncoding: null, options, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -763,17 +765,17 @@ public sealed class ClickHouseClient : IClickHouseClient
     public async Task<HttpResponseMessage> PostStreamAsync(string sql, Stream data, bool isCompressed, CancellationToken token, QueryOptions queryOptions = null)
     {
         var content = new StreamContent(data);
-        return await PostStreamAsync(sql, content, isCompressed, queryOptions, token).ConfigureAwait(false);
+        return await PostStreamAsync(sql, content, isCompressed ? "gzip" : null, queryOptions, token).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task<HttpResponseMessage> PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, bool isCompressed, CancellationToken token, QueryOptions queryOptions = null)
     {
         var content = new StreamCallbackContent(callback, token);
-        return await PostStreamAsync(sql, content, isCompressed, queryOptions, token).ConfigureAwait(false);
+        return await PostStreamAsync(sql, content, isCompressed ? "gzip" : null, queryOptions, token).ConfigureAwait(false);
     }
 
-    private async Task<HttpResponseMessage> PostStreamAsync(string sql, HttpContent content, bool isCompressed, QueryOptions queryOptions, CancellationToken token)
+    private async Task<HttpResponseMessage> PostStreamAsync(string sql, HttpContent content, string contentEncoding, QueryOptions queryOptions, CancellationToken token)
     {
         using var activity = this.StartActivity("PostStreamAsync");
         activity.SetQuery(sql);
@@ -785,12 +787,12 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         postMessage.Content = content;
         postMessage.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        if (isCompressed)
+        if (!string.IsNullOrEmpty(contentEncoding))
         {
-            postMessage.Content.Headers.Add("Content-Encoding", "gzip");
+            postMessage.Content.Headers.Add("Content-Encoding", contentEncoding);
         }
 
-        GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Sending streamed request to {Endpoint} (Compressed: {Compressed}).", serverUri, isCompressed);
+        GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Sending streamed request to {Endpoint} (Content-Encoding: {ContentEncoding}).", serverUri, contentEncoding ?? "none");
 
         try
         {

@@ -21,11 +21,18 @@ public class ComparisonConfig : ManualConfig
         var baselineVersion = Environment.GetEnvironmentVariable("BASELINE_VERSION");
         var prVersion = Environment.GetEnvironmentVariable("PR_VERSION");
 
+        // Slow (network-bound) benchmarks can dial these down for a quick pass without changing the
+        // defaults the PR-comparison regression runs depend on, e.g.:
+        //   BENCH_WARMUP=1 BENCH_ITERATIONS=5 BENCH_LAUNCHES=1 dotnet run -c Release -- --filter ...
+        var warmupCount = GetEnvInt("BENCH_WARMUP", 3);
+        var iterationCount = GetEnvInt("BENCH_ITERATIONS", 30);
+        var launchCount = GetEnvInt("BENCH_LAUNCHES", 2);
+
         var job = Job.Default
             .WithStrategy(RunStrategy.Monitoring)
-            .WithWarmupCount(3)
-            .WithIterationCount(30)
-            .WithLaunchCount(2)
+            .WithWarmupCount(warmupCount)
+            .WithIterationCount(iterationCount)
+            .WithLaunchCount(launchCount)
             .WithOutlierMode(OutlierMode.RemoveAll);
 
         // Comparison mode: both baseline and PR versions are set
@@ -56,5 +63,13 @@ public class ComparisonConfig : ManualConfig
         {
             AddJob(job.WithId("current"));
         }
+    }
+
+    // Reads a positive integer from an env var, falling back to the default when unset/invalid.
+    // WarmupCount may legitimately be 0 (skip warmup entirely), so allow non-negative here.
+    private static int GetEnvInt(string name, int fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(raw, out var value) && value >= 0 ? value : fallback;
     }
 }

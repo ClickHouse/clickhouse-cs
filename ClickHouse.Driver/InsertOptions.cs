@@ -1,6 +1,7 @@
 ﻿#nullable enable
 
 using System.Collections.Generic;
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Copy;
 
 namespace ClickHouse.Driver;
@@ -24,6 +25,17 @@ public sealed class InsertOptions : QueryOptions
     /// Gets or sets the row binary format to use. Default is RowBinary.
     /// </summary>
     public RowBinaryFormat Format { get; init; } = RowBinaryFormat.RowBinary;
+
+    /// <summary>
+    /// Gets or sets the compressor applied to the binary insert body. Defaults to
+    /// <see cref="GZipCompressor.Default"/> (GZip, fastest). Set to <see langword="null"/> to send the
+    /// RowBinary payload uncompressed — useful over a fast/local link where the compression CPU
+    /// outweighs the bandwidth savings, or when a proxy already compresses on the client's behalf.
+    /// Provide a configured <see cref="GZipCompressor"/> (or another <see cref="IClickHouseCompressor"/>)
+    /// to change the level, buffer size, or codec. This is independent of
+    /// <see cref="ADO.ClickHouseClientSettings.UseCompression"/>, which governs query/response transport compression.
+    /// </summary>
+    public IClickHouseCompressor? Compressor { get; init; } = GZipCompressor.Default;
 
     /// <summary>
     /// Gets or sets explicit column type mappings (key: column name; value: ClickHouse type string).
@@ -60,6 +72,7 @@ public sealed class InsertOptions : QueryOptions
             BatchSize = BatchSize,
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
             Format = Format,
+            Compressor = Compressor,
             ColumnTypes = ColumnTypes,
             UseSchemaCache = UseSchemaCache,
         };
@@ -82,6 +95,7 @@ public sealed class InsertOptions : QueryOptions
             BatchSize = BatchSize,
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
             Format = Format,
+            Compressor = Compressor,
             ColumnTypes = columnTypes,
             UseSchemaCache = UseSchemaCache,
         };
