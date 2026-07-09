@@ -2,22 +2,28 @@ name: TCP Tests
 
 # Runs the ClickHouse.Driver.Tcp test suite, gated on changes to the TCP projects only.
 # The TCP project is standalone (no reference to ClickHouse.Driver), so its build/test closure is just
-# the two TCP projects plus the shared package versions.
+# the two TCP projects plus the shared package versions and the CI wiring itself.
 on:
   push:
-    branches: [main, tcp-client] # tcp-client is the long-lived feature branch that the per-epic PRs stack onto
-    paths:
-      - "ClickHouse.Driver.Tcp/**"
-      - "ClickHouse.Driver.Tcp.Tests/**"
-      - "Directory.Packages.props"
-      - ".github/workflows/tests-tcp.yml"
-  pull_request:
+    # Only the long-lived integration branches run on push (validating what landed). The per-epic tcp/**
+    # branches are validated by the pull_request trigger below; keeping them off push avoids a duplicate
+    # run every time a commit is pushed to an epic branch that already has an open PR.
     branches: [main, tcp-client]
     paths:
       - "ClickHouse.Driver.Tcp/**"
       - "ClickHouse.Driver.Tcp.Tests/**"
       - "Directory.Packages.props"
       - ".github/workflows/tests-tcp.yml"
+      - ".github/workflows/reusable-tcp.yml"
+  pull_request:
+    # Matches the PR's base branch, so a PR stacked onto another tcp/** epic branch triggers too.
+    branches: [main, tcp-client, "tcp/**"]
+    paths:
+      - "ClickHouse.Driver.Tcp/**"
+      - "ClickHouse.Driver.Tcp.Tests/**"
+      - "Directory.Packages.props"
+      - ".github/workflows/tests-tcp.yml"
+      - ".github/workflows/reusable-tcp.yml"
   workflow_dispatch:
     inputs:
       ref:
@@ -29,42 +35,31 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: TCP Tests (${{ matrix.framework }})
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
+  regress-clickhouse-tcp:
+    name: ClickHouse regression (TCP)
+    uses: ./.github/workflows/reusable-tcp.yml
+    with:
+      clickhouse-version: ${{ matrix.version }}
+      ref: ${{ inputs.ref }}
     strategy:
       fail-fast: false
       matrix:
-        framework: ["net8.0", "net9.0", "net10.0"] # TCP library targets net8.0+ only
+        version:
+          - "latest"
+          - "26.6"
+          - "26.5"
+          - "26.4"
+          - "26.3"
+          - "25.8"
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-
-      - uses: actions/cache@v6
-        name: Cache NuGet
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'Directory.Packages.props') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: |
-            8.x
-            9.x
-            10.x
-
-      - name: Test
-        run: >
-          dotnet test ClickHouse.Driver.Tcp.Tests/ClickHouse.Driver.Tcp.Tests.csproj
-          --framework ${{ matrix.framework }}
-          --configuration Release
-          --verbosity normal
-          --logger GitHubActions
-          /clp:ErrorsOnly
+  regress-dotnet-tcp:
+    name: .NET regression (TCP)
+    # Framework axis: each TFM runs against clickhouse-version 'latest' (the reusable default).
+    uses: ./.github/workflows/reusable-tcp.yml
+    with:
+      framework: ${{ matrix.framework }}
+      ref: ${{ inputs.ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: ["net10.0", "net9.0", "net8.0"] # TCP library targets net8.0+ only
