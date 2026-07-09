@@ -27,6 +27,9 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     public string TypeName => "DateTime";
 
     /// <inheritdoc/>
+    public int? FixedRowByteSize => sizeof(uint);
+
+    /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         var values = new DateTime[rowCount];
@@ -57,12 +60,50 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column)
+    public bool CanWrite(IColumn column) => column is IColumn<DateTime> or IColumn<DateTimeOffset>;
+
+    /// <inheritdoc/>
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        foreach (DateTime value in ((IColumn<DateTime>)column).Values)
+        // Both a UTC instant (DateTimeOffset) and a DateTime map to the same epoch-second column body; a
+        // DateTime is normalized to UTC first (its offset, if any, is resolved by ToUniversalTime).
+        switch (column)
         {
-            long seconds = (long)(value.ToUniversalTime() - DateTime.UnixEpoch).TotalSeconds;
-            writer.WriteUInt32((uint)seconds);
+            case IColumn<DateTime> dateTimes:
+                foreach (DateTime value in dateTimes.Values.Slice(start, length))
+                {
+                    writer.WriteUInt32(ToUnixSeconds(value.ToUniversalTime()));
+                }
+
+                break;
+
+            case IColumn<DateTimeOffset> offsets:
+                foreach (DateTimeOffset value in offsets.Values.Slice(start, length))
+                {
+                    writer.WriteUInt32(ToUnixSeconds(value.UtcDateTime));
+                }
+
+                break;
+
+            default:
+                throw new ArgumentException($"A DateTime column must hold DateTime or DateTimeOffset values, not {column.GetType()}.", nameof(column));
         }
+    }
+
+    private static uint ToUnixSeconds(DateTime utc)
+    {
+        // Seconds from ticks (not TotalSeconds, which is a double), then range-check: ClickHouse DateTime is a
+        // UInt32 second count, so anything before the epoch or past 2106-02-07 06:28:15 UTC cannot be
+        // represented and must fail loudly rather than silently wrap.
+        long seconds = (utc - DateTime.UnixEpoch).Ticks / TimeSpan.TicksPerSecond;
+        if (seconds < 0 || seconds > uint.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(utc),
+                utc,
+                "DateTime is outside the range ClickHouse DateTime can hold (1970-01-01 to 2106-02-07 06:28:15 UTC).");
+        }
+
+        return (uint)seconds;
     }
 }

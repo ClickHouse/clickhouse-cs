@@ -33,6 +33,9 @@ internal sealed class IntegerColumnCodec<T> : IColumnCodec
     public string TypeName { get; }
 
     /// <inheritdoc/>
+    public int? FixedRowByteSize => Unsafe.SizeOf<T>();
+
+    /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         if (rowCount == 0)
@@ -57,8 +60,11 @@ internal sealed class IntegerColumnCodec<T> : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column)
+    public bool CanWrite(IColumn column) => column is IColumn<T>;
+
+    /// <inheritdoc/>
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        writer.WriteBytes(MemoryMarshal.AsBytes(((IColumn<T>)column).Values));
+        writer.WriteBytes(MemoryMarshal.AsBytes(((IColumn<T>)column).Values.Slice(start, length)));
     }
 }
