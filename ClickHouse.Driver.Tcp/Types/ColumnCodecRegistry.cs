@@ -6,33 +6,42 @@ using ClickHouse.Driver.Tcp.Types.Codecs;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
+/// Builds the codec for a ClickHouse type string, given the resolution context. A factory consumes the parsed
+/// <see cref="TypeNode"/> arguments (for parameterized types such as <c>Decimal(P,S)</c> or <c>Enum8(...)</c>)
+/// and the <see cref="ResolveContext"/> (for timezone-bearing types that fall back to the server timezone).
+/// </summary>
+/// <param name="node">The parsed type, whose <see cref="TypeNode.Arguments"/> carry any type parameters.</param>
+/// <param name="context">The resolution context (e.g. the server timezone).</param>
+/// <returns>The codec for the type.</returns>
+internal delegate IColumnCodec CodecFactory(TypeNode node, in ResolveContext context);
+
+/// <summary>
 /// Resolves a ClickHouse type string to the codec that reads/writes it. The type string is parsed into a
-/// <see cref="TypeNode"/> and dispatched on its base name. This slice registers the fixed-width integers,
-/// <c>String</c>, and minimal <c>DateTime</c> / <c>Enum8</c> / <c>Enum16</c> aliases — the latter three are
-/// needed to consume the server's always-present ProfileEvents block, whose columns include a <c>DateTime</c>
-/// and an <c>Enum8</c>. The enum aliases surface the raw underlying integer; label mapping is a later type.
-/// Parameterized dispatch that consumes <see cref="TypeNode.Arguments"/> is added with composite types.
+/// <see cref="TypeNode"/> and dispatched on its base name to a <see cref="CodecFactory"/>; simple types register
+/// a factory that returns a shared singleton, while parameterized and timezone-bearing types build a codec
+/// instance from the parsed arguments and the resolution context.
 /// </summary>
 internal sealed class ColumnCodecRegistry
 {
     /// <summary>The default registry with the built-in codecs.</summary>
     public static readonly ColumnCodecRegistry Default = CreateDefault();
 
-    private readonly Dictionary<string, IColumnCodec> byName;
+    private readonly Dictionary<string, CodecFactory> byName;
 
-    private ColumnCodecRegistry(Dictionary<string, IColumnCodec> byName) => this.byName = byName;
+    private ColumnCodecRegistry(Dictionary<string, CodecFactory> byName) => this.byName = byName;
 
     /// <summary>Resolves the codec for a ClickHouse type string.</summary>
     /// <param name="typeString">The type string from a column header (e.g. <c>UInt64</c>, <c>DateTime('UTC')</c>).</param>
+    /// <param name="context">The resolution context (server timezone, etc.); use <see cref="ResolveContext.ForWrite"/> on the write path.</param>
     /// <returns>The codec for that type.</returns>
     /// <exception cref="FormatException"><paramref name="typeString"/> is malformed.</exception>
     /// <exception cref="NotSupportedException">The type is well-formed but not yet supported by this client.</exception>
-    public IColumnCodec Resolve(string typeString)
+    public IColumnCodec Resolve(string typeString, in ResolveContext context)
     {
         TypeNode node = TypeParser.Parse(typeString);
-        if (byName.TryGetValue(node.Name, out IColumnCodec codec))
+        if (byName.TryGetValue(node.Name, out CodecFactory factory))
         {
-            return codec;
+            return factory(node, in context);
         }
 
         throw new NotSupportedException($"ClickHouse type '{typeString}' is not supported by this client yet.");
@@ -40,26 +49,64 @@ internal sealed class ColumnCodecRegistry
 
     private static ColumnCodecRegistry CreateDefault()
     {
-        var byName = new Dictionary<string, IColumnCodec>(StringComparer.Ordinal);
+        var byName = new Dictionary<string, CodecFactory>(StringComparer.Ordinal);
 
-        void Add(IColumnCodec codec) => byName[codec.TypeName] = codec;
+        // A type whose codec ignores both the parsed arguments and the resolution context registers a single
+        // shared instance, wrapped in a factory that returns it unconditionally.
+        void AddConstant(IColumnCodec codec) => byName[codec.TypeName] = (TypeNode _, in ResolveContext _) => codec;
 
-        Add(new IntegerColumnCodec<byte>("UInt8"));
-        Add(new IntegerColumnCodec<sbyte>("Int8"));
-        Add(new IntegerColumnCodec<ushort>("UInt16"));
-        Add(new IntegerColumnCodec<short>("Int16"));
-        Add(new IntegerColumnCodec<uint>("UInt32"));
-        Add(new IntegerColumnCodec<int>("Int32"));
-        Add(new IntegerColumnCodec<ulong>("UInt64"));
-        Add(new IntegerColumnCodec<long>("Int64"));
-        Add(new IntegerColumnCodec<UInt128>("UInt128"));
-        Add(new IntegerColumnCodec<Int128>("Int128"));
-        Add(new IntegerColumnCodec<UInt256>("UInt256"));
-        Add(new IntegerColumnCodec<Int256>("Int256"));
-        Add(new IntegerColumnCodec<sbyte>("Enum8"));   // underlying Int8; raw ordinal, label mapping deferred
-        Add(new IntegerColumnCodec<short>("Enum16"));  // underlying Int16; raw ordinal, label mapping deferred
-        Add(StringColumnCodec.Instance);
-        Add(DateTimeColumnCodec.Instance);
+        void AddFactory(string name, CodecFactory factory) => byName[name] = factory;
+
+        AddConstant(new FixedWidthColumnCodec<byte>("UInt8"));
+        AddConstant(new FixedWidthColumnCodec<sbyte>("Int8"));
+        AddConstant(new FixedWidthColumnCodec<ushort>("UInt16"));
+        AddConstant(new FixedWidthColumnCodec<short>("Int16"));
+        AddConstant(new FixedWidthColumnCodec<uint>("UInt32"));
+        AddConstant(new FixedWidthColumnCodec<int>("Int32"));
+        AddConstant(new FixedWidthColumnCodec<ulong>("UInt64"));
+        AddConstant(new FixedWidthColumnCodec<long>("Int64"));
+        AddConstant(new FixedWidthColumnCodec<UInt128>("UInt128"));
+        AddConstant(new FixedWidthColumnCodec<Int128>("Int128"));
+        AddConstant(new FixedWidthColumnCodec<UInt256>("UInt256"));
+        AddConstant(new FixedWidthColumnCodec<Int256>("Int256"));
+
+        // IEEE-754 floats and the widened brain-float.
+        AddConstant(new FixedWidthColumnCodec<float>("Float32"));
+        AddConstant(new FixedWidthColumnCodec<double>("Float64"));
+        AddConstant(BFloat16ColumnCodec.Instance);
+
+        AddConstant(new FixedWidthColumnCodec<bool>("Bool"));
+        AddConstant(StringColumnCodec.Instance);
+
+        // Dates and times.
+        AddConstant(DateColumnCodec.Instance);
+        AddConstant(Date32ColumnCodec.Instance);
+        AddConstant(TimeColumnCodec.Instance);
+        AddConstant(UuidColumnCodec.Instance);
+        AddConstant(IPv4ColumnCodec.Instance);
+        AddConstant(IPv6ColumnCodec.Instance);
+        AddConstant(NothingColumnCodec.Instance);
+
+        // Interval<Unit>: the underlying Int64 count, one registration per unit; the unit is kept in the name.
+        foreach (string unit in new[] { "Nanosecond", "Microsecond", "Millisecond", "Second", "Minute", "Hour", "Day", "Week", "Month", "Quarter", "Year" })
+        {
+            AddConstant(new FixedWidthColumnCodec<long>("Interval" + unit));
+        }
+
+        // Timezone-bearing types resolve their offset from the type string or, failing that, the session timezone.
+        AddFactory("DateTime", static (TypeNode node, in ResolveContext context) => DateTimeColumnCodec.Create(node, context.ServerTimezone));
+        AddFactory("DateTime64", static (TypeNode node, in ResolveContext context) => DateTime64ColumnCodec.Create(node, context.ServerTimezone));
+        AddFactory("Time64", static (TypeNode node, in ResolveContext _) => Time64ColumnCodec.Create(node));
+
+        // Enum aliases: raw underlying Int8/Int16 ordinal; the label map is parsed and retained by the codec.
+        AddFactory("Enum8", static (TypeNode node, in ResolveContext _) => Enum8ColumnCodec.Create(node));
+        AddFactory("Enum16", static (TypeNode node, in ResolveContext _) => Enum16ColumnCodec.Create(node));
+
+        // Decimal(P, S) and the fixed-width aliases share the width-by-precision codec factory.
+        foreach (string name in new[] { "Decimal", "Decimal32", "Decimal64", "Decimal128", "Decimal256" })
+        {
+            AddFactory(name, static (TypeNode node, in ResolveContext _) => DecimalColumnCodec.Create(node));
+        }
 
         return new ColumnCodecRegistry(byName);
     }

@@ -1,6 +1,5 @@
 using System;
-using System.Buffers;
-using System.Runtime.InteropServices;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -8,72 +7,75 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
-/// A minimal codec for the ClickHouse <c>DateTime</c> column: a little-endian <c>UInt32</c> of seconds since
-/// the Unix epoch per row, surfaced as a UTC <see cref="DateTime"/>. The type's timezone argument (part of the
-/// type string, not the body) affects only display, not the instant, so it is ignored here. This exists so the
-/// server's always-present ProfileEvents block, which carries a <c>DateTime</c> column, can be consumed; full
-/// timezone-aware DateTime handling is a later TODO.
+/// A codec for the ClickHouse <c>DateTime</c> / <c>DateTime('tz')</c> column: a little-endian <c>UInt32</c> of
+/// seconds since the Unix epoch per row, surfaced as a <see cref="DateTimeOffset"/>. The wire value is a UTC
+/// instant; the column's timezone — the type string's explicit argument, or the session timezone when it has
+/// none — determines the offset each value is presented with (resolved per instant, so daylight-saving
+/// transitions are honored).
 /// </summary>
 internal sealed class DateTimeColumnCodec : IColumnCodec
 {
-    /// <summary>The shared, stateless instance.</summary>
-    public static readonly DateTimeColumnCodec Instance = new();
+    private readonly TimeZoneInfo timeZone;
 
-    private DateTimeColumnCodec()
+    private DateTimeColumnCodec(string typeName, TimeZoneInfo timeZone)
     {
+        TypeName = typeName;
+        this.timeZone = timeZone;
     }
 
     /// <inheritdoc/>
-    public string TypeName => "DateTime";
+    public string TypeName { get; }
 
     /// <inheritdoc/>
-    public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
+    public Type ElementType => typeof(DateTimeOffset);
+
+    /// <inheritdoc/>
+    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(DateTimeOffset), typeof(DateTime) };
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => DateTimeOffset.UnixEpoch;
+
+    /// <inheritdoc/>
+    public object NullPlaceholderAs(Type writeType)
     {
-        var values = new DateTime[rowCount];
-        if (rowCount == 0)
+        if (writeType == typeof(DateTimeOffset))
         {
-            return new ArrayColumn<DateTime>(columnName, columnType, values);
+            return DateTimeOffset.UnixEpoch;
         }
 
-        // Read the whole fixed-size column body in one transfer, reinterpret it as the epoch-second UInt32s,
-        // then convert. The scratch buffer is pooled since it's discarded once the DateTimes are built.
-        int byteCount = checked(rowCount * sizeof(uint));
-        byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
-        try
+        if (writeType == typeof(DateTime))
         {
-            await reader.ReadBytesAsync(rented.AsMemory(0, byteCount), cancellationToken).ConfigureAwait(false);
-            ReadOnlySpan<uint> seconds = MemoryMarshal.Cast<byte, uint>(rented.AsSpan(0, byteCount));
-            for (int i = 0; i < rowCount; i++)
-            {
-                values[i] = DateTime.UnixEpoch.AddSeconds(seconds[i]);
-            }
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
+            return DateTime.UnixEpoch;
         }
 
-        return new ArrayColumn<DateTime>(columnName, columnType, values);
+        throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+    }
+
+    /// <summary>Builds a <c>DateTime</c> codec, resolving its timezone from the type string or the session.</summary>
+    /// <param name="node">The parsed <c>DateTime</c> type node (its optional argument is the timezone).</param>
+    /// <param name="serverTimezone">The session timezone, used when the type string carries none.</param>
+    /// <returns>The codec.</returns>
+    public static DateTimeColumnCodec Create(TypeNode node, string serverTimezone)
+    {
+        string explicitTz = node.Arguments.Count > 0 ? DateTimeZones.UnquoteTimezone(node.Arguments[0]) : null;
+        TimeZoneInfo tz = DateTimeZones.Resolve(explicitTz, serverTimezone);
+        return new DateTimeColumnCodec(node.ToString(), tz);
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<DateTime> or IColumn<DateTimeOffset>;
+    public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
+        => DateTimeColumn.ReadAsync(reader, columnName, columnType, timeZone, rowCount, cancellationToken);
+
+    /// <inheritdoc/>
+    public bool CanWrite(IColumn column) => column is IColumn<DateTimeOffset> or IColumn<DateTime>;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        // Both a UTC instant (DateTimeOffset) and a DateTime map to the same epoch-second column body; a
-        // DateTime is normalized to UTC first (its offset, if any, is resolved by ToUniversalTime).
+        // Both a DateTimeOffset and a DateTime resolve to the same UTC instant, which is what the epoch-second
+        // column body stores; the display timezone is irrelevant to the bytes on the wire.
         switch (column)
         {
-            case IColumn<DateTime> dateTimes:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteUInt32(ToUnixSeconds(dateTimes[start + i].ToUniversalTime()));
-                }
-
-                break;
-
             case IColumn<DateTimeOffset> offsets:
                 for (int i = 0; i < length; i++)
                 {
@@ -82,10 +84,28 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
 
                 break;
 
+            case IColumn<DateTime> dateTimes:
+                for (int i = 0; i < length; i++)
+                {
+                    writer.WriteUInt32(ToUnixSeconds(ToUtc(dateTimes[start + i], timeZone)));
+                }
+
+                break;
+
             default:
-                throw new ArgumentException($"A DateTime column must hold DateTime or DateTimeOffset values, not {column.GetType()}.", nameof(column));
+                throw new ArgumentException($"A DateTime column must hold DateTimeOffset or DateTime values, not {column.GetType()}.", nameof(column));
         }
     }
+
+    // Reduces a DateTime to the UTC instant to encode. A Utc or Local value already denotes an instant and is
+    // converted directly. An Unspecified value carries no offset, so — matching the HTTP client — its wall-clock
+    // is interpreted in the column's timezone (the session's, or UTC, when the type names none). The encoded
+    // instant therefore depends on the column timezone, never on the host machine's. An Unspecified wall-clock
+    // that does not exist or is ambiguous in that zone (a daylight-saving transition) is resolved by the
+    // platform's TimeZoneInfo rules.
+    internal static DateTime ToUtc(DateTime value, TimeZoneInfo timeZone) => value.Kind == DateTimeKind.Unspecified
+        ? TimeZoneInfo.ConvertTimeToUtc(value, timeZone)
+        : value.ToUniversalTime();
 
     private static uint ToUnixSeconds(DateTime utc)
     {
