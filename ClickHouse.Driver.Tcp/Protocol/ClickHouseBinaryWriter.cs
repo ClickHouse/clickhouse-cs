@@ -75,6 +75,13 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
         buffer[position++] = unchecked((byte)value);
     }
 
+    /// <summary>
+    /// Writes a client→server packet type code as the leading VarUInt of a packet envelope. At protocol
+    /// version 54460 there is no chunk wrapping, so this is written straight onto the buffered stream.
+    /// </summary>
+    /// <param name="type">The packet type to write.</param>
+    public void WriteClientPacketType(ClientPacketType type) => WriteVarUInt((ulong)type);
+
     /// <summary>Writes a native-format String: a VarUInt length prefix followed by the UTF-8 bytes.</summary>
     /// <param name="value">The string to write.</param>
     public void WriteString(string value)
