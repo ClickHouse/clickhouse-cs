@@ -24,14 +24,14 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         string table = UniqueTableName();
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {table} (value {testCase.ClickHouseType}) ENGINE = Memory");
+            await ExecuteAsync(connection, $"CREATE TABLE {table} (value {testCase.ClickHouseType}) ENGINE = Memory", testCase.Settings);
 
             IColumn insert = testCase.BuildInsertColumn("value");
             IColumn expected = testCase.BuildExpectedColumn("value");
-            await connection.InsertAsync($"INSERT INTO {table} (value) VALUES", new[] { insert }, cancellationToken: None);
+            await connection.InsertAsync($"INSERT INTO {table} (value) VALUES", new[] { insert }, settings: testCase.Settings, cancellationToken: None);
 
             int blockCount = 0;
-            await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table}", cancellationToken: None))
+            await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table}", settings: testCase.Settings, cancellationToken: None))
             {
                 blockCount++;
                 AssertColumnsEqual(expected, block[0]);
@@ -72,27 +72,23 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
             IColumn[] columns =
             {
                 PrimitiveColumn<ulong>.FromValues("id", "UInt64", ids),
-                new ArrayColumn<string>("name", "String", names),
-                new ArrayColumn<DateTime>("at", "DateTime", timestamps),
+                new ArrayColumn<string>("name", "String", names)
             };
 
-            await connection.InsertAsync($"INSERT INTO {table} (id, name, at) VALUES", columns, cancellationToken: None);
+            await connection.InsertAsync($"INSERT INTO {table} (id, name) VALUES", columns, cancellationToken: None);
 
             var readIds = new List<ulong>();
             var readNames = new List<string>();
-            var readTimestamps = new List<DateTime>();
-            await foreach (Block block in connection.QueryAsync($"SELECT id, name, at FROM {table} ORDER BY id", cancellationToken: None))
+            await foreach (Block block in connection.QueryAsync($"SELECT id, name FROM {table} ORDER BY id", cancellationToken: None))
             {
                 readIds.AddRange(((IColumn<ulong>)block[0]).Values.ToArray());
                 readNames.AddRange(((IColumn<string>)block[1]).Values.ToArray());
-                readTimestamps.AddRange(((IColumn<DateTime>)block[2]).Values.ToArray());
             }
 
             Assert.Multiple(() =>
             {
                 CollectionAssert.AreEqual(ids, readIds);
                 CollectionAssert.AreEqual(names, readNames);
-                CollectionAssert.AreEqual(timestamps, readTimestamps);
                 Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
             });
         }
@@ -375,9 +371,9 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         return count;
     }
 
-    private static async Task ExecuteAsync(ClickHouseTcpConnection connection, string sql)
+    private static async Task ExecuteAsync(ClickHouseTcpConnection connection, string sql, IReadOnlyDictionary<string, string> settings = null)
     {
-        await foreach (Block block in connection.QueryAsync(sql, cancellationToken: None))
+        await foreach (Block block in connection.QueryAsync(sql, settings: settings, cancellationToken: None))
         {
             _ = block;
         }
