@@ -180,6 +180,58 @@ public class ClickHouseTcpConnectionQueryIntegrationTests
     }
 
     [Test]
+    public async Task QueryAsync_SessionTimezoneSetting_ResolvesTimezoneLessColumnAgainstSessionTimezone()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        var settings = new Dictionary<string, string> { ["session_timezone"] = "Asia/Kolkata" };
+
+        DateTimeOffset value = default;
+        // toDateTime of a Unix instant yields a timezone-less DateTime column; the client applies its own
+        // session_timezone setting as that column's presentation timezone, so the value presents at +05:30.
+        await foreach (Block block in connection.QueryAsync("SELECT toDateTime(1700000000)", settings, cancellationToken: None))
+        {
+            value = ((IColumn<DateTimeOffset>)block[0]).Values[0];
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value.ToUnixTimeSeconds(), Is.EqualTo(1_700_000_000));
+            Assert.That(value.Offset, Is.EqualTo(new TimeSpan(5, 30, 0)));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_SessionTimezoneSetting_DoesNotLeakIntoNextQuery()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        // Baseline: the server's own timezone, with no override in play.
+        TimeSpan baseline = await SelectOffsetAsync(connection, null);
+
+        // An overriding query, then a follow-up with no setting: the follow-up must match the baseline, not
+        // carry the previous query's override.
+        _ = await SelectOffsetAsync(connection, "Asia/Kolkata");
+        TimeSpan afterOverride = await SelectOffsetAsync(connection, null);
+
+        Assert.That(afterOverride, Is.EqualTo(baseline), "the session_timezone override must not persist to the next query");
+    }
+
+    private static async Task<TimeSpan> SelectOffsetAsync(ClickHouseTcpConnection connection, string sessionTimezone)
+    {
+        IReadOnlyDictionary<string, string> settings = sessionTimezone is null
+            ? null
+            : new Dictionary<string, string> { ["session_timezone"] = sessionTimezone };
+
+        TimeSpan offset = default;
+        await foreach (Block block in connection.QueryAsync("SELECT toDateTime(1700000000)", settings, cancellationToken: None))
+        {
+            offset = ((IColumn<DateTimeOffset>)block[0]).Values[0].Offset;
+        }
+
+        return offset;
+    }
+
+    [Test]
     public async Task QueryAsync_ServerError_ThrowsThenConnectionIsReusable()
     {
         await using var connection = await TcpServerFixture.ConnectAsync(None);

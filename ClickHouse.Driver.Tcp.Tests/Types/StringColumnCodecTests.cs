@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -38,6 +39,70 @@ public class StringColumnCodecTests
         using var reader = ReaderOver(Array.Empty<byte>());
         using var column = (IColumn<string>)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", 0, None);
         Assert.That(column.RowCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task ReadColumn_NonUtf8Bytes_ExposesRawBytesAndHonoursChosenEncoding()
+    {
+        // A row that is not valid UTF-8: 'A', 0xFF, 'B'. Wire is the VarUInt length (3) then those bytes.
+        byte[] wire = { 0x03, 0x41, 0xFF, 0x42 };
+        using var reader = ReaderOver(wire);
+        using var column = (StringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", 1, None);
+
+        Assert.Multiple(() =>
+        {
+            CollectionAssert.AreEqual(new byte[] { 0x41, 0xFF, 0x42 }, column.GetBytes(0).ToArray());
+            Assert.That(column.GetString(0, Encoding.Latin1), Is.EqualTo("AÿB"));
+            Assert.That(column[0], Is.EqualTo("A�B")); // the default UTF-8 view replaces the invalid byte
+        });
+    }
+
+    [Test]
+    public async Task ReadColumn_MultipleRows_GetBytesSlicesEachRow()
+    {
+        var values = new[] { string.Empty, "a", "bcd", "héllo" };
+
+        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<string>("c", "String", values)));
+        using var reader = ReaderOver(bytes);
+        using var column = (StringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", values.Length, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column.GetBytes(0).Length, Is.EqualTo(0));
+            Assert.That(column.GetBytes(2).ToArray(), Is.EqualTo(new byte[] { (byte)'b', (byte)'c', (byte)'d' }));
+            Assert.That(column.GetString(3, Encoding.UTF8), Is.EqualTo("héllo"));
+            CollectionAssert.AreEqual(values, column.Values.ToArray());
+        });
+    }
+
+    [Test]
+    public async Task ReadColumn_IndexOrGetBytesBeyondRowCount_Throws()
+    {
+        // The read path rents blob/offsets from the pool, so the backing arrays are typically larger than the
+        // row count. Access beyond RowCount must still fail fast rather than return a stale pooled slot — both
+        // before the UTF-8 cache is built and after it is materialized by touching Values.
+        var values = new[] { "a", "bcd" };
+        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<string>("c", "String", values)));
+        using var reader = ReaderOver(bytes);
+        using var column = (StringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", values.Length, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<IndexOutOfRangeException>(() => _ = column.GetBytes(values.Length).Length);
+            Assert.Throws<IndexOutOfRangeException>(() => _ = column[values.Length]);
+            _ = column.Values.Length; // materialize the cache, then re-check the indexer
+            Assert.Throws<IndexOutOfRangeException>(() => _ = column[values.Length]);
+        });
+    }
+
+    [Test]
+    public async Task GetString_NullEncoding_ThrowsArgumentNull()
+    {
+        byte[] wire = { 0x01, 0x41 };
+        using var reader = ReaderOver(wire);
+        using var column = (StringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", 1, None);
+
+        Assert.Throws<ArgumentNullException>(() => column.GetString(0, null));
     }
 
     [Test]

@@ -267,7 +267,7 @@ internal sealed class ClickHouseBinaryReader : IDisposable
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The length in bytes.</returns>
     /// <exception cref="InvalidDataException">The declared length exceeds <see cref="MaxStringLength"/>.</exception>
-    private async ValueTask<int> ReadStringLengthAsync(CancellationToken cancellationToken)
+    public async ValueTask<int> ReadStringLengthAsync(CancellationToken cancellationToken)
     {
         ulong length = await ReadVarUIntAsync(cancellationToken).ConfigureAwait(false);
         if (length > MaxStringLength)
