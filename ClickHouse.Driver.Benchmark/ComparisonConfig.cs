@@ -65,7 +65,7 @@ public class ComparisonConfig : ManualConfig
         }
     }
 
-    // Reads a positive integer from an env var, falling back to the default when unset/invalid.
+    // Reads a non-negative integer from an env var, falling back to the default when unset/invalid.
     // WarmupCount may legitimately be 0 (skip warmup entirely), so allow non-negative here.
     private static int GetEnvInt(string name, int fallback)
     {

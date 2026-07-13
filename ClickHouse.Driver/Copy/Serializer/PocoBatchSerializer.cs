@@ -30,7 +30,7 @@ internal class PocoBatchSerializer
     }
 
     /// <summary>
-    /// Serializes a batch of POCO rows into the target stream, optionally GZip-compressed.
+    /// Serializes a batch of POCO rows into the target stream, optionally compressed via the supplied compressor.
     /// </summary>
     /// <typeparam name="T">The POCO type.</typeparam>
     /// <param name="batch">The batch of rows, query text, and resolved column types.</param>

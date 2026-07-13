@@ -171,7 +171,8 @@ public class InsertBinaryCompressionTests : AbstractConnectionTestFixture
             Assert.That(count, Is.EqualTo((ulong)rowCount));
 
             var sum = await client.ExecuteScalarAsync($"SELECT sum(Id) FROM test.{tableName}");
-            // sum(UInt64) comes back as a large unsigned aggregate; compare via string to stay type-agnostic
+            // sum(Id) comes back as a UInt64 aggregate (ulong); it fits well within Int64 here, so
+            // Convert.ToInt64 normalizes it for comparison regardless of the exact returned CLR type.
             var expected = ((long)rowCount - 1) * rowCount / 2;
             Assert.That(Convert.ToInt64(sum), Is.EqualTo(expected));
         }

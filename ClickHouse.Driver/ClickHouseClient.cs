@@ -792,7 +792,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             postMessage.Content.Headers.Add("Content-Encoding", contentEncoding);
         }
 
-        GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Sending streamed request to {Endpoint} (Content-Encoding: {ContentEncoding}).", serverUri, contentEncoding ?? "none");
+        GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Sending streamed request to {Endpoint} (Content-Encoding: {ContentEncoding}).", serverUri, string.IsNullOrEmpty(contentEncoding) ? "none" : contentEncoding);
 
         try
         {
