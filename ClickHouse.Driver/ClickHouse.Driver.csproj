@@ -21,6 +21,8 @@
     <AnalysisMode>Recommended</AnalysisMode>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
+    <!-- Pack the referenced ClickHouse.Driver.Tcp assembly into this package instead of adding it as a dependency. -->
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeTcpAssemblyInPackage</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>
 
   <Target Name="SetPackageReleaseNotes" BeforeTargets="GenerateNuspec">
@@ -32,6 +34,18 @@
   <ItemGroup>
     <None Include="..\README.nuget.md" Link="README.nuget.md" Pack="true" PackagePath="" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- PrivateAssets="all" keeps Tcp out of the package's dependency list; its DLL is packed via the target below.
+         Tcp targets net8.0+ only, so the reference is excluded for the package's net6.0 build. -->
+    <ProjectReference Include="..\ClickHouse.Driver.Tcp\ClickHouse.Driver.Tcp.csproj" PrivateAssets="all" Condition="'$(TargetFramework)' != 'net6.0'" />
+  </ItemGroup>
+
+  <Target Name="IncludeTcpAssemblyInPackage" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Filename)' == 'ClickHouse.Driver.Tcp'" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
