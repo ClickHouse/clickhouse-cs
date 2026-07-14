@@ -3,7 +3,7 @@ ClickHouse.Driver.Compression.Lz4Compressor.Compress(System.IO.Stream destinatio
 ClickHouse.Driver.Compression.Lz4Compressor.ContentEncoding.get -> string
 ClickHouse.Driver.Compression.Lz4Compressor.Decode(System.ReadOnlySpan<byte> source, System.Span<byte> target) -> int
 ClickHouse.Driver.Compression.Lz4Compressor.Encode(System.ReadOnlySpan<byte> source, System.Span<byte> target) -> int
-ClickHouse.Driver.Compression.Lz4Compressor.Lz4Compressor(int level = 0, int bufferSize = 262144) -> void
+ClickHouse.Driver.Compression.Lz4Compressor.Lz4Compressor(K4os.Compression.LZ4.LZ4Level level = K4os.Compression.LZ4.LZ4Level.L00_FAST, int bufferSize = 262144) -> void
 ClickHouse.Driver.Compression.Lz4Compressor.MaxEncodedLength(int sourceLength) -> int
 ClickHouse.Driver.Compression.Lz4Compressor.MethodByte.get -> byte
 const ClickHouse.Driver.Compression.Lz4Compressor.Lz4MethodByte = 130 -> byte
