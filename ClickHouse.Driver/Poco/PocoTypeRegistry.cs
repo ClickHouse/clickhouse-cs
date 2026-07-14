@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using ClickHouse.Driver.Formats;
+using ClickHouse.Driver.Types;
 using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.Poco;
@@ -19,6 +21,14 @@ internal sealed class PocoTypeRegistry
 {
     private readonly ConcurrentDictionary<Type, PocoInsertMapping> insertMappings = new();
     private readonly ConcurrentDictionary<Type, PocoReadMapping> readMappings = new();
+
+    // Cache of compiled per-column write delegates. The delegates fuse the property read with the writer
+    // call and depend on the resolved ClickHouseType[], which is only known per-insert — so they are built
+    // here at plan time, not at registration time. The outer key is the POCO Type itself (identity, not
+    // display name — so types that merely share a FullName across assemblies never collide), and its value
+    // holds the boxed Action&lt;T, ExtendedBinaryWriter&gt;[] for that exact T; the inner key is the resolved
+    // column-type sequence.
+    private readonly ConcurrentDictionary<Type, ConcurrentDictionary<string, object>> writerCache = new();
 
     /// <summary>
     /// Registers a POCO type for binary insert. Idempotent and thread-safe.
@@ -55,6 +65,69 @@ internal sealed class PocoTypeRegistry
     internal PocoInsertMapping<T> GetInsertMapping<T>()
         where T : class
         => insertMappings.TryGetValue(typeof(T), out var mapping) ? (PocoInsertMapping<T>)mapping : null;
+
+    /// <summary>
+    /// Gets (building and caching on first use) the per-column box-free write delegates for a POCO insert
+    /// into columns of the given resolved types. Each delegate reads one property and writes it directly;
+    /// columns without a fast path fall back to a delegate that wraps the boxed
+    /// <see cref="ClickHouseType.Write(ExtendedBinaryWriter, object)"/> using the compiled boxed getter.
+    /// The result is cached per <c>(T, resolved column-type sequence)</c>: property types are fixed by
+    /// <typeparamref name="T"/>, and the type sequence captures the only per-insert variable, so the cached
+    /// delegates stay correct even when the same POCO is inserted into different tables.
+    /// </summary>
+    /// <param name="properties">Mapped properties, ordered to match <paramref name="types"/> and <paramref name="getters"/>.</param>
+    /// <param name="getters">Compiled boxed getters, used for the fallback path.</param>
+    /// <param name="types">Resolved ClickHouse column types.</param>
+    internal Action<T, ExtendedBinaryWriter>[] GetOrBuildWriters<T>(
+        PocoPropertyInfo[] properties, Func<T, object>[] getters, ClickHouseType[] types)
+        where T : class
+    {
+        var byType = writerCache.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<string, object>(StringComparer.Ordinal));
+        var key = BuildTypeSequenceKey(types);
+        return (Action<T, ExtendedBinaryWriter>[])byType.GetOrAdd(
+            key, _ => BuildWriters(properties, getters, types));
+    }
+
+    // Joins the resolved column types with a newline — a character no ClickHouse type name contains — so the
+    // key is injective even for composite types whose ToString() embeds commas (e.g. Tuple, Map, Decimal).
+    private static string BuildTypeSequenceKey(ClickHouseType[] types)
+    {
+        var parts = new string[types.Length];
+        for (var i = 0; i < types.Length; i++)
+            parts[i] = types[i].ToString();
+        return string.Join("\n", parts);
+    }
+
+    private static Action<T, ExtendedBinaryWriter>[] BuildWriters<T>(
+        PocoPropertyInfo[] properties, Func<T, object>[] getters, ClickHouseType[] types)
+        where T : class
+    {
+        var writers = new Action<T, ExtendedBinaryWriter>[properties.Length];
+        var rowParam = Expression.Parameter(typeof(T), "row");
+        var writerParam = Expression.Parameter(typeof(ExtendedBinaryWriter), "writer");
+
+        for (var i = 0; i < properties.Length; i++)
+        {
+            var propertyAccess = Expression.Property(rowParam, properties[i].Property);
+            var body = PocoWriteExpressionFactory.TryBuildWriteBody(types[i], propertyAccess, writerParam);
+
+            if (body != null)
+            {
+                writers[i] = Expression.Lambda<Action<T, ExtendedBinaryWriter>>(body, rowParam, writerParam).Compile();
+            }
+            else
+            {
+                // No fast path for this (property, type) pair: reuse the boxed getter + boxed Write, which
+                // is byte-identical to the default path. Copy to locals so the closure captures per-column
+                // values rather than the loop variable.
+                var type = types[i];
+                var getter = getters[i];
+                writers[i] = (row, writer) => type.Write(writer, getter(row));
+            }
+        }
+
+        return writers;
+    }
 
     /// <summary>
     /// Gets the typed read mapping for a registered type, or null if not registered for read.
@@ -238,6 +311,7 @@ internal sealed class PocoTypeRegistry
 
         return new PocoPropertyInfo
         {
+            Property = property,
             ColumnName = columnName,
             ExplicitClickHouseType = explicitType,
             PropertyName = property.Name,

@@ -591,6 +591,14 @@ public sealed class ClickHouseClient : IClickHouseClient
     {
         var plan = await PrepareInsertAsync(table, properties.Select(x => x.ColumnName), options).ConfigureAwait(false);
         var serializer = PocoBatchSerializer.GetByRowBinaryFormat(plan.Options.Format);
+
+        // The RowBinary fast path writes each column through a compiled, box-free delegate. The
+        // RowBinaryWithDefaults path must inspect a boxed DBDefault sentinel per value, so it stays on
+        // the boxed getters and gets no writer delegates.
+        var writers = plan.Options.Format == RowBinaryFormat.RowBinary
+            ? pocoTypeRegistry.GetOrBuildWriters<T>(properties, getters, plan.ColumnTypes)
+            : null;
+
         int queryIdCounter = 0;
 
         var logger = GetLogger(ClickHouseLogCategories.Client);
@@ -615,7 +623,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             async (batch, ct) =>
             {
                 var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}"); // Avoid duplicate query ids across batches
-                var count = await SendPocoBatchAsync(table, batch, getters, serializer, batchOptions, ct).ConfigureAwait(false);
+                var count = await SendPocoBatchAsync(table, batch, getters, writers, serializer, batchOptions, ct).ConfigureAwait(false);
                 Interlocked.Add(ref totalRowsWritten, count);
             }).ConfigureAwait(false);
 
@@ -628,7 +636,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         return totalRowsWritten;
     }
 
-    private async Task<int> SendPocoBatchAsync<T>(string destinationTable, PocoBatch<T> batch, Func<T, object>[] getters, PocoBatchSerializer serializer, InsertOptions insertOptions, CancellationToken token)
+    private async Task<int> SendPocoBatchAsync<T>(string destinationTable, PocoBatch<T> batch, Func<T, object>[] getters, Action<T, ExtendedBinaryWriter>[] writers, PocoBatchSerializer serializer, InsertOptions insertOptions, CancellationToken token)
     {
         var logger = GetLogger(ClickHouseLogCategories.Client);
 
@@ -636,7 +644,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         {
             using var stream = MemoryStreamManager.GetStream(nameof(SendPocoBatchAsync), 128 * 1024);
             token.ThrowIfCancellationRequested();
-            serializer.Serialize(batch, getters, stream);
+            serializer.Serialize(batch, getters, writers, stream);
 
             stream.Seek(0, SeekOrigin.Begin);
 

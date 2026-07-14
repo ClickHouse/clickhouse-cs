@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 
 namespace ClickHouse.Driver.Poco;
 
@@ -7,6 +8,12 @@ namespace ClickHouse.Driver.Poco;
 /// </summary>
 internal sealed class PocoPropertyInfo
 {
+    /// <summary>
+    /// Gets the reflected property, used to compile typed property-access expressions
+    /// (e.g. the box-free insert write delegates in <see cref="PocoWriteExpressionFactory"/>).
+    /// </summary>
+    public PropertyInfo Property { get; init; }
+
     /// <summary>
     /// Gets the ClickHouse column name this property maps to.
     /// </summary>

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using ClickHouse.Driver.Formats;
 using NodaTime;
 
 namespace ClickHouse.Driver.Types;
@@ -21,7 +22,11 @@ internal static class DateTimeConversions
     public static DateTime FromUnixTimeDays(int days) => DateTimeEpochStart.AddDays(days);
 }
 
-internal abstract class AbstractDateTimeType : ParameterizedType
+internal abstract class AbstractDateTimeType : ParameterizedType,
+    ITypedWriter<DateTime>, ITypedWriter<DateTimeOffset>
+#if NET6_0_OR_GREATER
+    , ITypedWriter<DateOnly>
+#endif
 {
     // ClickHouse emits synthetic fixed-offset timezone names like "Fixed/UTC+05:30:00" for columns
     // declared with a fixed UTC offset. These names are not in the IANA TZDB so GetZoneOrNull
@@ -67,21 +72,59 @@ internal abstract class AbstractDateTimeType : ParameterizedType
         return value switch
         {
 #if NET6_0_OR_GREATER
-            DateOnly date => new DateTimeOffset(date.Year, date.Month, date.Day, 0, 0, 0, TimeSpan.Zero),
+            DateOnly date => CoerceToDateTimeOffset(date),
 #endif
-            DateTimeOffset v => v,
-            // UTC DateTime represents a specific instant - preserve it exactly
-            DateTime { Kind: DateTimeKind.Utc } dt => new DateTimeOffset(dt),
-            // Local DateTime: convert to UTC using system timezone (preserves instant)
-            DateTime { Kind: DateTimeKind.Local } dt => new DateTimeOffset(dt),
-            // Unspecified DateTime: treat as wall-clock time in target column timezone
-            DateTime dt => TimeZoneOrUtc.AtLeniently(LocalDateTime.FromDateTime(dt)).ToDateTimeOffset(),
+            DateTimeOffset v => CoerceToDateTimeOffset(v),
+            DateTime dt => CoerceToDateTimeOffset(dt),
             OffsetDateTime o => o.ToDateTimeOffset(),
             ZonedDateTime z => z.ToDateTimeOffset(),
             Instant i => ToDateTimeOffset(i),
             _ => throw new NotSupportedException()
         };
     }
+
+    /// <summary>
+    /// Box-free coercion of a <see cref="DateTime"/> to <see cref="DateTimeOffset"/>, identical to the
+    /// <see cref="DateTime"/> branches of <see cref="CoerceToDateTimeOffset(object)"/> (which delegates here).
+    /// Used by the POCO insert fast path so a <see cref="DateTime"/> property is never boxed.
+    /// </summary>
+    public DateTimeOffset CoerceToDateTimeOffset(DateTime value)
+    {
+        return value.Kind switch
+        {
+            // UTC DateTime represents a specific instant - preserve it exactly
+            DateTimeKind.Utc => new DateTimeOffset(value),
+            // Local DateTime: convert to UTC using system timezone (preserves instant)
+            DateTimeKind.Local => new DateTimeOffset(value),
+            // Unspecified DateTime: treat as wall-clock time in target column timezone
+            _ => TimeZoneOrUtc.AtLeniently(LocalDateTime.FromDateTime(value)).ToDateTimeOffset(),
+        };
+    }
+
+    // Box-free overloads mirroring the corresponding branches of CoerceToDateTimeOffset(object).
+    public DateTimeOffset CoerceToDateTimeOffset(DateTimeOffset value) => value;
+
+#if NET6_0_OR_GREATER
+    public DateTimeOffset CoerceToDateTimeOffset(DateOnly value) => new(value.Year, value.Month, value.Day, 0, 0, 0, TimeSpan.Zero);
+#endif
+
+    public override void Write(ExtendedBinaryWriter writer, object value) => WriteChecked(writer, CoerceToDateTimeOffset(value), value);
+
+    public void WriteValue(ExtendedBinaryWriter writer, DateTime value) => WriteChecked(writer, CoerceToDateTimeOffset(value), value);
+
+    public void WriteValue(ExtendedBinaryWriter writer, DateTimeOffset value) => WriteChecked(writer, CoerceToDateTimeOffset(value), value);
+
+#if NET6_0_OR_GREATER
+    public void WriteValue(ExtendedBinaryWriter writer, DateOnly value) => WriteChecked(writer, CoerceToDateTimeOffset(value), value);
+#endif
+
+    /// <summary>
+    /// Serializes the coerced <paramref name="dto"/>. The generic <paramref name="original"/> carries the
+    /// caller's un-coerced value so an out-of-range error can report it exactly as the boxed path did; being
+    /// a generic parameter, a value-type <paramref name="original"/> is NOT boxed on the hot path — the box
+    /// only happens if an <see cref="ArgumentOutOfRangeException"/> is actually thrown.
+    /// </summary>
+    protected abstract void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T original);
 
     public override Type FrameworkType => typeof(DateTime);
 
