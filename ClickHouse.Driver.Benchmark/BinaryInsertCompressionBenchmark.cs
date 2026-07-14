@@ -35,6 +35,10 @@ public class BinaryInsertCompressionBenchmark
         GzipOptimal,
         BrotliFastest,
         BrotliOptimal,
+#if LZ4_AVAILABLE
+        Lz4Fastest,
+        Lz4Max,
+#endif
     }
 
     // Use the always-present `default` database rather than creating a custom one: on ClickHouse Cloud
@@ -54,7 +58,13 @@ public class BinaryInsertCompressionBenchmark
         InsertCompression.GzipFastest,
         InsertCompression.GzipOptimal,
         InsertCompression.BrotliFastest,
-        InsertCompression.BrotliOptimal)]
+        InsertCompression.BrotliOptimal
+#if LZ4_AVAILABLE
+        ,
+        InsertCompression.Lz4Fastest,
+        InsertCompression.Lz4Max
+#endif
+        )]
     public InsertCompression Compression { get; set; }
 
     private static IClickHouseCompressor Map(InsertCompression compression) => compression switch
@@ -65,6 +75,11 @@ public class BinaryInsertCompressionBenchmark
         InsertCompression.BrotliFastest => BrotliCompressor.Default,
         // NOTE: Brotli Optimal maps to a high quality level and is markedly slower than Fastest.
         InsertCompression.BrotliOptimal => new BrotliCompressor(CompressionLevel.Optimal),
+#if LZ4_AVAILABLE
+        InsertCompression.Lz4Fastest => Lz4Compressor.Default,
+        // NOTE: Lz4 Max maps to the maximum LZ4 level (high-compression) and is much slower than Fastest.
+        InsertCompression.Lz4Max => new Lz4Compressor(CompressionLevel.SmallestSize),
+#endif
         _ => throw new ArgumentOutOfRangeException(nameof(compression)),
     };
 

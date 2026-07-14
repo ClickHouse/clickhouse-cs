@@ -1,0 +1,10 @@
+ClickHouse.Driver.Compression.Lz4Compressor
+ClickHouse.Driver.Compression.Lz4Compressor.Compress(System.IO.Stream destination, bool leaveOpen) -> System.IO.Stream
+ClickHouse.Driver.Compression.Lz4Compressor.ContentEncoding.get -> string
+ClickHouse.Driver.Compression.Lz4Compressor.Decode(System.ReadOnlySpan<byte> source, System.Span<byte> target) -> int
+ClickHouse.Driver.Compression.Lz4Compressor.Encode(System.ReadOnlySpan<byte> source, System.Span<byte> target, System.IO.Compression.CompressionLevel level = System.IO.Compression.CompressionLevel.Fastest) -> int
+ClickHouse.Driver.Compression.Lz4Compressor.Lz4Compressor(System.IO.Compression.CompressionLevel level = System.IO.Compression.CompressionLevel.Fastest, int bufferSize = 262144) -> void
+ClickHouse.Driver.Compression.Lz4Compressor.MaxEncodedLength(int sourceLength) -> int
+ClickHouse.Driver.Compression.Lz4Compressor.MethodByte.get -> byte
+const ClickHouse.Driver.Compression.Lz4Compressor.Lz4MethodByte = 130 -> byte
+static readonly ClickHouse.Driver.Compression.Lz4Compressor.Default -> ClickHouse.Driver.Compression.Lz4Compressor

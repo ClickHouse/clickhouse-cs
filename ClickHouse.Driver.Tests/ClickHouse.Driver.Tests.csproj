@@ -49,6 +49,8 @@
     <!-- ClickHouse.Driver references Common with PrivateAssets="all" (bundled, not a public dependency),
          so it does not flow transitively; reference it directly to use the compression types. -->
     <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
+    <!-- Opt-in LZ4 codec under test; also transitively brings K4os for use as a differential oracle. -->
+    <ProjectReference Include="..\ClickHouse.Driver.Lz4\ClickHouse.Driver.Lz4.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net6.0;net8.0;net9.0;net10.0</TargetFrameworks>
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageId>ClickHouse.Driver.Lz4</PackageId>
+    <PackageProjectUrl>https://github.com/ClickHouse/clickhouse-cs</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ClickHouse/clickhouse-cs</RepositoryUrl>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageTags>clickhouse;click;house;database;compression;lz4</PackageTags>
+    <Authors>ClickHouse</Authors>
+    <Description>LZ4 compression codec for ClickHouse.Driver (backed by K4os.Compression.LZ4). Opt-in package that keeps the core driver free of third-party runtime dependencies.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.nuget.md</PackageReadmeFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <LangVersion>latest</LangVersion>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisMode>Recommended</AnalysisMode>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.nuget.md" Pack="true" PackagePath="" />
+    <None Include="..\ClickHouse.Driver\icon.png" Link="icon.png" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="K4os.Compression.LZ4" />
+    <PackageReference Include="K4os.Compression.LZ4.Streams" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+    <PackageReference Include="StyleCop.Analyzers">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Real package dependency: ClickHouse.Driver ships ClickHouse.Driver.Common.dll (which defines
+      IClickHouseCompressor) bundled in its lib/, so depending on it delivers the interface to consumers.
+    -->
+    <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
+    <!--
+      Compile-time-only reference to the bundled Common assembly for access to IClickHouseCompressor.
+      PrivateAssets="all": it does not flow through ClickHouse.Driver (that reference is also private),
+      and must not be emitted as a package dependency (Common is bundled, not a standalone package) nor
+      duplicated into this package.
+    -->
+    <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
