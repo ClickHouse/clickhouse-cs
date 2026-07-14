@@ -56,15 +56,12 @@ public interface IClickHouseCompressor
 
     /// <summary>
     /// Compresses <paramref name="source"/> into <paramref name="target"/> (which must be at least
-    /// <see cref="MaxEncodedLength"/> bytes) and returns the number of bytes written. Only meaningful for
-    /// codecs that support the native block path; the default throws <see cref="NotSupportedException"/>.
+    /// <see cref="MaxEncodedLength"/> bytes) and returns the number of bytes written, using the
+    /// compression level the codec instance was configured with (the same level <see cref="Compress"/>
+    /// uses). Only meaningful for codecs that support the native block path; the default throws
+    /// <see cref="NotSupportedException"/>.
     /// </summary>
-    /// <param name="level">
-    /// Codec-defined compression level (<c>0</c> = the codec's default). The meaning is specific to the
-    /// implementing codec, which validates it and throws for out-of-range values — a neutral <see cref="int"/>
-    /// is used here rather than a fixed enum so each codec can expose its full native level range.
-    /// </param>
-    int Encode(ReadOnlySpan<byte> source, Span<byte> target, int level = 0)
+    int Encode(ReadOnlySpan<byte> source, Span<byte> target)
         => throw new NotSupportedException($"{GetType().Name} does not support native block framing.");
 
     /// <summary>
