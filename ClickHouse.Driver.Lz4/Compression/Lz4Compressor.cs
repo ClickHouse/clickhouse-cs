@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.IO.Compression;
 using K4os.Compression.LZ4;
 using K4os.Compression.LZ4.Streams;
 
@@ -31,8 +30,7 @@ public sealed class Lz4Compressor : IClickHouseCompressor
     public const byte Lz4MethodByte = 0x82;
 
     /// <summary>
-    /// Shared default instance: <see cref="CompressionLevel.Fastest"/> (LZ4 fast mode) with a 256 KiB
-    /// write buffer.
+    /// Shared default instance: LZ4 fast mode (level <c>0</c>) with a 256 KiB write buffer.
     /// </summary>
     public static readonly Lz4Compressor Default = new();
 
@@ -40,18 +38,22 @@ public sealed class Lz4Compressor : IClickHouseCompressor
     private readonly int bufferSize;
 
     /// <param name="level">
-    /// Compression level, mapped onto the LZ4 level ladder: <see cref="CompressionLevel.NoCompression"/>
-    /// and <see cref="CompressionLevel.Fastest"/> use LZ4 fast mode, <see cref="CompressionLevel.Optimal"/>
-    /// uses a high-compression level, and <see cref="CompressionLevel.SmallestSize"/> uses the maximum
-    /// level. Defaults to <see cref="CompressionLevel.Fastest"/>.
+    /// LZ4 level, given as the underlying <c>K4os.Compression.LZ4.LZ4Level</c> value cast to
+    /// <see cref="int"/>: <c>0</c> = fast mode (default), <c>3</c>–<c>12</c> = high-compression
+    /// (HC/OPT/MAX). Any other value throws <see cref="ArgumentOutOfRangeException"/>.
+    /// <para>
+    /// On typical (semi-compressible, short-record) insert payloads the ratio plateaus around level
+    /// <c>3</c>, so <c>0</c> or <c>3</c> are usually the only levels worth using — higher levels cost
+    /// markedly more CPU for little-to-no extra ratio.
+    /// </para>
     /// </param>
     /// <param name="bufferSize">Size in bytes of the write buffer wrapped around the LZ4 stream. Defaults to 256 KiB.</param>
-    public Lz4Compressor(CompressionLevel level = CompressionLevel.Fastest, int bufferSize = 256 * 1024)
+    public Lz4Compressor(int level = 0, int bufferSize = 256 * 1024)
     {
         if (bufferSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(bufferSize), bufferSize, "Buffer size must be positive.");
 
-        this.level = MapLevel(level);
+        this.level = ToLz4Level(level);
         this.bufferSize = bufferSize;
     }
 
@@ -69,12 +71,12 @@ public sealed class Lz4Compressor : IClickHouseCompressor
     public int MaxEncodedLength(int sourceLength) => LZ4Codec.MaximumOutputSize(sourceLength);
 
     /// <inheritdoc />
-    public int Encode(ReadOnlySpan<byte> source, Span<byte> target, CompressionLevel level = CompressionLevel.Fastest)
+    public int Encode(ReadOnlySpan<byte> source, Span<byte> target, int level = 0)
     {
         if (source.IsEmpty)
             return 0;
 
-        var written = LZ4Codec.Encode(source, target, MapLevel(level));
+        var written = LZ4Codec.Encode(source, target, ToLz4Level(level));
         if (written <= 0)
             throw new InvalidOperationException(
                 $"LZ4 encode failed; the target buffer ({target.Length} bytes) is likely too small. " +
@@ -97,12 +99,10 @@ public sealed class Lz4Compressor : IClickHouseCompressor
         return written;
     }
 
-    private static LZ4Level MapLevel(CompressionLevel level) => level switch
-    {
-        CompressionLevel.NoCompression => LZ4Level.L00_FAST,
-        CompressionLevel.Fastest => LZ4Level.L00_FAST,
-        CompressionLevel.Optimal => LZ4Level.L09_HC,
-        CompressionLevel.SmallestSize => LZ4Level.L12_MAX,
-        _ => LZ4Level.L00_FAST,
-    };
+    // Validates an int level as a K4os LZ4Level (0 = fast, 3-12 = HC/OPT/MAX) and casts it.
+    private static LZ4Level ToLz4Level(int level)
+        => Enum.IsDefined(typeof(LZ4Level), level)
+            ? (LZ4Level)level
+            : throw new ArgumentOutOfRangeException(nameof(level), level,
+                "LZ4 level must be a valid LZ4Level value cast to int: 0 (fast) or 3-12 (high-compression).");
 }

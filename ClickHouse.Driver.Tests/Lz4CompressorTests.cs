@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.IO.Compression;
 using System.Text;
 using ClickHouse.Driver.Compression;
 using K4os.Compression.LZ4;
@@ -116,6 +115,23 @@ public class Lz4CompressorTests
     public void Lz4Compressor_Constructor_WithNonPositiveBufferSize_Throws()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(bufferSize: 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(CompressionLevel.Optimal, bufferSize: -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(3, bufferSize: -1));
+    }
+
+    [Test]
+    public void Lz4Compressor_Constructor_WithInvalidLevel_Throws()
+    {
+        // Valid LZ4 levels are 0 (fast) and 3-12 (HC); 1, 2 and >12 are not LZ4Level values.
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(2));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(13));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(-1));
+    }
+
+    [Test]
+    public void Lz4Compressor_Constructor_WithValidHcLevel_Works()
+    {
+        Assert.That(new Lz4Compressor(3).ContentEncoding, Is.EqualTo("lz4"));
+        Assert.That(new Lz4Compressor(12).ContentEncoding, Is.EqualTo("lz4"));
     }
 }

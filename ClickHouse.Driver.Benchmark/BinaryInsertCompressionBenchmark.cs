@@ -77,8 +77,8 @@ public class BinaryInsertCompressionBenchmark
         InsertCompression.BrotliOptimal => new BrotliCompressor(CompressionLevel.Optimal),
 #if LZ4_AVAILABLE
         InsertCompression.Lz4Fastest => Lz4Compressor.Default,
-        // NOTE: Lz4 Max maps to the maximum LZ4 level (high-compression) and is much slower than Fastest.
-        InsertCompression.Lz4Max => new Lz4Compressor(CompressionLevel.SmallestSize),
+        // level 12 (LZ4Level.L12_MAX) is the maximum; far slower than fast mode for ~no extra ratio.
+        InsertCompression.Lz4Max => new Lz4Compressor(12),
 #endif
         _ => throw new ArgumentOutOfRangeException(nameof(compression)),
     };
