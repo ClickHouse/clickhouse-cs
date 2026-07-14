@@ -5,7 +5,8 @@ backed by [K4os.Compression.LZ4](https://www.nuget.org/packages/K4os.Compression
 
 This is an **opt-in** package. The core `ClickHouse.Driver` package deliberately ships with a
 Microsoft-only dependency set; installing this package adds the third-party K4os LZ4 dependency and
-registers an `IClickHouseCompressor` implementation you can plug into binary inserts.
+provides an `IClickHouseCompressor` implementation — `Lz4Compressor` — that you assign to
+`InsertOptions.Compressor` yourself. There is no automatic registration or DI wiring.
 
 ## Usage
 

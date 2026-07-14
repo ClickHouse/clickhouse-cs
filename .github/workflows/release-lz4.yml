@@ -135,4 +135,29 @@ jobs:
     - name: Push package
       id: push
       shell: cmd
+      # Pushing the .nupkg to NuGet.org also publishes the adjacent .snupkg (symbols) automatically.
       run: dotnet nuget push ClickHouse.Driver.Lz4.*.nupkg --skip-duplicate --api-key ${{ secrets.NUGET_TOKEN }} --source https://api.nuget.org/v3/index.json
+
+  github_release:
+    runs-on: ubuntu-latest
+    needs: [sign]
+    name: Create GitHub release
+    permissions:
+      contents: write
+    steps:
+    - name: Download Artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: package-lz4
+    - name: Create Release
+      id: create_release
+      uses: ncipollo/release-action@v1
+      with:
+        # Distinct tag prefix so the satellite package's releases never collide with the core
+        # ClickHouse.Driver release tags. Attaches both the package and its symbols (.snupkg).
+        artifacts: "*.nupkg,*.snupkg"
+        commit: ${{ github.sha }}
+        tag: lz4-v${{ inputs.version }}
+        generateReleaseNotes: true
+        draft: false
+        prerelease: false
