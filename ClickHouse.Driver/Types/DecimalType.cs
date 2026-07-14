@@ -114,19 +114,18 @@ internal class DecimalType : ParameterizedType
 
     private void WriteBigInteger(ExtendedBinaryWriter writer, BigInteger value)
     {
-        byte[] bigIntBytes = value.ToByteArray();
-        byte[] decimalBytes = new byte[Size];
+        // Size is always one of {4, 8, 16, 32} (see GetSizeFromPrecision), so a stack
+        // buffer avoids both the BigInteger.ToByteArray() and the new byte[Size] allocation.
+        Span<byte> decimalBytes = stackalloc byte[Size];
 
-        if (bigIntBytes.Length > Size)
-            throw new OverflowException($"Trying to write {bigIntBytes.Length} bytes, at most {Size} expected");
-
-        bigIntBytes.CopyTo(decimalBytes, 0);
+        if (!value.TryWriteBytes(decimalBytes, out int bytesWritten))
+            throw new OverflowException($"Trying to write {value.GetByteCount()} bytes, at most {Size} expected");
 
         // If a negative BigInteger is not long enough to fill the whole buffer,
         // the remainder needs to be filled with 0xFF
         if (value.Sign < 0)
         {
-            for (int i = bigIntBytes.Length; i < Size; i++)
+            for (int i = bytesWritten; i < Size; i++)
                 decimalBytes[i] = 0xFF;
         }
         writer.Write(decimalBytes);

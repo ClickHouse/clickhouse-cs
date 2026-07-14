@@ -6,6 +6,7 @@ Unreleased
 **Improvements:**
 * You can now pass `UseFormDataParameters` through the connection string. Added `UseFormDataParameters` property to `ClickHouseConnectionStringBuilder`.
 * Faster `Variant` write-type resolution: matching a value to its variant subtype now uses an O(1) hash lookup by runtime type instead of an O(n) linear scan for variants with 3 or more underlying types. Resolution time is now flat regardless of arity instead of growing with it (~2.6× faster to resolve an 8-type variant in the worst case, no extra allocations). Two-type variants keep the linear scan, which is faster at that size. Behavior is unchanged, including IPv4/IPv6 disambiguation.
+* Reduced allocations when writing `Decimal`/`Decimal128`/`Decimal256` values (binary inserts and parameters): the write path no longer allocates a `BigInteger.ToByteArray()` array plus a separate destination buffer per value. It now writes the mantissa directly into a stack-allocated span, eliminating both heap allocations. Behavior is unchanged, including two's-complement sign extension for negative values and overflow detection.
 
 **Bug Fixes:**
 
