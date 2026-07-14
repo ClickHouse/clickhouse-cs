@@ -1,0 +1,17 @@
+ClickHouse.Driver.Compression.BrotliCompressor
+ClickHouse.Driver.Compression.BrotliCompressor.BrotliCompressor(System.IO.Compression.CompressionLevel level = System.IO.Compression.CompressionLevel.Fastest, int bufferSize = 262144) -> void
+ClickHouse.Driver.Compression.BrotliCompressor.Compress(System.IO.Stream destination, bool leaveOpen) -> System.IO.Stream
+ClickHouse.Driver.Compression.BrotliCompressor.ContentEncoding.get -> string
+ClickHouse.Driver.Compression.GZipCompressor
+ClickHouse.Driver.Compression.GZipCompressor.Compress(System.IO.Stream destination, bool leaveOpen) -> System.IO.Stream
+ClickHouse.Driver.Compression.GZipCompressor.ContentEncoding.get -> string
+ClickHouse.Driver.Compression.GZipCompressor.GZipCompressor(System.IO.Compression.CompressionLevel level = System.IO.Compression.CompressionLevel.Fastest, int bufferSize = 262144) -> void
+ClickHouse.Driver.Compression.IClickHouseCompressor
+ClickHouse.Driver.Compression.IClickHouseCompressor.Compress(System.IO.Stream destination, bool leaveOpen) -> System.IO.Stream
+ClickHouse.Driver.Compression.IClickHouseCompressor.ContentEncoding.get -> string
+ClickHouse.Driver.Compression.IClickHouseCompressor.Decode(System.ReadOnlySpan<byte> source, System.Span<byte> target) -> int
+ClickHouse.Driver.Compression.IClickHouseCompressor.Encode(System.ReadOnlySpan<byte> source, System.Span<byte> target, System.IO.Compression.CompressionLevel level = System.IO.Compression.CompressionLevel.Fastest) -> int
+ClickHouse.Driver.Compression.IClickHouseCompressor.MaxEncodedLength(int sourceLength) -> int
+ClickHouse.Driver.Compression.IClickHouseCompressor.MethodByte.get -> byte
+static readonly ClickHouse.Driver.Compression.BrotliCompressor.Default -> ClickHouse.Driver.Compression.BrotliCompressor
+static readonly ClickHouse.Driver.Compression.GZipCompressor.Default -> ClickHouse.Driver.Compression.GZipCompressor

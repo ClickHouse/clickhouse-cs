@@ -9,6 +9,8 @@
 
     <ItemGroup>
         <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
+        <!-- Compression types live in the bundled (PrivateAssets="all") Common assembly; reference it directly. -->
+        <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
     </ItemGroup>
 
     <ItemGroup>
