@@ -22,7 +22,10 @@ jobs:
 
     - name: Build & pack
       id: build_pack
-      run: dotnet build ClickHouse.Driver.Lz4\ClickHouse.Driver.Lz4.csproj --configuration Release /p:Version=${{ inputs.version }}
+      # Lz4ReleasePack=true packs against the *published* ClickHouse.Driver (central ClickHouseDriverVersion)
+      # so the emitted dependency is pinned to a driver release that ships the compression API. Requires
+      # that driver version to be published on NuGet.org first.
+      run: dotnet build ClickHouse.Driver.Lz4\ClickHouse.Driver.Lz4.csproj --configuration Release /p:Version=${{ inputs.version }} /p:Lz4ReleasePack=true
 
     - name: Upload unsigned package
       uses: actions/upload-artifact@v7

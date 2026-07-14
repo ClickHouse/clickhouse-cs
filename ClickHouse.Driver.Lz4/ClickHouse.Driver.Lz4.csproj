@@ -39,19 +39,25 @@
     </PackageReference>
   </ItemGroup>
 
-  <ItemGroup>
-    <!--
-      Real package dependency: ClickHouse.Driver ships ClickHouse.Driver.Common.dll (which defines
-      IClickHouseCompressor) bundled in its lib/, so depending on it delivers the interface to consumers.
-    -->
+  <!--
+    Driver reference. Two modes so the packed ClickHouse.Driver dependency version is the *published*
+    driver version (the one that actually ships IClickHouseCompressor), not whatever /p:Version this
+    package is released at:
+      - Default (local dev / CI): ProjectReference the driver + Common from source, so the stacked
+        change builds against the in-repo API.
+      - Release pack (Lz4ReleasePack=true, set by release-lz4.yml): PackageReference the published
+        ClickHouse.Driver at the central ClickHouseDriverVersion. Its lib/ carries the bundled
+        Common.dll (so IClickHouseCompressor resolves) and the emitted dependency is pinned to that
+        published version. This requires the driver to be published first — the correct release order.
+  -->
+  <ItemGroup Condition="'$(Lz4ReleasePack)' != 'true'">
     <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
-    <!--
-      Compile-time-only reference to the bundled Common assembly for access to IClickHouseCompressor.
-      PrivateAssets="all": it does not flow through ClickHouse.Driver (that reference is also private),
-      and must not be emitted as a package dependency (Common is bundled, not a standalone package) nor
-      duplicated into this package.
-    -->
+    <!-- Compile-time access to the bundled Common assembly (IClickHouseCompressor). PrivateAssets="all":
+         Common is bundled, not a standalone package, so it must not be emitted as a dependency. -->
     <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Lz4ReleasePack)' == 'true'">
+    <PackageReference Include="ClickHouse.Driver" />
   </ItemGroup>
 
 </Project>
