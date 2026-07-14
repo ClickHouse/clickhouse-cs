@@ -6,9 +6,8 @@ using K4os.Compression.LZ4.Streams;
 namespace ClickHouse.Driver.Compression;
 
 /// <summary>
-/// LZ4 compressor backed by the <c>K4os.Compression.LZ4</c> library. Shipped as the opt-in
-/// <c>ClickHouse.Driver.Lz4</c> package so the core <c>ClickHouse.Driver</c> package keeps a
-/// Microsoft-only dependency set.
+/// LZ4 compressor backed by the <c>K4os.Compression.LZ4</c> library, shipped as the opt-in
+/// <c>ClickHouse.Driver.Lz4</c> package so its <c>K4os</c> dependency is only pulled in when you use LZ4.
 /// <para>
 /// Implements both paths of <see cref="IClickHouseCompressor"/>:
 /// <list type="bullet">
@@ -20,7 +19,16 @@ namespace ClickHouse.Driver.Compression;
 /// </list>
 /// </para>
 /// LZ4 is much faster than GZip/Brotli at a lower compression ratio, which makes it a good fit for
-/// throughput-bound inserts where CPU (not bandwidth) is the constraint.
+/// throughput-bound inserts where CPU (not bandwidth) is the constraint. It also imposes the lowest
+/// <b>server-side</b> load of the available codecs: LZ4 decompression is near-free, so in our benchmarks
+/// the server CPU per insert was essentially the same as uncompressed and far below GZip/Brotli — making
+/// it the best choice when minimizing load on the ClickHouse server matters.
+/// <para>
+/// <b>Recommendation:</b> use <see cref="Default"/> (fast mode, level 0) for almost all inserts. In our
+/// benchmarks the compression ratio plateaus almost immediately, so higher levels cost markedly more CPU
+/// for little-to-no extra ratio on typical insert data — reach for a higher level only if you have
+/// measured that your data compresses meaningfully better at it.
+/// </para>
 /// </summary>
 public sealed class Lz4Compressor : IClickHouseCompressor
 {
@@ -30,7 +38,8 @@ public sealed class Lz4Compressor : IClickHouseCompressor
     public const byte Lz4MethodByte = 0x82;
 
     /// <summary>
-    /// Shared default instance: LZ4 fast mode (level <c>0</c>) with a 256 KiB write buffer.
+    /// Shared default instance: LZ4 fast mode (level <c>0</c>) with a 256 KiB write buffer — the
+    /// recommended setting for almost all inserts.
     /// </summary>
     public static readonly Lz4Compressor Default = new();
 
@@ -71,12 +80,13 @@ public sealed class Lz4Compressor : IClickHouseCompressor
     public int MaxEncodedLength(int sourceLength) => LZ4Codec.MaximumOutputSize(sourceLength);
 
     /// <inheritdoc />
-    public int Encode(ReadOnlySpan<byte> source, Span<byte> target, int level = 0)
+    public int Encode(ReadOnlySpan<byte> source, Span<byte> target)
     {
         if (source.IsEmpty)
             return 0;
 
-        var written = LZ4Codec.Encode(source, target, ToLz4Level(level));
+        // Uses the level this compressor was constructed with, exactly like Compress.
+        var written = LZ4Codec.Encode(source, target, this.level);
         if (written <= 0)
             throw new InvalidOperationException(
                 $"LZ4 encode failed; the target buffer ({target.Length} bytes) is likely too small. " +

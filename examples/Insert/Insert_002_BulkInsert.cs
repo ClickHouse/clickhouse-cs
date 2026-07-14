@@ -1,5 +1,6 @@
 using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Utility;
+using K4os.Compression.LZ4;
 
 namespace ClickHouse.Driver.Examples;
 
@@ -95,6 +96,22 @@ public static class BulkInsert
         var brotliData = GenerateSampleData(10000, startId: 20001);
         rowsInserted = await client.InsertBinaryAsync(tableName, columns, brotliData, brotliOptions);
         Console.WriteLine($"   Inserted {rowsInserted} rows using Brotli compression\n");
+
+        // Example 5: Bulk insert with LZ4 compression at a custom level
+        Console.WriteLine("5. Bulk inserting with LZ4 compression (custom level):");
+        // LZ4 ships in the separate, opt-in ClickHouse.Driver.Lz4 package. Lz4Compressor.Default uses
+        // fast mode (level 0), which is the recommended setting for almost all inserts — it is fastest,
+        // and it also puts the least decompression load on the server. Higher levels cost noticeably more
+        // CPU for little-to-no extra compression on typical data. The level is a K4os LZ4Level value as an
+        // int; cast the enum to make the choice explicit. Here we pass L03_HC just to show how to set it.
+        var lz4Options = new InsertOptions
+        {
+            Compressor = new Lz4Compressor((int)LZ4Level.L03_HC),
+        };
+
+        var lz4Data = GenerateSampleData(10000, startId: 30001);
+        rowsInserted = await client.InsertBinaryAsync(tableName, columns, lz4Data, lz4Options);
+        Console.WriteLine($"   Inserted {rowsInserted} rows using LZ4 compression (L03_HC)\n");
 
         // Query and display sample results
         Console.WriteLine("Sample data from main table:");
