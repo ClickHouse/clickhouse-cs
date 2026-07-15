@@ -121,13 +121,11 @@ internal class DecimalType : ParameterizedType
         if (!value.TryWriteBytes(decimalBytes, out int bytesWritten))
             throw new OverflowException($"Trying to write {value.GetByteCount()} bytes, at most {Size} expected");
 
-        // If a negative BigInteger is not long enough to fill the whole buffer,
-        // the remainder needs to be filled with 0xFF
-        if (value.Sign < 0)
-        {
-            for (int i = bytesWritten; i < Size; i++)
-                decimalBytes[i] = 0xFF;
-        }
+        // Fill the bytes past the mantissa: 0xFF to sign-extend a negative value, 0x00 for a
+        // positive one. The positive case is explicit rather than relying on the stackalloc being
+        // zero-initialized (guaranteed only while the compiler emits localsinit; a future
+        // [SkipLocalsInit] would leave stack garbage in the high bytes and corrupt the value).
+        decimalBytes.Slice(bytesWritten).Fill(value.Sign < 0 ? (byte)0xFF : (byte)0x00);
         writer.Write(decimalBytes);
     }
 }

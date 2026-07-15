@@ -52,7 +52,7 @@ public class DecimalTypeTests
     public void Write_WithPositiveValueWhoseTopBitIsSet_DoesNotSignExtend()
     {
         // 0xFF (255) has its high bit set; a naive path would emit a leading 0x00 sign byte.
-        // The high bytes must stay zero (relies on the stackalloc buffer being zero-initialized).
+        // The high bytes must stay zero (the write path explicitly zero-fills them for positives).
         var type = new Decimal128Type { Precision = 20, Scale = 0, UseBigDecimal = true };
 
         var result = Write(type, new ClickHouseDecimal(new BigInteger(255), 0));
