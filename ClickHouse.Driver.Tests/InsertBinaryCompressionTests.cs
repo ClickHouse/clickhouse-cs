@@ -33,7 +33,7 @@ public class InsertBinaryCompressionTests : AbstractConnectionTestFixture
         return tableName;
     }
 
-    // null => uncompressed; then GZip (default + level knob), Brotli, and LZ4 (opt-in package),
+    // null => uncompressed; then GZip (default + level knob), Brotli, and LZ4 (vendored codec),
     // exercising each Content-Encoding the driver can send.
     private static IEnumerable<IClickHouseCompressor> Compressors()
     {

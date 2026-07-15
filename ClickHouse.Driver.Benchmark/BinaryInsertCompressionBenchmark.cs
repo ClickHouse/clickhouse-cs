@@ -53,6 +53,9 @@ public class BinaryInsertCompressionBenchmark
     [Params(500_000)]
     public int Count { get; set; }
 
+    [Params(100_000)]
+    public int BatchSize { get; set; }
+
     [Params(
         InsertCompression.None,
         InsertCompression.GzipFastest,
@@ -109,7 +112,7 @@ public class BinaryInsertCompressionBenchmark
     {
         var options = new InsertOptions
         {
-            BatchSize = 100_000,
+            BatchSize = BatchSize,
             MaxDegreeOfParallelism = 1,
             Compressor = Map(Compression),
         };

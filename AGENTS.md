@@ -93,6 +93,15 @@ var users = connection.Query<User>("SELECT * FROM users");
 - **Negative tests**: Error handling, edge cases, concurrency scenarios
 - **Existing tests**: Only add new tests, never delete/weaken existing ones
 - **Test organization**: Client tests in `.Tests`, third-party integration tests in `.IntegrationTests`
+- **Test isolation**: Create tables in the dedicated `test` database (qualified `test.<name>`),
+  and give each table a **randomized** name (e.g. `SanitizeTableName($"...{Guid.NewGuid():N}")`,
+  as `BulkCopyTests`/`NestedArrayParameterTests` already do). Tests run across `net6/8/9/10`
+  simultaneously against a shared server, so fixed/unqualified table names collide and flake.
+- **Deterministic literals**: When asserting stored values, match a literal's precision to the
+  column scale (e.g. an 8-digit fractional for `DateTime64(8)`) instead of relying on
+  server-side rounding/truncation, which can vary by version/settings.
+- **Parametrized tests**: When cases differ only in inputs/expected values, use an NUnit
+  `TestCaseSource`/`[TestCase]` parametrized test rather than several near-identical methods.
 - **Test naming**: The name of your test should consist of three parts:
   - Name of the method being tested
   - Scenario under which the method is being tested
