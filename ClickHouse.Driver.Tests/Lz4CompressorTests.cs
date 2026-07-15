@@ -93,6 +93,31 @@ public class Lz4CompressorTests
     }
 
     [Test]
+    public void Lz4Compressor_Decode_EmptySource_ReturnsZero()
+    {
+        Assert.That(Lz4Compressor.Default.Decode(ReadOnlySpan<byte>.Empty, new byte[16]), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Lz4Compressor_Encode_TargetTooSmall_Throws()
+    {
+        // A one-byte target cannot hold the encoded block, so the codec reports failure.
+        Assert.Throws<InvalidOperationException>(() => Lz4Compressor.Default.Encode(Sample, new byte[1]));
+    }
+
+    [Test]
+    public void Lz4Compressor_Decode_TargetTooSmall_Throws()
+    {
+        var compressor = Lz4Compressor.Default;
+        var encoded = new byte[compressor.MaxEncodedLength(Sample.Length)];
+        var encodedLength = compressor.Encode(Sample, encoded);
+
+        // Decoding a valid block into a target smaller than the original length fails.
+        Assert.Throws<InvalidOperationException>(
+            () => compressor.Decode(encoded.AsSpan(0, encodedLength), new byte[1]));
+    }
+
+    [Test]
     public void Lz4Compressor_Compress_ProducesLz4FrameDecodableStream()
     {
         using var destination = new MemoryStream();
