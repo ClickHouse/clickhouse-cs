@@ -87,7 +87,8 @@ public sealed class Lz4Compressor : IClickHouseCompressor
         var written = LZ4Codec.Decode(source, target);
         if (written < 0)
             throw new InvalidOperationException(
-                $"LZ4 decode failed; the target buffer ({target.Length} bytes) is smaller than the decoded length.");
+                $"LZ4 decode failed; the target buffer ({target.Length} bytes) may be smaller than the decoded " +
+                "length, or the source block may be corrupt or not valid LZ4 data.");
 
         return written;
     }
