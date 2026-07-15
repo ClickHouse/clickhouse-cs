@@ -1,7 +1,7 @@
 using System;
 using System.IO;
-using System.IO.Compression;
 using System.Text;
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Copy.Serializer;
@@ -38,7 +38,7 @@ internal class PocoBatchSerializer
     }
 
     /// <summary>
-    /// Serializes a batch of POCO rows into the target stream using GZip compression.
+    /// Serializes a batch of POCO rows into the target stream, optionally compressed via the supplied compressor.
     /// </summary>
     /// <typeparam name="T">The POCO type.</typeparam>
     /// <param name="batch">The batch of rows, query text, and resolved column types.</param>
@@ -47,15 +47,19 @@ internal class PocoBatchSerializer
     /// <param name="writers">Compiled per-column write delegates for the RowBinary fast path, or null for
     /// the boxed path.</param>
     /// <param name="stream">The output stream (typically a recyclable memory stream).</param>
-    public void Serialize<T>(PocoBatch<T> batch, Func<T, object>[] getters, Action<T, ExtendedBinaryWriter>[] writers, Stream stream)
+    /// <param name="compressor">Compressor for the payload, or <c>null</c> to write uncompressed.</param>
+    public void Serialize<T>(PocoBatch<T> batch, Func<T, object>[] getters, Action<T, ExtendedBinaryWriter>[] writers, Stream stream, IClickHouseCompressor compressor)
     {
-        using var gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
-        using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
+        // See BatchSerializer.Serialize for the leaveOpen/flush rationale.
+        var compressing = compressor != null;
+        var target = compressing ? compressor.Compress(stream, leaveOpen: true) : stream;
+
+        using (var textWriter = new StreamWriter(target, Encoding.UTF8, 4 * 1024, true))
         {
             textWriter.WriteLine(batch.Query);
         }
 
-        using var writer = new ExtendedBinaryWriter(gzipStream);
+        using var writer = new ExtendedBinaryWriter(target, leaveOpen: !compressing);
 
         var types = batch.Types;
 

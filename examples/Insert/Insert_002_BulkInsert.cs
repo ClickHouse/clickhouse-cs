@@ -1,3 +1,4 @@
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -76,6 +77,24 @@ public static class BulkInsert
 
         rowsInserted = await client.InsertBinaryAsync(partialTableName, partialColumns, partialData);
         Console.WriteLine($"   Inserted {rowsInserted} rows with partial columns\n");
+
+        // Example 4: Bulk insert with Brotli compression
+        Console.WriteLine("4. Bulk inserting with Brotli compression:");
+        // The insert body can be compressed before being sent. The default is GZip (with compression level =fastest), 
+        // but over a remote/cloud connection Brotli is faster in our testing. 
+        // Set the Compressor property to switch codecs; the built-in GZipCompressor and
+        // BrotliCompressor also expose a CompressionLevel. 
+        // 
+        // Over a fast/local link, set Compressor = null to skip compression entirely;
+        // there the compression cost outweighs the bandwidth saved.
+        var brotliOptions = new InsertOptions
+        {
+            Compressor = BrotliCompressor.Default,
+        };
+
+        var brotliData = GenerateSampleData(10000, startId: 20001);
+        rowsInserted = await client.InsertBinaryAsync(tableName, columns, brotliData, brotliOptions);
+        Console.WriteLine($"   Inserted {rowsInserted} rows using Brotli compression\n");
 
         // Query and display sample results
         Console.WriteLine("Sample data from main table:");
