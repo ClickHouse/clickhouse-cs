@@ -11,7 +11,7 @@ using ClickHouse.Driver.Types;
 namespace ClickHouse.Driver.Tests.Copy;
 
 /// <summary>
-/// Server-free tests for the POCO insert box-free write fast path (issue #505). The fast path must
+/// Server-free tests for the POCO insert box-free write fast path. Ensures that the fast path will
 /// produce byte-identical output to the boxed <see cref="ClickHouseType.Write(ExtendedBinaryWriter, object)"/>
 /// path, and must only engage on an exact CLR-type match (otherwise it falls back to the boxed path,
 /// preserving the coercions that path performs).
@@ -139,13 +139,11 @@ public class PocoWriteFastPathTests
         yield return Case("DateTime_FromDateTimeOffset", new DateTimeType(), dto);
         yield return Case("DateTime64_FromDateTimeOffset", new DateTime64Type { Scale = 6 }, dto);
         yield return Case("Date_FromDateTimeOffset", new DateType(), dto);
-#if NET6_0_OR_GREATER
         var dateOnly = new DateOnly(2024, 3, 14);
         yield return Case("DateTime_FromDateOnly", new DateTimeType(), dateOnly);
         yield return Case("Date_FromDateOnly", new DateType(), dateOnly);
         yield return Case("Date32_FromDateOnly", new Date32Type(), dateOnly);
         yield return Case("Nullable_DateOnly_Value", Nullable(new DateType()), (DateOnly?)dateOnly);
-#endif
         yield return Case("Nullable_DateTimeOffset_Value", Nullable(new DateTimeType()), (DateTimeOffset?)dto);
 
         // Decimal (decimal) and ClickHouseDecimal

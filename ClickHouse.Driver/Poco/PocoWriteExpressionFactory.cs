@@ -8,7 +8,7 @@ using ClickHouse.Driver.Types;
 namespace ClickHouse.Driver.Poco;
 
 /// <summary>
-/// Builds box-free write expressions for the POCO binary-insert fast path (issue #505).
+/// Builds box-free write expressions for the POCO binary-insert fast path.
 ///
 /// The default insert path reads each property through a compiled <c>Func&lt;T,object&gt;</c> getter —
 /// which boxes every value-type property, once per value, per row — and then unboxes it inside

@@ -149,9 +149,8 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         public string Value { get; set; }
     }
 
-    // Exercises the box-free write fast path (issue #505) for every supported scalar type, plus a
-    // nullable value type (Nullable(Int32)) which also fast-paths: the null marker is written directly
-    // and a present value recurses into the Int32 fast path, so no boxing occurs for either state.
+    // Exercises the box-free write fast path for every supported scalar type, plus a
+    // nullable value type (Nullable(Int32)) which also fast-paths.
     private class AllScalarsPoco
     {
         public sbyte I8 { get; set; }
@@ -228,7 +227,7 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         }
     }
 
-    // Exercises the Stage 2 box-free write fast path (issue #505) for the bespoke value types
+    // Exercises the Stage 2 box-free write fast path for the bespoke value types
     // (Guid, DateTime family, decimal, BigInteger) plus their Nullable<T> wrappers.
     private class AllValueTypesPoco
     {

@@ -12,8 +12,8 @@ namespace ClickHouse.Driver.Copy.Serializer;
 /// </summary>
 /// <remarks>
 /// The <see cref="RowBinaryFormat.RowBinary"/> path uses pre-compiled per-column write delegates that
-/// fuse the property read with the writer call, avoiding the box-per-value the boxed getters incur
-/// (issue #505). The <see cref="RowBinaryFormat.RowBinaryWithDefaults"/> path keeps the boxed row
+/// fuse the property read with the writer call, avoiding the box-per-value the boxed getters incur.
+/// The <see cref="RowBinaryFormat.RowBinaryWithDefaults"/> path keeps the boxed row
 /// serializer because it must inspect a boxed <c>DBDefault</c> sentinel before writing.
 /// </remarks>
 internal class PocoBatchSerializer
@@ -64,6 +64,7 @@ internal class PocoBatchSerializer
         {
             if (writers != null)
             {
+                // RowBinary path
                 for (int i = 0; i < batch.Size; i++)
                 {
                     current = batch.Rows[i];
@@ -73,6 +74,7 @@ internal class PocoBatchSerializer
             }
             else
             {
+                // RowBinaryWithDefaults path
                 for (int i = 0; i < batch.Size; i++)
                 {
                     current = batch.Rows[i];

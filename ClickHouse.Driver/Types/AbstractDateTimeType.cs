@@ -10,9 +10,7 @@ internal static class DateTimeConversions
 {
     public static readonly DateTime DateTimeEpochStart = DateTimeOffset.FromUnixTimeSeconds(0).UtcDateTime;
 
-#if NET6_0_OR_GREATER
     public static readonly DateOnly DateOnlyEpochStart = new(1970, 1, 1);
-#endif
 
     public static int ToUnixTimeDays(this DateTimeOffset dto)
     {
@@ -23,10 +21,7 @@ internal static class DateTimeConversions
 }
 
 internal abstract class AbstractDateTimeType : ParameterizedType,
-    ITypedWriter<DateTime>, ITypedWriter<DateTimeOffset>
-#if NET6_0_OR_GREATER
-    , ITypedWriter<DateOnly>
-#endif
+    ITypedWriter<DateTime>, ITypedWriter<DateTimeOffset>, ITypedWriter<DateOnly>
 {
     // ClickHouse emits synthetic fixed-offset timezone names like "Fixed/UTC+05:30:00" for columns
     // declared with a fixed UTC offset. These names are not in the IANA TZDB so GetZoneOrNull
@@ -71,9 +66,7 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
     {
         return value switch
         {
-#if NET6_0_OR_GREATER
             DateOnly date => CoerceToDateTimeOffset(date),
-#endif
             DateTimeOffset v => CoerceToDateTimeOffset(v),
             DateTime dt => CoerceToDateTimeOffset(dt),
             OffsetDateTime o => o.ToDateTimeOffset(),
@@ -104,9 +97,7 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
     // Box-free overloads mirroring the corresponding branches of CoerceToDateTimeOffset(object).
     public DateTimeOffset CoerceToDateTimeOffset(DateTimeOffset value) => value;
 
-#if NET6_0_OR_GREATER
     public DateTimeOffset CoerceToDateTimeOffset(DateOnly value) => new(value.Year, value.Month, value.Day, 0, 0, 0, TimeSpan.Zero);
-#endif
 
     public override void Write(ExtendedBinaryWriter writer, object value) => WriteChecked(writer, CoerceToDateTimeOffset(value), value);
 
@@ -114,9 +105,7 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
 
     public void WriteValue(ExtendedBinaryWriter writer, DateTimeOffset value) => WriteChecked(writer, CoerceToDateTimeOffset(value), value);
 
-#if NET6_0_OR_GREATER
     public void WriteValue(ExtendedBinaryWriter writer, DateOnly value) => WriteChecked(writer, CoerceToDateTimeOffset(value), value);
-#endif
 
     /// <summary>
     /// Serializes the coerced <paramref name="dto"/>. The generic <paramref name="original"/> carries the
