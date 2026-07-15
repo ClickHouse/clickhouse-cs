@@ -13,5 +13,27 @@ ClickHouse.Driver.Compression.IClickHouseCompressor.Decode(System.ReadOnlySpan<b
 ClickHouse.Driver.Compression.IClickHouseCompressor.Encode(System.ReadOnlySpan<byte> source, System.Span<byte> target) -> int
 ClickHouse.Driver.Compression.IClickHouseCompressor.MaxEncodedLength(int sourceLength) -> int
 ClickHouse.Driver.Compression.IClickHouseCompressor.MethodByte.get -> byte
+ClickHouse.Driver.Compression.Lz4Compressor
+ClickHouse.Driver.Compression.Lz4Compressor.Compress(System.IO.Stream destination, bool leaveOpen) -> System.IO.Stream
+ClickHouse.Driver.Compression.Lz4Compressor.ContentEncoding.get -> string
+ClickHouse.Driver.Compression.Lz4Compressor.Decode(System.ReadOnlySpan<byte> source, System.Span<byte> target) -> int
+ClickHouse.Driver.Compression.Lz4Compressor.Encode(System.ReadOnlySpan<byte> source, System.Span<byte> target) -> int
+ClickHouse.Driver.Compression.Lz4Compressor.Lz4Compressor(ClickHouse.Driver.Compression.Lz4Level level = ClickHouse.Driver.Compression.Lz4Level.Fast, int bufferSize = 262144) -> void
+ClickHouse.Driver.Compression.Lz4Compressor.MaxEncodedLength(int sourceLength) -> int
+ClickHouse.Driver.Compression.Lz4Compressor.MethodByte.get -> byte
+ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.Fast = 0 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.High3 = 3 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.High4 = 4 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.High5 = 5 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.High6 = 6 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.High7 = 7 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.High8 = 8 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.High9 = 9 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.Max = 12 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.Optimal10 = 10 -> ClickHouse.Driver.Compression.Lz4Level
+ClickHouse.Driver.Compression.Lz4Level.Optimal11 = 11 -> ClickHouse.Driver.Compression.Lz4Level
+const ClickHouse.Driver.Compression.Lz4Compressor.Lz4MethodByte = 130 -> byte
 static readonly ClickHouse.Driver.Compression.BrotliCompressor.Default -> ClickHouse.Driver.Compression.BrotliCompressor
 static readonly ClickHouse.Driver.Compression.GZipCompressor.Default -> ClickHouse.Driver.Compression.GZipCompressor
+static readonly ClickHouse.Driver.Compression.Lz4Compressor.Default -> ClickHouse.Driver.Compression.Lz4Compressor

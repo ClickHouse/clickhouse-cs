@@ -1,6 +1,5 @@
 using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Utility;
-using K4os.Compression.LZ4;
 
 namespace ClickHouse.Driver.Examples;
 
@@ -99,13 +98,13 @@ public static class BulkInsert
 
         // Example 5: Bulk insert with LZ4 compression at a custom level
         Console.WriteLine("5. Bulk inserting with LZ4 compression (custom level):");
-        // LZ4 ships in the separate, opt-in ClickHouse.Driver.Lz4 package. Lz4Compressor.Default uses
-        // fast mode (LZ4Level.L00_FAST), the recommended setting for almost all inserts — it is fastest
-        // and puts the least decompression load on the server. Higher levels cost noticeably more CPU for
-        // little-to-no extra compression on typical data. Here we pass L03_HC just to show how to set it.
+        // LZ4 ships in the core driver (no extra package needed). Lz4Compressor.Default uses fast mode
+        // (Lz4Level.Fast), the recommended setting for almost all inserts — it is fastest and puts the
+        // least decompression load on the server. Higher levels cost noticeably more CPU for
+        // little-to-no extra compression on typical data. Here we pass High3 just to show how to set it.
         var lz4Options = new InsertOptions
         {
-            Compressor = new Lz4Compressor(LZ4Level.L03_HC),
+            Compressor = new Lz4Compressor(Lz4Level.High3),
         };
 
         var lz4Data = GenerateSampleData(10000, startId: 30001);

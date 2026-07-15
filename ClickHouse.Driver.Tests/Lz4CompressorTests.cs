@@ -9,10 +9,11 @@ using NUnit.Framework;
 namespace ClickHouse.Driver.Tests;
 
 /// <summary>
-/// Unit tests (no server) for <see cref="Lz4Compressor"/> from the opt-in <c>ClickHouse.Driver.Lz4</c>
-/// package. Uses the underlying K4os library directly as a differential oracle: what our codec encodes
-/// must decode with K4os and vice versa, guarding format compatibility on both the HTTP frame path and
-/// the native block path.
+/// Unit tests (no server) for the built-in <see cref="Lz4Compressor"/>, whose codec is a vendored copy
+/// of K4os (see <c>ClickHouse.Driver.Common/Vendor/K4os</c>). Uses the real upstream K4os package (a
+/// test-only dependency) directly as a differential oracle: what our vendored codec encodes must decode
+/// with upstream K4os and vice versa, guarding format compatibility on both the HTTP frame path and the
+/// native block path.
 /// </summary>
 [TestFixture]
 public class Lz4CompressorTests
@@ -115,6 +116,6 @@ public class Lz4CompressorTests
     public void Lz4Compressor_Constructor_WithNonPositiveBufferSize_Throws()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(bufferSize: 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(LZ4Level.L03_HC, bufferSize: -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Lz4Compressor(Lz4Level.High3, bufferSize: -1));
     }
 }

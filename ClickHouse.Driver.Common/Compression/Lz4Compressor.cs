@@ -1,22 +1,24 @@
 using System;
 using System.IO;
-using K4os.Compression.LZ4;
-using K4os.Compression.LZ4.Streams;
+using ClickHouse.Driver.Vendor.K4os.Compression.LZ4;
+using ClickHouse.Driver.Vendor.K4os.Compression.LZ4.Streams;
+using K4osLevel = ClickHouse.Driver.Vendor.K4os.Compression.LZ4.LZ4Level;
 
 namespace ClickHouse.Driver.Compression;
 
 /// <summary>
-/// LZ4 compressor backed by the <c>K4os.Compression.LZ4</c> library, shipped as the opt-in
-/// <c>ClickHouse.Driver.Lz4</c> package so its <c>K4os</c> dependency is only pulled in when you use LZ4.
+/// LZ4 compressor backed by a vendored, dependency-free copy of the <c>K4os.Compression.LZ4</c>
+/// library (bundled into the driver — see <c>Vendor/K4os/README.md</c>), so LZ4 is available without
+/// pulling in any third-party runtime dependency.
 /// <para>
 /// LZ4 is faster than GZip/Brotli at a lower compression ratio, which makes it a good fit for
 /// throughput-bound inserts where CPU (not bandwidth) is the constraint. It also imposes the lowest
-/// <b>server-side</b> load of the available codecs, making
-/// it the best choice when minimizing load on the ClickHouse server matters.
+/// <b>server-side</b> load of the available codecs, making it the best choice when minimizing load on
+/// the ClickHouse server matters.
 /// </para>
 /// <para>
-/// <b>Recommendation:</b> use <see cref="Default"/> (fast mode, level 0) for almost all inserts,
-/// higher levels show very small gains in compression size.
+/// <b>Recommendation:</b> use <see cref="Default"/> (<see cref="Lz4Level.Fast"/>) for almost all
+/// inserts; higher levels show very small gains in compression size at a large CPU cost.
 /// </para>
 /// </summary>
 public sealed class Lz4Compressor : IClickHouseCompressor
@@ -27,22 +29,23 @@ public sealed class Lz4Compressor : IClickHouseCompressor
     public const byte Lz4MethodByte = 0x82;
 
     /// <summary>
-    /// Shared default instance: <see cref="LZ4Level.L00_FAST"/> with a 256 KiB write buffer — the
+    /// Shared default instance: <see cref="Lz4Level.Fast"/> with a 256 KiB write buffer — the
     /// recommended setting for almost all inserts.
     /// </summary>
     public static readonly Lz4Compressor Default = new();
 
-    private readonly LZ4Level level;
+    private readonly K4osLevel level;
     private readonly int bufferSize;
 
-    /// <param name="level">Compression level. Defaults to fastest, which is also the recommended level.</param>
+    /// <param name="level">Compression level. Defaults to <see cref="Lz4Level.Fast"/>, which is also the recommended level.</param>
     /// <param name="bufferSize">Size in bytes of the write buffer wrapped around the LZ4 stream. Defaults to 256 KiB.</param>
-    public Lz4Compressor(LZ4Level level = LZ4Level.L00_FAST, int bufferSize = 256 * 1024)
+    public Lz4Compressor(Lz4Level level = Lz4Level.Fast, int bufferSize = 256 * 1024)
     {
         if (bufferSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(bufferSize), bufferSize, "Buffer size must be positive.");
 
-        this.level = level;
+        // Lz4Level's numeric values match the vendored codec's LZ4Level exactly.
+        this.level = (K4osLevel)(int)level;
         this.bufferSize = bufferSize;
     }
 

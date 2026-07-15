@@ -3,7 +3,6 @@ using System.IO.Compression;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using ClickHouse.Driver.Compression;
-using K4os.Compression.LZ4;
 
 namespace ClickHouse.Driver.Benchmark;
 
@@ -78,8 +77,8 @@ public class BinaryInsertCompressionBenchmark
         InsertCompression.BrotliOptimal => new BrotliCompressor(CompressionLevel.Optimal),
 #if LZ4_AVAILABLE
         InsertCompression.Lz4Fastest => Lz4Compressor.Default,
-        // L12_MAX is the maximum level; far slower than fast mode for ~no extra ratio.
-        InsertCompression.Lz4Max => new Lz4Compressor(LZ4Level.L12_MAX),
+        // Max is the maximum level; far slower than fast mode for ~no extra ratio.
+        InsertCompression.Lz4Max => new Lz4Compressor(Lz4Level.Max),
 #endif
         _ => throw new ArgumentOutOfRangeException(nameof(compression)),
     };

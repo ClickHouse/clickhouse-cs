@@ -7,7 +7,6 @@ on:
       - "examples/**"
       - "ClickHouse.Driver/**"
       - "ClickHouse.Driver.Common/**"
-      - "ClickHouse.Driver.Lz4/**"
       - ".github/workflows/examples.yml"
   pull_request:
     branches: [main]
@@ -15,7 +14,6 @@ on:
       - "examples/**"
       - "ClickHouse.Driver/**"
       - "ClickHouse.Driver.Common/**"
-      - "ClickHouse.Driver.Lz4/**"
       - ".github/workflows/examples.yml"
   workflow_dispatch:
     inputs:

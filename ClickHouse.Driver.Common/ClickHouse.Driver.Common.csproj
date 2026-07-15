@@ -5,6 +5,8 @@
     <CheckEolTargetFramework>false</CheckEolTargetFramework>
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
     <LangVersion>latest</LangVersion>
+    <!-- Required by the vendored K4os LZ4/xxHash codec (pointer-based hot paths). See Vendor/K4os/README.md. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisMode>Recommended</AnalysisMode>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
@@ -12,6 +14,17 @@
     <!-- Bundled into the ClickHouse.Driver package (see that project's pack target); never shipped on its own. -->
     <IsPackable>false</IsPackable>
   </PropertyGroup>
+
+  <!-- Global usings required by the vendored K4os source (which was written against these implicit
+       usings upstream). Additive; the driver's own Common files declare their usings explicitly. -->
+  <ItemGroup>
+    <Using Include="System" />
+    <Using Include="System.Linq" />
+    <Using Include="System.IO" />
+    <Using Include="System.Collections.Generic" />
+    <Using Include="System.Threading" />
+    <Using Include="System.Threading.Tasks" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="StyleCop.Analyzers">
