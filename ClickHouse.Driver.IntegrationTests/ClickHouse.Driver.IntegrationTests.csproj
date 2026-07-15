@@ -31,6 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\ClickHouse.Driver.Tests\ClickHouse.Driver.Tests.csproj" />
     <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
   </ItemGroup>
 
