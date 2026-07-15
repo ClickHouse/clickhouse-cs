@@ -2,6 +2,8 @@ Unreleased
 ---
 
 **New Features:**
+* Pluggable binary-insert compression via `InsertOptions.Compressor` (`IClickHouseCompressor`). The presence of a compressor is the on/off switch: set it to `null` to send the RowBinary payload uncompressed (useful over fast/local links where the compression CPU outweighs the bandwidth savings). It defaults to `GZipCompressor.Default` (GZip, fastest), so existing behavior is unchanged. Built-in codecs `GZipCompressor` and `BrotliCompressor` expose `CompressionLevel` and write-buffer-size knobs; `IClickHouseCompressor` is the extension point for other codecs. These compression types live in a new `ClickHouse.Driver.Common` assembly (namespace unchanged: `ClickHouse.Driver.Compression`) that is bundled inside the `ClickHouse.Driver` package, so there is no new package dependency and no `using` change for consumers. Applies to `InsertBinaryAsync` (both the `object[]` and POCO overloads).
+  - **Tuning guidance:** the best codec depends on where the server is. Over a fast/local link, compression is pure overhead, so set `Compressor = null` for a large speedup. Over a remote/cloud connection the payload reduction dominates (depending on bandwidth): in our benchmarks (500k-row insert, ~55 MiB → ~11 MiB) `BrotliCompressor.Default` was ~38% faster than the default GZip and ~54% faster than uncompressed, at lower client CPU. `CompressionLevel.Optimal` was not worth it for either codec (much more CPU, negligible extra payload reduction).
 
 **Improvements:**
 * You can now pass `UseFormDataParameters` through the connection string. Added `UseFormDataParameters` property to `ClickHouseConnectionStringBuilder`.

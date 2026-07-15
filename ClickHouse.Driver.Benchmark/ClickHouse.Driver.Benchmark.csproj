@@ -22,6 +22,9 @@
   -->
   <ItemGroup Condition="'$(BenchmarkComparisonMode)' != 'true'">
     <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
+    <!-- Compression types live in the bundled (PrivateAssets="all") Common assembly; reference it
+         directly for local dev. In comparison mode the types come from Common.dll inside the package. -->
+    <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(BenchmarkComparisonMode)' == 'true'">
     <PackageReference Include="ClickHouse.Driver" />

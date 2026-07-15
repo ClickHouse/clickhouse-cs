@@ -1,7 +1,7 @@
 using System;
 using System.IO;
-using System.IO.Compression;
 using System.Text;
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Copy.Serializer;
@@ -25,15 +25,20 @@ internal class BatchSerializer : IBatchSerializer
         this.rowSerializer = rowSerializer;
     }
 
-    public void Serialize(Batch batch, Stream stream)
+    public void Serialize(Batch batch, Stream stream, IClickHouseCompressor compressor)
     {
-        using var gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
-        using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
+        // With a compressor, write through it (it leaves the base stream open); disposing the writer
+        // flushes the compressed bytes into it. With no compressor, write straight to the base stream
+        // and leave it open so the caller can seek/read it afterwards.
+        var compressing = compressor != null;
+        var target = compressing ? compressor.Compress(stream, leaveOpen: true) : stream;
+
+        using (var textWriter = new StreamWriter(target, Encoding.UTF8, 4 * 1024, true))
         {
             textWriter.WriteLine(batch.Query);
         }
 
-        using var writer = new ExtendedBinaryWriter(gzipStream);
+        using var writer = new ExtendedBinaryWriter(target, leaveOpen: !compressing);
 
         object[] row = null;
         try

@@ -29,6 +29,21 @@
     </PropertyGroup>
   </Target>
 
+  <!--
+    ClickHouse.Driver.Common is a PrivateAssets="all" project reference (no public package dependency).
+    Bundle its DLL into this package's lib/<tfm>/ so consumers get the compression types without a
+    separate package reference.
+  -->
+  <PropertyGroup>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeCommonAssemblyInPackage</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+
+  <Target Name="IncludeCommonAssemblyInPackage" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)' == 'ClickHouse.Driver.Common'" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <None Include="..\README.nuget.md" Link="README.nuget.md" Pack="true" PackagePath="" />
   </ItemGroup>
@@ -44,6 +59,11 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Unconditional (all TFMs): the HTTP driver uses the compression interface on net6.0 too. -->
+    <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" PrivateAssets="all" />
   </ItemGroup>
   
   <ItemGroup>

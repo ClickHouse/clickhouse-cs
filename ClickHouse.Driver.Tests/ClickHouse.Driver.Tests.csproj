@@ -46,6 +46,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
+    <!-- ClickHouse.Driver references Common with PrivateAssets="all" (bundled, not a public dependency),
+         so it does not flow transitively; reference it directly to use the compression types. -->
+    <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
   </ItemGroup>
 
 </Project>
