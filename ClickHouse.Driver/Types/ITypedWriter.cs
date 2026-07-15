@@ -12,7 +12,7 @@ namespace ClickHouse.Driver.Types;
 ///
 /// The interface is intentionally <b>invariant</b> in <typeparamref name="T"/>: the fast path fires
 /// only when a POCO property's CLR type is exactly <typeparamref name="T"/>
-/// (see <see cref="PocoWriteExpressionFactory"/>), which is what guarantees the emitted bytes match the
+/// (see <see cref="ClickHouse.Driver.Poco.PocoWriteExpressionFactory"/>), which is what guarantees the emitted bytes match the
 /// boxed path's coercion rules.
 /// </summary>
 /// <typeparam name="T">The exact CLR type this type can write without boxing (e.g. <see cref="System.Guid"/>).</typeparam>

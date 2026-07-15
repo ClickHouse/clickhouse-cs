@@ -212,6 +212,9 @@ public class PocoWriteFastPathTests
         yield return Case("IntEnum_To_Int32", new Int32Type(), IntEnum.Y);
         yield return Case("ByteEnum_To_Int16", new Int16Type(), ByteEnum.B);
         yield return Case("ByteEnum_To_UInt8", new UInt8Type(), ByteEnum.B);
+        yield return Case("Double_To_BFloat16", new BFloat16Type(), 3.14159265358979);
+        yield return Case("Int_To_BFloat16", new BFloat16Type(), 42);
+        yield return Case("IntEnum_To_BFloat16", new BFloat16Type(), IntEnum.X);
 
         static TestCaseData Case<T>(string name, ClickHouseType type, T value)
             => new TestCaseData((Action)(() => AssertParity(type, value)))

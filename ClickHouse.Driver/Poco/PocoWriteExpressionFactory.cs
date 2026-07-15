@@ -16,11 +16,18 @@ namespace ClickHouse.Driver.Poco;
 /// instead compile a fused delegate that reads the strongly-typed property and calls the matching
 /// <see cref="System.IO.BinaryWriter"/> overload directly, eliminating both the box and the unbox.
 ///
-/// This factory is intentionally a strict, conservative subset: it only produces a fast path when the
-/// property's CLR type is exactly the type's natural framework type (e.g. <see cref="long"/> ↔ Int64),
-/// so the emitted bytes are identical to what the boxed <c>Write</c> would produce. Every other type,
-/// coercion, or shape (Nullable, arrays, tuples, wider/narrower integers, etc.) returns <c>null</c> and
-/// the caller falls back to the existing boxed path.
+/// Every fast path is byte-identical to the boxed <c>Write</c> by construction. It fires for:
+/// <list type="bullet">
+///   <item>fixed-width scalars whose CLR type exactly matches the column (e.g. <see cref="long"/> ↔ Int64);</item>
+///   <item><see cref="string"/> on a String column (no box to remove, but skips the virtual dispatch);</item>
+///   <item><see cref="NullableType"/> — emits the null marker and recurses into the underlying type;</item>
+///   <item>value types with bespoke serialization exposing <see cref="ITypedWriter{T}"/> (Guid, the DateTime
+///     family, decimal, BigInteger, TimeSpan, …), dispatched through a direct interface call;</item>
+///   <item>box-free numeric coercion — any other numeric value-type property (or C# enum) on an integer,
+///     float, <c>Decimal</c>, or BFloat16 column, mirroring the boxed path's <c>Convert.ToXxx</c>.</item>
+/// </list>
+/// Anything with no fast path (arrays, tuples, maps, reference types other than string, value types with
+/// no matching conversion, …) returns <c>null</c> and the caller falls back to the existing boxed path.
 /// </summary>
 internal static class PocoWriteExpressionFactory
 {
@@ -159,6 +166,22 @@ internal static class PocoWriteExpressionFactory
             var writerInterface = typeof(ITypedWriter<decimal>);
             var method = writerInterface.GetMethod(nameof(ITypedWriter<decimal>.WriteValue));
             return Expression.Call(Expression.Constant(type, writerInterface), method, writer, Expression.Call(toDecimal, source));
+        }
+
+        // BFloat16 columns coerce any numeric input via Convert.ToSingle, then apply the BFloat16 bit
+        // truncation inside WriteValue(float). Float32/Float64 write the raw value and are handled by
+        // NumericCoercionTargets above; BFloat16 needs the custom truncation, so it routes through its
+        // own ITypedWriter<float> call. Convert.ToSingle for a numeric source is culture-independent,
+        // so the emitted bytes and any overflow match the boxed Write's Convert.ToSingle(value, Invariant).
+        if (type is BFloat16Type)
+        {
+            var toSingle = GetExactConvert(nameof(Convert.ToSingle), sourceType);
+            if (toSingle == null)
+                return null;
+
+            var writerInterface = typeof(ITypedWriter<float>);
+            var method = writerInterface.GetMethod(nameof(ITypedWriter<float>.WriteValue));
+            return Expression.Call(Expression.Constant(type, writerInterface), method, writer, Expression.Call(toSingle, source));
         }
 
         return null;
