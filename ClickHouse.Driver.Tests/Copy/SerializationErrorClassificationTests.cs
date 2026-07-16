@@ -57,6 +57,20 @@ public class SerializationErrorClassificationTests
     }
 
     [Test]
+    public void RethrowSerializationError_WhenWrappedInnerIsObjectDisposed_SurfacesTransportErrorWithoutRow()
+    {
+        // A request stream disposed mid-write surfaces as ObjectDisposedException, which the client
+        // treats as a transport failure elsewhere; it must not be reported as a serialization error.
+        var transport = new ObjectDisposedException("request stream");
+        var wrapper = new ClickHouseBulkCopySerializationException(new object[] { 1UL }, transport);
+        var edi = ExceptionDispatchInfo.Capture(wrapper);
+
+        var ex = Assert.Throws<ObjectDisposedException>(() => ClickHouseClient.RethrowSerializationError(edi));
+
+        Assert.That(ex, Is.SameAs(transport));
+    }
+
+    [Test]
     public void RethrowSerializationError_WithRawTransportException_RethrowsAsIs()
     {
         // A failure before the serializer's own try block (e.g. writing the query line) propagates
