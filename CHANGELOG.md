@@ -12,6 +12,7 @@ Unreleased
 * Reduced allocations when writing `Decimal`/`Decimal128`/`Decimal256` values (binary inserts and parameters): the write path no longer allocates a `BigInteger.ToByteArray()` array plus a separate destination buffer per value. It now writes the mantissa directly into a stack-allocated span, eliminating both heap allocations. Behavior is unchanged, including two's-complement sign extension for negative values and overflow detection.
 
 **Bug Fixes:**
+* Fixed `ClickHouseDataReader.GetSchemaTable()` leaving `NumericScale` unset (`DBNull`) for `DateTime64(N)` and `Time64(N)` columns (including their `Nullable(...)` variants). The schema table now reports the fractional-seconds precision `N` in `NumericScale`, matching how `Decimal` columns are already reported (issue #438).
 
 v1.3.0
 ---
