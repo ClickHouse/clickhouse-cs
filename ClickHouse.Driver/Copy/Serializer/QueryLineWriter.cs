@@ -1,3 +1,4 @@
+using System;
 using System.Buffers;
 using System.IO;
 using System.Text;
@@ -14,10 +15,16 @@ internal static class QueryLineWriter
     /// Writes <paramref name="query"/> as UTF-8 followed by a single <c>'\n'</c> to
     /// <paramref name="target"/>, using a pooled scratch buffer so no per-batch allocation is
     /// incurred. Unlike a <see cref="StreamWriter"/>, this emits no BOM and a deterministic
-    /// (cross-platform) newline.
+    /// (cross-platform) newline. A <see langword="null"/> <paramref name="query"/> is treated as
+    /// empty (only the newline is written), matching the prior <see cref="StreamWriter"/> behavior.
     /// </summary>
     public static void Write(Stream target, string query)
     {
+        if (target is null)
+            throw new ArgumentNullException(nameof(target));
+
+        query ??= string.Empty;
+
         int max = Encoding.UTF8.GetMaxByteCount(query.Length) + 1; // +1 for the trailing '\n'
         byte[] buffer = ArrayPool<byte>.Shared.Rent(max);
         try
