@@ -469,7 +469,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             }
             catch
             {
-                serializationError?.Throw();
+                RethrowSerializationError(serializationError);
                 throw;
             }
 
@@ -479,6 +479,29 @@ public sealed class ClickHouseClient : IClickHouseClient
             return batch.Size;
         }
     }
+
+    // Now that serialization runs directly against the request-body stream, a transport-level write
+    // failure (connection reset, cancellation) throws from inside serializer.Serialize and gets wrapped
+    // into a ClickHouseBulkCopySerializationException with the failing row attached. Surfacing that would
+    // both misreport a transport error as a serialization error and leak row contents into the exception
+    // (and any logs built from it). So only rethrow the captured error when it's a genuine serialization
+    // fault; for a transport/cancellation cause, let the original transport exception propagate instead.
+    internal static void RethrowSerializationError(ExceptionDispatchInfo serializationError)
+    {
+        if (serializationError is null)
+            return;
+
+        if (serializationError.SourceException is ClickHouseBulkCopySerializationException wrapper &&
+            IsTransportException(wrapper.InnerException))
+        {
+            ExceptionDispatchInfo.Capture(wrapper.InnerException).Throw();
+        }
+
+        serializationError.Throw();
+    }
+
+    private static bool IsTransportException(Exception exception) =>
+        exception is IOException or OperationCanceledException;
 
     /// <inheritdoc />
     public Task<long> InsertBinaryAsync(
@@ -705,7 +728,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             }
             catch
             {
-                serializationError?.Throw();
+                RethrowSerializationError(serializationError);
                 throw;
             }
 
