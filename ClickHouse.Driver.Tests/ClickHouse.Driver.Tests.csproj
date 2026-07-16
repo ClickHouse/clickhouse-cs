@@ -8,6 +8,12 @@
     <IsTestProject>true</IsTestProject>
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
     <NoWarn>CS8002</NoWarn>
+    <!-- Vendored third-party source (ClickHouse.Driver.Common/Vendor/K4os) is a verbatim copy we
+         don't own; its coverage is already excluded from codecov (see codecov.yml). Exclude it from
+         coverlet instrumentation too: the heavy unsafe/pointer LZ4 code trips a Windows-only coverlet
+         crash ("Unable to read beyond the end of the stream" in CalculateCoverage) during coverage
+         calculation. Path-based so it also covers the System-namespace polyfill under Vendor. -->
+    <ExcludeByFile>**/Vendor/**/*.cs</ExcludeByFile>
   </PropertyGroup>
 
   <ItemGroup>
