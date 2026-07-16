@@ -500,8 +500,11 @@ public sealed class ClickHouseClient : IClickHouseClient
         serializationError.Throw();
     }
 
+    // ObjectDisposedException is included because the client already treats it as a transport failure
+    // mode when the underlying stream is torn down mid-operation (see DrainAndDisposeAsync); a request
+    // stream disposed mid-write surfaces the same way.
     private static bool IsTransportException(Exception exception) =>
-        exception is IOException or OperationCanceledException;
+        exception is IOException or OperationCanceledException or ObjectDisposedException;
 
     /// <inheritdoc />
     public Task<long> InsertBinaryAsync(
