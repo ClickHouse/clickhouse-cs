@@ -9,13 +9,14 @@ using Microsoft.IO;
 namespace ClickHouse.Driver.Benchmark;
 
 /// <summary>
-/// Measures the cost of a single-batch binary insert on the object[] and POCO paths.
-/// Targets issue #508: today the whole (gzipped) batch is materialized into a rented
-/// <see cref="RecyclableMemoryStream"/> before the POST starts. This benchmark reports both
+/// Measures the cost of a binary insert on the object[] and POCO paths across degrees of
+/// parallelism. Targets issue #508: before streaming, each (gzipped) batch is materialized into a
+/// rented <see cref="RecyclableMemoryStream"/> before its POST starts. This benchmark reports both
 /// the BenchmarkDotNet time/allocation columns and a custom "peak pooled bytes" metric that
 /// samples the injected <see cref="RecyclableMemoryStreamManager"/> in-use size during the run.
 ///
-/// Before streaming: peak pooled bytes ~= the compressed batch size (grows with batch size).
+/// Before streaming: peak pooled bytes ~= Degree concurrently-materialized batches (scales with
+///                   both batch size and MaxDegreeOfParallelism).
 /// After streaming:  peak pooled bytes ~= 0 (the payload never routes through the pool).
 ///
 /// Peak values are written to <c>streaming-peak-memory.txt</c> in the working directory so a
@@ -38,10 +39,16 @@ public class BinaryInsertStreamingBenchmark
     private RecyclableMemoryStreamManager manager;
     private PoolPeakSampler sampler;
 
-    // Single large batch (BatchSize == Count, degree 1) so peak pooled bytes reflects the whole
-    // materialized payload rather than one of several concurrently-serialized batches.
+    // Fixed sub-batch size so Count/BatchRows batches are produced and serialized up to Degree at a
+    // time. Buffered peak pooled bytes scale with Degree (concurrently-materialized batches); the
+    // streamed path never routes through the pool, so it stays ~0 regardless of Degree.
+    private const int BatchRows = 25_000;
+
     [Params(200_000)]
     public int Count { get; set; }
+
+    [Params(1, 8)]
+    public int Degree { get; set; }
 
     [GlobalSetup]
     public async Task Setup()
@@ -77,7 +84,7 @@ public class BinaryInsertStreamingBenchmark
     {
         sampler?.Stop();
         var peak = sampler?.PeakBytes ?? 0;
-        var line = $"{GetType().Name}\tCount={Count}\tPeakPooledBytes={peak}";
+        var line = $"{GetType().Name}\tCount={Count}\tDegree={Degree}\tPeakPooledBytes={peak}";
         Console.WriteLine(line);
         try
         {
@@ -94,14 +101,14 @@ public class BinaryInsertStreamingBenchmark
     [Benchmark(Baseline = true)]
     public async Task<long> ObjectArray()
     {
-        var options = new InsertOptions { BatchSize = Count, MaxDegreeOfParallelism = 1 };
+        var options = new InsertOptions { BatchSize = BatchRows, MaxDegreeOfParallelism = Degree };
         return await client.InsertBinaryAsync(TableName, Columns, GenerateObjectRows(Count), options);
     }
 
     [Benchmark]
     public async Task<long> Poco()
     {
-        var options = new InsertOptions { BatchSize = Count, MaxDegreeOfParallelism = 1 };
+        var options = new InsertOptions { BatchSize = BatchRows, MaxDegreeOfParallelism = Degree };
         return await client.InsertBinaryAsync(TableName, GeneratePocoRows(Count), options);
     }
 
