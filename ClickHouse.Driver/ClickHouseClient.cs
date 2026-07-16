@@ -9,6 +9,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -432,17 +433,45 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         using (batch) // Dispose object regardless whether sending succeeds
         {
-            using var stream = MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
             token.ThrowIfCancellationRequested();
             var compressor = insertOptions.Compressor;
-            serializer.Serialize(batch, stream, compressor);
-
-            // Seek to beginning as after writing it's at end
-            stream.Seek(0, SeekOrigin.Begin);
 
             // Async sending
             logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
-            await PostStreamAsync(null, new StreamContent(stream), compressor?.ContentEncoding, insertOptions, token).ConfigureAwait(false);
+
+            // Serialize the (optionally compressed) batch straight into the request stream instead of
+            // first materializing the whole payload into a rented MemoryStream and seeking back to the
+            // start. A serialization failure is captured and rethrown so callers still observe the
+            // original ClickHouseBulkCopySerializationException rather than a transport-level wrapper.
+            ExceptionDispatchInfo serializationError = null;
+            try
+            {
+                await PostStreamAsync(
+                    null,
+                    (stream, ct) =>
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        try
+                        {
+                            serializer.Serialize(batch, stream, compressor);
+                        }
+                        catch (Exception ex)
+                        {
+                            serializationError = ExceptionDispatchInfo.Capture(ex);
+                            throw;
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                    compressor?.ContentEncoding,
+                    insertOptions,
+                    token).ConfigureAwait(false);
+            }
+            catch
+            {
+                serializationError?.Throw();
+                throw;
+            }
 
             onBatchSent?.Invoke(batch.Size);
 
@@ -643,15 +672,42 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         using (batch)
         {
-            using var stream = MemoryStreamManager.GetStream(nameof(SendPocoBatchAsync), 128 * 1024);
             token.ThrowIfCancellationRequested();
             var compressor = insertOptions.Compressor;
-            serializer.Serialize(batch, getters, writers, stream, compressor);
-
-            stream.Seek(0, SeekOrigin.Begin);
 
             logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
-            await PostStreamAsync(null, new StreamContent(stream), compressor?.ContentEncoding, insertOptions, token).ConfigureAwait(false);
+
+            // Stream the (optionally compressed) batch straight into the request stream (see
+            // SendBatchAsync for the serialization-error capture rationale).
+            ExceptionDispatchInfo serializationError = null;
+            try
+            {
+                await PostStreamAsync(
+                    null,
+                    (stream, ct) =>
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        try
+                        {
+                            serializer.Serialize(batch, getters, writers, stream, compressor);
+                        }
+                        catch (Exception ex)
+                        {
+                            serializationError = ExceptionDispatchInfo.Capture(ex);
+                            throw;
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                    compressor?.ContentEncoding,
+                    insertOptions,
+                    token).ConfigureAwait(false);
+            }
+            catch
+            {
+                serializationError?.Throw();
+                throw;
+            }
 
             logger?.LogDebug("Batch sent to {Table}. Rows in batch: {BatchRows}.", destinationTable, batch.Size);
             return batch.Size;
@@ -781,6 +837,12 @@ public sealed class ClickHouseClient : IClickHouseClient
     {
         var content = new StreamCallbackContent(callback, token);
         return await PostStreamAsync(sql, content, isCompressed ? "gzip" : null, queryOptions, token).ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, string contentEncoding, QueryOptions queryOptions, CancellationToken token)
+    {
+        var content = new StreamCallbackContent(callback, token);
+        return await PostStreamAsync(sql, content, contentEncoding, queryOptions, token).ConfigureAwait(false);
     }
 
     private async Task<HttpResponseMessage> PostStreamAsync(string sql, HttpContent content, string contentEncoding, QueryOptions queryOptions, CancellationToken token)
