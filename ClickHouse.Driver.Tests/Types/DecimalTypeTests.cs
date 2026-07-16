@@ -18,6 +18,22 @@ public class DecimalTypeTests
         return stream.ToArray();
     }
 
+    private static object Read(DecimalType type, byte[] bytes)
+    {
+        using var readStream = new MemoryStream(bytes);
+        using var reader = new ExtendedBinaryReader(readStream);
+        return type.Read(reader);
+    }
+
+    private static DecimalType CreateType(int size, int precision, int scale, bool useBigDecimal) => size switch
+    {
+        4 => new Decimal32Type { Precision = precision, Scale = scale, UseBigDecimal = useBigDecimal },
+        8 => new Decimal64Type { Precision = precision, Scale = scale, UseBigDecimal = useBigDecimal },
+        16 => new Decimal128Type { Precision = precision, Scale = scale, UseBigDecimal = useBigDecimal },
+        32 => new Decimal256Type { Precision = precision, Scale = scale, UseBigDecimal = useBigDecimal },
+        _ => throw new ArgumentOutOfRangeException(nameof(size)),
+    };
+
     [Test]
     public void Write_WithNegativeOneScaleZero_FillsBufferWithSignBytes()
     {
@@ -110,5 +126,109 @@ public class DecimalTypeTests
         using var stream = new MemoryStream();
         using var writer = new ExtendedBinaryWriter(stream);
         Assert.Throws<ArgumentOutOfRangeException>(() => type.Write(writer, tooBig));
+    }
+
+    [TestCase(4, 9, 3)]   // Decimal32
+    [TestCase(8, 18, 5)]  // Decimal64
+    [TestCase(16, 38, 9)] // Decimal128
+    [TestCase(32, 76, 9)] // Decimal256
+    public void WriteThenRead_RoundTripsPositiveValue_PreservesValue(int size, int precision, int scale)
+    {
+        var type = CreateType(size, precision, scale, useBigDecimal: true);
+
+        var value = new ClickHouseDecimal(new BigInteger(1234567), scale);
+
+        var bytes = Write(type, value);
+        Assert.That(bytes.Length, Is.EqualTo(size));
+
+        Assert.That(Read(type, bytes), Is.EqualTo(value));
+    }
+
+    [TestCase(4, 9, 3)]   // Decimal32
+    [TestCase(8, 18, 5)]  // Decimal64
+    [TestCase(16, 38, 9)] // Decimal128
+    [TestCase(32, 76, 9)] // Decimal256
+    public void WriteThenRead_RoundTripsZero_PreservesValue(int size, int precision, int scale)
+    {
+        var type = CreateType(size, precision, scale, useBigDecimal: true);
+
+        var value = new ClickHouseDecimal(BigInteger.Zero, scale);
+
+        var bytes = Write(type, value);
+        Assert.That(bytes.Length, Is.EqualTo(size));
+
+        Assert.That(Read(type, bytes), Is.EqualTo(value));
+    }
+
+    // The precision-defined max/min (±(10^precision - 1)) is the largest/smallest number the type
+    // is defined to hold. Its mantissa fills the buffer right up to bytesWritten == Size, so the
+    // sign-fill slice is empty and no byte is written past the mantissa. This is a legal value, not
+    // an overflow, and must round-trip exactly.
+    [TestCase(4, 9, 0)]   // Decimal32
+    [TestCase(8, 18, 0)]  // Decimal64
+    [TestCase(16, 38, 0)] // Decimal128
+    [TestCase(32, 76, 0)] // Decimal256
+    public void WriteThenRead_RoundTripsPrecisionCeilingMaxValue_PreservesValue(int size, int precision, int scale)
+    {
+        var type = CreateType(size, precision, scale, useBigDecimal: true);
+
+        var value = type.MaxValue;
+
+        var bytes = Write(type, value);
+        Assert.That(bytes.Length, Is.EqualTo(size));
+
+        Assert.That(Read(type, bytes), Is.EqualTo(value));
+    }
+
+    [TestCase(4, 9, 0)]   // Decimal32
+    [TestCase(8, 18, 0)]  // Decimal64
+    [TestCase(16, 38, 0)] // Decimal128
+    [TestCase(32, 76, 0)] // Decimal256
+    public void WriteThenRead_RoundTripsPrecisionFloorMinValue_PreservesValue(int size, int precision, int scale)
+    {
+        var type = CreateType(size, precision, scale, useBigDecimal: true);
+
+        var value = type.MinValue;
+
+        var bytes = Write(type, value);
+        Assert.That(bytes.Length, Is.EqualTo(size));
+
+        Assert.That(Read(type, bytes), Is.EqualTo(value));
+    }
+
+    // With UseBigDecimal = false the Read path divides the mantissa by the scale exponent and
+    // returns a framework decimal instead of a ClickHouseDecimal. The write path is identical for
+    // both modes, so this exercises the otherwise-untested false branch of Read.
+    [TestCase(4, 9, 2)]   // Decimal32 - ReadInt32 branch
+    [TestCase(8, 18, 2)]  // Decimal64 - ReadInt64 branch
+    [TestCase(16, 38, 2)] // Decimal128 - BigInteger branch
+    [TestCase(32, 76, 2)] // Decimal256 - BigInteger branch
+    public void WriteThenRead_WithUseBigDecimalFalse_RoundTripsAsDecimal(int size, int precision, int scale)
+    {
+        var type = CreateType(size, precision, scale, useBigDecimal: false);
+
+        var bytes = Write(type, new ClickHouseDecimal(new BigInteger(12345), scale));
+        Assert.That(bytes.Length, Is.EqualTo(size));
+
+        var roundTripped = Read(type, bytes);
+
+        Assert.That(roundTripped, Is.TypeOf<decimal>());
+        Assert.That(roundTripped, Is.EqualTo(123.45m));
+    }
+
+    [Test]
+    public void Write_WithSameMantissaDifferentScale_ProducesIdenticalEncoding()
+    {
+        // WriteBigInteger serializes only the scaled mantissa; the type's Scale is not part of the
+        // on-wire encoding. Two values with an identical scaled mantissa but different Scale (and
+        // therefore different numeric value: 12345.67 vs 1.234567) must encode to the same bytes.
+        var mantissa = new BigInteger(1234567);
+        var lowScale = new Decimal64Type { Precision = 18, Scale = 2, UseBigDecimal = true };
+        var highScale = new Decimal64Type { Precision = 18, Scale = 6, UseBigDecimal = true };
+
+        var lowScaleBytes = Write(lowScale, new ClickHouseDecimal(mantissa, 2));
+        var highScaleBytes = Write(highScale, new ClickHouseDecimal(mantissa, 6));
+
+        Assert.That(lowScaleBytes, Is.EqualTo(highScaleBytes));
     }
 }

@@ -23,9 +23,9 @@ internal class DateTimeType : AbstractDateTimeType
 
     public override object Read(ExtendedBinaryReader reader) => ToDateTime(Instant.FromUnixTimeSeconds(reader.ReadUInt32()));
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T value)
     {
-        var seconds = CoerceToDateTimeOffset(value).ToUnixTimeSeconds();
+        var seconds = dto.ToUnixTimeSeconds();
         if (seconds < 0L || seconds > uint.MaxValue)
         {
             throw new ArgumentOutOfRangeException(

@@ -3,7 +3,7 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class UuidType : ClickHouseType
+internal class UuidType : ClickHouseType, ITypedWriter<Guid>
 {
     public override Type FrameworkType => typeof(Guid);
 
@@ -21,10 +21,11 @@ internal class UuidType : ClickHouseType
 
     public override string ToString() => "UUID";
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write(ExtendedBinaryWriter writer, object value) => WriteValue(writer, ExtractGuid(value));
+
+    public void WriteValue(ExtendedBinaryWriter writer, Guid value)
     {
-        var guid = ExtractGuid(value);
-        var bytes = guid.ToByteArray();
+        var bytes = value.ToByteArray();
         Array.Reverse(bytes, 8, 8);
         writer.Write(bytes, 6, 2);
         writer.Write(bytes, 4, 2);

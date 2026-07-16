@@ -14,7 +14,7 @@ namespace ClickHouse.Driver.Types;
 /// Conversion is performed by truncating/extending the bit representation. The top 16 bits of a Float32
 /// are equivalent to a BFloat16.
 /// </remarks>
-internal class BFloat16Type : FloatType
+internal class BFloat16Type : FloatType, ITypedWriter<float>
 {
     public override Type FrameworkType => typeof(float);
 
@@ -28,10 +28,12 @@ internal class BFloat16Type : FloatType
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
+        => WriteValue(writer, Convert.ToSingle(value, CultureInfo.InvariantCulture));
+
+    public void WriteValue(ExtendedBinaryWriter writer, float value)
     {
         // Convert float to BFloat16 by truncating to top 16 bits
-        float floatValue = Convert.ToSingle(value, CultureInfo.InvariantCulture);
-        uint float32Bits = BitConverter.SingleToUInt32Bits(floatValue);
+        uint float32Bits = BitConverter.SingleToUInt32Bits(value);
         ushort bfloat16Bits = (ushort)(float32Bits >> 16);
         writer.Write(bfloat16Bits);
     }
