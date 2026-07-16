@@ -55,6 +55,8 @@ internal class EnumType : ParameterizedType
 
     public int Lookup(string key) => Values[key];
 
+    public bool TryLookup(string key, out int value) => Values.TryGetValue(key, out value);
+
     public string Lookup(int value) => reverseValues.TryGetValue(value, out var key) ? key : throw new KeyNotFoundException($"Enum value {value} not found");
 
     public override string ToString() => $"{Name}({string.Join(",", Values.Select(kvp => kvp.Key + "=" + kvp.Value))}";

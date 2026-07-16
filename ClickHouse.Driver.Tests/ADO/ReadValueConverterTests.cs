@@ -326,6 +326,74 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
     }
 
     // ==========================================
+    // Enum columns: integer accessors expose the raw wire ordinal, converter-independent
+    // ==========================================
+
+    [Test]
+    public async Task GetInt32_EnumColumnWithLabelMutatingConverter_ReturnsRawOrdinalWithoutKeyNotFound()
+    {
+        // The converter rewrites the enum label to a string that is NOT a valid enum member. The
+        // integer accessors must still return the raw wire ordinal (resolved from the unconverted
+        // label) and agree with GetFieldValue<int> — never surfacing KeyNotFoundException — while
+        // the string projections apply the converter.
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings)
+        {
+            ReadValueConverter = new LabelMutatingConverter(),
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(
+            "SELECT CAST('Active', 'Enum8(''Active'' = 1, ''Inactive'' = 2)') AS value");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.Multiple(() =>
+        {
+            // Integer accessors expose the raw wire ordinal, independent of the converter, and agree.
+            Assert.That(reader.GetInt32(0), Is.EqualTo(1));
+            Assert.That(reader.GetByte(0), Is.EqualTo(1));
+            Assert.That(reader.GetSByte(0), Is.EqualTo(1));
+            Assert.That(reader.GetInt64(0), Is.EqualTo(1));
+            Assert.That(reader.GetUInt32(0), Is.EqualTo(1));
+            Assert.That(reader.GetFieldValue<int>(0), Is.EqualTo(1));
+            Assert.That(reader.GetFieldValue<byte>(0), Is.EqualTo(1));
+            // The string projections still apply the converter.
+            Assert.That(reader.GetString(0), Is.EqualTo("Active_converted"));
+            Assert.That(reader.GetValue(0), Is.EqualTo("Active_converted"));
+            Assert.That(reader.GetFieldValue<string>(0), Is.EqualTo("Active_converted"));
+        });
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    public async Task GetInt32_EnumColumnWithRelabelingConverter_ReturnsRawWireOrdinalNotConvertedLabelOrdinal()
+    {
+        // The converter remaps one valid enum label to ANOTHER valid label ("Active" -> "Inactive").
+        // Integer accessors must return the ordinal of the RAW wire label (1), not the converted
+        // label's ordinal (2), and GetInt32 must agree with GetFieldValue<int>; the string
+        // projections see the converted label.
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings)
+        {
+            ReadValueConverter = new LabelRemappingConverter(),
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(
+            "SELECT CAST('Active', 'Enum8(''Active'' = 1, ''Inactive'' = 2)') AS value");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.GetInt32(0), Is.EqualTo(1));
+            Assert.That(reader.GetByte(0), Is.EqualTo(1));
+            Assert.That(reader.GetFieldValue<int>(0), Is.EqualTo(1));
+            // The string projections see the converted label.
+            Assert.That(reader.GetString(0), Is.EqualTo("Inactive"));
+            Assert.That(reader.GetFieldValue<string>(0), Is.EqualTo("Inactive"));
+        });
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    // ==========================================
     // Indexer access
     // ==========================================
 
@@ -870,6 +938,35 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
     {
         public object ConvertValue(object value, string columnName, string clickHouseType) => value;
         public T ConvertValue<T>(T value, string columnName, string clickHouseType) => value;
+    }
+
+    // Rewrites string values (including enum labels) to a non-label string, and would also mutate
+    // ints. Used to prove enum integer accessors expose the raw ordinal regardless of the converter,
+    // while the string projection still applies it.
+    private sealed class LabelMutatingConverter : IReadValueConverter
+    {
+        public object ConvertValue(object value, string columnName, string clickHouseType)
+            => value is string s ? s + "_converted" : value;
+
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
+        {
+            if (value is string s)
+                return (T)(object)(s + "_converted");
+            if (value is int i)
+                return (T)(object)(i + 100);
+            return value;
+        }
+    }
+
+    // Remaps one valid enum label to another valid label. Used to prove enum integer accessors
+    // expose the raw wire ordinal, not the ordinal of the converted label.
+    private sealed class LabelRemappingConverter : IReadValueConverter
+    {
+        public object ConvertValue(object value, string columnName, string clickHouseType)
+            => value is string s && s == "Active" ? "Inactive" : value;
+
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
+            => value is string s && s == "Active" ? (T)(object)"Inactive" : value;
     }
 
     private sealed class ThrowingConverter : IReadValueConverter
