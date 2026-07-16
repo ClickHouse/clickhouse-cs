@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -959,9 +960,60 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         var error = await ReadErrorBodyAsync(response).ConfigureAwait(false);
-        var ex = ClickHouseServerException.FromServerResponse(error, query);
+        var ex = string.IsNullOrWhiteSpace(error)
+            ? CreateEmptyBodyException(response, query)
+            : ClickHouseServerException.FromServerResponse(error, query);
         activity?.SetException(ex);
         throw ex;
+    }
+
+    /// <summary>
+    /// Builds an exception for a non-success HTTP response whose body is empty or whitespace-only.
+    /// This happens when an upstream component (a ClickHouse Cloud edge, a load balancer, a proxy)
+    /// fails the request before it reaches a ClickHouse node, so there is no server error body to
+    /// parse. Surface the HTTP status line — and the <c>X-ClickHouse-Exception-Code</c> header when
+    /// present — so the caller still gets actionable diagnostics instead of a blank message.
+    /// </summary>
+    private static ClickHouseServerException CreateEmptyBodyException(HttpResponseMessage response, string query)
+    {
+        var exceptionCode = TryGetExceptionCodeHeader(response);
+
+        var message = new StringBuilder("ClickHouse server returned HTTP ")
+            .Append(((int)response.StatusCode).ToString(CultureInfo.InvariantCulture));
+        if (!string.IsNullOrWhiteSpace(response.ReasonPhrase))
+        {
+            message.Append(" (").Append(response.ReasonPhrase).Append(')');
+        }
+
+        message.Append(" with an empty response body.");
+        if (exceptionCode.HasValue)
+        {
+            message.Append(" X-ClickHouse-Exception-Code: ")
+                .Append(exceptionCode.Value.ToString(CultureInfo.InvariantCulture))
+                .Append('.');
+        }
+
+        return new ClickHouseServerException(message.ToString(), query, exceptionCode ?? -1);
+    }
+
+    /// <summary>
+    /// Reads the numeric <c>X-ClickHouse-Exception-Code</c> response header, when the server set one.
+    /// Returns <see langword="null"/> if the header is absent or not a valid integer.
+    /// </summary>
+    private static int? TryGetExceptionCodeHeader(HttpResponseMessage response)
+    {
+        if (response.Headers.TryGetValues("X-ClickHouse-Exception-Code", out var values))
+        {
+            foreach (var value in values)
+            {
+                if (int.TryParse(value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var code))
+                {
+                    return code;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

@@ -11,6 +11,7 @@ Unreleased
 * Reduced allocations when writing `Decimal`/`Decimal128`/`Decimal256` values (binary inserts and parameters): the write path no longer allocates a `BigInteger.ToByteArray()` array plus a separate destination buffer per value. It now writes the mantissa directly into a stack-allocated span, eliminating both heap allocations. Behavior is unchanged, including two's-complement sign extension for negative values and overflow detection.
 
 **Bug Fixes:**
+* Fixed `ClickHouseServerException` carrying a blank `Message` and an `ErrorCode` of `-1` when the server — or an upstream component such as a load balancer or the ClickHouse Cloud edge — returned a non-2xx HTTP response with an empty (or whitespace-only) body. The exception now reports the HTTP status code and reason phrase, and uses the `X-ClickHouse-Exception-Code` response header as the error code when the server sets it (issue #440). Non-empty error bodies are unaffected.
 
 v1.3.0
 ---
