@@ -394,6 +394,48 @@ public sealed class InsertRoundTripCase
                 Array.Empty<(int, string)>(),
                 new[] { (3, "c") },
             }));
+
+        // Map(K, V): byte-identical to Array(Tuple(K, V)) — offsets + a keys stream + a values stream. Each row
+        // surfaces as a KeyValuePair<K, V>[] (not a Dictionary), so pair order round-trips; empty-map rows and an
+        // all-empty column ride along. Keys within a row are kept unique here because the server rejects duplicate
+        // keys on insert — duplicate-key preservation is a wire property proven by the codec unit test instead.
+        // Map is, like Array/Tuple, an exception to the "wrap every type in Nullable" rule (the server rejects
+        // Nullable(Map(...))), so nullability is composed inside the value as Map(K, Nullable(V)); Map keys are
+        // themselves non-nullable in ClickHouse.
+        yield return Maps<string, uint>("String", "UInt32", Pairs<string, uint>(("a", 1), ("b", 2)), Array.Empty<KeyValuePair<string, uint>>(), Pairs<string, uint>(("x", uint.MaxValue)));
+        yield return Maps<byte, string>("UInt8", "String", Pairs<byte, string>((1, "a"), (2, "héllo✓")), Array.Empty<KeyValuePair<byte, string>>());
+        yield return Maps<string, uint>("String", "UInt32", Array.Empty<KeyValuePair<string, uint>>(), Array.Empty<KeyValuePair<string, uint>>()); // every row empty
+
+        // Value composites: Nullable (the Nullable stand-in) and Array inside the value.
+        yield return Maps<string, uint?>("String", "Nullable(UInt32)", Pairs<string, uint?>(("a", 1), ("b", null)), Array.Empty<KeyValuePair<string, uint?>>(), Pairs<string, uint?>(("c", null)));
+        yield return Maps<string, int[]>("String", "Array(Int32)", Pairs<string, int[]>(("a", new[] { 1, 2, 3 }), ("b", Array.Empty<int>())), Pairs<string, int[]>(("c", new[] { -1 })));
+        yield return Maps<string, (int, string)>("String", "Tuple(Int32, String)", Pairs<string, (int, string)>(("a", (1, "x")), ("b", (-5, string.Empty))), Array.Empty<KeyValuePair<string, (int, string)>>());
+
+        // Nested: Array(Map(...)) recurses the offsets-plus-streams shape one level up through the array codec.
+        yield return Arrays<KeyValuePair<string, uint>[]>("Map(String, UInt32)", new[]
+        {
+            new[] { Pairs<string, uint>(("a", 1)), Pairs<string, uint>(("b", 2), ("c", 3)) },
+            Array.Empty<KeyValuePair<string, uint>[]>(),
+        });
+    }
+
+    // Map(K, V) inserts and reads back the ergonomic jagged column of KeyValuePair arrays, which doubles as expected.
+    private static InsertRoundTripCase Maps<TKey, TValue>(string keyType, string valueType, params KeyValuePair<TKey, TValue>[][] rows)
+    {
+        string type = $"Map({keyType}, {valueType})";
+        return Same($"{type} [{rows.Length} rows]", type, name => new ArrayColumn<KeyValuePair<TKey, TValue>[]>(name, type, rows));
+    }
+
+    // Builds one map row's pairs, preserving the given order.
+    private static KeyValuePair<TKey, TValue>[] Pairs<TKey, TValue>(params (TKey Key, TValue Value)[] pairs)
+    {
+        var result = new KeyValuePair<TKey, TValue>[pairs.Length];
+        for (int i = 0; i < pairs.Length; i++)
+        {
+            result[i] = new KeyValuePair<TKey, TValue>(pairs[i].Key, pairs[i].Value);
+        }
+
+        return result;
     }
 
     // Array(T) inserts and reads back the inner element arrays; the ergonomic jagged column doubles as expected.
