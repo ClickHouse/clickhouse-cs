@@ -32,7 +32,7 @@ internal class BatchSerializer : IBatchSerializer
         var compressing = compressor != null;
         var target = compressing ? compressor.Compress(stream, leaveOpen: true) : stream;
 
-        QueryLineWriter.Write(target, batch.Query);
+        PooledStreamWriter.WriteLine(target, batch.Query);
 
         using var writer = new ExtendedBinaryWriter(target, leaveOpen: !compressing);
 
