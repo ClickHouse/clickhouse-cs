@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
 using System.Text;
 
 namespace ClickHouse.Driver.Formats;
@@ -51,6 +52,27 @@ internal class ExtendedBinaryReader : BinaryReader
         while (bytesRead < count);
 
         return bytesRead;
+    }
+
+    /// <summary>
+    /// Performs guaranteed read of enough bytes to fill <paramref name="buffer"/>, or throws.
+    /// Lets callers read fixed-size values into a stack-allocated span without heap allocation.
+    /// </summary>
+    /// <param name="buffer">destination span to fill completely</param>
+    /// <exception cref="EndOfStreamException">thrown if the stream ends before the span is filled</exception>
+    public void ReadBytes(Span<byte> buffer)
+    {
+        int bytesRead = 0;
+        while (bytesRead < buffer.Length)
+        {
+            int read = base.Read(buffer.Slice(bytesRead));
+            if (read == 0)
+            {
+                throw new EndOfStreamException($"Expected to read {buffer.Length} bytes, got {bytesRead}");
+            }
+
+            bytesRead += read;
+        }
     }
 
     public override int PeekChar() => streamWrapper.Peek();
