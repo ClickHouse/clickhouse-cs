@@ -76,6 +76,12 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <summary>
     /// Gets RecyclableMemoryStreamManager used to create recyclable streams.
     /// </summary>
+    /// <remarks>
+    /// No longer used: binary inserts now stream directly into the HTTP request body instead of
+    /// buffering the payload through a <see cref="RecyclableMemoryStreamManager"/>, so setting this
+    /// has no effect. Scheduled for removal in a future version.
+    /// </remarks>
+    [Obsolete("MemoryStreamManager is no longer used: binary inserts stream directly into the request body and no longer buffer through a RecyclableMemoryStream. This property has no effect and will be removed in a future version.")]
     public RecyclableMemoryStreamManager MemoryStreamManager
     {
         get { return memoryStreamManager ?? CommonMemoryStreamManager; }

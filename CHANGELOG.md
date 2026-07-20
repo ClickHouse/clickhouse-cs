@@ -12,6 +12,9 @@ Unreleased
 * Reduced allocations when writing `Decimal`/`Decimal128`/`Decimal256` values (binary inserts and parameters): the write path no longer allocates a `BigInteger.ToByteArray()` array plus a separate destination buffer per value. It now writes the mantissa directly into a stack-allocated span, eliminating both heap allocations. Behavior is unchanged, including two's-complement sign extension for negative values and overflow detection.
 * Binary inserts (`InsertBinaryAsync`) now stream the serialized batch directly into the HTTP request body instead of buffering the whole payload in a pooled `RecyclableMemoryStream` first, eliminating the transient per-batch buffer and reducing memory/large-object-heap pressure for large and concurrent inserts. Throughput is unchanged. Requests are now sent with chunked transfer-encoding (no `Content-Length`).
 
+**Deprecations:**
+* `ClickHouseClient.MemoryStreamManager` is now `[Obsolete]`. Since binary inserts stream directly into the request body (see above), this property is no longer used and has no effect; it will be removed in a future version.
+
 **Bug Fixes:**
 
 v1.3.0

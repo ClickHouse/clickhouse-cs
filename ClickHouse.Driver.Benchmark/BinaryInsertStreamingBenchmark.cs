@@ -10,7 +10,7 @@ namespace ClickHouse.Driver.Benchmark;
 
 /// <summary>
 /// Measures the cost of a binary insert on the object[] and POCO paths across degrees of
-/// parallelism. Targets issue #508: before streaming, each (gzipped) batch is materialized into a
+/// parallelism. Before streaming, each (gzipped) batch is materialized into a
 /// rented <see cref="RecyclableMemoryStream"/> before its POST starts. This benchmark reports both
 /// the BenchmarkDotNet time/allocation columns and a custom "peak pooled bytes" metric that
 /// samples the injected <see cref="RecyclableMemoryStreamManager"/> in-use size during the run.
