@@ -34,6 +34,7 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
         public ulong U64 { get; set; }
         public float F32 { get; set; }
         public double F64 { get; set; }
+        public float BF { get; set; }
         public bool B { get; set; }
     }
 
@@ -77,7 +78,7 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
         const string sql =
             "SELECT toInt8(-8) AS I8, toInt16(-16) AS I16, toInt32(-32) AS I32, toInt64(-64) AS I64, " +
             "toUInt8(8) AS U8, toUInt16(16) AS U16, toUInt32(32) AS U32, toUInt64(64) AS U64, " +
-            "toFloat32(1.5) AS F32, toFloat64(2.5) AS F64, true AS B";
+            "toFloat32(1.5) AS F32, toFloat64(2.5) AS F64, toBFloat16(1.25) AS BF, true AS B";
 
         // Every column is a value type with a typed reader, so the whole row is box-free.
         using (var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(sql))
@@ -100,6 +101,7 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
             Assert.That(row.U64, Is.EqualTo(64ul));
             Assert.That(row.F32, Is.EqualTo(1.5f));
             Assert.That(row.F64, Is.EqualTo(2.5d));
+            Assert.That(row.BF, Is.EqualTo(1.25f)); // exactly representable in BFloat16
             Assert.That(row.B, Is.True);
         });
     }
