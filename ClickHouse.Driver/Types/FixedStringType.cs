@@ -8,7 +8,7 @@ using ClickHouse.Driver.Types.Grammar;
 
 namespace ClickHouse.Driver.Types;
 
-internal class FixedStringType : ParameterizedType
+internal class FixedStringType : ParameterizedType, ITypedReader<string>, ITypedReader<byte[]>
 {
     public int Length { get; set; }
 
@@ -33,13 +33,19 @@ internal class FixedStringType : ParameterizedType
     private const int MaxStackAllocLength = 256;
 
     public override object Read(ExtendedBinaryReader reader)
-    {
-        if (ReadAsByteArray)
-        {
-            // Buffer is returned to the caller as the column value, so it must be a fresh heap array.
-            return reader.ReadBytes(Length);
-        }
+        => ReadAsByteArray ? ReadByteArray(reader) : ReadStringValue(reader);
 
+    // Both representations are always available to the typed read fast path; the boxed Read picks per the
+    // client's ReadAsByteArray setting. Explicit interface impls because they differ only by return type.
+    string ITypedReader<string>.ReadValue(ExtendedBinaryReader reader) => ReadStringValue(reader);
+
+    byte[] ITypedReader<byte[]>.ReadValue(ExtendedBinaryReader reader) => ReadByteArray(reader);
+
+    // Buffer is returned to the caller as the column value, so it must be a fresh heap array.
+    private byte[] ReadByteArray(ExtendedBinaryReader reader) => reader.ReadBytes(Length);
+
+    private string ReadStringValue(ExtendedBinaryReader reader)
+    {
         byte[] rented = null;
         try
         {
