@@ -402,7 +402,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// Mirrors <see cref="Read"/>'s mid-stream server-exception handling. The delegates consume every wire
     /// column in order, so the stream stays aligned even for columns the POCO does not map.
     /// </summary>
-    internal bool TryReadRow<T>(Action<ExtendedBinaryReader, T>[] materializers, Func<T> constructor, out T value)
+    internal bool TryMaterializeNextRow<T>(Action<ExtendedBinaryReader, T>[] materializers, Func<T> constructor, out T value)
         where T : class
     {
         if (reader.PeekChar() == -1)
