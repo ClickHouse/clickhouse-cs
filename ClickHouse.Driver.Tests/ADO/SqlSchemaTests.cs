@@ -13,7 +13,6 @@ namespace ClickHouse.Driver.Tests.ADO;
 [Category("Cloud")]
 public class SqlSchemaTests : AbstractConnectionTestFixture
 {
-#if NET5_0_OR_GREATER
     [Test]
     public async Task ShouldGetReaderColumnSchema()
     {
@@ -26,7 +25,6 @@ public class SqlSchemaTests : AbstractConnectionTestFixture
             Assert.That(schema[1].ColumnName, Is.EqualTo("str"));
         });
     }
-#endif
 
     [Test]
     public async Task ShouldGetReaderSchemaTable()
@@ -64,7 +62,6 @@ public class SqlSchemaTests : AbstractConnectionTestFixture
         });
     }
 
-#if NET5_0_OR_GREATER
     [Test]
     public async Task GetColumnSchema_DateTime64Column_ReportsScaleAsNumericScale()
     {
@@ -74,7 +71,6 @@ public class SqlSchemaTests : AbstractConnectionTestFixture
         var column = reader.GetColumnSchema()[0];
         Assert.That(column.NumericScale, Is.EqualTo(3));
     }
-#endif
 
     [Test]
     [RequiredFeature(Feature.Time)]
@@ -98,7 +94,7 @@ public class SqlSchemaTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task GetSchemaTable_DecimalColumn_StillReportsPrecisionAndScale()
+    public async Task GetSchemaTable_DecimalColumn_ReportsPrecisionAndScale()
     {
         using var reader = await connection.ExecuteReaderAsync("SELECT CAST(1.23 AS Decimal(18, 4)) AS d");
         var row = reader.GetSchemaTable().Rows[0];
@@ -111,7 +107,7 @@ public class SqlSchemaTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task GetSchemaTable_NullableDecimalColumn_StillReportsPrecisionAndScale()
+    public async Task GetSchemaTable_NullableDecimalColumn_ReportsPrecisionAndScale()
     {
         using var reader = await connection.ExecuteReaderAsync("SELECT CAST(1.23 AS Nullable(Decimal(18, 4))) AS d");
         var row = reader.GetSchemaTable().Rows[0];
