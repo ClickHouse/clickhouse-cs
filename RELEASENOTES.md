@@ -17,6 +17,9 @@ Unreleased
 * Lower GC pressure when reading query responses: the reader no longer allocates a fresh `BufferedStream` buffer per query. The response read buffering now rents its backing buffer from `ArrayPool<byte>` and returns it when the reader is disposed, removing one fresh allocation per query. **The default `ReadBufferSize` has been raised from 8 KiB to 64 KiB** now that pooling removes the per-query allocation that motivated the small default (see v1.3.0), reducing read refills on large responses.
 * Binary inserts (`InsertBinaryAsync`) now stream the serialized batch directly into the HTTP request body instead of buffering the whole payload in a pooled `RecyclableMemoryStream` first, eliminating the transient per-batch buffer and reducing memory/large-object-heap pressure for large and concurrent inserts. Throughput is unchanged. Requests are now sent with chunked transfer-encoding (no `Content-Length`).
 
+**Deprecations:**
+* `ClickHouseClient.MemoryStreamManager` is now `[Obsolete]`. Since binary inserts stream directly into the request body (see above), this property is no longer used and has no effect; it will be removed in a future version.
+
 **Bug Fixes:**
 * Fixed `ClickHouseServerException` carrying a blank `Message` and an `ErrorCode` of `-1` when the server — or an upstream component such as a load balancer or the ClickHouse Cloud edge — returned a non-2xx HTTP response with an empty (or whitespace-only) body. The exception now reports the HTTP status code and reason phrase, and uses the `X-ClickHouse-Exception-Code` response header as the error code when the server sets it (issue #440). Non-empty error bodies are unaffected.
 
