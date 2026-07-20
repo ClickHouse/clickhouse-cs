@@ -4,11 +4,13 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class IPv4Type : ClickHouseType
+internal class IPv4Type : ClickHouseType, ITypedReader<IPAddress>
 {
     public override Type FrameworkType => typeof(IPAddress);
 
-    public override object Read(ExtendedBinaryReader reader)
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public IPAddress ReadValue(ExtendedBinaryReader reader)
     {
         var ipv4bytes = reader.ReadBytes(4);
         Array.Reverse(ipv4bytes);

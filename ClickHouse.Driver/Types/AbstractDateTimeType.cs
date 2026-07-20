@@ -21,7 +21,8 @@ internal static class DateTimeConversions
 }
 
 internal abstract class AbstractDateTimeType : ParameterizedType,
-    ITypedWriter<DateTime>, ITypedWriter<DateTimeOffset>, ITypedWriter<DateOnly>
+    ITypedWriter<DateTime>, ITypedWriter<DateTimeOffset>, ITypedWriter<DateOnly>,
+    ITypedReader<DateTime>, ITypedReader<DateTimeOffset>, ITypedReader<DateOnly>
 {
     // ClickHouse emits synthetic fixed-offset timezone names like "Fixed/UTC+05:30:00" for columns
     // declared with a fixed UTC offset. These names are not in the IANA TZDB so GetZoneOrNull
@@ -117,13 +118,34 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
 
     public override Type FrameworkType => typeof(DateTime);
 
+    // The boxed read returns the canonical DateTime, historically the only representation. The typed read
+    // fast path can additionally produce DateTimeOffset / DateOnly from the same wire value (explicit impls
+    // because they differ only by return type). Each is byte-identical to the boxed path by construction.
+    public override object Read(ExtendedBinaryReader reader) => ReadDateTime(reader);
+
+    DateTime ITypedReader<DateTime>.ReadValue(ExtendedBinaryReader reader) => ReadDateTime(reader);
+
+    DateTimeOffset ITypedReader<DateTimeOffset>.ReadValue(ExtendedBinaryReader reader) => ReadDateTimeOffset(reader);
+
+    DateOnly ITypedReader<DateOnly>.ReadValue(ExtendedBinaryReader reader) => ReadDateOnly(reader);
+
+    // Decodes the wire form into a DateTime — the historical Read result. Subclasses implement per their
+    // on-wire encoding (seconds / ticks / days).
+    protected abstract DateTime ReadDateTime(ExtendedBinaryReader reader);
+
+    // Default derives an offset-0 value from the decoded DateTime; correct for the date-only subtypes, whose
+    // DateTime is UTC-kind. Timezone-aware subtypes override to derive the offset from the source instant.
+    protected virtual DateTimeOffset ReadDateTimeOffset(ExtendedBinaryReader reader) => new(ReadDateTime(reader), TimeSpan.Zero);
+
+    protected virtual DateOnly ReadDateOnly(ExtendedBinaryReader reader) => DateOnly.FromDateTime(ReadDateTime(reader));
+
     public DateTimeZone TimeZone { get; set; }
 
     public DateTimeZone TimeZoneOrUtc => TimeZone ?? DateTimeZone.Utc;
 
     public override string ToString() => TimeZone == null ? $"{Name}" : $"{Name}('{TimeZone.Id}')";
 
-    private DateTimeOffset ToDateTimeOffset(Instant instant) => instant.InZone(TimeZoneOrUtc).ToDateTimeOffset();
+    protected DateTimeOffset ToDateTimeOffset(Instant instant) => instant.InZone(TimeZoneOrUtc).ToDateTimeOffset();
 
     public DateTime ToDateTime(Instant instant)
     {

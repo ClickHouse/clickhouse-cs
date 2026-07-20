@@ -5,7 +5,7 @@ using Microsoft.IO;
 
 namespace ClickHouse.Driver.Types;
 
-internal class StringType : ClickHouseType
+internal class StringType : ClickHouseType, ITypedReader<string>, ITypedReader<byte[]>
 {
     private static readonly RecyclableMemoryStreamManager MemoryStreamManager = new();
 
@@ -14,13 +14,20 @@ internal class StringType : ClickHouseType
     public override Type FrameworkType => ReadAsByteArray ? typeof(byte[]) : typeof(string);
 
     public override object Read(ExtendedBinaryReader reader)
+        => ReadAsByteArray ? ReadByteArray(reader) : ReadStringValue(reader);
+
+    // Both representations are always available to the typed read fast path; the boxed Read picks per the
+    // client's ReadAsByteArray setting. Explicit interface impls because they differ only by return type.
+    string ITypedReader<string>.ReadValue(ExtendedBinaryReader reader) => ReadStringValue(reader);
+
+    byte[] ITypedReader<byte[]>.ReadValue(ExtendedBinaryReader reader) => ReadByteArray(reader);
+
+    private static string ReadStringValue(ExtendedBinaryReader reader) => reader.ReadString();
+
+    private static byte[] ReadByteArray(ExtendedBinaryReader reader)
     {
-        if (ReadAsByteArray)
-        {
-            var length = reader.Read7BitEncodedInt();
-            return reader.ReadBytes(length);
-        }
-        return reader.ReadString();
+        var length = reader.Read7BitEncodedInt();
+        return reader.ReadBytes(length);
     }
 
     public override string ToString() => "String";

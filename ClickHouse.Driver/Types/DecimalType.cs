@@ -7,7 +7,7 @@ using ClickHouse.Driver.Types.Grammar;
 
 namespace ClickHouse.Driver.Types;
 
-internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWriter<ClickHouseDecimal>
+internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWriter<ClickHouseDecimal>, ITypedReader<decimal>, ITypedReader<ClickHouseDecimal>
 {
     private int scale;
 
@@ -62,27 +62,36 @@ internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWri
     }
 
     public override object Read(ExtendedBinaryReader reader)
+        // Cast to object so the ternary does not unify decimal into ClickHouseDecimal via its implicit
+        // conversion (which would make the UseBigDecimal=false branch return the wrong type).
+        => UseBigDecimal ? ReadClickHouseDecimal(reader) : (object)ReadDecimal(reader);
+
+    // Both representations are always available to the typed read fast path; the boxed Read picks per the
+    // UseBigDecimal setting. Explicit interface impls because they differ only by return type.
+    decimal ITypedReader<decimal>.ReadValue(ExtendedBinaryReader reader) => ReadDecimal(reader);
+
+    ClickHouseDecimal ITypedReader<ClickHouseDecimal>.ReadValue(ExtendedBinaryReader reader) => ReadClickHouseDecimal(reader);
+
+    private ClickHouseDecimal ReadClickHouseDecimal(ExtendedBinaryReader reader)
     {
-        if (UseBigDecimal)
+        var mantissa = Size switch
         {
-            var mantissa = Size switch
-            {
-                4 => (BigInteger)reader.ReadInt32(),
-                8 => (BigInteger)reader.ReadInt64(),
-                _ => new BigInteger(reader.ReadBytes(Size)),
-            };
-            return new ClickHouseDecimal(mantissa, Scale);
-        }
-        else
+            4 => (BigInteger)reader.ReadInt32(),
+            8 => (BigInteger)reader.ReadInt64(),
+            _ => new BigInteger(reader.ReadBytes(Size)),
+        };
+        return new ClickHouseDecimal(mantissa, Scale);
+    }
+
+    private decimal ReadDecimal(ExtendedBinaryReader reader)
+    {
+        var mantissa = Size switch
         {
-            var mantissa = Size switch
-            {
-                4 => reader.ReadInt32(),
-                8 => reader.ReadInt64(),
-                _ => (decimal)new BigInteger(reader.ReadBytes(Size)),
-            };
-            return mantissa / (decimal)Exponent;
-        }
+            4 => reader.ReadInt32(),
+            8 => reader.ReadInt64(),
+            _ => (decimal)new BigInteger(reader.ReadBytes(Size)),
+        };
+        return mantissa / (decimal)Exponent;
     }
 
     public override string ToString() => $"{Name}({Precision}, {Scale})";
