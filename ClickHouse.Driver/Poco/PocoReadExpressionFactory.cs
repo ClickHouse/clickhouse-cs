@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
 using ClickHouse.Driver.Formats;
@@ -29,6 +30,12 @@ internal static class PocoReadExpressionFactory
     private static readonly MethodInfo ReadByteMethod =
         typeof(System.IO.BinaryReader).GetMethod(nameof(System.IO.BinaryReader.ReadByte), Type.EmptyTypes);
 
+    private static readonly MethodInfo MapReadListMethod =
+        typeof(MapMaterializer).GetMethod(nameof(MapMaterializer.ReadList));
+
+    private static readonly MethodInfo MapReadArrayMethod =
+        typeof(MapMaterializer).GetMethod(nameof(MapMaterializer.ReadArray));
+
     /// <summary>
     /// Returns an expression that reads the column value of exact CLR type <paramref name="targetClrType"/>
     /// from <paramref name="reader"/> without boxing, or <c>null</c> if there is no fast path and the caller
@@ -46,6 +53,12 @@ internal static class PocoReadExpressionFactory
 
         if (type is NullableType nullableType)
             return TryBuildNullableRead(nullableType, reader, targetClrType);
+
+        // Map column bound to a List<KeyValuePair<K,V>> or KeyValuePair<K,V>[] property: materialize the
+        // entries in wire order (preserving duplicate keys) instead of the boxed Dictionary. A Dictionary
+        // property has no typed reader here and falls through to the boxed path below, unchanged.
+        if (type is MapType mapType)
+            return TryBuildMapRead(mapType, reader, targetClrType);
 
         // Non-nullable column with a Nullable<U> property: read U from the column and wrap it — the column
         // never yields null, so this is always a value.
@@ -87,6 +100,39 @@ internal static class PocoReadExpressionFactory
                 Expression.GreaterThan(marker, Expression.Constant((byte)0)),
                 Expression.Default(targetClrType),
                 hasValue));
+    }
+
+    // Map(K,V) -> List<KeyValuePair<K,V>> or KeyValuePair<K,V>[]. Returns null (so the boxed Dictionary path
+    // is used) unless the property is exactly one of those shapes AND its K/V match the map's key/value
+    // framework types — no silent element coercion, mirroring the exact-match rule everywhere else.
+    private static Expression TryBuildMapRead(MapType map, Expression reader, Type targetClrType)
+    {
+        Type elementType;
+        bool isArray;
+        if (targetClrType.IsArray)
+        {
+            elementType = targetClrType.GetElementType();
+            isArray = true;
+        }
+        else if (targetClrType.IsGenericType && targetClrType.GetGenericTypeDefinition() == typeof(List<>))
+        {
+            elementType = targetClrType.GetGenericArguments()[0];
+            isArray = false;
+        }
+        else
+        {
+            return null;
+        }
+
+        if (elementType is not { IsGenericType: true } || elementType.GetGenericTypeDefinition() != typeof(KeyValuePair<,>))
+            return null;
+
+        var kvpArgs = elementType.GetGenericArguments();
+        if (kvpArgs[0] != map.KeyType.FrameworkType || kvpArgs[1] != map.ValueType.FrameworkType)
+            return null;
+
+        var method = (isArray ? MapReadArrayMethod : MapReadListMethod).MakeGenericMethod(kvpArgs[0], kvpArgs[1]);
+        return Expression.Call(method, Expression.Constant(map), reader);
     }
 
     // ((ITypedReader<clrType>)type).ReadValue(reader) — result typed exactly clrType, no box. Invariance in T
