@@ -3,11 +3,13 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class UuidType : ClickHouseType, ITypedWriter<Guid>
+internal class UuidType : ClickHouseType, ITypedWriter<Guid>, ITypedReader<Guid>
 {
     public override Type FrameworkType => typeof(Guid);
 
-    public override object Read(ExtendedBinaryReader reader)
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public Guid ReadValue(ExtendedBinaryReader reader)
     {
         // Byte manipulation because of ClickHouse's weird GUID/UUID implementation
         var bytes = new byte[16];

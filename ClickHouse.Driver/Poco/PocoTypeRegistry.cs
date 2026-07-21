@@ -30,6 +30,17 @@ internal sealed class PocoTypeRegistry
     // column-type sequence.
     private readonly ConcurrentDictionary<Type, ConcurrentDictionary<string, object>> writerCache = new();
 
+    // Cache of compiled per-wire-column read delegates for the POCO materialization fast path. Mirrors
+    // writerCache: outer key is the POCO Type identity, inner key is the wire-column signature (field
+    // names + resolved types, in order) — both matter because they jointly determine binding and decode.
+    // Each column gets its own delegate (typed fast read, or a boxed-fallback read for composites, or a
+    // discard read for unmapped columns), so a slow column never disables the fast path for its siblings.
+    // Invariant: a registry is owned by a single ClickHouseClient, so every read served through this cache
+    // shares that client's fixed ReadStringsAsByteArrays setting. The key therefore does not need to encode
+    // String's byte-array-vs-string mode; if the registry were ever shared across clients with differing
+    // settings, the key would have to include StringType.ReadAsByteArray (or FrameworkType) to stay correct.
+    private readonly ConcurrentDictionary<Type, ConcurrentDictionary<string, object>> rowReaderCache = new();
+
     /// <summary>
     /// Registers a POCO type for binary insert. Idempotent and thread-safe.
     /// </summary>
@@ -135,6 +146,130 @@ internal sealed class PocoTypeRegistry
     internal PocoReadMapping<T> GetReadMapping<T>()
         where T : class
         => readMappings.TryGetValue(typeof(T), out var mapping) ? (PocoReadMapping<T>)mapping : null;
+
+    /// <summary>
+    /// Gets (building and caching on first use) the per-wire-column read delegates that materialize one row
+    /// of the given shape straight from the stream into a <typeparamref name="T"/>. There is one delegate per
+    /// wire column, in wire order, and the array is jointly responsible for consuming every column's bytes:
+    /// a bound column with a typed read decodes box-free and assigns; a bound column with no typed read
+    /// (composite/polymorphic) reads via the boxed path and assigns with the same null/error semantics as
+    /// <c>MapTo&lt;T&gt;</c>; an unmapped column reads and discards (to keep the stream aligned). Cached per
+    /// <c>(T, wire-column signature)</c> since the same POCO can be read from different projections. Throws
+    /// (fail-fast, on first use of a shape) if a boxed-fallback column is not assignable to its property.
+    /// </summary>
+    /// <param name="fieldNames">Wire column names, in order.</param>
+    /// <param name="types">Resolved ClickHouse column types, in wire order (parallel to <paramref name="fieldNames"/>).</param>
+    /// <param name="mapping">The read mapping for <typeparamref name="T"/> (bindings + constructor).</param>
+    internal Action<ExtendedBinaryReader, T>[] GetOrBuildRowReaders<T>(
+        string[] fieldNames, ClickHouseType[] types, PocoReadMapping<T> mapping)
+        where T : class
+    {
+        var byType = rowReaderCache.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<string, object>(StringComparer.Ordinal));
+        var key = BuildRowReaderKey(fieldNames, types);
+        return (Action<ExtendedBinaryReader, T>[])byType.GetOrAdd(key, _ => BuildRowReaders(fieldNames, types, mapping));
+    }
+
+    // Signature over the wire shape: field name + resolved type per column, in order. '\t' separates the
+    // name from the type and '\n' separates columns — neither appears in a ClickHouse type name, and column
+    // aliases in practice contain neither, so the key distinguishes the shapes we cache. (A pathological
+    // backtick-quoted alias embedding a literal tab/newline could in theory collide; the shapes come from
+    // the caller's own SQL on an internal path, so this is not a security or real-world correctness concern.)
+    private static string BuildRowReaderKey(string[] fieldNames, ClickHouseType[] types)
+    {
+        var parts = new string[types.Length];
+        for (var i = 0; i < types.Length; i++)
+            parts[i] = fieldNames[i] + "\t" + types[i].ToString();
+        return string.Join("\n", parts);
+    }
+
+    private static Action<ExtendedBinaryReader, T>[] BuildRowReaders<T>(
+        string[] fieldNames, ClickHouseType[] types, PocoReadMapping<T> mapping)
+        where T : class
+    {
+        var readers = new Action<ExtendedBinaryReader, T>[types.Length];
+        var readerParam = Expression.Parameter(typeof(ExtendedBinaryReader), "reader");
+        var instanceParam = Expression.Parameter(typeof(T), "instance");
+
+        for (var i = 0; i < types.Length; i++)
+        {
+            var type = types[i];
+
+            if (!mapping.Bindings.TryGetValue(fieldNames[i], out var binding))
+            {
+                // Unmapped column: not assigned to any property, but its bytes must still be consumed so the
+                // next column reads from the right offset. Boxes the discarded value — acceptable, since it
+                // is a column the caller's POCO does not use. Copy to a local for correct closure capture.
+                var discardType = type;
+                readers[i] = (r, _) => discardType.Read(r);
+                continue;
+            }
+
+            var readBody = PocoReadExpressionFactory.TryBuildReadBody(type, readerParam, binding.PropInfo.PropertyType);
+            if (readBody != null)
+            {
+                // Box-free fast path: read straight into the strongly-typed property. Exact-typed by
+                // construction, so no runtime assignability check is needed.
+                var assign = Expression.Assign(Expression.Property(instanceParam, binding.PropInfo.Property), readBody);
+                readers[i] = Expression.Lambda<Action<ExtendedBinaryReader, T>>(assign, readerParam, instanceParam).Compile();
+            }
+            else
+            {
+                // No typed read (composite/polymorphic column): fall back to the boxed read + setter for just
+                // this column, byte-identical to MapTo<T>. Validate assignability up front (fail-fast) exactly
+                // as MapTo's plan build does.
+                if (!PocoColumnAssignment.IsAssignable(binding.PropInfo, type))
+                {
+                    var colFrameworkType = type.FrameworkType;
+                    var unwrapped = Nullable.GetUnderlyingType(colFrameworkType) ?? colFrameworkType;
+                    throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
+                        typeof(T), binding.PropInfo, fieldNames[i], type.ToString(), unwrapped));
+                }
+
+                readers[i] = BuildBoxedColumnReader(type, binding, fieldNames[i]);
+            }
+        }
+
+        return readers;
+    }
+
+    // Boxed fallback for a single column, replicating MapTo<T>'s per-column assignment: read the value, map
+    // null/DBNull to the property (or throw if it cannot take null), and translate an assignment
+    // InvalidCastException into the standard diagnostic. No value converter is involved — the fast loop is
+    // only used when the reader has no read value converter.
+    private static Action<ExtendedBinaryReader, T> BuildBoxedColumnReader<T>(
+        ClickHouseType type, ColumnBinding<T> binding, string fieldName)
+        where T : class
+    {
+        var propInfo = binding.PropInfo;
+        var setter = binding.Setter;
+        var canAssignNull = propInfo.CanAssignNull;
+
+        return (reader, instance) =>
+        {
+            var value = type.Read(reader);
+            if (value is null || value is DBNull)
+            {
+                if (canAssignNull)
+                {
+                    setter(instance, null);
+                    return;
+                }
+
+                throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
+                    typeof(T), propInfo, fieldName, type.ToString(), null));
+            }
+
+            try
+            {
+                setter(instance, value);
+            }
+            catch (InvalidCastException)
+            {
+                throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
+                    typeof(T), propInfo, fieldName, type.ToString(), value.GetType()));
+            }
+        };
+    }
 
     private static PocoInsertMapping<T> BuildInsertMapping<T>(ILogger logger)
         where T : class

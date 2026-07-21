@@ -14,11 +14,13 @@ namespace ClickHouse.Driver.Types;
 /// Conversion is performed by truncating/extending the bit representation. The top 16 bits of a Float32
 /// are equivalent to a BFloat16.
 /// </remarks>
-internal class BFloat16Type : FloatType, ITypedWriter<float>
+internal class BFloat16Type : FloatType, ITypedWriter<float>, ITypedReader<float>
 {
     public override Type FrameworkType => typeof(float);
 
-    public override object Read(ExtendedBinaryReader reader)
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public float ReadValue(ExtendedBinaryReader reader)
     {
         // BFloat16 is 16 bits: 1 sign + 8 exponent + 7 mantissa
         // Read as ushort and expand to float32 by left-shifting 16 bits

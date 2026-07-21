@@ -24,7 +24,7 @@ namespace ClickHouse.Driver.Types;
 /// At the moment, the option enable_time_time64_type must be set to 1 to use Time or Time64.
 /// </para>
 /// </summary>
-internal class Time64Type : ParameterizedType, ITypedWriter<TimeSpan>
+internal class Time64Type : ParameterizedType, ITypedWriter<TimeSpan>, ITypedReader<TimeSpan>
 {
     // Range: [-999:59:59.xxx, 999:59:59.xxx] in seconds with fractional part
     internal const decimal MinSeconds = -3599999.999999999m; // -999:59:59.999999999
@@ -111,11 +111,13 @@ internal class Time64Type : ParameterizedType, ITypedWriter<TimeSpan>
         };
     }
 
-    public override object Read(ExtendedBinaryReader reader)
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public TimeSpan ReadValue(ExtendedBinaryReader reader)
     {
         // Read as Decimal64 (like DecimalType does)
         // Time64 is stored as Decimal64(Scale) internally
-        var fractionalSeconds = (decimal)decimalType.Read(reader);
+        var fractionalSeconds = ((ITypedReader<decimal>)decimalType).ReadValue(reader);
 
         return Time64Type.FromClickHouseDecimal(fractionalSeconds);
     }

@@ -349,7 +349,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                     continue;
                 }
 
-                throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
                     typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), null));
             }
 
@@ -359,12 +359,74 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             }
             catch (InvalidCastException)
             {
-                throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
                     typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), value.GetType()));
             }
         }
 
         return instance;
+    }
+
+    /// <summary>
+    /// If <typeparamref name="T"/> is registered for read and the current result shape has a full box-free
+    /// fast path, returns the per-wire-column materializer delegates and the constructor; otherwise returns
+    /// false and the caller should use the <see cref="Read"/> + <see cref="MapTo{T}"/> loop. Disabled when a
+    /// read value converter is present, since the boxed path routes every value through it (see
+    /// <see cref="MapTo{T}"/>), and that conversion must not be bypassed.
+    /// </summary>
+    internal bool TryGetRowMaterializer<T>(out Action<ExtendedBinaryReader, T>[] materializers, out Func<T> constructor)
+        where T : class
+    {
+        materializers = null;
+        constructor = null;
+
+        if (readValueConverter != null || pocoRegistry == null)
+            return false;
+
+        var mapping = pocoRegistry.GetReadMapping<T>();
+        if (mapping == null)
+            return false;
+
+        var built = pocoRegistry.GetOrBuildRowReaders<T>(FieldNames, RawTypes, mapping);
+        if (built == null)
+            return false;
+
+        materializers = built;
+        constructor = mapping.Constructor;
+        return true;
+    }
+
+    /// <summary>
+    /// Reads and materializes the next row straight from the stream via the fast-path delegates, bypassing
+    /// the shared <c>object[]</c> row buffer (and its per-value boxing). Returns false at end of stream.
+    /// Mirrors <see cref="Read"/>'s mid-stream server-exception handling. The delegates consume every wire
+    /// column in order, so the stream stays aligned even for columns the POCO does not map.
+    /// </summary>
+    internal bool TryMaterializeNextRow<T>(Action<ExtendedBinaryReader, T>[] materializers, Func<T> constructor, out T value)
+        where T : class
+    {
+        if (reader.PeekChar() == -1)
+        {
+            hasCurrentRow = false;
+            value = null;
+            return false;
+        }
+
+        try
+        {
+            var instance = constructor();
+            for (var i = 0; i < materializers.Length; i++)
+                materializers[i](reader, instance);
+            value = instance;
+            return true;
+        }
+        catch (EndOfStreamException) when (exceptionTagStream != null)
+        {
+            var serverEx = exceptionTagStream.TryExtractMidStreamException();
+            if (serverEx != null)
+                throw serverEx;
+            throw;
+        }
     }
 
     private (int ColumnOrdinal, ColumnBinding<T> Binding)[] GetOrBuildBindingPlan<T>(PocoReadMapping<T> mapping)
@@ -397,34 +459,13 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private void ValidateBinding(Type pocoType, PocoPropertyInfo propInfo, int columnOrdinal)
     {
         var colType = RawTypes[columnOrdinal];
-        var colFrameworkType = colType.FrameworkType;
-        var unwrappedColFrameworkType = Nullable.GetUnderlyingType(colFrameworkType) ?? colFrameworkType;
-
-        if (unwrappedColFrameworkType == typeof(object))
-            return;
-
-        var assignable = propInfo.PropertyType.IsAssignableFrom(unwrappedColFrameworkType)
-            || (propInfo.NullableUnderlyingType != null && propInfo.NullableUnderlyingType.IsAssignableFrom(unwrappedColFrameworkType));
-
-        if (!assignable)
+        if (!PocoColumnAssignment.IsAssignable(propInfo, colType))
         {
-            throw new InvalidOperationException(BuildAssignmentErrorMessage(
+            var colFrameworkType = colType.FrameworkType;
+            var unwrappedColFrameworkType = Nullable.GetUnderlyingType(colFrameworkType) ?? colFrameworkType;
+            throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
                 pocoType, propInfo, FieldNames[columnOrdinal], colType.ToString(), unwrappedColFrameworkType));
         }
-    }
-
-    private static string BuildAssignmentErrorMessage(
-        Type targetType,
-        PocoPropertyInfo propInfo,
-        string columnName,
-        string clickHouseType,
-        Type returnedType)
-    {
-        var returnedDescription = returnedType is null ? "null" : returnedType.FullName;
-        return
-            $"Cannot map ClickHouse column '{columnName}' ({clickHouseType}) to property " +
-            $"{targetType.Name}.{propInfo.PropertyName} ({propInfo.PropertyType.FullName}). " +
-            $"The reader returned {returnedDescription}, which is not assignable to {propInfo.PropertyType.FullName}.";
     }
 
     public override bool Read()

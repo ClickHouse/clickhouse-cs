@@ -5,7 +5,7 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class Enum16Type : EnumType
+internal class Enum16Type : EnumType, ITypedReader<string>
 {
     public Enum16Type() { }
 
@@ -16,7 +16,9 @@ internal class Enum16Type : EnumType
 
     public override string ToString() => "Enum16";
 
-    public override object Read(ExtendedBinaryReader reader) => Lookup(reader.ReadInt16());
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public string ReadValue(ExtendedBinaryReader reader) => Lookup(reader.ReadInt16());
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {

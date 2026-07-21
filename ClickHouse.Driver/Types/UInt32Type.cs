@@ -4,11 +4,13 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class UInt32Type : IntegerType
+internal class UInt32Type : IntegerType, ITypedReader<uint>
 {
     public override Type FrameworkType => typeof(uint);
 
-    public override object Read(ExtendedBinaryReader reader) => reader.ReadUInt32();
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public uint ReadValue(ExtendedBinaryReader reader) => reader.ReadUInt32();
 
     public override string ToString() => "UInt32";
 

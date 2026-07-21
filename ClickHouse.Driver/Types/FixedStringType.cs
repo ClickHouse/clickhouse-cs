@@ -7,7 +7,7 @@ using ClickHouse.Driver.Types.Grammar;
 
 namespace ClickHouse.Driver.Types;
 
-internal class FixedStringType : ParameterizedType
+internal class FixedStringType : ParameterizedType, ITypedReader<string>, ITypedReader<byte[]>
 {
     public int Length { get; set; }
 
@@ -29,14 +29,17 @@ internal class FixedStringType : ParameterizedType
     public override string ToString() => $"FixedString({Length})";
 
     public override object Read(ExtendedBinaryReader reader)
-    {
-        var bytes = reader.ReadBytes(Length);
-        if (ReadAsByteArray)
-        {
-            return bytes;
-        }
-        return Encoding.UTF8.GetString(bytes);
-    }
+        => ReadAsByteArray ? ReadByteArray(reader) : ReadStringValue(reader);
+
+    // Both representations are always available to the typed read fast path; the boxed Read picks per the
+    // client's ReadAsByteArray setting. Explicit interface impls because they differ only by return type.
+    string ITypedReader<string>.ReadValue(ExtendedBinaryReader reader) => ReadStringValue(reader);
+
+    byte[] ITypedReader<byte[]>.ReadValue(ExtendedBinaryReader reader) => ReadByteArray(reader);
+
+    private byte[] ReadByteArray(ExtendedBinaryReader reader) => reader.ReadBytes(Length);
+
+    private string ReadStringValue(ExtendedBinaryReader reader) => Encoding.UTF8.GetString(reader.ReadBytes(Length));
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {

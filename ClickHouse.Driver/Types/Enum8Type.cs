@@ -5,7 +5,7 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class Enum8Type : EnumType
+internal class Enum8Type : EnumType, ITypedReader<string>
 {
     public Enum8Type() { }
 
@@ -14,7 +14,9 @@ internal class Enum8Type : EnumType
 
     public override string Name => "Enum8";
 
-    public override object Read(ExtendedBinaryReader reader) => Lookup(reader.ReadSByte());
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public string ReadValue(ExtendedBinaryReader reader) => Lookup(reader.ReadSByte());
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {

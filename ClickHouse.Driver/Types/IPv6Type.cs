@@ -4,11 +4,13 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class IPv6Type : ClickHouseType
+internal class IPv6Type : ClickHouseType, ITypedReader<IPAddress>
 {
     public override Type FrameworkType => typeof(IPAddress);
 
-    public override object Read(ExtendedBinaryReader reader) => new IPAddress(reader.ReadBytes(16));
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public IPAddress ReadValue(ExtendedBinaryReader reader) => new IPAddress(reader.ReadBytes(16));
 
     public override string ToString() => "IPv6";
 

@@ -5,13 +5,15 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal abstract class AbstractBigIntegerType : IntegerType, ITypedWriter<BigInteger>
+internal abstract class AbstractBigIntegerType : IntegerType, ITypedWriter<BigInteger>, ITypedReader<BigInteger>
 {
     public virtual int Size { get; }
 
     public override Type FrameworkType => typeof(BigInteger);
 
-    public override object Read(ExtendedBinaryReader reader)
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public BigInteger ReadValue(ExtendedBinaryReader reader)
     {
         if (Signed)
             return new BigInteger(reader.ReadBytes(Size));

@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
 
@@ -61,12 +62,41 @@ internal class MapType : ParameterizedType
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-        var dict = (IDictionary)value;
-        writer.Write7BitEncodedInt(dict.Count);
-        foreach (DictionaryEntry kvp in dict)
+        if (value is IDictionary dict)
         {
-            KeyType.Write(writer, kvp.Key);
-            ValueType.Write(writer, kvp.Value);
+            writer.Write7BitEncodedInt(dict.Count);
+            foreach (DictionaryEntry kvp in dict)
+            {
+                KeyType.Write(writer, kvp.Key);
+                ValueType.Write(writer, kvp.Value);
+            }
+            return;
         }
+
+        // Also accept an ordered collection of KeyValuePair<,> (e.g. List<KeyValuePair<K,V>> or an array):
+        // the shape a POCO Map property may use instead of Dictionary. Preserves order and duplicate keys.
+        if (value is ICollection collection)
+        {
+            writer.Write7BitEncodedInt(collection.Count);
+            PropertyInfo keyProperty = null;
+            PropertyInfo valueProperty = null;
+            foreach (var entry in collection)
+            {
+                if (keyProperty is null)
+                {
+                    var entryType = entry?.GetType();
+                    if (entryType is not { IsGenericType: true } || entryType.GetGenericTypeDefinition() != typeof(KeyValuePair<,>))
+                        throw new ArgumentException($"Map requires an IDictionary or a collection of KeyValuePair<,>, got element {entry?.GetType().Name ?? "null"}");
+                    keyProperty = entryType.GetProperty("Key");
+                    valueProperty = entryType.GetProperty("Value");
+                }
+
+                KeyType.Write(writer, keyProperty.GetValue(entry));
+                ValueType.Write(writer, valueProperty.GetValue(entry));
+            }
+            return;
+        }
+
+        throw new ArgumentException($"Map requires an IDictionary or a collection of KeyValuePair<,>, got {value?.GetType().Name ?? "null"}");
     }
 }

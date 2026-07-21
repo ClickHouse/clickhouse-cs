@@ -402,12 +402,25 @@ public sealed class ClickHouseClient : IClickHouseClient
         var reader = await ExecuteReaderAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
         try
         {
-            // reader.Read() is sync because ClickHouseDataReader has no async overload — the
-            // underlying HTTP stream is buffered, so per-row reads do not perform real I/O.
-            while (reader.Read())
+            // reader.Read()/TryMaterializeNextRow are sync because ClickHouseDataReader has no async overload —
+            // the underlying HTTP stream is buffered, so per-row reads do not perform real I/O.
+            if (reader.TryGetRowMaterializer<T>(out var materializers, out var constructor))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return reader.MapTo<T>();
+                // Box-free fast path: materialize straight from the stream into T, bypassing the shared
+                // object[] row buffer and the boxing/unboxing MapTo<T> setter.
+                while (reader.TryMaterializeNextRow(materializers, constructor, out var row))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return row;
+                }
+            }
+            else
+            {
+                while (reader.Read())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return reader.MapTo<T>();
+                }
             }
         }
         finally
