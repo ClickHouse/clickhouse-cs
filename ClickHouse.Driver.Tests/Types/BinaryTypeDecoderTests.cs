@@ -17,7 +17,7 @@ public class BinaryTypeDecoderTests
     }
 
     // Every stateless, parameterless type code should decode to the exact same shared instance
-    // on repeated calls (the #501 allocation optimisation), and to the expected runtime type.
+    // on repeated calls (the allocation optimisation), and to the expected runtime type.
     private static readonly (byte ByteCode, System.Type Expected)[] StatelessTypeCases =
     [
         (BinaryTypeIndex.Nothing, typeof(NothingType)),

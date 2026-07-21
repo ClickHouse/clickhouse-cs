@@ -10,7 +10,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// <summary>
 /// Measures allocations when reading a <c>Dynamic</c> column. Every value in a Dynamic column
 /// carries its own binary type header, so <c>DynamicType.Read</c> calls
-/// <c>BinaryTypeDecoder.FromByteCode</c> once per row. Before #501 that allocated a fresh
+/// <c>BinaryTypeDecoder.FromByteCode</c> once per row. This previously allocated a fresh
 /// <c>ClickHouseType</c> per row; now stateless types return a shared singleton, so the residual
 /// per-row allocation should be just the boxed value.
 /// </summary>
