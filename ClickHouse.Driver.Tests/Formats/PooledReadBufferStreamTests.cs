@@ -119,6 +119,18 @@ public class PooledReadBufferStreamTests
     }
 
     [Test]
+    public void Read_InvalidOffsetOrCount_Throws()
+    {
+        using var buffered = new PooledReadBufferStream(new MemoryStream(MakePayload(8)), bufferSize: 64, leaveOpen: true);
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => buffered.Read(new byte[4], -1, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => buffered.Read(new byte[4], 0, -1));
+            Assert.Throws<ArgumentException>(() => buffered.Read(new byte[4], 2, 5)); // offset + count > length
+        });
+    }
+
+    [Test]
     public void Constructor_NullInner_Throws()
         => Assert.Throws<ArgumentNullException>(() => new PooledReadBufferStream(null, bufferSize: 64));
 

@@ -8,7 +8,7 @@ namespace ClickHouse.Driver.Formats;
 /// A read-only buffering stream — like <see cref="BufferedStream"/> for reads — that rents its backing
 /// buffer from <see cref="ArrayPool{T}"/> instead of allocating a fresh array per instance. The reader wraps
 /// each HTTP query response in one of these, so this removes the fresh per-query read buffer
-/// (<c>ReadBufferSize</c>, 8 KiB by default; larger sizes would otherwise land on the large object heap).
+/// (<c>ReadBufferSize</c>, 64 KiB by default; larger sizes would otherwise land on the large object heap).
 ///
 /// The buffer is returned to the pool on <see cref="Dispose(bool)"/>, which is idempotent. Callers pass
 /// <c>leaveOpen: true</c> when the inner stream is owned elsewhere (e.g. the HTTP response message).
@@ -51,9 +51,18 @@ internal sealed class PooledReadBufferStream : Stream
 
     public override int Read(byte[] array, int offset, int count)
     {
-        _ = array ?? throw new ArgumentNullException(nameof(array));
+        // Validate arguments per the Stream contract (Stream.ValidateBufferArguments is unavailable on net6.0).
+        if (array is null)
+            throw new ArgumentNullException(nameof(array));
+        if (offset < 0)
+            throw new ArgumentOutOfRangeException(nameof(offset), offset, "Non-negative number required.");
+        if (count < 0)
+            throw new ArgumentOutOfRangeException(nameof(count), count, "Non-negative number required.");
+        if (array.Length - offset < count)
+            throw new ArgumentException("The sum of offset and count is larger than the buffer length.");
+
         ThrowIfDisposed();
-        if (count <= 0)
+        if (count == 0)
             return 0;
 
         // Serve from the buffer while it still has unread bytes.
