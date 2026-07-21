@@ -139,6 +139,12 @@ internal sealed class ColumnCodecRegistry
         // and value codecs are resolved recursively; each row surfaces as a KeyValuePair<K, V>[].
         AddFactory("Map", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => MapColumnCodec.Create(node, context, registry));
 
+        // Nested(...) as a single wire column (flatten_nested = 0) is byte-identical to Array(Tuple(...)): the same
+        // offsets stream plus each field's flattened stream, differing only in the type string, which keeps the
+        // field names. It has a dedicated arity-agnostic codec (not Array(Tuple) reuse) surfacing a columnar
+        // NestedColumn, so it is not bound by the tuple's element-count cap.
+        AddFactory("Nested", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => NestedColumnCodec.Create(node, context, registry));
+
         return new ColumnCodecRegistry(byName);
     }
 }
