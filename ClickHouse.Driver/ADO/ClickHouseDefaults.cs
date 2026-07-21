@@ -83,7 +83,9 @@ public static class ClickHouseDefaults
     public static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
 
     /// <summary>
-    /// Default size, in bytes, of the buffer used when reading HTTP query responses (8 KiB).
+    /// Default size, in bytes, of the buffer used when reading HTTP query responses (64 KiB). The buffer is
+    /// pooled (rented from <see cref="System.Buffers.ArrayPool{T}"/>), so it is not a per-query allocation;
+    /// 64 KiB stays under the ~85 KiB large-object-heap threshold.
     /// </summary>
-    public const int ReadBufferSize = 8 * 1024;
+    public const int ReadBufferSize = 64 * 1024;
 }

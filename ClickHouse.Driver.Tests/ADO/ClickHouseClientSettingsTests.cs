@@ -872,7 +872,7 @@ public class ClickHouseClientSettingsTests
         var settings = new ClickHouseClientSettings();
 
         Assert.That(settings.ReadBufferSize, Is.EqualTo(ClickHouseDefaults.ReadBufferSize));
-        Assert.That(settings.ReadBufferSize, Is.EqualTo(8 * 1024));
+        Assert.That(settings.ReadBufferSize, Is.EqualTo(64 * 1024));
     }
 
     [Test]
