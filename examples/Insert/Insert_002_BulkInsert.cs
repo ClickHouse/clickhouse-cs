@@ -96,6 +96,21 @@ public static class BulkInsert
         rowsInserted = await client.InsertBinaryAsync(tableName, columns, brotliData, brotliOptions);
         Console.WriteLine($"   Inserted {rowsInserted} rows using Brotli compression\n");
 
+        // Example 5: Bulk insert with LZ4 compression at a custom level
+        Console.WriteLine("5. Bulk inserting with LZ4 compression (custom level):");
+        // LZ4 ships in the core driver (no extra package needed). Lz4Compressor.Default uses fast mode
+        // (Lz4Level.Fast), the recommended setting for almost all inserts — it is fastest and puts the
+        // least decompression load on the server. Higher levels cost noticeably more CPU for
+        // little-to-no extra compression on typical data. Here we pass High3 just to show how to set it.
+        var lz4Options = new InsertOptions
+        {
+            Compressor = new Lz4Compressor(Lz4Level.High3),
+        };
+
+        var lz4Data = GenerateSampleData(10000, startId: 30001);
+        rowsInserted = await client.InsertBinaryAsync(tableName, columns, lz4Data, lz4Options);
+        Console.WriteLine($"   Inserted {rowsInserted} rows using LZ4 compression (L03_HC)\n");
+
         // Query and display sample results
         Console.WriteLine("Sample data from main table:");
         using (var reader = await client.ExecuteReaderAsync($"SELECT * FROM {tableName} ORDER BY id LIMIT 5"))

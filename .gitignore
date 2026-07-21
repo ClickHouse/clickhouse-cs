@@ -25,6 +25,11 @@ bld/
 [Oo]bj/
 [Ll]og/
 
+# The vendored K4os LZ4 codec ships source directories literally named x64/ (and x32/).
+# These are source, not build output, so exempt them from the x64/ rule above.
+!ClickHouse.Driver.Common/Vendor/**/x64/
+!ClickHouse.Driver.Common/Vendor/**/x64/**
+
 # Visual Studio 2015/2017 cache/options directory
 .vs/
 # Uncomment if you have tasks that create the project's static files in wwwroot

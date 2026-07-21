@@ -20,10 +20,17 @@
     CI comparison mode: Use PackageReference with version controlled by ClickHouseDriverVersion property
     Set BenchmarkComparisonMode=true in CI to enable comparison mode
   -->
+  <!-- Local development: project references. LZ4 now ships in core (bundled Common assembly), so it
+       is always available in source mode (gated by LZ4_AVAILABLE). Comparison mode references a
+       published ClickHouse.Driver package; older published packages predate core LZ4, so the LZ4
+       benchmark variants are compiled out there. -->
+  <PropertyGroup Condition="'$(BenchmarkComparisonMode)' != 'true'">
+    <DefineConstants>$(DefineConstants);LZ4_AVAILABLE</DefineConstants>
+  </PropertyGroup>
   <ItemGroup Condition="'$(BenchmarkComparisonMode)' != 'true'">
     <ProjectReference Include="..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
-    <!-- Compression types live in the bundled (PrivateAssets="all") Common assembly; reference it
-         directly for local dev. In comparison mode the types come from Common.dll inside the package. -->
+    <!-- Compression types (incl. LZ4) live in the bundled (PrivateAssets="all") Common assembly;
+         reference it directly for local dev. In comparison mode the types come from Common.dll inside the package. -->
     <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(BenchmarkComparisonMode)' == 'true'">

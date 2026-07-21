@@ -1,0 +1,20 @@
+# Vendored third-party source (K4os LZ4 / xxHash). Treated as generated code:
+# analyzers and code-style rules are turned off here so upstream formatting is preserved
+# verbatim and does not produce warnings. See K4os/README.md for provenance.
+[*.cs]
+generated_code = true
+dotnet_analyzer_diagnostic.severity = none
+
+# Compiler (CSxxxx) nullable diagnostics are not covered by the analyzer severity above.
+# The upstream source is compiled with nullable enabled but carries a handful of its own
+# nullable warnings; suppress them here so the vendored tree stays warning-free.
+dotnet_diagnostic.CS8600.severity = none
+dotnet_diagnostic.CS8601.severity = none
+dotnet_diagnostic.CS8602.severity = none
+dotnet_diagnostic.CS8603.severity = none
+dotnet_diagnostic.CS8604.severity = none
+dotnet_diagnostic.CS8618.severity = none
+dotnet_diagnostic.CS8619.severity = none
+dotnet_diagnostic.CS8620.severity = none
+dotnet_diagnostic.CS8625.severity = none
+dotnet_diagnostic.CS8632.severity = none
