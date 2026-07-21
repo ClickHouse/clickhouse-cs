@@ -431,12 +431,80 @@ public sealed class InsertRoundTripCase
         yield return Maps<string, int[]>("String", "Array(Int32)", Pairs<string, int[]>(("a", new[] { 1, 2, 3 }), ("b", Array.Empty<int>())), Pairs<string, int[]>(("c", new[] { -1 })));
         yield return Maps<string, (int, string)>("String", "Tuple(Int32, String)", Pairs<string, (int, string)>(("a", (1, "x")), ("b", (-5, string.Empty))), Array.Empty<KeyValuePair<string, (int, string)>>());
 
-        // Nested: Array(Map(...)) recurses the offsets-plus-streams shape one level up through the array codec.
+        // Array(Map(...)) recurses the offsets-plus-streams shape one level up through the array codec.
         yield return Arrays<KeyValuePair<string, uint>[]>("Map(String, UInt32)", new[]
         {
             new[] { Pairs<string, uint>(("a", 1)), Pairs<string, uint>(("b", 2), ("c", 3)) },
             Array.Empty<KeyValuePair<string, uint>[]>(),
         });
+
+        // Nested(...) at flatten_nested = 0: a single wire column laid out byte-identically to Array(Tuple(...)),
+        // surfaced as a columnar NestedColumn (flat field columns + shared offsets), arity-agnostic. The insert
+        // source is the dense NestedColumn itself. flatten_nested = 0 must apply at CREATE so the column is stored
+        // as one Nested column rather than flattened into parallel dotted Array columns. Like Array/Tuple/Map, the
+        // server rejects Nullable(Nested), so nullability composes inside a field.
+        // Rows: [(1,'a'),(2,'b')], [], [(3,'c')].
+        yield return Same(
+            "Nested(a UInt8, b String)",
+            "Nested(a UInt8, b String)",
+            name => new NestedColumn(
+                name,
+                "Nested(a UInt8, b String)",
+                new[] { "a", "b" },
+                new IColumn[]
+                {
+                    new ArrayColumn<byte>(name, "UInt8", new byte[] { 1, 2, 3 }),
+                    new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
+                },
+                new[] { 0, 2, 2, 3 },
+                rowCount: 3,
+                pooledOffsets: false,
+                ownsFields: false),
+            NestedSettings);
+
+        // Composite fields recurse: a nullable field and an array field. Rows: [(1,['x','y']),(null,[])], [], [(-5,['z'])].
+        yield return Same(
+            "Nested(a Nullable(Int32), b Array(String)) [nullable + array fields]",
+            "Nested(a Nullable(Int32), b Array(String))",
+            name => new NestedColumn(
+                name,
+                "Nested(a Nullable(Int32), b Array(String))",
+                new[] { "a", "b" },
+                new IColumn[]
+                {
+                    new ArrayColumn<int?>(name, "Nullable(Int32)", new int?[] { 1, null, -5 }),
+                    new ArrayColumn<string[]>(name, "Array(String)", new[] { new[] { "x", "y" }, Array.Empty<string>(), new[] { "z" } }),
+                },
+                new[] { 0, 2, 2, 3 },
+                rowCount: 3,
+                pooledOffsets: false,
+                ownsFields: false),
+            NestedSettings);
+
+        // Eight fields: proves the dedicated codec is not bound by the tuple's 7-element cap. Rows of 2 and 1 elements.
+        yield return Same(
+            "Nested(8 fields) [uncapped]",
+            "Nested(a UInt8, b UInt8, c UInt8, d UInt8, e UInt8, f UInt8, g UInt8, h UInt8)",
+            name =>
+            {
+                var names = new[] { "a", "b", "c", "d", "e", "f", "g", "h" };
+                var fields = new IColumn[8];
+                for (int i = 0; i < 8; i++)
+                {
+                    fields[i] = new ArrayColumn<byte>(name, "UInt8", new byte[] { (byte)i, (byte)(i + 10), (byte)(i + 20) });
+                }
+
+                return new NestedColumn(
+                    name,
+                    "Nested(a UInt8, b UInt8, c UInt8, d UInt8, e UInt8, f UInt8, g UInt8, h UInt8)",
+                    names,
+                    fields,
+                    new[] { 0, 2, 3 },
+                    rowCount: 2,
+                    pooledOffsets: false,
+                    ownsFields: false);
+            },
+            NestedSettings);
     }
 
     // Map(K, V) inserts and reads back the ergonomic jagged column of KeyValuePair arrays, which doubles as expected.
@@ -596,5 +664,14 @@ public sealed class InsertRoundTripCase
     {
         ["enable_time_time64_type"] = "1",
         ["allow_experimental_time_time64_type"] = "1",
+    };
+
+    /// <summary>
+    /// Keeps a <c>Nested</c> column as a single wire column instead of flattening it into parallel dotted
+    /// <c>Array</c> columns; must apply at CREATE for the column to be stored as one <c>Nested(...)</c> column.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> NestedSettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["flatten_nested"] = "0",
     };
 }
