@@ -562,6 +562,43 @@ public sealed class InsertRoundTripCase
                 new byte[] { 1, 2, 3, 4 },
                 new byte[] { 0xFF, 0, 0xFF, 0 },
             }));
+
+        // Variant(...): a discriminated union — each row is a value of one alternative or NULL. The ergonomic
+        // insert source is a flat IColumn<object>; each value's runtime CLR type picks its alternative, and null
+        // marks a NULL row. Like Array/Tuple/Map/Nested, the server rejects Nullable(Variant(...)) — NULL is the
+        // discriminator's job — so there is no Nullable(...) case; NULL rides inside the variant instead. The
+        // alternatives arrive server-canonicalized (sorted by name), so the type strings here are already in
+        // discriminator order. A present value equal to a type's default (0, empty string) rides alongside NULL to
+        // prove the two are distinct.
+        yield return Same(
+            "Variant(String, UInt64)",
+            "Variant(String, UInt64)",
+            name => new ArrayColumn<object>(name, "Variant(String, UInt64)", new object[] { 42UL, "hi", null, 0UL, string.Empty, null }),
+            VariantSettings);
+
+        // Three alternatives, exercising more than one non-null discriminator interleaved with NULL.
+        yield return Same(
+            "Variant(Bool, Int32, String)",
+            "Variant(Bool, Int32, String)",
+            name => new ArrayColumn<object>(name, "Variant(Bool, Int32, String)", new object[] { true, 42, "x", null, false, -1 }),
+            VariantSettings);
+
+        // A composite alternative: an Array as one of the variant types. A row selecting it carries the inner
+        // element array (ulong[]); the other rows carry a String or NULL.
+        yield return Same(
+            "Variant(Array(UInt64), String)",
+            "Variant(Array(UInt64), String)",
+            name => new ArrayColumn<object>(name, "Variant(Array(UInt64), String)", new object[] { "hello", new ulong[] { 1, 2, 3 }, null, Array.Empty<ulong>() }),
+            VariantSettings);
+
+        // Array(Variant(...)) composition: the array flattens its elements into one Variant value stream, so each
+        // element is a variant value (or NULL) and empty rows ride along.
+        yield return Arrays(
+            "Variant(String, UInt64)",
+            VariantSettings,
+            new object[] { 1UL, "a" },
+            Array.Empty<object>(),
+            new object[] { "b", 2UL, null });
     }
 
     // Map(K, V) inserts and reads back the ergonomic jagged column of KeyValuePair arrays, which doubles as expected.
@@ -736,5 +773,12 @@ public sealed class InsertRoundTripCase
     private static readonly IReadOnlyDictionary<string, string> LowCardinalitySettings = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["allow_suspicious_low_cardinality_types"] = "1",
+    };
+
+    /// <summary>Enables the experimental <c>Variant</c> type (and allows the suspicious combinations the tests use).</summary>
+    private static readonly IReadOnlyDictionary<string, string> VariantSettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["allow_experimental_variant_type"] = "1",
+        ["allow_suspicious_variant_types"] = "1",
     };
 }
