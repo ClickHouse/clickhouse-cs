@@ -265,6 +265,147 @@ public class AcceptEncodingTests
         Assert.That(ex.Message, Does.Contain("plain text"));
     }
 
+    [TestCase("")]
+    [TestCase("   ")]
+    [TestCase("\r\n\t ")]
+    public void HandleError_WithEmptyOrWhitespaceBody_ThrowsExceptionWithHttpStatusAndReasonPhrase(string body)
+    {
+        var fakeHandler = new TrackingHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            ReasonPhrase = "Internal Server Error",
+            Content = new StringContent(body),
+        });
+        using var httpClient = new HttpClient(fakeHandler);
+        var settings = new ClickHouseClientSettings
+        {
+            HttpClient = httpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("SELECT 1"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Does.Contain("500"));
+            Assert.That(ex.Message, Does.Contain("Internal Server Error"));
+            Assert.That(ex.ErrorCode, Is.EqualTo(-1));
+        });
+    }
+
+    [Test]
+    public void HandleError_WithEmptyBodyAndExceptionCodeHeader_UsesHeaderValueAsErrorCode()
+    {
+        var fakeHandler = new TrackingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            {
+                ReasonPhrase = "Service Unavailable",
+                Content = new StringContent(string.Empty),
+            };
+            response.Headers.TryAddWithoutValidation("X-ClickHouse-Exception-Code", "241");
+            return response;
+        });
+        using var httpClient = new HttpClient(fakeHandler);
+        var settings = new ClickHouseClientSettings
+        {
+            HttpClient = httpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("SELECT 1"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.ErrorCode, Is.EqualTo(241));
+            Assert.That(ex.Message, Does.Contain("503"));
+            Assert.That(ex.Message, Does.Contain("241"));
+        });
+    }
+
+    [Test]
+    public void HandleError_WithNonEmptyBody_PreservesBodyMessageAndParsedErrorCode()
+    {
+        var serverMessage = "Code: 62. DB::Exception: Syntax error";
+        var fakeHandler = new TrackingHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            ReasonPhrase = "Internal Server Error",
+            Content = new StringContent(serverMessage, Encoding.UTF8),
+        });
+        using var httpClient = new HttpClient(fakeHandler);
+        var settings = new ClickHouseClientSettings
+        {
+            HttpClient = httpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("SELECT 1"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Is.EqualTo(serverMessage));
+            Assert.That(ex.ErrorCode, Is.EqualTo(62));
+        });
+    }
+
+    [Test]
+    public void HandleError_WithEmptyBodyAndNoReasonPhrase_MessageStillIncludesHttpStatus()
+    {
+        var fakeHandler = new TrackingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)
+        {
+            ReasonPhrase = string.Empty,
+            Content = new StringContent(string.Empty),
+        });
+        using var httpClient = new HttpClient(fakeHandler);
+        var settings = new ClickHouseClientSettings
+        {
+            HttpClient = httpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("SELECT 1"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Does.Contain("502"));
+            Assert.That(ex.Message, Does.Not.Contain("("));
+            Assert.That(ex.ErrorCode, Is.EqualTo(-1));
+        });
+    }
+
+    [Test]
+    public void HandleError_WithEmptyBodyAndNonNumericExceptionCodeHeader_FallsBackToMinusOne()
+    {
+        var fakeHandler = new TrackingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                ReasonPhrase = "Internal Server Error",
+                Content = new StringContent(string.Empty),
+            };
+            response.Headers.TryAddWithoutValidation("X-ClickHouse-Exception-Code", "not-a-number");
+            return response;
+        });
+        using var httpClient = new HttpClient(fakeHandler);
+        var settings = new ClickHouseClientSettings
+        {
+            HttpClient = httpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("SELECT 1"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.ErrorCode, Is.EqualTo(-1));
+            Assert.That(ex.Message, Does.Contain("500"));
+        });
+    }
+
     [Test]
     public void ContentEncoding_WhenHeaderPresent_ReturnsHeaderValue()
     {

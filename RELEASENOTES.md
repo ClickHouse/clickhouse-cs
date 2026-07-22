@@ -14,6 +14,7 @@ Unreleased
 * Lower GC pressure when reading `Dynamic` columns: every value in a `Dynamic` column carries its own binary type header, so the driver decoded (and allocated) a fresh type descriptor per row. Stateless, parameterless types (all integer/float/`Date`/`Date32`/`UUID`/`IPv4`/`IPv6`/`Bool`/`Time` types, plus both `String` read variants) now decode to a shared immutable singleton instead, eliminating the per-row type allocation. Measured on a 500k-row `Dynamic` read, per-op allocation drops ~50% for an `Int64` column (22.9 MB → 11.5 MB) and ~34% for a `String` column (33.6 MB → 22.2 MB), roughly halving Gen0 collections; the residual allocation is the boxed value itself. Behavior is unchanged.
 
 **Bug Fixes:**
+* Fixed `ClickHouseServerException` carrying a blank `Message` and an `ErrorCode` of `-1` when the server — or an upstream component such as a load balancer or the ClickHouse Cloud edge — returned a non-2xx HTTP response with an empty (or whitespace-only) body. The exception now reports the HTTP status code and reason phrase, and uses the `X-ClickHouse-Exception-Code` response header as the error code when the server sets it (issue #440). Non-empty error bodies are unaffected.
 
 v1.3.0
 ---
