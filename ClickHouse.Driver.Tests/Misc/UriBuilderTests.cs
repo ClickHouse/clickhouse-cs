@@ -171,6 +171,10 @@ public class UriBuilderTests
     [TestCase("http://localhost:8123/", "http://localhost:8123/")]
     [TestCase("http://localhost/clickhouse", "http://localhost:80/clickhouse")]
     [TestCase("https://some.server:8443/path", "https://some.server:8443/path")]
+    // IPv6 literals: Uri.Host keeps the brackets (unlike DnsSafeHost), so the manual composition
+    // matches UriBuilder byte-for-byte.
+    [TestCase("http://[::1]:8123", "http://[::1]:8123/")]
+    [TestCase("http://[2001:db8::1]:9000/path", "http://[2001:db8::1]:9000/path")]
     public void ToString_ShouldComposeUriFromBaseParts_PreservingPathAndPort(string baseUri, string expectedPrefix)
     {
         var builder = new ClickHouseUriBuilder(new Uri(baseUri));
