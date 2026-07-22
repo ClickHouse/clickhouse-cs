@@ -54,7 +54,7 @@ public class SerialisationTests
     [TestCase(256)]
     [TestCase(257)]
     [TestCase(1024)]
-    public void FixedStringReadShouldRoundtripAcrossStackallocAndPoolBranches(int length)
+    public void FixedStringRead_AcrossStackallocAndPoolBranches_ShouldRoundtrip(int length)
     {
         var type = TypeConverter.ParseClickHouseType($"FixedString({length})", TypeSettings.Default);
         // Exactly `length` single-byte characters, so no zero-padding is added on write and the
@@ -73,7 +73,7 @@ public class SerialisationTests
     }
 
     [Test]
-    public void ReadBytesSpanShouldFillBufferExactly()
+    public void ReadBytesSpan_WithExactLengthStream_ShouldFillBuffer()
     {
         using var stream = new MemoryStream(new byte[] { 1, 2, 3, 4, 5 });
         using var reader = new ExtendedBinaryReader(stream);
@@ -86,7 +86,7 @@ public class SerialisationTests
     }
 
     [Test]
-    public void ReadBytesSpanShouldThrowWhenStreamTooShort()
+    public void ReadBytesSpan_WhenStreamTooShort_ShouldThrowEndOfStream()
     {
         using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
         using var reader = new ExtendedBinaryReader(stream);
@@ -101,7 +101,7 @@ public class SerialisationTests
     [Test]
     [TestCase("UInt128", 16)]
     [TestCase("UInt256", 32)]
-    public void UnsignedBigIntegerReadShouldDecodeAllOnesAsUnsignedMax(string clickHouseType, int size)
+    public void UnsignedBigIntegerRead_WithAllOnes_ShouldDecodeAsUnsignedMax(string clickHouseType, int size)
     {
         var value = ReadRawBigInteger(clickHouseType, Enumerable.Repeat((byte)0xFF, size).ToArray());
         Assert.That(value, Is.EqualTo((BigInteger.One << (size * 8)) - 1));
@@ -110,7 +110,7 @@ public class SerialisationTests
     [Test]
     [TestCase("Int128", 16)]
     [TestCase("Int256", 32)]
-    public void SignedBigIntegerReadShouldDecodeAllOnesAsNegativeOne(string clickHouseType, int size)
+    public void SignedBigIntegerRead_WithAllOnes_ShouldDecodeAsNegativeOne(string clickHouseType, int size)
     {
         var value = ReadRawBigInteger(clickHouseType, Enumerable.Repeat((byte)0xFF, size).ToArray());
         Assert.That(value, Is.EqualTo(BigInteger.MinusOne));
@@ -119,7 +119,7 @@ public class SerialisationTests
     [Test]
     [TestCase("Int128", 16)]
     [TestCase("Int256", 32)]
-    public void SignedBigIntegerReadShouldDecodeHighBitAsMinValue(string clickHouseType, int size)
+    public void SignedBigIntegerRead_WithHighBitSet_ShouldDecodeAsMinValue(string clickHouseType, int size)
     {
         // Little-endian two's-complement min: only the most-significant byte's high bit set.
         var bytes = new byte[size];
