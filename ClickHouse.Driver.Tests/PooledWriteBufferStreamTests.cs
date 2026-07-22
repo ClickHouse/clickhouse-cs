@@ -8,7 +8,7 @@ using NUnit.Framework;
 namespace ClickHouse.Driver.Tests;
 
 [TestFixture]
-public class PooledBufferStreamTests
+public class PooledWriteBufferStreamTests
 {
     // Deterministic pseudo-random payload so failures are reproducible.
     private static byte[] MakePayload(int length)
@@ -28,7 +28,7 @@ public class PooledBufferStreamTests
         var payload = MakePayload(length);
         using var destination = new MemoryStream();
 
-        using (var buffered = new PooledBufferStream(new GZipStream(destination, CompressionLevel.Fastest, leaveOpen: true), bufferSize: 64))
+        using (var buffered = new PooledWriteBufferStream(new GZipStream(destination, CompressionLevel.Fastest, leaveOpen: true), bufferSize: 64))
         {
             buffered.Write(payload, 0, payload.Length);
         }
@@ -42,7 +42,7 @@ public class PooledBufferStreamTests
         var payload = MakePayload(300); // spans multiple 64-byte buffer fills
         using var destination = new MemoryStream();
 
-        using (var buffered = new PooledBufferStream(new GZipStream(destination, CompressionLevel.Fastest, leaveOpen: true), bufferSize: 64))
+        using (var buffered = new PooledWriteBufferStream(new GZipStream(destination, CompressionLevel.Fastest, leaveOpen: true), bufferSize: 64))
         {
             foreach (var b in payload)
                 buffered.WriteByte(b);
@@ -58,7 +58,7 @@ public class PooledBufferStreamTests
         var payload = MakePayload(10_000);
         using var destination = new MemoryStream();
 
-        using (var buffered = new PooledBufferStream(new GZipStream(destination, CompressionLevel.Fastest, leaveOpen: true), bufferSize: 256))
+        using (var buffered = new PooledWriteBufferStream(new GZipStream(destination, CompressionLevel.Fastest, leaveOpen: true), bufferSize: 256))
         {
             buffered.Write(payload, 0, payload.Length);
         }
@@ -73,7 +73,7 @@ public class PooledBufferStreamTests
         var head = MakePayload(10);
         var big = MakePayload(5000);
 
-        using (var buffered = new PooledBufferStream(destination, bufferSize: 256, leaveOpen: true))
+        using (var buffered = new PooledWriteBufferStream(destination, bufferSize: 256, leaveOpen: true))
         {
             buffered.Write(head, 0, head.Length);   // stays buffered
             buffered.Write(big, 0, big.Length);      // triggers flush of head, then direct forward
@@ -88,7 +88,7 @@ public class PooledBufferStreamTests
     {
         var counter = new WriteCountingStream(new MemoryStream());
 
-        using (var buffered = new PooledBufferStream(counter, bufferSize: 256, leaveOpen: true))
+        using (var buffered = new PooledWriteBufferStream(counter, bufferSize: 256, leaveOpen: true))
         {
             for (int i = 0; i < 256; i++)
                 buffered.WriteByte((byte)i); // 256 one-byte writes fill exactly one buffer
@@ -102,7 +102,7 @@ public class PooledBufferStreamTests
     public void Flush_PushesBufferedBytesToInner()
     {
         var counter = new WriteCountingStream(new MemoryStream());
-        using var buffered = new PooledBufferStream(counter, bufferSize: 256, leaveOpen: true);
+        using var buffered = new PooledWriteBufferStream(counter, bufferSize: 256, leaveOpen: true);
 
         buffered.WriteByte(1);
         buffered.WriteByte(2);
@@ -115,7 +115,7 @@ public class PooledBufferStreamTests
     [Test]
     public void Write_NullArray_Throws()
     {
-        using var buffered = new PooledBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
+        using var buffered = new PooledWriteBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
         Assert.Throws<ArgumentNullException>(() => buffered.Write(null, 0, 0));
     }
 
@@ -123,7 +123,7 @@ public class PooledBufferStreamTests
     public void Dispose_WithLeaveOpenFalse_DisposesInnerStream()
     {
         var inner = new MemoryStream();
-        var buffered = new PooledBufferStream(inner, bufferSize: 64, leaveOpen: false);
+        var buffered = new PooledWriteBufferStream(inner, bufferSize: 64, leaveOpen: false);
         buffered.Dispose();
 
         Assert.That(inner.CanWrite, Is.False, "inner stream should be disposed");
@@ -133,7 +133,7 @@ public class PooledBufferStreamTests
     public void Dispose_WithLeaveOpenTrue_LeavesInnerStreamOpen()
     {
         using var inner = new MemoryStream();
-        var buffered = new PooledBufferStream(inner, bufferSize: 64, leaveOpen: true);
+        var buffered = new PooledWriteBufferStream(inner, bufferSize: 64, leaveOpen: true);
         buffered.Dispose();
 
         Assert.That(inner.CanWrite, Is.True, "inner stream should remain usable");
@@ -145,7 +145,7 @@ public class PooledBufferStreamTests
         // BinaryWriter disposes the underlying stream, then the caller's `using` disposes it
         // again. Returning the pooled buffer twice would corrupt the pool, so dispose must be
         // idempotent.
-        var buffered = new PooledBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
+        var buffered = new PooledWriteBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
         buffered.Dispose();
         Assert.DoesNotThrow(() => buffered.Dispose());
     }
@@ -153,23 +153,23 @@ public class PooledBufferStreamTests
     [Test]
     public void Write_AfterDispose_Throws()
     {
-        var buffered = new PooledBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
+        var buffered = new PooledWriteBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
         buffered.Dispose();
         Assert.Throws<ObjectDisposedException>(() => buffered.WriteByte(1));
     }
 
     [Test]
     public void Constructor_NullInner_Throws()
-        => Assert.Throws<ArgumentNullException>(() => new PooledBufferStream(null, bufferSize: 64));
+        => Assert.Throws<ArgumentNullException>(() => new PooledWriteBufferStream(null, bufferSize: 64));
 
     [Test]
     public void Constructor_NonPositiveBufferSize_Throws()
-        => Assert.Throws<ArgumentOutOfRangeException>(() => new PooledBufferStream(new MemoryStream(), bufferSize: 0));
+        => Assert.Throws<ArgumentOutOfRangeException>(() => new PooledWriteBufferStream(new MemoryStream(), bufferSize: 0));
 
     [Test]
     public void Capabilities_AreWriteOnly()
     {
-        using var buffered = new PooledBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
+        using var buffered = new PooledWriteBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
         Assert.Multiple(() =>
         {
             Assert.That(buffered.CanWrite, Is.True);
@@ -181,7 +181,7 @@ public class PooledBufferStreamTests
     [Test]
     public void UnsupportedOperations_Throw()
     {
-        using var buffered = new PooledBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
+        using var buffered = new PooledWriteBufferStream(new MemoryStream(), bufferSize: 64, leaveOpen: true);
         Assert.Multiple(() =>
         {
             Assert.Throws<NotSupportedException>(() => buffered.Read(new byte[1], 0, 1));

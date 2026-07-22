@@ -15,7 +15,7 @@ namespace ClickHouse.Driver.Compression;
 /// constructs one compressing stream per batch, so this removes one large-object-heap allocation
 /// (256 KiB by default) — and the Gen2 collection it drives — for every batch sent.
 /// </summary>
-internal sealed class PooledBufferStream : Stream
+internal sealed class PooledWriteBufferStream : Stream
 {
     private readonly Stream inner;
     private readonly bool leaveOpen;
@@ -31,7 +31,7 @@ internal sealed class PooledBufferStream : Stream
     /// flushes the trailing footer. The compressor passes the caller's <c>leaveOpen</c> to the
     /// compression stream itself, which governs whether the final destination is left open.
     /// </param>
-    public PooledBufferStream(Stream inner, int bufferSize, bool leaveOpen = false)
+    public PooledWriteBufferStream(Stream inner, int bufferSize, bool leaveOpen = false)
     {
         this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
         if (bufferSize <= 0)
@@ -153,7 +153,7 @@ internal sealed class PooledBufferStream : Stream
         // ObjectDisposedException.ThrowIf is unavailable on net6.0 (a supported target), so throw manually.
 #pragma warning disable CA1513
         if (disposed)
-            throw new ObjectDisposedException(nameof(PooledBufferStream));
+            throw new ObjectDisposedException(nameof(PooledWriteBufferStream));
 #pragma warning restore CA1513
     }
 }
