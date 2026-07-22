@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Text;
 using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Formats;
 
@@ -33,10 +32,7 @@ internal class BatchSerializer : IBatchSerializer
         var compressing = compressor != null;
         var target = compressing ? compressor.Compress(stream, leaveOpen: true) : stream;
 
-        using (var textWriter = new StreamWriter(target, Encoding.UTF8, 4 * 1024, true))
-        {
-            textWriter.WriteLine(batch.Query);
-        }
+        PooledStreamWriter.WriteLine(target, batch.Query);
 
         using var writer = new ExtendedBinaryWriter(target, leaveOpen: !compressing);
 
