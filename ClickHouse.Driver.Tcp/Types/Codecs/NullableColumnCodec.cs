@@ -133,6 +133,25 @@ internal sealed class NullableColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => innerCanWrite && ResolveWriteShape(column) is not null;
 
     /// <inheritdoc/>
+<<<<<<< HEAD
+=======
+    // Delegate to the shape for the supplied column's write type, which projects the ergonomic T? / nullable-
+    // reference form into the dense (inner column + null-map) column and recurses the inner codec's TryDensify. A
+    // column whose write type is unrecognized is left unchanged (borrowed); the write path then reports it.
+    public IColumn TryDensify(IColumn column, out bool built)
+    {
+        INullableShape shape = ResolveWriteShape(column);
+        if (shape is null)
+        {
+            built = false;
+            return column;
+        }
+
+        return shape.TryDensify(inner, column, out built);
+    }
+
+    /// <inheritdoc/>
+>>>>>>> bc9e8fd (Widen IColumnCodec.WriteStatePrefix to receive the sliced column)
     // Every inner type supported today has a data-independent state prefix, so the outer column/slice is
     // forwarded unchanged and ignored by the inner. A future data-dependent inner (e.g. Dynamic) will need the
     // inner's own sliced value column projected here, landed with the prefix->data scratch work.

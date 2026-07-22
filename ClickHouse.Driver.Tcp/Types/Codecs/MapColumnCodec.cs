@@ -184,6 +184,7 @@ internal sealed class MapColumnCodec : IColumnCodec
         => shape.BeginWrite(keyCodec, valueCodec, column, start, length);
 
     /// <inheritdoc/>
+<<<<<<< HEAD
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         if (shape.CanWrite(column))
@@ -209,6 +210,15 @@ internal sealed class MapColumnCodec : IColumnCodec
         }
 
         WriteStatePrefix(writer, column, start, length);
+=======
+    // Every key/value type supported today has a data-independent state prefix, so the outer column/slice is
+    // forwarded unchanged and ignored by the children. A data-dependent child (e.g. Dynamic) would need its
+    // flattened element sub-slice projected here, landed with the prefix->data scratch work.
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        keyCodec.WriteStatePrefix(writer, column, start, length);
+        valueCodec.WriteStatePrefix(writer, column, start, length);
+>>>>>>> bc9e8fd (Widen IColumnCodec.WriteStatePrefix to receive the sliced column)
     }
 
     /// <inheritdoc/>

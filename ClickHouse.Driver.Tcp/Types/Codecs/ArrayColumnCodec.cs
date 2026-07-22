@@ -321,9 +321,44 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         return new ArrayWriteState(view, elementBase: 0, total, viewState, sliceOffsets);
     }
 
+<<<<<<< HEAD
     // Sums each row's element count into a slice-relative cumulative offsets array (offsets[0] = 0), rejecting null
     // rows (Array(T) is element-nullable only through Array(Nullable(T))) and guarding that the run fits one array.
     private static int[] ComputeOffsets(IColumn<TElement[]> source, int start, int length)
+=======
+    /// <inheritdoc/>
+    // Every inner type supported today has a data-independent state prefix, so the outer column/slice is
+    // forwarded unchanged and ignored by the inner. A data-dependent inner (e.g. Dynamic) would need the
+    // flattened element sub-slice projected here, landed with the prefix->data scratch work.
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+        => inner.WriteStatePrefix(writer, column, start, length);
+
+    /// <inheritdoc/>
+    // Every column is densified before the write, so the body is always the dense wire shape: the offsets already
+    // exist and the inner column already holds every element, so both are written directly. The wire offsets are
+    // relative to this slice's values stream, so subtract the slice's first element index from each. The ergonomic
+    // jagged form was flattened into this shape by TryDensify.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        var dense = (ArrayValueColumn<TElement>)column;
+        ReadOnlySpan<int> offsets = dense.Offsets;
+        int elementBase = offsets[start];
+        for (int i = 0; i < length; i++)
+        {
+            writer.WriteUInt64((ulong)(offsets[start + i + 1] - elementBase));
+        }
+
+        inner.WriteColumn(writer, dense.Inner, elementBase, offsets[start + length] - elementBase);
+    }
+
+    /// <summary>
+    /// Sums the column's element count, rejecting null rows, and guards that the flat run fits a single array —
+    /// the preflight <see cref="TryDensify"/> runs before flattening the jagged rows into one contiguous inner column.
+    /// </summary>
+    /// <exception cref="ArgumentException">A row is null; <c>Array(T)</c> rows are non-nullable.</exception>
+    /// <exception cref="NotSupportedException">The elements sum past <see cref="Array.MaxLength"/>.</exception>
+    private static int SumElementCount(IColumn<TElement[]> column, string columnName, int start, int length)
+>>>>>>> bc9e8fd (Widen IColumnCodec.WriteStatePrefix to receive the sliced column)
     {
         var offsets = new int[length + 1];
         ulong total64 = 0;
