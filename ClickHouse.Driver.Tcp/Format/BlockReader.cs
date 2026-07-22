@@ -53,10 +53,9 @@ internal static class BlockReader
 
                 IColumnCodec codec = registry.Resolve(columnType, in context);
 
-                // A zero-row block (a schema header, or an end-of-input marker) carries no state prefix and no body.
-                // TODO: this holds for every type with default serialization, but dictionary-bearing types
-                // (e.g. LowCardinality) write a serialization-state prefix even when empty. When such types are
-                // added, the reader and writer must emit their prefix regardless of row count or the stream desyncs.
+                // A zero-row block (a schema header, or an end-of-input marker) carries no state prefix and no
+                // body — this holds for dictionary-bearing types too: LowCardinality emits its version prefix only
+                // for a block whose row count is greater than zero, matching the writer.
                 if (rowCount != 0)
                 {
                     await codec.ReadStatePrefixAsync(reader, cancellationToken).ConfigureAwait(false);
