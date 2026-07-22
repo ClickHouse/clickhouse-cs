@@ -7,8 +7,7 @@ namespace ClickHouse.Driver.Formats;
 /// <summary>
 /// A read-only buffering stream — like <see cref="BufferedStream"/> for reads — that rents its backing
 /// buffer from <see cref="ArrayPool{T}"/> instead of allocating a fresh array per instance. The reader wraps
-/// each HTTP query response in one of these, so this removes the fresh per-query read buffer
-/// (<c>ReadBufferSize</c>, 64 KiB by default; larger sizes would otherwise land on the large object heap).
+/// each HTTP query response in one of these, so this removes the fresh per-query read buffer.
 ///
 /// The buffer is returned to the pool on <see cref="Dispose(bool)"/>, which is idempotent. Callers pass
 /// <c>leaveOpen: true</c> when the inner stream is owned elsewhere (e.g. the HTTP response message).
@@ -49,6 +48,17 @@ internal sealed class PooledReadBufferStream : Stream
         set => throw new NotSupportedException();
     }
 
+    /// <summary>
+    /// Reads up to <paramref name="count"/> bytes into <paramref name="array"/> and returns the number
+    /// actually read.
+    /// </summary>
+    /// <remarks>
+    /// Per the <see cref="Stream"/> contract this may return fewer bytes than requested (a "short read"):
+    /// each call serves whatever is already buffered — or a single refill — rather than looping to satisfy
+    /// the full <paramref name="count"/>. A return of 0 means end of stream. Callers that need an exact byte
+    /// count must loop until satisfied; the reader does this through <see cref="ExtendedBinaryReader.Read"/>,
+    /// which keeps calling until it has every byte the length-prefixed protocol expects.
+    /// </remarks>
     public override int Read(byte[] array, int offset, int count)
     {
         // Validate arguments per the Stream contract (Stream.ValidateBufferArguments is unavailable on net6.0).
@@ -65,7 +75,7 @@ internal sealed class PooledReadBufferStream : Stream
         if (count == 0)
             return 0;
 
-        // Serve from the buffer while it still has unread bytes.
+        // Buffer still has unread bytes: hand back whatever fits, up to count (may be a short read).
         if (position < filled)
             return CopyOut(array, offset, count);
 
@@ -74,9 +84,11 @@ internal sealed class PooledReadBufferStream : Stream
         if (count >= buffer.Length)
             return inner.Read(array, offset, count);
 
+        // Refill from the inner stream; Refill returns false only at end of stream, so report 0.
         if (!Refill())
             return 0;
 
+        // Serve the freshly filled buffer (again, up to count — the caller loops for the rest).
         return CopyOut(array, offset, count);
     }
 

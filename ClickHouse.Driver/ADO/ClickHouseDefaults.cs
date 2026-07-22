@@ -84,8 +84,7 @@ public static class ClickHouseDefaults
 
     /// <summary>
     /// Default size, in bytes, of the buffer used when reading HTTP query responses (64 KiB). The buffer is
-    /// pooled (rented from <see cref="System.Buffers.ArrayPool{T}"/>), so it is not a per-query allocation;
-    /// 64 KiB stays under the ~85 KiB large-object-heap threshold.
+    /// pooled (rented from <see cref="System.Buffers.ArrayPool{T}"/>), so it is not a per-query allocation.
     /// </summary>
     public const int ReadBufferSize = 64 * 1024;
 }

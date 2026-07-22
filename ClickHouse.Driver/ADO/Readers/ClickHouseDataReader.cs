@@ -78,6 +78,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             // fresh per-query array. leaveOpen: true because httpResponse owns rawStream and disposes it;
             // the reader disposes this wrapper explicitly to return the buffer (the BinaryReader ->
             // PeekableStreamWrapper chain does not propagate Dispose to inner streams).
+            // Its Read may return fewer bytes than requested; the ExtendedBinaryReader below loops to
+            // satisfy exact-count reads.
             buffered = new PooledReadBufferStream(rawStream, readBufferSize, leaveOpen: true);
 
             // Conditionally wrap with exception-aware stream
