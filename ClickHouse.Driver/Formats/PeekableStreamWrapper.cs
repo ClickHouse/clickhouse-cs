@@ -46,6 +46,22 @@ internal class PeekableStreamWrapper : Stream, IDisposable
         return result;
     }
 
+    public override int Read(Span<byte> buffer)
+    {
+        if (buffer.Length == 0)
+            return 0;
+        if (!hasReadAheadByte)
+            return stream.Read(buffer);
+
+        hasReadAheadByte = false;
+        if (readAheadByte == -1)
+            return 0; // peeked past the end of the stream
+
+        // Emit the peeked byte first, then read the remainder directly into the span.
+        buffer[0] = (byte)readAheadByte;
+        return buffer.Length > 1 ? 1 + stream.Read(buffer.Slice(1)) : 1;
+    }
+
     public override long Seek(long offset, SeekOrigin origin) => stream.Seek(offset, origin);
 
     public override void SetLength(long value) => stream.SetLength(value);

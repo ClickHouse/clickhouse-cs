@@ -95,6 +95,23 @@ public class SerialisationTests
         Assert.Throws<EndOfStreamException>(() => reader.ReadBytes(buffer));
     }
 
+    // PeekChar buffers a read-ahead byte in PeekableStreamWrapper; a subsequent span read must emit
+    // that peeked byte first (not drop or duplicate it) before reading the remainder from the stream.
+    [Test]
+    public void ReadBytesSpan_AfterPeek_ShouldEmitPeekedByteFirst()
+    {
+        using var stream = new MemoryStream(new byte[] { 1, 2, 3, 4, 5 });
+        using var reader = new ExtendedBinaryReader(stream);
+
+        Assert.That(reader.PeekChar(), Is.EqualTo(1));
+
+        Span<byte> buffer = stackalloc byte[5];
+        reader.ReadBytes(buffer);
+
+        Assert.That(buffer.ToArray(), Is.EqualTo(new byte[] { 1, 2, 3, 4, 5 }));
+        Assert.That(stream.Position, Is.EqualTo(stream.Length));
+    }
+
     // Locks in the read-side sign semantics after the switch to
     // new BigInteger(span, isUnsigned: !Signed): an all-ones little-endian buffer must decode as the
     // unsigned max (2^bits - 1) for unsigned types and as -1 for signed types.
