@@ -326,16 +326,16 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
     }
 
     // ==========================================
-    // Enum columns: integer accessors expose the raw wire ordinal, converter-independent
+    // Enum columns: TryGetEnumOrdinal exposes the raw wire ordinal, converter-independent
     // ==========================================
 
     [Test]
-    public async Task GetInt32_EnumColumnWithLabelMutatingConverter_ReturnsRawOrdinalWithoutKeyNotFound()
+    public async Task TryGetEnumOrdinal_WithLabelMutatingConverter_ReturnsRawWireOrdinal()
     {
-        // The converter rewrites the enum label to a string that is NOT a valid enum member. The
-        // integer accessors must still return the raw wire ordinal (resolved from the unconverted
-        // label) and agree with GetFieldValue<int> — never surfacing KeyNotFoundException — while
-        // the string projections apply the converter.
+        // The converter rewrites the enum label to a string that is NOT a valid enum member.
+        // TryGetEnumOrdinal must still return the raw wire ordinal (resolved from the unconverted
+        // label) — never surfacing KeyNotFoundException — while the string projections apply the
+        // converter.
         var settings = TestUtilities.GetTestClickHouseClientSettings();
         settings = new ClickHouseClientSettings(settings)
         {
@@ -348,14 +348,9 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
         ClassicAssert.IsTrue(reader.Read());
         Assert.Multiple(() =>
         {
-            // Integer accessors expose the raw wire ordinal, independent of the converter, and agree.
-            Assert.That(reader.GetInt32(0), Is.EqualTo(1));
-            Assert.That(reader.GetByte(0), Is.EqualTo(1));
-            Assert.That(reader.GetSByte(0), Is.EqualTo(1));
-            Assert.That(reader.GetInt64(0), Is.EqualTo(1));
-            Assert.That(reader.GetUInt32(0), Is.EqualTo(1));
-            Assert.That(reader.GetFieldValue<int>(0), Is.EqualTo(1));
-            Assert.That(reader.GetFieldValue<byte>(0), Is.EqualTo(1));
+            // The ordinal is the raw wire value, independent of the converter.
+            Assert.That(reader.TryGetEnumOrdinal(0, out var ordinal), Is.True);
+            Assert.That(ordinal, Is.EqualTo(1));
             // The string projections still apply the converter.
             Assert.That(reader.GetString(0), Is.EqualTo("Active_converted"));
             Assert.That(reader.GetValue(0), Is.EqualTo("Active_converted"));
@@ -365,12 +360,11 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task GetInt32_EnumColumnWithRelabelingConverter_ReturnsRawWireOrdinalNotConvertedLabelOrdinal()
+    public async Task TryGetEnumOrdinal_WithRelabelingConverter_ReturnsRawWireOrdinalNotConvertedLabelOrdinal()
     {
         // The converter remaps one valid enum label to ANOTHER valid label ("Active" -> "Inactive").
-        // Integer accessors must return the ordinal of the RAW wire label (1), not the converted
-        // label's ordinal (2), and GetInt32 must agree with GetFieldValue<int>; the string
-        // projections see the converted label.
+        // TryGetEnumOrdinal must return the ordinal of the RAW wire label (1), not the converted
+        // label's ordinal (2); the string projections see the converted label.
         var settings = TestUtilities.GetTestClickHouseClientSettings();
         settings = new ClickHouseClientSettings(settings)
         {
@@ -383,9 +377,8 @@ public class ReadValueConverterTests : AbstractConnectionTestFixture
         ClassicAssert.IsTrue(reader.Read());
         Assert.Multiple(() =>
         {
-            Assert.That(reader.GetInt32(0), Is.EqualTo(1));
-            Assert.That(reader.GetByte(0), Is.EqualTo(1));
-            Assert.That(reader.GetFieldValue<int>(0), Is.EqualTo(1));
+            Assert.That(reader.TryGetEnumOrdinal(0, out var ordinal), Is.True);
+            Assert.That(ordinal, Is.EqualTo(1)); // raw wire ordinal, not Inactive's 2
             // The string projections see the converted label.
             Assert.That(reader.GetString(0), Is.EqualTo("Inactive"));
             Assert.That(reader.GetFieldValue<string>(0), Is.EqualTo("Inactive"));

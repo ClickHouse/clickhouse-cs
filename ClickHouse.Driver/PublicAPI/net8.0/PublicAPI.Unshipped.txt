@@ -27,3 +27,4 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.ReadValueConverter.init -> void
 ClickHouse.Driver.QueryOptions.ReadValueConverter.get -> ClickHouse.Driver.ADO.Readers.IReadValueConverter?
 ClickHouse.Driver.QueryOptions.ReadValueConverter.init -> void
 ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetFieldValue<T>(string name) -> T
+ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.TryGetEnumOrdinal(int ordinal, out int value) -> bool

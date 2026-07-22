@@ -101,24 +101,34 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     internal ClickHouseType GetClickHouseType(int ordinal) => RawTypes[ordinal];
 
-    // Enum columns (Enum8/Enum16, and Nullable(Enum...)) materialize as their string label because
-    // EnumType.FrameworkType is string. The integer accessors instead expose the underlying ordinal
-    // that arrived on the wire, resolved from the label through the enum's value map. The lookup reads
-    // the raw materialized label (CurrentRow) rather than GetValue, so the ordinal reflects the wire
-    // value and is independent of any IReadValueConverter (which is a same-type transform of the
-    // string representation, not of the ordinal). Returns false for non-enum columns and for values
-    // that are not a known label, so the caller falls back to its existing cast behavior — preserving
-    // InvalidCastException for genuinely non-convertible values rather than surfacing KeyNotFoundException.
-    private bool TryGetEnumOrdinal(int ordinal, out int ordinalValue)
+    /// <summary>
+    /// Attempts to read the underlying integer ordinal of an <c>Enum8</c>/<c>Enum16</c> (or
+    /// <c>Nullable(Enum...)</c>) column for the current row. Enum columns materialize as their
+    /// string label, so the standard numeric accessors (<c>GetInt32</c>, <c>GetByte</c>, …) throw
+    /// <see cref="InvalidCastException"/> on them, matching ADO.NET's behavior for a string-backed
+    /// column; use this method to obtain the underlying wire ordinal instead.
+    /// </summary>
+    /// <param name="ordinal">The zero-based column ordinal.</param>
+    /// <param name="value">
+    /// When this method returns <see langword="true"/>, the underlying integer ordinal that arrived
+    /// on the wire; otherwise <c>0</c>. The ordinal is the raw wire value and is independent of any
+    /// configured read value converter (which transforms the string label, not the ordinal).
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> if the column is an <c>Enum8</c>/<c>Enum16</c> type and the current
+    /// value is a known label; otherwise <see langword="false"/> (a non-enum column, a
+    /// <see cref="DBNull"/> value, or a value that is not a known enum label).
+    /// </returns>
+    public bool TryGetEnumOrdinal(int ordinal, out int value)
     {
         if (CurrentRow[ordinal] is string label &&
             GetEffectiveClickHouseType(ordinal) is EnumType enumType &&
-            enumType.TryLookup(label, out ordinalValue))
+            enumType.TryLookup(label, out value))
         {
             return true;
         }
 
-        ordinalValue = default;
+        value = default;
         return false;
     }
 
@@ -144,10 +154,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override bool GetBoolean(int ordinal) => Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
 
-    public override byte GetByte(int ordinal)
-        => TryGetEnumOrdinal(ordinal, out var ordinalValue)
-            ? Convert.ToByte(ordinalValue, CultureInfo.InvariantCulture)
-            : (byte)GetValue(ordinal);
+    public override byte GetByte(int ordinal) => (byte)GetValue(ordinal);
 
     public override long GetBytes(int ordinal, long dataOffset, byte[] buffer, int bufferOffset, int length) => throw new NotImplementedException();
 
@@ -180,18 +187,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override Guid GetGuid(int ordinal) => (Guid)GetValue(ordinal);
 
-    public override short GetInt16(int ordinal)
-        => TryGetEnumOrdinal(ordinal, out var ordinalValue)
-            ? Convert.ToInt16(ordinalValue, CultureInfo.InvariantCulture)
-            : (short)GetValue(ordinal);
+    public override short GetInt16(int ordinal) => (short)GetValue(ordinal);
 
-    public override int GetInt32(int ordinal)
-        => TryGetEnumOrdinal(ordinal, out var ordinalValue) ? ordinalValue : (int)GetValue(ordinal);
+    public override int GetInt32(int ordinal) => (int)GetValue(ordinal);
 
-    public override long GetInt64(int ordinal)
-        => TryGetEnumOrdinal(ordinal, out var ordinalValue)
-            ? Convert.ToInt64(ordinalValue, CultureInfo.InvariantCulture)
-            : (long)GetValue(ordinal);
+    public override long GetInt64(int ordinal) => (long)GetValue(ordinal);
 
     public override string GetName(int ordinal) => FieldNames[ordinal];
 
@@ -290,14 +290,6 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             }
         }
 
-        if (FieldValueDispatcher<T>.IsEnumNumericTarget && TryGetEnumOrdinal(ordinal, out var ordinalValue))
-        {
-            // Enum columns materialize as their string label; expose the underlying wire ordinal for
-            // integer target types (mirrors the numeric accessors). This projection is independent of
-            // the read value converter, which transforms the string representation, not the ordinal.
-            return (T)Convert.ChangeType(ordinalValue, typeof(T), CultureInfo.InvariantCulture);
-        }
-
         var value = (T)CurrentRow[ordinal];
         if (readValueConverter != null)
             return readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
@@ -315,12 +307,6 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     {
         public static readonly bool RequiresMultidimConversion =
             typeof(T).IsArray && typeof(T).GetArrayRank() >= 2;
-
-        public static readonly bool IsEnumNumericTarget =
-            typeof(T) == typeof(sbyte) || typeof(T) == typeof(byte) ||
-            typeof(T) == typeof(short) || typeof(T) == typeof(ushort) ||
-            typeof(T) == typeof(int) || typeof(T) == typeof(uint) ||
-            typeof(T) == typeof(long) || typeof(T) == typeof(ulong);
     }
 
     // Custom extension
@@ -331,22 +317,13 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken) => Task.FromResult(false);
 
     // Custom extension
-    public ushort GetUInt16(int ordinal)
-        => TryGetEnumOrdinal(ordinal, out var ordinalValue)
-            ? Convert.ToUInt16(ordinalValue, CultureInfo.InvariantCulture)
-            : (ushort)GetValue(ordinal);
+    public ushort GetUInt16(int ordinal) => (ushort)GetValue(ordinal);
 
     // Custom extension
-    public uint GetUInt32(int ordinal)
-        => TryGetEnumOrdinal(ordinal, out var ordinalValue)
-            ? Convert.ToUInt32(ordinalValue, CultureInfo.InvariantCulture)
-            : (uint)GetValue(ordinal);
+    public uint GetUInt32(int ordinal) => (uint)GetValue(ordinal);
 
     // Custom extension
-    public ulong GetUInt64(int ordinal)
-        => TryGetEnumOrdinal(ordinal, out var ordinalValue)
-            ? Convert.ToUInt64(ordinalValue, CultureInfo.InvariantCulture)
-            : (ulong)GetValue(ordinal);
+    public ulong GetUInt64(int ordinal) => (ulong)GetValue(ordinal);
 
     // Custom extension
     public IPAddress GetIPAddress(int ordinal) => (IPAddress)GetValue(ordinal);
@@ -355,10 +332,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     public ITuple GetTuple(int ordinal) => (ITuple)GetValue(ordinal);
 
     // Custom extension
-    public sbyte GetSByte(int ordinal)
-        => TryGetEnumOrdinal(ordinal, out var ordinalValue)
-            ? Convert.ToSByte(ordinalValue, CultureInfo.InvariantCulture)
-            : (sbyte)GetValue(ordinal);
+    public sbyte GetSByte(int ordinal) => (sbyte)GetValue(ordinal);
 
     // Custom extension
     public BigInteger GetBigInteger(int ordinal) => (BigInteger)GetValue(ordinal);
