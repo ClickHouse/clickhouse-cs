@@ -10,8 +10,9 @@ internal class IPv4Type : ClickHouseType
 
     public override object Read(ExtendedBinaryReader reader)
     {
-        var ipv4bytes = reader.ReadBytes(4);
-        Array.Reverse(ipv4bytes);
+        Span<byte> ipv4bytes = stackalloc byte[4];
+        reader.ReadBytes(ipv4bytes);
+        ipv4bytes.Reverse();
         return new IPAddress(ipv4bytes);
     }
 

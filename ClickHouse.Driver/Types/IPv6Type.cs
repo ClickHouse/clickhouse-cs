@@ -8,7 +8,12 @@ internal class IPv6Type : ClickHouseType
 {
     public override Type FrameworkType => typeof(IPAddress);
 
-    public override object Read(ExtendedBinaryReader reader) => new IPAddress(reader.ReadBytes(16));
+    public override object Read(ExtendedBinaryReader reader)
+    {
+        Span<byte> ipv6bytes = stackalloc byte[16];
+        reader.ReadBytes(ipv6bytes);
+        return new IPAddress(ipv6bytes);
+    }
 
     public override string ToString() => "IPv6";
 
