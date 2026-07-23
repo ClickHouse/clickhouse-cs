@@ -268,6 +268,74 @@ internal sealed class TupleColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => allChildrenWritable && icolumnOfTupleType.IsInstanceOfType(column);
 
     /// <inheritdoc/>
+    // Produces the dense TupleColumn (one child column per element) so a later measure/write drives the children
+    // directly with no per-row projection. A flat column of ValueTuple values is un-transposed once: each element
+    // position is gathered into a per-child column (boxing each value, as the ergonomic write path does), and each
+    // child is itself densified so a nested composite element (e.g. Tuple(Array(T)) / Tuple(Nullable(T))) becomes
+    // dense too. An already-dense tuple recurses into its children and is returned unchanged (by reference) when
+    // they are all already dense.
+    public IColumn Densify(IColumn column)
+    {
+        int rowCount = column.RowCount;
+
+        if (column is ITupleColumn tuple && tuple.Children.Count == children.Length)
+        {
+            IColumn[] densified = null;
+            for (int i = 0; i < children.Length; i++)
+            {
+                IColumn original = tuple.Children[i];
+                IColumn child = children[i].Densify(original);
+                if (densified is null && !ReferenceEquals(child, original))
+                {
+                    densified = new IColumn[children.Length];
+                    for (int j = 0; j < i; j++)
+                    {
+                        densified[j] = tuple.Children[j];
+                    }
+                }
+
+                if (densified is not null)
+                {
+                    densified[i] = child;
+                }
+            }
+
+            if (densified is null)
+            {
+                return column;
+            }
+
+            // The rebuilt wrapper borrows its children — the freshly densified ones are unpooled and the unchanged
+            // ones are still owned by the original column — so it does not dispose them (ownsChildren: false).
+            return (IColumn)columnConstructor.Invoke(new object[] { column.Name, column.TypeName, densified, fieldNames, rowCount, false });
+        }
+
+        var childBoxed = new object[children.Length][];
+        for (int i = 0; i < children.Length; i++)
+        {
+            childBoxed[i] = new object[rowCount];
+        }
+
+        for (int r = 0; r < rowCount; r++)
+        {
+            var tupleValue = (ITuple)column.GetValue(r);
+            for (int i = 0; i < children.Length; i++)
+            {
+                childBoxed[i][r] = tupleValue[i];
+            }
+        }
+
+        var childColumns = new IColumn[children.Length];
+        for (int i = 0; i < children.Length; i++)
+        {
+            IColumn built = childFlatBuilders[i](column.Name, children[i].TypeName, childBoxed[i], rowCount);
+            childColumns[i] = children[i].Densify(built);
+        }
+
+        return (IColumn)columnConstructor.Invoke(new object[] { column.Name, column.TypeName, childColumns, fieldNames, rowCount, true });
+    }
+
+    /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer)
     {
         foreach (IColumnCodec child in children)

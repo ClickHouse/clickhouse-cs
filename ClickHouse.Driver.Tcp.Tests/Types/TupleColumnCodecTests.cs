@@ -331,4 +331,61 @@ public class TupleColumnCodecTests
 
         Assert.That(((IColumn<(int, string, double, byte, short, bool, uint)>)read).Values.ToArray(), Is.EqualTo(expected));
     }
+
+    [Test]
+    public async Task Densify_FlatValueTupleColumn_ProducesDenseColumnThatRoundTrips()
+    {
+        // A flat ArrayColumn<ValueTuple> is un-transposed into one child column per element, so a later
+        // measure/write drives the children directly. It must surface the same rows and round-trip.
+        IColumnCodec codec = Resolve("Tuple(Int32, String)");
+        var rows = new (int, string)[] { (1, "a"), (2, "b"), (3, "c") };
+        var flat = new ArrayColumn<(int, string)>("c", "Tuple(Int32, String)", rows);
+
+        IColumn densified = codec.Densify(flat);
+
+        Assert.That(densified, Is.InstanceOf<ITupleColumn>());
+        var dense = (ITupleColumn)densified;
+        Assert.Multiple(() =>
+        {
+            Assert.That(dense.Children.Count, Is.EqualTo(2));
+            Assert.That(((IColumn<int>)dense.Children[0]).Values.ToArray(), Is.EqualTo(new[] { 1, 2, 3 }));
+            Assert.That(((IColumn<string>)dense.Children[1]).Values.ToArray(), Is.EqualTo(new[] { "a", "b", "c" }));
+            Assert.That(((IColumn<(int, string)>)densified).Values.ToArray(), Is.EqualTo(rows));
+        });
+
+        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, densified, "Tuple(Int32, String)", rows.Length);
+        Assert.That(((IColumn<(int, string)>)read).Values.ToArray(), Is.EqualTo(rows));
+    }
+
+    [Test]
+    public void Densify_FlatTupleWithArrayElement_DensifiesChildToDenseArray()
+    {
+        // A flat Tuple(Array(UInt8), String): densify un-transposes into per-child columns AND recurses, so the
+        // Array child becomes a dense ArrayValueColumn rather than a jagged ArrayColumn<byte[]>.
+        IColumnCodec codec = Resolve("Tuple(Array(UInt8), String)");
+        var rows = new (byte[], string)[] { (new byte[] { 1, 2 }, "x"), (new byte[] { 3 }, "y") };
+        var flat = new ArrayColumn<(byte[], string)>("c", "Tuple(Array(UInt8), String)", rows);
+
+        var dense = (ITupleColumn)codec.Densify(flat);
+        var arrayChild = (IColumn<byte[]>)dense.Children[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dense.Children[0], Is.InstanceOf<ArrayValueColumn<byte>>());
+            Assert.That(arrayChild[0], Is.EqualTo(new byte[] { 1, 2 }));
+            Assert.That(arrayChild[1], Is.EqualTo(new byte[] { 3 }));
+            Assert.That(((IColumn<string>)dense.Children[1]).Values.ToArray(), Is.EqualTo(new[] { "x", "y" }));
+        });
+    }
+
+    [Test]
+    public void Densify_AlreadyDenseColumn_ReturnsSameInstance()
+    {
+        // A dense TupleColumn whose children are already dense (leaf columns) has nothing to rebuild, so it is
+        // returned by reference.
+        IColumnCodec codec = Resolve("Tuple(Int32, String)");
+        var dense = new TupleColumn<int, string>("c", "Tuple(Int32, String)", new (int, string)[] { (1, "a"), (2, "b") });
+
+        Assert.That(codec.Densify(dense), Is.SameAs(dense));
+    }
 }
