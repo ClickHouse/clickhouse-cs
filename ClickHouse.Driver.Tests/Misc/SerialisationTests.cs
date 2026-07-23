@@ -112,6 +112,35 @@ public class SerialisationTests
         Assert.That(stream.Position, Is.EqualTo(stream.Length));
     }
 
+    // An empty span read while a byte is buffered from Peek must be a no-op: it must not write the
+    // peeked byte into the zero-length buffer (which would throw) nor consume it from the stream.
+    [Test]
+    public void PeekableStreamWrapperReadSpan_WithEmptyBufferAfterPeek_ShouldReturnZeroWithoutConsuming()
+    {
+        using var stream = new MemoryStream(new byte[] { 7, 8, 9 });
+        using var wrapper = new PeekableStreamWrapper(stream);
+
+        Assert.That(wrapper.Peek(), Is.EqualTo(7));
+        Assert.That(wrapper.Read(Span<byte>.Empty), Is.EqualTo(0));
+
+        // Peeked byte is still pending and read out intact afterwards.
+        Assert.That(wrapper.ReadByte(), Is.EqualTo(7));
+    }
+
+    // Peeking an empty stream buffers a -1 sentinel; a following span read must surface end-of-stream
+    // as a zero-length read rather than writing 0xFF (the truncated sentinel) into the buffer.
+    [Test]
+    public void PeekableStreamWrapperReadSpan_AfterPeekPastEndOfStream_ShouldReturnZero()
+    {
+        using var stream = new MemoryStream(Array.Empty<byte>());
+        using var wrapper = new PeekableStreamWrapper(stream);
+
+        Assert.That(wrapper.Peek(), Is.EqualTo(-1));
+
+        var buffer = new byte[4];
+        Assert.That(wrapper.Read(buffer.AsSpan()), Is.EqualTo(0));
+    }
+
     // Locks in the read-side sign semantics after the switch to
     // new BigInteger(span, isUnsigned: !Signed): an all-ones little-endian buffer must decode as the
     // unsigned max (2^bits - 1) for unsigned types and as -1 for signed types.
