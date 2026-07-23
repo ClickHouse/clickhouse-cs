@@ -76,7 +76,7 @@ public class ArrayColumnCodecTests
         IColumnCodec codec = Resolve("Array(UInt32)");
         var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", Array.Empty<uint[]>());
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column, 0, 0));
+        byte[] bytes = await CodecTestHarness.WriteDenseAsync(codec, column, 0, 0);
         Assert.That(bytes, Is.Empty, "an empty array column writes no offsets and no values");
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
@@ -124,7 +124,7 @@ public class ArrayColumnCodecTests
             new uint[] { 4, 5, 6 },
         });
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, full, start: 1, length: 2));
+        byte[] bytes = await CodecTestHarness.WriteDenseAsync(codec, full, start: 1, length: 2);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
         using IColumn read = await codec.ReadColumnAsync(reader, "c", "Array(UInt32)", 2, CodecTestHarness.None);
 
@@ -136,11 +136,12 @@ public class ArrayColumnCodecTests
     {
         IColumnCodec codec = Resolve("Array(UInt32)");
         var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", new[] { new uint[] { 10, 20, 30 }, Array.Empty<uint>() });
+        using IColumn dense = codec.TryDensify(column, out _);
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.MeasureRowBytes(column, 0), Is.EqualTo(8 + (3 * 4))); // one UInt64 offset + three UInt32
-            Assert.That(codec.MeasureRowBytes(column, 1), Is.EqualTo(8));           // one offset, no elements
+            Assert.That(codec.MeasureRowBytes(dense, 0), Is.EqualTo(8 + (3 * 4))); // one UInt64 offset + three UInt32
+            Assert.That(codec.MeasureRowBytes(dense, 1), Is.EqualTo(8));           // one offset, no elements
             Assert.That(codec.FixedRowByteSize, Is.Null);
         });
     }
@@ -148,21 +149,22 @@ public class ArrayColumnCodecTests
     [Test]
     public void WriteColumn_NullRow_ThrowsArgumentException()
     {
-        // Array(T) rows are non-nullable, so a null row is rejected rather than silently written as an empty array.
+        // Array(T) rows are non-nullable, so a null row is rejected (during densify, before the write) rather than
+        // silently written as an empty array.
         IColumnCodec codec = Resolve("Array(UInt32)");
         var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", new[] { new uint[] { 1, 2 }, null, new uint[] { 3 } });
 
-        Assert.ThrowsAsync<ArgumentException>(() => CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
+        Assert.Throws<ArgumentException>(() => codec.TryDensify(column, out _));
     }
 
     [Test]
     public void MeasureRowBytes_NullRow_ThrowsArgumentException()
     {
-        // Sizing must agree with the write path: a null row is invalid, not empty.
+        // TryDensify (which the measure/write pipeline runs first) must reject a null row rather than treat it as empty.
         IColumnCodec codec = Resolve("Array(UInt32)");
         var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", new[] { new uint[] { 1, 2 }, null });
 
-        Assert.Throws<ArgumentException>(() => codec.MeasureRowBytes(column, 1));
+        Assert.Throws<ArgumentException>(() => codec.TryDensify(column, out _));
     }
 
     [Test]
@@ -170,11 +172,12 @@ public class ArrayColumnCodecTests
     {
         IColumnCodec codec = Resolve("Array(String)");
         var column = new ArrayColumn<string[]>("c", "Array(String)", new[] { new[] { "a", "bb" }, Array.Empty<string>() });
+        using IColumn dense = codec.TryDensify(column, out _);
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.MeasureRowBytes(column, 0), Is.EqualTo(8 + (1 + 1) + (1 + 2))); // offset + "a" + "bb"
-            Assert.That(codec.MeasureRowBytes(column, 1), Is.EqualTo(8));
+            Assert.That(codec.MeasureRowBytes(dense, 0), Is.EqualTo(8 + (1 + 1) + (1 + 2))); // offset + "a" + "bb"
+            Assert.That(codec.MeasureRowBytes(dense, 1), Is.EqualTo(8));
         });
     }
 
@@ -258,15 +261,15 @@ public class ArrayColumnCodecTests
     }
 
     [Test]
-    public async Task Densify_JaggedColumn_ProducesDenseColumnThatRoundTrips()
+    public async Task TryDensify_JaggedColumn_ProducesDenseColumnThatRoundTrips()
     {
-        // Densify flattens the jagged T[]-per-row form into the dense wire shape: a per-row offsets array plus a
+        // TryDensify flattens the jagged T[]-per-row form into the dense wire shape: a per-row offsets array plus a
         // single flat inner column holding every element end-to-end. It must surface the same rows and round-trip.
         IColumnCodec codec = Resolve("Array(UInt32)");
         var expected = new[] { new uint[] { 10, 20, 30 }, Array.Empty<uint>(), new uint[] { 40, 50 } };
         var jagged = new ArrayColumn<uint[]>("c", "Array(UInt32)", expected);
 
-        IColumn densified = codec.Densify(jagged);
+        IColumn densified = codec.TryDensify(jagged, out _);
 
         Assert.That(densified, Is.InstanceOf<ArrayValueColumn<uint>>());
         var dense = (ArrayValueColumn<uint>)densified;
@@ -282,7 +285,7 @@ public class ArrayColumnCodecTests
     }
 
     [Test]
-    public void Densify_NestedNullableInner_DensifiesInnerToo()
+    public void TryDensify_NestedNullableInner_DensifiesInnerToo()
     {
         // Array(Nullable(T)): densify flattens the jagged rows AND recurses the inner codec, turning the
         // concatenated T? run into the dense (inner column + null-map) nullable column — the whole tree is dense.
@@ -290,7 +293,7 @@ public class ArrayColumnCodecTests
         var expected = new[] { new uint?[] { 1, null }, new uint?[] { 3 } };
         var jagged = new ArrayColumn<uint?[]>("c", "Array(Nullable(UInt32))", expected);
 
-        var dense = (ArrayValueColumn<uint?>)codec.Densify(jagged);
+        var dense = (ArrayValueColumn<uint?>)codec.TryDensify(jagged, out _);
 
         Assert.Multiple(() =>
         {
@@ -301,14 +304,20 @@ public class ArrayColumnCodecTests
     }
 
     [Test]
-    public void Densify_AlreadyDenseColumn_ReturnsSameInstance()
+    public void TryDensify_AlreadyDenseColumn_ReturnsSameInstanceNotBuilt()
     {
-        // Idempotent: a dense column whose inner is already dense is returned by reference (nothing to rebuild).
+        // Idempotent: a dense column whose inner is already dense is returned by reference with built = false
+        // (nothing to rebuild).
         IColumnCodec codec = Resolve("Array(UInt32)");
         var inner = PrimitiveColumn<uint>.FromValues("c", "UInt32", new uint[] { 10, 20, 30, 40, 50 });
         var dense = new ArrayValueColumn<uint>("c", "Array(UInt32)", inner, new[] { 0, 3, 3, 5 }, rowCount: 3, pooledOffsets: false);
 
-        Assert.That(codec.Densify(dense), Is.SameAs(dense));
+        IColumn result = codec.TryDensify(dense, out bool built);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.SameAs(dense));
+            Assert.That(built, Is.False, "an already-dense column is borrowed, not rebuilt");
+        });
     }
 
     [Test]
