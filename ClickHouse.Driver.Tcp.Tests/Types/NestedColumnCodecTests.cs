@@ -67,8 +67,10 @@ public class NestedColumnCodecTests
             new[] { ((byte)30, "z") },
         });
 
-        byte[] nestedBytes = await CodecTestHarness.WriteAsync(w => Resolve("Nested(a UInt8, b String)").WriteColumn(w, nested));
-        byte[] arrayBytes = await CodecTestHarness.WriteAsync(w => Resolve("Array(Tuple(a UInt8, b String))").WriteColumn(w, arrayOfTuple));
+        IColumnCodec nestedCodec = Resolve("Nested(a UInt8, b String)");
+        IColumnCodec arrayCodec = Resolve("Array(Tuple(a UInt8, b String))");
+        byte[] nestedBytes = await CodecTestHarness.WriteAsync(w => nestedCodec.WriteColumn(w, nestedCodec.TryDensify(nested, out _)));
+        byte[] arrayBytes = await CodecTestHarness.WriteAsync(w => arrayCodec.WriteColumn(w, arrayCodec.TryDensify(arrayOfTuple, out _)));
 
         Assert.That(nestedBytes, Is.EqualTo(arrayBytes));
     }
@@ -323,5 +325,47 @@ public class NestedColumnCodecTests
 
         Assert.ThrowsAsync<ClickHouseProtocolException>(async () =>
             await codec.ReadColumnAsync(reader, "c", "Nested(a UInt8, b UInt8)", 2, CodecTestHarness.None));
+    }
+
+    [Test]
+    public void TryDensify_NestedWithOneErgonomicField_DisposesOnlyRebuiltFieldNotBorrowed()
+    {
+        // A Nested whose field 'a' is still ergonomic (a jagged Nullable column) while field 'b' is already dense (a
+        // leaf): TryDensify rebuilds only field 'a' and keeps field 'b' by reference. Disposing the rebuilt wrapper must
+        // free the freshly built field 'a' but leave the borrowed field 'b' alone — it is still owned by the source
+        // column, so disposing it here would double-dispose it.
+        IColumnCodec codec = Resolve("Nested(a Nullable(Int32), b UInt32)");
+        var ergonomicField = Field<int?>("Nullable(Int32)", 1, null, 3);
+        var borrowedField = new DisposeSpyColumn<uint>("c", "UInt32", new uint[] { 9, 8, 7 });
+        var source = Nested("Nested(a Nullable(Int32), b UInt32)", new[] { "a", "b" }, new IColumn[] { ergonomicField, borrowedField }, new[] { 0, 3 });
+
+        IColumn densified = codec.TryDensify(source, out bool built);
+        Assert.That(built, Is.True, "field 'a' was ergonomic, so a rebuild is expected");
+        Assert.That(densified, Is.Not.SameAs(source));
+        densified.Dispose();
+
+        Assert.That(borrowedField.DisposeCount, Is.EqualTo(0), "the borrowed, already-dense field must not be disposed by the rebuilt wrapper");
+
+        ergonomicField.Dispose();
+        borrowedField.Dispose();
+    }
+
+    [Test]
+    public void RestrictOwnership_DisposesOnlyFlaggedFields()
+    {
+        // The mechanism the partial densify rebuild relies on: after RestrictOwnership, Dispose frees exactly the
+        // fields flagged true (the freshly built ones) and leaves the rest (borrowed) untouched.
+        var owned = new DisposeSpyColumn<byte>("c", "UInt8", new byte[] { 1 });
+        var borrowed = new DisposeSpyColumn<string>("c", "String", new[] { "x" });
+        var nested = Nested("Nested(a UInt8, b String)", new[] { "a", "b" }, new IColumn[] { owned, borrowed }, new[] { 0, 1 });
+
+        nested.RestrictOwnership(new[] { true, false });
+        nested.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(owned.DisposeCount, Is.EqualTo(1), "a flagged (freshly built) field must be disposed exactly once");
+            Assert.That(borrowed.DisposeCount, Is.EqualTo(0), "an unflagged (borrowed) field must not be disposed");
+        });
     }
 }
