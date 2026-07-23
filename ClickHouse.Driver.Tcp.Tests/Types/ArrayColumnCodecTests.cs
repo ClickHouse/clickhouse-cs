@@ -258,6 +258,60 @@ public class ArrayColumnCodecTests
     }
 
     [Test]
+    public async Task Densify_JaggedColumn_ProducesDenseColumnThatRoundTrips()
+    {
+        // Densify flattens the jagged T[]-per-row form into the dense wire shape: a per-row offsets array plus a
+        // single flat inner column holding every element end-to-end. It must surface the same rows and round-trip.
+        IColumnCodec codec = Resolve("Array(UInt32)");
+        var expected = new[] { new uint[] { 10, 20, 30 }, Array.Empty<uint>(), new uint[] { 40, 50 } };
+        var jagged = new ArrayColumn<uint[]>("c", "Array(UInt32)", expected);
+
+        IColumn densified = codec.Densify(jagged);
+
+        Assert.That(densified, Is.InstanceOf<ArrayValueColumn<uint>>());
+        var dense = (ArrayValueColumn<uint>)densified;
+        Assert.Multiple(() =>
+        {
+            Assert.That(dense.Offsets.ToArray(), Is.EqualTo(new[] { 0, 3, 3, 5 }));
+            Assert.That(dense.Inner.Values.ToArray(), Is.EqualTo(new uint[] { 10, 20, 30, 40, 50 }));
+            Assert.That(((IColumn<uint[]>)densified).Values.ToArray(), Is.EqualTo(expected));
+        });
+
+        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, densified, "Array(UInt32)", densified.RowCount);
+        Assert.That(((IColumn<uint[]>)read).Values.ToArray(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Densify_NestedNullableInner_DensifiesInnerToo()
+    {
+        // Array(Nullable(T)): densify flattens the jagged rows AND recurses the inner codec, turning the
+        // concatenated T? run into the dense (inner column + null-map) nullable column — the whole tree is dense.
+        IColumnCodec codec = Resolve("Array(Nullable(UInt32))");
+        var expected = new[] { new uint?[] { 1, null }, new uint?[] { 3 } };
+        var jagged = new ArrayColumn<uint?[]>("c", "Array(Nullable(UInt32))", expected);
+
+        var dense = (ArrayValueColumn<uint?>)codec.Densify(jagged);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dense.Offsets.ToArray(), Is.EqualTo(new[] { 0, 2, 3 }));
+            Assert.That(dense.Inner, Is.InstanceOf<NullableValueColumn<uint>>());
+            Assert.That(((IColumn<uint?[]>)dense).Values.ToArray(), Is.EqualTo(expected));
+        });
+    }
+
+    [Test]
+    public void Densify_AlreadyDenseColumn_ReturnsSameInstance()
+    {
+        // Idempotent: a dense column whose inner is already dense is returned by reference (nothing to rebuild).
+        IColumnCodec codec = Resolve("Array(UInt32)");
+        var inner = PrimitiveColumn<uint>.FromValues("c", "UInt32", new uint[] { 10, 20, 30, 40, 50 });
+        var dense = new ArrayValueColumn<uint>("c", "Array(UInt32)", inner, new[] { 0, 3, 3, 5 }, rowCount: 3, pooledOffsets: false);
+
+        Assert.That(codec.Densify(dense), Is.SameAs(dense));
+    }
+
+    [Test]
     public void Resolve_Array_StampsFullTypeName()
         => Assert.That(Resolve("Array(Nullable(String))").TypeName, Is.EqualTo("Array(Nullable(String))"));
 
