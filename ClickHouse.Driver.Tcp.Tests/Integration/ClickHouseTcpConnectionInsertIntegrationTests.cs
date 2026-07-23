@@ -351,6 +351,107 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         Assert.That(probe, Is.EqualTo((byte)1));
     }
 
+    // The values-per-row shape (varying lengths, interspersed empties) that makes the offsets stream non-trivial,
+    // shared by the two block-splitting tests below.
+    private static readonly uint[][] JaggedArrayRows =
+    {
+        new uint[] { 1 },
+        Array.Empty<uint>(),
+        new uint[] { 2, 3 },
+        new uint[] { 4, 5, 6 },
+        Array.Empty<uint>(),
+        new uint[] { 7 },
+        new uint[] { 8, 9, 10, 11 },
+    };
+
+    [Test]
+    public async Task InsertAsync_JaggedArrayColumnSplitAcrossBlocks_RoundTripsEveryRow()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Array(UInt32)) ENGINE = Memory");
+
+            // maxRowsPerBlock: 2 forces the seven rows into four wire blocks. Each block re-bases its offsets at
+            // zero, so this drives the ergonomic jagged write path across block boundaries. The id column pins the
+            // read-back order (Memory does not guarantee it otherwise).
+            IColumn[] columns =
+            {
+                PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(JaggedArrayRows.Length)),
+                new ArrayColumn<uint[]>("value", "Array(UInt32)", JaggedArrayRows),
+            };
+            await connection.InsertAsync($"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, cancellationToken: None);
+
+            uint[][] readBack = await ReadArraysOrderedByIdAsync(connection, table, JaggedArrayRows.Length);
+            Assert.That(readBack, Is.EqualTo(JaggedArrayRows));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Test]
+    public async Task InsertAsync_DenseArrayValueColumnSplitAcrossBlocks_RoundTripsEveryRow()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Array(UInt32)) ENGINE = Memory");
+
+            // The dense wire-shaped column (one flat inner column + a cumulative offsets array) is the zero-copy
+            // write source a read produces. Splitting it with maxRowsPerBlock: 2 exercises the dense write path's
+            // slice-relative offset arithmetic — subtracting each block's first element index — which only runs
+            // when a block begins at a non-zero element offset (blocks 2+ here).
+            var inner = PrimitiveColumn<uint>.FromValues("value", "UInt32", new uint[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 });
+            var dense = new ArrayValueColumn<uint>("value", "Array(UInt32)", inner, new[] { 0, 1, 1, 3, 6, 6, 7, 11 }, rowCount: JaggedArrayRows.Length, pooledOffsets: false);
+            IColumn[] columns =
+            {
+                PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(JaggedArrayRows.Length)),
+                dense,
+            };
+            await connection.InsertAsync($"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, cancellationToken: None);
+
+            uint[][] readBack = await ReadArraysOrderedByIdAsync(connection, table, JaggedArrayRows.Length);
+            Assert.That(readBack, Is.EqualTo(JaggedArrayRows));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    private static uint[] RowIds(int count)
+    {
+        var ids = new uint[count];
+        for (uint i = 0; i < count; i++)
+        {
+            ids[i] = i;
+        }
+
+        return ids;
+    }
+
+    // Reads the Array(UInt32) column back in id order, copying each row out of the borrowed block (the materialized
+    // arrays are fresh copies, so they outlive it).
+    private static async Task<uint[][]> ReadArraysOrderedByIdAsync(ClickHouseTcpConnection connection, string table, int expectedRows)
+    {
+        var rows = new List<uint[]>(expectedRows);
+        await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table} ORDER BY id", cancellationToken: None))
+        {
+            foreach (uint[] row in ((IColumn<uint[]>)block[0]).Values)
+            {
+                rows.Add(row);
+            }
+        }
+
+        return rows.ToArray();
+    }
+
     private static void AssertColumnsEqual(IColumn expected, IColumn actual)
     {
         Assert.That(actual.RowCount, Is.EqualTo(expected.RowCount), "row count");
