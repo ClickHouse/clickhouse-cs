@@ -490,6 +490,72 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
         }
     }
 
+    // ----- Binary blit fast path: every fixed-width primitive leaf, multidim INSERT -> read back -----
+    //
+    // InsertBinaryAsync is the only path that reaches WriteMultidimensional (the SELECT-echo cases
+    // above go through the HTTP text formatter instead). A rectangular multidim of a blittable leaf
+    // takes the new blit path on the wire; the server must accept the bytes and return the matching
+    // jagged value for every fixed-width primitive type.
+
+    public static IEnumerable<TestCaseData> BlittableLeafBinaryInsertCases()
+    {
+        yield return BinInsertCase<sbyte>("Int8", i => (sbyte)i);
+        yield return BinInsertCase<byte>("UInt8", i => (byte)i);
+        yield return BinInsertCase<short>("Int16", i => (short)i);
+        yield return BinInsertCase<ushort>("UInt16", i => (ushort)i);
+        yield return BinInsertCase<int>("Int32", i => i);
+        yield return BinInsertCase<uint>("UInt32", i => (uint)i);
+        yield return BinInsertCase<long>("Int64", i => i);
+        yield return BinInsertCase<ulong>("UInt64", i => (ulong)i);
+        yield return BinInsertCase<float>("Float32", i => i + 0.5f);
+        yield return BinInsertCase<double>("Float64", i => i + 0.5d);
+        yield return BinInsertCase<bool>("Bool", i => i % 2 == 0);
+    }
+
+    [Test]
+    [TestCaseSource(nameof(BlittableLeafBinaryInsertCases))]
+    public async Task ClientInsertBinaryAsync_BlittableMultidimLeaf_RoundTripsViaBlitPath(string leafType, object matrix, object expectedJagged)
+    {
+        var tableName = SanitizeTableName($"nested_blit_{leafType}_{Guid.NewGuid():N}");
+        var fqn = $"test.{tableName}";
+        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {fqn}");
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {fqn} (id Int32, arr Array(Array({leafType}))) ENGINE Memory");
+        try
+        {
+            await client.InsertBinaryAsync(
+                fqn,
+                new[] { "id", "arr" },
+                new List<object[]> { new object[] { 0, matrix } });
+
+            using var reader = await client.ExecuteReaderAsync($"SELECT arr FROM {fqn}");
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetValue(0), Is.EqualTo(expectedJagged));
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {fqn}");
+        }
+    }
+
+    private static TestCaseData BinInsertCase<T>(string leafType, Func<int, T> gen)
+    {
+        var matrix = new T[2, 3];
+        var jagged = new T[2][];
+        for (var r = 0; r < 2; r++)
+        {
+            jagged[r] = new T[3];
+            for (var c = 0; c < 3; c++)
+            {
+                var v = gen((r * 3) + c);
+                matrix[r, c] = v;
+                jagged[r][c] = v;
+            }
+        }
+
+        return new TestCaseData(leafType, (object)matrix, (object)jagged)
+            .SetName($"InsertBinaryBlit_{typeof(T).Name}_RoundTrips");
+    }
+
     // ----- GetFieldValue<T> with multidim T (materialises jagged result as rectangular) -----
 
     [Test]
