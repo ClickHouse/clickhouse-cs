@@ -39,6 +39,11 @@ internal sealed class NestedColumn : IColumn<object[][]>
     private int[] offsets;
     private object[][][] cache;
 
+    // When non-null, overrides ownsFields per field: Dispose disposes field i only when fieldOwnership[i] is true.
+    // Set once by RestrictOwnership immediately after construction so a densified wrapper that mixes freshly built
+    // field columns with fields borrowed from another column disposes only the ones it created.
+    private bool[] fieldOwnership;
+
     /// <summary>Initializes a nested column over its flat field columns and their shared per-row offsets.</summary>
     /// <param name="name">The column name.</param>
     /// <param name="typeName">The full <c>Nested(...)</c> type string.</param>
@@ -69,6 +74,22 @@ internal sealed class NestedColumn : IColumn<object[][]>
         this.rowCount = rowCount;
         this.pooledOffsets = pooledOffsets;
         this.ownsFields = ownsFields;
+    }
+
+    /// <summary>
+    /// Restricts disposal to the fields flagged in <paramref name="owned"/> (one entry per field), overriding the
+    /// all-or-nothing <c>ownsFields</c> passed at construction. Used when rebuilding a densified nested column that
+    /// keeps some field columns by reference (owned by the source column) and replaces others with freshly built
+    /// ones, so disposing this wrapper frees only the columns it created. Must be called before the column is observed.
+    /// </summary>
+    internal void RestrictOwnership(bool[] owned)
+    {
+        if (owned is null || owned.Length != fields.Length)
+        {
+            throw new ArgumentException("Ownership mask must have one entry per field column.", nameof(owned));
+        }
+
+        fieldOwnership = owned;
     }
 
     /// <inheritdoc/>
@@ -148,7 +169,17 @@ internal sealed class NestedColumn : IColumn<object[][]>
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (ownsFields)
+        if (fieldOwnership is not null)
+        {
+            for (int i = 0; i < fields.Length; i++)
+            {
+                if (fieldOwnership[i])
+                {
+                    fields[i].Dispose();
+                }
+            }
+        }
+        else if (ownsFields)
         {
             foreach (IColumn field in fields)
             {
