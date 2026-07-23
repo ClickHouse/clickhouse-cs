@@ -1,6 +1,4 @@
 using System;
-using System.Buffers;
-using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
@@ -31,62 +29,27 @@ internal sealed class ReferenceNullableShape<T> : INullableShape
     public bool IsNull(IColumn column, int row) => ((IColumn<T>)column)[row] is null;
 
     /// <inheritdoc/>
+    // Every column is densified before the write, so the body is always the dense (inner column + null-map) shape:
+    // the inner column already holds a value at every row (a placeholder at the null rows), so the null-map bytes
+    // and the inner column are written directly with no copy. The ergonomic nullable-reference form was projected
+    // into this shape by TryDensify.
     public void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        if (column is NullableReferenceColumn<T> dense)
-        {
-            WriteDense(inner, writer, dense, start, length);
-        }
-        else
-        {
-            WriteErgonomic(inner, writer, (IColumn<T>)column, start, length);
-        }
-    }
-
-    // Dense form (the wire's own layout): the inner column already holds a value at every row (a placeholder at
-    // the null rows), so write the null-map bytes and the inner column with no copy.
-    private static void WriteDense(IColumnCodec inner, ClickHouseBinaryWriter writer, NullableReferenceColumn<T> dense, int start, int length)
-    {
+        var dense = (NullableReferenceColumn<T>)column;
         writer.WriteBytes(dense.NullMap.Slice(start, length));
         inner.WriteColumn(writer, dense.Inner, start, length);
-    }
-
-    // Ergonomic form (an inner-typed column with null entries): emit the null-map per row, then materialize the
-    // values into a pooled buffer with the inner codec's own null placeholder at the null rows, so a null never
-    // reaches the inner codec — a genuinely non-nullable inner column with a stray null still fails fast.
-    private static void WriteErgonomic(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn<T> typed, int start, int length)
-    {
-        for (int i = 0; i < length; i++)
-        {
-            writer.WriteBool(typed[start + i] is null);
-        }
-
-        var placeholder = (T)inner.NullPlaceholderAs(typeof(T));
-        T[] rented = ArrayPool<T>.Shared.Rent(length);
-        try
-        {
-            for (int i = 0; i < length; i++)
-            {
-                rented[i] = typed[start + i] ?? placeholder;
-            }
-
-            inner.WriteColumn(writer, ArrayColumn<T>.OverBuffer(typed.Name, inner.TypeName, rented, length), 0, length);
-        }
-        finally
-        {
-            ArrayPool<T>.Shared.Return(rented, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
-        }
     }
 
     /// <inheritdoc/>
     // Same projection as WriteErgonomic, but materialized once into the dense column instead of written: split the
     // nullable-reference values into an inner T column (the inner codec's placeholder at the null rows) plus the
-    // null-map, recurse the inner codec's own Densify (a no-op for a leaf inner), and wrap. An already-dense column
-    // is returned as-is.
-    public IColumn Densify(IColumnCodec inner, IColumn column)
+    // null-map, recurse the inner codec's own TryDensify (a no-op for a leaf inner), and wrap. An already-dense
+    // column is returned as-is (built = false).
+    public IColumn TryDensify(IColumnCodec inner, IColumn column, out bool built)
     {
         if (column is NullableReferenceColumn<T>)
         {
+            built = false;
             return column;
         }
 
@@ -102,7 +65,8 @@ internal sealed class ReferenceNullableShape<T> : INullableShape
             values[i] = value ?? placeholder;
         }
 
-        IColumn innerColumn = inner.Densify(new ArrayColumn<T>(source.Name, inner.TypeName, values));
+        IColumn innerColumn = inner.TryDensify(new ArrayColumn<T>(source.Name, inner.TypeName, values), out _);
+        built = true;
         return new NullableReferenceColumn<T>(source.Name, source.TypeName, (IColumn<T>)innerColumn, nullMap, rowCount, pooledMap: false);
     }
 
