@@ -28,6 +28,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     private readonly HttpResponseMessage httpResponse; // Used to dispose at the end of reader
     private readonly ExtendedBinaryReader reader;
+    private readonly PooledReadBufferStream pooledReadBuffer; // Returns its pooled buffer on dispose
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
     private readonly IReadValueConverter readValueConverter; // Can be null
     private readonly string[] columnTypeNames; // Raw server-sent type strings; null when no converter
@@ -35,10 +36,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly Dictionary<Type, object> bindingPlanCache = new();
     private bool hasCurrentRow;
 
-    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
+    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, PooledReadBufferStream pooledReadBuffer, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
     {
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
+        this.pooledReadBuffer = pooledReadBuffer;
         this.exceptionTagStream = exceptionTagStream;
         this.readValueConverter = readValueConverter;
         // pocoRegistry may be null when the reader is used purely for ADO.NET-style access
@@ -68,10 +70,17 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
         ExtendedBinaryReader reader = null;
         ExceptionTagAwareStream exceptionStream = null;
+        PooledReadBufferStream buffered = null;
         try
         {
             var rawStream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            var buffered = new BufferedStream(rawStream, readBufferSize);
+            // Buffer reads through a pooled buffer (rented from ArrayPool) rather than BufferedStream's
+            // fresh per-query array. leaveOpen: true because httpResponse owns rawStream and disposes it;
+            // the reader disposes this wrapper explicitly to return the buffer (the BinaryReader ->
+            // PeekableStreamWrapper chain does not propagate Dispose to inner streams).
+            // Its Read may return fewer bytes than requested; the ExtendedBinaryReader below loops to
+            // satisfy exact-count reads.
+            buffered = new PooledReadBufferStream(rawStream, readBufferSize, leaveOpen: true);
 
             // Conditionally wrap with exception-aware stream
             Stream streamForReader = buffered;
@@ -81,14 +90,15 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                 streamForReader = exceptionStream;
             }
 
-            reader = new ExtendedBinaryReader(streamForReader); // will dispose of stream
+            reader = new ExtendedBinaryReader(streamForReader);
             var (names, types, rawTypeNames) = ReadHeaders(reader, settings, readValueConverter != null);
-            return new ClickHouseDataReader(httpResponse, reader, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter);
+            return new ClickHouseDataReader(httpResponse, reader, buffered, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter);
         }
         catch (Exception)
         {
             httpResponse?.Dispose();
             reader?.Dispose();
+            buffered?.Dispose(); // returns the rented buffer if we failed before handing it to the reader
             throw;
         }
     }
@@ -498,6 +508,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         {
             httpResponse?.Dispose();
             reader?.Dispose();
+            // Explicit: the BinaryReader -> PeekableStreamWrapper chain does not propagate Dispose to the
+            // inner buffering stream, so return its pooled buffer here (idempotent if already disposed).
+            pooledReadBuffer?.Dispose();
         }
     }
 #pragma warning restore CA2215 // Dispose methods should call base class dispose

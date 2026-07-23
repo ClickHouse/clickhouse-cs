@@ -137,7 +137,7 @@ const ClickHouse.Driver.ADO.ClickHouseDefaults.UseCustomDecimals = true -> bool
 const ClickHouse.Driver.ADO.ClickHouseDefaults.UseFormDataParameters = false -> bool
 const ClickHouse.Driver.ADO.ClickHouseDefaults.Username = "default" -> string
 const ClickHouse.Driver.ADO.ClickHouseDefaults.ReadStringsAsByteArrays = false -> bool
-const ClickHouse.Driver.ADO.ClickHouseDefaults.ReadBufferSize = 8192 -> int
+const ClickHouse.Driver.ADO.ClickHouseDefaults.ReadBufferSize = 65536 -> int
 const ClickHouse.Driver.ADO.ClickHouseDefaults.UseSession = false -> bool
 const ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.ActivitySourceName = "ClickHouse.Driver" -> string
 Microsoft.Extensions.DependencyInjection.ClickHouseServiceCollectionExtensions

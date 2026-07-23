@@ -46,6 +46,27 @@ internal class PeekableStreamWrapper : Stream, IDisposable
         return result;
     }
 
+    /// <summary>
+    /// Reads directly into <paramref name="buffer"/>, avoiding the base <see cref="Stream.Read(Span{byte})"/>
+    /// fallback that rents and copies through a pooled array. Emits any byte buffered by <see cref="Peek"/>
+    /// first, so read-ahead semantics are preserved.
+    /// </summary>
+    public override int Read(Span<byte> buffer)
+    {
+        if (buffer.Length == 0)
+            return 0;
+        if (!hasReadAheadByte)
+            return stream.Read(buffer);
+
+        hasReadAheadByte = false;
+        if (readAheadByte == -1)
+            return 0; // peeked past the end of the stream
+
+        // Emit the peeked byte first, then read the remainder directly into the span.
+        buffer[0] = (byte)readAheadByte;
+        return buffer.Length > 1 ? 1 + stream.Read(buffer.Slice(1)) : 1;
+    }
+
     public override long Seek(long offset, SeekOrigin origin) => stream.Seek(offset, origin);
 
     public override void SetLength(long value) => stream.SetLength(value);
