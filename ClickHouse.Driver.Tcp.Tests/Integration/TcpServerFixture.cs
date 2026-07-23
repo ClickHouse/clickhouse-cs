@@ -80,7 +80,6 @@ public sealed class TcpServerFixture
             Port,
             new ClientHandshakeParameters
             {
-                ClientName = "ClickHouse.Driver.Tcp.Tests",
                 Username = username ?? Username,
                 Password = password ?? Password,
             },

@@ -18,7 +18,6 @@ public class ClickHouseTcpConnectionTests
 
     private static readonly ClientHandshakeParameters Handshake = new()
     {
-        ClientName = "test-client",
         Username = "default",
     };
 
@@ -107,6 +106,29 @@ public class ClickHouseTcpConnectionTests
         connection.Terminate();
 
         Assert.ThrowsAsync<ObjectDisposedException>(async () => await connection.HandshakeAsync(Handshake, None));
+    }
+
+    [Test]
+    public async Task HandshakeAsync_ServerBelowMinimumProtocol_ThrowsNotSupportedAndTerminates()
+    {
+        // A revision below the floor the write path assumes: the settings triples we always send would desync
+        // it, so the handshake must refuse rather than proceed. The revision still sits above the timezone,
+        // display_name and version_patch gates, so those fields are present and must be written.
+        byte[] script = await BytesAsync(w =>
+        {
+            w.WriteVarUInt((ulong)ServerPacketType.Hello);
+            w.WriteString("ClickHouse");
+            w.WriteVarUInt(21);
+            w.WriteVarUInt(3);
+            w.WriteVarUInt(NegotiatedProtocol.MinimumTcpProtocolVersion - 1);
+            w.WriteString("UTC");                // timezone
+            w.WriteString("clickhouse-server");  // display_name
+            w.WriteVarUInt(0);                   // version_patch
+        });
+        using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(script), socket: null);
+
+        Assert.ThrowsAsync<NotSupportedException>(async () => await connection.HandshakeAsync(Handshake, None));
+        Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
 
     [Test]

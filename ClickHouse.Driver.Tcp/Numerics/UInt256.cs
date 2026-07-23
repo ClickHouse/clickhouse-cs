@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.InteropServices;
 
 namespace ClickHouse.Driver.Tcp.Numerics;
 
@@ -10,6 +11,7 @@ namespace ClickHouse.Driver.Tcp.Numerics;
 /// Stored as four little-endian 64-bit limbs. The BCL has no native 256-bit type, so this
 /// fills the gap (128-bit uses <see cref="UInt128"/>).
 /// </summary>
+[StructLayout(LayoutKind.Sequential)]  // Necessary to match byte order on the wire
 public readonly struct UInt256 : IEquatable<UInt256>, IComparable<UInt256>
 {
     /// <summary>The number of bytes in the little-endian wire representation.</summary>

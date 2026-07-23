@@ -36,7 +36,6 @@ public class HandshakeTests
         const string quotaKey = "distinctive-secret-quota-key";
         var parameters = new ClientHandshakeParameters
         {
-            ClientName = "test-client",
             VersionMajor = 12,
             VersionMinor = 34,
             Database = "test-database",
@@ -49,7 +48,7 @@ public class HandshakeTests
         Assert.Multiple(() =>
         {
             Assert.That(description, Does.Contain(nameof(ClientHandshakeParameters)));
-            Assert.That(description, Does.Contain("test-client"));
+            Assert.That(description, Does.Contain(ClientHandshakeParameters.DefaultClientName));
             Assert.That(description, Does.Contain("12.34"));
             Assert.That(description, Does.Contain("test-database"));
             Assert.That(description, Does.Contain("test-user"));
