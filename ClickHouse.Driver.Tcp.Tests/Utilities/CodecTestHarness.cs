@@ -29,11 +29,47 @@ internal static class CodecTestHarness
     /// <summary>A reader over the given bytes.</summary>
     public static ClickHouseBinaryReader ReaderOver(byte[] bytes) => new(new MemoryStream(bytes));
 
-    /// <summary>Writes then reads back <paramref name="column"/> through <paramref name="codec"/>, returning the decoded column.</summary>
+    /// <summary>
+    /// Writes then reads back <paramref name="column"/> through <paramref name="codec"/>, returning the decoded
+    /// column. The column is densified first, mirroring the insert pipeline, which densifies every column before
+    /// the write so the codecs only ever measure/write the dense wire shape.
+    /// </summary>
     public static async Task<IColumn> RoundTripAsync(IColumnCodec codec, IColumn column, string columnType, int rowCount)
     {
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
-        using ClickHouseBinaryReader reader = ReaderOver(bytes);
-        return await codec.ReadColumnAsync(reader, column.Name, columnType, rowCount, None);
+        IColumn dense = codec.TryDensify(column, out bool built);
+        try
+        {
+            byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, dense));
+            using ClickHouseBinaryReader reader = ReaderOver(bytes);
+            return await codec.ReadColumnAsync(reader, column.Name, columnType, rowCount, None);
+        }
+        finally
+        {
+            if (built)
+            {
+                dense.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Densifies <paramref name="column"/> through <paramref name="codec"/> and encodes the requested row range,
+    /// mirroring the insert pipeline. Use for the direct-<see cref="IColumnCodec.WriteColumn(ClickHouseBinaryWriter, IColumn, int, int)"/>
+    /// slice tests that bypass <see cref="RoundTripAsync"/>.
+    /// </summary>
+    public static async Task<byte[]> WriteDenseAsync(IColumnCodec codec, IColumn column, int start, int length)
+    {
+        IColumn dense = codec.TryDensify(column, out bool built);
+        try
+        {
+            return await WriteAsync(w => codec.WriteColumn(w, dense, start, length));
+        }
+        finally
+        {
+            if (built)
+            {
+                dense.Dispose();
+            }
+        }
     }
 }
