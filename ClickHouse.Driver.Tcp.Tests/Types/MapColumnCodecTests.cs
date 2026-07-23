@@ -344,4 +344,46 @@ public class MapColumnCodecTests
             Assert.Throws<NotSupportedException>(() => Resolve("Map(String, NoSuchType)"));
         });
     }
+
+    [Test]
+    public void TryDensify_DenseMapWithErgonomicValueColumn_DisposesOnlyRebuiltColumnNotBorrowed()
+    {
+        // A dense MapColumn whose value column is still ergonomic (a jagged ArrayColumn) while its key column is
+        // already dense (a leaf): TryDensify rebuilds only the value column and keeps the key column by reference.
+        // Disposing the rebuilt wrapper must free the freshly built value column but leave the borrowed key column
+        // alone — it is still owned by the source column, so disposing it here would double-dispose it.
+        IColumnCodec codec = Resolve("Map(Int32, Array(Int32))");
+        var borrowedKeys = new DisposeSpyColumn<int>("c", "Int32", new[] { 7 });
+        var ergonomicValues = new ArrayColumn<int[]>("c", "Array(Int32)", new[] { new[] { 1, 2 } });
+        var source = new MapColumn<int, int[]>("c", "Map(Int32, Array(Int32))", borrowedKeys, ergonomicValues, new[] { 0, 1 }, rowCount: 1, pooledOffsets: false);
+
+        IColumn densified = codec.TryDensify(source, out bool built);
+        Assert.That(built, Is.True, "the value column was ergonomic, so a rebuild is expected");
+        Assert.That(densified, Is.Not.SameAs(source));
+        densified.Dispose();
+
+        Assert.That(borrowedKeys.DisposeCount, Is.EqualTo(0), "the borrowed, already-dense key column must not be disposed by the rebuilt wrapper");
+
+        ergonomicValues.Dispose();
+        borrowedKeys.Dispose();
+    }
+
+    [Test]
+    public void RestrictOwnership_DisposesOnlyOwnedChildColumn()
+    {
+        // The mechanism the partial densify rebuild relies on: after RestrictOwnership, Dispose frees exactly the
+        // child (key/value) column flagged owned (the freshly built one) and leaves the borrowed one untouched.
+        var ownedKeys = new DisposeSpyColumn<int>("c", "Int32", new[] { 1 });
+        var borrowedValues = new DisposeSpyColumn<int[]>("c", "Array(Int32)", new[] { new[] { 2 } });
+        var map = new MapColumn<int, int[]>("c", "Map(Int32, Array(Int32))", ownedKeys, borrowedValues, new[] { 0, 1 }, rowCount: 1, pooledOffsets: false);
+
+        map.RestrictOwnership(keysOwned: true, valuesOwned: false);
+        map.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ownedKeys.DisposeCount, Is.EqualTo(1), "the owned (freshly built) column must be disposed exactly once");
+            Assert.That(borrowedValues.DisposeCount, Is.EqualTo(0), "the borrowed column must not be disposed");
+        });
+    }
 }

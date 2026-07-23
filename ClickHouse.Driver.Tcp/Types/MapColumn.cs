@@ -38,6 +38,11 @@ internal sealed class MapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValu
     private int[] offsets;
     private KeyValuePair<TKey, TValue>[][] cache;
 
+    // Whether Dispose disposes the key / value column. Both true by default (this column owns its inner columns);
+    // RestrictOwnership flips one off when a densified wrapper keeps that child by reference from another column.
+    private bool ownsKeys = true;
+    private bool ownsValues = true;
+
     /// <summary>Initializes a map column over the flat key and value columns and their shared per-row offsets.</summary>
     /// <param name="name">The column name.</param>
     /// <param name="typeName">The full <c>Map(...)</c> type string.</param>
@@ -55,6 +60,18 @@ internal sealed class MapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValu
         this.offsets = offsets ?? throw new ArgumentNullException(nameof(offsets));
         this.rowCount = rowCount;
         this.pooledOffsets = pooledOffsets;
+    }
+
+    /// <summary>
+    /// Restricts which inner columns <see cref="Dispose"/> disposes, overriding the default of owning both. Used
+    /// when a densified map rebuilds only one of the key/value columns and keeps the other by reference (owned by
+    /// the source column), so disposing this wrapper frees only the column it built. Must be called before the
+    /// column is observed.
+    /// </summary>
+    internal void RestrictOwnership(bool keysOwned, bool valuesOwned)
+    {
+        ownsKeys = keysOwned;
+        ownsValues = valuesOwned;
     }
 
     /// <inheritdoc/>
@@ -110,8 +127,16 @@ internal sealed class MapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValu
     /// <inheritdoc/>
     public void Dispose()
     {
-        keys.Dispose();
-        values.Dispose();
+        if (ownsKeys)
+        {
+            keys.Dispose();
+        }
+
+        if (ownsValues)
+        {
+            values.Dispose();
+        }
+
         if (pooledOffsets && offsets.Length != 0)
         {
             ArrayPool<int>.Shared.Return(offsets);

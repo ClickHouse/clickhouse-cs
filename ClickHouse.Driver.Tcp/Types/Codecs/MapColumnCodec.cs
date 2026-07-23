@@ -184,6 +184,13 @@ internal sealed class MapColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => childrenCanWrite && shape.CanWrite(column);
 
     /// <inheritdoc/>
+    // Projects the ergonomic KeyValuePair[]-per-row form into the dense map column (offsets + a flat key column and
+    // a flat value column) once, recursing the key and value codecs' own TryDensify so a composite key/value becomes
+    // dense too. An already-dense map recurses into its key/value columns and is returned unchanged (built = false)
+    // when neither changed.
+    public IColumn TryDensify(IColumn column, out bool built) => shape.TryDensify(keyCodec, valueCodec, column, out built);
+
+    /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer)
     {
         keyCodec.WriteStatePrefix(writer);
@@ -218,6 +225,15 @@ internal interface IMapShape
 
     /// <summary>Whether both the key and value codecs can write their typed column at all (e.g. <c>Nothing</c> cannot).</summary>
     bool CanInnerWrite(IColumnCodec keyCodec, IColumnCodec valueCodec);
+
+    /// <summary>
+    /// Projects an ergonomic <c>KeyValuePair&lt;K, V&gt;[]</c>-per-row column into the dense map column — a flat key
+    /// column and a flat value column paired with the per-row offsets — recursing the key and value codecs' own
+    /// <see cref="IColumnCodec.TryDensify"/>. An already-dense column is returned unchanged with
+    /// <paramref name="built"/> = <see langword="false"/>; a freshly built column sets <paramref name="built"/> =
+    /// <see langword="true"/> and transfers ownership to the caller.
+    /// </summary>
+    IColumn TryDensify(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, out bool built);
 
     /// <summary>
     /// Writes the map body for rows [<paramref name="start"/>, start + length): the offsets stream (each offset
@@ -269,6 +285,77 @@ internal sealed class MapShape<TKey, TValue> : IMapShape
     public bool CanInnerWrite(IColumnCodec keyCodec, IColumnCodec valueCodec)
         => keyCodec.CanWrite(new ArrayColumn<TKey>(string.Empty, keyCodec.TypeName, Array.Empty<TKey>()))
         && valueCodec.CanWrite(new ArrayColumn<TValue>(string.Empty, valueCodec.TypeName, Array.Empty<TValue>()));
+
+    /// <inheritdoc/>
+    public IColumn TryDensify(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, out bool built)
+    {
+        if (column is MapColumn<TKey, TValue> dense)
+        {
+            IColumn densifiedKeys = keyCodec.TryDensify(dense.KeyColumn, out bool keysRebuilt);
+            IColumn densifiedValues = valueCodec.TryDensify(dense.ValueColumn, out bool valuesRebuilt);
+            if (!keysRebuilt && !valuesRebuilt)
+            {
+                built = false;
+                return column;
+            }
+
+            // The rebuilt map mixes children: a rebuilt key/value column is new and this wrapper must dispose it,
+            // while an unchanged one is borrowed by reference and stays owned by the source column. Own only the
+            // ones we rebuilt so disposing this wrapper does not double-dispose a borrowed child.
+            var rebuilt = new MapColumn<TKey, TValue>(dense.Name, dense.TypeName, (IColumn<TKey>)densifiedKeys, (IColumn<TValue>)densifiedValues, dense.Offsets.ToArray(), dense.RowCount, pooledOffsets: false);
+            rebuilt.RestrictOwnership(keysRebuilt, valuesRebuilt);
+            built = true;
+            return rebuilt;
+        }
+
+        // Ergonomic pair-array form: sum the pairs (rejecting null rows), then flatten the pair arrays into a flat
+        // key column and a flat value column with the per-row offsets, and densify each through its codec so a
+        // composite key/value becomes dense too. Map(K, V) rows are non-nullable, matching the write path.
+        var source = (IColumn<KeyValuePair<TKey, TValue>[]>)column;
+        int rowCount = source.RowCount;
+        ulong total64 = 0;
+        for (int i = 0; i < rowCount; i++)
+        {
+            KeyValuePair<TKey, TValue>[] row = source[i];
+            if (row is null)
+            {
+                throw new ArgumentException(
+                    $"Map column '{source.Name}' has a null value at row {i}; Map(K, V) rows are non-nullable. Use Array.Empty<KeyValuePair<K, V>>() for an empty row, or Map(K, Nullable(V)) to carry null values.",
+                    nameof(column));
+            }
+
+            total64 += (ulong)row.Length;
+        }
+
+        if (total64 > (ulong)Array.MaxLength)
+        {
+            throw new NotSupportedException(
+                $"Map column '{source.Name}' holds {total64} pairs in one block, exceeding the maximum ({Array.MaxLength}) this client can buffer.");
+        }
+
+        int total = (int)total64;
+        var offsets = new int[rowCount + 1];
+        var flatKeys = new TKey[total];
+        var flatValues = new TValue[total];
+        int pos = 0;
+        for (int i = 0; i < rowCount; i++)
+        {
+            KeyValuePair<TKey, TValue>[] row = source[i];
+            for (int p = 0; p < row.Length; p++)
+            {
+                flatKeys[pos] = row[p].Key;
+                flatValues[pos] = row[p].Value;
+                pos++;
+            }
+
+            offsets[i + 1] = pos;
+        }
+
+        IColumn keyColumn = keyCodec.TryDensify(new ArrayColumn<TKey>(source.Name, keyCodec.TypeName, flatKeys), out _);
+        IColumn valueColumn = valueCodec.TryDensify(new ArrayColumn<TValue>(source.Name, valueCodec.TypeName, flatValues), out _);
+        built = true;
+        return new MapColumn<TKey, TValue>(source.Name, source.TypeName, (IColumn<TKey>)keyColumn, (IColumn<TValue>)valueColumn, offsets, rowCount, pooledOffsets: false);
+    }
 
     /// <inheritdoc/>
     public void WriteBody(IColumnCodec keyCodec, IColumnCodec valueCodec, ClickHouseBinaryWriter writer, IColumn column, int start, int length)
