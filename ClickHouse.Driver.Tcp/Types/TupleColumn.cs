@@ -13,6 +13,11 @@ internal abstract class TupleColumnBase : ITupleColumn
     private readonly IColumn[] children;
     private readonly bool ownsChildren;
 
+    // When non-null, overrides ownsChildren per child: Dispose disposes child i only when childOwnership[i] is true.
+    // Set once by RestrictOwnership immediately after construction (before the column is observed) so a wrapper that
+    // mixes freshly built children with children borrowed from another column disposes only the ones it created.
+    private bool[] childOwnership;
+
     /// <summary>Initializes the shared tuple-column state.</summary>
     /// <param name="name">The column name.</param>
     /// <param name="typeName">The full <c>Tuple(...)</c> type string (element names included when named).</param>
@@ -51,15 +56,34 @@ internal abstract class TupleColumnBase : ITupleColumn
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (!ownsChildren)
+        if (childOwnership is null && !ownsChildren)
         {
             return;
         }
 
-        foreach (IColumn child in children)
+        for (int i = 0; i < children.Length; i++)
         {
-            child.Dispose();
+            if (childOwnership is null || childOwnership[i])
+            {
+                children[i].Dispose();
+            }
         }
+    }
+
+    /// <summary>
+    /// Restricts disposal to the children flagged in <paramref name="owned"/> (one entry per child), overriding the
+    /// all-or-nothing <c>ownsChildren</c> passed at construction. Used when rebuilding a densified tuple that keeps
+    /// some children by reference (owned by the source column) and replaces others with freshly built ones, so
+    /// disposing this wrapper frees only the columns it created. Must be called before the column is observed.
+    /// </summary>
+    internal void RestrictOwnership(bool[] owned)
+    {
+        if (owned is null || owned.Length != children.Length)
+        {
+            throw new ArgumentException("Ownership mask must have one entry per child column.", nameof(owned));
+        }
+
+        childOwnership = owned;
     }
 
     /// <summary>The child column at <paramref name="index"/>, for a subclass to cast to its typed element column.</summary>
