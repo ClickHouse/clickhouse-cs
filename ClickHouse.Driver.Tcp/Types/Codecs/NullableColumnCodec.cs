@@ -162,9 +162,19 @@ internal sealed class NullableColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // Delegate to the shape for the supplied column's write type, which projects the ergonomic T? / nullable-
-    // reference form into the dense (inner column + null-map) column and recurses the inner codec's Densify. A
-    // column whose write type is unrecognized is left unchanged; the write path then reports it.
-    public IColumn Densify(IColumn column) => ResolveWriteShape(column)?.Densify(inner, column) ?? column;
+    // reference form into the dense (inner column + null-map) column and recurses the inner codec's TryDensify. A
+    // column whose write type is unrecognized is left unchanged (borrowed); the write path then reports it.
+    public IColumn TryDensify(IColumn column, out bool built)
+    {
+        INullableShape shape = ResolveWriteShape(column);
+        if (shape is null)
+        {
+            built = false;
+            return column;
+        }
+
+        return shape.TryDensify(inner, column, out built);
+    }
 
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer) => inner.WriteStatePrefix(writer);
