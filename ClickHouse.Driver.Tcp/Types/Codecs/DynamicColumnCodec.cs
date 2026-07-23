@@ -267,7 +267,11 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         (string typeName, object canonical) = DynamicTypeInference.Infer(value);
         IColumnCodec valueCodec = ResolveForMeasure(typeName);
         IColumn probe = FlatBuilderFor(valueCodec.ElementType)(column.Name, valueCodec.TypeName, new[] { canonical }, 1);
-        return 1 + valueCodec.MeasureRowBytes(probe, 0);
+
+        // Densify the one-row probe before measuring it: the inferred value's codec measures only the dense wire
+        // shape, and a composite value (an array, a tuple) arrives here in its ergonomic form. The probe is a
+        // throwaway measured in place, so the freshly built column (if any) is not retained.
+        return 1 + valueCodec.MeasureRowBytes(valueCodec.TryDensify(probe, out _), 0);
     }
 
     // Writes the state prefix from a computed write plan: version, the runtime type list, then each type's own
@@ -490,7 +494,12 @@ internal sealed class DynamicColumnCodec : IColumnCodec
                 for (int i = 0; i < typeCount; i++)
                 {
                     childLength[i] = filled[i];
-                    childColumns[i] = FlatBuilderFor(children[i].ElementType)(column.Name, children[i].TypeName, buckets[i], filled[i]);
+
+                    // Densify each per-type bucket before writing it: the resolved codec writes only the dense wire
+                    // shape, and a composite value (array, tuple) arrives in its ergonomic form. The densified column
+                    // is what the body phase writes, so store it (not the ergonomic build) in childColumns.
+                    IColumn built = FlatBuilderFor(children[i].ElementType)(column.Name, children[i].TypeName, buckets[i], filled[i]);
+                    childColumns[i] = children[i].TryDensify(built, out _);
                     childStates[i] = children[i].BeginWrite(childColumns[i], 0, filled[i]);
                     statesBuilt = i + 1;
                 }
