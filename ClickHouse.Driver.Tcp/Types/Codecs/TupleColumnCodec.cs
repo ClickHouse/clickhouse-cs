@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -24,10 +23,10 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </para>
 ///
 /// <para>
-/// On the write path a dense <c>TupleColumn</c> (whose child columns already exist) is serialized straight from
-/// those children with no copy. A flat column of <c>ValueTuple</c> values — the buffer an
-/// <c>Array(Tuple(...))</c> flattens into, or one a caller builds directly — is projected element-by-element into
-/// per-child columns, which boxes each element; this is the ergonomic, not the hot, path.
+/// On the write path the column is always the dense <c>TupleColumn</c> (whose child columns already exist),
+/// serialized straight from those children with no copy. A flat column of <c>ValueTuple</c> values — the buffer
+/// an <c>Array(Tuple(...))</c> flattens into, or one a caller builds directly — is un-transposed into the
+/// per-child columns by <see cref="TryDensify"/> before the write.
 /// </para>
 /// </summary>
 internal sealed class TupleColumnCodec : IColumnCodec
@@ -238,27 +237,13 @@ internal sealed class TupleColumnCodec : IColumnCodec
             return width;
         }
 
-        // The fixed-width children contribute the same bytes every row, so only the variable-width ones are
-        // measured per row.
+        // The column is always the dense TupleColumn (the pipeline densifies first). The fixed-width children
+        // contribute the same bytes every row, so only the variable-width ones are measured per row.
+        var dense = (ITupleColumn)column;
         long total = fixedChildrenByteTotal;
-        if (column is ITupleColumn dense && dense.Children.Count == children.Length)
-        {
-            foreach (int i in variableChildIndices)
-            {
-                total += children[i].MeasureRowBytes(dense.Children[i], row);
-            }
-
-            return total;
-        }
-
-        // Flat column: measure each variable child by projecting its single value into a one-row child column.
-        var tuple = (ITuple)column.GetValue(row);
-        var single = new object[1];
         foreach (int i in variableChildIndices)
         {
-            single[0] = tuple[i];
-            IColumn childColumn = childFlatBuilders[i](column.Name, children[i].TypeName, single, 1);
-            total += children[i].MeasureRowBytes(childColumn, 0);
+            total += children[i].MeasureRowBytes(dense.Children[i], row);
         }
 
         return total;
@@ -272,22 +257,24 @@ internal sealed class TupleColumnCodec : IColumnCodec
     // directly with no per-row projection. A flat column of ValueTuple values is un-transposed once: each element
     // position is gathered into a per-child column (boxing each value, as the ergonomic write path does), and each
     // child is itself densified so a nested composite element (e.g. Tuple(Array(T)) / Tuple(Nullable(T))) becomes
-    // dense too. An already-dense tuple recurses into its children and is returned unchanged (by reference) when
+    // dense too. An already-dense tuple recurses into its children and is returned unchanged (built = false) when
     // they are all already dense.
-    public IColumn Densify(IColumn column)
+    public IColumn TryDensify(IColumn column, out bool built)
     {
         int rowCount = column.RowCount;
 
         if (column is ITupleColumn tuple && tuple.Children.Count == children.Length)
         {
             IColumn[] densified = null;
+            bool[] owned = null;
             for (int i = 0; i < children.Length; i++)
             {
                 IColumn original = tuple.Children[i];
-                IColumn child = children[i].Densify(original);
-                if (densified is null && !ReferenceEquals(child, original))
+                IColumn child = children[i].TryDensify(original, out bool childBuilt);
+                if (densified is null && childBuilt)
                 {
                     densified = new IColumn[children.Length];
+                    owned = new bool[children.Length];
                     for (int j = 0; j < i; j++)
                     {
                         densified[j] = tuple.Children[j];
@@ -297,17 +284,25 @@ internal sealed class TupleColumnCodec : IColumnCodec
                 if (densified is not null)
                 {
                     densified[i] = child;
+                    owned[i] = childBuilt;
                 }
             }
 
             if (densified is null)
             {
+                built = false;
                 return column;
             }
 
-            // The rebuilt wrapper borrows its children — the freshly densified ones are unpooled and the unchanged
-            // ones are still owned by the original column — so it does not dispose them (ownsChildren: false).
-            return (IColumn)columnConstructor.Invoke(new object[] { column.Name, column.TypeName, densified, fieldNames, rowCount, false });
+            // The rebuilt wrapper mixes children: the freshly densified ones are new columns this wrapper must
+            // dispose, while the unchanged ones are borrowed by reference and stay owned by the source column. Build
+            // it borrowing everything (ownsChildren: false), then restrict disposal to exactly the columns we built
+            // — the per-child `owned` flags come straight from each child's `built` signal, so disposing the wrapper
+            // frees the new children without double-disposing the borrowed ones.
+            var rebuilt = (TupleColumnBase)columnConstructor.Invoke(new object[] { column.Name, column.TypeName, densified, fieldNames, rowCount, false });
+            rebuilt.RestrictOwnership(owned);
+            built = true;
+            return rebuilt;
         }
 
         var childBoxed = new object[children.Length][];
@@ -328,10 +323,11 @@ internal sealed class TupleColumnCodec : IColumnCodec
         var childColumns = new IColumn[children.Length];
         for (int i = 0; i < children.Length; i++)
         {
-            IColumn built = childFlatBuilders[i](column.Name, children[i].TypeName, childBoxed[i], rowCount);
-            childColumns[i] = children[i].Densify(built);
+            IColumn flat = childFlatBuilders[i](column.Name, children[i].TypeName, childBoxed[i], rowCount);
+            childColumns[i] = children[i].TryDensify(flat, out _);
         }
 
+        built = true;
         return (IColumn)columnConstructor.Invoke(new object[] { column.Name, column.TypeName, childColumns, fieldNames, rowCount, true });
     }
 
@@ -345,23 +341,20 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
+    // Every column is densified before the write, so it is always the dense TupleColumn: each child column already
+    // exists, so serialize each with its own codec, no copy. The flat ValueTuple form was un-transposed into the
+    // per-child columns by TryDensify.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        if (column is ITupleColumn dense && dense.Children.Count == children.Length)
+        var dense = (ITupleColumn)column;
+        for (int i = 0; i < children.Length; i++)
         {
-            // Dense: each child column already exists, so serialize each with its own codec, no copy.
-            for (int i = 0; i < children.Length; i++)
-            {
-                children[i].WriteColumn(writer, dense.Children[i], start, length);
-            }
-
-            return;
+            children[i].WriteColumn(writer, dense.Children[i], start, length);
         }
-
-        WriteFlat(writer, column, start, length);
     }
 
-    // Builds a flat typed column from boxed element values — the ergonomic write path's per-child projection.
+    // Builds a flat typed column from boxed element values — the per-child projection TryDensify uses to un-transpose
+    // a flat ValueTuple column (reached through the cached childFlatBuilders delegates).
     private static IColumn BuildFlatColumn<T>(string name, string typeName, object[] boxed, int count)
     {
         var values = new T[count];
@@ -371,42 +364,5 @@ internal sealed class TupleColumnCodec : IColumnCodec
         }
 
         return new ArrayColumn<T>(name, typeName, values);
-    }
-
-    // Serializes a flat column of ValueTuple values by projecting each element position into a per-child column.
-    // Reads each row's tuple once and distributes its elements across the child buffers (boxing each element).
-    private void WriteFlat(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        int arity = children.Length;
-        var childBoxed = new object[arity][];
-        for (int i = 0; i < arity; i++)
-        {
-            childBoxed[i] = ArrayPool<object>.Shared.Rent(length);
-        }
-
-        try
-        {
-            for (int row = 0; row < length; row++)
-            {
-                var tuple = (ITuple)column.GetValue(start + row);
-                for (int i = 0; i < arity; i++)
-                {
-                    childBoxed[i][row] = tuple[i];
-                }
-            }
-
-            for (int i = 0; i < arity; i++)
-            {
-                IColumn childColumn = childFlatBuilders[i](column.Name, children[i].TypeName, childBoxed[i], length);
-                children[i].WriteColumn(writer, childColumn, 0, length);
-            }
-        }
-        finally
-        {
-            for (int i = 0; i < arity; i++)
-            {
-                ArrayPool<object>.Shared.Return(childBoxed[i], clearArray: true);
-            }
-        }
     }
 }

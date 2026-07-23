@@ -167,7 +167,7 @@ public class TupleColumnCodecTests
             Assert.That(codec.FixedRowByteSize, Is.Null);
             Assert.That(codec.MeasureRowBytes(dense, 0), Is.EqualTo(4 + (1 + 1))); // Int32 + (varint len + "a")
             Assert.That(codec.MeasureRowBytes(dense, 1), Is.EqualTo(4 + (1 + 4)));
-            Assert.That(codec.MeasureRowBytes(flat, 1), Is.EqualTo(4 + (1 + 4))); // flat path prices the same
+            Assert.That(codec.MeasureRowBytes(codec.TryDensify(flat, out _), 1), Is.EqualTo(4 + (1 + 4))); // flat densifies to the same
         });
     }
 
@@ -333,7 +333,7 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public async Task Densify_FlatValueTupleColumn_ProducesDenseColumnThatRoundTrips()
+    public async Task TryDensify_FlatValueTupleColumn_ProducesDenseColumnThatRoundTrips()
     {
         // A flat ArrayColumn<ValueTuple> is un-transposed into one child column per element, so a later
         // measure/write drives the children directly. It must surface the same rows and round-trip.
@@ -341,7 +341,7 @@ public class TupleColumnCodecTests
         var rows = new (int, string)[] { (1, "a"), (2, "b"), (3, "c") };
         var flat = new ArrayColumn<(int, string)>("c", "Tuple(Int32, String)", rows);
 
-        IColumn densified = codec.Densify(flat);
+        IColumn densified = codec.TryDensify(flat, out _);
 
         Assert.That(densified, Is.InstanceOf<ITupleColumn>());
         var dense = (ITupleColumn)densified;
@@ -358,7 +358,7 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void Densify_FlatTupleWithArrayElement_DensifiesChildToDenseArray()
+    public void TryDensify_FlatTupleWithArrayElement_DensifiesChildToDenseArray()
     {
         // A flat Tuple(Array(UInt8), String): densify un-transposes into per-child columns AND recurses, so the
         // Array child becomes a dense ArrayValueColumn rather than a jagged ArrayColumn<byte[]>.
@@ -366,7 +366,7 @@ public class TupleColumnCodecTests
         var rows = new (byte[], string)[] { (new byte[] { 1, 2 }, "x"), (new byte[] { 3 }, "y") };
         var flat = new ArrayColumn<(byte[], string)>("c", "Tuple(Array(UInt8), String)", rows);
 
-        var dense = (ITupleColumn)codec.Densify(flat);
+        var dense = (ITupleColumn)codec.TryDensify(flat, out _);
         var arrayChild = (IColumn<byte[]>)dense.Children[0];
 
         Assert.Multiple(() =>
@@ -379,13 +379,65 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void Densify_AlreadyDenseColumn_ReturnsSameInstance()
+    public void TryDensify_AlreadyDenseColumn_ReturnsSameInstanceNotBuilt()
     {
         // A dense TupleColumn whose children are already dense (leaf columns) has nothing to rebuild, so it is
-        // returned by reference.
+        // returned by reference with built = false.
         IColumnCodec codec = Resolve("Tuple(Int32, String)");
         var dense = new TupleColumn<int, string>("c", "Tuple(Int32, String)", new (int, string)[] { (1, "a"), (2, "b") });
 
-        Assert.That(codec.Densify(dense), Is.SameAs(dense));
+        IColumn result = codec.TryDensify(dense, out bool built);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.SameAs(dense));
+            Assert.That(built, Is.False, "an all-dense tuple is borrowed, not rebuilt");
+        });
+    }
+
+    [Test]
+    public void TryDensify_DenseTupleWithOneErgonomicChild_DisposesOnlyRebuiltChildNotBorrowed()
+    {
+        // A dense TupleColumn whose child 0 is still ergonomic (a jagged ArrayColumn) while child 1 is already dense
+        // (a leaf): TryDensify rebuilds only child 0 into a fresh dense column and keeps child 1 by reference. Disposing
+        // the rebuilt wrapper must free the freshly built child 0 but leave the borrowed child 1 alone — it is still
+        // owned by the source column, so disposing it here would double-dispose it (returning pooled buffers twice).
+        IColumnCodec codec = Resolve("Tuple(Array(Int32), Int32)");
+        var ergonomicArray = new ArrayColumn<int[]>("c", "Array(Int32)", new[] { new[] { 1, 2 }, new[] { 3 } });
+        var borrowedLeaf = new DisposeSpyColumn<int>("c", "Int32", new[] { 9, 8 });
+        // The source borrows both children (this test owns them), like a caller-assembled dense tuple.
+        var source = new TupleColumn<int[], int>("c", "Tuple(Array(Int32), Int32)", new IColumn[] { ergonomicArray, borrowedLeaf }, null, rowCount: 2, ownsChildren: false);
+
+        IColumn densified = codec.TryDensify(source, out bool built);
+        Assert.That(built, Is.True, "child 0 was ergonomic, so a rebuild is expected");
+        Assert.That(densified, Is.Not.SameAs(source));
+        densified.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(borrowedLeaf.DisposeCount, Is.EqualTo(0), "the borrowed, already-dense child must not be disposed by the rebuilt wrapper");
+            Assert.That(borrowedLeaf.Values.ToArray(), Is.EqualTo(new[] { 9, 8 }), "the borrowed child is still readable after disposing the wrapper");
+        });
+
+        ergonomicArray.Dispose();
+        borrowedLeaf.Dispose();
+    }
+
+    [Test]
+    public void RestrictOwnership_DisposesOnlyFlaggedChildren()
+    {
+        // The mechanism the partial densify rebuild relies on: after RestrictOwnership, Dispose frees exactly the
+        // children flagged true (the freshly built ones) and leaves the rest (borrowed) untouched.
+        var owned = new DisposeSpyColumn<int>("c", "Int32", new[] { 1 });
+        var borrowed = new DisposeSpyColumn<int>("c", "Int32", new[] { 2 });
+        var tuple = new TupleColumn<int, int>("c", "Tuple(Int32, Int32)", new IColumn[] { owned, borrowed }, null, rowCount: 1, ownsChildren: false);
+
+        tuple.RestrictOwnership(new[] { true, false });
+        tuple.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(owned.DisposeCount, Is.EqualTo(1), "a flagged (freshly built) child must be disposed exactly once");
+            Assert.That(borrowed.DisposeCount, Is.EqualTo(0), "an unflagged (borrowed) child must not be disposed");
+        });
     }
 }
