@@ -27,18 +27,19 @@ internal interface INullableShape
 
     /// <summary>
     /// Writes the full nullable body for rows [<paramref name="start"/>, start + length): the null-map, then the
-    /// inner-type values with a placeholder at each null row. A dense nullable column (inner column + null-map)
-    /// is written with no intermediate copy; the ergonomic <c>T?</c> form is filled through a pooled buffer.
+    /// inner-type values with a placeholder at each null row. The column is always the dense nullable column (inner
+    /// column + null-map) — the pipeline densifies before the write — so it is written with no intermediate copy.
     /// </summary>
     void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length);
 
     /// <summary>
     /// Projects an ergonomic column of this element type (the <c>T?</c> / nullable-reference form) into the dense
     /// nullable column — an inner column holding a real value at every row (the inner codec's placeholder at the
-    /// null rows) paired with the null-map — recursing the inner codec's own <see cref="IColumnCodec.Densify"/>. A
-    /// column already in dense form is returned unchanged.
+    /// null rows) paired with the null-map — recursing the inner codec's own <see cref="IColumnCodec.TryDensify"/>.
+    /// A column already in dense form is returned unchanged with <paramref name="built"/> = <see langword="false"/>;
+    /// a freshly built column sets <paramref name="built"/> = <see langword="true"/> and transfers ownership to the caller.
     /// </summary>
-    IColumn Densify(IColumnCodec inner, IColumn column);
+    IColumn TryDensify(IColumnCodec inner, IColumn column, out bool built);
 
     /// <summary>The inner encoded byte length of a present (non-null) row's value.</summary>
     long MeasureInnerRow(IColumnCodec inner, IColumn column, int row);
