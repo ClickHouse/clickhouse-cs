@@ -2,7 +2,6 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -64,9 +63,9 @@ internal static class ArrayColumnCodec
 /// <see cref="ArrayValueColumn{TElement}"/> and slice inner values without boxing; the registry pipeline is
 /// non-generic, so <see cref="ArrayColumnCodec"/> closes this over the inner codec's runtime element type. The
 /// inner codec stays non-generic (<see cref="IColumnCodec"/>), so its column is cast to <c>IColumn&lt;TElement&gt;</c>
-/// once at the read boundary. On the write path a column is accepted as either the dense
-/// <see cref="ArrayValueColumn{TElement}"/> (the wire's own shape, written with no copy) or the ergonomic jagged
-/// form (<c>TElement[]</c> per row, flattened through a pooled buffer).
+/// once at the read boundary. On the write path the column is always the dense
+/// <see cref="ArrayValueColumn{TElement}"/> (the wire's own shape, written with no copy) — the ergonomic jagged
+/// form (<c>TElement[]</c> per row) is projected into it by <see cref="TryDensify"/> before the write.
 /// </para>
 /// </summary>
 /// <typeparam name="TElement">The inner codec's CLR element type; each row surfaces as <typeparamref name="TElement"/>[].</typeparam>
@@ -191,15 +190,20 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     // elements end-to-end) from the ergonomic jagged form once, so a later measure/write indexes/slices it with no
     // re-projection. The flat inner run is itself densified through the inner codec — a no-op for a leaf inner, but
     // for e.g. Array(Nullable(T)) it turns the concatenated T? run into the dense (inner column + null-map) shape.
-    // An already-dense column is returned unchanged when its inner is already dense.
-    public IColumn Densify(IColumn column)
+    // An already-dense column is returned unchanged (built = false) when its inner is already dense.
+    public IColumn TryDensify(IColumn column, out bool built)
     {
         if (column is ArrayValueColumn<TElement> dense)
         {
-            IColumn densifiedInner = inner.Densify(dense.Inner);
-            return ReferenceEquals(densifiedInner, dense.Inner)
-                ? column
-                : new ArrayValueColumn<TElement>(dense.Name, dense.TypeName, (IColumn<TElement>)densifiedInner, dense.Offsets.ToArray(), dense.RowCount, pooledOffsets: false);
+            IColumn densifiedInner = inner.TryDensify(dense.Inner, out bool innerBuilt);
+            if (!innerBuilt)
+            {
+                built = false;
+                return column;
+            }
+
+            built = true;
+            return new ArrayValueColumn<TElement>(dense.Name, dense.TypeName, (IColumn<TElement>)densifiedInner, dense.Offsets.ToArray(), dense.RowCount, pooledOffsets: false);
         }
 
         var source = (IColumn<TElement[]>)column;
@@ -221,7 +225,8 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             offsets[i + 1] = pos;
         }
 
-        IColumn innerColumn = inner.Densify(new ArrayColumn<TElement>(source.Name, inner.TypeName, flat));
+        IColumn innerColumn = inner.TryDensify(new ArrayColumn<TElement>(source.Name, inner.TypeName, flat), out _);
+        built = true;
         return new ArrayValueColumn<TElement>(source.Name, source.TypeName, (IColumn<TElement>)innerColumn, offsets, rowCount, pooledOffsets: false);
     }
 
@@ -229,82 +234,29 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     public void WriteStatePrefix(ClickHouseBinaryWriter writer) => inner.WriteStatePrefix(writer);
 
     /// <inheritdoc/>
+    // Every column is densified before the write, so the body is always the dense wire shape: the offsets already
+    // exist and the inner column already holds every element, so both are written directly. The wire offsets are
+    // relative to this slice's values stream, so subtract the slice's first element index from each. The ergonomic
+    // jagged form was flattened into this shape by TryDensify.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        if (column is ArrayValueColumn<TElement> dense)
-        {
-            // Dense form (the wire's own layout): the offsets already exist and the inner column already holds
-            // every element, so write both directly. The wire offsets are relative to this slice's values stream,
-            // so subtract the slice's first element index from each.
-            ReadOnlySpan<int> offsets = dense.Offsets;
-            int elementBase = offsets[start];
-            for (int i = 0; i < length; i++)
-            {
-                writer.WriteUInt64((ulong)(offsets[start + i + 1] - elementBase));
-            }
-
-            inner.WriteColumn(writer, dense.Inner, elementBase, offsets[start + length] - elementBase);
-            return;
-        }
-
-        // Ergonomic jagged form: preflight the whole slice (element count, null-row rejection, size guard) before
-        // writing anything, then emit the offsets stream, then flatten the element arrays into a pooled inner-typed
-        // buffer (copying array references for a composite inner, values for a leaf inner) and hand it to the inner
-        // codec as one contiguous column.
-        //
-        // The flatten is required for correctness, not just to save calls: the inner codec must see every element
-        // at once. A sectioned inner encoding — Nullable's null-map, LowCardinality's dictionary, a nested Array's
-        // offsets — emits its section(s) once spanning the whole element run and only then the values. Writing the
-        // inner codec one row at a time would restart that layout per row (e.g. null-map/values/null-map/values
-        // interleaved) and corrupt the stream, so the elements are gathered contiguous first. A leaf inner that is
-        // a pure per-element concatenation (fixed-width, String) would tolerate per-row writes, but the write path
-        // stays uniform across inner types rather than branching on their layout.
-        //
-        // Array(T) rows are themselves non-nullable, so a null row is rejected rather than silently coerced to an
-        // empty array; callers pass Array.Empty<T>() for an empty row, or use Array(Nullable(T)) to carry null
-        // elements. (ClickHouse rejects Nullable(Array(T)), so an array row itself cannot be null.)
-        var source = (IColumn<TElement[]>)column;
-
-        int total = SumElementCount(source, column.Name, start, length);
-
-        // Offsets stream: each row's cumulative element end, relative to this slice's own values stream.
-        ulong running = 0;
+        var dense = (ArrayValueColumn<TElement>)column;
+        ReadOnlySpan<int> offsets = dense.Offsets;
+        int elementBase = offsets[start];
         for (int i = 0; i < length; i++)
         {
-            running += (ulong)source[start + i].Length;
-            writer.WriteUInt64(running);
+            writer.WriteUInt64((ulong)(offsets[start + i + 1] - elementBase));
         }
 
-        var flat = ArrayPool<TElement>.Shared.Rent(total);
-        try
-        {
-            int pos = 0;
-            for (int i = 0; i < length; i++)
-            {
-                TElement[] row = source[start + i];
-                if (row.Length > 0)
-                {
-                    Array.Copy(row, 0, flat, pos, row.Length);
-                    pos += row.Length;
-                }
-            }
-
-            inner.WriteColumn(writer, ArrayColumn<TElement>.OverBuffer(column.Name, inner.TypeName, flat, total), 0, total);
-        }
-        finally
-        {
-            ArrayPool<TElement>.Shared.Return(flat, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<TElement>());
-        }
+        inner.WriteColumn(writer, dense.Inner, elementBase, offsets[start + length] - elementBase);
     }
 
     /// <summary>
-    /// Preflight for the jagged write path: sums the slice's element count, rejecting null rows, before a single
-    /// byte is written. The flat buffer in <see cref="WriteColumn"/> is int-addressed, so a slice whose elements
-    /// sum past <see cref="Array.MaxLength"/> cannot be buffered — catching that here (rather than after the offsets
-    /// are already on the wire) keeps a failed write from leaving a half-written, corrupt column behind.
+    /// Sums the column's element count, rejecting null rows, and guards that the flat run fits a single array —
+    /// the preflight <see cref="TryDensify"/> runs before flattening the jagged rows into one contiguous inner column.
     /// </summary>
-    /// <exception cref="ArgumentException">A row in the slice is null; <c>Array(T)</c> rows are non-nullable.</exception>
-    /// <exception cref="NotSupportedException">The slice's elements sum past <see cref="Array.MaxLength"/>.</exception>
+    /// <exception cref="ArgumentException">A row is null; <c>Array(T)</c> rows are non-nullable.</exception>
+    /// <exception cref="NotSupportedException">The elements sum past <see cref="Array.MaxLength"/>.</exception>
     private static int SumElementCount(IColumn<TElement[]> column, string columnName, int start, int length)
     {
         ulong total64 = 0;
@@ -331,41 +283,16 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // One UInt64 offset plus the inner bytes of this row's elements, measured through whichever form the column
-    // takes — the wire-shaped dense column or the ergonomic jagged one.
+    // One UInt64 offset plus the inner bytes of this row's elements. The column is always the dense wire shape (the
+    // pipeline densifies before measuring), so the inner column already holds every element and this row's elements
+    // are just its offset range.
     public long MeasureRowBytes(IColumn column, int row)
-        => column is ArrayValueColumn<TElement> dense
-            ? MeasureDenseRow(dense, row)
-            : MeasureJaggedRow(column, row);
-
-    // Dense form: the inner column already holds every element, so this row's elements are just the offset range.
-    private long MeasureDenseRow(ArrayValueColumn<TElement> dense, int row)
     {
+        var dense = (ArrayValueColumn<TElement>)column;
         ReadOnlySpan<int> offsets = dense.Offsets;
         int elementStart = offsets[row];
         int elementEnd = offsets[row + 1];
         return sizeof(ulong) + MeasureInnerRun(dense.Inner, elementStart, elementEnd - elementStart);
-    }
-
-    // Ergonomic jagged form: this row is its own element array, wrapped (only when non-empty, to skip the wrapper
-    // allocation for an empty row) so the inner codec can price its elements.
-    private long MeasureJaggedRow(IColumn column, int row)
-    {
-        TElement[] value = ((IColumn<TElement[]>)column)[row];
-        if (value is null)
-        {
-            throw new ArgumentException(
-                $"Array column '{column.Name}' has a null value at row {row}; Array(T) rows are non-nullable. Use Array.Empty<T>() for an empty row, or Array(Nullable(T)) to carry null elements.",
-                nameof(column));
-        }
-
-        if (value.Length == 0)
-        {
-            return sizeof(ulong);
-        }
-
-        var wrapped = ArrayColumn<TElement>.OverBuffer(column.Name, inner.TypeName, value, value.Length);
-        return sizeof(ulong) + MeasureInnerRun(wrapped, start: 0, value.Length);
     }
 
     // The inner bytes for the contiguous run of count elements starting at start in innerColumn: a fixed-width
