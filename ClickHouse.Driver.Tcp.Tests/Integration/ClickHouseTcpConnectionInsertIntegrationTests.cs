@@ -49,6 +49,55 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         }
     }
 
+    // The dense counterpart of the convenient-form round-trip above: seed a table with the caller-friendly column,
+    // then re-insert what a read produces — the dense wire-shaped column (ArrayValueColumn, TupleColumn, MapColumn,
+    // NestedColumn, VariantColumn, the dictionary-backed LowCardinality column, …) — into a second table and read
+    // that back. This proves every supported type also inserts correctly in its dense form, not just the ergonomic
+    // one, exercising the codecs' zero-copy dense write path end-to-end. The read-back block is re-inserted inside
+    // its own iteration (through a second connection), never retained past it.
+    [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
+    public async Task InsertAsync_DenseReadbackReinserted_RoundTripsThroughSelect(InsertRoundTripCase testCase)
+    {
+        await using var source = await TcpServerFixture.ConnectAsync(None);
+        await using var sink = await TcpServerFixture.ConnectAsync(None);
+        string seedTable = UniqueTableName();
+        string denseTable = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(source, $"CREATE TABLE {seedTable} (value {testCase.ClickHouseType}) ENGINE = Memory", testCase.Settings);
+            await ExecuteAsync(sink, $"CREATE TABLE {denseTable} (value {testCase.ClickHouseType}) ENGINE = Memory", testCase.Settings);
+
+            await source.InsertAsync($"INSERT INTO {seedTable} (value) VALUES", new[] { testCase.BuildInsertColumn("value") }, settings: testCase.Settings, cancellationToken: None);
+
+            // Re-insert each dense read-back block into the second table while it is still valid (a second
+            // connection, since the source query is streaming on the first).
+            await foreach (Block block in source.QueryAsync($"SELECT value FROM {seedTable}", settings: testCase.Settings, cancellationToken: None))
+            {
+                await sink.InsertAsync($"INSERT INTO {denseTable} (value) VALUES", new[] { block[0] }, settings: testCase.Settings, cancellationToken: None);
+            }
+
+            IColumn expected = testCase.BuildExpectedColumn("value");
+            int blockCount = 0;
+            await foreach (Block block in sink.QueryAsync($"SELECT value FROM {denseTable}", settings: testCase.Settings, cancellationToken: None))
+            {
+                blockCount++;
+                AssertColumnsEqual(expected, block[0]);
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(blockCount, Is.EqualTo(1), "re-inserting the dense read-back should round-trip exactly one row-bearing block");
+                Assert.That(source.State, Is.EqualTo(TcpConnectionState.Ready));
+                Assert.That(sink.State, Is.EqualTo(TcpConnectionState.Ready));
+            });
+        }
+        finally
+        {
+            await ExecuteAsync(source, $"DROP TABLE IF EXISTS {seedTable}");
+            await ExecuteAsync(sink, $"DROP TABLE IF EXISTS {denseTable}");
+        }
+    }
+
     [Test]
     public async Task InsertAsync_MultipleColumnsAndRows_RoundTripsEveryColumn()
     {
