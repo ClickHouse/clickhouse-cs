@@ -251,6 +251,54 @@ internal sealed class NestedColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
+    // A Nested column is only ever the dense NestedColumn (there is no ergonomic write form), so TryDensify just
+    // recurses each field codec's own TryDensify over its field column — turning e.g. a Nested with an Array or
+    // Nullable field dense all the way down. The wrapper is rebuilt only when some field densified to a new column;
+    // otherwise the input is returned unchanged (built = false).
+    public IColumn TryDensify(IColumn column, out bool built)
+    {
+        var nested = AsNested(column);
+        IColumn[] densified = null;
+        bool[] owned = null;
+        for (int f = 0; f < children.Length; f++)
+        {
+            IColumn original = nested.GetField(f);
+            IColumn field = children[f].TryDensify(original, out bool fieldBuilt);
+            if (densified is null && fieldBuilt)
+            {
+                densified = new IColumn[children.Length];
+                owned = new bool[children.Length];
+                for (int j = 0; j < f; j++)
+                {
+                    densified[j] = nested.GetField(j);
+                }
+            }
+
+            if (densified is not null)
+            {
+                densified[f] = field;
+                owned[f] = fieldBuilt;
+            }
+        }
+
+        if (densified is null)
+        {
+            built = false;
+            return column;
+        }
+
+        // The rebuilt wrapper mixes fields: the freshly densified ones are new columns it must dispose, while the
+        // unchanged ones are borrowed by reference and stay owned by the source column. Build it borrowing everything
+        // (ownsFields: false), then restrict disposal to exactly the fields we built — the per-field `owned` flags
+        // come straight from each field's `built` signal — so disposing the wrapper frees the new columns without
+        // double-disposing the borrowed ones.
+        var rebuilt = new NestedColumn(nested.Name, nested.TypeName, fieldNames, densified, nested.Offsets.ToArray(), nested.RowCount, pooledOffsets: false, ownsFields: false);
+        rebuilt.RestrictOwnership(owned);
+        built = true;
+        return rebuilt;
+    }
+
+    /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer)
     {
         foreach (IColumnCodec child in children)
