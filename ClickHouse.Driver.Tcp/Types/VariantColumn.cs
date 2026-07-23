@@ -35,6 +35,12 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
     private byte[] discriminators;
     private object[] cache;
 
+    // When non-null, overrides ownsColumns per type column: Dispose disposes type column i only when
+    // columnOwnership[i] is true. Set once by RestrictOwnership immediately after construction so a densified
+    // wrapper that mixes freshly built type columns with columns borrowed from another column disposes only the
+    // ones it created.
+    private bool[] columnOwnership;
+
     /// <summary>Initializes a variant column over its discriminator stream and per-type child columns.</summary>
     /// <param name="name">The column name.</param>
     /// <param name="typeName">The full <c>Variant(...)</c> type string.</param>
@@ -67,6 +73,23 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
             byte d = discriminators[row];
             localIndex[row] = d == NullDiscriminator ? -1 : counters[d]++;
         }
+    }
+
+    /// <summary>
+    /// Restricts disposal to the type columns flagged in <paramref name="owned"/> (one entry per alternative),
+    /// overriding the all-or-nothing <c>ownsColumns</c> passed at construction. Used when rebuilding a densified
+    /// variant that keeps some type columns by reference (owned by the source column) and replaces others with
+    /// freshly built ones, so disposing this wrapper frees only the columns it created. Must be called before the
+    /// column is observed.
+    /// </summary>
+    internal void RestrictOwnership(bool[] owned)
+    {
+        if (owned is null || owned.Length != typeColumns.Length)
+        {
+            throw new ArgumentException("Ownership mask must have one entry per type column.", nameof(owned));
+        }
+
+        columnOwnership = owned;
     }
 
     /// <inheritdoc/>
@@ -130,7 +153,17 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (ownsColumns)
+        if (columnOwnership is not null)
+        {
+            for (int i = 0; i < typeColumns.Length; i++)
+            {
+                if (columnOwnership[i])
+                {
+                    typeColumns[i].Dispose();
+                }
+            }
+        }
+        else if (ownsColumns)
         {
             foreach (IColumn column in typeColumns)
             {

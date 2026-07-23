@@ -157,4 +157,46 @@ public class VariantColumnCodecTests
 
         Assert.That(column.RowCount, Is.Zero);
     }
+
+    [Test]
+    public void TryDensify_DenseVariantWithOneErgonomicTypeColumn_DisposesOnlyRebuiltColumnNotBorrowed()
+    {
+        // A dense variant whose Array alternative column is still ergonomic (a jagged ArrayColumn) while its UInt32
+        // alternative is already dense (a leaf): TryDensify rebuilds only the Array column and keeps the UInt32 column
+        // by reference. Disposing the rebuilt wrapper must free the freshly built Array column but leave the borrowed
+        // UInt32 column alone — it is still owned by the source column, so disposing it here would double-dispose it.
+        IColumnCodec codec = Resolve("Variant(UInt32, Array(Int32))");
+        var borrowed = new DisposeSpyColumn<uint>("v", "UInt32", new uint[] { 42 });
+        var ergonomicArray = new ArrayColumn<int[]>("v", "Array(Int32)", new[] { new[] { 1, 2 } });
+        var source = new VariantColumn("v", "Variant(UInt32, Array(Int32))", new byte[] { 0, 1 }, new IColumn[] { borrowed, ergonomicArray }, rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
+
+        IColumn densified = codec.TryDensify(source, out bool built);
+        Assert.That(built, Is.True, "the Array alternative was ergonomic, so a rebuild is expected");
+        Assert.That(densified, Is.Not.SameAs(source));
+        densified.Dispose();
+
+        Assert.That(borrowed.DisposeCount, Is.EqualTo(0), "the borrowed, already-dense alternative column must not be disposed by the rebuilt wrapper");
+
+        ergonomicArray.Dispose();
+        borrowed.Dispose();
+    }
+
+    [Test]
+    public void RestrictOwnership_DisposesOnlyFlaggedTypeColumns()
+    {
+        // The mechanism the partial densify rebuild relies on: after RestrictOwnership, Dispose frees exactly the
+        // alternative columns flagged true (the freshly built ones) and leaves the rest (borrowed) untouched.
+        var owned = new DisposeSpyColumn<uint>("v", "UInt32", new uint[] { 1 });
+        var borrowed = new DisposeSpyColumn<int>("v", "Int32", new[] { 2 });
+        var variant = new VariantColumn("v", "Variant(UInt32, Int32)", new byte[] { 0, 1 }, new IColumn[] { owned, borrowed }, rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
+
+        variant.RestrictOwnership(new[] { true, false });
+        variant.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(owned.DisposeCount, Is.EqualTo(1), "a flagged (freshly built) alternative column must be disposed exactly once");
+            Assert.That(borrowed.DisposeCount, Is.EqualTo(0), "an unflagged (borrowed) alternative column must not be disposed");
+        });
+    }
 }
