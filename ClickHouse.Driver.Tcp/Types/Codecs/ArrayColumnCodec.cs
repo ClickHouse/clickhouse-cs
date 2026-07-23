@@ -187,6 +187,45 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     public bool CanWrite(IColumn column) => innerCanWrite && column is IColumn<TElement[]>;
 
     /// <inheritdoc/>
+    // Builds the dense wire shape (a per-row offsets array plus a single flat inner column holding every row's
+    // elements end-to-end) from the ergonomic jagged form once, so a later measure/write indexes/slices it with no
+    // re-projection. The flat inner run is itself densified through the inner codec — a no-op for a leaf inner, but
+    // for e.g. Array(Nullable(T)) it turns the concatenated T? run into the dense (inner column + null-map) shape.
+    // An already-dense column is returned unchanged when its inner is already dense.
+    public IColumn Densify(IColumn column)
+    {
+        if (column is ArrayValueColumn<TElement> dense)
+        {
+            IColumn densifiedInner = inner.Densify(dense.Inner);
+            return ReferenceEquals(densifiedInner, dense.Inner)
+                ? column
+                : new ArrayValueColumn<TElement>(dense.Name, dense.TypeName, (IColumn<TElement>)densifiedInner, dense.Offsets.ToArray(), dense.RowCount, pooledOffsets: false);
+        }
+
+        var source = (IColumn<TElement[]>)column;
+        int rowCount = source.RowCount;
+        int total = SumElementCount(source, source.Name, 0, rowCount);
+
+        var offsets = new int[rowCount + 1];
+        var flat = new TElement[total];
+        int pos = 0;
+        for (int i = 0; i < rowCount; i++)
+        {
+            TElement[] row = source[i];
+            if (row.Length > 0)
+            {
+                Array.Copy(row, 0, flat, pos, row.Length);
+                pos += row.Length;
+            }
+
+            offsets[i + 1] = pos;
+        }
+
+        IColumn innerColumn = inner.Densify(new ArrayColumn<TElement>(source.Name, inner.TypeName, flat));
+        return new ArrayValueColumn<TElement>(source.Name, source.TypeName, (IColumn<TElement>)innerColumn, offsets, rowCount, pooledOffsets: false);
+    }
+
+    /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer) => inner.WriteStatePrefix(writer);
 
     /// <inheritdoc/>
