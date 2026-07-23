@@ -13,14 +13,9 @@ internal abstract class AbstractBigIntegerType : IntegerType, ITypedWriter<BigIn
 
     public override object Read(ExtendedBinaryReader reader)
     {
-        if (Signed)
-            return new BigInteger(reader.ReadBytes(Size));
-
-        var data = new byte[Size + 1];
-        for (int i = 0; i < Size; i++)
-            data[i] = reader.ReadByte();
-        data[Size] = 0;
-        return new BigInteger(data);
+        Span<byte> buffer = stackalloc byte[Size];
+        reader.ReadBytes(buffer);
+        return new BigInteger(buffer, isUnsigned: !Signed);
     }
 
     public abstract override string ToString();

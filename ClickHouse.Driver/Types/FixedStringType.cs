@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -28,14 +29,33 @@ internal class FixedStringType : ParameterizedType
 
     public override string ToString() => $"FixedString({Length})";
 
+    // Above this length the scratch buffer is rented from the pool instead of stack-allocated.
+    private const int MaxStackAllocLength = 256;
+
     public override object Read(ExtendedBinaryReader reader)
     {
-        var bytes = reader.ReadBytes(Length);
         if (ReadAsByteArray)
         {
-            return bytes;
+            // Buffer is returned to the caller as the column value, so it must be a fresh heap array.
+            return reader.ReadBytes(Length);
         }
-        return Encoding.UTF8.GetString(bytes);
+
+        byte[] rented = null;
+        try
+        {
+            Span<byte> buffer = Length <= MaxStackAllocLength
+                ? stackalloc byte[Length]
+                : (rented = ArrayPool<byte>.Shared.Rent(Length)).AsSpan(0, Length);
+            reader.ReadBytes(buffer);
+            return Encoding.UTF8.GetString(buffer);
+        }
+        finally
+        {
+            if (rented != null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
