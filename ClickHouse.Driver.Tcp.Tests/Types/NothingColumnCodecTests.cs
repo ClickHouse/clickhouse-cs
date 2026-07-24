@@ -35,18 +35,6 @@ public class NothingColumnCodecTests
     }
 
     [Test]
-    public void FixedRowByteSize_IsOneByte_AndComposesUnderNullable()
-    {
-        IColumnCodec nullableOfNothing = ColumnCodecRegistry.Default.Resolve("Nullable(Nothing)", default);
-        Assert.Multiple(() =>
-        {
-            // One placeholder byte per row for the bare type; the null-map byte adds one more under Nullable.
-            Assert.That(NothingColumnCodec.Instance.FixedRowByteSize, Is.EqualTo(1));
-            Assert.That(nullableOfNothing.FixedRowByteSize, Is.EqualTo(2));
-        });
-    }
-
-    [Test]
     public void CanWrite_IsFalse_AndWriteThrows()
     {
         var column = new ArrayColumn<object>("c", "Nothing", new object[1]);

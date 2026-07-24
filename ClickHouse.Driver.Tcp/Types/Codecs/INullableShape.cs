@@ -22,28 +22,11 @@ internal interface INullableShape
     /// <summary>Whether the inner codec can write an inner-typed column at all (e.g. <c>Nothing</c> cannot).</summary>
     bool CanInnerWrite(IColumnCodec inner);
 
-    /// <summary>Whether the value at <paramref name="row"/> of <paramref name="column"/> is null.</summary>
-    bool IsNull(IColumn column, int row);
-
     /// <summary>
     /// Writes the full nullable body for rows [<paramref name="start"/>, start + length): the null-map, then the
-    /// inner-type values with a placeholder at each null row. The column is always the dense nullable column (inner
-    /// column + null-map) — the pipeline densifies before the write — so it is written with no intermediate copy.
+    /// inner-type values with a placeholder at each null row. A dense nullable column (inner column + null-map) is
+    /// written with no intermediate copy; the ergonomic <c>T?</c> / nullable-reference form writes the null-map from
+    /// each row's nullness and hands the inner codec a substitute view (the inner placeholder at the null rows).
     /// </summary>
     void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length);
-
-    /// <summary>
-    /// Projects an ergonomic column of this element type (the <c>T?</c> / nullable-reference form) into the dense
-    /// nullable column — an inner column holding a real value at every row (the inner codec's placeholder at the
-    /// null rows) paired with the null-map — recursing the inner codec's own <see cref="IColumnCodec.TryDensify"/>.
-    /// A column already in dense form is returned unchanged with <paramref name="built"/> = <see langword="false"/>;
-    /// a freshly built column sets <paramref name="built"/> = <see langword="true"/> and transfers ownership to the caller.
-    /// </summary>
-    IColumn TryDensify(IColumnCodec inner, IColumn column, out bool built);
-
-    /// <summary>The inner encoded byte length of a present (non-null) row's value.</summary>
-    long MeasureInnerRow(IColumnCodec inner, IColumn column, int row);
-
-    /// <summary>The inner encoded byte length of the inner codec's null placeholder (what a null row writes).</summary>
-    long MeasureNullPlaceholder(IColumnCodec inner);
 }
