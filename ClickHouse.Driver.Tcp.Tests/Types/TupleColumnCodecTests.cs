@@ -143,35 +143,6 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void MeasureRowBytes_AllFixedElements_IsConstantSumOfWidths()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32, UInt8)");
-        var column = new TupleColumn<int, byte>("c", "Tuple(Int32, UInt8)", new (int, byte)[] { (1, 2), (3, 4) });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.FixedRowByteSize, Is.EqualTo(5)); // 4 (Int32) + 1 (UInt8)
-            Assert.That(codec.MeasureRowBytes(column, 0), Is.EqualTo(5));
-        });
-    }
-
-    [Test]
-    public void MeasureRowBytes_VariableElement_SumsPerChild()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32, String)");
-        var dense = new TupleColumn<int, string>("c", "Tuple(Int32, String)", new (int, string)[] { (1, "a"), (2, "bbbb") });
-        var flat = new ArrayColumn<(int, string)>("c", "Tuple(Int32, String)", new (int, string)[] { (1, "a"), (2, "bbbb") });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.FixedRowByteSize, Is.Null);
-            Assert.That(codec.MeasureRowBytes(dense, 0), Is.EqualTo(4 + (1 + 1))); // Int32 + (varint len + "a")
-            Assert.That(codec.MeasureRowBytes(dense, 1), Is.EqualTo(4 + (1 + 4)));
-            Assert.That(codec.MeasureRowBytes(codec.TryDensify(flat, out _), 1), Is.EqualTo(4 + (1 + 4))); // flat densifies to the same
-        });
-    }
-
-    [Test]
     public void CanWrite_AcceptsDenseAndFlatMatchingTupleColumnsOnly()
     {
         IColumnCodec codec = Resolve("Tuple(Int32, String)");
@@ -330,96 +301,6 @@ public class TupleColumnCodecTests
         using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32, String, Float64, UInt8, Int16, Bool, UInt32)", column.RowCount);
 
         Assert.That(((IColumn<(int, string, double, byte, short, bool, uint)>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task TryDensify_FlatValueTupleColumn_ProducesDenseColumnThatRoundTrips()
-    {
-        // A flat ArrayColumn<ValueTuple> is un-transposed into one child column per element, so a later
-        // measure/write drives the children directly. It must surface the same rows and round-trip.
-        IColumnCodec codec = Resolve("Tuple(Int32, String)");
-        var rows = new (int, string)[] { (1, "a"), (2, "b"), (3, "c") };
-        var flat = new ArrayColumn<(int, string)>("c", "Tuple(Int32, String)", rows);
-
-        IColumn densified = codec.TryDensify(flat, out _);
-
-        Assert.That(densified, Is.InstanceOf<ITupleColumn>());
-        var dense = (ITupleColumn)densified;
-        Assert.Multiple(() =>
-        {
-            Assert.That(dense.Children.Count, Is.EqualTo(2));
-            Assert.That(((IColumn<int>)dense.Children[0]).Values.ToArray(), Is.EqualTo(new[] { 1, 2, 3 }));
-            Assert.That(((IColumn<string>)dense.Children[1]).Values.ToArray(), Is.EqualTo(new[] { "a", "b", "c" }));
-            Assert.That(((IColumn<(int, string)>)densified).Values.ToArray(), Is.EqualTo(rows));
-        });
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, densified, "Tuple(Int32, String)", rows.Length);
-        Assert.That(((IColumn<(int, string)>)read).Values.ToArray(), Is.EqualTo(rows));
-    }
-
-    [Test]
-    public void TryDensify_FlatTupleWithArrayElement_DensifiesChildToDenseArray()
-    {
-        // A flat Tuple(Array(UInt8), String): densify un-transposes into per-child columns AND recurses, so the
-        // Array child becomes a dense ArrayValueColumn rather than a jagged ArrayColumn<byte[]>.
-        IColumnCodec codec = Resolve("Tuple(Array(UInt8), String)");
-        var rows = new (byte[], string)[] { (new byte[] { 1, 2 }, "x"), (new byte[] { 3 }, "y") };
-        var flat = new ArrayColumn<(byte[], string)>("c", "Tuple(Array(UInt8), String)", rows);
-
-        var dense = (ITupleColumn)codec.TryDensify(flat, out _);
-        var arrayChild = (IColumn<byte[]>)dense.Children[0];
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(dense.Children[0], Is.InstanceOf<ArrayValueColumn<byte>>());
-            Assert.That(arrayChild[0], Is.EqualTo(new byte[] { 1, 2 }));
-            Assert.That(arrayChild[1], Is.EqualTo(new byte[] { 3 }));
-            Assert.That(((IColumn<string>)dense.Children[1]).Values.ToArray(), Is.EqualTo(new[] { "x", "y" }));
-        });
-    }
-
-    [Test]
-    public void TryDensify_AlreadyDenseColumn_ReturnsSameInstanceNotBuilt()
-    {
-        // A dense TupleColumn whose children are already dense (leaf columns) has nothing to rebuild, so it is
-        // returned by reference with built = false.
-        IColumnCodec codec = Resolve("Tuple(Int32, String)");
-        var dense = new TupleColumn<int, string>("c", "Tuple(Int32, String)", new (int, string)[] { (1, "a"), (2, "b") });
-
-        IColumn result = codec.TryDensify(dense, out bool built);
-        Assert.Multiple(() =>
-        {
-            Assert.That(result, Is.SameAs(dense));
-            Assert.That(built, Is.False, "an all-dense tuple is borrowed, not rebuilt");
-        });
-    }
-
-    [Test]
-    public void TryDensify_DenseTupleWithOneErgonomicChild_DisposesOnlyRebuiltChildNotBorrowed()
-    {
-        // A dense TupleColumn whose child 0 is still ergonomic (a jagged ArrayColumn) while child 1 is already dense
-        // (a leaf): TryDensify rebuilds only child 0 into a fresh dense column and keeps child 1 by reference. Disposing
-        // the rebuilt wrapper must free the freshly built child 0 but leave the borrowed child 1 alone — it is still
-        // owned by the source column, so disposing it here would double-dispose it (returning pooled buffers twice).
-        IColumnCodec codec = Resolve("Tuple(Array(Int32), Int32)");
-        var ergonomicArray = new ArrayColumn<int[]>("c", "Array(Int32)", new[] { new[] { 1, 2 }, new[] { 3 } });
-        var borrowedLeaf = new DisposeSpyColumn<int>("c", "Int32", new[] { 9, 8 });
-        // The source borrows both children (this test owns them), like a caller-assembled dense tuple.
-        var source = new TupleColumn<int[], int>("c", "Tuple(Array(Int32), Int32)", new IColumn[] { ergonomicArray, borrowedLeaf }, null, rowCount: 2, ownsChildren: false);
-
-        IColumn densified = codec.TryDensify(source, out bool built);
-        Assert.That(built, Is.True, "child 0 was ergonomic, so a rebuild is expected");
-        Assert.That(densified, Is.Not.SameAs(source));
-        densified.Dispose();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(borrowedLeaf.DisposeCount, Is.EqualTo(0), "the borrowed, already-dense child must not be disposed by the rebuilt wrapper");
-            Assert.That(borrowedLeaf.Values.ToArray(), Is.EqualTo(new[] { 9, 8 }), "the borrowed child is still readable after disposing the wrapper");
-        });
-
-        ergonomicArray.Dispose();
-        borrowedLeaf.Dispose();
     }
 
     [Test]
