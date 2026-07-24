@@ -86,6 +86,19 @@ public sealed class InsertRoundTripCase
 
         yield return Strings("String", string.Empty, "hello", "héllo✓", "a\0b", new string('x', 500));
 
+        // FixedString(N): N contiguous bytes per row, surfaced as a per-row byte[] of exactly N bytes. The bytes
+        // are byte-oriented, so embedded NULs and non-UTF-8 bytes ride along unchanged.
+        yield return FixedStrings(4, new byte[] { 0, 0, 0, 0 }, new byte[] { 1, 2, 3, 4 }, new byte[] { 0xFF, 0x00, 0xFF, 0x00 });
+
+        // A value shorter than N is right-padded to N zero bytes by the server, so the read-back differs from the
+        // inserted bytes; the empty value becomes an all-zero row and a full-width value is unchanged.
+        yield return new InsertRoundTripCase(
+            "FixedString(6) [padding]",
+            "FixedString(6)",
+            name => new ArrayColumn<byte[]>(name, "FixedString(6)", new[] { Array.Empty<byte>(), new byte[] { 1, 2, 3 }, new byte[] { 1, 2, 3, 4, 5, 6 } }),
+            name => new ArrayColumn<byte[]>(name, "FixedString(6)", new[] { new byte[6], new byte[] { 1, 2, 3, 0, 0, 0 }, new byte[] { 1, 2, 3, 4, 5, 6 } }),
+            settings: null);
+
         yield return Dates("Date", new DateOnly(1970, 1, 1), new DateOnly(2024, 1, 15), new DateOnly(2149, 6, 6));
         yield return Dates("Date32", new DateOnly(1900, 1, 1), new DateOnly(1970, 1, 1), new DateOnly(2024, 1, 15), new DateOnly(2299, 12, 31));
 
@@ -180,6 +193,12 @@ public sealed class InsertRoundTripCase
         yield return NullableStrings("hello", null, "world", string.Empty);
         yield return NullableStrings(null, null); // every row null
 
+        // Nullable(FixedString(N)): byte[] is reference-typed, so a null row surfaces as null; present rows are
+        // exactly N bytes. A null row must not reach the FixedString codec (the nullable write substitutes the
+        // N-zero-byte placeholder instead), so the all-null case proves the placeholder-only values stream.
+        yield return NullableFixedStrings(4, new byte[] { 1, 2, 3, 4 }, null, new byte[] { 0xFF, 0xFF, 0xFF, 0xFF });
+        yield return NullableFixedStrings(4, null, null); // every row null
+
         // IPv4/IPv6 are reference-typed (IPAddress) but fixed-width; a null row must not reach the IP codec (it
         // dereferences the address), so the nullable write substitutes a placeholder instead.
         yield return NullableIps("IPv4", "127.0.0.1", null, "255.255.255.255");
@@ -209,6 +228,7 @@ public sealed class InsertRoundTripCase
         yield return Arrays("Float64", new[] { 0d, -1.5e100, double.MaxValue });
         yield return Arrays("Bool", new[] { true, false, true }, Array.Empty<bool>());
         yield return Arrays("String", new[] { "a", "bb" }, Array.Empty<string>(), new[] { string.Empty, "héllo✓" });
+        yield return Arrays<byte[]>("FixedString(4)", new[] { new byte[] { 1, 2, 3, 4 }, new byte[] { 0xFF, 0, 0xFF, 0 } }, Array.Empty<byte[]>());
         yield return Arrays("Date", new[] { new DateOnly(1970, 1, 1), new DateOnly(2149, 6, 6) }, Array.Empty<DateOnly>());
         yield return Arrays("Date32", new[] { new DateOnly(1900, 1, 1), new DateOnly(2299, 12, 31) });
 
@@ -496,6 +516,20 @@ public sealed class InsertRoundTripCase
 
     private static InsertRoundTripCase Strings(string clickHouseType, params string[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<string>(name, clickHouseType, values));
+
+    // FixedString(N) inserts and reads back a per-row byte[]; values must be exactly N bytes for the read-back to
+    // equal the inserted column (a shorter value is server-padded — see the dedicated padding case).
+    private static InsertRoundTripCase FixedStrings(int size, params byte[][] values)
+    {
+        string type = $"FixedString({size})";
+        return Same($"{type} [{values.Length} rows]", type, name => new ArrayColumn<byte[]>(name, type, values));
+    }
+
+    private static InsertRoundTripCase NullableFixedStrings(int size, params byte[][] values)
+    {
+        string type = $"Nullable(FixedString({size}))";
+        return Same($"{type} [{values.Length} rows]", type, name => new ArrayColumn<byte[]>(name, type, values));
+    }
 
     // BFloat16 widens to float; values are chosen to be exactly representable so the narrow-on-write is lossless.
     private static InsertRoundTripCase BFloat16s(string clickHouseType, IReadOnlyDictionary<string, string> settings, params float[] values)
