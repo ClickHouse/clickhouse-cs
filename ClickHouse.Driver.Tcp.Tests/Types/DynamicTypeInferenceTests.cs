@@ -57,19 +57,21 @@ public class DynamicTypeInferenceTests
     }
 
     [Test]
-    public void Infer_DateTimeOffset_MapsToDateTime64AndCoercesToClickHouseDateTime64()
+    public void Infer_DateTimeOffset_MapsToDateTime64AndCoercesToNanosecondCount()
     {
         var value = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5));
         (string typeName, object canonical) = DynamicTypeInference.Infer(value);
 
         Assert.That(typeName, Is.EqualTo("DateTime64(9)"));
-        Assert.That(canonical, Is.InstanceOf<ClickHouseDateTime64>());
-        Assert.That(((ClickHouseDateTime64)canonical).ToDateTimeOffset(), Is.EqualTo(value));
+        Assert.That(canonical, Is.InstanceOf<long>());
+        Assert.That((long)canonical, Is.EqualTo((value.UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks) * 100));
     }
 
     [Test]
-    public void Infer_ClickHouseDateTime64_KeepsItsScale()
-        => Assert.That(DynamicTypeInference.Infer(new ClickHouseDateTime64(0, 3, TimeSpan.Zero)).TypeName, Is.EqualTo("DateTime64(3)"));
+    public void Infer_Long_MapsToInt64_NotDateTime64()
+        // A raw Int64 is ambiguous with a DateTime64 count, so Dynamic keeps it Int64; date-time semantics need a
+        // DateTimeOffset/DateTime input.
+        => Assert.That(DynamicTypeInference.Infer(1_700_000_000_123L).TypeName, Is.EqualTo("Int64"));
 
     [Test]
     public void Infer_Decimal_MapsToDecimal128AtItsScaleAndCoerces()
