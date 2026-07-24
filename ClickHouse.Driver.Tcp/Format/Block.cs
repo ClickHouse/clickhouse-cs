@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Format;
@@ -15,14 +16,16 @@ namespace ClickHouse.Driver.Tcp.Format;
 /// <c>Values.ToArray()</c>) while iterating.
 /// </para>
 /// </summary>
-internal sealed class Block : IDisposable
+public sealed class Block : IDisposable
 {
+    private string[] columnNames;
+
     /// <summary>Initializes a new instance of the <see cref="Block"/> class.</summary>
     /// <param name="name">The block name (usually empty for result blocks).</param>
     /// <param name="info">The block info prefix.</param>
     /// <param name="rowCount">The number of rows every column holds.</param>
     /// <param name="columns">The decoded columns, in header order.</param>
-    public Block(string name, BlockInfo info, int rowCount, IReadOnlyList<IColumn> columns)
+    internal Block(string name, BlockInfo info, int rowCount, IReadOnlyList<IColumn> columns)
     {
         Name = name;
         Info = info;
@@ -34,7 +37,7 @@ internal sealed class Block : IDisposable
     public string Name { get; }
 
     /// <summary>The block info prefix.</summary>
-    public BlockInfo Info { get; }
+    internal BlockInfo Info { get; }
 
     /// <summary>The number of rows in the block.</summary>
     public int RowCount { get; }
@@ -44,6 +47,35 @@ internal sealed class Block : IDisposable
 
     /// <summary>The decoded columns, in header order.</summary>
     public IReadOnlyList<IColumn> Columns { get; }
+
+    /// <summary>
+    /// The column names, in header order — the same order as <see cref="Columns"/> and the <c>object[]</c> rows
+    /// produced by the client's untyped read. Pair this with a row to address values by name. Computed once and
+    /// cached; the returned list is owned (safe to retain past the block, unlike the columns themselves).
+    /// </summary>
+    public IReadOnlyList<string> ColumnNames
+    {
+        get
+        {
+            // Fully populate a local, then publish the reference with a release write so a concurrent reader
+            // never observes the array before its elements are written. A benign double-compute (two readers
+            // racing the first access) yields equivalent arrays, so only the torn-publication needs guarding.
+            string[] existing = Volatile.Read(ref columnNames);
+            if (existing is not null)
+            {
+                return existing;
+            }
+
+            var names = new string[Columns.Count];
+            for (int i = 0; i < names.Length; i++)
+            {
+                names[i] = Columns[i].Name;
+            }
+
+            Volatile.Write(ref columnNames, names);
+            return names;
+        }
+    }
 
     /// <summary>The column at <paramref name="index"/>.</summary>
     /// <param name="index">The zero-based column index.</param>
