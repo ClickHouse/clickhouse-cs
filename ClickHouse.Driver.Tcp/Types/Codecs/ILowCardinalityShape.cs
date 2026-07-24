@@ -36,8 +36,9 @@ internal interface ILowCardinalityShape
 
     /// <summary>
     /// Writes the low-cardinality body for rows [<paramref name="start"/>, start + length): the metadata word,
-    /// the dictionary size, the dictionary values, the keys count, then the keys. A dense
-    /// <see cref="LowCardinalityColumn{T}"/> re-emits its dictionary and keys with no rebuild; an ergonomic
+    /// the dictionary size, the dictionary values, the keys count, then the keys. A dense low-cardinality column —
+    /// the non-nullable <see cref="LowCardinalityColumn{T}"/> or a nullable one implementing
+    /// <see cref="IDenseLowCardinality{T}"/> — re-emits its dictionary and keys with no rebuild; an ergonomic
     /// <c>IColumn&lt;T&gt;</c> is deduplicated into a fresh block-local dictionary. Writes nothing when
     /// <paramref name="length"/> is zero (the empty body a composite emits under its own state prefix).
     /// </summary>
