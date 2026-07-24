@@ -109,7 +109,17 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             // An empty column writes no offsets and no values: read a zero-row inner column and wrap it with the
             // single sentinel offset (offsets[0] = 0) every array column carries.
             IColumn emptyInner = await inner.ReadColumnAsync(reader, columnName, inner.TypeName, 0, cancellationToken).ConfigureAwait(false);
-            return new ArrayValueColumn<TElement>(columnName, columnType, (IColumn<TElement>)emptyInner, new int[1], rowCount: 0, pooledOffsets: false);
+            try
+            {
+                // Cast inside the try so a mismatched inner element type surfacing as a cast failure disposes the
+                // inner column rather than leaking it, matching the non-empty path below.
+                return new ArrayValueColumn<TElement>(columnName, columnType, (IColumn<TElement>)emptyInner, new int[1], rowCount: 0, pooledOffsets: false);
+            }
+            catch
+            {
+                emptyInner.Dispose();
+                throw;
+            }
         }
 
         long offsetBytes = (long)rowCount * sizeof(ulong);
@@ -333,7 +343,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             if (row is null)
             {
                 throw new ArgumentException(
-                    $"Array column '{source.Name}' has a null value at row {start + i}; Array(T) rows are non-nullable. Use Array.Empty<T>() for an empty row, or Array(Nullable(T)) to carry null elements.",
+                    $"Array column '{source.Name}' has a null value at row {start + i}; Array(T) rows are non-nullable. Use an empty array for an empty row, or declare the column Array(Nullable(T)) to carry null elements.",
                     nameof(source));
             }
 

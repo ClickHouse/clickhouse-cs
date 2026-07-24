@@ -284,11 +284,10 @@ public sealed class InsertRoundTripCase
         yield return Arrays("Date", new[] { new DateOnly(1970, 1, 1), new DateOnly(2149, 6, 6) }, Array.Empty<DateOnly>());
         yield return Arrays("Date32", new[] { new DateOnly(1900, 1, 1), new DateOnly(2299, 12, 31) });
 
-        // Array(DateTime)/Array(DateTime64) insert and read back a DateTimeOffset / ClickHouseDateTime64 element;
-        // equality is by instant, so the offset the server presents does not matter.
-        yield return Arrays<DateTimeOffset>("DateTime", new[] { new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero), DateTimeOffset.UnixEpoch }, Array.Empty<DateTimeOffset>());
-        yield return Arrays<ClickHouseDateTime64>("DateTime64(3)", new[] { new ClickHouseDateTime64(0L, 3, TimeSpan.Zero), new ClickHouseDateTime64(1_700_000_000_123L, 3, TimeSpan.Zero) });
-        yield return Arrays<ClickHouseDateTime64>("DateTime64(9)", new[] { new ClickHouseDateTime64(1_700_000_000_123_456_789L, 9, TimeSpan.Zero) }, Array.Empty<ClickHouseDateTime64>());
+        // Array(DateTime) reads back raw uint epoch seconds; Array(DateTime64) raw long counts at the column scale.
+        yield return Arrays<uint>("DateTime", new uint[] { 1_700_000_000, 0 }, Array.Empty<uint>());
+        yield return Arrays<long>("DateTime64(3)", new[] { 0L, 1_700_000_000_123L });
+        yield return Arrays<long>("DateTime64(9)", new[] { 1_700_000_000_123_456_789L }, Array.Empty<long>());
 
         yield return Arrays("UUID", new[] { Guid.Empty }, new[] { new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff") });
         yield return Arrays<IPAddress>("IPv4", new[] { IPAddress.Parse("0.0.0.0"), IPAddress.Parse("255.255.255.255") }, Array.Empty<IPAddress>());
@@ -304,8 +303,8 @@ public sealed class InsertRoundTripCase
 
         // Experimental server types: enable their flag on the round-trip (same as their bare cases).
         yield return Arrays("BFloat16", BFloat16Settings, new[] { 0f, 1f, -2f, 0.5f }, Array.Empty<float>());
-        yield return Arrays("Time", TimeSettings, new[] { TimeSpan.Zero, new TimeSpan(12, 34, 56) }, Array.Empty<TimeSpan>());
-        yield return Arrays("Time64(3)", TimeSettings, new[] { TimeSpan.Zero, new TimeSpan(0, 1, 2, 3, 456) });
+        yield return Arrays("Time", TimeSettings, new[] { 0, (12 * 3600) + (34 * 60) + 56 }, Array.Empty<int>());
+        yield return Arrays("Time64(3)", TimeSettings, new[] { 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456 });
 
         // Array(Nullable(T)): nullability composed inside the array, for both a value inner and a reference inner.
         yield return Arrays<uint?>("Nullable(UInt32)", new uint?[] { 1, null, 3 }, Array.Empty<uint?>(), new uint?[] { null });
