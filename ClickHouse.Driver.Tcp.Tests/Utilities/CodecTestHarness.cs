@@ -31,45 +31,21 @@ internal static class CodecTestHarness
 
     /// <summary>
     /// Writes then reads back <paramref name="column"/> through <paramref name="codec"/>, returning the decoded
-    /// column. The column is densified first, mirroring the insert pipeline, which densifies every column before
-    /// the write so the codecs only ever measure/write the dense wire shape.
+    /// column. The column is written straight from its ergonomic form (no densify step), exactly as the insert
+    /// pipeline now does — the codec projects it to the wire through lazy views with no intermediate dense buffer.
     /// </summary>
     public static async Task<IColumn> RoundTripAsync(IColumnCodec codec, IColumn column, string columnType, int rowCount)
     {
-        IColumn dense = codec.TryDensify(column, out bool built);
-        try
-        {
-            byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, dense));
-            using ClickHouseBinaryReader reader = ReaderOver(bytes);
-            return await codec.ReadColumnAsync(reader, column.Name, columnType, rowCount, None);
-        }
-        finally
-        {
-            if (built)
-            {
-                dense.Dispose();
-            }
-        }
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
+        using ClickHouseBinaryReader reader = ReaderOver(bytes);
+        return await codec.ReadColumnAsync(reader, column.Name, columnType, rowCount, None);
     }
 
     /// <summary>
-    /// Densifies <paramref name="column"/> through <paramref name="codec"/> and encodes the requested row range,
-    /// mirroring the insert pipeline. Use for the direct-<see cref="IColumnCodec.WriteColumn(ClickHouseBinaryWriter, IColumn, int, int)"/>
-    /// slice tests that bypass <see cref="RoundTripAsync"/>.
+    /// Encodes the requested row range of <paramref name="column"/> straight from its ergonomic form. Use for the
+    /// direct-<see cref="IColumnCodec.WriteColumn(ClickHouseBinaryWriter, IColumn, int, int)"/> slice tests that
+    /// bypass <see cref="RoundTripAsync"/>.
     /// </summary>
-    public static async Task<byte[]> WriteDenseAsync(IColumnCodec codec, IColumn column, int start, int length)
-    {
-        IColumn dense = codec.TryDensify(column, out bool built);
-        try
-        {
-            return await WriteAsync(w => codec.WriteColumn(w, dense, start, length));
-        }
-        finally
-        {
-            if (built)
-            {
-                dense.Dispose();
-            }
-        }
-    }
+    public static Task<byte[]> WriteSliceAsync(IColumnCodec codec, IColumn column, int start, int length)
+        => WriteAsync(w => codec.WriteColumn(w, column, start, length));
 }
