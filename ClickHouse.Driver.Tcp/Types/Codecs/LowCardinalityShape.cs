@@ -112,31 +112,6 @@ internal sealed class LowCardinalityShape<T> : ILowCardinalityShape
             ArrayPool<int>.Shared.Return(keys);
         }
     }
-
-    /// <inheritdoc/>
-    public long MeasureRow(IColumnCodec inner, IColumn column, int row)
-    {
-        // A conservative upper bound: the widest key plus this row's full inner value, ignoring the dictionary's
-        // deduplication (which only ever makes the true size smaller). The block splitter tolerates an
-        // over-estimate — it just closes blocks a little earlier.
-        const long maxKeyBytes = sizeof(ulong);
-
-        if (column is LowCardinalityColumn<T> dense)
-        {
-            // The value lives in the dictionary at this row's key, so it can be priced in place with no allocation.
-            return maxKeyBytes + inner.MeasureRowBytes(dense.Dictionary, dense.Keys[row]);
-        }
-
-        if (inner.FixedRowByteSize is int width)
-        {
-            return maxKeyBytes + width;
-        }
-
-        // A variable-width inner must measure the value; wrap the single row so the inner codec can price it.
-        T value = ((IColumn<T>)column)[row];
-        var wrapped = ArrayColumn<T>.OverBuffer(column.Name, inner.TypeName, new[] { value }, 1);
-        return maxKeyBytes + inner.MeasureRowBytes(wrapped, 0);
-    }
 }
 
 /// <summary>Structural (content) equality for <see cref="byte"/> arrays, so equal FixedString values deduplicate.</summary>

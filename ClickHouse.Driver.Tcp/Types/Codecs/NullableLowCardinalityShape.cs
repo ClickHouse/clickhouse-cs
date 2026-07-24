@@ -137,30 +137,6 @@ internal abstract class NullableLowCardinalityShape<T> : ILowCardinalityShape
             ArrayPool<int>.Shared.Return(keys);
         }
     }
-
-    /// <inheritdoc/>
-    public long MeasureRow(IColumnCodec inner, IColumn column, int row)
-    {
-        // A conservative upper bound: the widest key plus this row's inner value, ignoring the dictionary's
-        // deduplication (which only ever makes the true size smaller). A NULL row prices as the inner default, the
-        // bytes written into the reserved slot 0.
-        const long maxKeyBytes = sizeof(ulong);
-
-        if (column is IDenseLowCardinality<T> dense)
-        {
-            return maxKeyBytes + inner.MeasureRowBytes(dense.Dictionary, dense.Keys[row]);
-        }
-
-        if (inner.FixedRowByteSize is int width)
-        {
-            return maxKeyBytes + width;
-        }
-
-        // A variable-width inner must measure the value; a NULL row measures the inner default it reserves.
-        T value = IsNull(column, row) ? (T)inner.NullPlaceholderAs(typeof(T)) : Value(column, row);
-        var wrapped = ArrayColumn<T>.OverBuffer(column.Name, inner.TypeName, new[] { value }, 1);
-        return maxKeyBytes + inner.MeasureRowBytes(wrapped, 0);
-    }
 }
 
 /// <summary>The nullable bridge for a value-type inner: the column surfaces <c>T?</c>.</summary>

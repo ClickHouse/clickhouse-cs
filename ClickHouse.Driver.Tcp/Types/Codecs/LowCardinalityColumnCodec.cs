@@ -338,13 +338,12 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public long MeasureRowBytes(IColumn column, int row) => shape.MeasureRow(inner, column, row);
-
-    /// <inheritdoc/>
     public bool CanWrite(IColumn column) => innerCanWrite && shape.CanWrite(column);
 
     /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer) => writer.WriteInt64(LowCardinalityWire.StatePrefixVersion);
+    // The prefix is a fixed version marker, independent of the data; the column/slice is unused.
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+        => writer.WriteInt64(LowCardinalityWire.StatePrefixVersion);
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
