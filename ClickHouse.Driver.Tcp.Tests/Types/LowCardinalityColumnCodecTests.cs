@@ -20,7 +20,7 @@ public class LowCardinalityColumnCodecTests
 
         byte[] bytes = await CodecTestHarness.WriteAsync(w =>
         {
-            codec.WriteStatePrefix(w);
+            codec.WriteStatePrefix(w, column);
             codec.WriteColumn(w, column);
         });
 
@@ -127,7 +127,8 @@ public class LowCardinalityColumnCodecTests
     public async Task WriteThenReadStatePrefix_RoundTripsTheVersionMarker()
     {
         IColumnCodec codec = Resolve("LowCardinality(String)");
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteStatePrefix(w));
+        var column = new ArrayColumn<string>("c", "LowCardinality(String)", new[] { "a" });
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteStatePrefix(w, column));
 
         Assert.That(bytes, Is.EqualTo(new byte[] { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }));
 
@@ -327,17 +328,6 @@ public class LowCardinalityColumnCodecTests
     }
 
     [Test]
-    public void MeasureRowBytes_DenseColumn_PricesKeyPlusInnerValue()
-    {
-        IColumnCodec codec = Resolve("LowCardinality(String)");
-        using var dictionary = new ArrayColumn<string>("c", "String", new[] { string.Empty, "abc" });
-        using var dense = new LowCardinalityColumn<string>("c", "LowCardinality(String)", dictionary, new[] { 1 }, rowCount: 1, pooledKeys: false);
-
-        // 8 bytes for the widest key, plus the inner String's encoding of "abc" (1-byte length prefix + 3 bytes).
-        Assert.That(codec.MeasureRowBytes(dense, 0), Is.EqualTo(8 + 1 + 3));
-    }
-
-    [Test]
     public void NullPlaceholder_NullableInner_IsNull()
         => Assert.That(Resolve("LowCardinality(Nullable(String))").NullPlaceholder, Is.Null);
 
@@ -430,16 +420,14 @@ public class LowCardinalityColumnCodecTests
     }
 
     [Test]
-    public async Task WriteColumn_NullableValueDenseColumn_RoundTripsAndMeasuresWithoutRebuilding()
+    public async Task WriteColumn_NullableValueDenseColumn_RoundTripsWithoutRebuilding()
     {
-        // The value-inner dense column (uint dictionary + keys, key 0 = NULL) is the zero-copy write source and is
-        // priced straight off the dictionary. dict [0, 0, 7, 42], keys [2, 0, 3, 1] → [7, NULL, 42, 0].
+        // The value-inner dense column (uint dictionary + keys, key 0 = NULL) is the zero-copy write source.
+        // dict [0, 0, 7, 42], keys [2, 0, 3, 1] → [7, NULL, 42, 0].
         IColumnCodec codec = Resolve("LowCardinality(Nullable(UInt32))");
         using var dictionary = PrimitiveColumn<uint>.FromValues("c", "UInt32", new uint[] { 0, 0, 7, 42 });
         using var dense = new NullableLowCardinalityValueColumn<uint>(
             "c", "LowCardinality(Nullable(UInt32))", dictionary, new[] { 2, 0, 3, 1 }, rowCount: 4, pooledKeys: false);
-
-        Assert.That(codec.MeasureRowBytes(dense, 0), Is.EqualTo(8 + 4), "8-byte widest key plus the fixed UInt32 width");
 
         using IColumn read = await CodecTestHarness.RoundTripAsync(codec, dense, "LowCardinality(Nullable(UInt32))", dense.RowCount);
         Assert.That(((IColumn<uint?>)read).Values.ToArray(), Is.EqualTo(new uint?[] { 7, null, 42, 0 }));

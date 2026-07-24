@@ -42,7 +42,4 @@ internal interface ILowCardinalityShape
     /// <paramref name="length"/> is zero (the empty body a composite emits under its own state prefix).
     /// </summary>
     void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length);
-
-    /// <summary>An upper-bound encoded byte length of row <paramref name="row"/>: a max-width key plus its inner value.</summary>
-    long MeasureRow(IColumnCodec inner, IColumn column, int row);
 }
