@@ -52,30 +52,6 @@ public class NestedColumnCodecTests
     }
 
     [Test]
-    public async Task WriteColumn_Nested_IsByteIdenticalToArrayOfTuple()
-    {
-        // The flatten_nested = 0 form is byte-for-byte the same as Array(Tuple(...)); only the type-string text
-        // (which keeps the field names) differs. Proven by writing the same data through both and comparing bytes.
-        var nested = Nested(
-            "Nested(a UInt8, b String)",
-            new[] { "a", "b" },
-            new[] { Field<byte>("UInt8", 10, 20, 30), Field<string>("String", "x", "y", "z") },
-            new[] { 0, 2, 3 });
-        var arrayOfTuple = new ArrayColumn<(byte, string)[]>("c", "Array(Tuple(a UInt8, b String))", new[]
-        {
-            new[] { ((byte)10, "x"), ((byte)20, "y") },
-            new[] { ((byte)30, "z") },
-        });
-
-        IColumnCodec nestedCodec = Resolve("Nested(a UInt8, b String)");
-        IColumnCodec arrayCodec = Resolve("Array(Tuple(a UInt8, b String))");
-        byte[] nestedBytes = await CodecTestHarness.WriteAsync(w => nestedCodec.WriteColumn(w, nestedCodec.TryDensify(nested, out _)));
-        byte[] arrayBytes = await CodecTestHarness.WriteAsync(w => arrayCodec.WriteColumn(w, arrayCodec.TryDensify(arrayOfTuple, out _)));
-
-        Assert.That(nestedBytes, Is.EqualTo(arrayBytes));
-    }
-
-    [Test]
     public async Task ReadColumn_MoreThanSevenFields_RoundTrips()
     {
         // The whole point of the dedicated codec: a Nested is not bound by the tuple's 7-element cap. Eight fields.
@@ -168,27 +144,6 @@ public class NestedColumnCodecTests
             Assert.That(nested.Offsets.ToArray(), Is.EqualTo(new[] { 0, 2, 2 }));
             Assert.That(((IColumn<byte>)nested.GetField("a")).Values.ToArray(), Is.EqualTo(new byte[] { 2, 3 }));
             Assert.That(((IColumn<string>)nested.GetField("b")).Values.ToArray(), Is.EqualTo(new[] { "b", "c" }));
-        });
-    }
-
-    [Test]
-    public void MeasureRowBytes_CountsOneOffsetPlusEachFieldsElements()
-    {
-        const string type = "Nested(a UInt8, b String)";
-        IColumnCodec codec = Resolve(type);
-        var column = Nested(
-            type,
-            new[] { "a", "b" },
-            new[] { Field<byte>("UInt8", 1, 2, 3), Field<string>("String", "x", "yy", "z") },
-            new[] { 0, 2, 3 });
-
-        Assert.Multiple(() =>
-        {
-            // row 0 has 2 elements: offset(8) + 2 UInt8 + ("x"=1+1) + ("yy"=1+2)
-            Assert.That(codec.MeasureRowBytes(column, 0), Is.EqualTo(8 + 2 + (1 + 1) + (1 + 2)));
-            // row 1 has 1 element: offset(8) + 1 UInt8 + ("z"=1+1)
-            Assert.That(codec.MeasureRowBytes(column, 1), Is.EqualTo(8 + 1 + (1 + 1)));
-            Assert.That(codec.FixedRowByteSize, Is.Null);
         });
     }
 
@@ -325,29 +280,6 @@ public class NestedColumnCodecTests
 
         Assert.ThrowsAsync<ClickHouseProtocolException>(async () =>
             await codec.ReadColumnAsync(reader, "c", "Nested(a UInt8, b UInt8)", 2, CodecTestHarness.None));
-    }
-
-    [Test]
-    public void TryDensify_NestedWithOneErgonomicField_DisposesOnlyRebuiltFieldNotBorrowed()
-    {
-        // A Nested whose field 'a' is still ergonomic (a jagged Nullable column) while field 'b' is already dense (a
-        // leaf): TryDensify rebuilds only field 'a' and keeps field 'b' by reference. Disposing the rebuilt wrapper must
-        // free the freshly built field 'a' but leave the borrowed field 'b' alone — it is still owned by the source
-        // column, so disposing it here would double-dispose it.
-        IColumnCodec codec = Resolve("Nested(a Nullable(Int32), b UInt32)");
-        var ergonomicField = Field<int?>("Nullable(Int32)", 1, null, 3);
-        var borrowedField = new DisposeSpyColumn<uint>("c", "UInt32", new uint[] { 9, 8, 7 });
-        var source = Nested("Nested(a Nullable(Int32), b UInt32)", new[] { "a", "b" }, new IColumn[] { ergonomicField, borrowedField }, new[] { 0, 3 });
-
-        IColumn densified = codec.TryDensify(source, out bool built);
-        Assert.That(built, Is.True, "field 'a' was ergonomic, so a rebuild is expected");
-        Assert.That(densified, Is.Not.SameAs(source));
-        densified.Dispose();
-
-        Assert.That(borrowedField.DisposeCount, Is.EqualTo(0), "the borrowed, already-dense field must not be disposed by the rebuilt wrapper");
-
-        ergonomicField.Dispose();
-        borrowedField.Dispose();
     }
 
     [Test]

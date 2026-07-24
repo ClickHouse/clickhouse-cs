@@ -56,9 +56,6 @@ internal sealed class NestedColumnCodec : IColumnCodec
     /// </summary>
     public object NullPlaceholder => Array.Empty<object[]>();
 
-    /// <summary>A nested row is variable-width (its element count and each field's values vary), so it has no fixed byte size.</summary>
-    public int? FixedRowByteSize => null;
-
     /// <summary>Builds a <c>Nested(...)</c> codec, resolving each field's codec through the registry.</summary>
     /// <param name="node">The parsed <c>Nested</c> node; each argument is a named field (<c>name Type</c>).</param>
     /// <param name="context">The resolution context, forwarded to each field codec's factory.</param>
@@ -204,34 +201,6 @@ internal sealed class NestedColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public long MeasureRowBytes(IColumn column, int row)
-    {
-        var nested = AsNested(column);
-        ReadOnlySpan<int> offsets = nested.Offsets;
-        int start = offsets[row];
-        int end = offsets[row + 1];
-
-        long total = sizeof(ulong); // this row's single offset entry
-        for (int f = 0; f < children.Length; f++)
-        {
-            // A fixed-width field prices its slice in O(1); only a variable-width field is walked per element.
-            if (children[f].FixedRowByteSize is int width)
-            {
-                total += (long)(end - start) * width;
-                continue;
-            }
-
-            IColumn field = nested.GetField(f);
-            for (int e = start; e < end; e++)
-            {
-                total += children[f].MeasureRowBytes(field, e);
-            }
-        }
-
-        return total;
-    }
-
-    /// <inheritdoc/>
     public bool CanWrite(IColumn column)
     {
         if (column is not NestedColumn nested || nested.FieldCount != children.Length)
@@ -251,64 +220,57 @@ internal sealed class NestedColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // A Nested column is only ever the dense NestedColumn (there is no ergonomic write form), so TryDensify just
-    // recurses each field codec's own TryDensify over its field column — turning e.g. a Nested with an Array or
-    // Nullable field dense all the way down. The wrapper is rebuilt only when some field densified to a new column;
-    // otherwise the input is returned unchanged (built = false).
-    public IColumn TryDensify(IColumn column, out bool built)
+    // Project each field's flat column and slice once and create each field codec's own write state over it, so a
+    // data-dependent field (Dynamic) sees its real values at prefix time and the projection spans both phases.
+    public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
+
+    /// <inheritdoc/>
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        var nested = AsNested(column);
-        IColumn[] densified = null;
-        bool[] owned = null;
-        for (int f = 0; f < children.Length; f++)
-        {
-            IColumn original = nested.GetField(f);
-            IColumn field = children[f].TryDensify(original, out bool fieldBuilt);
-            if (densified is null && fieldBuilt)
-            {
-                densified = new IColumn[children.Length];
-                owned = new bool[children.Length];
-                for (int j = 0; j < f; j++)
-                {
-                    densified[j] = nested.GetField(j);
-                }
-            }
-
-            if (densified is not null)
-            {
-                densified[f] = field;
-                owned[f] = fieldBuilt;
-            }
-        }
-
-        if (densified is null)
-        {
-            built = false;
-            return column;
-        }
-
-        // The rebuilt wrapper mixes fields: the freshly densified ones are new columns it must dispose, while the
-        // unchanged ones are borrowed by reference and stay owned by the source column. Build it borrowing everything
-        // (ownsFields: false), then restrict disposal to exactly the fields we built — the per-field `owned` flags
-        // come straight from each field's `built` signal — so disposing the wrapper frees the new columns without
-        // double-disposing the borrowed ones.
-        var rebuilt = new NestedColumn(nested.Name, nested.TypeName, fieldNames, densified, nested.Offsets.ToArray(), nested.RowCount, pooledOffsets: false, ownsFields: false);
-        rebuilt.RestrictOwnership(owned);
-        built = true;
-        return rebuilt;
+        using NestedWriteState state = BuildState(column, start, length);
+        WriteStatePrefixCore(writer, state);
     }
 
     /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer)
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        foreach (IColumnCodec child in children)
+        if (state is NestedWriteState nestedState)
         {
-            child.WriteStatePrefix(writer);
+            WriteStatePrefixCore(writer, nestedState);
+            return;
         }
+
+        WriteStatePrefix(writer, column, start, length);
     }
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        using NestedWriteState state = BuildState(column, start, length);
+        WriteBodyCore(writer, column, start, length, state);
+    }
+
+    /// <inheritdoc/>
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+    {
+        if (state is NestedWriteState nestedState)
+        {
+            WriteBodyCore(writer, column, start, length, nestedState);
+            return;
+        }
+
+        WriteColumn(writer, column, start, length);
+    }
+
+    private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, NestedWriteState state)
+    {
+        for (int f = 0; f < children.Length; f++)
+        {
+            children[f].WriteStatePrefix(writer, state.FieldColumns[f], state.ElementBase, state.ElementCount, state.FieldStates[f]);
+        }
+    }
+
+    private void WriteBodyCore(ClickHouseBinaryWriter writer, IColumn column, int start, int length, NestedWriteState state)
     {
         var nested = AsNested(column);
         ReadOnlySpan<int> offsets = nested.Offsets;
@@ -321,11 +283,46 @@ internal sealed class NestedColumnCodec : IColumnCodec
             writer.WriteUInt64((ulong)(offsets[start + i + 1] - elementBase));
         }
 
-        int elementCount = offsets[start + length] - elementBase;
         for (int f = 0; f < children.Length; f++)
         {
-            children[f].WriteColumn(writer, nested.GetField(f), elementBase, elementCount);
+            children[f].WriteColumn(writer, state.FieldColumns[f], state.ElementBase, state.ElementCount, state.FieldStates[f]);
         }
+    }
+
+    // Builds the per-field projection state for a slice: each field's flat column with the slice's element range,
+    // plus each field codec's own write state over it.
+    private NestedWriteState BuildState(IColumn column, int start, int length)
+    {
+        var nested = AsNested(column);
+        ReadOnlySpan<int> offsets = nested.Offsets;
+        int elementBase = offsets[start];
+        int elementCount = offsets[start + length] - elementBase;
+
+        var fieldColumns = new IColumn[children.Length];
+        var fieldStates = new IColumnWriteState[children.Length];
+        int built = 0;
+        try
+        {
+            for (int f = 0; f < children.Length; f++)
+            {
+                fieldColumns[f] = nested.GetField(f);
+                fieldStates[f] = children[f].BeginWrite(fieldColumns[f], elementBase, elementCount);
+                built = f + 1;
+            }
+        }
+        catch
+        {
+            // A later field's BeginWrite throwing must not leak the field states already built (each may hold
+            // rented buffers).
+            for (int f = 0; f < built; f++)
+            {
+                fieldStates[f]?.Dispose();
+            }
+
+            throw;
+        }
+
+        return new NestedWriteState { FieldColumns = fieldColumns, ElementBase = elementBase, ElementCount = elementCount, FieldStates = fieldStates };
     }
 
     // A Nested column has no jagged/row-oriented write form (that would need a per-row record type and reintroduce
@@ -340,5 +337,26 @@ internal sealed class NestedColumnCodec : IColumnCodec
         throw new ArgumentException(
             $"The '{TypeName}' codec writes a NestedColumn with {children.Length} field(s); got '{column?.GetType().Name ?? "null"}'.",
             nameof(column));
+    }
+
+    // The per-field projection of one slice, shared across the prefix and body phases: each field's (borrowed)
+    // flat column, the shared element range, and each field codec's own state.
+    private sealed class NestedWriteState : IColumnWriteState
+    {
+        public IColumn[] FieldColumns;
+        public int ElementBase;
+        public int ElementCount;
+        public IColumnWriteState[] FieldStates;
+
+        public void Dispose()
+        {
+            if (FieldStates is not null)
+            {
+                foreach (IColumnWriteState state in FieldStates)
+                {
+                    state?.Dispose();
+                }
+            }
+        }
     }
 }
