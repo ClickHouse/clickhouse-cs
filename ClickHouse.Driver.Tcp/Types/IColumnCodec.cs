@@ -110,22 +110,6 @@ internal interface IColumnCodec
     IColumnWriteState BeginWrite(IColumn column, int start, int length) => null;
 
     /// <summary>
-    /// Computes any per-operation scratch this codec needs to write rows [<paramref name="start"/>,
-    /// <paramref name="start"/> + <paramref name="length"/>), shared across the following state-prefix and body
-    /// phases so a data-dependent prefix or an element-flattening composite does its discovery/flatten exactly
-    /// once. Default: none — the codec's prefix is absent or a fixed constant, so the phases share nothing.
-    /// When non-null, the returned state is passed to the state-aware
-    /// <see cref="WriteStatePrefix(ClickHouseBinaryWriter, IColumn, int, int, IColumnWriteState)"/> and
-    /// <see cref="WriteColumn(ClickHouseBinaryWriter, IColumn, int, int, IColumnWriteState)"/> overloads, and the
-    /// caller disposes it after the body.
-    /// </summary>
-    /// <param name="column">The column about to be written; must match this codec's element type.</param>
-    /// <param name="start">The zero-based first row the write will cover.</param>
-    /// <param name="length">The number of rows the write will cover.</param>
-    /// <returns>The per-operation write state, or <see langword="null"/> when the codec needs none.</returns>
-    IColumnWriteState BeginWrite(IColumn column, int start, int length) => null;
-
-    /// <summary>
     /// Writes the column's serialization state prefix for rows [<paramref name="start"/>,
     /// <paramref name="start"/> + <paramref name="length"/>), if any. Default: none. The slice is supplied
     /// because a type whose prefix is data-dependent (its bytes derive from the values themselves) must see the
