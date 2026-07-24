@@ -27,9 +27,6 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     public string TypeName => "DateTime";
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => sizeof(uint);
-
-    /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         var values = new DateTime[rowCount];
@@ -70,17 +67,17 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         switch (column)
         {
             case IColumn<DateTime> dateTimes:
-                foreach (DateTime value in dateTimes.Values.Slice(start, length))
+                for (int i = 0; i < length; i++)
                 {
-                    writer.WriteUInt32(ToUnixSeconds(value.ToUniversalTime()));
+                    writer.WriteUInt32(ToUnixSeconds(dateTimes[start + i].ToUniversalTime()));
                 }
 
                 break;
 
             case IColumn<DateTimeOffset> offsets:
-                foreach (DateTimeOffset value in offsets.Values.Slice(start, length))
+                for (int i = 0; i < length; i++)
                 {
-                    writer.WriteUInt32(ToUnixSeconds(value.UtcDateTime));
+                    writer.WriteUInt32(ToUnixSeconds(offsets[start + i].UtcDateTime));
                 }
 
                 break;
