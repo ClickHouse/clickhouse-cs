@@ -272,6 +272,27 @@ public class UriBuilderTests
     }
 
     [Test]
+    public void ToString_WhenCustomSettingCollidesWithMaxExecutionTime_ShouldPreferExplicitMaxExecutionTime()
+    {
+        // The explicit MaxExecutionTime is written last on the deduplication path, so it must win
+        // over a custom setting that happens to use the same key (last-write-wins). Emitted once.
+        var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
+        {
+            CommandQueryStringParameters = new Dictionary<string, object> { { "max_execution_time", 999 } },
+            MaxExecutionTime = TimeSpan.FromSeconds(45),
+        };
+
+        var uri = builder.ToString();
+        var @params = HttpUtility.ParseQueryString(new Uri(uri).Query);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.Get("max_execution_time"), Is.EqualTo("45"));
+            Assert.That(@params.GetValues("max_execution_time"), Has.Length.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void ToString_WithEmptyDatabaseAndSession_ShouldOmitThoseParameters()
     {
         var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
