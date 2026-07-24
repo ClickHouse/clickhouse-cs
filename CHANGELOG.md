@@ -18,6 +18,7 @@ Unreleased
 
 **Bug Fixes:**
 * Fixed `ClickHouseServerException` carrying a blank `Message` and an `ErrorCode` of `-1` when the server — or an upstream component such as a load balancer or the ClickHouse Cloud edge — returned a non-2xx HTTP response with an empty (or whitespace-only) body. The exception now reports the HTTP status code and reason phrase, and uses the `X-ClickHouse-Exception-Code` response header as the error code when the server sets it (issue #440). Non-empty error bodies are unaffected.
+* Fixed `ClickHouseDataReader.GetSchemaTable()` leaving `NumericScale` unset (`DBNull`) for `DateTime64(N)` and `Time64(N)` columns (including their `Nullable(...)` variants). The schema table now reports the fractional-seconds precision `N` in `NumericScale`, matching how `Decimal` columns are already reported (issue #438).
 
 v1.3.0
 ---
