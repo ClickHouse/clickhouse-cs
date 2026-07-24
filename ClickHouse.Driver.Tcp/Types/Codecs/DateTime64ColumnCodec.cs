@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,7 +31,34 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     public string TypeName { get; }
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => sizeof(long);
+    public Type ElementType => typeof(ClickHouseDateTime64);
+
+    /// <inheritdoc/>
+    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(ClickHouseDateTime64), typeof(DateTimeOffset), typeof(DateTime) };
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => new ClickHouseDateTime64(0, scale, TimeSpan.Zero);
+
+    /// <inheritdoc/>
+    public object NullPlaceholderAs(Type writeType)
+    {
+        if (writeType == typeof(ClickHouseDateTime64))
+        {
+            return NullPlaceholder;
+        }
+
+        if (writeType == typeof(DateTimeOffset))
+        {
+            return DateTimeOffset.UnixEpoch;
+        }
+
+        if (writeType == typeof(DateTime))
+        {
+            return DateTime.UnixEpoch;
+        }
+
+        throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+    }
 
     /// <summary>Builds a <c>DateTime64</c> codec from its scale and optional timezone arguments.</summary>
     /// <param name="node">The parsed <c>DateTime64</c> type node.</param>
@@ -67,25 +95,26 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         switch (column)
         {
             case IColumn<ClickHouseDateTime64> native:
-                foreach (ClickHouseDateTime64 value in native.Values.Slice(start, length))
+                for (int i = 0; i < length; i++)
                 {
+                    ClickHouseDateTime64 value = native[start + i];
                     writer.WriteInt64(RescaleCount(value.Count, value.Scale, scale, TypeName));
                 }
 
                 break;
 
             case IColumn<DateTimeOffset> offsets:
-                foreach (DateTimeOffset value in offsets.Values.Slice(start, length))
+                for (int i = 0; i < length; i++)
                 {
-                    writer.WriteInt64(ClickHouseDateTime64.FromDateTimeOffset(value, scale).Count);
+                    writer.WriteInt64(ClickHouseDateTime64.FromDateTimeOffset(offsets[start + i], scale).Count);
                 }
 
                 break;
 
             case IColumn<DateTime> dateTimes:
-                foreach (DateTime value in dateTimes.Values.Slice(start, length))
+                for (int i = 0; i < length; i++)
                 {
-                    writer.WriteInt64(ClickHouseDateTime64.FromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(value, timeZone)), scale).Count);
+                    writer.WriteInt64(ClickHouseDateTime64.FromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(dateTimes[start + i], timeZone)), scale).Count);
                 }
 
                 break;

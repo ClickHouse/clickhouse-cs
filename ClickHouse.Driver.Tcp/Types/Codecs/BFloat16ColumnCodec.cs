@@ -25,7 +25,10 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
     public string TypeName => "BFloat16";
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => sizeof(ushort);
+    public Type ElementType => typeof(float);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => 0f;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -48,10 +51,11 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        foreach (float value in ((IColumn<float>)column).Values.Slice(start, length))
+        var typed = (IColumn<float>)column;
+        for (int i = 0; i < length; i++)
         {
             // Narrow to the top 16 bits of the float32 representation; the low mantissa bits are dropped.
-            writer.WriteUInt16((ushort)(BitConverter.SingleToUInt32Bits(value) >> 16));
+            writer.WriteUInt16((ushort)(BitConverter.SingleToUInt32Bits(typed[start + i]) >> 16));
         }
     }
 }
