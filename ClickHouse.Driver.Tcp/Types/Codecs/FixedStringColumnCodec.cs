@@ -85,14 +85,25 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     public bool CanWrite(IColumn column) => column is IColumn<byte[]>;
 
     /// <inheritdoc/>
-    // Read per element through the indexer so a scattered write-path view (a substitute for a nullable value, a
-    // Tuple field) writes with no materialized copy; a dense FixedStringColumn materializes each row's bytes just
-    // the same.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         // A reusable zero run for the right-padding; the common case (value exactly N bytes) writes none of it.
         Span<byte> zeros = stackalloc byte[64];
         zeros.Clear();
+
+        // A dense FixedStringColumn exposes each row's bytes as a zero-copy slice of its blob, so write straight
+        // from that and skip the per-row byte[] the IColumn<byte[]> indexer would materialize — the hot path when
+        // re-inserting a value read straight back. A scattered write-path view (a nullable substitute, a Tuple
+        // field) has no such slice, so it falls back to reading each row through the indexer.
+        if (column is FixedStringColumn dense)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                WriteRow(writer, dense.GetBytes(start + i), zeros);
+            }
+
+            return;
+        }
 
         var typed = (IColumn<byte[]>)column;
         for (int i = 0; i < length; i++)
@@ -114,7 +125,8 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
         }
     }
 
-    // Emits one row's bytes verbatim, right-padded with zeros to the fixed width.
+    // Emits one row's bytes verbatim, right-padded with zeros to the fixed width; rejects a null row (a
+    // FixedString row is never null — Nullable carries that) before delegating to the span path.
     private void WriteRow(ClickHouseBinaryWriter writer, byte[] value, ReadOnlySpan<byte> zeros)
     {
         if (value is null)
@@ -122,9 +134,15 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
             throw new ArgumentException($"A {TypeName} column cannot hold a null row; wrap the type in Nullable to write nulls.", nameof(value));
         }
 
+        WriteRow(writer, (ReadOnlySpan<byte>)value, zeros);
+    }
+
+    // Emits one row's bytes verbatim, right-padded with zeros to the fixed width.
+    private void WriteRow(ClickHouseBinaryWriter writer, ReadOnlySpan<byte> value, ReadOnlySpan<byte> zeros)
+    {
         if (value.Length > size)
         {
-            throw new ArgumentException($"A {TypeName} value is {value.Length} bytes, longer than the fixed width of {size}.", nameof(value));
+            throw new ArgumentException($"A {TypeName} value is {value.Length} bytes, longer than the fixed width of {size}.", "value");
         }
 
         writer.WriteBytes(value);
