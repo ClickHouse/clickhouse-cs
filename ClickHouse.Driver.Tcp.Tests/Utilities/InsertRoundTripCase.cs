@@ -788,7 +788,7 @@ public sealed class InsertRoundTripCase
         // repeat (and include the inner default) so the dedup and the reserved slot-0 default are both exercised.
         // Like Array/Tuple/Map/Nested, LowCardinality is an exception to the "wrap every type in Nullable" rule —
         // the server rejects Nullable(LowCardinality(T)); nullability composes the other way as
-        // LowCardinality(Nullable(T)), which is a separate (not-yet-supported) feature. A numeric inner is
+        // LowCardinality(Nullable(T)), covered by its own cases further below. A numeric inner is
         // "suspicious" and needs allow_suspicious_low_cardinality_types; String/FixedString are allowed by default.
         yield return Same(
             "LowCardinality(String)",
