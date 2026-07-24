@@ -58,7 +58,10 @@ internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec
     public string TypeName { get; }
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => Unsafe.SizeOf<TMantissa>();
+    public Type ElementType => typeof(TValue);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => default(TValue);
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -83,20 +86,21 @@ internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        ReadOnlySpan<TValue> values = ((IColumn<TValue>)column).Values.Slice(start, length);
-        if (values.Length == 0)
+        if (length == 0)
         {
             return;
         }
 
+        // Read per element through the indexer so a scattered write-path view writes with no materialized copy.
         // Rent the mantissa scratch rather than allocating per call; the rented array may be larger, so only the
         // populated prefix is written.
-        TMantissa[] mantissas = ArrayPool<TMantissa>.Shared.Rent(values.Length);
+        var typed = (IColumn<TValue>)column;
+        TMantissa[] mantissas = ArrayPool<TMantissa>.Shared.Rent(length);
         try
         {
-            for (int i = 0; i < values.Length; i++)
+            for (int i = 0; i < length; i++)
             {
-                TMantissa mantissa = encode(values[i], scale);
+                TMantissa mantissa = encode(typed[start + i], scale);
                 if (mantissa.CompareTo(minMantissa) < 0 || mantissa.CompareTo(maxMantissa) > 0)
                 {
                     throw new OverflowException($"Value at index {i} exceeds the declared precision {precision} of decimal type '{TypeName}'.");
@@ -105,7 +109,7 @@ internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec
                 mantissas[i] = mantissa;
             }
 
-            writer.WriteBytes(MemoryMarshal.AsBytes<TMantissa>(mantissas.AsSpan(0, values.Length)));
+            writer.WriteBytes(MemoryMarshal.AsBytes<TMantissa>(mantissas.AsSpan(0, length)));
         }
         finally
         {

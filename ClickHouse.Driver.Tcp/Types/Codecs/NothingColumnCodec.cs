@@ -26,6 +26,12 @@ internal sealed class NothingColumnCodec : IColumnCodec
     public string TypeName => "Nothing";
 
     /// <inheritdoc/>
+    public Type ElementType => typeof(object);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => throw new NotSupportedException("Values cannot be written to a ClickHouse Nothing column.");
+
+    /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         // One placeholder byte per row must be consumed to keep the stream aligned, even though it carries no

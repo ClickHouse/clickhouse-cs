@@ -25,7 +25,10 @@ internal sealed class UuidColumnCodec : IColumnCodec
     public string TypeName => "UUID";
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => UuidSize;
+    public Type ElementType => typeof(Guid);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => Guid.Empty;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -46,9 +49,10 @@ internal sealed class UuidColumnCodec : IColumnCodec
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         Span<byte> wire = stackalloc byte[UuidSize];
-        foreach (Guid value in ((IColumn<Guid>)column).Values.Slice(start, length))
+        var typed = (IColumn<Guid>)column;
+        for (int i = 0; i < length; i++)
         {
-            ToWire(value, wire);
+            ToWire(typed[start + i], wire);
             writer.WriteBytes(wire);
         }
     }
