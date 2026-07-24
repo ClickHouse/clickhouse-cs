@@ -51,8 +51,8 @@ internal static class DynamicTypeInference
     /// <returns>
     /// The canonical ClickHouse type string and the value coerced to that codec's CLR element type — so the write
     /// path can bucket it as the element type the codec reads back. For most types the value is returned as-is; a
-    /// <see cref="DateTimeOffset"/>/<see cref="DateTime"/> becomes a <see cref="ClickHouseDateTime64"/> and a
-    /// <see cref="decimal"/> a <see cref="ClickHouseDecimal"/>.
+    /// <see cref="DateTimeOffset"/>/<see cref="DateTime"/> becomes a raw <see cref="long"/> nanosecond count
+    /// (<c>DateTime64(9)</c>'s element type) and a <see cref="decimal"/> a <see cref="ClickHouseDecimal"/>.
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is null.</exception>
     /// <exception cref="NotSupportedException">No ClickHouse type is inferred for the value's CLR type.</exception>
@@ -68,16 +68,16 @@ internal static class DynamicTypeInference
         // Types whose ClickHouse mapping depends on the value (scale) or that map to a canonical read-back type
         // wider than the input CLR type. The value is coerced to that codec's element type so it round-trips:
         //  - a decimal maps to Decimal128 (element type ClickHouseDecimal), a ClickHouseDecimal to Decimal256;
-        //  - a DateTimeOffset/DateTime maps to DateTime64 at nanosecond scale (element type ClickHouseDateTime64),
-        //    which is exact for either (both hold at most 100 ns ticks); a ClickHouseDateTime64 keeps its scale.
+        //  - a DateTimeOffset/DateTime maps to DateTime64 at nanosecond scale, coerced to the codec's Int64 count
+        //    element type (exact for either — both hold at most 100 ns ticks). A raw Int64 is Int64, not
+        //    DateTime64: there is no distinct CLR carrier to key on, so date-time semantics require a
+        //    DateTimeOffset/DateTime input.
         switch (value)
         {
-            case ClickHouseDateTime64 dateTime64:
-                return (FormattableString.Invariant($"DateTime64({dateTime64.Scale})"), value);
             case DateTimeOffset dateTimeOffset:
-                return ("DateTime64(9)", ClickHouseDateTime64.FromDateTimeOffset(dateTimeOffset, 9));
+                return ("DateTime64(9)", ToNanosecondCount(dateTimeOffset));
             case DateTime dateTime:
-                return ("DateTime64(9)", ClickHouseDateTime64.FromDateTimeOffset(new DateTimeOffset(dateTime.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dateTime, DateTimeKind.Utc) : dateTime), 9));
+                return ("DateTime64(9)", ToNanosecondCount(new DateTimeOffset(dateTime.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dateTime, DateTimeKind.Utc) : dateTime)));
             case ClickHouseDecimal wideDecimal:
                 return (FormattableString.Invariant($"Decimal(76, {wideDecimal.Scale})"), value);
             case decimal value128:
@@ -118,16 +118,30 @@ internal static class DynamicTypeInference
         }
 
         // Prefer a present element's runtime type (so IPAddress and other value-disambiguated types resolve), and
-        // fall back to the declared element type for an empty (or all-null) array.
+        // fall back to the declared element type for an empty (or all-null) array. Every present element must
+        // infer the same type: the write path buckets the whole array as one element type, so a heterogeneous
+        // array (e.g. IPv4 mixed with IPv6 in an IPAddress[]) would fail the element cast later — reject it here.
+        string inferredElement = null;
         foreach (object element in array)
         {
-            if (element is not null)
+            if (element is null)
             {
-                return $"Array({InferComposable(element)})";
+                continue;
+            }
+
+            string current = InferComposable(element);
+            if (inferredElement is null)
+            {
+                inferredElement = current;
+            }
+            else if (!string.Equals(inferredElement, current, StringComparison.Ordinal))
+            {
+                throw new NotSupportedException(
+                    $"A Dynamic array must have a single element type, but it mixes '{inferredElement}' and '{current}'. Provide an array whose values all map to one ClickHouse type.");
             }
         }
 
-        return $"Array({InferFromClrType(elementType)})";
+        return $"Array({inferredElement ?? InferFromClrType(elementType)})";
     }
 
     private static string InferTuple(ITuple tuple)
@@ -159,7 +173,7 @@ internal static class DynamicTypeInference
         if (canonical.GetType() != element.GetType())
         {
             throw new NotSupportedException(
-                $"A Dynamic composite element of CLR type '{element.GetType()}' would be coerced to '{canonical.GetType()}', which is not supported inside a composite. Use the canonical type directly (e.g. ClickHouseDateTime64 for a date-time, ClickHouseDecimal for a decimal).");
+                $"A Dynamic composite element of CLR type '{element.GetType()}' would be coerced to '{canonical.GetType()}', which is not supported inside a composite. Use the canonical element type directly (e.g. a raw long count for a DateTime64, ClickHouseDecimal for a decimal).");
         }
 
         return typeName;
@@ -168,6 +182,10 @@ internal static class DynamicTypeInference
     // The scale of a System.Decimal — the count of fractional digits, held in bits 16–23 of its flags word.
     private static int ScaleOf(decimal value) => (decimal.GetBits(value)[3] >> 16) & 0xFF;
 
+    // DateTime64's element type is the raw Int64 count; at scale 9 (nanoseconds) that is the .NET tick count
+    // since the epoch times 100 (1 tick = 100 ns), exact for any DateTimeOffset/DateTime (both hold 100 ns ticks).
+    private static long ToNanosecondCount(DateTimeOffset value) => checked((value.UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks) * 100);
+
     // Infers a type from a CLR type alone (no value) — used for the element type of an empty array, where no
     // element is available to disambiguate. Ambiguous types (e.g. IPAddress) cannot be resolved this way.
     private static string InferFromClrType(Type type)
@@ -175,6 +193,22 @@ internal static class DynamicTypeInference
         if (type is not null && Scalars.TryGetValue(type, out string scalar))
         {
             return scalar;
+        }
+
+        // An empty nested composite still resolves structurally from its CLR element type, with no value to
+        // disambiguate — mirroring how a present value of the same shape infers (a KeyValuePair<,>[] as a Map, any
+        // other T[] as Array(T), including byte[] as Array(UInt8)). This is what makes an empty nested array (an
+        // empty Array(Array(UInt64)), say) usable inside Dynamic.
+        if (type is not null && type.IsArray)
+        {
+            Type elementType = type.GetElementType();
+            if (elementType is not null && elementType.IsGenericType && elementType.GetGenericTypeDefinition() == typeof(KeyValuePair<,>))
+            {
+                Type[] pair = elementType.GetGenericArguments();
+                return $"Map({InferFromClrType(pair[0])}, {InferFromClrType(pair[1])})";
+            }
+
+            return $"Array({InferFromClrType(elementType)})";
         }
 
         throw new NotSupportedException(
