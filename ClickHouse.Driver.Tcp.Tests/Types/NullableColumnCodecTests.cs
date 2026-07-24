@@ -157,23 +157,18 @@ public class NullableColumnCodecTests
     {
         // The bare DateTime codec accepts both DateTimeOffset and DateTime; Nullable(DateTime) re-offers both.
         // A DateTime? column (the inner's alternate spelling made nullable) must write, with the null row taking
-        // a DateTime placeholder — not the canonical DateTimeOffset one — and read back as the canonical offset.
+        // a DateTime placeholder, and read back as the canonical raw epoch seconds (uint?).
         IColumnCodec codec = Resolve("Nullable(DateTime('UTC'))");
         var input = new DateTime?[] { DateTime.UnixEpoch.AddSeconds(1_700_000_000), null, DateTime.UnixEpoch };
         var column = new ArrayColumn<DateTime?>("c", "Nullable(DateTime('UTC'))", input);
 
         using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Nullable(DateTime('UTC'))", column.RowCount);
 
-        var expected = new DateTimeOffset?[]
-        {
-            DateTimeOffset.FromUnixTimeSeconds(1_700_000_000),
-            null,
-            DateTimeOffset.FromUnixTimeSeconds(0),
-        };
+        var expected = new uint?[] { 1_700_000_000u, null, 0u };
         Assert.Multiple(() =>
         {
-            Assert.That(codec.ElementType, Is.EqualTo(typeof(DateTimeOffset?)));
-            Assert.That(((IColumn<DateTimeOffset?>)read).Values.ToArray(), Is.EqualTo(expected));
+            Assert.That(codec.ElementType, Is.EqualTo(typeof(uint?)));
+            Assert.That(((IColumn<uint?>)read).Values.ToArray(), Is.EqualTo(expected));
             Assert.That(read.GetValue(1), Is.Null);
         });
     }
@@ -194,11 +189,12 @@ public class NullableColumnCodecTests
     [Test]
     public async Task WriteColumn_NullableDateTime64AsOffsetAndDateTimeSpellings_RoundTripsAsCanonicalNative()
     {
-        // DateTime64's canonical read type is ClickHouseDateTime64, but it accepts DateTimeOffset and DateTime on
+        // DateTime64's canonical read type is the raw Int64 count, but it accepts DateTimeOffset and DateTime on
         // write; Nullable(DateTime64) re-offers all three. Both alternate spellings must round-trip through the
-        // native read type, each with its own-typed placeholder at the null row.
+        // raw read type, with a null placeholder at the null row.
         IColumnCodec codec = Resolve("Nullable(DateTime64(3, 'UTC'))");
         DateTimeOffset present = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123);
+        const long presentCount = 1_700_000_000_123L; // scale 3: milliseconds since the epoch
 
         var asOffset = new ArrayColumn<DateTimeOffset?>("c", "Nullable(DateTime64(3, 'UTC'))", new DateTimeOffset?[] { present, null });
         var asDateTime = new ArrayColumn<DateTime?>("c", "Nullable(DateTime64(3, 'UTC'))", new DateTime?[] { present.UtcDateTime, null });
@@ -208,14 +204,14 @@ public class NullableColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.ElementType, Is.EqualTo(typeof(ClickHouseDateTime64?)));
+            Assert.That(codec.ElementType, Is.EqualTo(typeof(long?)));
 
-            var offsetRead = (IColumn<ClickHouseDateTime64?>)fromOffset;
-            Assert.That(offsetRead[0].Value.ToDateTimeOffset(), Is.EqualTo(present));
+            var offsetRead = (IColumn<long?>)fromOffset;
+            Assert.That(offsetRead[0].Value, Is.EqualTo(presentCount));
             Assert.That(fromOffset.GetValue(1), Is.Null);
 
-            var dateTimeRead = (IColumn<ClickHouseDateTime64?>)fromDateTime;
-            Assert.That(dateTimeRead[0].Value.ToDateTimeOffset(), Is.EqualTo(present));
+            var dateTimeRead = (IColumn<long?>)fromDateTime;
+            Assert.That(dateTimeRead[0].Value, Is.EqualTo(presentCount));
             Assert.That(fromDateTime.GetValue(1), Is.Null);
         });
     }
@@ -227,7 +223,7 @@ public class NullableColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(new ArrayColumn<ClickHouseDateTime64?>("c", "Nullable(DateTime64(3, 'UTC'))", new ClickHouseDateTime64?[] { new ClickHouseDateTime64(0, 3, TimeSpan.Zero) })), Is.True);
+            Assert.That(codec.CanWrite(new ArrayColumn<long?>("c", "Nullable(DateTime64(3, 'UTC'))", new long?[] { 0L })), Is.True);
             Assert.That(codec.CanWrite(new ArrayColumn<DateTimeOffset?>("c", "Nullable(DateTime64(3, 'UTC'))", new DateTimeOffset?[] { DateTimeOffset.UnixEpoch })), Is.True);
             Assert.That(codec.CanWrite(new ArrayColumn<DateTime?>("c", "Nullable(DateTime64(3, 'UTC'))", new DateTime?[] { DateTime.UnixEpoch })), Is.True);
         });
