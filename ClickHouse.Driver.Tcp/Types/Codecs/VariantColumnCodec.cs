@@ -60,10 +60,13 @@ internal sealed class VariantColumnCodec : IColumnCodec
         MethodInfo builderTemplate = typeof(VariantColumnCodec).GetMethod(nameof(BuildFlatColumn), BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException($"Method '{nameof(BuildFlatColumn)}' was not found.");
 
-        // Map each alternative's writable CLR types to its discriminator, so the ergonomic write path can pick a
-        // row's alternative from the runtime type of its value. The canonical element type is registered first;
-        // if two alternatives claim the same CLR type the lower discriminator wins (the server does not allow
-        // duplicate alternative types, so this is only a defensive tie-break).
+        // Map each alternative's canonical element type to its discriminator, so the ergonomic write path can
+        // pick a row's alternative from the runtime type of its value. Only the canonical element type is keyed
+        // here — not a codec's extra convenience write types (e.g. DateTime alongside DateTimeOffset): the
+        // per-alternative bucket is materialized as that exact element type (BuildFlatColumn<ElementType>), so a
+        // convenience-typed value would fail the bucket cast. Rejecting it up front with a clear "no alternative"
+        // error beats a deep InvalidCastException. If two alternatives claimed the same CLR type the lower
+        // discriminator would win (the server forbids duplicate alternative types, so this is only a tie-break).
         discriminatorByClrType = new Dictionary<Type, int>();
         bool writable = true;
         for (int i = 0; i < typeCount; i++)
@@ -73,10 +76,6 @@ internal sealed class VariantColumnCodec : IColumnCodec
                 .CreateDelegate(typeof(Func<string, string, object[], int, IColumn>));
 
             discriminatorByClrType.TryAdd(children[i].ElementType, i);
-            foreach (Type writeType in children[i].WritableElementTypes)
-            {
-                discriminatorByClrType.TryAdd(writeType, i);
-            }
 
             // Probe writability with an empty child column so a Variant over a non-writable alternative (e.g.
             // Nothing) is rejected up front rather than mid-write.
