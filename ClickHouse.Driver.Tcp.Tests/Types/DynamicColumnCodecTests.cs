@@ -71,22 +71,6 @@ public class DynamicColumnCodecTests
     }
 
     [Test]
-    public async Task MeasureRowBytes_DenseColumn_PricesDiscriminatorPlusValue()
-    {
-        IColumnCodec codec = Resolve("Dynamic");
-
-        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
-        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
-        using IColumn dense = await codec.ReadColumnAsync(reader, "d", "Dynamic", 3, CodecTestHarness.None);
-
-        // Two runtime types, so the discriminator is one byte. Row 0 = UInt64 42: 1 + 8. Row 1 = String "hi":
-        // 1 + (1 length varint + 2 bytes). Row 2 = NULL: just the discriminator.
-        Assert.That(codec.MeasureRowBytes(dense, 0), Is.EqualTo(9));
-        Assert.That(codec.MeasureRowBytes(dense, 1), Is.EqualTo(4));
-        Assert.That(codec.MeasureRowBytes(dense, 2), Is.EqualTo(1));
-    }
-
-    [Test]
     public async Task ReadColumn_DocumentedBytes_ReconstructsValuesAndNull()
     {
         IColumnCodec codec = Resolve("Dynamic");

@@ -41,10 +41,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     private string[] prefixTypeNames;
     private IColumnCodec[] prefixChildren;
 
-    // Codecs resolved lazily for MeasureRowBytes (which has no shared write state), cached by type name so a
-    // per-row measure does not re-resolve the same runtime type.
-    private Dictionary<string, IColumnCodec> measureCodecs;
-
     private DynamicColumnCodec(string typeName, ColumnCodecRegistry registry, in ResolveContext context)
     {
         TypeName = typeName;
@@ -238,40 +234,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         }
 
         WriteColumn(writer, column, start, length);
-    }
-
-    /// <inheritdoc/>
-    public long MeasureRowBytes(IColumn column, int row)
-    {
-        if (column is IDynamicColumn dense)
-        {
-            int width = DynamicWire.DiscriminatorWidth(dense.TypeCount);
-            int d = dense.Discriminators[row];
-            if (d == dense.TypeCount)
-            {
-                return width;
-            }
-
-            IColumnCodec child = ResolveForMeasure(dense.TypeNames[d]);
-            return width + child.MeasureRowBytes(dense.GetTypeColumn(d), dense.LocalIndices[row]);
-        }
-
-        object value = column.GetValue(row);
-        if (value is null)
-        {
-            // Approximate the discriminator as one byte; the block's type count (hence the true width) is not
-            // known per row, and a small mis-price only shifts where blocks split, never correctness.
-            return 1;
-        }
-
-        (string typeName, object canonical) = DynamicTypeInference.Infer(value);
-        IColumnCodec valueCodec = ResolveForMeasure(typeName);
-        IColumn probe = FlatBuilderFor(valueCodec.ElementType)(column.Name, valueCodec.TypeName, new[] { canonical }, 1);
-
-        // Densify the one-row probe before measuring it: the inferred value's codec measures only the dense wire
-        // shape, and a composite value (an array, a tuple) arrives here in its ergonomic form. The probe is a
-        // throwaway measured in place, so the freshly built column (if any) is not retained.
-        return 1 + valueCodec.MeasureRowBytes(valueCodec.TryDensify(probe, out _), 0);
     }
 
     // Writes the state prefix from a computed write plan: version, the runtime type list, then each type's own
@@ -495,11 +457,10 @@ internal sealed class DynamicColumnCodec : IColumnCodec
                 {
                     childLength[i] = filled[i];
 
-                    // Densify each per-type bucket before writing it: the resolved codec writes only the dense wire
-                    // shape, and a composite value (array, tuple) arrives in its ergonomic form. The densified column
-                    // is what the body phase writes, so store it (not the ergonomic build) in childColumns.
+                    // Build each per-type bucket's typed column; the child codec's WriteColumn writes it
+                    // ergonomically, so no separate densify step is needed here.
                     IColumn built = FlatBuilderFor(children[i].ElementType)(column.Name, children[i].TypeName, buckets[i], filled[i]);
-                    childColumns[i] = children[i].TryDensify(built, out _);
+                    childColumns[i] = built;
                     childStates[i] = children[i].BeginWrite(childColumns[i], 0, filled[i]);
                     statesBuilt = i + 1;
                 }
@@ -540,18 +501,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
             ArrayPool<string>.Shared.Return(rowTypes, clearArray: true);
             ArrayPool<object>.Shared.Return(rowValues, clearArray: true);
         }
-    }
-
-    private IColumnCodec ResolveForMeasure(string typeName)
-    {
-        measureCodecs ??= new Dictionary<string, IColumnCodec>(StringComparer.Ordinal);
-        if (!measureCodecs.TryGetValue(typeName, out IColumnCodec codec))
-        {
-            codec = registry.Resolve(typeName, in context);
-            measureCodecs[typeName] = codec;
-        }
-
-        return codec;
     }
 
     private static Func<string, string, object[], int, IColumn> FlatBuilderFor(Type elementType)
