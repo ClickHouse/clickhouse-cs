@@ -27,6 +27,10 @@ public class EnumColumnCodecTests
         => Assert.Throws<FormatException>(() => Enum8ColumnCodec.Create(TypeParser.Parse("Enum8('a' = 128)")));
 
     [Test]
+    public void Create_Enum8_NoMembers_Throws()
+        => Assert.Throws<FormatException>(() => Enum8ColumnCodec.Create(TypeParser.Parse("Enum8()")));
+
+    [Test]
     public void Create_MalformedMember_Throws()
         => Assert.Throws<FormatException>(() => Enum8ColumnCodec.Create(TypeParser.Parse("Enum8('a')")));
 
