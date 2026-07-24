@@ -1,4 +1,3 @@
-using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -20,25 +19,6 @@ internal interface IColumnCodec
 {
     /// <summary>The canonical base type name this codec handles (e.g. <c>UInt64</c>, <c>String</c>).</summary>
     string TypeName { get; }
-
-    /// <summary>
-    /// The exact number of value bytes <see cref="WriteColumn"/> emits per row when that size is identical for
-    /// every row (fixed-width types), or null when a row's size varies (e.g. <c>String</c>). The insert
-    /// splitter uses this to price fixed-width columns in O(1) and walk only the variable-width ones per row.
-    /// </summary>
-    int? FixedRowByteSize => null;
-
-    /// <summary>
-    /// The exact number of value bytes <see cref="WriteColumn"/> emits for row <paramref name="row"/> of
-    /// <paramref name="column"/> (state prefix and header excluded). Fixed-width codecs inherit this from
-    /// <see cref="FixedRowByteSize"/>; a variable-width codec overrides it to measure the value.
-    /// </summary>
-    /// <param name="column">The column being measured.</param>
-    /// <param name="row">The zero-based row index.</param>
-    /// <returns>The encoded byte length of that row's value.</returns>
-    long MeasureRowBytes(IColumn column, int row)
-        => FixedRowByteSize ?? throw new NotSupportedException(
-            $"The '{TypeName}' codec has a variable per-row size and must override {nameof(MeasureRowBytes)}.");
 
     /// <summary>Reads the column's serialization state prefix, if any. Default: none.</summary>
     /// <param name="reader">The reader positioned at the prefix.</param>
