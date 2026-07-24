@@ -26,6 +26,10 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 /// </summary>
 internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 {
+    // The setting a query uses to override the session timezone; its value becomes the presentation timezone
+    // for timezone-less DateTime/DateTime64 result columns.
+    private const string SessionTimezoneSetting = "session_timezone";
+
     private readonly Socket socket;
     private readonly Stream stream;
     private readonly ClickHouseBinaryReader reader;
@@ -52,6 +56,22 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
     /// <summary>The current lifecycle state.</summary>
     public TcpConnectionState State => state;
+
+    /// <summary>
+    /// Builds the context passed to the codec registry when reading an operation's blocks, carrying the
+    /// session timezone so a timezone-bearing column whose type string omits an explicit timezone resolves
+    /// against it. A query's <c>session_timezone</c> setting takes precedence over the handshake default. No
+    /// connection state is mutated: the context is a value threaded through the read path for one operation.
+    /// </summary>
+    private ResolveContext ReadContextFor(IReadOnlyDictionary<string, string> settings)
+        => new() { ServerTimezone = SessionTimezoneFrom(settings) ?? server.Timezone };
+
+    // The session_timezone value from a query's settings, or null when the query does not set it (so the
+    // handshake timezone stands). An empty value is treated as unset.
+    private static string SessionTimezoneFrom(IReadOnlyDictionary<string, string> settings)
+        => settings is not null && settings.TryGetValue(SessionTimezoneSetting, out string timezone) && !string.IsNullOrEmpty(timezone)
+            ? timezone
+            : null;
 
     /// <summary>The server identity and protocol details decoded during the handshake.</summary>
     public ServerHandshake Server => server;
@@ -88,6 +108,15 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(handshake);
+
+        // The wire is little-endian and columns are read/written as raw reinterpreted bytes with no byte-swapping,
+        // so refuse a big-endian host up front rather than silently mis-decoding every value. .NET has no
+        // big-endian runtime target today; this is a guard against a future one, checked once per connect.
+        if (!BitConverter.IsLittleEndian)
+        {
+            throw new PlatformNotSupportedException(
+                "The ClickHouse native-protocol client requires a little-endian host: column values are transferred as raw little-endian bytes without byte-swapping.");
+        }
 
         var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         try
@@ -226,6 +255,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
         BeginOperation();
 
+        ResolveContext readContext = ReadContextFor(settings);
         NegotiatedProtocol negotiated = server.Negotiated;
         ClickHouseServerException pending = null;
         Block current = null;
@@ -278,7 +308,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
                 if (packet == ServerPacketType.Data)
                 {
-                    Block block = await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, cancellationToken).ConfigureAwait(false);
+                    Block block = await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, readContext, cancellationToken).ConfigureAwait(false);
                     if (block.RowCount != 0)
                     {
                         // Held as the current block so it is released when the consumer advances or stops.
@@ -294,7 +324,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 {
                     // Everything else is interleaved metadata: consumed to stay stream-aligned, surfaced to the
                     // handlers when set. An unexpected packet throws from here.
-                    await ConsumeMetadataAsync(packet, negotiated, handlers, cancellationToken).ConfigureAwait(false);
+                    await ConsumeMetadataAsync(packet, negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -391,8 +421,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             BlockWriter.WriteEmptyBlock(writer);
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
 
-            // Drain metadata until the schema block (the first Data packet) or a terminal packet.
-            (Block schema, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, handlers, cancellationToken).ConfigureAwait(false);
+            // Drain metadata until the schema block (the first Data packet) or a terminal packet. An insert
+            // reads only the zero-row schema and acknowledgement blocks, so no display timezone is needed.
+            (Block schema, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, ResolveContext.ForWrite, handlers, cancellationToken).ConfigureAwait(false);
             if (schema is null)
             {
                 if (error is null)
@@ -423,7 +454,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 await StreamInsertRowsAsync(plan, rowCount, maxRowsPerBlock, negotiated, cancellationToken).ConfigureAwait(false);
 
                 // Rethrow any server error once the state is back to Ready.
-                pending = await DrainToEndOfStreamAsync(negotiated, handlers, cancellationToken).ConfigureAwait(false);
+                pending = await DrainToEndOfStreamAsync(negotiated, ResolveContext.ForWrite, handlers, cancellationToken).ConfigureAwait(false);
                 completed = true;
             }
         }
@@ -535,17 +566,19 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// the stream is left at a packet boundary, so the connection stays usable.
     /// </summary>
     /// <param name="negotiated">The negotiated protocol.</param>
+    /// <param name="context">The codec-resolution context (timezone) for decoding blocks.</param>
     /// <param name="handlers">Optional metadata callbacks for the interleaved packets, or null to discard them.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The parked server exception, or null if the stream ended cleanly.</returns>
     private async ValueTask<ClickHouseServerException> DrainToEndOfStreamAsync(
         NegotiatedProtocol negotiated,
+        ResolveContext context,
         MetadataHandlers handlers,
         CancellationToken cancellationToken)
     {
         while (true)
         {
-            (Block block, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, handlers, cancellationToken).ConfigureAwait(false);
+            (Block block, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, context, handlers, cancellationToken).ConfigureAwait(false);
             if (block is null)
             {
                 return error;
@@ -624,14 +657,15 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
 
         // Names line up one-to-one; resolve each target type to its codec (the target type, not the caller's) and
-        // confirm the value column is writable as it.
+        // confirm the value column is writable as it. Writing a value uses its own instant, so no server timezone
+        // is needed to resolve the codec.
         for (int i = 0; i < plan.Length; i++)
         {
             InsertColumn slot = plan[i];
             IColumnCodec codec;
             try
             {
-                codec = ColumnCodecRegistry.Default.Resolve(slot.TypeName);
+                codec = ColumnCodecRegistry.Default.Resolve(slot.TypeName, ResolveContext.ForWrite);
             }
             catch (Exception ex) when (ex is NotSupportedException or FormatException)
             {
@@ -690,10 +724,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     private static async ValueTask ReadMetadataBlockAsync(
         ClickHouseBinaryReader reader,
         NegotiatedProtocol negotiated,
+        ResolveContext context,
         Action<Block> handler,
         CancellationToken cancellationToken)
     {
-        Block block = await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, cancellationToken).ConfigureAwait(false);
+        Block block = await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, context, cancellationToken).ConfigureAwait(false);
         try
         {
             handler?.Invoke(block);
@@ -799,11 +834,13 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// terminates the connection.
     /// </summary>
     /// <param name="negotiated">The negotiated protocol, for version-gated fields.</param>
+    /// <param name="context">The codec-resolution context (timezone) for decoding blocks.</param>
     /// <param name="handlers">Optional metadata callbacks for the interleaved packets, or null to discard them.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The next Data block, or a null block plus the parked terminal exception (if any).</returns>
     private async ValueTask<(Block block, ClickHouseServerException error)> ReadToNextDataBlockAsync(
         NegotiatedProtocol negotiated,
+        ResolveContext context,
         MetadataHandlers handlers,
         CancellationToken cancellationToken)
     {
@@ -819,10 +856,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     return (null, await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false));
 
                 case ServerPacketType.Data:
-                    return (await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, cancellationToken).ConfigureAwait(false), null);
+                    return (await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, context, cancellationToken).ConfigureAwait(false), null);
 
                 default:
-                    await ConsumeMetadataAsync(packet, negotiated, handlers, cancellationToken).ConfigureAwait(false);
+                    await ConsumeMetadataAsync(packet, negotiated, context, handlers, cancellationToken).ConfigureAwait(false);
                     break;
             }
         }
@@ -835,12 +872,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// </summary>
     /// <param name="packet">The packet type just read (never Data, Exception, or EndOfStream).</param>
     /// <param name="negotiated">The negotiated protocol, for version-gated fields.</param>
+    /// <param name="context">The codec-resolution context (timezone) for decoding block-bearing packets.</param>
     /// <param name="handlers">Optional metadata callbacks, or null to discard every packet.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <exception cref="ClickHouseProtocolException"><paramref name="packet"/> is not a valid interleaved packet.</exception>
     private async ValueTask ConsumeMetadataAsync(
         ServerPacketType packet,
         NegotiatedProtocol negotiated,
+        ResolveContext context,
         MetadataHandlers handlers,
         CancellationToken cancellationToken)
     {
@@ -848,19 +887,19 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         {
             // Block-bearing packets lend the borrowed block to the handler for the call, then release it.
             case ServerPacketType.Totals:
-                await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnTotals, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(reader, negotiated, context, handlers?.OnTotals, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.Extremes:
-                await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnExtremes, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(reader, negotiated, context, handlers?.OnExtremes, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.ProfileEvents:
-                await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnProfileEvents, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(reader, negotiated, context, handlers?.OnProfileEvents, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.Log:
-                await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnLog, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(reader, negotiated, context, handlers?.OnLog, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.Progress:
