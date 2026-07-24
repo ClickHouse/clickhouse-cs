@@ -320,10 +320,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// The default cap on the rows per wire block (1,000,000), applied alongside the byte target
-    /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>) so a block closes at whichever it reaches first.
-    /// The byte target is the primary, width-invariant bound; this row cap keeps very narrow rows from producing
-    /// an unbounded row count in a single block.
+    /// The default cap on the rows per wire block (1,000,000). Block geometry is bounded by row count alone, so
+    /// this cap is what splits a large insert into bounded blocks. Peak buffered bytes while a block is written
+    /// are bounded separately by the between-column flush backstop
+    /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>), which flushes mid-block rather than closing it.
     /// </summary>
     public const int DefaultMaxRowsPerBlock = 1_000_000;
 
@@ -337,17 +337,18 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// filling the rest from their defaults. Values are serialized as the target's resolved type, not the type
     /// the column declares. Zero rows is a no-op INSERT. A mismatch (wrong names, or a CLR type the target
     /// cannot accept) writes nothing and leaves the connection usable before throwing. Large inserts are split
-    /// into wire blocks sized to an internal byte target, additionally capped at <paramref name="maxRowsPerBlock"/>
-    /// rows per block when set (a block closes at whichever limit it reaches first).
+    /// into wire blocks of at most <paramref name="maxRowsPerBlock"/> rows each — row count is the only bound on
+    /// block geometry — or written as a single block when the cap is null.
     /// </remarks>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="columns">The row data, matched to the target columns by name.</param>
     /// <param name="settings">Per-query settings as textual values, or null for none.</param>
     /// <param name="parameters">Query parameter values in SQL representation, or null for none.</param>
     /// <param name="queryId">The query id, or null to let the server assign one.</param>
-    /// <param name="maxRowsPerBlock">A cap on the rows per wire block, applied alongside the internal byte target
-    /// (a block closes at whichever it reaches first). Defaults to <see cref="DefaultMaxRowsPerBlock"/>; pass null
-    /// for no row cap (byte target only).</param>
+    /// <param name="maxRowsPerBlock">A cap on the rows per wire block — the only bound on block geometry.
+    /// Defaults to <see cref="DefaultMaxRowsPerBlock"/>; pass null to write the whole insert as a single block.
+    /// Peak buffered bytes are bounded separately by the between-column flush backstop
+    /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>).</param>
     /// <param name="handlers">Optional callbacks for the metadata the server interleaves into the insert
     /// acknowledgement (notably <see cref="MetadataHandlers.OnProgress"/> for rows written and
     /// <see cref="MetadataHandlers.OnProfileEvents"/>), or null to discard it.</param>
