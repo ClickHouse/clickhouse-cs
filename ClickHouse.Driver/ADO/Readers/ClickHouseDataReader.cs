@@ -111,6 +111,37 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     internal ClickHouseType GetClickHouseType(int ordinal) => RawTypes[ordinal];
 
+    /// <summary>
+    /// Attempts to read the underlying integer ordinal of an <c>Enum8</c>/<c>Enum16</c> (or
+    /// <c>Nullable(Enum...)</c>) column for the current row. Enum columns materialize as their
+    /// string label, so the standard numeric accessors (<c>GetInt32</c>, <c>GetByte</c>, …) throw
+    /// <see cref="InvalidCastException"/> on them, matching ADO.NET's behavior for a string-backed
+    /// column; use this method to obtain the underlying wire ordinal instead.
+    /// </summary>
+    /// <param name="ordinal">The zero-based column ordinal.</param>
+    /// <param name="value">
+    /// When this method returns <see langword="true"/>, the underlying integer ordinal that arrived
+    /// on the wire; otherwise <c>0</c>. The ordinal is the raw wire value and is independent of any
+    /// configured read value converter (which transforms the string label, not the ordinal).
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> if the column is an <c>Enum8</c>/<c>Enum16</c> type and the current
+    /// value is a known label; otherwise <see langword="false"/> (a non-enum column, a
+    /// <see cref="DBNull"/> value, or a value that is not a known enum label).
+    /// </returns>
+    public bool TryGetEnumOrdinal(int ordinal, out int value)
+    {
+        if (CurrentRow[ordinal] is string label &&
+            GetEffectiveClickHouseType(ordinal) is EnumType enumType &&
+            enumType.TryLookup(label, out value))
+        {
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
     public override object this[int ordinal] => GetValue(ordinal);
 
     public override object this[string name] => this[GetOrdinal(name)];
