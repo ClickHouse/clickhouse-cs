@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -26,7 +25,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// On the write path the column is always the dense <c>TupleColumn</c> (whose child columns already exist),
 /// serialized straight from those children with no copy. A flat column of <c>ValueTuple</c> values — the buffer
 /// an <c>Array(Tuple(...))</c> flattens into, or one a caller builds directly — is un-transposed into the
-/// per-child columns by <see cref="TryDensify"/> before the write.
+/// per-child columns before the write.
 /// </para>
 /// </summary>
 internal sealed class TupleColumnCodec : IColumnCodec
@@ -63,15 +62,8 @@ internal sealed class TupleColumnCodec : IColumnCodec
     private readonly string[] fieldNames;
     private readonly ConstructorInfo columnConstructor;
     private readonly Type icolumnOfTupleType;
-    private readonly Func<string, string, object[], int, IColumn>[] childFlatBuilders;
+    private readonly Func<string, IColumn, int, IColumn>[] childProjectionBuilders;
     private readonly bool allChildrenWritable;
-    private readonly int? fixedRowByteSize;
-
-    // The per-row byte size splits into a constant part — the fixed-width children, summed once — and the
-    // variable-width children, which are the only ones that must be measured per row. Used when the tuple as a
-    // whole is variable-width (at least one variable child); an all-fixed tuple takes the FixedRowByteSize path.
-    private readonly long fixedChildrenByteTotal;
-    private readonly int[] variableChildIndices;
 
     private TupleColumnCodec(string typeName, IColumnCodec[] children, string[] fieldNames)
     {
@@ -104,45 +96,33 @@ internal sealed class TupleColumnCodec : IColumnCodec
             modifiers: null)
             ?? throw new InvalidOperationException($"The tuple column type '{columnType}' is missing its expected constructor.");
 
-        // One cached delegate per element for the "flat" write path (where the source is a single column of
-        // whole ValueTuple rows, not N per-element columns as in the dense path.)
-        // Writing it means un-transposing: gather each element position's values (pulled out of the
-        // tuples boxed) into a temporary per-element column the child codec can serialize. Each delegate is
-        // BuildFlatColumn<T> closed over the child's element type, signature
-        // (columnName, typeName, boxed values, count) -> IColumn. Closing the generics once here keeps that write
-        // path reflection-free.
-        childFlatBuilders = new Func<string, string, object[], int, IColumn>[arity];
-        MethodInfo builderTemplate = typeof(TupleColumnCodec).GetMethod(nameof(BuildFlatColumn), BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException($"Method '{nameof(BuildFlatColumn)}' was not found.");
+        // One cached delegate per element for the ergonomic write path: a lazy projection view over the flat
+        // ValueTuple column that surfaces one element position, so the child codec writes strided through the tuples
+        // with no per-child buffer materialized. BuildProjection<T> closed over the child's element type once.
+        childProjectionBuilders = new Func<string, IColumn, int, IColumn>[arity];
+        MethodInfo projectionTemplate = typeof(TupleColumnCodec).GetMethod(nameof(BuildProjection), BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException($"Method '{nameof(BuildProjection)}' was not found.");
+
+        // Closed once per element type to build an empty child column for the up-front writability probe below.
+        MethodInfo emptyTemplate = typeof(TupleColumnCodec).GetMethod(nameof(BuildEmptyColumn), BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException($"Method '{nameof(BuildEmptyColumn)}' was not found.");
 
         bool writable = true;
-        int fixedTotal = 0;
-        var variableIndices = new List<int>();
         for (int i = 0; i < arity; i++)
         {
-            childFlatBuilders[i] = (Func<string, string, object[], int, IColumn>)builderTemplate
+            childProjectionBuilders[i] = (Func<string, IColumn, int, IColumn>)projectionTemplate
                 .MakeGenericMethod(elementTypes[i])
-                .CreateDelegate(typeof(Func<string, string, object[], int, IColumn>));
+                .CreateDelegate(typeof(Func<string, IColumn, int, IColumn>));
 
             // Probe writability with an empty child column so a Tuple over a non-writable element (e.g. Nothing)
             // is rejected up front rather than mid-write.
-            IColumn probe = childFlatBuilders[i](string.Empty, children[i].TypeName, Array.Empty<object>(), 0);
-            writable &= children[i].CanWrite(probe);
-
-            if (children[i].FixedRowByteSize is int width)
-            {
-                fixedTotal += width;
-            }
-            else
-            {
-                variableIndices.Add(i);
-            }
+            var emptyBuilder = (Func<string, IColumn>)emptyTemplate
+                .MakeGenericMethod(elementTypes[i])
+                .CreateDelegate(typeof(Func<string, IColumn>));
+            writable &= children[i].CanWrite(emptyBuilder(children[i].TypeName));
         }
 
         allChildrenWritable = writable;
-        fixedChildrenByteTotal = fixedTotal;
-        variableChildIndices = variableIndices.ToArray();
-        fixedRowByteSize = variableIndices.Count == 0 ? fixedTotal : null;
     }
 
     /// <inheritdoc/>
@@ -153,9 +133,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public object NullPlaceholder { get; }
-
-    /// <inheritdoc/>
-    public int? FixedRowByteSize => fixedRowByteSize;
 
     /// <summary>Builds a <c>Tuple(...)</c> codec, resolving each element's codec through the registry.</summary>
     /// <param name="node">The parsed <c>Tuple</c> node; its arguments are the element types (each optionally name-prefixed).</param>
@@ -230,139 +207,155 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public long MeasureRowBytes(IColumn column, int row)
-    {
-        if (fixedRowByteSize is int width)
-        {
-            return width;
-        }
-
-        // The column is always the dense TupleColumn (the pipeline densifies first). The fixed-width children
-        // contribute the same bytes every row, so only the variable-width ones are measured per row.
-        var dense = (ITupleColumn)column;
-        long total = fixedChildrenByteTotal;
-        foreach (int i in variableChildIndices)
-        {
-            total += children[i].MeasureRowBytes(dense.Children[i], row);
-        }
-
-        return total;
-    }
-
-    /// <inheritdoc/>
     public bool CanWrite(IColumn column) => allChildrenWritable && icolumnOfTupleType.IsInstanceOfType(column);
 
     /// <inheritdoc/>
-    // Produces the dense TupleColumn (one child column per element) so a later measure/write drives the children
-    // directly with no per-row projection. A flat column of ValueTuple values is un-transposed once: each element
-    // position is gathered into a per-child column (boxing each value, as the ergonomic write path does), and each
-    // child is itself densified so a nested composite element (e.g. Tuple(Array(T)) / Tuple(Nullable(T))) becomes
-    // dense too. An already-dense tuple recurses into its children and is returned unchanged (built = false) when
-    // they are all already dense.
-    public IColumn TryDensify(IColumn column, out bool built)
-    {
-        int rowCount = column.RowCount;
-
-        if (column is ITupleColumn tuple && tuple.Children.Count == children.Length)
-        {
-            IColumn[] densified = null;
-            bool[] owned = null;
-            for (int i = 0; i < children.Length; i++)
-            {
-                IColumn original = tuple.Children[i];
-                IColumn child = children[i].TryDensify(original, out bool childBuilt);
-                if (densified is null && childBuilt)
-                {
-                    densified = new IColumn[children.Length];
-                    owned = new bool[children.Length];
-                    for (int j = 0; j < i; j++)
-                    {
-                        densified[j] = tuple.Children[j];
-                    }
-                }
-
-                if (densified is not null)
-                {
-                    densified[i] = child;
-                    owned[i] = childBuilt;
-                }
-            }
-
-            if (densified is null)
-            {
-                built = false;
-                return column;
-            }
-
-            // The rebuilt wrapper mixes children: the freshly densified ones are new columns this wrapper must
-            // dispose, while the unchanged ones are borrowed by reference and stay owned by the source column. Build
-            // it borrowing everything (ownsChildren: false), then restrict disposal to exactly the columns we built
-            // — the per-child `owned` flags come straight from each child's `built` signal, so disposing the wrapper
-            // frees the new children without double-disposing the borrowed ones.
-            var rebuilt = (TupleColumnBase)columnConstructor.Invoke(new object[] { column.Name, column.TypeName, densified, fieldNames, rowCount, false });
-            rebuilt.RestrictOwnership(owned);
-            built = true;
-            return rebuilt;
-        }
-
-        var childBoxed = new object[children.Length][];
-        for (int i = 0; i < children.Length; i++)
-        {
-            childBoxed[i] = new object[rowCount];
-        }
-
-        for (int r = 0; r < rowCount; r++)
-        {
-            var tupleValue = (ITuple)column.GetValue(r);
-            for (int i = 0; i < children.Length; i++)
-            {
-                childBoxed[i][r] = tupleValue[i];
-            }
-        }
-
-        var childColumns = new IColumn[children.Length];
-        for (int i = 0; i < children.Length; i++)
-        {
-            IColumn flat = childFlatBuilders[i](column.Name, children[i].TypeName, childBoxed[i], rowCount);
-            childColumns[i] = children[i].TryDensify(flat, out _);
-        }
-
-        built = true;
-        return (IColumn)columnConstructor.Invoke(new object[] { column.Name, column.TypeName, childColumns, fieldNames, rowCount, true });
-    }
+    // Project each element position into its own child column once (dense children as-is, a flat tuple column
+    // distributed into per-child buffers), and create each child's own write state over it, so a data-dependent
+    // child (Dynamic) sees its real values at prefix time and the projection is not repeated between phases.
+    public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
 
     /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer)
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
+        if (IsTupleColumn(column))
+        {
+            using TupleWriteState state = BuildState(column, start, length);
+            WriteStatePrefixCore(writer, state);
+            return;
+        }
+
+        // An outer composite forwarded its own column (its children's prefixes are written from its own slice);
+        // the children ignore it, preserving the prior contract for a Tuple nested in Variant/Map/Nested.
         foreach (IColumnCodec child in children)
         {
-            child.WriteStatePrefix(writer);
+            child.WriteStatePrefix(writer, column, start, length);
         }
     }
 
     /// <inheritdoc/>
-    // Every column is densified before the write, so it is always the dense TupleColumn: each child column already
-    // exists, so serialize each with its own codec, no copy. The flat ValueTuple form was un-transposed into the
-    // per-child columns by TryDensify.
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+    {
+        if (state is TupleWriteState tupleState)
+        {
+            WriteStatePrefixCore(writer, tupleState);
+            return;
+        }
+
+        WriteStatePrefix(writer, column, start, length);
+    }
+
+    /// <inheritdoc/>
+    // Every column is densified before the write, so it is always the dense TupleColumn; each child is written
+    // through its own codec and pre-built state, no copy. The flat ValueTuple form was un-transposed into the
+    // per-child columns before the write.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        var dense = (ITupleColumn)column;
+        using TupleWriteState state = BuildState(column, start, length);
+        WriteBodyCore(writer, state);
+    }
+
+    /// <inheritdoc/>
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+    {
+        if (state is TupleWriteState tupleState)
+        {
+            WriteBodyCore(writer, tupleState);
+            return;
+        }
+
+        WriteColumn(writer, column, start, length);
+    }
+
+    private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, TupleWriteState state)
+    {
         for (int i = 0; i < children.Length; i++)
         {
-            children[i].WriteColumn(writer, dense.Children[i], start, length);
+            children[i].WriteStatePrefix(writer, state.ChildColumns[i], state.ChildStart, state.Length, state.ChildStates[i]);
         }
     }
 
-    // Builds a flat typed column from boxed element values — the per-child projection TryDensify uses to un-transpose
-    // a flat ValueTuple column (reached through the cached childFlatBuilders delegates).
-    private static IColumn BuildFlatColumn<T>(string name, string typeName, object[] boxed, int count)
+    private void WriteBodyCore(ClickHouseBinaryWriter writer, TupleWriteState state)
     {
-        var values = new T[count];
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < children.Length; i++)
         {
-            values[i] = (T)boxed[i];
+            children[i].WriteColumn(writer, state.ChildColumns[i], state.ChildStart, state.Length, state.ChildStates[i]);
+        }
+    }
+
+    private bool IsTupleColumn(IColumn column)
+        => (column is ITupleColumn dense && dense.Children.Count == children.Length) || icolumnOfTupleType.IsInstanceOfType(column);
+
+    // Builds the per-element write state for a slice. A dense tuple column exposes each child column directly; an
+    // ergonomic flat ValueTuple column is projected into one lazy per-element view per child (strided through the
+    // tuples, no per-child buffer materialized). Each child's own BeginWrite runs over its column so a data-
+    // dependent child (Dynamic) sees its real values at prefix time.
+    private TupleWriteState BuildState(IColumn column, int start, int length)
+    {
+        int arity = children.Length;
+        var childColumns = new IColumn[arity];
+        var childStates = new IColumnWriteState[arity];
+        ITupleColumn dense = column is ITupleColumn tuple && tuple.Children.Count == arity ? tuple : null;
+
+        int built = 0;
+        try
+        {
+            for (int i = 0; i < arity; i++)
+            {
+                childColumns[i] = dense is not null
+                    ? dense.Children[i]
+                    : childProjectionBuilders[i](children[i].TypeName, column, i);
+                childStates[i] = children[i].BeginWrite(childColumns[i], start, length);
+                built = i + 1;
+            }
+        }
+        catch
+        {
+            // A later child's BeginWrite throwing must not leak the states already built (each may hold rented buffers).
+            DisposeStates(childStates, built);
+            throw;
         }
 
-        return new ArrayColumn<T>(name, typeName, values);
+        return new TupleWriteState { ChildColumns = childColumns, ChildStart = start, Length = length, ChildStates = childStates };
+    }
+
+    // Disposes the first count child write states after a mid-construction failure, so their pooled buffers are
+    // returned rather than leaked.
+    private static void DisposeStates(IColumnWriteState[] states, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            states[i]?.Dispose();
+        }
+    }
+
+    // Builds an empty typed column for the constructor's up-front child writability probe.
+    private static IColumn BuildEmptyColumn<T>(string typeName)
+        => new ArrayColumn<T>(string.Empty, typeName, Array.Empty<T>());
+
+    // Builds the lazy per-element projection view the ergonomic write path hands each child codec (reached through
+    // the cached childProjectionBuilders delegates).
+    private static IColumn BuildProjection<T>(string typeName, IColumn source, int fieldIndex)
+        => new TupleFieldColumn<T>(typeName, source, fieldIndex);
+
+    // The per-element write state of one slice, shared across the prefix and body phases: each element's dense
+    // child column plus the child codec's own state.
+    private sealed class TupleWriteState : IColumnWriteState
+    {
+        public IColumn[] ChildColumns;
+        public int ChildStart;
+        public int Length;
+        public IColumnWriteState[] ChildStates;
+
+        public void Dispose()
+        {
+            if (ChildStates is not null)
+            {
+                foreach (IColumnWriteState state in ChildStates)
+                {
+                    state?.Dispose();
+                }
+            }
+        }
     }
 }

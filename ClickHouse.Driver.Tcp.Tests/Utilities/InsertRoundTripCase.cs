@@ -382,15 +382,14 @@ public sealed class InsertRoundTripCase
                 (127, 32767),
             }));
 
-        // DateTime reads back a DateTimeOffset and DateTime64 a ClickHouseDateTime64; equality is by instant, so
-        // insert-as-UTC matches whatever offset the server presents on read.
+        // DateTime reads back the raw uint epoch seconds and DateTime64 the raw long count at the column scale.
         yield return Same(
             "Tuple(Date, Date32, DateTime, DateTime64(3), UUID)",
             "Tuple(Date, Date32, DateTime, DateTime64(3), UUID)",
-            name => new TupleColumn<DateOnly, DateOnly, DateTimeOffset, ClickHouseDateTime64, Guid>(name, "Tuple(Date, Date32, DateTime, DateTime64(3), UUID)", new (DateOnly, DateOnly, DateTimeOffset, ClickHouseDateTime64, Guid)[]
+            name => new TupleColumn<DateOnly, DateOnly, uint, long, Guid>(name, "Tuple(Date, Date32, DateTime, DateTime64(3), UUID)", new (DateOnly, DateOnly, uint, long, Guid)[]
             {
-                (new DateOnly(1970, 1, 1), new DateOnly(1900, 1, 1), DateTimeOffset.UnixEpoch, new ClickHouseDateTime64(0L, 3, TimeSpan.Zero), Guid.Empty),
-                (new DateOnly(2149, 6, 6), new DateOnly(2299, 12, 31), new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero), new ClickHouseDateTime64(1_700_000_000_123L, 3, TimeSpan.Zero), new Guid("00112233-4455-6677-8899-aabbccddeeff")),
+                (new DateOnly(1970, 1, 1), new DateOnly(1900, 1, 1), 0u, 0L, Guid.Empty),
+                (new DateOnly(2149, 6, 6), new DateOnly(2299, 12, 31), (uint)new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero).ToUnixTimeSeconds(), 1_700_000_000_123L, new Guid("00112233-4455-6677-8899-aabbccddeeff")),
             }));
 
         yield return Same(
@@ -427,10 +426,10 @@ public sealed class InsertRoundTripCase
         yield return Same(
             "Tuple(Time, Time64(3))",
             "Tuple(Time, Time64(3))",
-            name => new TupleColumn<TimeSpan, TimeSpan>(name, "Tuple(Time, Time64(3))", new (TimeSpan, TimeSpan)[]
+            name => new TupleColumn<int, long>(name, "Tuple(Time, Time64(3))", new (int, long)[]
             {
-                (TimeSpan.Zero, TimeSpan.Zero),
-                (new TimeSpan(12, 34, 56), new TimeSpan(0, 1, 2, 3, 456)),
+                (0, 0L),
+                ((12 * 3600) + (34 * 60) + 56, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456),
             }),
             TimeSettings);
 
