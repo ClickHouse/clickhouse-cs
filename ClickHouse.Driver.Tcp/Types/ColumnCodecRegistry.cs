@@ -139,6 +139,11 @@ internal sealed class ColumnCodecRegistry
         // and value codecs are resolved recursively; each row surfaces as a KeyValuePair<K, V>[].
         AddFactory("Map", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => MapColumnCodec.Create(node, context, registry));
 
+        // LowCardinality(T) replaces the inner values with a block-local dictionary plus indices; the inner codec
+        // is resolved recursively. Its serialization-state prefix is a fixed version marker; the dictionary and
+        // keys live in the column body.
+        AddFactory("LowCardinality", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => LowCardinalityColumnCodec.Create(node, context, registry));
+
         // Nested(...) as a single wire column (flatten_nested = 0) is byte-identical to Array(Tuple(...)): the same
         // offsets stream plus each field's flattened stream, differing only in the type string, which keeps the
         // field names. It has a dedicated arity-agnostic codec (not Array(Tuple) reuse) surfacing a columnar

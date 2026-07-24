@@ -505,6 +505,63 @@ public sealed class InsertRoundTripCase
                     ownsFields: false);
             },
             NestedSettings);
+
+        // LowCardinality(T): the inner values are replaced by a block-local dictionary plus per-row keys. Values
+        // repeat (and include the inner default) so the dedup and the reserved slot-0 default are both exercised.
+        // Like Array/Tuple/Map/Nested, LowCardinality is an exception to the "wrap every type in Nullable" rule —
+        // the server rejects Nullable(LowCardinality(T)); nullability composes the other way as
+        // LowCardinality(Nullable(T)), which is a separate (not-yet-supported) feature. A numeric inner is
+        // "suspicious" and needs allow_suspicious_low_cardinality_types; String/FixedString are allowed by default.
+        yield return Same(
+            "LowCardinality(String)",
+            "LowCardinality(String)",
+            name => new ArrayColumn<string>(name, "LowCardinality(String)", new[] { "a", "b", "a", "c", "b", string.Empty }));
+
+        yield return Same(
+            "LowCardinality(UInt32)",
+            "LowCardinality(UInt32)",
+            name => PrimitiveColumn<uint>.FromValues(name, "LowCardinality(UInt32)", new uint[] { 7, 7, 42, 7, 42, 0 }),
+            LowCardinalitySettings);
+
+        yield return Same(
+            "LowCardinality(FixedString(4))",
+            "LowCardinality(FixedString(4))",
+            name => new ArrayColumn<byte[]>(name, "LowCardinality(FixedString(4))", new[]
+            {
+                new byte[] { 1, 2, 3, 4 },
+                new byte[] { 1, 2, 3, 4 },
+                new byte[] { 0xFF, 0, 0xFF, 0 },
+            }));
+
+        // Array(LowCardinality(String)) flattens its jagged rows into one values stream handed to the
+        // low-cardinality codec; empty rows and repeated values ride along.
+        yield return Arrays("LowCardinality(String)", new[] { "a", "b" }, Array.Empty<string>(), new[] { "a", "a", "c" });
+
+        // LowCardinality(Nullable(T)): nullability is expressed by a reserved dictionary slot (key 0 = NULL), not a
+        // null-map — the dictionary is still bare T. This is the nullable coverage for LowCardinality (the server
+        // rejects Nullable(LowCardinality(T))). A present value equal to the inner default (empty string, 0) rides
+        // alongside NULL to prove the two are distinct on the wire.
+        yield return Same(
+            "LowCardinality(Nullable(String))",
+            "LowCardinality(Nullable(String))",
+            name => new ArrayColumn<string>(name, "LowCardinality(Nullable(String))", new[] { "a", null, string.Empty, "b", "a", null }));
+
+        yield return Same(
+            "LowCardinality(Nullable(UInt32))",
+            "LowCardinality(Nullable(UInt32))",
+            name => new ArrayColumn<uint?>(name, "LowCardinality(Nullable(UInt32))", new uint?[] { 7, null, 0, 7, 42, null }),
+            LowCardinalitySettings);
+
+        yield return Same(
+            "LowCardinality(Nullable(FixedString(4)))",
+            "LowCardinality(Nullable(FixedString(4)))",
+            name => new ArrayColumn<byte[]>(name, "LowCardinality(Nullable(FixedString(4)))", new[]
+            {
+                new byte[] { 1, 2, 3, 4 },
+                null,
+                new byte[] { 1, 2, 3, 4 },
+                new byte[] { 0xFF, 0, 0xFF, 0 },
+            }));
     }
 
     // Map(K, V) inserts and reads back the ergonomic jagged column of KeyValuePair arrays, which doubles as expected.
@@ -673,5 +730,11 @@ public sealed class InsertRoundTripCase
     private static readonly IReadOnlyDictionary<string, string> NestedSettings = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["flatten_nested"] = "0",
+    };
+
+    /// <summary>Allows a <c>LowCardinality</c> over a numeric inner, which the server otherwise rejects as suspicious.</summary>
+    private static readonly IReadOnlyDictionary<string, string> LowCardinalitySettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["allow_suspicious_low_cardinality_types"] = "1",
     };
 }
