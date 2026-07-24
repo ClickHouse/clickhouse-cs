@@ -102,7 +102,14 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             if (key.StartsWith(CustomSettingPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 string name = key.Substring(CustomSettingPrefix.Length);
-                (customSettings ??= new Dictionary<string, string>(StringComparer.Ordinal))[name] = GetStringOrDefault(key, null);
+                if (name.Length == 0)
+                {
+                    // '<prefix>' alone names an empty setting, which would terminate the wire settings list early.
+                    throw new ArgumentException($"Connection-string key '{key}' names an empty custom setting; a setting name must be non-empty (e.g. '{CustomSettingPrefix}max_threads').");
+                }
+
+                // Never store null (it cannot be written): a value-less set_ key becomes an empty-string setting.
+                (customSettings ??= new Dictionary<string, string>(StringComparer.Ordinal))[name] = GetStringOrDefault(key, string.Empty);
             }
         }
 

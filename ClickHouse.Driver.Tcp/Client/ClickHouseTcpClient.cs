@@ -42,7 +42,13 @@ public sealed class ClickHouseTcpClient : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         source = new SingleConnectionSource(options);
-        baseSettings = options.CustomSettings;
+
+        // Copy the caller's settings into an owned dictionary: the client is shared across threads and merges
+        // these on every query, so retaining the caller's reference would let a later mutation of it fault or
+        // partially apply mid-merge.
+        baseSettings = options.CustomSettings is null
+            ? null
+            : new Dictionary<string, string>(options.CustomSettings, StringComparer.Ordinal);
         maxSendBufferBytes = options.MaxSendBufferBytes;
     }
 

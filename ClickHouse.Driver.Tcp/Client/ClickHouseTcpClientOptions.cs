@@ -28,7 +28,11 @@ public sealed class ClickHouseTcpClientOptions
     /// <summary>The user to authenticate as. Defaults to <c>default</c>.</summary>
     public string Username { get; init; } = DefaultUsername;
 
-    /// <summary>The password, sent in plaintext and protected only by TLS. Defaults to empty.</summary>
+    /// <summary>
+    /// The password, sent to the server in plaintext during the handshake. This client's native-protocol
+    /// transport is not encrypted, so the password (and all data) travels in the clear — use it only over a
+    /// trusted network. Defaults to empty.
+    /// </summary>
     public string Password { get; init; } = string.Empty;
 
     /// <summary>The default database for queries. Defaults to <c>default</c>.</summary>
@@ -110,6 +114,24 @@ public sealed class ClickHouseTcpClientOptions
         if (MaxSendBufferBytes <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(MaxSendBufferBytes), MaxSendBufferBytes, "MaxSendBufferBytes must be positive.");
+        }
+
+        if (CustomSettings is not null)
+        {
+            foreach (KeyValuePair<string, string> setting in CustomSettings)
+            {
+                // An empty setting name would collide with the empty key that terminates the settings list on the
+                // wire, silently truncating the rest; a null value cannot be written. Reject both up front.
+                if (string.IsNullOrEmpty(setting.Key))
+                {
+                    throw new ArgumentException("A custom setting name must not be null or empty.", nameof(CustomSettings));
+                }
+
+                if (setting.Value is null)
+                {
+                    throw new ArgumentException($"Custom setting '{setting.Key}' has a null value; use an empty string for a flag-style setting.", nameof(CustomSettings));
+                }
+            }
         }
     }
 
