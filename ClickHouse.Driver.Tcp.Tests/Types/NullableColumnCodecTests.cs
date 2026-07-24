@@ -138,29 +138,6 @@ public class NullableColumnCodecTests
     }
 
     [Test]
-    public void FixedRowByteSize_IsNullMapBytePlusInner_OrNullForVariableInner()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(Resolve("Nullable(Int32)").FixedRowByteSize, Is.EqualTo(5));
-            Assert.That(Resolve("Nullable(String)").FixedRowByteSize, Is.Null);
-        });
-    }
-
-    [Test]
-    public void MeasureRowBytes_VariableInner_CountsNullMapBytePlusInnerValue()
-    {
-        IColumnCodec codec = Resolve("Nullable(String)");
-        var column = new ArrayColumn<string>("c", "Nullable(String)", new[] { "hi", null });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.MeasureRowBytes(column, 0), Is.EqualTo(4)); // 1 null-map + 1 length prefix + 2 bytes
-            Assert.That(codec.MeasureRowBytes(column, 1), Is.EqualTo(2)); // 1 null-map + empty-string placeholder
-        });
-    }
-
-    [Test]
     public void CanWrite_AcceptsOnlyMatchingNullableColumn()
     {
         IColumnCodec value = Resolve("Nullable(Int32)");
@@ -298,102 +275,6 @@ public class NullableColumnCodecTests
     }
 
     [Test]
-    public async Task TryDensify_ErgonomicValueColumn_ProducesDenseColumnThatRoundTrips()
-    {
-        // TryDensify splits the ergonomic T? column into a dense (inner column + null-map) NullableValueColumn: the
-        // inner holds a real value at every row (the codec's placeholder at the null rows) and the null-map marks
-        // the nulls. It must surface the same T? values and round-trip identically to the ergonomic form.
-        IColumnCodec codec = Resolve("Nullable(Int32)");
-        var expected = new int?[] { 7, null, -3, null, 0 };
-        var ergonomic = new ArrayColumn<int?>("c", "Nullable(Int32)", expected);
-
-        using IColumn densified = codec.TryDensify(ergonomic, out _);
-
-        Assert.That(densified, Is.InstanceOf<NullableValueColumn<int>>());
-        var dense = (NullableValueColumn<int>)densified;
-        Assert.Multiple(() =>
-        {
-            Assert.That(dense.NullMap.ToArray(), Is.EqualTo(new byte[] { 0, 1, 0, 1, 0 }));
-            Assert.That(dense.Inner.Values.ToArray(), Is.EqualTo(new[] { 7, 0, -3, 0, 0 })); // placeholder 0 at nulls
-            Assert.That(((IColumn<int?>)densified).Values.ToArray(), Is.EqualTo(expected));
-        });
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, densified, "Nullable(Int32)", densified.RowCount);
-        Assert.That(((IColumn<int?>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task TryDensify_ErgonomicReferenceColumn_ProducesDenseColumnThatRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Nullable(String)");
-        var expected = new[] { "hi", null, string.Empty, "world" };
-        var ergonomic = new ArrayColumn<string>("c", "Nullable(String)", expected);
-
-        using IColumn densified = codec.TryDensify(ergonomic, out _);
-
-        Assert.That(densified, Is.InstanceOf<NullableReferenceColumn<string>>());
-        var dense = (NullableReferenceColumn<string>)densified;
-        Assert.Multiple(() =>
-        {
-            Assert.That(dense.NullMap.ToArray(), Is.EqualTo(new byte[] { 0, 1, 0, 0 }));
-            Assert.That(((IColumn<string>)densified).Values.ToArray(), Is.EqualTo(expected));
-        });
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, densified, "Nullable(String)", densified.RowCount);
-        Assert.That(((IColumn<string>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public void TryDensify_NullRows_UseInnerPlaceholderNotClrDefault()
-    {
-        // default(DateOnly) (0001-01-01) is out of the Date codec's range; densify must fill the null rows with
-        // the codec's own placeholder (the epoch) so the dense inner column is writable.
-        IColumnCodec codec = Resolve("Nullable(Date)");
-        var expected = new DateOnly?[] { new DateOnly(2000, 1, 1), null };
-        var ergonomic = new ArrayColumn<DateOnly?>("c", "Nullable(Date)", expected);
-
-        using var dense = (NullableValueColumn<DateOnly>)codec.TryDensify(ergonomic, out _);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(dense.Inner[1], Is.EqualTo(new DateOnly(1970, 1, 1)));
-            Assert.That(((IColumn<DateOnly?>)dense).Values.ToArray(), Is.EqualTo(expected));
-        });
-    }
-
-    [Test]
-    public void TryDensify_AlreadyDenseColumn_ReturnsSameInstanceNotBuilt()
-    {
-        // TryDensify is idempotent: a column already in dense form is returned by reference with built = false, so a
-        // caller knows it is borrowed (not to be disposed) rather than freshly built.
-        IColumnCodec codec = Resolve("Nullable(Int32)");
-        var inner = PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 7, 0, 9 });
-        var dense = new NullableValueColumn<int>("c", "Nullable(Int32)", inner, new byte[] { 0, 1, 0 }, rowCount: 3, pooledMap: false);
-
-        IColumn result = codec.TryDensify(dense, out bool built);
-        Assert.Multiple(() =>
-        {
-            Assert.That(result, Is.SameAs(dense));
-            Assert.That(built, Is.False, "an already-dense column is borrowed, not rebuilt");
-        });
-    }
-
-    [Test]
-    public void TryDensify_LeafCodec_ReturnsColumnUnchangedNotBuilt()
-    {
-        // A leaf codec has no denser form, so the default hook returns the column by reference with built = false.
-        IColumnCodec codec = Resolve("Int32");
-        var column = new ArrayColumn<int>("c", "Int32", new[] { 1, 2, 3 });
-
-        IColumn result = codec.TryDensify(column, out bool built);
-        Assert.Multiple(() =>
-        {
-            Assert.That(result, Is.SameAs(column));
-            Assert.That(built, Is.False, "a leaf codec never builds a new column");
-        });
-    }
-
-    [Test]
     public void Resolve_NestedNullable_ThrowsFormat()
         => Assert.Throws<FormatException>(() => Resolve("Nullable(Nullable(Int32))"));
 
@@ -404,7 +285,7 @@ public class NullableColumnCodecTests
 
     [Test]
     public void Resolve_UnsupportedInner_ThrowsNotSupported()
-        => Assert.Throws<NotSupportedException>(() => Resolve("Nullable(Array(Int32))"));
+        => Assert.Throws<NotSupportedException>(() => Resolve("Nullable(Point)"));
 
     [Test]
     public void Resolve_Nullable_StampsFullTypeName()

@@ -35,8 +35,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
     private readonly INullableShape canonicalShape;
     private readonly (Type Spelling, INullableShape Shape)[] writeShapes;
     private readonly bool innerCanWrite;
-    private INullableShape measureShape;  // the shape matching the measured column's write type, resolved on first use
-    private long? nullPlaceholderBytes;   // encoded size of a null row's placeholder, measured once measureShape is known
 
     private NullableColumnCodec(string typeName, IColumnCodec inner)
     {
@@ -74,9 +72,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
     /// </summary>
     public object NullPlaceholder => null;
 
-    /// <inheritdoc/>
-    public int? FixedRowByteSize => inner.FixedRowByteSize is int width ? 1 + width : null;
-
     /// <summary>Builds a <c>Nullable(T)</c> codec, resolving the inner type <c>T</c> through the registry.</summary>
     /// <param name="node">The parsed <c>Nullable</c> type node; its single argument is the inner type.</param>
     /// <param name="context">The resolution context, forwarded to the inner codec's factory.</param>
@@ -98,29 +93,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
 
         IColumnCodec inner = registry.ResolveNode(innerNode, in context);
         return new NullableColumnCodec(node.ToString(), inner);
-    }
-
-    /// <inheritdoc/>
-    public long MeasureRowBytes(IColumn column, int row)
-    {
-        // Measure through the shape matching the supplied column's CLR write type — the same resolution the write
-        // path uses — because IsNull and MeasureInnerRow read the column in its own write type. Resolved once and
-        // reused: the splitter measures a single column across all its rows, and a Nullable codec instance is
-        // never shared across columns. (The fixed-width inners — the only ones with alternate write types today —
-        // are priced in O(1) via FixedRowByteSize and never reach this walk, but the resolution keeps this
-        // correct for a variable-width inner that grows alternate write types, e.g. String also taking byte[].)
-        measureShape ??= ResolveWriteShape(column) ?? canonicalShape;
-
-        // One null-map byte, then the inner size: a present row measures its value; a null row measures the
-        // inner's placeholder (never the null value itself, which the inner codec would reject). The placeholder
-        // size is the same for every null row, so measure it once and cache.
-        if (measureShape.IsNull(column, row))
-        {
-            nullPlaceholderBytes ??= measureShape.MeasureNullPlaceholder(inner);
-            return 1 + nullPlaceholderBytes.Value;
-        }
-
-        return 1 + measureShape.MeasureInnerRow(inner, column, row);
     }
 
     /// <inheritdoc/>
@@ -159,22 +131,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => innerCanWrite && ResolveWriteShape(column) is not null;
-
-    /// <inheritdoc/>
-    // Delegate to the shape for the supplied column's write type, which projects the ergonomic T? / nullable-
-    // reference form into the dense (inner column + null-map) column and recurses the inner codec's TryDensify. A
-    // column whose write type is unrecognized is left unchanged (borrowed); the write path then reports it.
-    public IColumn TryDensify(IColumn column, out bool built)
-    {
-        INullableShape shape = ResolveWriteShape(column);
-        if (shape is null)
-        {
-            built = false;
-            return column;
-        }
-
-        return shape.TryDensify(inner, column, out built);
-    }
 
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer) => inner.WriteStatePrefix(writer);
