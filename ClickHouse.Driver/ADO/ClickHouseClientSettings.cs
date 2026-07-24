@@ -215,13 +215,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets the size, in bytes, of the buffer used when reading HTTP query responses.
+    /// The buffer is pooled (rented from <see cref="System.Buffers.ArrayPool{T}"/>), so it is not a
+    /// per-query allocation.
     /// <para>
     /// A larger buffer reduces the number of refills for large responses,
     /// but any value at or above 85,000 bytes is allocated on the LOH,
     /// which is not compacted and only reclaimed by gen2 collections; under high query
     /// throughput that can cause LOH fragmentation, inflated committed memory and longer GC pauses.
     /// </para>
-    /// Default: 8192 (8 KiB)
+    /// Default: 65536 (64 KiB)
     /// </summary>
     public int ReadBufferSize { get; init; } = ClickHouseDefaults.ReadBufferSize;
 

@@ -69,7 +69,7 @@ internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWri
             {
                 4 => (BigInteger)reader.ReadInt32(),
                 8 => (BigInteger)reader.ReadInt64(),
-                _ => new BigInteger(reader.ReadBytes(Size)),
+                _ => ReadMantissa(reader),
             };
             return new ClickHouseDecimal(mantissa, Scale);
         }
@@ -79,10 +79,17 @@ internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWri
             {
                 4 => reader.ReadInt32(),
                 8 => reader.ReadInt64(),
-                _ => (decimal)new BigInteger(reader.ReadBytes(Size)),
+                _ => (decimal)ReadMantissa(reader),
             };
             return mantissa / (decimal)Exponent;
         }
+    }
+
+    private BigInteger ReadMantissa(ExtendedBinaryReader reader)
+    {
+        Span<byte> buffer = stackalloc byte[Size];
+        reader.ReadBytes(buffer);
+        return new BigInteger(buffer);
     }
 
     public override string ToString() => $"{Name}({Precision}, {Scale})";

@@ -167,6 +167,151 @@ public class UriBuilderTests
     }
 
     [Test]
+    [TestCase("http://localhost:8123", "http://localhost:8123/")]
+    [TestCase("http://localhost:8123/", "http://localhost:8123/")]
+    [TestCase("http://localhost/clickhouse", "http://localhost:80/clickhouse")]
+    [TestCase("https://some.server:8443/path", "https://some.server:8443/path")]
+    // IPv6 literals: Uri.Host keeps the brackets (unlike DnsSafeHost), so the manual composition
+    // matches UriBuilder byte-for-byte.
+    [TestCase("http://[::1]:8123", "http://[::1]:8123/")]
+    [TestCase("http://[2001:db8::1]:9000/path", "http://[2001:db8::1]:9000/path")]
+    public void ToString_ShouldComposeUriFromBaseParts_PreservingPathAndPort(string baseUri, string expectedPrefix)
+    {
+        var builder = new ClickHouseUriBuilder(new Uri(baseUri));
+
+        var result = builder.ToString();
+
+        // The base part (scheme://host:port/path) must be reproduced verbatim, and the query
+        // must be separated by a single '?'. This matches the previous UriBuilder-based output.
+        Assert.That(result, Does.StartWith(expectedPrefix + "?"));
+    }
+
+    [Test]
+    public void ToString_WithNoCustomSettings_ShouldEmitAllParametersWithoutDuplicates()
+    {
+        // Exercises the fast path (no connection/command query-string parameters): base settings,
+        // SQL parameters, JSON modes, max_execution_time and roles must all appear exactly once.
+        var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
+        {
+            Database = "DATABASE",
+            Sql = "SELECT 1",
+            SessionId = "SESSION",
+            QueryId = "QUERY",
+            UseCompression = true,
+            JsonReadMode = JsonReadMode.String,
+            JsonWriteMode = JsonWriteMode.Binary,
+            MaxExecutionTime = TimeSpan.FromSeconds(30),
+            ConnectionRoles = new[] { "admin", "reader" },
+        };
+        builder.AddSqlQueryParameter("p1", "v1");
+        builder.AddSqlQueryParameter("p2", "v2");
+
+        var uri = builder.ToString();
+        var @params = HttpUtility.ParseQueryString(new Uri(uri).Query);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.Get("enable_http_compression"), Is.EqualTo("true"));
+            Assert.That(@params.Get("default_format"), Is.EqualTo("RowBinaryWithNamesAndTypes"));
+            Assert.That(@params.Get("database"), Is.EqualTo("DATABASE"));
+            Assert.That(@params.Get("session_id"), Is.EqualTo("SESSION"));
+            Assert.That(@params.Get("query"), Is.EqualTo("SELECT 1"));
+            Assert.That(@params.Get("query_id"), Is.EqualTo("QUERY"));
+            Assert.That(@params.Get("output_format_binary_write_json_as_string"), Is.EqualTo("1"));
+            Assert.That(@params.Get("input_format_binary_read_json_as_string"), Is.EqualTo("0"));
+            Assert.That(@params.Get("param_p1"), Is.EqualTo("v1"));
+            Assert.That(@params.Get("param_p2"), Is.EqualTo("v2"));
+            Assert.That(@params.Get("max_execution_time"), Is.EqualTo("30"));
+            Assert.That(@params.GetValues("role"), Is.EqualTo(new[] { "admin", "reader" }));
+            // Exactly one '?' separates path and query; no key is emitted twice
+            // (ParseQueryString would fold duplicates into a comma-joined value).
+            Assert.That(uri.Split('?'), Has.Length.EqualTo(2));
+            foreach (var key in @params.AllKeys)
+                Assert.That(@params.GetValues(key), Has.Length.EqualTo(key == "role" ? 2 : 1), $"key '{key}' duplicated");
+        });
+    }
+
+    [Test]
+    public void ToString_WithJsonModeNone_ShouldOmitJsonFormatSettings()
+    {
+        // JsonReadMode/JsonWriteMode of None must skip the format settings entirely
+        // (for readonly connections or older servers) on the fast path.
+        var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
+        {
+            JsonReadMode = JsonReadMode.None,
+            JsonWriteMode = JsonWriteMode.None,
+        };
+
+        var @params = HttpUtility.ParseQueryString(new Uri(builder.ToString()).Query);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.AllKeys, Does.Not.Contain("output_format_binary_write_json_as_string"));
+            Assert.That(@params.AllKeys, Does.Not.Contain("input_format_binary_read_json_as_string"));
+        });
+    }
+
+    [Test]
+    public void ToString_WithCustomSettingsAndMaxExecutionTime_ShouldEmitBothOnDeduplicationPath()
+    {
+        // Exercises the slow (deduplication) path together with max_execution_time, ensuring both
+        // the custom setting and the max_execution_time key survive.
+        var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
+        {
+            CommandQueryStringParameters = new Dictionary<string, object> { { "max_threads", 4 } },
+            MaxExecutionTime = TimeSpan.FromSeconds(45),
+        };
+
+        var @params = HttpUtility.ParseQueryString(new Uri(builder.ToString()).Query);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.Get("max_threads"), Is.EqualTo("4"));
+            Assert.That(@params.Get("max_execution_time"), Is.EqualTo("45"));
+        });
+    }
+
+    [Test]
+    public void ToString_WhenCustomSettingCollidesWithMaxExecutionTime_ShouldPreferExplicitMaxExecutionTime()
+    {
+        // The explicit MaxExecutionTime is written last on the deduplication path, so it must win
+        // over a custom setting that happens to use the same key (last-write-wins). Emitted once.
+        var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
+        {
+            CommandQueryStringParameters = new Dictionary<string, object> { { "max_execution_time", 999 } },
+            MaxExecutionTime = TimeSpan.FromSeconds(45),
+        };
+
+        var uri = builder.ToString();
+        var @params = HttpUtility.ParseQueryString(new Uri(uri).Query);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.Get("max_execution_time"), Is.EqualTo("45"));
+            Assert.That(@params.GetValues("max_execution_time"), Has.Length.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void ToString_WithEmptyDatabaseAndSession_ShouldOmitThoseParameters()
+    {
+        var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
+        {
+            Database = "",
+            SessionId = null,
+        };
+
+        var @params = HttpUtility.ParseQueryString(new Uri(builder.ToString()).Query);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.AllKeys, Does.Not.Contain("database"));
+            Assert.That(@params.AllKeys, Does.Not.Contain("session_id"));
+            Assert.That(@params.AllKeys, Does.Not.Contain("query"));
+        });
+    }
+
+    [Test]
     [TestCase("Çay", "%c3%87ay")]
     public void ShouldEncodeUnicodeCharactersCorrectly(string input, string expected)
     {
