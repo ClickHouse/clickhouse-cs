@@ -76,7 +76,9 @@ internal sealed class NullableReferenceColumn<T> : IColumn<T>
     }
 
     /// <inheritdoc/>
-    public T this[int row] => nullMap[row] != 0 ? null : inner[row];
+    // Index through the RowCount-sliced null-map so an out-of-range row throws rather than reading a stale slot
+    // of the pooled buffer, which can be longer than RowCount.
+    public T this[int row] => NullMap[row] != 0 ? null : inner[row];
 
     /// <inheritdoc/>
     public object GetValue(int row) => this[row];

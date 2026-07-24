@@ -274,10 +274,10 @@ public class DateTime64ColumnCodecTests
         => Assert.Throws<FormatException>(() => Codec("DateTime64(10)"));
 
     [Test]
-    public void WritableElementTypes_ListsNativeThenOffsetThenDateTime()
+    public void WritableElementTypes_ListsLongThenOffsetThenDateTime()
         => Assert.That(
             Codec("DateTime64(3)").WritableElementTypes,
-            Is.EqualTo(new[] { typeof(ClickHouseDateTime64), typeof(DateTimeOffset), typeof(DateTime) }));
+            Is.EqualTo(new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) }));
 
     [Test]
     public void NullPlaceholderAs_ReturnsEpochInRequestedSpelling_ThrowsForOthers()
@@ -285,7 +285,7 @@ public class DateTime64ColumnCodecTests
         DateTime64ColumnCodec codec = Codec("DateTime64(3)");
         Assert.Multiple(() =>
         {
-            Assert.That(((ClickHouseDateTime64)codec.NullPlaceholderAs(typeof(ClickHouseDateTime64))).Count, Is.EqualTo(0));
+            Assert.That(codec.NullPlaceholderAs(typeof(long)), Is.EqualTo(0L));
             Assert.That(codec.NullPlaceholderAs(typeof(DateTimeOffset)), Is.EqualTo(DateTimeOffset.UnixEpoch));
             Assert.That(codec.NullPlaceholderAs(typeof(DateTime)), Is.EqualTo(DateTime.UnixEpoch));
             Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(string)));
