@@ -8,7 +8,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// borrowed view over the array.
 /// </summary>
 /// <typeparam name="T">The CLR element type.</typeparam>
-internal sealed class ArrayColumn<T> : IColumn<T>
+internal sealed class ArrayColumn<T> : IColumn<T>, ISpanColumn<T>
 {
     private readonly T[] values;
     private readonly int offset;
@@ -44,6 +44,9 @@ internal sealed class ArrayColumn<T> : IColumn<T>
 
     /// <inheritdoc/>
     public ReadOnlySpan<T> Values => new ReadOnlySpan<T>(values, offset, length);
+
+    /// <inheritdoc/>
+    ReadOnlySpan<T> ISpanColumn<T>.Span => Values;
 
     /// <inheritdoc/>
     public T this[int row] => values[offset + row];

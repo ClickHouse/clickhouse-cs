@@ -509,9 +509,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     {
         if (rowCount > 0 && plan is not null)
         {
-            var values = Array.ConvertAll(plan, p => p.Values);
-            var codecs = Array.ConvertAll(plan, p => p.Codec);
-            foreach ((int start, int length) in PlanInsertBlocks(values, codecs, rowCount, maxRowsPerBlock, BlockWriter.DefaultFlushThresholdBytes))
+            // Split into wire blocks by row count alone (each column is written straight from its ergonomic form,
+            // so there is no intermediate dense buffer to build first). The between-column flush backstop bounds
+            // peak client memory while a block streams.
+            foreach ((int start, int length) in PlanInsertBlocks(rowCount, maxRowsPerBlock))
             {
                 writer.WriteClientPacketType(ClientPacketType.Data);
                 await BlockWriter.WriteDataBlockAsync(
@@ -555,81 +556,24 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Splits <paramref name="rowCount"/> rows into contiguous wire-block ranges, closing a block whenever adding
-    /// the next row would push its encoded body past <paramref name="byteLimit"/> or the block already holds
-    /// <paramref name="maxRowsPerBlock"/> rows — whichever limit a block reaches first. A single row larger than
-    /// the byte limit still forms its own block. With no <paramref name="maxRowsPerBlock"/> only the byte target
-    /// bounds a block: when every column is fixed-width the rows-per-block is a single division (uniform blocks,
-    /// nothing measured), and when any column is variable-width the rows are measured through the codecs.
+    /// Splits <paramref name="rowCount"/> rows into contiguous wire-block ranges of at most
+    /// <paramref name="maxRowsPerBlock"/> rows each — the block geometry is bounded by row count alone. With no
+    /// <paramref name="maxRowsPerBlock"/> the whole insert is a single block; peak client memory while it is
+    /// written is instead bounded by the between-column flush backstop
+    /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>), not by splitting the block.
     /// </summary>
-    /// <param name="columns">The insert's columns, all of the same length.</param>
-    /// <param name="codecs">The resolved codec for each column, positionally aligned with <paramref name="columns"/>.</param>
     /// <param name="rowCount">The number of rows to split (assumed greater than zero).</param>
-    /// <param name="maxRowsPerBlock">A cap on the rows per block, applied alongside <paramref name="byteLimit"/>, or null for no row cap.</param>
-    /// <param name="byteLimit">The per-block encoded-size target.</param>
+    /// <param name="maxRowsPerBlock">The cap on the rows per block, or null for a single block.</param>
     /// <returns>The (start, length) row range of each wire block, in order.</returns>
-    internal static List<(int Start, int Length)> PlanInsertBlocks(
-        IReadOnlyList<IColumn> columns, IColumnCodec[] codecs, int rowCount, int? maxRowsPerBlock, long byteLimit)
+    internal static List<(int Start, int Length)> PlanInsertBlocks(int rowCount, int? maxRowsPerBlock)
     {
         var blocks = new List<(int Start, int Length)>();
-        int rowCap = maxRowsPerBlock ?? int.MaxValue;
-
-        long fixedBytesPerRow = 0;
-        List<(IColumn Column, IColumnCodec Codec)> variable = null;
-        for (int i = 0; i < columns.Count; i++)
+        int step = maxRowsPerBlock is int cap && cap > 0 ? cap : rowCount;
+        for (int start = 0; start < rowCount; start += step)
         {
-            if (codecs[i].FixedRowByteSize is int size)
-            {
-                fixedBytesPerRow += size;
-            }
-            else
-            {
-                (variable ??= new List<(IColumn, IColumnCodec)>()).Add((columns[i], codecs[i]));
-            }
+            blocks.Add((start, Math.Min(step, rowCount - start)));
         }
 
-        if (variable is null)
-        {
-            // Every column is fixed-width, so every row costs the same: the rows that fill the byte budget is one
-            // division, and the block is bounded by whichever of that and the row cap is smaller. Blocks are
-            // uniform (bar the last), no per-row walk. A zero per-row size (no columns priced) can't be divided
-            // by, so bytes impose no limit and only the row cap (if any) applies.
-            long byteStep = fixedBytesPerRow == 0 ? rowCount : Math.Max(1, byteLimit / fixedBytesPerRow);
-            int step = (int)Math.Min(Math.Min((long)rowCount, byteStep), rowCap);
-            for (int start = 0; start < rowCount; start += step)
-            {
-                blocks.Add((start, Math.Min(step, rowCount - start)));
-            }
-
-            return blocks;
-        }
-
-        // At least one variable-width column, so each row must be measured. The fixed columns contribute a
-        // constant; only the variable ones are walked per row.
-        int blockStart = 0;
-        long blockBytes = 0;
-        for (int row = 0; row < rowCount; row++)
-        {
-            long rowBytes = fixedBytesPerRow;
-            foreach ((IColumn column, IColumnCodec codec) in variable)
-            {
-                rowBytes += codec.MeasureRowBytes(column, row);
-            }
-
-            // Close the current block before this row when it already holds a row and adding this one would cross
-            // the byte limit, or the block has reached the row cap — whichever comes first. A row larger than the
-            // byte limit on its own still becomes a single-row block.
-            if (row > blockStart && (blockBytes + rowBytes > byteLimit || row - blockStart >= rowCap))
-            {
-                blocks.Add((blockStart, row - blockStart));
-                blockStart = row;
-                blockBytes = 0;
-            }
-
-            blockBytes += rowBytes;
-        }
-
-        blocks.Add((blockStart, rowCount - blockStart));
         return blocks;
     }
 
