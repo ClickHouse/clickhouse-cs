@@ -29,7 +29,10 @@ internal sealed class TimeColumnCodec : IColumnCodec
     public string TypeName => "Time";
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => sizeof(int);
+    public Type ElementType => typeof(TimeSpan);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => TimeSpan.Zero;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -52,8 +55,11 @@ internal sealed class TimeColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        foreach (TimeSpan value in ((IColumn<TimeSpan>)column).Values.Slice(start, length))
+        var typed = (IColumn<TimeSpan>)column;
+        for (int i = 0; i < length; i++)
         {
+            TimeSpan value = typed[start + i];
+
             // Time stores whole seconds; any sub-second component is truncated toward zero (the caller owns
             // the precision trade-off, and Time64 is available when sub-second precision matters).
             long seconds = value.Ticks / TimeSpan.TicksPerSecond;
@@ -93,7 +99,10 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     public string TypeName { get; }
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => sizeof(long);
+    public Type ElementType => typeof(TimeSpan);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => TimeSpan.Zero;
 
     /// <summary>Builds a <c>Time64</c> codec from its scale argument.</summary>
     /// <param name="node">The parsed <c>Time64</c> type node.</param>
@@ -137,8 +146,11 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         int shift = scale - DotNetTickScale;
-        foreach (TimeSpan value in ((IColumn<TimeSpan>)column).Values.Slice(start, length))
+        var typed = (IColumn<TimeSpan>)column;
+        for (int i = 0; i < length; i++)
         {
+            TimeSpan value = typed[start + i];
+
             // Reject durations outside ClickHouse's range up front (mirrors Time), rather than emitting a count
             // the server rejects or wraps. Precision finer than the column scale is truncated toward zero.
             long seconds = value.Ticks / TimeSpan.TicksPerSecond;

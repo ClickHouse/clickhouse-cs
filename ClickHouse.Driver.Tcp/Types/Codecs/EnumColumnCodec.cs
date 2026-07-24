@@ -26,19 +26,27 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
 {
     private readonly FixedWidthColumnCodec<T> underlying;
 
-    private EnumColumnCodec(string typeName, IReadOnlyDictionary<string, T> labelToOrdinal, IReadOnlyDictionary<T, string> ordinalToLabel)
+    private readonly T nullPlaceholder;
+
+    private EnumColumnCodec(string typeName, IReadOnlyDictionary<string, T> labelToOrdinal, IReadOnlyDictionary<T, string> ordinalToLabel, T nullPlaceholder)
     {
         TypeName = typeName;
         underlying = new FixedWidthColumnCodec<T>(typeName);
         LabelToOrdinal = labelToOrdinal;
         OrdinalToLabel = ordinalToLabel;
+        this.nullPlaceholder = nullPlaceholder;
     }
 
     /// <inheritdoc/>
     public string TypeName { get; }
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => underlying.FixedRowByteSize;
+    public Type ElementType => typeof(T);
+
+    /// <inheritdoc/>
+    // A declared member ordinal, not default(T): the ordinal 0 need not be a member, and the server can reject
+    // an undeclared ordinal even at a Nullable(Enum) null position where it is only a placeholder.
+    public object NullPlaceholder => nullPlaceholder;
 
     /// <summary>The enum's declared members, mapping each label to its underlying ordinal.</summary>
     public IReadOnlyDictionary<string, T> LabelToOrdinal { get; }
@@ -57,6 +65,8 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     {
         var labelToOrdinal = new Dictionary<string, T>(StringComparer.Ordinal);
         var ordinalToLabel = new Dictionary<T, string>();
+        T nullPlaceholder = default;
+        bool haveMember = false;
 
         foreach (TypeNode argument in node.Arguments)
         {
@@ -71,9 +81,21 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
             {
                 throw new FormatException($"Enum type '{node}' declares the ordinal {ordinal} more than once.");
             }
+
+            if (!haveMember)
+            {
+                // The first declared member is a guaranteed-valid placeholder for a Nullable(Enum) null row.
+                nullPlaceholder = value;
+                haveMember = true;
+            }
         }
 
-        return new EnumColumnCodec<T>(node.ToString(), labelToOrdinal, ordinalToLabel);
+        if (!haveMember)
+        {
+            throw new FormatException($"Enum type '{node}' declares no members.");
+        }
+
+        return new EnumColumnCodec<T>(node.ToString(), labelToOrdinal, ordinalToLabel, nullPlaceholder);
     }
 
     /// <inheritdoc/>
