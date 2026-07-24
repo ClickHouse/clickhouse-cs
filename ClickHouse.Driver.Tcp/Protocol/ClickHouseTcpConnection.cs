@@ -410,6 +410,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         BeginOperation();
 
         NegotiatedProtocol negotiated = server.Negotiated;
+        // The server interleaves metadata blocks (ProfileEvents, Logs, Totals, Extremes) into the insert
+        // acknowledgement, some of which carry timezone-bearing DateTime/DateTime64 columns. Decode them with the
+        // same session/server timezone a query would use, so a metadata handler sees consistent offsets.
+        ResolveContext readContext = ReadContextFor(settings);
         ClickHouseServerException pending = null;
         bool completed = false;
         string mismatchError = null;
@@ -422,9 +426,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             BlockWriter.WriteEmptyBlock(writer);
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
 
-            // Drain metadata until the schema block (the first Data packet) or a terminal packet. An insert
-            // reads only the zero-row schema and acknowledgement blocks, so no display timezone is needed.
-            (Block schema, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, ResolveContext.ForWrite, handlers, cancellationToken).ConfigureAwait(false);
+            // Drain metadata until the schema block (the first Data packet) or a terminal packet.
+            (Block schema, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
             if (schema is null)
             {
                 if (error is null)
@@ -455,7 +458,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 await StreamInsertRowsAsync(plan, rowCount, maxRowsPerBlock, negotiated, cancellationToken).ConfigureAwait(false);
 
                 // Rethrow any server error once the state is back to Ready.
-                pending = await DrainToEndOfStreamAsync(negotiated, ResolveContext.ForWrite, handlers, cancellationToken).ConfigureAwait(false);
+                pending = await DrainToEndOfStreamAsync(negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
                 completed = true;
             }
         }
