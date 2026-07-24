@@ -136,7 +136,7 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
             return count;
         }
 
-        long factor = Pow10(Math.Abs(shift));
+        long factor = FixedPointScaling.Pow10(Math.Abs(shift));
         if (shift > 0)
         {
             return checked(count * factor);
@@ -149,16 +149,5 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         }
 
         return quotient;
-    }
-
-    private static long Pow10(int exponent)
-    {
-        long result = 1;
-        for (int i = 0; i < exponent; i++)
-        {
-            result *= 10;
-        }
-
-        return result;
     }
 }
