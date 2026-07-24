@@ -234,80 +234,42 @@ public class ClickHouseTcpConnectionInsertTests
     }
 
     [Test]
-    public void PlanInsertBlocks_FixedWidthExceedingByteLimit_SplitsByByteBudget()
+    public void PlanInsertBlocks_NoRowCap_ProducesOneBlock()
     {
-        // UInt64 is 8 bytes/row; a 16-byte budget fits two rows per block.
-        IColumn[] columns = { UInt64Column(1, 2, 3, 4, 5) };
-        var plan = ClickHouseTcpConnection.PlanInsertBlocks(columns, Codecs(columns), rowCount: 5, maxRowsPerBlock: null, byteLimit: 16);
+        // With no row cap the whole insert is one block; peak memory is bounded by the flush backstop, not a split.
+        var plan = ClickHouseTcpConnection.PlanInsertBlocks(rowCount: 5, maxRowsPerBlock: null);
+
+        CollectionAssert.AreEqual(new[] { (0, 5) }, plan);
+    }
+
+    [Test]
+    public void PlanInsertBlocks_RowCapSmallerThanRowCount_SplitsByRowCap()
+    {
+        var plan = ClickHouseTcpConnection.PlanInsertBlocks(rowCount: 5, maxRowsPerBlock: 2);
 
         CollectionAssert.AreEqual(new[] { (0, 2), (2, 2), (4, 1) }, plan);
     }
 
     [Test]
-    public void PlanInsertBlocks_RowCapTighterThanByteBudget_SplitsByRowCap()
+    public void PlanInsertBlocks_RowCapExactMultiple_SplitsEvenly()
     {
-        IColumn[] columns = { UInt64Column(1, 2, 3, 4, 5) };
-        // The byte budget alone would allow one big block; the row cap of two is reached first.
-        var plan = ClickHouseTcpConnection.PlanInsertBlocks(columns, Codecs(columns), rowCount: 5, maxRowsPerBlock: 2, byteLimit: 10 * 1024 * 1024);
+        var plan = ClickHouseTcpConnection.PlanInsertBlocks(rowCount: 4, maxRowsPerBlock: 2);
 
-        CollectionAssert.AreEqual(new[] { (0, 2), (2, 2), (4, 1) }, plan);
+        CollectionAssert.AreEqual(new[] { (0, 2), (2, 2) }, plan);
     }
 
     [Test]
-    public void PlanInsertBlocks_ByteBudgetTighterThanRowCap_SplitsByBytes()
+    public void PlanInsertBlocks_RowCapAtLeastRowCount_ProducesOneBlock()
     {
-        IColumn[] columns = { UInt64Column(1, 2, 3, 4, 5) };
-        // UInt64 is 8 bytes/row; a 16-byte budget fits two rows, reached before the four-row cap.
-        var plan = ClickHouseTcpConnection.PlanInsertBlocks(columns, Codecs(columns), rowCount: 5, maxRowsPerBlock: 4, byteLimit: 16);
-
-        CollectionAssert.AreEqual(new[] { (0, 2), (2, 2), (4, 1) }, plan);
-    }
-
-    [Test]
-    public void PlanInsertBlocks_RowCapWithVariableWidthColumn_ClosesBlockAtRowCap()
-    {
-        // A variable-width column takes the measured path; the row cap must bind there too, before the byte limit.
-        IColumn[] columns = { new ArrayColumn<string>("s", "String", new[] { "a", "bb", "ccc", "dddd", "e" }) };
-        var plan = ClickHouseTcpConnection.PlanInsertBlocks(columns, Codecs(columns), rowCount: 5, maxRowsPerBlock: 2, byteLimit: 10 * 1024 * 1024);
-
-        CollectionAssert.AreEqual(new[] { (0, 2), (2, 2), (4, 1) }, plan);
-    }
-
-    [Test]
-    public void PlanInsertBlocks_SingleRowLargerThanLimit_FormsItsOwnBlock()
-    {
-        // "xxxxx" encodes as varint(5)+5 = 6 bytes, past the 3-byte budget, but a single row is never split.
-        IColumn[] columns = { new ArrayColumn<string>("s", "String", new[] { "xxxxx", "aa" }) };
-        var plan = ClickHouseTcpConnection.PlanInsertBlocks(columns, Codecs(columns), rowCount: 2, maxRowsPerBlock: null, byteLimit: 3);
-
-        CollectionAssert.AreEqual(new[] { (0, 1), (1, 1) }, plan);
-    }
-
-    [Test]
-    public void PlanInsertBlocks_DataWithinLimit_ProducesOneBlock()
-    {
-        IColumn[] columns = { UInt64Column(1, 2, 3) };
-        var plan = ClickHouseTcpConnection.PlanInsertBlocks(columns, Codecs(columns), rowCount: 3, maxRowsPerBlock: null, byteLimit: 10 * 1024 * 1024);
+        var plan = ClickHouseTcpConnection.PlanInsertBlocks(rowCount: 3, maxRowsPerBlock: 10);
 
         CollectionAssert.AreEqual(new[] { (0, 3) }, plan);
     }
 
     [Test]
-    public void PlanInsertBlocks_MultipleFixedWidthColumns_SizesByCombinedRowWidth()
+    public void PlanInsertBlocks_RowCapOfOne_EmitsOneRowPerBlock()
     {
-        // Two UInt64 columns = 16 bytes/row; a 40-byte budget fits two rows per block.
-        IColumn[] columns = { UInt64Column(1, 2, 3, 4, 5), UInt64Column(6, 7, 8, 9, 10) };
-        var plan = ClickHouseTcpConnection.PlanInsertBlocks(columns, Codecs(columns), rowCount: 5, maxRowsPerBlock: null, byteLimit: 40);
-
-        CollectionAssert.AreEqual(new[] { (0, 2), (2, 2), (4, 1) }, plan);
-    }
-
-    [Test]
-    public void PlanInsertBlocks_FixedWidthRowExceedsLimit_EmitsOneRowPerBlock()
-    {
-        // UInt64 is 8 bytes/row, past the 3-byte budget; a fixed-width row is never split, so one row per block.
-        IColumn[] columns = { UInt64Column(1, 2, 3) };
-        var plan = ClickHouseTcpConnection.PlanInsertBlocks(columns, Codecs(columns), rowCount: 3, maxRowsPerBlock: null, byteLimit: 3);
+        var plan = ClickHouseTcpConnection.PlanInsertBlocks(rowCount: 3, maxRowsPerBlock: 1);
 
         CollectionAssert.AreEqual(new[] { (0, 1), (1, 1), (2, 1) }, plan);
     }
@@ -322,17 +284,6 @@ public class ClickHouseTcpConnectionInsertTests
     private static IColumn[] Columns(params IColumn[] columns) => columns;
 
     private static IColumn UInt64Column(params ulong[] values) => PrimitiveColumn<ulong>.FromValues("x", "UInt64", values);
-
-    private static IColumnCodec[] Codecs(IReadOnlyList<IColumn> columns)
-    {
-        var codecs = new IColumnCodec[columns.Count];
-        for (int i = 0; i < columns.Count; i++)
-        {
-            codecs[i] = ColumnCodecRegistry.Default.Resolve(columns[i].TypeName);
-        }
-
-        return codecs;
-    }
 
     // A zero-row Data block carrying only column headers — the shape the server sends as the INSERT schema.
     private static Task<byte[]> SchemaBlockAsync(params (string Name, string Type)[] columns)

@@ -18,7 +18,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </para>
 /// </summary>
 /// <typeparam name="T">The CLR type the ClickHouse integer maps to.</typeparam>
-internal sealed class PrimitiveColumn<T> : IColumn<T>
+internal sealed class PrimitiveColumn<T> : IColumn<T>, ISpanColumn<T>
     where T : unmanaged
 {
     private readonly int byteOffset;
@@ -59,6 +59,9 @@ internal sealed class PrimitiveColumn<T> : IColumn<T>
 
     /// <inheritdoc/>
     public ReadOnlySpan<T> Values => MemoryMarshal.Cast<byte, T>(buffer.AsSpan(byteOffset, length));
+
+    /// <inheritdoc/>
+    ReadOnlySpan<T> ISpanColumn<T>.Span => Values;
 
     /// <inheritdoc/>
     public T this[int row] => Values[row];
