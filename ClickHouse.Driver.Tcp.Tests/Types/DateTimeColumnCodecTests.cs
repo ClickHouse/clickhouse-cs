@@ -49,6 +49,46 @@ public class DateTimeColumnCodecTests
         Assert.That(column.RowCount, Is.EqualTo(0));
     }
 
+    [Test]
+    public async Task WriteColumn_DateTimeOffset_EncodesSameUnixSecondsAsEquivalentDateTime()
+    {
+        // The same instant expressed as a DateTimeOffset (with a non-zero offset) and as a UTC DateTime must
+        // produce identical column bodies — both are epoch seconds of the UTC instant.
+        DateTime utc = DateTime.UnixEpoch.AddSeconds(1_700_000_000);
+        var offset = new DateTimeOffset(utc, TimeSpan.Zero).ToOffset(TimeSpan.FromHours(5));
+
+        byte[] fromDateTime = await WriteAsync(w => DateTimeColumnCodec.Instance.WriteColumn(w, new ArrayColumn<DateTime>("c", "DateTime", new[] { utc })));
+        byte[] fromOffset = await WriteAsync(w => DateTimeColumnCodec.Instance.WriteColumn(w, new ArrayColumn<DateTimeOffset>("c", "DateTime", new[] { offset })));
+
+        CollectionAssert.AreEqual(fromDateTime, fromOffset);
+    }
+
+    [Test]
+    public void WriteColumn_DateTimeOutsideClickHouseRange_Throws()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new ClickHouseBinaryWriter(ms);
+        var beforeEpoch = new ArrayColumn<DateTime>("c", "DateTime", new[] { new DateTime(1969, 12, 31, 23, 59, 59, DateTimeKind.Utc) });
+        var pastMax = new ArrayColumn<DateTime>("c", "DateTime", new[] { new DateTime(2200, 1, 1, 0, 0, 0, DateTimeKind.Utc) });
+
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => DateTimeColumnCodec.Instance.WriteColumn(writer, beforeEpoch));
+            Assert.Throws<ArgumentOutOfRangeException>(() => DateTimeColumnCodec.Instance.WriteColumn(writer, pastMax));
+        });
+    }
+
+    [Test]
+    public void CanWrite_AcceptsDateTimeAndDateTimeOffset_RejectsOthers()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(DateTimeColumnCodec.Instance.CanWrite(new ArrayColumn<DateTime>("c", "DateTime", Array.Empty<DateTime>())), Is.True);
+            Assert.That(DateTimeColumnCodec.Instance.CanWrite(new ArrayColumn<DateTimeOffset>("c", "DateTime", Array.Empty<DateTimeOffset>())), Is.True);
+            Assert.That(DateTimeColumnCodec.Instance.CanWrite(new ArrayColumn<string>("c", "DateTime", Array.Empty<string>())), Is.False);
+        });
+    }
+
     private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)
     {
         using var ms = new MemoryStream();

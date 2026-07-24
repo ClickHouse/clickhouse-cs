@@ -276,73 +276,25 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     break;
                 }
 
-                switch (packet)
+                if (packet == ServerPacketType.Data)
                 {
-                    case ServerPacketType.Data:
+                    Block block = await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, cancellationToken).ConfigureAwait(false);
+                    if (block.RowCount != 0)
                     {
-                        Block block = await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, cancellationToken).ConfigureAwait(false);
-                        if (block.RowCount != 0)
-                        {
-                            // Held as the current block so it is released when the consumer advances or stops.
-                            current = block;
-                            yield return block;
-                        }
-                        else
-                        {
-                            block.Dispose();
-                        }
-
-                        break;
+                        // Held as the current block so it is released when the consumer advances or stops.
+                        current = block;
+                        yield return block;
                     }
-                    // The remaining metadata packets are always decoded to stay stream-aligned; each is handed
-                    // to its handler when one is set, otherwise discarded. The block-bearing ones lend the block
-                    // to the handler for the duration of the call and release it immediately after.
-                    case ServerPacketType.Totals:
-                        await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnTotals, cancellationToken).ConfigureAwait(false);
-                        break;
-
-                    case ServerPacketType.Extremes:
-                        await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnExtremes, cancellationToken).ConfigureAwait(false);
-                        break;
-
-                    case ServerPacketType.ProfileEvents:
-                        await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnProfileEvents, cancellationToken).ConfigureAwait(false);
-                        break;
-
-                    case ServerPacketType.Log:
-                        await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnLog, cancellationToken).ConfigureAwait(false);
-                        break;
-
-                    case ServerPacketType.Progress:
+                    else
                     {
-                        Progress progress = await Progress.ReadAsync(reader, negotiated, cancellationToken).ConfigureAwait(false);
-                        handlers?.OnProgress?.Invoke(progress);
-                        break;
+                        block.Dispose();
                     }
-
-                    case ServerPacketType.ProfileInfo:
-                    {
-                        ProfileInfo profileInfo = await ProfileInfo.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
-                        handlers?.OnProfileInfo?.Invoke(profileInfo);
-                        break;
-                    }
-
-                    case ServerPacketType.TableColumns:
-                        // A column-defaults description the server may send; the client has no use for it yet, so
-                        // it is decoded to stay stream-aligned and discarded (an internal concern, not surfaced).
-                        await TableColumns.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
-                        break;
-
-                    case ServerPacketType.PartUUIDs:
-                        // Valid mid-query when part-level deduplication is active. Consumed to stay stream-aligned;
-                        // the decoded UUIDs have no result surface yet. TODO: surface.
-                        await PartUUIDs.ConsumeAsync(reader, cancellationToken).ConfigureAwait(false);
-                        break;
-
-                    default:
-                        // Only the packets above are valid in a query response at this protocol target; anything
-                        // else (e.g. a read-task request) is a violation here.
-                        throw new ClickHouseProtocolException($"Unexpected packet type {packet} ({(ulong)packet}) in query response.");
+                }
+                else
+                {
+                    // Everything else is interleaved metadata: consumed to stay stream-aligned, surfaced to the
+                    // handlers when set. An unexpected packet throws from here.
+                    await ConsumeMetadataAsync(packet, negotiated, handlers, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -365,6 +317,370 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         {
             throw pending;
         }
+    }
+
+    /// <summary>
+    /// The default cap on the rows per wire block (1,000,000), applied alongside the byte target
+    /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>) so a block closes at whichever it reaches first.
+    /// The byte target is the primary, width-invariant bound; this row cap keeps very narrow rows from producing
+    /// an unbounded row count in a single block.
+    /// </summary>
+    public const int DefaultMaxRowsPerBlock = 1_000_000;
+
+    /// <summary>
+    /// Runs an INSERT, streaming <paramref name="columns"/> as the row data and returning once the server
+    /// acknowledges it.
+    /// </summary>
+    /// <remarks>
+    /// Columns are matched to the target's schema <b>by name</b>: order is free, and naming a subset of the
+    /// table's columns in the statement (<c>INSERT INTO t (a, c) VALUES</c>) inserts only those, with the server
+    /// filling the rest from their defaults. Values are serialized as the target's resolved type, not the type
+    /// the column declares. Zero rows is a no-op INSERT. A mismatch (wrong names, or a CLR type the target
+    /// cannot accept) writes nothing and leaves the connection usable before throwing. Large inserts are split
+    /// into wire blocks sized to an internal byte target, additionally capped at <paramref name="maxRowsPerBlock"/>
+    /// rows per block when set (a block closes at whichever limit it reaches first).
+    /// </remarks>
+    /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
+    /// <param name="columns">The row data, matched to the target columns by name.</param>
+    /// <param name="settings">Per-query settings as textual values, or null for none.</param>
+    /// <param name="parameters">Query parameter values in SQL representation, or null for none.</param>
+    /// <param name="queryId">The query id, or null to let the server assign one.</param>
+    /// <param name="maxRowsPerBlock">A cap on the rows per wire block, applied alongside the internal byte target
+    /// (a block closes at whichever it reaches first). Defaults to <see cref="DefaultMaxRowsPerBlock"/>; pass null
+    /// for no row cap (byte target only).</param>
+    /// <param name="handlers">Optional callbacks for the metadata the server interleaves into the insert
+    /// acknowledgement (notably <see cref="MetadataHandlers.OnProgress"/> for rows written and
+    /// <see cref="MetadataHandlers.OnProfileEvents"/>), or null to discard it.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>A task that completes when the server acknowledges the insert with end-of-stream.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="columns"/> is null.</exception>
+    /// <exception cref="ArgumentException">The columns hold differing row counts or duplicate names, their names
+    /// do not match the target schema, or a column's CLR type is not writable as its target type.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxRowsPerBlock"/> is zero or negative.</exception>
+    /// <exception cref="InvalidOperationException">The connection is busy with another operation.</exception>
+    /// <exception cref="ObjectDisposedException">The connection has been terminated.</exception>
+    /// <exception cref="ClickHouseServerException">The server reported an error while executing the insert.</exception>
+    /// <exception cref="ClickHouseProtocolException">The server sent an unexpected packet, or no schema block.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    internal async ValueTask InsertAsync(
+        string sql,
+        IReadOnlyList<IColumn> columns,
+        IReadOnlyDictionary<string, string> settings = null,
+        IReadOnlyDictionary<string, string> parameters = null,
+        string queryId = null,
+        int? maxRowsPerBlock = DefaultMaxRowsPerBlock,
+        MetadataHandlers handlers = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateInsertArguments(sql, columns, maxRowsPerBlock, out int rowCount);
+
+        // Bail on cancellation before claiming the connection, so a pre-cancelled call leaves it idle.
+        cancellationToken.ThrowIfCancellationRequested();
+        BeginOperation();
+
+        NegotiatedProtocol negotiated = server.Negotiated;
+        ClickHouseServerException pending = null;
+        bool completed = false;
+        string mismatchError = null;
+        try
+        {
+            // The empty end-of-input block must follow the Query: the server waits for it before sending the
+            // schema block, so omitting it deadlocks.
+            Query.Write(writer, negotiated, clientMetadata, queryId, sql, settings, parameters);
+            writer.WriteClientPacketType(ClientPacketType.Data);
+            BlockWriter.WriteEmptyBlock(writer);
+            await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+            // Drain metadata until the schema block (the first Data packet) or a terminal packet.
+            (Block schema, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, handlers, cancellationToken).ConfigureAwait(false);
+            if (schema is null)
+            {
+                if (error is null)
+                {
+                    // Clean end-of-stream with no schema: the server never opened the row-stream phase (e.g.
+                    // inline VALUES, or INSERT … SELECT). That breaks the INSERT contract, so terminate rather
+                    // than pool a spent connection.
+                    throw new ClickHouseProtocolException("The server ended the INSERT response without sending a schema block.");
+                }
+
+                // Server Exception instead of the schema: the stream is at a packet boundary, so rethrow once
+                // the state is back to Ready.
+                pending = error;
+                completed = true;
+            }
+            else
+            {
+                // Align the caller's columns to the schema by name. No columns is the explicit no-op insert; a
+                // mismatch leaves plan null (so only the terminator goes out) and defers the throw until Ready.
+                InsertColumn[] plan;
+                using (schema)
+                {
+                    plan = columns.Count == 0
+                        ? null
+                        : BuildInsertPlan(columns, schema, validateWritable: rowCount > 0, out mismatchError);
+                }
+
+                await StreamInsertRowsAsync(plan, rowCount, maxRowsPerBlock, negotiated, cancellationToken).ConfigureAwait(false);
+
+                // Rethrow any server error once the state is back to Ready.
+                pending = await DrainToEndOfStreamAsync(negotiated, handlers, cancellationToken).ConfigureAwait(false);
+                completed = true;
+            }
+        }
+        finally
+        {
+            if (completed)
+            {
+                state = TcpConnectionState.Ready;
+            }
+            else
+            {
+                Terminate();
+            }
+        }
+
+        if (pending is not null)
+        {
+            throw pending;
+        }
+
+        if (mismatchError is not null)
+        {
+            throw new ArgumentException(mismatchError, nameof(columns));
+        }
+    }
+
+    /// <summary>
+    /// Validates the arguments that need no server round-trip — non-null inputs, a positive
+    /// <paramref name="maxRowsPerBlock"/>, a consistent row count, and unique column names — and reports that row
+    /// count. Runs before the connection is claimed, so a malformed call leaves it idle. Name-to-schema
+    /// alignment and per-column writability need the sample block and are checked after the query round-trip.
+    /// </summary>
+    /// <param name="rowCount">Set to the row count every column must share (zero when there are no columns).</param>
+    private static void ValidateInsertArguments(
+        string sql,
+        IReadOnlyList<IColumn> columns,
+        int? maxRowsPerBlock,
+        out int rowCount)
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        ArgumentNullException.ThrowIfNull(columns);
+        if (maxRowsPerBlock is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxRowsPerBlock), maxRowsPerBlock, "The rows-per-block cap must be positive.");
+        }
+
+        rowCount = columns.Count == 0 ? 0 : columns[0].RowCount;
+        for (int i = 1; i < columns.Count; i++)
+        {
+            if (columns[i].RowCount != rowCount)
+            {
+                throw new ArgumentException(
+                    $"All columns must hold the same number of rows; column 0 has {rowCount} but column {i} has {columns[i].RowCount}.",
+                    nameof(columns));
+            }
+        }
+
+        var names = new HashSet<string>(columns.Count, StringComparer.Ordinal);
+        foreach (IColumn column in columns)
+        {
+            if (!names.Add(column.Name))
+            {
+                throw new ArgumentException(
+                    $"Column '{column.Name}' is supplied more than once; column names must be unique.",
+                    nameof(columns));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes the INSERT row stream: the rows as bounded wire blocks (each read straight from the columns'
+    /// spans), then the empty terminator that closes it. A null <paramref name="plan"/> or zero
+    /// <paramref name="rowCount"/> writes only the terminator — a no-op insert. Trims the writer's pooled buffer
+    /// once everything is flushed.
+    /// </summary>
+    /// <param name="plan">The per-column write plan in schema order, or null to write only the terminator.</param>
+    private async ValueTask StreamInsertRowsAsync(
+        InsertColumn[] plan,
+        int rowCount,
+        int? maxRowsPerBlock,
+        NegotiatedProtocol negotiated,
+        CancellationToken cancellationToken)
+    {
+        if (rowCount > 0 && plan is not null)
+        {
+            // Split into wire blocks by row count alone (each column is written straight from its ergonomic form,
+            // so there is no intermediate dense buffer to build first). The between-column flush backstop bounds
+            // peak client memory while a block streams.
+            foreach ((int start, int length) in PlanInsertBlocks(rowCount, maxRowsPerBlock))
+            {
+                writer.WriteClientPacketType(ClientPacketType.Data);
+                await BlockWriter.WriteDataBlockAsync(
+                    writer, negotiated, plan, start, length, BlockWriter.DefaultFlushThresholdBytes, cancellationToken).ConfigureAwait(false);
+                await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        writer.WriteClientPacketType(ClientPacketType.Data);
+        BlockWriter.WriteEmptyBlock(writer);
+        await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+        // Return the pooled buffer to baseline so an idle connection doesn't retain a large insert's peak size.
+        writer.TrimBuffer();
+    }
+
+    /// <summary>
+    /// Reads and releases blocks until the response ends, returning the server
+    /// <see cref="ClickHouseServerException"/> that terminated it, or null on a clean end-of-stream. Either way
+    /// the stream is left at a packet boundary, so the connection stays usable.
+    /// </summary>
+    /// <param name="negotiated">The negotiated protocol.</param>
+    /// <param name="handlers">Optional metadata callbacks for the interleaved packets, or null to discard them.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The parked server exception, or null if the stream ended cleanly.</returns>
+    private async ValueTask<ClickHouseServerException> DrainToEndOfStreamAsync(
+        NegotiatedProtocol negotiated,
+        MetadataHandlers handlers,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            (Block block, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, handlers, cancellationToken).ConfigureAwait(false);
+            if (block is null)
+            {
+                return error;
+            }
+
+            block.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Splits <paramref name="rowCount"/> rows into contiguous wire-block ranges of at most
+    /// <paramref name="maxRowsPerBlock"/> rows each — the block geometry is bounded by row count alone. With no
+    /// <paramref name="maxRowsPerBlock"/> the whole insert is a single block; peak client memory while it is
+    /// written is instead bounded by the between-column flush backstop
+    /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>), not by splitting the block.
+    /// </summary>
+    /// <param name="rowCount">The number of rows to split (assumed greater than zero).</param>
+    /// <param name="maxRowsPerBlock">The cap on the rows per block, or null for a single block.</param>
+    /// <returns>The (start, length) row range of each wire block, in order.</returns>
+    internal static List<(int Start, int Length)> PlanInsertBlocks(int rowCount, int? maxRowsPerBlock)
+    {
+        var blocks = new List<(int Start, int Length)>();
+        int step = maxRowsPerBlock is int cap && cap > 0 ? cap : rowCount;
+        for (int start = 0; start < rowCount; start += step)
+        {
+            blocks.Add((start, Math.Min(step, rowCount - start)));
+        }
+
+        return blocks;
+    }
+
+    /// <summary>
+    /// Aligns the caller's columns to the schema by name, returning one descriptor per schema column (in schema
+    /// order) that pairs the target's name, resolved type, and codec with the caller's values — the caller's own
+    /// type string is ignored. With <paramref name="validateWritable"/> set, a value column whose CLR type the
+    /// target cannot serialize is rejected. Returns null and sets <paramref name="error"/> on any mismatch.
+    /// </summary>
+    /// <param name="columns">The caller's value columns; names are unique (validated earlier).</param>
+    /// <param name="schema">The server's sample block describing the target columns.</param>
+    /// <param name="validateWritable">Whether to confirm each value column is writable as its target type.</param>
+    /// <param name="error">Set to a human-readable message on mismatch; null on success.</param>
+    /// <returns>The per-column write plan in schema order, or null when <paramref name="error"/> is set.</returns>
+    private static InsertColumn[] BuildInsertPlan(IReadOnlyList<IColumn> columns, Block schema, bool validateWritable, out string error)
+    {
+        error = null;
+
+        var byName = new Dictionary<string, IColumn>(columns.Count, StringComparer.Ordinal);
+        foreach (IColumn column in columns)
+        {
+            byName[column.Name] = column;
+        }
+
+        // Align by name: every schema column must be supplied and every supplied column must exist in the schema.
+        // Both directions are reported so a wrong column set is actionable, not just a count mismatch.
+        var plan = new InsertColumn[schema.ColumnCount];
+        List<string> missing = null;
+        int matched = 0;
+        for (int i = 0; i < schema.ColumnCount; i++)
+        {
+            IColumn schemaColumn = schema[i];
+            if (byName.TryGetValue(schemaColumn.Name, out IColumn value))
+            {
+                matched++;
+                plan[i] = new InsertColumn(schemaColumn.Name, schemaColumn.TypeName, codec: null, value);
+            }
+            else
+            {
+                (missing ??= new List<string>()).Add(schemaColumn.Name);
+            }
+        }
+
+        if (missing is not null || matched != columns.Count)
+        {
+            error = DescribeSchemaMismatch(columns, schema, missing);
+            return null;
+        }
+
+        // Names line up one-to-one; resolve each target type to its codec (the target type, not the caller's) and
+        // confirm the value column is writable as it.
+        for (int i = 0; i < plan.Length; i++)
+        {
+            InsertColumn slot = plan[i];
+            IColumnCodec codec;
+            try
+            {
+                codec = ColumnCodecRegistry.Default.Resolve(slot.TypeName);
+            }
+            catch (Exception ex) when (ex is NotSupportedException or FormatException)
+            {
+                error = $"The target column '{slot.Name}' has type '{slot.TypeName}', which this client cannot serialize: {ex.Message}";
+                return null;
+            }
+
+            if (validateWritable && !codec.CanWrite(slot.Values))
+            {
+                error = $"Column '{slot.Name}' was given a value column of type {slot.Values.GetType()}, whose CLR element type the target type '{slot.TypeName}' does not accept.";
+                return null;
+            }
+
+            plan[i] = new InsertColumn(slot.Name, slot.TypeName, codec, slot.Values);
+        }
+
+        return plan;
+    }
+
+    /// <summary>Composes a message naming the columns the caller failed to supply and the ones it supplied in excess.</summary>
+    private static string DescribeSchemaMismatch(IReadOnlyList<IColumn> columns, Block schema, List<string> missing)
+    {
+        var schemaNames = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < schema.ColumnCount; i++)
+        {
+            schemaNames.Add(schema[i].Name);
+        }
+
+        List<string> unexpected = null;
+        foreach (IColumn column in columns)
+        {
+            if (!schemaNames.Contains(column.Name))
+            {
+                (unexpected ??= new List<string>()).Add(column.Name);
+            }
+        }
+
+        var parts = new List<string>(2);
+        if (missing is not null)
+        {
+            parts.Add($"missing column(s) the target requires: {string.Join(", ", missing)}");
+        }
+
+        if (unexpected is not null)
+        {
+            parts.Add($"column(s) not in the target: {string.Join(", ", unexpected)}");
+        }
+
+        return $"The insert columns do not match the target schema — {string.Join("; ", parts)}. Columns are matched to the target by name.";
     }
 
     /// <summary>
@@ -473,6 +789,110 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
 
         state = TcpConnectionState.Ready;
+    }
+
+    /// <summary>
+    /// Reads packets, consuming interleaved metadata, until the next Data block or a terminal packet. Returns
+    /// the decoded block (the caller owns and must dispose it), or a null block when the stream ended — with the
+    /// server Exception attached when the end was an <see cref="ServerPacketType.Exception"/>, or a null
+    /// exception on a clean <see cref="ServerPacketType.EndOfStream"/>. A read failure propagates; the caller
+    /// terminates the connection.
+    /// </summary>
+    /// <param name="negotiated">The negotiated protocol, for version-gated fields.</param>
+    /// <param name="handlers">Optional metadata callbacks for the interleaved packets, or null to discard them.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The next Data block, or a null block plus the parked terminal exception (if any).</returns>
+    private async ValueTask<(Block block, ClickHouseServerException error)> ReadToNextDataBlockAsync(
+        NegotiatedProtocol negotiated,
+        MetadataHandlers handlers,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            ServerPacketType packet = await reader.ReadServerPacketTypeAsync(cancellationToken).ConfigureAwait(false);
+            switch (packet)
+            {
+                case ServerPacketType.EndOfStream:
+                    return (null, null);
+
+                case ServerPacketType.Exception:
+                    return (null, await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false));
+
+                case ServerPacketType.Data:
+                    return (await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, cancellationToken).ConfigureAwait(false), null);
+
+                default:
+                    await ConsumeMetadataAsync(packet, negotiated, handlers, cancellationToken).ConfigureAwait(false);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Consumes one interleaved metadata packet to keep the stream aligned, handing it to the matching callback
+    /// in <paramref name="handlers"/> when one is set and discarding it otherwise. Shared by the query and insert
+    /// response drains. Any packet type not valid mid-response at this protocol target is a violation.
+    /// </summary>
+    /// <param name="packet">The packet type just read (never Data, Exception, or EndOfStream).</param>
+    /// <param name="negotiated">The negotiated protocol, for version-gated fields.</param>
+    /// <param name="handlers">Optional metadata callbacks, or null to discard every packet.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <exception cref="ClickHouseProtocolException"><paramref name="packet"/> is not a valid interleaved packet.</exception>
+    private async ValueTask ConsumeMetadataAsync(
+        ServerPacketType packet,
+        NegotiatedProtocol negotiated,
+        MetadataHandlers handlers,
+        CancellationToken cancellationToken)
+    {
+        switch (packet)
+        {
+            // Block-bearing packets lend the borrowed block to the handler for the call, then release it.
+            case ServerPacketType.Totals:
+                await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnTotals, cancellationToken).ConfigureAwait(false);
+                break;
+
+            case ServerPacketType.Extremes:
+                await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnExtremes, cancellationToken).ConfigureAwait(false);
+                break;
+
+            case ServerPacketType.ProfileEvents:
+                await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnProfileEvents, cancellationToken).ConfigureAwait(false);
+                break;
+
+            case ServerPacketType.Log:
+                await ReadMetadataBlockAsync(reader, negotiated, handlers?.OnLog, cancellationToken).ConfigureAwait(false);
+                break;
+
+            case ServerPacketType.Progress:
+            {
+                Progress progress = await Progress.ReadAsync(reader, negotiated, cancellationToken).ConfigureAwait(false);
+                handlers?.OnProgress?.Invoke(progress);
+                break;
+            }
+
+            case ServerPacketType.ProfileInfo:
+            {
+                ProfileInfo profileInfo = await ProfileInfo.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+                handlers?.OnProfileInfo?.Invoke(profileInfo);
+                break;
+            }
+
+            case ServerPacketType.TableColumns:
+                // Column-defaults metadata the server may send before the schema block; decoded to stay aligned
+                // and discarded (no result surface yet).
+                await TableColumns.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+                break;
+
+            case ServerPacketType.PartUUIDs:
+                // Valid when part-level deduplication is active; consumed to stay aligned. TODO: surface.
+                await PartUUIDs.ConsumeAsync(reader, cancellationToken).ConfigureAwait(false);
+                break;
+
+            default:
+                // Anything else (e.g. TimezoneUpdate, a read-task request) is not valid interleaved in a query or
+                // insert response at this protocol target.
+                throw new ClickHouseProtocolException($"Unexpected packet type {packet} ({(ulong)packet}) in server response.");
+        }
     }
 
     /// <summary>

@@ -100,6 +100,19 @@ public class IntegerColumnCodecTests
         });
     }
 
+    [Test]
+    public void CanWrite_MatchesElementType_RejectsMismatch()
+    {
+        var codec = new IntegerColumnCodec<int>("Int32");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWrite(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.True);
+            Assert.That(codec.CanWrite(PrimitiveColumn<long>.FromValues("c", "Int64", new[] { 1L })), Is.False);
+            Assert.That(codec.CanWrite(new ArrayColumn<string>("c", "String", new[] { "x" })), Is.False);
+        });
+    }
+
     private static async Task AssertRoundTripAsync<T>(IColumnCodec codec, string type, T[] values)
         where T : unmanaged
     {
