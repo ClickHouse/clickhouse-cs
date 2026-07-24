@@ -133,7 +133,11 @@ internal sealed class NullableColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => innerCanWrite && ResolveWriteShape(column) is not null;
 
     /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer) => inner.WriteStatePrefix(writer);
+    // Every inner type supported today has a data-independent state prefix, so the outer column/slice is
+    // forwarded unchanged and ignored by the inner. A future data-dependent inner (e.g. Dynamic) will need the
+    // inner's own sliced value column projected here, landed with the prefix->data scratch work.
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+        => inner.WriteStatePrefix(writer, column, start, length);
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
