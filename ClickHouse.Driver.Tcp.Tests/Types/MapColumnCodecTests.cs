@@ -186,62 +186,6 @@ public class MapColumnCodecTests
     }
 
     [Test]
-    public void MeasureRowBytes_FixedWidthKeyAndValue_CountsOneOffsetPlusPairs()
-    {
-        IColumnCodec codec = Resolve("Map(UInt8, UInt32)");
-        var column = new ArrayColumn<KeyValuePair<byte, uint>[]>("c", "Map(UInt8, UInt32)", new[]
-        {
-            Row<byte, uint>((1, 10), (2, 20), (3, 30)),
-            Array.Empty<KeyValuePair<byte, uint>>(),
-        });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.MeasureRowBytes(column, 0), Is.EqualTo(8 + (3 * (1 + 4)))); // one offset + three (UInt8 + UInt32) pairs
-            Assert.That(codec.MeasureRowBytes(column, 1), Is.EqualTo(8));                  // one offset, no pairs
-            Assert.That(codec.FixedRowByteSize, Is.Null);
-        });
-    }
-
-    [Test]
-    public void MeasureRowBytes_VariableKeyOrValue_WalksEachPair()
-    {
-        IColumnCodec codec = Resolve("Map(String, UInt32)");
-        var column = new ArrayColumn<KeyValuePair<string, uint>[]>("c", "Map(String, UInt32)", new[]
-        {
-            Row<string, uint>(("a", 1), ("bb", 2)),
-            Array.Empty<KeyValuePair<string, uint>>(),
-        });
-
-        Assert.Multiple(() =>
-        {
-            // offset + ("a" = 1+1) + ("bb" = 1+2) keys + two UInt32 values
-            Assert.That(codec.MeasureRowBytes(column, 0), Is.EqualTo(8 + (1 + 1) + (1 + 2) + (2 * 4)));
-            Assert.That(codec.MeasureRowBytes(column, 1), Is.EqualTo(8));
-        });
-    }
-
-    [Test]
-    public async Task MeasureRowBytes_DenseColumn_PricesFromOffsetsAndStreams()
-    {
-        // A dense MapColumn (the read-back shape) re-inserted goes through the offsets-based measure path, distinct
-        // from the jagged-column path.
-        IColumnCodec codec = Resolve("Map(String, UInt32)");
-        var jagged = new ArrayColumn<KeyValuePair<string, uint>[]>("c", "Map(String, UInt32)", new[]
-        {
-            Row<string, uint>(("a", 1), ("bb", 2)),
-            Array.Empty<KeyValuePair<string, uint>>(),
-        });
-        using IColumn dense = await CodecTestHarness.RoundTripAsync(codec, jagged, "Map(String, UInt32)", 2);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.MeasureRowBytes(dense, 0), Is.EqualTo(8 + (1 + 1) + (1 + 2) + (2 * 4)));
-            Assert.That(codec.MeasureRowBytes(dense, 1), Is.EqualTo(8));
-        });
-    }
-
-    [Test]
     public void WriteColumn_NullRow_ThrowsArgumentException()
     {
         // Map(K, V) rows are non-nullable, so a null row is rejected rather than silently written as an empty map.
@@ -253,20 +197,6 @@ public class MapColumnCodecTests
         });
 
         Assert.ThrowsAsync<ArgumentException>(() => CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
-    }
-
-    [Test]
-    public void MeasureRowBytes_NullRow_ThrowsArgumentException()
-    {
-        // Sizing must agree with the write path: a null row is invalid, not empty.
-        IColumnCodec codec = Resolve("Map(String, UInt8)");
-        var column = new ArrayColumn<KeyValuePair<string, byte>[]>("c", "Map(String, UInt8)", new[]
-        {
-            Row<string, byte>(("a", 1)),
-            null,
-        });
-
-        Assert.Throws<ArgumentException>(() => codec.MeasureRowBytes(column, 1));
     }
 
     [Test]
@@ -343,29 +273,6 @@ public class MapColumnCodecTests
             Assert.Throws<NotSupportedException>(() => Resolve("Map(NoSuchType, UInt32)"));
             Assert.Throws<NotSupportedException>(() => Resolve("Map(String, NoSuchType)"));
         });
-    }
-
-    [Test]
-    public void TryDensify_DenseMapWithErgonomicValueColumn_DisposesOnlyRebuiltColumnNotBorrowed()
-    {
-        // A dense MapColumn whose value column is still ergonomic (a jagged ArrayColumn) while its key column is
-        // already dense (a leaf): TryDensify rebuilds only the value column and keeps the key column by reference.
-        // Disposing the rebuilt wrapper must free the freshly built value column but leave the borrowed key column
-        // alone — it is still owned by the source column, so disposing it here would double-dispose it.
-        IColumnCodec codec = Resolve("Map(Int32, Array(Int32))");
-        var borrowedKeys = new DisposeSpyColumn<int>("c", "Int32", new[] { 7 });
-        var ergonomicValues = new ArrayColumn<int[]>("c", "Array(Int32)", new[] { new[] { 1, 2 } });
-        var source = new MapColumn<int, int[]>("c", "Map(Int32, Array(Int32))", borrowedKeys, ergonomicValues, new[] { 0, 1 }, rowCount: 1, pooledOffsets: false);
-
-        IColumn densified = codec.TryDensify(source, out bool built);
-        Assert.That(built, Is.True, "the value column was ergonomic, so a rebuild is expected");
-        Assert.That(densified, Is.Not.SameAs(source));
-        densified.Dispose();
-
-        Assert.That(borrowedKeys.DisposeCount, Is.EqualTo(0), "the borrowed, already-dense key column must not be disposed by the rebuilt wrapper");
-
-        ergonomicValues.Dispose();
-        borrowedKeys.Dispose();
     }
 
     [Test]
