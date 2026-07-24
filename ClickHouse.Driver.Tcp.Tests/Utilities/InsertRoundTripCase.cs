@@ -1009,8 +1009,8 @@ public sealed class InsertRoundTripCase
 
         // One Dynamic column holding a value of (basically) every supported type — each row's runtime CLR type is
         // inferred to a distinct ClickHouse type, so the block's type list spans them all at once. Uses the
-        // canonical read-back CLR types (e.g. ClickHouseDateTime64, ClickHouseDecimal) so insert equals read-back;
-        // the DateTimeOffset/DateTime/decimal inputs, whose read-back type differs, are covered separately below.
+        // canonical read-back CLR types (e.g. ClickHouseDecimal) so insert equals read-back; the
+        // DateTimeOffset/DateTime/decimal inputs, whose read-back type differs, are covered separately below.
         yield return Same(
             "Dynamic [every type + composites]",
             "Dynamic",
@@ -1022,7 +1022,6 @@ public sealed class InsertRoundTripCase
                 Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)),
                 1.5f, 3.5d, true, "héllo✓", new Guid("00112233-4455-6677-8899-aabbccddeeff"),
                 new DateOnly(2024, 1, 15), IPAddress.Parse("192.168.1.1"), IPAddress.Parse("2001:db8::1"),
-                new ClickHouseDateTime64(1_700_000_000_123L, 3, TimeSpan.Zero),
                 new ClickHouseDecimal(System.Numerics.BigInteger.Parse("1234567890123456789012345"), 5),
                 new ulong[] { 1, 2, 3 },
                 Pairs<string, uint>(("k", 9), ("m", 10)),
@@ -1032,8 +1031,8 @@ public sealed class InsertRoundTripCase
             DynamicSettings);
 
         // Inputs whose inferred ClickHouse type reads back as a different (canonical) CLR type: a DateTimeOffset
-        // and a DateTime infer to DateTime64(9) (read back as ClickHouseDateTime64, equal by instant), and a
-        // System.Decimal infers to Decimal128 (read back as ClickHouseDecimal, equal by value).
+        // and a DateTime infer to DateTime64(9) (read back as the raw long nanosecond count), and a System.Decimal
+        // infers to Decimal128 (read back as ClickHouseDecimal, equal by value).
         yield return new InsertRoundTripCase(
             "Dynamic [datetime + decimal inference]",
             "Dynamic",
@@ -1046,8 +1045,8 @@ public sealed class InsertRoundTripCase
             }),
             name => new ArrayColumn<object>(name, "Dynamic", new object[]
             {
-                ClickHouseDateTime64.FromDateTimeOffset(new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)), 9),
-                ClickHouseDateTime64.FromDateTimeOffset(new DateTimeOffset(new DateTime(1988, 8, 28, 11, 22, 33, DateTimeKind.Utc)), 9),
+                (new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)).UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks) * 100,
+                (new DateTime(1988, 8, 28, 11, 22, 33, DateTimeKind.Utc).Ticks - DateTime.UnixEpoch.Ticks) * 100,
                 new ClickHouseDecimal(new System.Numerics.BigInteger(123456789), 4),
                 null,
             }),
