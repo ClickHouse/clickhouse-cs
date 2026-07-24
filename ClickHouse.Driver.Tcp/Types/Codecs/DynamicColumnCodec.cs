@@ -505,8 +505,9 @@ internal sealed class DynamicColumnCodec : IColumnCodec
 
     private static Func<string, string, object[], int, IColumn> FlatBuilderFor(Type elementType)
         => FlatBuilders.GetOrAdd(elementType, static type => (Func<string, string, object[], int, IColumn>)
-            typeof(DynamicColumnCodec)
+            (typeof(DynamicColumnCodec)
                 .GetMethod(nameof(BuildFlatColumn), BindingFlags.NonPublic | BindingFlags.Static)
+                    ?? throw new InvalidOperationException($"Method '{nameof(BuildFlatColumn)}' was not found."))
                 .MakeGenericMethod(type)
                 .CreateDelegate(typeof(Func<string, string, object[], int, IColumn>)));
 
