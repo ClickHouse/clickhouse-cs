@@ -49,6 +49,55 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         }
     }
 
+    // The dense counterpart of the convenient-form round-trip above: seed a table with the caller-friendly column,
+    // then re-insert what a read produces — the dense wire-shaped column (ArrayValueColumn, TupleColumn, MapColumn,
+    // NestedColumn, VariantColumn, the dictionary-backed LowCardinality column, …) — into a second table and read
+    // that back. This proves every supported type also inserts correctly in its dense form, not just the ergonomic
+    // one, exercising the codecs' zero-copy dense write path end-to-end. The read-back block is re-inserted inside
+    // its own iteration (through a second connection), never retained past it.
+    [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
+    public async Task InsertAsync_DenseReadbackReinserted_RoundTripsThroughSelect(InsertRoundTripCase testCase)
+    {
+        await using var source = await TcpServerFixture.ConnectAsync(None);
+        await using var sink = await TcpServerFixture.ConnectAsync(None);
+        string seedTable = UniqueTableName();
+        string denseTable = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(source, $"CREATE TABLE {seedTable} (value {testCase.ClickHouseType}) ENGINE = Memory", testCase.Settings);
+            await ExecuteAsync(sink, $"CREATE TABLE {denseTable} (value {testCase.ClickHouseType}) ENGINE = Memory", testCase.Settings);
+
+            await source.InsertAsync($"INSERT INTO {seedTable} (value) VALUES", new[] { testCase.BuildInsertColumn("value") }, settings: testCase.Settings, cancellationToken: None);
+
+            // Re-insert each dense read-back block into the second table while it is still valid (a second
+            // connection, since the source query is streaming on the first).
+            await foreach (Block block in source.QueryAsync($"SELECT value FROM {seedTable}", settings: testCase.Settings, cancellationToken: None))
+            {
+                await sink.InsertAsync($"INSERT INTO {denseTable} (value) VALUES", new[] { block[0] }, settings: testCase.Settings, cancellationToken: None);
+            }
+
+            IColumn expected = testCase.BuildExpectedColumn("value");
+            int blockCount = 0;
+            await foreach (Block block in sink.QueryAsync($"SELECT value FROM {denseTable}", settings: testCase.Settings, cancellationToken: None))
+            {
+                blockCount++;
+                AssertColumnsEqual(expected, block[0]);
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(blockCount, Is.EqualTo(1), "re-inserting the dense read-back should round-trip exactly one row-bearing block");
+                Assert.That(source.State, Is.EqualTo(TcpConnectionState.Ready));
+                Assert.That(sink.State, Is.EqualTo(TcpConnectionState.Ready));
+            });
+        }
+        finally
+        {
+            await ExecuteAsync(source, $"DROP TABLE IF EXISTS {seedTable}");
+            await ExecuteAsync(sink, $"DROP TABLE IF EXISTS {denseTable}");
+        }
+    }
+
     [Test]
     public async Task InsertAsync_MultipleColumnsAndRows_RoundTripsEveryColumn()
     {
@@ -349,6 +398,107 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         }
 
         Assert.That(probe, Is.EqualTo((byte)1));
+    }
+
+    // The values-per-row shape (varying lengths, interspersed empties) that makes the offsets stream non-trivial,
+    // shared by the two block-splitting tests below.
+    private static readonly uint[][] JaggedArrayRows =
+    {
+        new uint[] { 1 },
+        Array.Empty<uint>(),
+        new uint[] { 2, 3 },
+        new uint[] { 4, 5, 6 },
+        Array.Empty<uint>(),
+        new uint[] { 7 },
+        new uint[] { 8, 9, 10, 11 },
+    };
+
+    [Test]
+    public async Task InsertAsync_JaggedArrayColumnSplitAcrossBlocks_RoundTripsEveryRow()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Array(UInt32)) ENGINE = Memory");
+
+            // maxRowsPerBlock: 2 forces the seven rows into four wire blocks. Each block re-bases its offsets at
+            // zero, so this drives the ergonomic jagged write path across block boundaries. The id column pins the
+            // read-back order (Memory does not guarantee it otherwise).
+            IColumn[] columns =
+            {
+                PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(JaggedArrayRows.Length)),
+                new ArrayColumn<uint[]>("value", "Array(UInt32)", JaggedArrayRows),
+            };
+            await connection.InsertAsync($"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, cancellationToken: None);
+
+            uint[][] readBack = await ReadArraysOrderedByIdAsync(connection, table, JaggedArrayRows.Length);
+            Assert.That(readBack, Is.EqualTo(JaggedArrayRows));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Test]
+    public async Task InsertAsync_DenseArrayValueColumnSplitAcrossBlocks_RoundTripsEveryRow()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Array(UInt32)) ENGINE = Memory");
+
+            // The dense wire-shaped column (one flat inner column + a cumulative offsets array) is the zero-copy
+            // write source a read produces. Splitting it with maxRowsPerBlock: 2 exercises the dense write path's
+            // slice-relative offset arithmetic — subtracting each block's first element index — which only runs
+            // when a block begins at a non-zero element offset (blocks 2+ here).
+            var inner = PrimitiveColumn<uint>.FromValues("value", "UInt32", new uint[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 });
+            var dense = new ArrayValueColumn<uint>("value", "Array(UInt32)", inner, new[] { 0, 1, 1, 3, 6, 6, 7, 11 }, rowCount: JaggedArrayRows.Length, pooledOffsets: false);
+            IColumn[] columns =
+            {
+                PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(JaggedArrayRows.Length)),
+                dense,
+            };
+            await connection.InsertAsync($"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, cancellationToken: None);
+
+            uint[][] readBack = await ReadArraysOrderedByIdAsync(connection, table, JaggedArrayRows.Length);
+            Assert.That(readBack, Is.EqualTo(JaggedArrayRows));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    private static uint[] RowIds(int count)
+    {
+        var ids = new uint[count];
+        for (uint i = 0; i < count; i++)
+        {
+            ids[i] = i;
+        }
+
+        return ids;
+    }
+
+    // Reads the Array(UInt32) column back in id order, copying each row out of the borrowed block (the materialized
+    // arrays are fresh copies, so they outlive it).
+    private static async Task<uint[][]> ReadArraysOrderedByIdAsync(ClickHouseTcpConnection connection, string table, int expectedRows)
+    {
+        var rows = new List<uint[]>(expectedRows);
+        await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table} ORDER BY id", cancellationToken: None))
+        {
+            foreach (uint[] row in ((IColumn<uint[]>)block[0]).Values)
+            {
+                rows.Add(row);
+            }
+        }
+
+        return rows.ToArray();
     }
 
     private static void AssertColumnsEqual(IColumn expected, IColumn actual)

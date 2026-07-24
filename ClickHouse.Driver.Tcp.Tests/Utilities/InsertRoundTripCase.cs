@@ -185,6 +185,75 @@ public sealed class InsertRoundTripCase
         yield return NullableIps("IPv4", "127.0.0.1", null, "255.255.255.255");
         yield return NullableIps("IPv6", "::1", null, "2001:db8::1");
         yield return NullableIps("IPv4", null, null); // every row null
+
+        // Array(T): one case per supported inner element type, so every type also survives being wrapped in an
+        // Array — a distinct write path (offsets stream + a single flattened values stream). Each row surfaces as
+        // the inner element array; empty rows (equal consecutive offsets) and all-empty columns exercise the
+        // zero-length paths. Array is the one exception to the "wrap every type in Nullable" rule — the server
+        // rejects Nullable(Array(T)) — so nullability is composed the other way here, as Array(Nullable(T)).
+        yield return Arrays("UInt8", new byte[] { 0, 128, 255 }, Array.Empty<byte>(), new byte[] { 1 });
+        yield return Arrays("Int8", new sbyte[] { -128, -1, 0, 127 }, Array.Empty<sbyte>());
+        yield return Arrays("UInt16", new ushort[] { 0, 258, ushort.MaxValue }, new ushort[] { 1 });
+        yield return Arrays("Int16", new short[] { short.MinValue, -1, 0, short.MaxValue });
+        yield return Arrays("UInt32", new uint[] { 10, 20, 30 }, Array.Empty<uint>(), new uint[] { 40, 50 });
+        yield return Arrays("Int32", new[] { int.MinValue, -1, 0, int.MaxValue }, Array.Empty<int>());
+        yield return Arrays("UInt64", new ulong[] { 0, 1, ulong.MaxValue });
+        yield return Arrays("Int64", new[] { long.MinValue, 0L }, new[] { long.MaxValue });
+        yield return Arrays("UInt128", new[] { UInt128.Zero, UInt128.One, UInt128.MaxValue });
+        yield return Arrays("Int128", new[] { Int128.MinValue, Int128.Zero, Int128.MaxValue });
+        yield return Arrays("UInt256", new[] { UInt256.Zero, UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)) });
+        yield return Arrays("Int256", new[] { Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)), Int256.Zero });
+        yield return Arrays("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, Array.Empty<sbyte>());
+        yield return Arrays("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 });
+        yield return Arrays("Float32", new[] { 0f, 1.5f, -1.5f, float.MaxValue }, Array.Empty<float>());
+        yield return Arrays("Float64", new[] { 0d, -1.5e100, double.MaxValue });
+        yield return Arrays("Bool", new[] { true, false, true }, Array.Empty<bool>());
+        yield return Arrays("String", new[] { "a", "bb" }, Array.Empty<string>(), new[] { string.Empty, "héllo✓" });
+        yield return Arrays("Date", new[] { new DateOnly(1970, 1, 1), new DateOnly(2149, 6, 6) }, Array.Empty<DateOnly>());
+        yield return Arrays("Date32", new[] { new DateOnly(1900, 1, 1), new DateOnly(2299, 12, 31) });
+
+        // Array(DateTime)/Array(DateTime64) insert and read back a DateTimeOffset / ClickHouseDateTime64 element;
+        // equality is by instant, so the offset the server presents does not matter.
+        yield return Arrays<DateTimeOffset>("DateTime", new[] { new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero), DateTimeOffset.UnixEpoch }, Array.Empty<DateTimeOffset>());
+        yield return Arrays<ClickHouseDateTime64>("DateTime64(3)", new[] { new ClickHouseDateTime64(0L, 3, TimeSpan.Zero), new ClickHouseDateTime64(1_700_000_000_123L, 3, TimeSpan.Zero) });
+        yield return Arrays<ClickHouseDateTime64>("DateTime64(9)", new[] { new ClickHouseDateTime64(1_700_000_000_123_456_789L, 9, TimeSpan.Zero) }, Array.Empty<ClickHouseDateTime64>());
+
+        yield return Arrays("UUID", new[] { Guid.Empty }, new[] { new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff") });
+        yield return Arrays<IPAddress>("IPv4", new[] { IPAddress.Parse("0.0.0.0"), IPAddress.Parse("255.255.255.255") }, Array.Empty<IPAddress>());
+        yield return Arrays<IPAddress>("IPv6", new[] { IPAddress.Parse("::1"), IPAddress.Parse("2001:db8::1") });
+
+        yield return Arrays("Decimal(9, 2)", new[] { 0m, 1.23m, -1.23m, 9999999.99m }, Array.Empty<decimal>());
+        yield return Arrays("Decimal(18, 4)", new[] { 12345.6789m, -12345.6789m });
+        yield return Arrays<ClickHouseDecimal>("Decimal(38, 10)", new[] { ParseWide("12345.6789"), ParseWide("-98765.4321") });
+        yield return Arrays<ClickHouseDecimal>("Decimal(76, 20)", new[] { ParseWide("1.00000000000000000001"), ParseWide("-1.00000000000000000001") });
+
+        yield return Arrays("IntervalSecond", new[] { 0L, 1L, -5L }, Array.Empty<long>());
+        yield return Arrays("IntervalDay", new[] { 7L, -30L });
+
+        // Experimental server types: enable their flag on the round-trip (same as their bare cases).
+        yield return Arrays("BFloat16", BFloat16Settings, new[] { 0f, 1f, -2f, 0.5f }, Array.Empty<float>());
+        yield return Arrays("Time", TimeSettings, new[] { TimeSpan.Zero, new TimeSpan(12, 34, 56) }, Array.Empty<TimeSpan>());
+        yield return Arrays("Time64(3)", TimeSettings, new[] { TimeSpan.Zero, new TimeSpan(0, 1, 2, 3, 456) });
+
+        // Array(Nullable(T)): nullability composed inside the array, for both a value inner and a reference inner.
+        yield return Arrays<uint?>("Nullable(UInt32)", new uint?[] { 1, null, 3 }, Array.Empty<uint?>(), new uint?[] { null });
+        yield return Arrays<int?>("Nullable(Int32)", new int?[] { int.MinValue, null, 0 });
+        yield return Arrays<string>("Nullable(String)", new[] { "x", null, string.Empty }, new string[] { null });
+        yield return Arrays<IPAddress>("Nullable(IPv4)", new[] { IPAddress.Parse("127.0.0.1"), null });
+
+        // Nested arrays: the same offsets-plus-values shape recurses one level down.
+        yield return Arrays<byte[]>("Array(UInt8)", new[] { new byte[] { 1, 2 } }, Array.Empty<byte[]>(), new[] { new byte[] { 3 }, new byte[] { 4, 5 } });
+        yield return Arrays<string[]>("Array(String)", new[] { new[] { "a" }, new[] { "b", "c" } }, Array.Empty<string[]>());
+    }
+
+    // Array(T) inserts and reads back the inner element arrays; the ergonomic jagged column doubles as expected.
+    private static InsertRoundTripCase Arrays<T>(string innerType, params T[][] rows)
+        => Arrays(innerType, settings: null, rows);
+
+    private static InsertRoundTripCase Arrays<T>(string innerType, IReadOnlyDictionary<string, string> settings, params T[][] rows)
+    {
+        string type = $"Array({innerType})";
+        return Same($"{type} [{rows.Length} rows]", type, name => new ArrayColumn<T[]>(name, type, rows), settings);
     }
 
     private static InsertRoundTripCase NullableValues<T>(string innerType, params T?[] values)
