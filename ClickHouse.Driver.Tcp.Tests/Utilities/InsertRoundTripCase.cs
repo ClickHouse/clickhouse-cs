@@ -218,8 +218,8 @@ public sealed class InsertRoundTripCase
 
         // Experimental server types: enable their flag on the round-trip (same as their non-nullable cases).
         yield return NullableValues<float>("BFloat16", BFloat16Settings, 0f, null, 1f, -2f);
-        yield return NullableValues<TimeSpan>("Time", TimeSettings, TimeSpan.Zero, null, new TimeSpan(12, 34, 56));
-        yield return NullableValues<TimeSpan>("Time64(3)", TimeSettings, TimeSpan.Zero, null, new TimeSpan(0, 1, 2, 3, 456));
+        yield return NullableValues<int>("Time", TimeSettings, 0, null, (12 * 3600) + (34 * 60) + 56);
+        yield return NullableValues<long>("Time64(3)", TimeSettings, 0L, null, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456);
 
         yield return NullableStrings("hello", null, "world", string.Empty);
         yield return NullableStrings(null, null); // every row null
@@ -242,17 +242,21 @@ public sealed class InsertRoundTripCase
         return new InsertRoundTripCase($"{type} [{values.Length} rows]", type, name => new ArrayColumn<T?>(name, type, values), name => new ArrayColumn<T?>(name, type, values), settings);
     }
 
-    // Nullable(DateTime) inserts and reads back a DateTimeOffset?; DateTimeOffset equality compares the instant,
-    // so the offset the server presents on read need not match the (UTC) one supplied here.
+    // Nullable(DateTime) inserts a DateTimeOffset? but reads back the raw UInt32 epoch seconds (uint?); the
+    // expected column carries each present instant's epoch seconds, with nulls preserved.
     private static InsertRoundTripCase NullableDateTimes(params DateTimeOffset?[] values)
-        => Same($"Nullable(DateTime) [{values.Length} rows]", "Nullable(DateTime)", name => new ArrayColumn<DateTimeOffset?>(name, "Nullable(DateTime)", values));
+        => new(
+            $"Nullable(DateTime) [{values.Length} rows]",
+            "Nullable(DateTime)",
+            name => new ArrayColumn<DateTimeOffset?>(name, "Nullable(DateTime)", values),
+            name => new ArrayColumn<uint?>(name, "Nullable(DateTime)", Array.ConvertAll(values, v => v is null ? (uint?)null : (uint)v.Value.ToUnixTimeSeconds())),
+            settings: null);
 
-    // Nullable(DateTime64(scale)) surfaces a ClickHouseDateTime64?; a null count maps to a null row.
+    // Nullable(DateTime64(scale)) surfaces a long? raw count at the column's scale; a null count maps to a null row.
     private static InsertRoundTripCase NullableDateTime64s(int scale, params long?[] counts)
     {
         string type = $"Nullable(DateTime64({scale}))";
-        return Same($"{type} [{counts.Length} rows]", type, name => new ArrayColumn<ClickHouseDateTime64?>(
-            name, type, Array.ConvertAll(counts, c => c is null ? (ClickHouseDateTime64?)null : new ClickHouseDateTime64(c.Value, scale, TimeSpan.Zero))));
+        return Same($"{type} [{counts.Length} rows]", type, name => new ArrayColumn<long?>(name, type, counts));
     }
 
     // Nullable of a wide decimal (Decimal128/256) surfaces a ClickHouseDecimal?; a null string maps to a null row.
