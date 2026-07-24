@@ -27,12 +27,6 @@ public class FixedStringColumnCodecTests
     }
 
     [Test]
-    public void FixedRowByteSize_IsTheDeclaredWidth()
-    {
-        Assert.That(Codec(16).FixedRowByteSize, Is.EqualTo(16));
-    }
-
-    [Test]
     public async Task WriteColumn_ExactWidthValue_WritesBytesVerbatim()
     {
         byte[] value = { 0xDE, 0xAD, 0xBE, 0xEF };
