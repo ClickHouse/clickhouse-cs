@@ -23,8 +23,27 @@ internal class StreamCallbackContent : HttpContent
     }
 
     protected override Task SerializeToStreamAsync(Stream stream, TransportContext context)
+        => SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+    // HttpClient supplies its own cancellation token here (folding in HttpClient.Timeout and internal
+    // aborts). Serialization should observe both it and the caller's token, but only pay for a linked
+    // CancellationTokenSource when both can actually fire — the caller often passes a non-cancelable
+    // token, and this content is created per insert batch.
+    protected override Task SerializeToStreamAsync(Stream stream, TransportContext context, CancellationToken httpCancellationToken)
     {
-        return callback(stream, cancellationToken);
+        if (!cancellationToken.CanBeCanceled)
+            return callback(stream, httpCancellationToken);
+
+        if (!httpCancellationToken.CanBeCanceled)
+            return callback(stream, cancellationToken);
+
+        return SerializeLinkedAsync(stream, httpCancellationToken);
+    }
+
+    private async Task SerializeLinkedAsync(Stream stream, CancellationToken httpCancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, httpCancellationToken);
+        await callback(stream, linked.Token).ConfigureAwait(false);
     }
 
     protected override bool TryComputeLength(out long length)
