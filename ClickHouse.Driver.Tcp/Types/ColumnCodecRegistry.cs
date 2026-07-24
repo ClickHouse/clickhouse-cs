@@ -128,6 +128,10 @@ internal sealed class ColumnCodecRegistry
         // Array(T) wraps a child codec (offsets + flattened element values), resolved recursively.
         AddFactory("Array", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => ArrayColumnCodec.Create(node, context, registry));
 
+        // Tuple(T1, ..., Tn) serializes its elements as N independent child columns (all prefixes then all
+        // bodies, in order); each element codec is resolved recursively and element names, if any, are kept.
+        AddFactory("Tuple", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => TupleColumnCodec.Create(node, context, registry));
+
         return new ColumnCodecRegistry(byName);
     }
 }
