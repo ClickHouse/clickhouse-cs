@@ -138,6 +138,13 @@ internal sealed class ByteArrayEqualityComparer : IEqualityComparer<byte[]>
     /// <inheritdoc/>
     public int GetHashCode(byte[] obj)
     {
+        // A null key hashes deterministically to zero (like EqualityComparer<byte[]>.Default) rather than
+        // throwing inside HashCode.AddBytes, so a stray null element never faults the dictionary build.
+        if (obj is null)
+        {
+            return 0;
+        }
+
         var hash = new HashCode();
         hash.AddBytes(obj);
         return hash.ToHashCode();
