@@ -196,8 +196,20 @@ internal sealed class DateTime64Column : IColumn<ClickHouseDateTime64>
             return new ClickHouseDateTime64(count, scale, constantOffset);
         }
 
-        long dotNetTicks = FixedPointScaling.ShiftDecimalPlaces(count, DotNetTickScale - scale);
-        var utc = new DateTimeOffset(UnixEpochTicks + dotNetTicks, TimeSpan.Zero);
-        return new ClickHouseDateTime64(count, scale, timeZone.GetUtcOffset(utc));
+        // Resolving a DST zone's offset projects the instant onto the .NET calendar, which overflows for counts
+        // outside DateTimeOffset's range even though the raw count itself is decodable. Surface that as an
+        // actionable message pointing at the raw-count accessors rather than a bare arithmetic exception.
+        try
+        {
+            long dotNetTicks = FixedPointScaling.ShiftDecimalPlaces(count, DotNetTickScale - scale);
+            var utc = new DateTimeOffset(UnixEpochTicks + dotNetTicks, TimeSpan.Zero);
+            return new ClickHouseDateTime64(count, scale, timeZone.GetUtcOffset(utc));
+        }
+        catch (Exception ex) when (ex is OverflowException or ArgumentOutOfRangeException)
+        {
+            throw new OverflowException(
+                $"A DateTime64 count of {count} at scale {scale} is outside the range presentable as a DateTimeOffset in timezone '{timeZone.Id}'; read the raw value via GetCount or Counts instead.",
+                ex);
+        }
     }
 }
