@@ -23,7 +23,10 @@ internal sealed class DateColumnCodec : IColumnCodec
     public string TypeName => "Date";
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => sizeof(ushort);
+    public Type ElementType => typeof(DateOnly);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => DateColumnCodecShared.Epoch;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -46,8 +49,10 @@ internal sealed class DateColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        foreach (DateOnly value in ((IColumn<DateOnly>)column).Values.Slice(start, length))
+        var typed = (IColumn<DateOnly>)column;
+        for (int i = 0; i < length; i++)
         {
+            DateOnly value = typed[start + i];
             int days = value.DayNumber - DateColumnCodecShared.UnixEpochDayNumber;
             if (days is < 0 or > ushort.MaxValue)
             {
@@ -80,7 +85,10 @@ internal sealed class Date32ColumnCodec : IColumnCodec
     public string TypeName => "Date32";
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => sizeof(int);
+    public Type ElementType => typeof(DateOnly);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => DateColumnCodecShared.Epoch;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -103,8 +111,10 @@ internal sealed class Date32ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        foreach (DateOnly value in ((IColumn<DateOnly>)column).Values.Slice(start, length))
+        var typed = (IColumn<DateOnly>)column;
+        for (int i = 0; i < length; i++)
         {
+            DateOnly value = typed[start + i];
             int days = value.DayNumber - DateColumnCodecShared.UnixEpochDayNumber;
             if (days < MinDays || days > MaxDays)
             {
@@ -121,4 +131,7 @@ internal static class DateColumnCodecShared
 {
     /// <summary>The <see cref="DateOnly.DayNumber"/> of the Unix epoch (1970-01-01), the wire's day-zero.</summary>
     public static readonly int UnixEpochDayNumber = new DateOnly(1970, 1, 1).DayNumber;
+
+    /// <summary>The Unix epoch (1970-01-01) — day-zero, in range for both <c>Date</c> and <c>Date32</c>, used as the null placeholder.</summary>
+    public static readonly DateOnly Epoch = new(1970, 1, 1);
 }

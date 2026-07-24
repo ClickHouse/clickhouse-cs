@@ -27,7 +27,10 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     public string TypeName => "IPv4";
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => Size;
+    public Type ElementType => typeof(IPAddress);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => IPAddress.Any;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -56,8 +59,10 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     {
         Span<byte> network = stackalloc byte[Size];
         Span<byte> wire = stackalloc byte[Size];
-        foreach (IPAddress value in ((IColumn<IPAddress>)column).Values.Slice(start, length))
+        var typed = (IColumn<IPAddress>)column;
+        for (int i = 0; i < length; i++)
         {
+            IPAddress value = typed[start + i];
             if (value.AddressFamily != AddressFamily.InterNetwork || !value.TryWriteBytes(network, out _))
             {
                 throw new ArgumentException($"An IPv4 column requires IPv4 addresses; got '{value}'.", nameof(column));
@@ -92,7 +97,10 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     public string TypeName => "IPv6";
 
     /// <inheritdoc/>
-    public int? FixedRowByteSize => Size;
+    public Type ElementType => typeof(IPAddress);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => IPAddress.IPv6Any;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -113,8 +121,10 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         Span<byte> network = stackalloc byte[Size];
-        foreach (IPAddress value in ((IColumn<IPAddress>)column).Values.Slice(start, length))
+        var typed = (IColumn<IPAddress>)column;
+        for (int i = 0; i < length; i++)
         {
+            IPAddress value = typed[start + i];
             IPAddress address = value.AddressFamily == AddressFamily.InterNetwork ? value.MapToIPv6() : value;
             if (address.AddressFamily != AddressFamily.InterNetworkV6 || !address.TryWriteBytes(network, out int written) || written != Size)
             {
