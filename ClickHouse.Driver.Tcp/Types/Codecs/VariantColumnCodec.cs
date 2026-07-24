@@ -128,6 +128,15 @@ internal sealed class VariantColumnCodec : IColumnCodec
                     $"Variant alternative '{argument}' must not be Nullable; a Variant carries NULL through its discriminator, not a nullable alternative.");
             }
 
+            // The server rejects Dynamic inside Variant (Dynamic is a superset of Variant). Reject it client-side
+            // too: a Variant does not thread the per-operation write state a data-dependent alternative needs, so a
+            // Dynamic alternative would desynchronize its type-list prefix from its body.
+            if (string.Equals(argument.Name, "Dynamic", StringComparison.Ordinal))
+            {
+                throw new FormatException(
+                    $"Variant alternative '{argument}' must not be Dynamic; the server does not allow a Dynamic type inside a Variant.");
+            }
+
             childCodecs[i] = registry.ResolveNode(argument, in context);
         }
 
@@ -226,127 +235,11 @@ internal sealed class VariantColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public long MeasureRowBytes(IColumn column, int row)
-    {
-        // Every row costs its one discriminator byte; a NULL row costs nothing more, and a present row also costs
-        // its value in the selected alternative's encoding.
-        if (column is IVariantColumn dense && dense.TypeCount == children.Length)
-        {
-            byte d = dense.Discriminators[row];
-            if (d == VariantColumn.NullDiscriminator)
-            {
-                return 1;
-            }
-
-            IColumn typeColumn = dense.GetTypeColumn(d);
-            return 1 + children[d].MeasureRowBytes(typeColumn, dense.LocalIndices[row]);
-        }
-
-        object value = column.GetValue(row);
-        if (value is null)
-        {
-            return 1;
-        }
-
-        int discriminator = DiscriminatorFor(value.GetType());
-        var single = new[] { value };
-        IColumn probe = childFlatBuilders[discriminator](column.Name, children[discriminator].TypeName, single, 1);
-        return 1 + children[discriminator].MeasureRowBytes(probe, 0);
-    }
-
-    /// <inheritdoc/>
     // A dense variant column is only writable when its alternatives match this codec's; a bare IColumn<object> is
     // scattered by runtime CLR type. A variant column of a different arity is rejected here rather than silently
     // re-scattered (which could reorder its discriminators).
     public bool CanWrite(IColumn column)
         => allChildrenWritable && (column is IVariantColumn dense ? dense.TypeCount == children.Length : column is IColumn<object>);
-
-    /// <inheritdoc/>
-    // Projects an ergonomic IColumn<object> of boxed values into the dense variant column — a per-row discriminator
-    // byte stream plus one child column per alternative (each holding only the rows that selected it) — recursing
-    // each alternative codec's own TryDensify so a composite alternative (e.g. Variant(Array(T), ...)) becomes dense
-    // too. An already-dense variant recurses into its per-type columns and is returned unchanged (built = false)
-    // when none changed.
-    public IColumn TryDensify(IColumn column, out bool built)
-    {
-        if (column is IVariantColumn denseSource && denseSource.TypeCount == children.Length)
-        {
-            IColumn[] densified = null;
-            bool[] owned = null;
-            for (int i = 0; i < children.Length; i++)
-            {
-                IColumn original = denseSource.GetTypeColumn(i);
-                IColumn child = children[i].TryDensify(original, out bool childBuilt);
-                if (densified is null && childBuilt)
-                {
-                    densified = new IColumn[children.Length];
-                    owned = new bool[children.Length];
-                    for (int j = 0; j < i; j++)
-                    {
-                        densified[j] = denseSource.GetTypeColumn(j);
-                    }
-                }
-
-                if (densified is not null)
-                {
-                    densified[i] = child;
-                    owned[i] = childBuilt;
-                }
-            }
-
-            if (densified is null)
-            {
-                built = false;
-                return column;
-            }
-
-            // The rebuilt wrapper mixes children: the freshly densified ones are new columns it must dispose, while
-            // the unchanged ones are borrowed by reference and stay owned by the source column. Build it borrowing
-            // everything (ownsColumns: false), then restrict disposal to exactly the columns we built — the per-child
-            // `owned` flags come straight from each child's `built` signal — so disposing the wrapper frees the new
-            // children without double-disposing the borrowed ones.
-            var rebuilt = new VariantColumn(column.Name, column.TypeName, denseSource.Discriminators.ToArray(), densified, column.RowCount, pooledDiscriminators: false, ownsColumns: false);
-            rebuilt.RestrictOwnership(owned);
-            built = true;
-            return rebuilt;
-        }
-
-        // Ergonomic boxed form: scatter each row into its alternative's bucket by runtime CLR type (values stay in
-        // row order within a bucket), then build and densify each alternative's flat column.
-        int typeCount = children.Length;
-        int rowCount = column.RowCount;
-        var discriminators = new byte[rowCount];
-        var buckets = new object[typeCount][];
-        var filled = new int[typeCount];
-        for (int i = 0; i < typeCount; i++)
-        {
-            buckets[i] = new object[rowCount];
-        }
-
-        for (int row = 0; row < rowCount; row++)
-        {
-            object value = column.GetValue(row);
-            if (value is null)
-            {
-                discriminators[row] = VariantColumn.NullDiscriminator;
-                continue;
-            }
-
-            int discriminator = DiscriminatorFor(value.GetType());
-            discriminators[row] = (byte)discriminator;
-            buckets[discriminator][filled[discriminator]++] = value;
-        }
-
-        var typeColumns = new IColumn[typeCount];
-        for (int i = 0; i < typeCount; i++)
-        {
-            IColumn flat = childFlatBuilders[i](column.Name, children[i].TypeName, buckets[i], filled[i]);
-            typeColumns[i] = children[i].TryDensify(flat, out _);
-        }
-
-        built = true;
-        return new VariantColumn(column.Name, column.TypeName, discriminators, typeColumns, rowCount, pooledDiscriminators: false, ownsColumns: true);
-    }
 
     /// <inheritdoc/>
     // The prefix is a fixed mode word followed by the alternatives' own prefixes; every alternative supported

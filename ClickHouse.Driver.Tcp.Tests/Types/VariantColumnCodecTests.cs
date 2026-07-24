@@ -105,28 +105,16 @@ public class VariantColumnCodecTests
         => Assert.Throws<FormatException>(() => Resolve("Variant()"));
 
     [Test]
+    public void Create_DynamicAlternative_Throws()
+        => Assert.Throws<FormatException>(() => Resolve("Variant(String, Dynamic)"));
+
+    [Test]
     public void WriteColumn_ValueWithNoMatchingAlternative_Throws()
     {
         IColumnCodec codec = Resolve(StringUInt64);
         var column = new ArrayColumn<object>("v", StringUInt64, new object[] { 3.14 }); // double matches neither String nor UInt64
 
         Assert.ThrowsAsync<ArgumentException>(async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
-    }
-
-    [Test]
-    public async Task MeasureRowBytes_DenseColumn_PricesDiscriminatorPlusValue()
-    {
-        IColumnCodec codec = Resolve(StringUInt64);
-
-        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
-        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
-        using IColumn dense = await codec.ReadColumnAsync(reader, "v", StringUInt64, 3, CodecTestHarness.None);
-
-        // Row 0 = UInt64 42: 1 discriminator + 8 value bytes. Row 1 = String "hi": 1 + (1 length varint + 2 bytes).
-        // Row 2 = NULL: just the 1 discriminator byte.
-        Assert.That(codec.MeasureRowBytes(dense, 0), Is.EqualTo(9));
-        Assert.That(codec.MeasureRowBytes(dense, 1), Is.EqualTo(4));
-        Assert.That(codec.MeasureRowBytes(dense, 2), Is.EqualTo(1));
     }
 
     [Test]
@@ -156,29 +144,6 @@ public class VariantColumnCodecTests
         using IColumn column = await codec.ReadColumnAsync(reader, "v", StringUInt64, 0, CodecTestHarness.None);
 
         Assert.That(column.RowCount, Is.Zero);
-    }
-
-    [Test]
-    public void TryDensify_DenseVariantWithOneErgonomicTypeColumn_DisposesOnlyRebuiltColumnNotBorrowed()
-    {
-        // A dense variant whose Array alternative column is still ergonomic (a jagged ArrayColumn) while its UInt32
-        // alternative is already dense (a leaf): TryDensify rebuilds only the Array column and keeps the UInt32 column
-        // by reference. Disposing the rebuilt wrapper must free the freshly built Array column but leave the borrowed
-        // UInt32 column alone — it is still owned by the source column, so disposing it here would double-dispose it.
-        IColumnCodec codec = Resolve("Variant(UInt32, Array(Int32))");
-        var borrowed = new DisposeSpyColumn<uint>("v", "UInt32", new uint[] { 42 });
-        var ergonomicArray = new ArrayColumn<int[]>("v", "Array(Int32)", new[] { new[] { 1, 2 } });
-        var source = new VariantColumn("v", "Variant(UInt32, Array(Int32))", new byte[] { 0, 1 }, new IColumn[] { borrowed, ergonomicArray }, rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
-
-        IColumn densified = codec.TryDensify(source, out bool built);
-        Assert.That(built, Is.True, "the Array alternative was ergonomic, so a rebuild is expected");
-        Assert.That(densified, Is.Not.SameAs(source));
-        densified.Dispose();
-
-        Assert.That(borrowed.DisposeCount, Is.EqualTo(0), "the borrowed, already-dense alternative column must not be disposed by the rebuilt wrapper");
-
-        ergonomicArray.Dispose();
-        borrowed.Dispose();
     }
 
     [Test]

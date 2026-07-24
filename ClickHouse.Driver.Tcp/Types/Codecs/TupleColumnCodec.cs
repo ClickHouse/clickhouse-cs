@@ -216,12 +216,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
     public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
 
     /// <inheritdoc/>
-<<<<<<< HEAD
-=======
-    // Every child type supported today has a data-independent state prefix, so the outer column/slice is
-    // forwarded unchanged and ignored by the children. A data-dependent child (e.g. Dynamic) would need its
-    // own sliced value column projected here, landed with the prefix->data scratch work.
->>>>>>> bc9e8fd (Widen IColumnCodec.WriteStatePrefix to receive the sliced column)
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         if (IsTupleColumn(column))

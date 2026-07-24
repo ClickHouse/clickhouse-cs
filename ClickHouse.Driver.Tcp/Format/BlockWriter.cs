@@ -125,7 +125,6 @@ internal static class BlockWriter
             // an empty range as a no-op (the Nothing codec, for one, refuses to write at all).
             if (rowCount != 0)
             {
-<<<<<<< HEAD
                 // Compute any per-operation scratch once, share it across the prefix and body phases (a
                 // data-dependent prefix and the element-flattening composites need this), and free it after.
                 IColumnWriteState state = column.Codec.BeginWrite(column.Values, start, rowCount);
@@ -138,10 +137,6 @@ internal static class BlockWriter
                 {
                     state?.Dispose();
                 }
-=======
-                column.Codec.WriteStatePrefix(writer, column.Values, start, rowCount);
-                column.Codec.WriteColumn(writer, column.Values, start, rowCount);
->>>>>>> bc9e8fd (Widen IColumnCodec.WriteStatePrefix to receive the sliced column)
             }
 
             // Backstop: flush between columns once the buffer passes the threshold, so a wide block doesn't

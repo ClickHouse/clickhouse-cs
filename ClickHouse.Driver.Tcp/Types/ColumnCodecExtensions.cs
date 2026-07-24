@@ -18,7 +18,6 @@ internal static class ColumnCodecExtensions
     /// <param name="column">The column whose prefix to write; must match the codec's element type.</param>
     public static void WriteStatePrefix(this IColumnCodec codec, ClickHouseBinaryWriter writer, IColumn column)
         => codec.WriteStatePrefix(writer, column, 0, column.RowCount);
-<<<<<<< HEAD
 
     /// <summary>
     /// Writes the whole column the way the block layer does: compute the per-operation scratch, write the state
@@ -49,6 +48,4 @@ internal static class ColumnCodecExtensions
             state?.Dispose();
         }
     }
-=======
->>>>>>> bc9e8fd (Widen IColumnCodec.WriteStatePrefix to receive the sliced column)
 }
