@@ -599,13 +599,183 @@ public sealed class InsertRoundTripCase
             new object[] { 1UL, "a" },
             Array.Empty<object>(),
             new object[] { "b", 2UL, null });
+
+        // Dynamic: a column whose per-row value type is discovered at runtime. The ergonomic insert source is a
+        // flat IColumn<object>; each value's CLR type is inferred to a ClickHouse type, and null marks a NULL row.
+        // Like Array/Tuple/Map/Nested/Variant, the server rejects Nullable(Dynamic) — NULL rides the discriminator
+        // — so there is no Nullable(...) case; NULL is intrinsic. A present value equal to a type's default (0,
+        // empty string) rides alongside NULL to prove the two are distinct.
+        yield return Same(
+            "Dynamic [scalars + null]",
+            "Dynamic",
+            name => new ArrayColumn<object>(name, "Dynamic", new object[] { 42UL, "hi", null, 0UL, string.Empty, null }),
+            DynamicSettings);
+
+        // A broader scalar mix, exercising the inference table across several runtime types in one column.
+        yield return Same(
+            "Dynamic [mixed scalar types]",
+            "Dynamic",
+            name => new ArrayColumn<object>(name, "Dynamic", new object[]
+            {
+                true, 42, 3.5d, 1.5f, (byte)7, new Guid("00112233-4455-6677-8899-aabbccddeeff"), null, "text",
+            }),
+            DynamicSettings);
+
+        // Composite values inside a Dynamic: an array, a map, and a tuple value, inferred recursively.
+        yield return Same(
+            "Dynamic [array value]",
+            "Dynamic",
+            name => new ArrayColumn<object>(name, "Dynamic", new object[] { new ulong[] { 1, 2, 3 }, "x", null, Array.Empty<ulong>() }),
+            DynamicSettings);
+
+        yield return Same(
+            "Dynamic [map value]",
+            "Dynamic",
+            name => new ArrayColumn<object>(name, "Dynamic", new object[] { Pairs<string, uint>(("a", 1), ("b", 2)), 5, null }),
+            DynamicSettings);
+
+        yield return Same(
+            "Dynamic [tuple value]",
+            "Dynamic",
+            name => new ArrayColumn<object>(name, "Dynamic", new object[] { (1, "a"), "plain", null }),
+            DynamicSettings);
+
+        // One Dynamic column holding a value of (basically) every supported type — each row's runtime CLR type is
+        // inferred to a distinct ClickHouse type, so the block's type list spans them all at once. Uses the
+        // canonical read-back CLR types (e.g. ClickHouseDateTime64, ClickHouseDecimal) so insert equals read-back;
+        // the DateTimeOffset/DateTime/decimal inputs, whose read-back type differs, are covered separately below.
+        yield return Same(
+            "Dynamic [every type + composites]",
+            "Dynamic",
+            name => new ArrayColumn<object>(name, "Dynamic", new object[]
+            {
+                (byte)7, (sbyte)-5, (ushort)300, (short)-300, 100000u, -100000, 42UL, -42L,
+                UInt128.MaxValue, Int128.MinValue,
+                UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)),
+                Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)),
+                1.5f, 3.5d, true, "héllo✓", new Guid("00112233-4455-6677-8899-aabbccddeeff"),
+                new DateOnly(2024, 1, 15), IPAddress.Parse("192.168.1.1"), IPAddress.Parse("2001:db8::1"),
+                new ClickHouseDateTime64(1_700_000_000_123L, 3, TimeSpan.Zero),
+                new ClickHouseDecimal(System.Numerics.BigInteger.Parse("1234567890123456789012345"), 5),
+                new ulong[] { 1, 2, 3 },
+                Pairs<string, uint>(("k", 9), ("m", 10)),
+                (1, "t"),
+                null,
+            }),
+            DynamicSettings);
+
+        // Inputs whose inferred ClickHouse type reads back as a different (canonical) CLR type: a DateTimeOffset
+        // and a DateTime infer to DateTime64(9) (read back as ClickHouseDateTime64, equal by instant), and a
+        // System.Decimal infers to Decimal128 (read back as ClickHouseDecimal, equal by value).
+        yield return new InsertRoundTripCase(
+            "Dynamic [datetime + decimal inference]",
+            "Dynamic",
+            name => new ArrayColumn<object>(name, "Dynamic", new object[]
+            {
+                new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)),
+                new DateTime(1988, 8, 28, 11, 22, 33, DateTimeKind.Utc),
+                12345.6789m,
+                null,
+            }),
+            name => new ArrayColumn<object>(name, "Dynamic", new object[]
+            {
+                ClickHouseDateTime64.FromDateTimeOffset(new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)), 9),
+                ClickHouseDateTime64.FromDateTimeOffset(new DateTimeOffset(new DateTime(1988, 8, 28, 11, 22, 33, DateTimeKind.Utc)), 9),
+                new ClickHouseDecimal(new System.Numerics.BigInteger(123456789), 4),
+                null,
+            }),
+            DynamicSettings);
+
+        // Array(Dynamic): Dynamic nested inside a composite. The array flattens its element values into one Dynamic
+        // stream, so the Dynamic type list (state prefix) precedes the array offsets on the wire; empty rows and a
+        // NULL element ride along.
+        yield return Arrays(
+            "Dynamic",
+            DynamicSettings,
+            new object[] { 1UL, "a" },
+            Array.Empty<object>(),
+            new object[] { "b", 2UL, null });
+
+        // Tuple(Dynamic, String): a Dynamic element inside a tuple. Each element position is its own child column,
+        // so the Dynamic child's type list (state prefix) is written from its own projected values.
+        yield return Same(
+            "Tuple(Dynamic, String)",
+            "Tuple(Dynamic, String)",
+            name => new TupleColumn<object, string>(name, "Tuple(Dynamic, String)", new (object, string)[]
+            {
+                (42UL, "a"), ("x", "b"), (null, "c"),
+            }),
+            DynamicSettings);
+
+        // Map(String, Dynamic): a Dynamic value column inside a map, flattened like Array(Tuple(String, Dynamic)).
+        yield return Maps<string, object>("String", "Dynamic", DynamicSettings,
+            Pairs<string, object>(("a", 1UL), ("b", "x")),
+            Array.Empty<KeyValuePair<string, object>>(),
+            Pairs<string, object>(("c", null)));
+
+        // Nested(a Dynamic, b String): a Dynamic field inside a Nested column.
+        yield return Same(
+            "Nested(a Dynamic, b String)",
+            "Nested(a Dynamic, b String)",
+            name => new NestedColumn(
+                name,
+                "Nested(a Dynamic, b String)",
+                new[] { "a", "b" },
+                new IColumn[]
+                {
+                    new ArrayColumn<object>(name, "Dynamic", new object[] { 1UL, "x", 3UL }),
+                    new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
+                },
+                new[] { 0, 2, 2, 3 },
+                rowCount: 3,
+                pooledOffsets: false,
+                ownsFields: false),
+            MergeSettings(NestedSettings, DynamicSettings));
+
+        // Two Dynamic elements in one tuple, each with its own runtime type list.
+        yield return Same(
+            "Tuple(Dynamic, Dynamic)",
+            "Tuple(Dynamic, Dynamic)",
+            name => new TupleColumn<object, object>(name, "Tuple(Dynamic, Dynamic)", new (object, object)[]
+            {
+                (1UL, "a"), ("x", 2), (null, null),
+            }),
+            DynamicSettings);
+
+        // Dynamic two composite levels deep: Array(Tuple(Dynamic, String)) — the array flattens its tuple rows
+        // into the tuple codec, which projects the Dynamic element's own values into its type list.
+        yield return Same(
+            "Array(Tuple(Dynamic, String))",
+            "Array(Tuple(Dynamic, String))",
+            name => new ArrayColumn<(object, string)[]>(name, "Array(Tuple(Dynamic, String))", new[]
+            {
+                new (object, string)[] { (1UL, "a"), ("b", "c") },
+                Array.Empty<(object, string)>(),
+                new (object, string)[] { (null, "d") },
+            }),
+            DynamicSettings);
+    }
+
+    // Merges two settings dictionaries into one (later entries win) for cases needing both flags.
+    private static IReadOnlyDictionary<string, string> MergeSettings(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b)
+    {
+        var merged = new Dictionary<string, string>(a, StringComparer.Ordinal);
+        foreach (KeyValuePair<string, string> entry in b)
+        {
+            merged[entry.Key] = entry.Value;
+        }
+
+        return merged;
     }
 
     // Map(K, V) inserts and reads back the ergonomic jagged column of KeyValuePair arrays, which doubles as expected.
     private static InsertRoundTripCase Maps<TKey, TValue>(string keyType, string valueType, params KeyValuePair<TKey, TValue>[][] rows)
+        => Maps(keyType, valueType, settings: null, rows);
+
+    private static InsertRoundTripCase Maps<TKey, TValue>(string keyType, string valueType, IReadOnlyDictionary<string, string> settings, params KeyValuePair<TKey, TValue>[][] rows)
     {
         string type = $"Map({keyType}, {valueType})";
-        return Same($"{type} [{rows.Length} rows]", type, name => new ArrayColumn<KeyValuePair<TKey, TValue>[]>(name, type, rows));
+        return Same($"{type} [{rows.Length} rows]", type, name => new ArrayColumn<KeyValuePair<TKey, TValue>[]>(name, type, rows), settings);
     }
 
     // Builds one map row's pairs, preserving the given order.
@@ -780,5 +950,15 @@ public sealed class InsertRoundTripCase
     {
         ["allow_experimental_variant_type"] = "1",
         ["allow_suspicious_variant_types"] = "1",
+    };
+
+    /// <summary>
+    /// Enables the experimental <c>Dynamic</c> type and selects the flattened serialization the client reads and
+    /// writes (without it the server would emit the non-flat native default, which the client rejects).
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> DynamicSettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["allow_experimental_dynamic_type"] = "1",
+        ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
     };
 }

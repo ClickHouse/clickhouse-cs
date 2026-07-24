@@ -155,6 +155,12 @@ internal sealed class ColumnCodecRegistry
         // recursively; the declared order is the discriminator order (the server sends it canonicalized).
         AddFactory("Variant", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => VariantColumnCodec.Create(node, context, registry));
 
+        // Dynamic is a column whose per-row value type is discovered at runtime: the runtime type set is carried
+        // on the wire (in the state prefix), not in the type string. Only the flattened serialization is read or
+        // written; runtime child codecs are resolved lazily from the wire/inferred type names, so the codec keeps
+        // the registry and context. NULL rides a discriminator, so it is never wrapped in Nullable.
+        AddFactory("Dynamic", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => DynamicColumnCodec.Create(node, context, registry));
+
         return new ColumnCodecRegistry(byName);
     }
 }
