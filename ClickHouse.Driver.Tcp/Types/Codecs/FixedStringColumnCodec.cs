@@ -15,7 +15,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// than <c>N</c> is rejected, matching the server, which stores over-length values as an error rather than
 /// truncating.
 /// </summary>
-internal sealed class FixedStringColumnCodec : IColumnCodec
+internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<byte[]>
 {
     private readonly int size;
 
@@ -36,9 +36,6 @@ internal sealed class FixedStringColumnCodec : IColumnCodec
     /// so the values stream stays aligned at a <c>Nullable(FixedString(N))</c> null position.
     /// </summary>
     public object NullPlaceholder => Array.Empty<byte>();
-
-    /// <inheritdoc/>
-    public int? FixedRowByteSize => size;
 
     /// <summary>Builds a <c>FixedString(N)</c> codec from its type node's single integer length argument.</summary>
     /// <param name="node">The parsed <c>FixedString</c> type node.</param>
@@ -88,33 +85,56 @@ internal sealed class FixedStringColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<byte[]>;
 
     /// <inheritdoc/>
+    // Read per element through the indexer so a scattered write-path view (a substitute for a nullable value, a
+    // Tuple field) writes with no materialized copy; a dense FixedStringColumn materializes each row's bytes just
+    // the same.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         // A reusable zero run for the right-padding; the common case (value exactly N bytes) writes none of it.
         Span<byte> zeros = stackalloc byte[64];
         zeros.Clear();
 
-        foreach (byte[] value in ((IColumn<byte[]>)column).Values.Slice(start, length))
+        var typed = (IColumn<byte[]>)column;
+        for (int i = 0; i < length; i++)
         {
-            if (value is null)
-            {
-                throw new ArgumentException($"A {TypeName} column cannot hold a null row; wrap the type in Nullable to write nulls.", nameof(column));
-            }
+            WriteRow(writer, typed[start + i], zeros);
+        }
+    }
 
-            if (value.Length > size)
-            {
-                throw new ArgumentException($"A {TypeName} value is {value.Length} bytes, longer than the fixed width of {size}.", nameof(column));
-            }
+    /// <inheritdoc/>
+    // Each row is its own fixed-width byte run, so a run of values is written in order.
+    public void WriteValues(ClickHouseBinaryWriter writer, ReadOnlySpan<byte[]> values)
+    {
+        Span<byte> zeros = stackalloc byte[64];
+        zeros.Clear();
 
-            writer.WriteBytes(value);
+        foreach (byte[] value in values)
+        {
+            WriteRow(writer, value, zeros);
+        }
+    }
 
-            int pad = size - value.Length;
-            while (pad > 0)
-            {
-                int chunk = Math.Min(pad, zeros.Length);
-                writer.WriteBytes(zeros.Slice(0, chunk));
-                pad -= chunk;
-            }
+    // Emits one row's bytes verbatim, right-padded with zeros to the fixed width.
+    private void WriteRow(ClickHouseBinaryWriter writer, byte[] value, ReadOnlySpan<byte> zeros)
+    {
+        if (value is null)
+        {
+            throw new ArgumentException($"A {TypeName} column cannot hold a null row; wrap the type in Nullable to write nulls.", nameof(value));
+        }
+
+        if (value.Length > size)
+        {
+            throw new ArgumentException($"A {TypeName} value is {value.Length} bytes, longer than the fixed width of {size}.", nameof(value));
+        }
+
+        writer.WriteBytes(value);
+
+        int pad = size - value.Length;
+        while (pad > 0)
+        {
+            int chunk = Math.Min(pad, zeros.Length);
+            writer.WriteBytes(zeros.Slice(0, chunk));
+            pad -= chunk;
         }
     }
 }
