@@ -244,6 +244,19 @@ public sealed class ClickHouseTcpClient : IAsyncDisposable
         {
             foreach (KeyValuePair<string, string> entry in perQuerySettings)
             {
+                // Per-query settings are user-provided and, unlike client CustomSettings, not validated at
+                // construction. An empty name would collide with the empty key that terminates the wire settings
+                // list, and a null value cannot be written — reject both rather than corrupt the request.
+                if (string.IsNullOrEmpty(entry.Key))
+                {
+                    throw new ArgumentException("A query setting name must not be null or empty.", nameof(perQuerySettings));
+                }
+
+                if (entry.Value is null)
+                {
+                    throw new ArgumentException($"Query setting '{entry.Key}' has a null value; use an empty string for a flag-style setting.", nameof(perQuerySettings));
+                }
+
                 merged[entry.Key] = entry.Value;
             }
         }
