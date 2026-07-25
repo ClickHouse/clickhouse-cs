@@ -199,8 +199,11 @@ internal sealed class NestedColumn : IColumn<object[][]>
     /// <summary>Copies row <paramref name="row"/>'s elements into an array of records, boxing each field value.</summary>
     private object[][] Materialize(int row)
     {
-        int start = offsets[row];
-        int length = offsets[row + 1] - start;
+        // Index through the RowCount-sliced offsets so an out-of-range row throws rather than reading a stale
+        // slot of the pooled offsets array, which can be longer than RowCount + 1.
+        ReadOnlySpan<int> rowOffsets = Offsets;
+        int start = rowOffsets[row];
+        int length = rowOffsets[row + 1] - start;
         if (length == 0)
         {
             return Array.Empty<object[]>();
