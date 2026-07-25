@@ -109,7 +109,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
                 }
 
                 // Never store null (it cannot be written): a value-less set_ key becomes an empty-string setting.
-                (customSettings ??= new Dictionary<string, string>(StringComparer.Ordinal))[name] = GetStringOrDefault(key, string.Empty);
+                (customSettings ??= new Dictionary<string, string>(StringComparer.Ordinal))[name] = GetCustomSettingValue(key);
             }
         }
 
@@ -127,6 +127,14 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             CustomSettings = customSettings,
         };
     }
+
+    // A custom setting's value as an invariant string: a string is taken as-is; a typed value set programmatically
+    // (e.g. builder["set_max_threads"] = 4) is formatted invariantly rather than silently dropped; an absent or
+    // null value becomes empty (never null, which cannot be written on the wire).
+    private string GetCustomSettingValue(string key)
+        => TryGetValue(key, out object value) && value is not null
+            ? value as string ?? Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
+            : string.Empty;
 
     private string GetStringOrDefault(string name, string @default)
         => TryGetValue(name, out object value) && value is string s ? s : @default;
