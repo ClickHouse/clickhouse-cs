@@ -13,7 +13,8 @@ namespace ClickHouse.Driver.Tcp.Format;
 /// A block <b>borrows</b> its columns' storage, which may be pooled. It is disposed by the reader that produced
 /// it — for a streamed query, when the consumer advances to the next block or stops enumerating. A consumer
 /// must not read a block's columns after that point; to retain values beyond the block, copy them (for example
-/// <c>Values.ToArray()</c>) while iterating.
+/// <c>Values.ToArray()</c>) while iterating. Do <b>not</b> dispose a block yielded by a query yourself: the
+/// reader owns its lifetime, and disposing it early would return borrowed pooled storage the reader still manages.
 /// </para>
 /// </summary>
 public sealed class Block : IDisposable
