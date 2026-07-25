@@ -471,13 +471,22 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(maxRowsPerBlock), maxRowsPerBlock, "The rows-per-block cap must be positive.");
         }
 
-        rowCount = columns.Count == 0 ? 0 : columns[0].RowCount;
-        for (int i = 1; i < columns.Count; i++)
+        rowCount = 0;
+        for (int i = 0; i < columns.Count; i++)
         {
-            if (columns[i].RowCount != rowCount)
+            // Reject a null element with a clear error before the connection is claimed, rather than NREing
+            // mid-validation on its RowCount/Name.
+            IColumn column = columns[i]
+                ?? throw new ArgumentException($"Column at index {i} is null; every supplied column must be non-null.", nameof(columns));
+
+            if (i == 0)
+            {
+                rowCount = column.RowCount;
+            }
+            else if (column.RowCount != rowCount)
             {
                 throw new ArgumentException(
-                    $"All columns must hold the same number of rows; column 0 has {rowCount} but column {i} has {columns[i].RowCount}.",
+                    $"All columns must hold the same number of rows; column 0 has {rowCount} but column {i} has {column.RowCount}.",
                     nameof(columns));
             }
         }
