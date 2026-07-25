@@ -142,7 +142,7 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     {
         if (value.Length > size)
         {
-            throw new ArgumentException($"A {TypeName} value is {value.Length} bytes, longer than the fixed width of {size}.", "value");
+            throw new ArgumentException($"A {TypeName} value is {value.Length} bytes, longer than the fixed width of {size}.", nameof(value));
         }
 
         writer.WriteBytes(value);
