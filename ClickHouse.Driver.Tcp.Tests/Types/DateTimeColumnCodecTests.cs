@@ -28,42 +28,42 @@ public class DateTimeColumnCodecTests
 
         byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTimeOffset>("c", "DateTime('UTC')", values)));
         using var reader = ReaderOver(bytes);
-        using var column = (IColumn<DateTimeOffset>)await codec.ReadColumnAsync(reader, "c", "DateTime('UTC')", values.Length, None);
+        using var column = (DateTimeColumn)await codec.ReadColumnAsync(reader, "c", "DateTime('UTC')", values.Length, None);
 
         Assert.Multiple(() =>
         {
-            CollectionAssert.AreEqual(values, column.Values.ToArray());
-            Assert.That(column[0].Offset, Is.EqualTo(TimeSpan.Zero));
+            CollectionAssert.AreEqual(values, column.ToDateTimeOffsets());
+            Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(TimeSpan.Zero));
             Assert.That(column.TypeName, Is.EqualTo("DateTime('UTC')"));
         });
     }
 
     [Test]
-    public async Task ReadColumn_SingleValue_DecodesUnixSecondsAsUtcInstant()
+    public async Task ReadColumn_SingleValue_DecodesRawUnixSeconds()
     {
         // 1 row: the little-endian UInt32 1000 = 1970-01-01T00:16:40Z.
         byte[] bytes = await WriteAsync(w => w.WriteUInt32(1000));
         using var reader = ReaderOver(bytes);
 
-        using var column = (IColumn<DateTimeOffset>)await Codec("DateTime").ReadColumnAsync(reader, "c", "DateTime", 1, None);
+        using var column = (IColumn<uint>)await Codec("DateTime").ReadColumnAsync(reader, "c", "DateTime", 1, None);
 
-        Assert.That(column[0].ToUnixTimeSeconds(), Is.EqualTo(1000));
+        Assert.That(column[0], Is.EqualTo(1000u));
     }
 
     [Test]
     public async Task ReadColumn_ExplicitTimezone_PresentsThatOffset()
     {
-        // A winter instant (no UK daylight-saving) read as Europe/London presents a +00:00 offset; the same
-        // instant read as a fixed +05:00 zone presents +05:00. Either way the instant is unchanged.
+        // A winter instant (no UK daylight-saving) read as Europe/London presents a +00:00 offset. Either way the
+        // instant (the raw seconds) is unchanged.
         byte[] bytes = await WriteAsync(w => w.WriteUInt32(1_700_000_000)); // 2023-11-14, winter
         using var reader = ReaderOver(bytes);
 
-        using var column = (IColumn<DateTimeOffset>)await Codec("DateTime('Europe/London')").ReadColumnAsync(reader, "c", "DateTime('Europe/London')", 1, None);
+        using var column = (DateTimeColumn)await Codec("DateTime('Europe/London')").ReadColumnAsync(reader, "c", "DateTime('Europe/London')", 1, None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(column[0].ToUnixTimeSeconds(), Is.EqualTo(1_700_000_000));
-            Assert.That(column[0].Offset, Is.EqualTo(TimeSpan.Zero));
+            Assert.That(column[0], Is.EqualTo(1_700_000_000u));
+            Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(TimeSpan.Zero));
         });
     }
 
@@ -71,16 +71,16 @@ public class DateTimeColumnCodecTests
     public async Task ReadColumn_DaylightSavingZoneSummerInstant_PresentsDaylightOffset()
     {
         // A summer instant read as Europe/London presents +01:00 (British Summer Time); the offset is resolved
-        // per instant, so a daylight-saving zone cannot use the fixed-offset fast path a zone like UTC does.
+        // per instant, so a daylight-saving zone honors its transitions.
         byte[] bytes = await WriteAsync(w => w.WriteUInt32(1_689_300_000)); // 2023-07-14, summer
         using var reader = ReaderOver(bytes);
 
-        using var column = (IColumn<DateTimeOffset>)await Codec("DateTime('Europe/London')").ReadColumnAsync(reader, "c", "DateTime('Europe/London')", 1, None);
+        using var column = (DateTimeColumn)await Codec("DateTime('Europe/London')").ReadColumnAsync(reader, "c", "DateTime('Europe/London')", 1, None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(column[0].ToUnixTimeSeconds(), Is.EqualTo(1_689_300_000));
-            Assert.That(column[0].Offset, Is.EqualTo(TimeSpan.FromHours(1)));
+            Assert.That(column[0], Is.EqualTo(1_689_300_000u));
+            Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(TimeSpan.FromHours(1)));
         });
     }
 
@@ -91,20 +91,20 @@ public class DateTimeColumnCodecTests
         using var reader = ReaderOver(bytes);
 
         // No timezone in the type string; the codec resolves against the session timezone instead.
-        using var column = (IColumn<DateTimeOffset>)await Codec("DateTime", serverTimezone: "Asia/Kolkata").ReadColumnAsync(reader, "c", "DateTime", 1, None);
+        using var column = (DateTimeColumn)await Codec("DateTime", serverTimezone: "Asia/Kolkata").ReadColumnAsync(reader, "c", "DateTime", 1, None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(column[0].ToUnixTimeSeconds(), Is.EqualTo(1_700_000_000));
-            Assert.That(column[0].Offset, Is.EqualTo(new TimeSpan(5, 30, 0)));
+            Assert.That(column[0], Is.EqualTo(1_700_000_000u));
+            Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(new TimeSpan(5, 30, 0)));
         });
     }
 
     [Test]
     public async Task ReadColumn_ExposesRawSecondsAndOffsetViews()
     {
-        // The specialized column offers the raw epoch seconds (zero-copy) and the DateTimeOffset view over the
-        // same rows; the timezone is column-level.
+        // The specialized column offers the raw epoch seconds (Values / indexer, zero-copy) and a DateTimeOffset
+        // projection over the same rows; the timezone is column-level.
         byte[] bytes = await WriteAsync(w =>
         {
             w.WriteUInt32(1000);
@@ -116,12 +116,13 @@ public class DateTimeColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            CollectionAssert.AreEqual(new uint[] { 1000, 1_700_000_000 }, column.Seconds.ToArray());
-            Assert.That(column.GetUnixTimeSeconds(1), Is.EqualTo(1_700_000_000L));
-            Assert.That(column[0].ToUnixTimeSeconds(), Is.EqualTo(1000)); // the DateTimeOffset view
+            Assert.That(column.TimeZone, Is.EqualTo(TimeZoneInfo.Utc));
+            CollectionAssert.AreEqual(new uint[] { 1000, 1_700_000_000 }, column.Values.ToArray());
+            Assert.That(column[1], Is.EqualTo(1_700_000_000u));
+            Assert.That(column.GetDateTimeOffset(0), Is.EqualTo(DateTimeOffset.FromUnixTimeSeconds(1000)));
             CollectionAssert.AreEqual(
                 new[] { DateTimeOffset.FromUnixTimeSeconds(1000), DateTimeOffset.FromUnixTimeSeconds(1_700_000_000) },
-                column.Values.ToArray());
+                column.ToDateTimeOffsets());
         });
     }
 
@@ -129,8 +130,21 @@ public class DateTimeColumnCodecTests
     public async Task ReadColumn_ZeroRows_ReturnsEmptyColumn()
     {
         using var reader = ReaderOver(Array.Empty<byte>());
-        using var column = (IColumn<DateTimeOffset>)await Codec("DateTime").ReadColumnAsync(reader, "c", "DateTime", 0, None);
+        using var column = (IColumn<uint>)await Codec("DateTime").ReadColumnAsync(reader, "c", "DateTime", 0, None);
         Assert.That(column.RowCount, Is.EqualTo(0));
+    }
+
+    [TestCase(0u)]
+    [TestCase(1_700_000_000u)]
+    public async Task WriteColumn_RawSeconds_WrittenVerbatim(uint seconds)
+    {
+        // Raw epoch seconds are the wire representation, so they are written unchanged.
+        DateTimeColumnCodec codec = Codec("DateTime");
+        var column = new ArrayColumn<uint>("c", "DateTime", new[] { seconds });
+
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
+
+        Assert.That(BitConverter.ToUInt32(bytes), Is.EqualTo(seconds));
     }
 
     [Test]
@@ -207,12 +221,12 @@ public class DateTimeColumnCodecTests
         byte[] bytes = await WriteAsync(w => w.WriteUInt32(1_700_000_000));
         using var reader = ReaderOver(bytes);
 
-        using var column = (IColumn<DateTimeOffset>)await Codec(type).ReadColumnAsync(reader, "c", type, 1, None);
+        using var column = (DateTimeColumn)await Codec(type).ReadColumnAsync(reader, "c", type, 1, None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(column[0].ToUnixTimeSeconds(), Is.EqualTo(1_700_000_000));
-            Assert.That(column[0].Offset, Is.EqualTo(new TimeSpan(offsetHours, offsetMinutes, 0)));
+            Assert.That(column[0], Is.EqualTo(1_700_000_000u));
+            Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(new TimeSpan(offsetHours, offsetMinutes, 0)));
         });
     }
 
@@ -223,10 +237,10 @@ public class DateTimeColumnCodecTests
         byte[] bytes = await WriteAsync(w => w.WriteUInt32(1_700_000_000));
         using var reader = ReaderOver(bytes);
 
-        using var column = (IColumn<DateTimeOffset>)await Codec("DateTime", serverTimezone: "Fixed/UTC+03:00:00")
+        using var column = (DateTimeColumn)await Codec("DateTime", serverTimezone: "Fixed/UTC+03:00:00")
             .ReadColumnAsync(reader, "c", "DateTime", 1, None);
 
-        Assert.That(column[0].Offset, Is.EqualTo(TimeSpan.FromHours(3)));
+        Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(TimeSpan.FromHours(3)));
     }
 
     [Test]
@@ -234,11 +248,12 @@ public class DateTimeColumnCodecTests
         => Assert.Throws<FormatException>(() => Codec("DateTime('Fixed/UTC+15:00:00')"));
 
     [Test]
-    public void CanWrite_AcceptsDateTimeAndDateTimeOffset_RejectsOthers()
+    public void CanWrite_AcceptsRawSecondsDateTimeAndDateTimeOffset_RejectsOthers()
     {
         DateTimeColumnCodec codec = Codec("DateTime");
         Assert.Multiple(() =>
         {
+            Assert.That(codec.CanWrite(new ArrayColumn<uint>("c", "DateTime", Array.Empty<uint>())), Is.True);
             Assert.That(codec.CanWrite(new ArrayColumn<DateTime>("c", "DateTime", Array.Empty<DateTime>())), Is.True);
             Assert.That(codec.CanWrite(new ArrayColumn<DateTimeOffset>("c", "DateTime", Array.Empty<DateTimeOffset>())), Is.True);
             Assert.That(codec.CanWrite(new ArrayColumn<string>("c", "DateTime", Array.Empty<string>())), Is.False);

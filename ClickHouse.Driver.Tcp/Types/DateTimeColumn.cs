@@ -8,29 +8,29 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// A <c>DateTime</c> / <c>DateTime('tz')</c> column that keeps the raw wire seconds and offers them under two
-/// types. ClickHouse writes a little-endian <c>UInt32</c> of seconds since the Unix epoch per row; those bytes
-/// are kept verbatim as the column's storage (reinterpreted as <see cref="uint"/> with no copy), and the
-/// timezone — the same for every row — lives once on the column. A caller reads each row either as the raw
-/// epoch seconds (<see cref="Seconds"/> / <see cref="GetUnixTimeSeconds"/>, zero-copy) or — the default
-/// <see cref="IColumn{T}"/> view — as a <see cref="DateTimeOffset"/> presented in the column's timezone
-/// (<see cref="DateTimeOffset"/> represents second-resolution instants exactly, so no precision is lost).
+/// A <c>DateTime</c> / <c>DateTime('tz')</c> column that surfaces the raw wire seconds. ClickHouse writes a
+/// little-endian <c>UInt32</c> of seconds since the Unix epoch per row; those bytes are kept verbatim as the
+/// column's storage and exposed — with no copy — as the <see cref="uint"/> <see cref="Values"/>. The timezone —
+/// the same for every row — lives once on the column rather than on each value.
+///
+/// <para>
+/// A caller that wants presented instants can call <see cref="GetDateTimeOffset"/> or <see cref="ToDateTimeOffsets"/>
+/// to project the seconds to <see cref="DateTimeOffset"/> in the column's timezone; that projection is exact
+/// (a <see cref="DateTimeOffset"/> represents second-resolution instants without loss).
+/// </para>
 ///
 /// <para>
 /// The backing buffer is rented from <see cref="ArrayPool{T}"/> and returned on <see cref="Dispose"/>; like every
-/// column, the bytes and the span returned by <see cref="Seconds"/> are borrowed for the block's lifetime. Copy
+/// column, the bytes and the span returned by <see cref="Values"/> are borrowed for the block's lifetime. Copy
 /// out to retain.
 /// </para>
 /// </summary>
-internal sealed class DateTimeColumn : IColumn<DateTimeOffset>
+internal sealed class DateTimeColumn : IColumn<uint>
 {
     private readonly TimeZoneInfo timeZone;
-    private readonly bool fixedOffset;
-    private readonly TimeSpan constantOffset;
     private readonly int length;
     private readonly bool pooled;
     private byte[] buffer;
-    private DateTimeOffset[] cache;
 
     /// <summary>Initializes a column over the raw little-endian second bytes.</summary>
     /// <param name="name">The column name.</param>
@@ -44,12 +44,6 @@ internal sealed class DateTimeColumn : IColumn<DateTimeOffset>
         Name = name;
         TypeName = typeName;
         this.timeZone = timeZone;
-
-        // Zones without daylight saving present a single offset for every instant, so resolve it once here
-        // rather than walking the zone's rules per row; only a DST zone needs the per-instant lookup in At.
-        fixedOffset = !timeZone.SupportsDaylightSavingTime;
-        constantOffset = timeZone.BaseUtcOffset;
-
         this.buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
         this.length = length;
         this.pooled = pooled;
@@ -64,48 +58,41 @@ internal sealed class DateTimeColumn : IColumn<DateTimeOffset>
     /// <inheritdoc/>
     public int RowCount => length / sizeof(uint);
 
-    /// <summary>The raw epoch-second counts, as a zero-copy view.</summary>
-    public ReadOnlySpan<uint> Seconds => MemoryMarshal.Cast<byte, uint>(buffer.AsSpan(0, length));
+    /// <summary>The timezone the seconds are presented in, shared by every value in the column. Use it to
+    /// interpret the raw <see cref="Values"/> seconds.</summary>
+    public TimeZoneInfo TimeZone => timeZone;
+
+    /// <summary>The raw epoch-second counts, as a zero-copy view. Use <see cref="ToDateTimeOffsets"/> for a
+    /// calendar view presented in the column's timezone.</summary>
+    public ReadOnlySpan<uint> Values => MemoryMarshal.Cast<byte, uint>(buffer.AsSpan(0, length));
+
+    /// <inheritdoc/>
+    public uint this[int row] => Values[row];
+
+    /// <inheritdoc/>
+    public object GetValue(int row) => Values[row];
+
+    /// <summary>Returns a row as a <see cref="DateTimeOffset"/> presented in the column's timezone.</summary>
+    /// <param name="row">The zero-based row index.</param>
+    /// <returns>The instant (exact — a <see cref="DateTimeOffset"/> holds second-resolution values without loss).</returns>
+    public DateTimeOffset GetDateTimeOffset(int row) => ToDateTimeOffset(Values[row]);
 
     /// <summary>
-    /// The rows as <see cref="DateTimeOffset"/>, materialized once and cached. Prefer <see cref="Seconds"/> or
-    /// <see cref="GetUnixTimeSeconds"/> to avoid building this array when only the raw seconds are needed.
+    /// Projects every row to a <see cref="DateTimeOffset"/> presented in the column's timezone, as a freshly
+    /// allocated array the caller owns (it outlives the block, unlike <see cref="Values"/>).
     /// </summary>
-    public ReadOnlySpan<DateTimeOffset> Values
+    /// <returns>One <see cref="DateTimeOffset"/> per row, in row order.</returns>
+    public DateTimeOffset[] ToDateTimeOffsets()
     {
-        get
+        ReadOnlySpan<uint> seconds = Values;
+        var result = new DateTimeOffset[seconds.Length];
+        for (int i = 0; i < seconds.Length; i++)
         {
-            if (cache is null)
-            {
-                // Rent rather than allocate: this is a convenience view consumers copy out of, so it only needs
-                // to live until Dispose returns it to the pool. Single-consumer per connection, so the lazy fill
-                // needs no synchronization. The rented buffer may be longer than RowCount; Values slices to it.
-                ReadOnlySpan<uint> seconds = Seconds;
-                DateTimeOffset[] decoded = ArrayPool<DateTimeOffset>.Shared.Rent(seconds.Length);
-                for (int i = 0; i < seconds.Length; i++)
-                {
-                    decoded[i] = At(seconds[i]);
-                }
-
-                cache = decoded;
-            }
-
-            return cache.AsSpan(0, RowCount);
+            result[i] = ToDateTimeOffset(seconds[i]);
         }
+
+        return result;
     }
-
-    /// <inheritdoc/>
-    // The cache is rented and may be longer than RowCount, so slice before indexing to keep an out-of-range row
-    // failing fast rather than returning a stale slot; the uncached path indexes the length-bounded Seconds span.
-    public DateTimeOffset this[int row] => cache is not null ? cache.AsSpan(0, RowCount)[row] : At(Seconds[row]);
-
-    /// <inheritdoc/>
-    public object GetValue(int row) => this[row];
-
-    /// <summary>Returns the raw epoch seconds for a row.</summary>
-    /// <param name="row">The zero-based row index.</param>
-    /// <returns>The seconds since the Unix epoch.</returns>
-    public long GetUnixTimeSeconds(int row) => Seconds[row];
 
     /// <inheritdoc/>
     public void Dispose()
@@ -116,13 +103,6 @@ internal sealed class DateTimeColumn : IColumn<DateTimeOffset>
         }
 
         buffer = Array.Empty<byte>();
-
-        if (cache is not null)
-        {
-            // DateTimeOffset holds no references, so no clear is needed.
-            ArrayPool<DateTimeOffset>.Shared.Return(cache);
-            cache = null;
-        }
     }
 
     /// <summary>
@@ -164,12 +144,11 @@ internal sealed class DateTimeColumn : IColumn<DateTimeOffset>
         return new DateTimeColumn(name, typeName, timeZone, rented, byteCount, pooled: true);
     }
 
-    // The wire value is a UTC instant; the timezone only decides the offset it is presented with. A zone with no
-    // daylight saving presents one offset for every instant (resolved once in the constructor); a DST zone is
-    // resolved from the instant so its transitions are honored.
-    private DateTimeOffset At(uint seconds)
+    // The wire value is a UTC instant; the timezone only decides the offset it is presented with. The offset is
+    // resolved from the instant so both daylight-saving transitions and historical base-offset changes are honored.
+    private DateTimeOffset ToDateTimeOffset(uint seconds)
     {
         DateTimeOffset utc = DateTimeOffset.FromUnixTimeSeconds(seconds);
-        return fixedOffset ? utc.ToOffset(constantOffset) : TimeZoneInfo.ConvertTime(utc, timeZone);
+        return TimeZoneInfo.ConvertTime(utc, timeZone);
     }
 }
