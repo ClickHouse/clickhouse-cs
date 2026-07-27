@@ -89,28 +89,31 @@ public sealed class InsertRoundTripCase
         yield return Dates("Date", new DateOnly(1970, 1, 1), new DateOnly(2024, 1, 15), new DateOnly(2149, 6, 6));
         yield return Dates("Date32", new DateOnly(1900, 1, 1), new DateOnly(1970, 1, 1), new DateOnly(2024, 1, 15), new DateOnly(2299, 12, 31));
 
-        // DateTime reads back as a DateTimeOffset; equality compares the instant, so the offset the server
-        // presents does not matter. Insert as DateTime (UTC) and expect the same instants.
+        // DateTime reads back as the raw UInt32 epoch seconds. Insert as DateTime (UTC) and expect the epoch
+        // seconds of the same instants, regardless of the timezone the server presents.
         yield return DateTimes(
             "DateTime",
             new DateTime(1988, 8, 28, 11, 22, 33, DateTimeKind.Utc),
             new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc),
             DateTime.UnixEpoch);
 
-        // A DateTimeOffset with a non-UTC offset survives as the same instant.
-        yield return Same("DateTime <- DateTimeOffset", "DateTime", name => new ArrayColumn<DateTimeOffset>(
-            name,
+        // A DateTimeOffset with a non-UTC offset survives as the same instant (i.e. the same epoch seconds).
+        var dateTimeOffsets = new[]
+        {
+            new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)),
+            new DateTimeOffset(1988, 8, 28, 11, 22, 33, TimeSpan.FromHours(-8)),
+        };
+        yield return new InsertRoundTripCase(
+            "DateTime <- DateTimeOffset",
             "DateTime",
-            new[]
-            {
-                new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)),
-                new DateTimeOffset(1988, 8, 28, 11, 22, 33, TimeSpan.FromHours(-8)),
-            }));
+            name => new ArrayColumn<DateTimeOffset>(name, "DateTime", dateTimeOffsets),
+            name => new ArrayColumn<uint>(name, "DateTime", Array.ConvertAll(dateTimeOffsets, o => (uint)o.ToUnixTimeSeconds())),
+            settings: null);
 
-        // DateTime64 surfaces as ClickHouseDateTime64, which retains the exact wire count at any scale. Scale 9
-        // (nanoseconds) is finer than a .NET tick, so the round-trip proves precision no DateTimeOffset can hold.
-        yield return DateTime64s("DateTime64(3)", 3, 0L, 1_700_000_000_123L, -6_000_000_000_000L);
-        yield return DateTime64s("DateTime64(9)", 9, 0L, 1_700_000_000_123_456_789L, -1_000_000_001L);
+        // DateTime64 surfaces as the raw Int64 count at the column's scale, so it retains the exact wire value at
+        // any scale. Scale 9 (nanoseconds) is finer than a .NET tick, proving precision no DateTimeOffset can hold.
+        yield return DateTime64s("DateTime64(3)", 0L, 1_700_000_000_123L, -6_000_000_000_000L);
+        yield return DateTime64s("DateTime64(9)", 0L, 1_700_000_000_123_456_789L, -1_000_000_001L);
 
         yield return Uuids("UUID", Guid.Empty, new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff"));
 
@@ -129,8 +132,11 @@ public sealed class InsertRoundTripCase
 
         // Newer/experimental server types: enable their flag on the round-trip
         yield return BFloat16s("BFloat16", BFloat16Settings, 0f, 1f, -2f, 0.5f, 100f);
-        yield return Times("Time", TimeSettings, TimeSpan.Zero, new TimeSpan(12, 34, 56), new TimeSpan(-1, -2, -3));
-        yield return Times("Time64(3)", TimeSettings, TimeSpan.Zero, new TimeSpan(0, 1, 2, 3, 456), new TimeSpan(-0, -1, -2, -3, -456));
+
+        // Time surfaces as the raw Int32 seconds; Time64 as the raw Int64 count at the column's scale. The
+        // inserted values are the exact wire values, returned verbatim.
+        yield return TimeSeconds("Time", TimeSettings, 0, (12 * 3600) + (34 * 60) + 56, -((1 * 3600) + (2 * 60) + 3));
+        yield return Time64Counts("Time64(3)", TimeSettings, 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456, -((((1 * 3600) + (2 * 60) + 3) * 1000L) + 456));
     }
 
     private static InsertRoundTripCase Primitive<T>(string clickHouseType, T[] values)
@@ -144,29 +150,31 @@ public sealed class InsertRoundTripCase
     private static InsertRoundTripCase BFloat16s(string clickHouseType, IReadOnlyDictionary<string, string> settings, params float[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<float>(name, clickHouseType, values), settings);
 
-    private static InsertRoundTripCase Times(string clickHouseType, IReadOnlyDictionary<string, string> settings, params TimeSpan[] values)
-        => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<TimeSpan>(name, clickHouseType, values), settings);
+    // Time inserts and reads back the raw Int32 seconds; the inserted seconds are returned verbatim.
+    private static InsertRoundTripCase TimeSeconds(string clickHouseType, IReadOnlyDictionary<string, string> settings, params int[] seconds)
+        => Same($"{clickHouseType} [{seconds.Length} rows]", clickHouseType, name => new ArrayColumn<int>(name, clickHouseType, seconds), settings);
 
-    // DateTime inserts as DateTime (UTC) but reads back as a DateTimeOffset; DateTimeOffset equality compares
-    // the instant, so the expected column carries the same instants regardless of the presented offset.
+    // Time64 inserts and reads back the raw Int64 counts at the column's scale; the inserted counts are returned verbatim.
+    private static InsertRoundTripCase Time64Counts(string clickHouseType, IReadOnlyDictionary<string, string> settings, params long[] counts)
+        => Same($"{clickHouseType} [{counts.Length} rows]", clickHouseType, name => new ArrayColumn<long>(name, clickHouseType, counts), settings);
+
+    // DateTime inserts as DateTime (UTC) but reads back as the raw UInt32 epoch seconds, so the expected column
+    // carries each instant's epoch seconds regardless of the timezone the server presents.
     private static InsertRoundTripCase DateTimes(string clickHouseType, params DateTime[] values)
         => new(
             $"{clickHouseType} [{values.Length} rows]",
             clickHouseType,
             name => new ArrayColumn<DateTime>(name, clickHouseType, values),
-            name => new ArrayColumn<DateTimeOffset>(name, clickHouseType, Array.ConvertAll(values, v => new DateTimeOffset(v.ToUniversalTime()))),
+            name => new ArrayColumn<uint>(name, clickHouseType, Array.ConvertAll(values, v => (uint)new DateTimeOffset(v.ToUniversalTime()).ToUnixTimeSeconds())),
             settings: null);
 
     private static InsertRoundTripCase Dates(string clickHouseType, params DateOnly[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<DateOnly>(name, clickHouseType, values));
 
-    // DateTime64 inserts and reads back a ClickHouseDateTime64. Equality is by instant, so the offset each value
-    // carries here (UTC) need not match the offset the server presents on read.
-    private static InsertRoundTripCase DateTime64s(string clickHouseType, int scale, params long[] counts)
-        => Same(
-            $"{clickHouseType} [{counts.Length} rows]",
-            clickHouseType,
-            name => new ArrayColumn<ClickHouseDateTime64>(name, clickHouseType, Array.ConvertAll(counts, c => new ClickHouseDateTime64(c, scale, TimeSpan.Zero))));
+    // DateTime64 inserts and reads back the raw Int64 counts at the column's scale, so the inserted counts are
+    // returned verbatim regardless of the timezone the server presents.
+    private static InsertRoundTripCase DateTime64s(string clickHouseType, params long[] counts)
+        => Same($"{clickHouseType} [{counts.Length} rows]", clickHouseType, name => new ArrayColumn<long>(name, clickHouseType, counts));
 
     private static InsertRoundTripCase Uuids(string clickHouseType, params Guid[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<Guid>(name, clickHouseType, values));

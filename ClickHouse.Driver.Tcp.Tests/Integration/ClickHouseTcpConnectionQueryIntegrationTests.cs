@@ -190,7 +190,7 @@ public class ClickHouseTcpConnectionQueryIntegrationTests
         // session_timezone setting as that column's presentation timezone, so the value presents at +05:30.
         await foreach (Block block in connection.QueryAsync("SELECT toDateTime(1700000000)", settings, cancellationToken: None))
         {
-            value = ((IColumn<DateTimeOffset>)block[0]).Values[0];
+            value = ((DateTimeColumn)block[0]).GetDateTimeOffset(0);
         }
 
         Assert.Multiple(() =>
@@ -225,7 +225,7 @@ public class ClickHouseTcpConnectionQueryIntegrationTests
         TimeSpan offset = default;
         await foreach (Block block in connection.QueryAsync("SELECT toDateTime(1700000000)", settings, cancellationToken: None))
         {
-            offset = ((IColumn<DateTimeOffset>)block[0]).Values[0].Offset;
+            offset = ((DateTimeColumn)block[0]).GetDateTimeOffset(0).Offset;
         }
 
         return offset;

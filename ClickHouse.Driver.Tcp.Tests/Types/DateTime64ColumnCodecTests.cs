@@ -1,6 +1,5 @@
 using System;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 using static ClickHouse.Driver.Tcp.Tests.Utilities.CodecTestHarness;
@@ -26,13 +25,13 @@ public class DateTime64ColumnCodecTests
             DateTimeOffset.FromUnixTimeSeconds(-1_000_000),
         };
 
-        using var column = (IColumn<ClickHouseDateTime64>)await RoundTripAsync(codec, new ArrayColumn<DateTimeOffset>("c", type, values), type, values.Length);
+        using var column = (DateTime64Column)await RoundTripAsync(codec, new ArrayColumn<DateTimeOffset>("c", type, values), type, values.Length);
 
         Assert.Multiple(() =>
         {
             for (int i = 0; i < values.Length; i++)
             {
-                Assert.That(column[i].ToDateTimeOffset(), Is.EqualTo(values[i]));
+                Assert.That(column.GetDateTimeOffset(i), Is.EqualTo(values[i]));
             }
         });
     }
@@ -43,52 +42,41 @@ public class DateTime64ColumnCodecTests
         // A nanosecond count with sub-100 ns digits that no DateTimeOffset could hold must survive verbatim.
         const string type = "DateTime64(9)";
         DateTime64ColumnCodec codec = Codec(type, "UTC");
-        var values = new[]
-        {
-            new ClickHouseDateTime64(1_700_000_000_123_456_789L, 9, TimeSpan.Zero),
-            new ClickHouseDateTime64(-1_000_000_001L, 9, TimeSpan.Zero),
-        };
+        var counts = new[] { 1_700_000_000_123_456_789L, -1_000_000_001L };
 
-        using var column = (IColumn<ClickHouseDateTime64>)await RoundTripAsync(codec, new ArrayColumn<ClickHouseDateTime64>("c", type, values), type, values.Length);
+        using var column = (IColumn<long>)await RoundTripAsync(codec, new ArrayColumn<long>("c", type, counts), type, counts.Length);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(column[0].Count, Is.EqualTo(1_700_000_000_123_456_789L));
-            Assert.That(column[0].Scale, Is.EqualTo(9));
-            Assert.That(column[1].Count, Is.EqualTo(-1_000_000_001L));
-        });
+        CollectionAssert.AreEqual(counts, column.Values.ToArray());
     }
 
-    [TestCase(5L, 0, "DateTime64(3)", 5000L)]  // widening: 5 s written to a ms column -> 5000
-    [TestCase(5000L, 3, "DateTime64(0)", 5L)]   // exact narrowing: 5000 ms written to a second column -> 5
-    public async Task WriteColumn_RescalesNativeValueToColumnScale(long count, int scale, string type, long expectedWire)
+    [TestCase(0L)]
+    [TestCase(1500L)]
+    [TestCase(-2500L)]
+    public async Task WriteColumn_RawCount_WrittenVerbatim(long count)
     {
-        DateTime64ColumnCodec codec = Codec(type, "UTC");
-        var column = new ArrayColumn<ClickHouseDateTime64>("c", type, new[] { new ClickHouseDateTime64(count, scale, TimeSpan.Zero) });
+        // A raw long is assumed already at the column's scale, so it is written to the wire unchanged.
+        DateTime64ColumnCodec codec = Codec("DateTime64(3)", "UTC");
+        var column = new ArrayColumn<long>("c", "DateTime64(3)", new[] { count });
 
         byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
 
-        Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(expectedWire));
+        Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(count));
     }
 
     [Test]
-    public async Task ReadColumn_ValuesSpan_MaterializesEveryRowAsStruct()
+    public async Task ReadColumn_ValuesSpan_ExposesRawCounts()
     {
         const string type = "DateTime64(9)";
-        var inserted = new[]
-        {
-            new ClickHouseDateTime64(0L, 9, TimeSpan.Zero),
-            new ClickHouseDateTime64(1_700_000_000_123_456_789L, 9, TimeSpan.Zero),
-        };
+        var counts = new[] { 0L, 1_700_000_000_123_456_789L };
         DateTime64ColumnCodec codec = Codec(type, "UTC");
 
-        using var column = (IColumn<ClickHouseDateTime64>)await RoundTripAsync(codec, new ArrayColumn<ClickHouseDateTime64>("c", type, inserted), type, inserted.Length);
+        using var column = (IColumn<long>)await RoundTripAsync(codec, new ArrayColumn<long>("c", type, counts), type, counts.Length);
 
         Assert.Multiple(() =>
         {
             Assert.That(column.RowCount, Is.EqualTo(2));
-            CollectionAssert.AreEqual(inserted, column.Values.ToArray());
-            Assert.That(column.GetValue(1), Is.EqualTo(inserted[1]));
+            CollectionAssert.AreEqual(counts, column.Values.ToArray());
+            Assert.That(column.GetValue(1), Is.EqualTo(counts[1]));
         });
     }
 
@@ -96,18 +84,8 @@ public class DateTime64ColumnCodecTests
     public async Task ReadColumn_ZeroRows_ReturnsEmptyColumn()
     {
         using var reader = ReaderOver(Array.Empty<byte>());
-        using var column = (IColumn<ClickHouseDateTime64>)await Codec("DateTime64(3)", "UTC").ReadColumnAsync(reader, "c", "DateTime64(3)", 0, None);
+        using var column = (IColumn<long>)await Codec("DateTime64(3)", "UTC").ReadColumnAsync(reader, "c", "DateTime64(3)", 0, None);
         Assert.That(column.RowCount, Is.EqualTo(0));
-    }
-
-    [Test]
-    public void WriteColumn_NarrowingScaleLosesPrecision_Throws()
-    {
-        // A scale-9 value with sub-millisecond digits cannot be written to a scale-3 column without loss.
-        DateTime64ColumnCodec codec = Codec("DateTime64(3)", "UTC");
-        var column = new ArrayColumn<ClickHouseDateTime64>("c", "DateTime64(3)", new[] { new ClickHouseDateTime64(1_234_567L, 9, TimeSpan.Zero) });
-
-        Assert.ThrowsAsync<ArgumentException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
     }
 
     [Test]
@@ -129,20 +107,20 @@ public class DateTime64ColumnCodecTests
         byte[] bytes = await WriteAsync(w => w.WriteInt64(1500));
         using var reader = ReaderOver(bytes);
 
-        using var column = (IColumn<ClickHouseDateTime64>)await Codec("DateTime64(3)", "UTC").ReadColumnAsync(reader, "c", "DateTime64(3)", 1, None);
+        using var column = (DateTime64Column)await Codec("DateTime64(3)", "UTC").ReadColumnAsync(reader, "c", "DateTime64(3)", 1, None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(column[0].Count, Is.EqualTo(1500));
-            Assert.That(column[0].ToDateTimeOffset(), Is.EqualTo(DateTimeOffset.FromUnixTimeMilliseconds(1500)));
+            Assert.That(column[0], Is.EqualTo(1500L));
+            Assert.That(column.GetDateTimeOffset(0), Is.EqualTo(DateTimeOffset.FromUnixTimeMilliseconds(1500)));
         });
     }
 
     [Test]
-    public async Task ReadColumn_ExposesRawCountsStructAndOffsetViews()
+    public async Task ReadColumn_ExposesRawCountsAndOffsetViews()
     {
-        // The specialized column offers three views over the same rows: raw counts, the ClickHouseDateTime64
-        // struct (default), and a DateTimeOffset. Scale and timezone are column-level.
+        // The specialized column offers the raw counts (Values / indexer, zero-copy) and a DateTimeOffset
+        // projection; scale and timezone are column-level.
         const string type = "DateTime64(3)";
         byte[] bytes = await WriteAsync(w =>
         {
@@ -156,11 +134,14 @@ public class DateTime64ColumnCodecTests
         Assert.Multiple(() =>
         {
             Assert.That(column.Scale, Is.EqualTo(3));
-            CollectionAssert.AreEqual(new[] { 1500L, -2500L }, column.Counts.ToArray());
-            Assert.That(column.GetCount(0), Is.EqualTo(1500L));
-            Assert.That(column[0].Count, Is.EqualTo(1500L)); // the struct view
+            Assert.That(column.TimeZone, Is.EqualTo(TimeZoneInfo.Utc));
+            CollectionAssert.AreEqual(new[] { 1500L, -2500L }, column.Values.ToArray());
+            Assert.That(column[0], Is.EqualTo(1500L));
             Assert.That(column.GetDateTimeOffset(0), Is.EqualTo(DateTimeOffset.FromUnixTimeMilliseconds(1500)));
             Assert.That(column.GetDateTimeOffset(1), Is.EqualTo(DateTimeOffset.FromUnixTimeMilliseconds(-2500)));
+            CollectionAssert.AreEqual(
+                new[] { DateTimeOffset.FromUnixTimeMilliseconds(1500), DateTimeOffset.FromUnixTimeMilliseconds(-2500) },
+                column.ToDateTimeOffsets());
         });
     }
 
@@ -170,25 +151,25 @@ public class DateTime64ColumnCodecTests
         byte[] bytes = await WriteAsync(w => w.WriteInt64(1_700_000_000_000)); // scale 3, winter instant
         using var reader = ReaderOver(bytes);
 
-        using var column = (IColumn<ClickHouseDateTime64>)await Codec("DateTime64(3, 'Asia/Kolkata')").ReadColumnAsync(reader, "c", "DateTime64(3, 'Asia/Kolkata')", 1, None);
+        using var column = (DateTime64Column)await Codec("DateTime64(3, 'Asia/Kolkata')").ReadColumnAsync(reader, "c", "DateTime64(3, 'Asia/Kolkata')", 1, None);
 
-        Assert.That(column[0].Offset, Is.EqualTo(new TimeSpan(5, 30, 0)));
+        Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(new TimeSpan(5, 30, 0)));
     }
 
     [Test]
     public async Task ReadColumn_DaylightSavingZoneSummerInstant_PresentsDaylightOffset()
     {
         // A summer instant read as Europe/London presents +01:00 (British Summer Time); the offset is resolved
-        // per instant, so a daylight-saving zone cannot use the fixed-offset fast path a zone like UTC does.
+        // per instant, so a daylight-saving zone honors its transitions.
         byte[] bytes = await WriteAsync(w => w.WriteInt64(1_689_300_000_000)); // scale 3, 2023-07-14, summer
         using var reader = ReaderOver(bytes);
 
-        using var column = (IColumn<ClickHouseDateTime64>)await Codec("DateTime64(3, 'Europe/London')").ReadColumnAsync(reader, "c", "DateTime64(3, 'Europe/London')", 1, None);
+        using var column = (DateTime64Column)await Codec("DateTime64(3, 'Europe/London')").ReadColumnAsync(reader, "c", "DateTime64(3, 'Europe/London')", 1, None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(column[0].Count, Is.EqualTo(1_689_300_000_000L));
-            Assert.That(column[0].Offset, Is.EqualTo(TimeSpan.FromHours(1)));
+            Assert.That(column[0], Is.EqualTo(1_689_300_000_000L));
+            Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(TimeSpan.FromHours(1)));
         });
     }
 
@@ -226,7 +207,7 @@ public class DateTime64ColumnCodecTests
         DateTime64ColumnCodec codec = Codec("DateTime64(3)", "UTC");
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(new ArrayColumn<ClickHouseDateTime64>("c", "DateTime64(3)", Array.Empty<ClickHouseDateTime64>())), Is.True);
+            Assert.That(codec.CanWrite(new ArrayColumn<long>("c", "DateTime64(3)", Array.Empty<long>())), Is.True);
             Assert.That(codec.CanWrite(new ArrayColumn<DateTimeOffset>("c", "DateTime64(3)", Array.Empty<DateTimeOffset>())), Is.True);
             Assert.That(codec.CanWrite(new ArrayColumn<DateTime>("c", "DateTime64(3)", Array.Empty<DateTime>())), Is.True);
             Assert.That(codec.CanWrite(new ArrayColumn<string>("c", "DateTime64(3)", Array.Empty<string>())), Is.False);
