@@ -37,6 +37,26 @@ public class UuidColumnCodecTests
     }
 
     [Test]
+    public async Task RoundTrip_ManyRandomGuids_PreservesEveryBytePosition()
+    {
+        // A deterministic fuzz over the full 16-byte permutation: any single-position mask error would corrupt
+        // at least one of these round-trips. Also exercises reads of arbitrary wire patterns (write is a
+        // bijection on 16 bytes, so these cover every wire byte layout).
+        var random = new Random(20260727);
+        var values = new Guid[512];
+        Span<byte> bytes = stackalloc byte[16];
+        for (int i = 0; i < values.Length; i++)
+        {
+            random.NextBytes(bytes);
+            values[i] = new Guid(bytes);
+        }
+
+        using var column = (IColumn<Guid>)await RoundTripAsync(UuidColumnCodec.Instance, new ArrayColumn<Guid>("c", "UUID", values), "UUID", values.Length);
+
+        CollectionAssert.AreEqual(values, column.Values.ToArray());
+    }
+
+    [Test]
     public void CanWrite_AcceptsGuidOnly()
     {
         Assert.Multiple(() =>

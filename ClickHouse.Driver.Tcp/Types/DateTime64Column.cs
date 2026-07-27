@@ -3,41 +3,34 @@ using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// A <c>DateTime64(scale[, tz])</c> column that keeps the raw wire counts and offers them under several types.
-/// ClickHouse writes a little-endian <c>Int64</c> tick count at <c>10^-scale</c> seconds since the Unix epoch
-/// per row; those bytes are kept verbatim as the column's storage (reinterpreted as <see cref="long"/> with no
-/// copy), and the scale and timezone — which are the same for every row — live once on the column rather than
-/// on each value. A caller chooses how to read each row: the raw count (<see cref="GetCount"/> /
-/// <see cref="Counts"/>, zero-copy), the presented instant (<see cref="GetDateTimeOffset"/>), or — the default
-/// <see cref="IColumn{T}"/> view — a full-precision <see cref="ClickHouseDateTime64"/> that also carries the
-/// scale and resolved offset.
+/// A <c>DateTime64(scale[, tz])</c> column that surfaces the raw wire counts. ClickHouse writes a little-endian
+/// <c>Int64</c> tick count at <c>10^-scale</c> seconds since the Unix epoch per row; those bytes are kept
+/// verbatim as the column's storage and exposed — with no copy — as the <see cref="long"/> <see cref="Values"/>,
+/// the exact wire value at any scale (including scales 8 and 9, which are finer than a .NET tick). The scale and
+/// timezone — the same for every row — live once on the column rather than on each value.
 ///
 /// <para>
 /// The backing buffer is rented from <see cref="ArrayPool{T}"/> and returned on <see cref="Dispose"/>; like every
-/// column, the bytes and the span returned by <see cref="Counts"/> are borrowed for the block's lifetime. Copy
+/// column, the bytes and the span returned by <see cref="Values"/> are borrowed for the block's lifetime. Copy
 /// out to retain.
 /// </para>
 /// </summary>
-internal sealed class DateTime64Column : IColumn<ClickHouseDateTime64>
+internal sealed class DateTime64Column : IColumn<long>
 {
     private const int DotNetTickScale = 7; // .NET tick = 100 ns = 10^-7 s.
     private static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
 
     private readonly int scale;
     private readonly TimeZoneInfo timeZone;
-    private readonly bool fixedOffset;
-    private readonly TimeSpan constantOffset;
     private readonly int length;
     private readonly bool pooled;
     private byte[] buffer;
-    private ClickHouseDateTime64[] cache;
 
     /// <summary>Initializes a column over the raw little-endian count bytes.</summary>
     /// <param name="name">The column name.</param>
@@ -53,12 +46,6 @@ internal sealed class DateTime64Column : IColumn<ClickHouseDateTime64>
         TypeName = typeName;
         this.scale = scale;
         this.timeZone = timeZone;
-
-        // Zones without daylight saving present a single offset for every instant, so resolve it once here
-        // rather than walking the zone's rules per row; only a DST zone needs the per-instant lookup in At.
-        fixedOffset = !timeZone.SupportsDaylightSavingTime;
-        constantOffset = timeZone.BaseUtcOffset;
-
         this.buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
         this.length = length;
         this.pooled = pooled;
@@ -76,55 +63,46 @@ internal sealed class DateTime64Column : IColumn<ClickHouseDateTime64>
     /// <summary>The fractional-second scale (0–9) shared by every value in the column.</summary>
     public int Scale => scale;
 
-    /// <summary>The raw signed tick counts (at <c>10^-Scale</c> seconds since the epoch), as a zero-copy view.</summary>
-    public ReadOnlySpan<long> Counts => MemoryMarshal.Cast<byte, long>(buffer.AsSpan(0, length));
+    /// <summary>The timezone the counts are presented in, shared by every value in the column. Combine with
+    /// <see cref="Scale"/> to interpret the raw <see cref="Values"/> counts.</summary>
+    public TimeZoneInfo TimeZone => timeZone;
 
     /// <summary>
-    /// The rows as <see cref="ClickHouseDateTime64"/>, materialized once and cached. Prefer <see cref="Counts"/>,
-    /// <see cref="GetCount"/>, or <see cref="GetDateTimeOffset"/> to avoid building this array when only the raw
-    /// count or the offset view is needed.
+    /// The raw signed tick counts (at <c>10^-Scale</c> seconds since the epoch), as a zero-copy view. This is the
+    /// exact wire value at every scale; use <see cref="ToDateTimeOffsets"/> for a (lossy) calendar view.
     /// </summary>
-    public ReadOnlySpan<ClickHouseDateTime64> Values
-    {
-        get
-        {
-            if (cache is null)
-            {
-                // Rent rather than allocate: this is a convenience view consumers copy out of, so it only needs
-                // to live until Dispose returns it to the pool. Single-consumer per connection, so the lazy fill
-                // needs no synchronization. The rented buffer may be longer than RowCount; Values slices to it.
-                ReadOnlySpan<long> counts = Counts;
-                ClickHouseDateTime64[] decoded = ArrayPool<ClickHouseDateTime64>.Shared.Rent(counts.Length);
-                for (int i = 0; i < counts.Length; i++)
-                {
-                    decoded[i] = At(counts[i]);
-                }
-
-                cache = decoded;
-            }
-
-            return cache.AsSpan(0, RowCount);
-        }
-    }
+    public ReadOnlySpan<long> Values => MemoryMarshal.Cast<byte, long>(buffer.AsSpan(0, length));
 
     /// <inheritdoc/>
-    // The cache is rented and may be longer than RowCount, so slice before indexing to keep an out-of-range row
-    // failing fast rather than returning a stale slot; the uncached path indexes the length-bounded Counts span.
-    public ClickHouseDateTime64 this[int row] => cache is not null ? cache.AsSpan(0, RowCount)[row] : At(Counts[row]);
+    public long this[int row] => Values[row];
 
     /// <inheritdoc/>
-    public object GetValue(int row) => this[row];
-
-    /// <summary>Returns the raw signed tick count for a row (at <c>10^-Scale</c> seconds since the epoch).</summary>
-    /// <param name="row">The zero-based row index.</param>
-    /// <returns>The raw count.</returns>
-    public long GetCount(int row) => Counts[row];
+    public object GetValue(int row) => Values[row];
 
     /// <summary>Returns a row as a <see cref="DateTimeOffset"/> at 100 ns resolution, presented in the column's timezone.</summary>
     /// <param name="row">The zero-based row index.</param>
-    /// <returns>The instant. Lossy for scales finer than 7 (sub-100 ns digits are truncated); use
-    /// <see cref="GetCount"/> or the <see cref="ClickHouseDateTime64"/> view for the exact value.</returns>
-    public DateTimeOffset GetDateTimeOffset(int row) => this[row].ToDateTimeOffset();
+    /// <returns>The instant. Lossy for scales finer than 7 (sub-100 ns digits are truncated); read
+    /// <see cref="Values"/> for the exact count.</returns>
+    public DateTimeOffset GetDateTimeOffset(int row) => ToDateTimeOffset(Values[row]);
+
+    /// <summary>
+    /// Projects every row to a <see cref="DateTimeOffset"/> presented in the column's timezone, as a freshly
+    /// allocated array the caller owns (it outlives the block, unlike <see cref="Values"/>).
+    /// </summary>
+    /// <returns>One <see cref="DateTimeOffset"/> per row, in row order.</returns>
+    /// <remarks><see cref="DateTimeOffset"/> holds only 100 ns ticks, so this view is lossy for scales finer than 7
+    /// (sub-100 ns digits are truncated toward zero); read <see cref="Values"/> for the exact counts.</remarks>
+    public DateTimeOffset[] ToDateTimeOffsets()
+    {
+        ReadOnlySpan<long> counts = Values;
+        var result = new DateTimeOffset[counts.Length];
+        for (int i = 0; i < counts.Length; i++)
+        {
+            result[i] = ToDateTimeOffset(counts[i]);
+        }
+
+        return result;
+    }
 
     /// <inheritdoc/>
     public void Dispose()
@@ -135,13 +113,6 @@ internal sealed class DateTime64Column : IColumn<ClickHouseDateTime64>
         }
 
         buffer = Array.Empty<byte>();
-
-        if (cache is not null)
-        {
-            // ClickHouseDateTime64 holds no references, so no clear is needed.
-            ArrayPool<ClickHouseDateTime64>.Shared.Return(cache);
-            cache = null;
-        }
     }
 
     /// <summary>
@@ -185,30 +156,24 @@ internal sealed class DateTime64Column : IColumn<ClickHouseDateTime64>
         return new DateTime64Column(name, typeName, scale, timeZone, rented, byteCount, pooled: true);
     }
 
-    // Builds the self-contained value for a raw count: the timezone only decides the presented offset. A zone
-    // with no daylight saving presents one offset for every instant (resolved once in the constructor); a DST
-    // zone is resolved from the instant (a 100 ns-truncated instant is precise enough to pick the offset for any
-    // transition, which only ever land on a whole second).
-    private ClickHouseDateTime64 At(long count)
+    // Projects a raw count onto the .NET calendar and presents it in the column's timezone. Sub-100 ns digits at
+    // scale 8/9 are truncated toward zero here; the exact value stays in Values. The offset is resolved from the
+    // instant so both daylight-saving transitions and historical base-offset changes are honored.
+    private DateTimeOffset ToDateTimeOffset(long count)
     {
-        if (fixedOffset)
-        {
-            return new ClickHouseDateTime64(count, scale, constantOffset);
-        }
-
-        // Resolving a DST zone's offset projects the instant onto the .NET calendar, which overflows for counts
-        // outside DateTimeOffset's range even though the raw count itself is decodable. Surface that as an
-        // actionable message pointing at the raw-count accessors rather than a bare arithmetic exception.
+        // Projecting the count onto the .NET calendar overflows for counts outside DateTimeOffset's range even
+        // though the raw count itself is decodable. Surface that as an actionable message pointing at Values
+        // rather than a bare arithmetic exception.
         try
         {
             long dotNetTicks = FixedPointScaling.ShiftDecimalPlaces(count, DotNetTickScale - scale);
             var utc = new DateTimeOffset(UnixEpochTicks + dotNetTicks, TimeSpan.Zero);
-            return new ClickHouseDateTime64(count, scale, timeZone.GetUtcOffset(utc));
+            return TimeZoneInfo.ConvertTime(utc, timeZone);
         }
         catch (Exception ex) when (ex is OverflowException or ArgumentOutOfRangeException)
         {
             throw new OverflowException(
-                $"A DateTime64 count of {count} at scale {scale} is outside the range presentable as a DateTimeOffset in timezone '{timeZone.Id}'; read the raw value via GetCount or Counts instead.",
+                $"A DateTime64 count of {count} at scale {scale} is outside the range presentable as a DateTimeOffset in timezone '{timeZone.Id}'; read the raw count via Values instead.",
                 ex);
         }
     }

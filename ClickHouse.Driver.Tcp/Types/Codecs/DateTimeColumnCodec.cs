@@ -8,10 +8,10 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
 /// A codec for the ClickHouse <c>DateTime</c> / <c>DateTime('tz')</c> column: a little-endian <c>UInt32</c> of
-/// seconds since the Unix epoch per row, surfaced as a <see cref="DateTimeOffset"/>. The wire value is a UTC
-/// instant; the column's timezone — the type string's explicit argument, or the session timezone when it has
-/// none — determines the offset each value is presented with (resolved per instant, so daylight-saving
-/// transitions are honored).
+/// seconds since the Unix epoch per row, surfaced as the raw <see cref="uint"/> second count. The wire value is
+/// a UTC instant; the column's timezone — the type string's explicit argument, or the session timezone when it
+/// has none — determines the offset a caller's <see cref="DateTimeOffset"/> projection is presented with
+/// (resolved per instant, so daylight-saving transitions are honored).
 /// </summary>
 internal sealed class DateTimeColumnCodec : IColumnCodec
 {
@@ -27,17 +27,22 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     public string TypeName { get; }
 
     /// <inheritdoc/>
-    public Type ElementType => typeof(DateTimeOffset);
+    public Type ElementType => typeof(uint);
 
     /// <inheritdoc/>
-    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(DateTimeOffset), typeof(DateTime) };
+    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) };
 
     /// <inheritdoc/>
-    public object NullPlaceholder => DateTimeOffset.UnixEpoch;
+    public object NullPlaceholder => 0u;
 
     /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
+        if (writeType == typeof(uint))
+        {
+            return NullPlaceholder;
+        }
+
         if (writeType == typeof(DateTimeOffset))
         {
             return DateTimeOffset.UnixEpoch;
@@ -67,7 +72,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         => DateTimeColumn.ReadAsync(reader, columnName, columnType, timeZone, rowCount, cancellationToken);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<DateTimeOffset> or IColumn<DateTime>;
+    public bool CanWrite(IColumn column) => column is IColumn<uint> or IColumn<DateTimeOffset> or IColumn<DateTime>;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
@@ -76,6 +81,15 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         // column body stores; the display timezone is irrelevant to the bytes on the wire.
         switch (column)
         {
+            case IColumn<uint> seconds:
+                // Raw epoch seconds are the wire representation, so they are written verbatim.
+                for (int i = 0; i < length; i++)
+                {
+                    writer.WriteUInt32(seconds[start + i]);
+                }
+
+                break;
+
             case IColumn<DateTimeOffset> offsets:
                 for (int i = 0; i < length; i++)
                 {
