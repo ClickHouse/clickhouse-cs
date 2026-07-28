@@ -815,6 +815,19 @@ public sealed class InsertRoundTripCase
         // low-cardinality codec; empty rows and repeated values ride along.
         yield return Arrays("LowCardinality(String)", new[] { "a", "b" }, Array.Empty<string>(), new[] { "a", "a", "c" });
 
+        // A dictionary past 255 entries forces the client to widen the key stream from UInt8 to UInt16
+        // (SelectKeyWidthCode switches on dictSize < byte.MaxValue). Unit tests assert the client picks that
+        // width; no case had more than three distinct values, so nothing proved the server accepts a
+        // client-written wide key stream.
+        yield return Same(
+            "LowCardinality(String) [wide keys]",
+            "LowCardinality(String)",
+            name => new ArrayColumn<string>(name, "LowCardinality(String)", Enumerable.Range(0, 300).Select(i => $"v{i}").ToArray()));
+
+        // Array(LowCardinality(Nullable(String))) puts the reserved key-0-is-NULL dictionary underneath the array
+        // offsets — exactly where a reserved-slot off-by-one would surface. Neither half-case reaches it.
+        yield return Arrays("LowCardinality(Nullable(String))", new[] { "a", null }, Array.Empty<string>(), new[] { "a", null, "c" });
+
         // LowCardinality(Nullable(T)): nullability is expressed by a reserved dictionary slot (key 0 = NULL), not a
         // null-map — the dictionary is still bare T. This is the nullable coverage for LowCardinality (the server
         // rejects Nullable(LowCardinality(T))). A present value equal to the inner default (empty string, 0) rides
