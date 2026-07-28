@@ -422,6 +422,44 @@ public class LowCardinalityColumnCodecTests
     }
 
     [Test]
+    public void Indexer_RowPastRowCount_ThrowsRatherThanReadingStaleKeys()
+    {
+        // The keys buffer is normally a pooled array longer than the column, and a stale key left in its tail by a
+        // previous read is a perfectly valid dictionary index — so reading a row past RowCount through the raw buffer
+        // returned a real value from the dictionary instead of failing. Here row 0 is the whole column; the trailing
+        // 2 is the stale tail. All three shapes keep their own copy of the indexer, hence all three here.
+        using var dictionary = new ArrayColumn<string>("c", "String", new[] { string.Empty, "x", "y" });
+        using var bare = new LowCardinalityColumn<string>("c", "LowCardinality(String)", dictionary, new[] { 1, 2 }, rowCount: 1, pooledKeys: false);
+        using var nullableReference = new NullableLowCardinalityReferenceColumn<string>(
+            "c", "LowCardinality(Nullable(String))", dictionary, new[] { 1, 2 }, rowCount: 1, pooledKeys: false);
+        using var valueDictionary = new ArrayColumn<uint>("c", "UInt32", new uint[] { 0, 7, 9 });
+        using var nullableValue = new NullableLowCardinalityValueColumn<uint>(
+            "c", "LowCardinality(Nullable(UInt32))", valueDictionary, new[] { 1, 2 }, rowCount: 1, pooledKeys: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bare[0], Is.EqualTo("x"));
+            Assert.That(() => bare[1], Throws.InstanceOf<IndexOutOfRangeException>());
+            Assert.That(nullableReference[0], Is.EqualTo("x"));
+            Assert.That(() => nullableReference[1], Throws.InstanceOf<IndexOutOfRangeException>());
+            Assert.That(nullableValue[0], Is.EqualTo(7u));
+            Assert.That(() => nullableValue[1], Throws.InstanceOf<IndexOutOfRangeException>());
+        });
+    }
+
+    [Test]
+    public void Constructor_KeysShorterThanRowCount_Throws()
+    {
+        // rowCount is load-bearing here — the dictionary holds one entry per distinct value, and the keys are pooled
+        // — so it is validated rather than derived.
+        using var dictionary = new ArrayColumn<string>("c", "String", new[] { string.Empty, "x" });
+
+        Assert.That(
+            () => new LowCardinalityColumn<string>("c", "LowCardinality(String)", dictionary, new[] { 1 }, rowCount: 2, pooledKeys: false),
+            Throws.ArgumentException.With.Message.Contains("fewer than"));
+    }
+
+    [Test]
     public void CanWrite_NullableInner_AcceptsNullableElementTypeOnly()
     {
         Assert.Multiple(() =>
