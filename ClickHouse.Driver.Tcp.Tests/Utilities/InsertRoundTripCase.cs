@@ -978,6 +978,15 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<object>(name, "Dynamic", new object[] { 42UL, "hi", null, 0UL, string.Empty, null }),
             DynamicSettings);
 
+        // Dynamic(max_types=N) is the one shape where the server reshapes the dynamic structure: types beyond N go
+        // to the shared/overflow bucket. Create_MaxTypesArgument_IsAccepted only checks the TypeName string, and no
+        // case used a parameterized Dynamic, so the client's read of that reshaped structure was untested.
+        yield return Same(
+            "Dynamic(max_types=2) [overflow bucket]",
+            "Dynamic(max_types=2)",
+            name => new ArrayColumn<object>(name, "Dynamic(max_types=2)", new object[] { 42UL, "hi", 1.5, true, null }),
+            DynamicSettings);
+
         // A broader scalar mix, exercising the inference table across several runtime types in one column.
         yield return Same(
             "Dynamic [mixed scalar types]",
