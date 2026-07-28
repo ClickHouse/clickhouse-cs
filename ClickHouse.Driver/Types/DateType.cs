@@ -14,9 +14,9 @@ internal class DateType : AbstractDateTimeType
 
     public override ParameterizedType Parse(SyntaxTreeNode typeName, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings) => throw new NotImplementedException();
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T value)
     {
-        var days = CoerceToDateTimeOffset(value).ToUnixTimeDays();
+        var days = dto.ToUnixTimeDays();
         if (days < 0 || days > ushort.MaxValue)
         {
             throw new ArgumentOutOfRangeException(

@@ -15,7 +15,7 @@ public class ConnectionStringBuilderTests
             Assert.That(new ClickHouseConnectionStringBuilder("Protocol=https").Port, Is.EqualTo(8443));
             Assert.That(new ClickHouseConnectionStringBuilder().Database, Is.EqualTo(""));
             Assert.That(new ClickHouseConnectionStringBuilder().Username, Is.EqualTo("default"));
-            Assert.That(new ClickHouseConnectionStringBuilder().ReadBufferSize, Is.EqualTo(8 * 1024));
+            Assert.That(new ClickHouseConnectionStringBuilder().ReadBufferSize, Is.EqualTo(ClickHouseDefaults.ReadBufferSize));
             Assert.That(new ClickHouseConnectionStringBuilder().UseFormDataParameters, Is.EqualTo(ClickHouseDefaults.UseFormDataParameters));
         });
     }

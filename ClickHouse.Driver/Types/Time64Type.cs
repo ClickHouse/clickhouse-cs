@@ -24,7 +24,7 @@ namespace ClickHouse.Driver.Types;
 /// At the moment, the option enable_time_time64_type must be set to 1 to use Time or Time64.
 /// </para>
 /// </summary>
-internal class Time64Type : ParameterizedType
+internal class Time64Type : ParameterizedType, ITypedWriter<TimeSpan>
 {
     // Range: [-999:59:59.xxx, 999:59:59.xxx] in seconds with fractional part
     internal const decimal MinSeconds = -3599999.999999999m; // -999:59:59.999999999
@@ -120,17 +120,18 @@ internal class Time64Type : ParameterizedType
         return Time64Type.FromClickHouseDecimal(fractionalSeconds);
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    public override void Write(ExtendedBinaryWriter writer, object value) => WriteValue(writer, CoerceToTimeSpan(value));
+
+    public void WriteValue(ExtendedBinaryWriter writer, TimeSpan value)
     {
-        var timeSpan = CoerceToTimeSpan(value);
-        var fractionalSeconds = ToClickHouseDecimal(timeSpan);
+        var fractionalSeconds = ToClickHouseDecimal(value);
 
         // Clamp to valid range, as the db does
         fractionalSeconds = Math.Max(MinSeconds, Math.Min(MaxSeconds, fractionalSeconds));
 
-        // Write as Decimal64
+        // Write as Decimal64 (box-free typed path — avoids boxing the intermediate ClickHouseDecimal)
         ClickHouseDecimal clickHouseDecimal = fractionalSeconds;
-        decimalType.Write(writer, clickHouseDecimal);
+        decimalType.WriteValue(writer, clickHouseDecimal);
     }
 
     private static TimeSpan CoerceToTimeSpan(object value)

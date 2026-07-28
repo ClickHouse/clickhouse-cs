@@ -10,51 +10,85 @@ namespace ClickHouse.Driver.Types;
 /// </summary>
 internal static class BinaryTypeDecoder
 {
+    // Many ClickHouse types carry no per-instance state (all integer/float/date/ip/bool types).
+    // On the Dynamic read path FromByteCode is invoked once per value, so allocating a fresh
+    // instance every call is pure GC pressure. These types are immutable, so a single shared
+    // instance can be reused safely across every decode. Types that carry state (String's
+    // ReadAsByteArray, timezones, scales, precision, composites) are still constructed per call.
+    private static readonly NothingType NothingSingleton = new();
+    private static readonly UInt8Type UInt8Singleton = new();
+    private static readonly UInt16Type UInt16Singleton = new();
+    private static readonly UInt32Type UInt32Singleton = new();
+    private static readonly UInt64Type UInt64Singleton = new();
+    private static readonly UInt128Type UInt128Singleton = new();
+    private static readonly UInt256Type UInt256Singleton = new();
+    private static readonly Int8Type Int8Singleton = new();
+    private static readonly Int16Type Int16Singleton = new();
+    private static readonly Int32Type Int32Singleton = new();
+    private static readonly Int64Type Int64Singleton = new();
+    private static readonly Int128Type Int128Singleton = new();
+    private static readonly Int256Type Int256Singleton = new();
+    private static readonly Float32Type Float32Singleton = new();
+    private static readonly Float64Type Float64Singleton = new();
+    private static readonly BFloat16Type BFloat16Singleton = new();
+    private static readonly DateType DateSingleton = new();
+    private static readonly Date32Type Date32Singleton = new();
+    private static readonly UuidType UuidSingleton = new();
+    private static readonly IPv4Type IPv4Singleton = new();
+    private static readonly IPv6Type IPv6Singleton = new();
+    private static readonly BooleanType BooleanSingleton = new();
+    private static readonly TimeType TimeSingleton = new();
+
+    // String is stateless apart from the ReadAsByteArray flag, which has exactly two values;
+    // cache one shared instance per variant rather than allocating per value.
+    private static readonly StringType StringSingleton = new() { ReadAsByteArray = false };
+    private static readonly StringType StringAsByteArraySingleton = new() { ReadAsByteArray = true };
+
     internal static ClickHouseType FromByteCode(ExtendedBinaryReader reader, TypeSettings typeSettings)
     {
         var value = reader.ReadByte();
         switch (value)
         {
             case BinaryTypeIndex.Nothing:
-                return new NothingType();
+                return NothingSingleton;
 
             case BinaryTypeIndex.UInt8:
-                return new UInt8Type();
+                return UInt8Singleton;
             case BinaryTypeIndex.UInt16:
-                return new UInt16Type();
+                return UInt16Singleton;
             case BinaryTypeIndex.UInt32:
-                return new UInt32Type();
+                return UInt32Singleton;
             case BinaryTypeIndex.UInt64:
-                return new UInt64Type();
+                return UInt64Singleton;
             case BinaryTypeIndex.UInt128:
-                return new UInt128Type();
+                return UInt128Singleton;
             case BinaryTypeIndex.UInt256:
-                return new UInt256Type();
+                return UInt256Singleton;
 
             case BinaryTypeIndex.Int8:
-                return new Int8Type();
+                return Int8Singleton;
             case BinaryTypeIndex.Int16:
-                return new Int16Type();
+                return Int16Singleton;
             case BinaryTypeIndex.Int32:
-                return new Int32Type();
+                return Int32Singleton;
             case BinaryTypeIndex.Int64:
-                return new Int64Type();
+                return Int64Singleton;
             case BinaryTypeIndex.Int128:
-                return new Int128Type();
+                return Int128Singleton;
             case BinaryTypeIndex.Int256:
-                return new Int256Type();
+                return Int256Singleton;
 
             case BinaryTypeIndex.Float32:
-                return new Float32Type();
+                return Float32Singleton;
             case BinaryTypeIndex.Float64:
-                return new Float64Type();
+                return Float64Singleton;
             case BinaryTypeIndex.BFloat16:
-                return new BFloat16Type();
+                return BFloat16Singleton;
 
             case BinaryTypeIndex.Date:
-                return new DateType();
+                return DateSingleton;
             case BinaryTypeIndex.Date32:
-                return new Date32Type();
+                return Date32Singleton;
             case BinaryTypeIndex.DateTimeUTC:
                 return new DateTimeType();
             case BinaryTypeIndex.DateTimeWithTimezone:
@@ -65,7 +99,7 @@ internal static class BinaryTypeDecoder
                 return new DateTime64Type() { Scale = reader.ReadByte(), TimeZone = AbstractDateTimeType.ResolveTimezone(reader.ReadString()) };
 
             case BinaryTypeIndex.String:
-                return new StringType() { ReadAsByteArray = typeSettings.readStringsAsByteArrays };
+                return typeSettings.readStringsAsByteArrays ? StringAsByteArraySingleton : StringSingleton;
             case BinaryTypeIndex.FixedString:
                 return new FixedStringType() { Length = reader.Read7BitEncodedInt(), ReadAsByteArray = typeSettings.readStringsAsByteArrays };
 
@@ -84,7 +118,7 @@ internal static class BinaryTypeDecoder
                 return DecodeDecimal256(reader, typeSettings);
 
             case BinaryTypeIndex.UUID:
-                return new UuidType();
+                return UuidSingleton;
 
             case BinaryTypeIndex.Array:
                 return new ArrayType() { UnderlyingType = FromByteCode(reader, typeSettings) };
@@ -118,9 +152,9 @@ internal static class BinaryTypeDecoder
                 return new MapType() { UnderlyingTypes = Tuple.Create(FromByteCode(reader, typeSettings), FromByteCode(reader, typeSettings)) };
 
             case BinaryTypeIndex.IPv4:
-                return new IPv4Type();
+                return IPv4Singleton;
             case BinaryTypeIndex.IPv6:
-                return new IPv6Type();
+                return IPv6Singleton;
 
             case BinaryTypeIndex.Variant:
                 return DecodeVariant(reader, typeSettings);
@@ -136,7 +170,7 @@ internal static class BinaryTypeDecoder
                 return DecodeCustomType(reader); // "Ring, Polygon, etc"
 
             case BinaryTypeIndex.Bool:
-                return new BooleanType();
+                return BooleanSingleton;
 
             case BinaryTypeIndex.SimpleAggregateFunction:
                 return DecodeSimpleAggregateFunction(reader);
@@ -148,7 +182,7 @@ internal static class BinaryTypeDecoder
                 return DecodeJson(reader, typeSettings);
 
             case BinaryTypeIndex.Time:
-                return new TimeType();
+                return TimeSingleton;
 
             case BinaryTypeIndex.Time64:
                 return new Time64Type

@@ -18,9 +18,9 @@ internal class Date32Type : DateType
     private const int Date32MinUnixDays = -25567;
     private const int Date32MaxUnixDays = 120529;
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T value)
     {
-        var days = CoerceToDateTimeOffset(value).ToUnixTimeDays();
+        var days = dto.ToUnixTimeDays();
         if (days < Date32MinUnixDays || days > Date32MaxUnixDays)
         {
             throw new ArgumentOutOfRangeException(

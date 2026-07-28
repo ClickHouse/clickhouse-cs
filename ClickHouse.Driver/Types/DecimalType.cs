@@ -7,7 +7,7 @@ using ClickHouse.Driver.Types.Grammar;
 
 namespace ClickHouse.Driver.Types;
 
-internal class DecimalType : ParameterizedType
+internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWriter<ClickHouseDecimal>
 {
     private int scale;
 
@@ -69,7 +69,7 @@ internal class DecimalType : ParameterizedType
             {
                 4 => (BigInteger)reader.ReadInt32(),
                 8 => (BigInteger)reader.ReadInt64(),
-                _ => new BigInteger(reader.ReadBytes(Size)),
+                _ => ReadMantissa(reader),
             };
             return new ClickHouseDecimal(mantissa, Scale);
         }
@@ -79,10 +79,17 @@ internal class DecimalType : ParameterizedType
             {
                 4 => reader.ReadInt32(),
                 8 => reader.ReadInt64(),
-                _ => (decimal)new BigInteger(reader.ReadBytes(Size)),
+                _ => (decimal)ReadMantissa(reader),
             };
             return mantissa / (decimal)Exponent;
         }
+    }
+
+    private BigInteger ReadMantissa(ExtendedBinaryReader reader)
+    {
+        Span<byte> buffer = stackalloc byte[Size];
+        reader.ReadBytes(buffer);
+        return new BigInteger(buffer);
     }
 
     public override string ToString() => $"{Name}({Precision}, {Scale})";
@@ -92,13 +99,32 @@ internal class DecimalType : ParameterizedType
         try
         {
             ClickHouseDecimal @decimal = value is ClickHouseDecimal chd ? chd : Convert.ToDecimal(value, CultureInfo.InvariantCulture);
-            var mantissa = ClickHouseDecimal.ScaleMantissa(@decimal, Scale);
-            WriteBigInteger(writer, mantissa);
+            WriteScaled(writer, @decimal);
         }
         catch (OverflowException)
         {
             throw new ArgumentOutOfRangeException(nameof(value), value, $"Value cannot be represented");
         }
+    }
+
+    public void WriteValue(ExtendedBinaryWriter writer, decimal value) => WriteValue(writer, (ClickHouseDecimal)value);
+
+    public void WriteValue(ExtendedBinaryWriter writer, ClickHouseDecimal value)
+    {
+        try
+        {
+            WriteScaled(writer, value);
+        }
+        catch (OverflowException)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, $"Value cannot be represented");
+        }
+    }
+
+    private void WriteScaled(ExtendedBinaryWriter writer, ClickHouseDecimal value)
+    {
+        var mantissa = ClickHouseDecimal.ScaleMantissa(value, Scale);
+        WriteBigInteger(writer, mantissa);
     }
 
     internal virtual bool UseBigDecimal { get; init; }

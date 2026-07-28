@@ -5,7 +5,7 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal abstract class AbstractBigIntegerType : IntegerType
+internal abstract class AbstractBigIntegerType : IntegerType, ITypedWriter<BigInteger>
 {
     public virtual int Size { get; }
 
@@ -13,14 +13,9 @@ internal abstract class AbstractBigIntegerType : IntegerType
 
     public override object Read(ExtendedBinaryReader reader)
     {
-        if (Signed)
-            return new BigInteger(reader.ReadBytes(Size));
-
-        var data = new byte[Size + 1];
-        for (int i = 0; i < Size; i++)
-            data[i] = reader.ReadByte();
-        data[Size] = 0;
-        return new BigInteger(data);
+        Span<byte> buffer = stackalloc byte[Size];
+        reader.ReadBytes(buffer);
+        return new BigInteger(buffer, isUnsigned: !Signed);
     }
 
     public abstract override string ToString();
@@ -40,10 +35,15 @@ internal abstract class AbstractBigIntegerType : IntegerType
             _ => new BigInteger(Convert.ToInt64(value, CultureInfo.InvariantCulture))
         };
 
-        if (bigInt < 0 && !Signed)
+        WriteValue(writer, bigInt);
+    }
+
+    public void WriteValue(ExtendedBinaryWriter writer, BigInteger value)
+    {
+        if (value < 0 && !Signed)
             throw new ArgumentException("Cannot convert negative BigInteger to UInt");
 
-        byte[] bigIntBytes = bigInt.ToByteArray();
+        byte[] bigIntBytes = value.ToByteArray();
         byte[] decimalBytes = new byte[Size];
 
         var lengthToCopy = bigIntBytes.Length;
@@ -57,7 +57,7 @@ internal abstract class AbstractBigIntegerType : IntegerType
 
         // If a negative BigInteger is not long enough to fill the whole buffer,
         // the remainder needs to be filled with 0xFF
-        if (bigInt < 0)
+        if (value < 0)
         {
             for (int i = bigIntBytes.Length; i < Size; i++)
                 decimalBytes[i] = 0xFF;

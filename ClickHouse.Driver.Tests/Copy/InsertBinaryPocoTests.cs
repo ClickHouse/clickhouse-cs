@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -146,6 +147,199 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
 
         public ulong Id { get; set; }
         public string Value { get; set; }
+    }
+
+    // Exercises the box-free write fast path for every supported scalar type, plus a
+    // nullable value type (Nullable(Int32)) which also fast-paths.
+    private class AllScalarsPoco
+    {
+        public sbyte I8 { get; set; }
+        public short I16 { get; set; }
+        public int I32 { get; set; }
+        public long I64 { get; set; }
+        public byte U8 { get; set; }
+        public ushort U16 { get; set; }
+        public uint U32 { get; set; }
+        public ulong U64 { get; set; }
+        public float F32 { get; set; }
+        public double F64 { get; set; }
+        public bool Flag { get; set; }
+        public string Text { get; set; }
+        public int? OptionalScore { get; set; }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_AllScalarTypes_RoundTripsViaFastPath()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync(
+                $"CREATE TABLE IF NOT EXISTS test.{tableName} (" +
+                "I8 Int8, I16 Int16, I32 Int32, I64 Int64, " +
+                "U8 UInt8, U16 UInt16, U32 UInt32, U64 UInt64, " +
+                "F32 Float32, F64 Float64, Flag Bool, Text String, OptionalScore Nullable(Int32)) " +
+                "ENGINE = MergeTree() ORDER BY I64");
+
+            client.RegisterBinaryInsertType<AllScalarsPoco>();
+
+            var row = new AllScalarsPoco
+            {
+                I8 = -42,
+                I16 = -12345,
+                I32 = -1_234_567_890,
+                I64 = -1_234_567_890_123L,
+                U8 = 200,
+                U16 = 54321,
+                U32 = 4_000_000_000u,
+                U64 = 18_000_000_000_000_000_000ul,
+                F32 = 3.14159f,
+                F64 = 2.718281828459045,
+                Flag = true,
+                Text = "hello ünïcode 🚀",
+                OptionalScore = null,
+            };
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName, new[] { row }, new InsertOptions { Database = "test" });
+            Assert.That(inserted, Is.EqualTo(1));
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, Flag, Text, OptionalScore FROM test.{tableName}");
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetFieldValue<sbyte>(0), Is.EqualTo(row.I8));
+            Assert.That(reader.GetFieldValue<short>(1), Is.EqualTo(row.I16));
+            Assert.That(reader.GetFieldValue<int>(2), Is.EqualTo(row.I32));
+            Assert.That(reader.GetFieldValue<long>(3), Is.EqualTo(row.I64));
+            Assert.That(reader.GetFieldValue<byte>(4), Is.EqualTo(row.U8));
+            Assert.That(reader.GetFieldValue<ushort>(5), Is.EqualTo(row.U16));
+            Assert.That(reader.GetFieldValue<uint>(6), Is.EqualTo(row.U32));
+            Assert.That(reader.GetFieldValue<ulong>(7), Is.EqualTo(row.U64));
+            Assert.That(reader.GetFieldValue<float>(8), Is.EqualTo(row.F32));
+            Assert.That(reader.GetFieldValue<double>(9), Is.EqualTo(row.F64));
+            Assert.That(reader.GetFieldValue<bool>(10), Is.EqualTo(row.Flag));
+            Assert.That(reader.GetFieldValue<string>(11), Is.EqualTo(row.Text));
+            Assert.That(reader.IsDBNull(12), Is.True);
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    // Exercises the Stage 2 box-free write fast path for the bespoke value types
+    // (Guid, DateTime family, decimal, BigInteger) plus their Nullable<T> wrappers.
+    private class AllValueTypesPoco
+    {
+        public Guid Uid { get; set; }
+        public DateTime Dt { get; set; }
+        public DateTime Dt64 { get; set; }
+        public DateTime D { get; set; }
+        public decimal Dec { get; set; }
+        public BigInteger Big { get; set; }
+        public Guid? OptionalUid { get; set; }
+        public DateTime? OptionalDt { get; set; }
+        public decimal? OptionalDec { get; set; }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_AllValueTypes_RoundTripsViaFastPath()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync(
+                $"CREATE TABLE IF NOT EXISTS test.{tableName} (" +
+                "Uid UUID, Dt DateTime, Dt64 DateTime64(3), D Date, Dec Decimal(18, 4), Big Int128, " +
+                "OptionalUid Nullable(UUID), OptionalDt Nullable(DateTime), OptionalDec Nullable(Decimal(18, 4))) " +
+                "ENGINE = MergeTree() ORDER BY Uid");
+
+            client.RegisterBinaryInsertType<AllValueTypesPoco>();
+
+            var row = new AllValueTypesPoco
+            {
+                Uid = Guid.Parse("11223344-5566-7788-99aa-bbccddeeff00"),
+                Dt = new DateTime(2024, 3, 14, 15, 9, 26, DateTimeKind.Unspecified),
+                Dt64 = new DateTime(2024, 3, 14, 15, 9, 26, 123, DateTimeKind.Unspecified),
+                D = new DateTime(2024, 3, 14, 0, 0, 0, DateTimeKind.Unspecified),
+                Dec = 123456.7891m,
+                Big = new BigInteger(123456789012345L),
+                OptionalUid = null,
+                OptionalDt = new DateTime(2020, 1, 1, 12, 0, 0, DateTimeKind.Unspecified),
+                OptionalDec = null,
+            };
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName, new[] { row }, new InsertOptions { Database = "test" });
+            Assert.That(inserted, Is.EqualTo(1));
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT Uid, Dt, Dt64, D, Dec, Big, OptionalUid, OptionalDt, OptionalDec FROM test.{tableName}");
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetFieldValue<Guid>(0), Is.EqualTo(row.Uid));
+            Assert.That(reader.GetFieldValue<DateTime>(1), Is.EqualTo(row.Dt));
+            Assert.That(reader.GetFieldValue<DateTime>(2), Is.EqualTo(row.Dt64));
+            Assert.That(reader.GetFieldValue<DateTime>(3), Is.EqualTo(row.D));
+            Assert.That(Convert.ToDecimal(reader.GetValue(4)), Is.EqualTo(row.Dec));
+            Assert.That(reader.GetFieldValue<BigInteger>(5), Is.EqualTo(row.Big));
+            Assert.That(reader.IsDBNull(6), Is.True);
+            Assert.That(reader.GetFieldValue<DateTime>(7), Is.EqualTo(row.OptionalDt.Value));
+            Assert.That(reader.IsDBNull(8), Is.True);
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
+    }
+
+    private enum Priority { Low = 1, High = 9 }
+
+    // Exercises the generous coercion fast path: a property whose CLR type is not the column's exact framework
+    // type but is still writeable (int→Int64, DateTimeOffset/DateOnly→DateTime/Date, enum→Int32).
+    private class CoercedPoco
+    {
+        public int WideId { get; set; }
+        public DateTimeOffset When { get; set; }
+        public Priority Level { get; set; }
+        public DateOnly Day { get; set; }
+    }
+
+    [Test]
+    public async Task InsertBinaryAsync_CoercedValueTypes_RoundTripsViaFastPath()
+    {
+        var tableName = CreateTestTableName();
+        try
+        {
+            await client.ExecuteNonQueryAsync(
+                $"CREATE TABLE IF NOT EXISTS test.{tableName} " +
+                "(WideId Int64, When DateTime, Level Int32, Day Date) ENGINE = MergeTree() ORDER BY WideId");
+
+            client.RegisterBinaryInsertType<CoercedPoco>();
+
+            var row = new CoercedPoco
+            {
+                WideId = 123456,
+                When = new DateTimeOffset(2024, 3, 14, 15, 9, 26, TimeSpan.FromHours(2)),
+                Level = Priority.High,
+                Day = new DateOnly(2024, 3, 14),
+            };
+
+            var inserted = await client.InsertBinaryAsync(
+                tableName, new[] { row }, new InsertOptions { Database = "test" });
+            Assert.That(inserted, Is.EqualTo(1));
+
+            using var reader = await client.ExecuteReaderAsync(
+                $"SELECT WideId, When, Level, Day FROM test.{tableName}");
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(reader.GetFieldValue<long>(0), Is.EqualTo(row.WideId));
+            Assert.That(reader.GetFieldValue<DateTime>(1), Is.EqualTo(row.When.UtcDateTime));
+            Assert.That(reader.GetFieldValue<int>(2), Is.EqualTo((int)row.Level));
+            Assert.That(reader.GetFieldValue<DateTime>(3).Date, Is.EqualTo(new DateTime(2024, 3, 14)));
+        }
+        finally
+        {
+            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
+        }
     }
 
     [Test]

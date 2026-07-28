@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -592,6 +593,14 @@ public sealed class ClickHouseClient : IClickHouseClient
     {
         var plan = await PrepareInsertAsync(table, properties.Select(x => x.ColumnName), options).ConfigureAwait(false);
         var serializer = PocoBatchSerializer.GetByRowBinaryFormat(plan.Options.Format);
+
+        // The RowBinary fast path writes each column through a compiled, box-free delegate. The
+        // RowBinaryWithDefaults path must inspect a boxed DBDefault sentinel per value, so it stays on
+        // the boxed getters and gets no writer delegates.
+        var writers = plan.Options.Format == RowBinaryFormat.RowBinary
+            ? pocoTypeRegistry.GetOrBuildWriters<T>(properties, getters, plan.ColumnTypes)
+            : null;
+
         int queryIdCounter = 0;
 
         var logger = GetLogger(ClickHouseLogCategories.Client);
@@ -616,7 +625,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             async (batch, ct) =>
             {
                 var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}"); // Avoid duplicate query ids across batches
-                var count = await SendPocoBatchAsync(table, batch, getters, serializer, batchOptions, ct).ConfigureAwait(false);
+                var count = await SendPocoBatchAsync(table, batch, getters, writers, serializer, batchOptions, ct).ConfigureAwait(false);
                 Interlocked.Add(ref totalRowsWritten, count);
             }).ConfigureAwait(false);
 
@@ -629,7 +638,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         return totalRowsWritten;
     }
 
-    private async Task<int> SendPocoBatchAsync<T>(string destinationTable, PocoBatch<T> batch, Func<T, object>[] getters, PocoBatchSerializer serializer, InsertOptions insertOptions, CancellationToken token)
+    private async Task<int> SendPocoBatchAsync<T>(string destinationTable, PocoBatch<T> batch, Func<T, object>[] getters, Action<T, ExtendedBinaryWriter>[] writers, PocoBatchSerializer serializer, InsertOptions insertOptions, CancellationToken token)
     {
         var logger = GetLogger(ClickHouseLogCategories.Client);
 
@@ -638,7 +647,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             using var stream = MemoryStreamManager.GetStream(nameof(SendPocoBatchAsync), 128 * 1024);
             token.ThrowIfCancellationRequested();
             var compressor = insertOptions.Compressor;
-            serializer.Serialize(batch, getters, stream, compressor);
+            serializer.Serialize(batch, getters, writers, stream, compressor);
 
             stream.Seek(0, SeekOrigin.Begin);
 
@@ -959,9 +968,60 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         var error = await ReadErrorBodyAsync(response).ConfigureAwait(false);
-        var ex = ClickHouseServerException.FromServerResponse(error, query);
+        var ex = string.IsNullOrWhiteSpace(error)
+            ? CreateEmptyBodyException(response, query)
+            : ClickHouseServerException.FromServerResponse(error, query);
         activity?.SetException(ex);
         throw ex;
+    }
+
+    /// <summary>
+    /// Builds an exception for a non-success HTTP response whose body is empty or whitespace-only.
+    /// This happens when an upstream component (a ClickHouse Cloud edge, a load balancer, a proxy)
+    /// fails the request before it reaches a ClickHouse node, so there is no server error body to
+    /// parse. Surface the HTTP status line — and the <c>X-ClickHouse-Exception-Code</c> header when
+    /// present — so the caller still gets actionable diagnostics instead of a blank message.
+    /// </summary>
+    private static ClickHouseServerException CreateEmptyBodyException(HttpResponseMessage response, string query)
+    {
+        var exceptionCode = TryGetExceptionCodeHeader(response);
+
+        var message = new StringBuilder("ClickHouse server returned HTTP ")
+            .Append(((int)response.StatusCode).ToString(CultureInfo.InvariantCulture));
+        if (!string.IsNullOrWhiteSpace(response.ReasonPhrase))
+        {
+            message.Append(" (").Append(response.ReasonPhrase).Append(')');
+        }
+
+        message.Append(" with an empty response body.");
+        if (exceptionCode.HasValue)
+        {
+            message.Append(" X-ClickHouse-Exception-Code: ")
+                .Append(exceptionCode.Value.ToString(CultureInfo.InvariantCulture))
+                .Append('.');
+        }
+
+        return new ClickHouseServerException(message.ToString(), query, exceptionCode ?? -1);
+    }
+
+    /// <summary>
+    /// Reads the numeric <c>X-ClickHouse-Exception-Code</c> response header, when the server set one.
+    /// Returns <see langword="null"/> if the header is absent or not a valid integer.
+    /// </summary>
+    private static int? TryGetExceptionCodeHeader(HttpResponseMessage response)
+    {
+        if (response.Headers.TryGetValues("X-ClickHouse-Exception-Code", out var values))
+        {
+            foreach (var value in values)
+            {
+                if (int.TryParse(value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var code))
+                {
+                    return code;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

@@ -44,8 +44,7 @@ internal class DateTime64Type : AbstractDateTimeType
 
     public override object Read(ExtendedBinaryReader reader) => FromClickHouseTicks(reader.ReadInt64());
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
-    {
-        writer.Write(ToClickHouseTicks(Instant.FromDateTimeOffset(CoerceToDateTimeOffset(value))));
-    }
+    // No range check: any coerced instant is representable, so 'original' is unused.
+    protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T original)
+        => writer.Write(ToClickHouseTicks(Instant.FromDateTimeOffset(dto)));
 }
