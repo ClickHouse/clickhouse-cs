@@ -315,6 +315,18 @@ public sealed class InsertRoundTripCase
         // Nested arrays: the same offsets-plus-values shape recurses one level down.
         yield return Arrays<byte[]>("Array(UInt8)", new[] { new byte[] { 1, 2 } }, Array.Empty<byte[]>(), new[] { new byte[] { 3 }, new byte[] { 4, 5 } });
         yield return Arrays<string[]>("Array(String)", new[] { new[] { "a" }, new[] { "b", "c" } }, Array.Empty<string[]>());
+
+        // Every row empty: the offsets stream is all zeroes and the values stream is absent entirely. The cases
+        // above all have at least one non-empty row, so nothing exercised that shape end to end.
+        yield return Arrays("UInt32", Array.Empty<uint>(), Array.Empty<uint>(), Array.Empty<uint>());
+
+        // An empty *inner* array — the only shape where the inner codec's own offsets stream holds an equal
+        // consecutive pair. The nested cases above only ever have an empty outer row.
+        yield return Arrays<byte[]>("Array(UInt8)", new[] { Array.Empty<byte>(), new byte[] { 1 } }, Array.Empty<byte[]>());
+
+        // Array(Array(Nullable(T))) composes the array recursion with the nullable state prefix, which the
+        // Array(Nullable(T)) and Array(Array(T)) cases each cover only half of.
+        yield return Arrays<uint?[]>("Array(Nullable(UInt32))", new[] { new uint?[] { 1, null } }, Array.Empty<uint?[]>());
     }
 
     // Array(T) inserts and reads back the inner element arrays; the ergonomic jagged column doubles as expected.

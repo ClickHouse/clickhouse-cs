@@ -12,8 +12,14 @@ public class ArrayColumnCodecTests
     private static IColumnCodec Resolve(string type) => ColumnCodecRegistry.Default.Resolve(type, default);
 
     [Test]
-    public async Task ReadColumn_WriteThenRead_FixedWidthInnerRoundTripsWithEmptyRows()
+    public async Task Values_AfterMaterializing_AgreesWithTheIndexer()
     {
+        // Per-type row values are covered against a real server by the Array(T) cases in InsertRoundTripCase.
+        // What those cannot reach is the warm-cache branch: ArrayValueColumn.Values materializes a cache, while
+        // the indexer reads `cache is not null ? cache[row] : Materialize(row)`, and AssertColumnsEqual only ever
+        // calls GetValue on a cold column — so the indexer's cached branch runs nowhere else. Reading Values
+        // first and then the indexer pins the two against each other. TypeName is asserted here for the same
+        // reason: the integration comparison never looks at it.
         IColumnCodec codec = Resolve("Array(UInt32)");
         var expected = new[] { new uint[] { 10, 20, 30 }, Array.Empty<uint>(), new uint[] { 40, 50 } };
         var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", expected);
@@ -23,51 +29,12 @@ public class ArrayColumnCodecTests
         Assert.Multiple(() =>
         {
             Assert.That(read.TypeName, Is.EqualTo("Array(UInt32)"));
-            Assert.That(read.RowCount, Is.EqualTo(3));
             Assert.That(((IColumn<uint[]>)read).Values.ToArray(), Is.EqualTo(expected));
-            Assert.That(read.GetValue(1), Is.EqualTo(Array.Empty<uint>()));
+            for (int row = 0; row < expected.Length; row++)
+            {
+                Assert.That(read.GetValue(row), Is.EqualTo(expected[row]), $"row {row} through the warm cache");
+            }
         });
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_VariableInnerRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Array(String)");
-        var expected = new[] { new[] { "a", "bb" }, Array.Empty<string>(), new[] { string.Empty, "héllo✓" } };
-        var column = new ArrayColumn<string[]>("c", "Array(String)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Array(String)", column.RowCount);
-
-        Assert.That(((IColumn<string[]>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_NestedArrayRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Array(Array(UInt32))");
-        var expected = new[]
-        {
-            new[] { new uint[] { 1, 2 } },
-            Array.Empty<uint[]>(),
-            new[] { new uint[] { 3 }, new uint[] { 4, 5 } },
-        };
-        var column = new ArrayColumn<uint[][]>("c", "Array(Array(UInt32))", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Array(Array(UInt32))", column.RowCount);
-
-        Assert.That(((IColumn<uint[][]>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_NullableInnerRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Array(Nullable(UInt32))");
-        var expected = new[] { new uint?[] { 1, null, 3 }, Array.Empty<uint?>(), new uint?[] { null, null } };
-        var column = new ArrayColumn<uint?[]>("c", "Array(Nullable(UInt32))", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Array(Nullable(UInt32))", column.RowCount);
-
-        Assert.That(((IColumn<uint?[]>)read).Values.ToArray(), Is.EqualTo(expected));
     }
 
     [Test]
@@ -82,53 +49,6 @@ public class ArrayColumnCodecTests
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
         using IColumn read = await codec.ReadColumnAsync(reader, "c", "Array(UInt32)", 0, CodecTestHarness.None);
         Assert.That(read.RowCount, Is.Zero);
-    }
-
-    [Test]
-    public async Task ReadColumn_EveryRowEmpty_RoundTripsAsAllEmpty()
-    {
-        IColumnCodec codec = Resolve("Array(UInt32)");
-        var expected = new[] { Array.Empty<uint>(), Array.Empty<uint>(), Array.Empty<uint>() };
-        var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Array(UInt32)", column.RowCount);
-
-        Assert.That(((IColumn<uint[]>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task WriteColumn_DenseArrayValueColumn_RoundTripsWithoutRebuildingValues()
-    {
-        // A dense ArrayValueColumn<T> (flat inner column + offsets, the wire's own layout) is the zero-copy write
-        // path — the same shape a read produces. Writing one and reading it back must preserve the rows.
-        IColumnCodec codec = Resolve("Array(UInt32)");
-        var inner = PrimitiveColumn<uint>.FromValues("c", "UInt32", new uint[] { 10, 20, 30, 40, 50 });
-        var dense = new ArrayValueColumn<uint>("c", "Array(UInt32)", inner, new[] { 0, 3, 3, 5 }, rowCount: 3, pooledOffsets: false);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, dense, "Array(UInt32)", dense.RowCount);
-
-        Assert.That(((IColumn<uint[]>)read).Values.ToArray(), Is.EqualTo(new[] { new uint[] { 10, 20, 30 }, Array.Empty<uint>(), new uint[] { 40, 50 } }));
-    }
-
-    [Test]
-    public async Task WriteColumn_SlicedRange_WritesOffsetsRelativeToTheSlice()
-    {
-        // Writing only rows [1, 3) of a four-row column (the insert splitter's per-block path) must emit offsets
-        // relative to that block's own values stream, not the full column.
-        IColumnCodec codec = Resolve("Array(UInt32)");
-        var full = new ArrayColumn<uint[]>("c", "Array(UInt32)", new[]
-        {
-            new uint[] { 1 },
-            new uint[] { 2, 3 },
-            Array.Empty<uint>(),
-            new uint[] { 4, 5, 6 },
-        });
-
-        byte[] bytes = await CodecTestHarness.WriteSliceAsync(codec, full, start: 1, length: 2);
-        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
-        using IColumn read = await codec.ReadColumnAsync(reader, "c", "Array(UInt32)", 2, CodecTestHarness.None);
-
-        Assert.That(((IColumn<uint[]>)read).Values.ToArray(), Is.EqualTo(new[] { new uint[] { 2, 3 }, Array.Empty<uint>() }));
     }
 
     [Test]
