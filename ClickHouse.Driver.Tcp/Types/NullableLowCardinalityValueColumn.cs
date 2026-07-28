@@ -74,6 +74,10 @@ internal sealed class NullableLowCardinalityValueColumn<T> : IColumn<T?>, IDense
     /// <inheritdoc/>
     public ReadOnlySpan<int> Keys => keys.AsSpan(0, rowCount);
 
+    /// <inheritdoc/>
+    // Two reserved slots: the NULL marker at 0 and the inner default at 1, so real values start at 2.
+    public int ReservedSlotCount => 2;
+
     /// <summary>
     /// The rows as <see cref="Nullable{T}"/>, materialized once and cached. Prefer the indexer when only some rows
     /// are needed, to avoid reconstructing the whole column.
