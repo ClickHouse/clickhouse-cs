@@ -38,6 +38,36 @@ public class ArrayColumnCodecTests
     }
 
     [Test]
+    public void Indexer_RowPastRowCount_ThrowsRatherThanReadingStaleOffsets()
+    {
+        // The offsets buffer is normally a pooled array longer than the column, and a previous, larger read leaves
+        // monotonic offsets behind in the tail. Reading a row past RowCount through the raw buffer would therefore
+        // hand back a real-looking slice of the inner column instead of failing — silent wrong data, not a crash.
+        // Here rows 0 and 1 are the column; the 7 and 9 are the stale tail a longer read would have left.
+        var inner = PrimitiveColumn<uint>.FromValues("c", "UInt32", new uint[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+        var offsets = new[] { 0, 2, 5, 7, 9 };
+        using var column = new ArrayValueColumn<uint>("c", "Array(UInt32)", inner, offsets, rowCount: 2, pooledOffsets: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[1], Is.EqualTo(new uint[] { 3, 4, 5 }), "the last real row still materializes");
+            Assert.That(() => column[2], Throws.InstanceOf<IndexOutOfRangeException>());
+        });
+    }
+
+    [Test]
+    public void Constructor_OffsetsShorterThanRowCountPlusOne_Throws()
+    {
+        // rowCount is load-bearing here — the inner column is flat and the offsets are pooled — so it is validated
+        // rather than derived. One offset per row plus the leading zero is the minimum.
+        var inner = PrimitiveColumn<uint>.FromValues("c", "UInt32", new uint[] { 1, 2, 3 });
+
+        Assert.That(
+            () => new ArrayValueColumn<uint>("c", "Array(UInt32)", inner, new[] { 0, 3 }, rowCount: 2, pooledOffsets: false),
+            Throws.ArgumentException.With.Message.Contains("fewer than"));
+    }
+
+    [Test]
     public async Task ReadColumn_EmptyColumn_ReadsZeroRowsWithoutConsumingBytes()
     {
         IColumnCodec codec = Resolve("Array(UInt32)");
