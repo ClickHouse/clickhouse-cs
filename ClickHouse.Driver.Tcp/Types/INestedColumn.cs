@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// The zero-copy read surface of a decoded <c>Nested(name1 T1, ..., namen Tn)</c> column carried as one wire column
+/// The columnar read surface of a decoded <c>Nested(name1 T1, ..., namen Tn)</c> column carried as one wire column
 /// (the <c>flatten_nested = 0</c> form). A nested column is a table-within-a-row: each row holds a variable number
 /// of records, and each record has one value per named field. On the wire — and here — that is stored field-major:
 /// one flat column per field holding every row's elements for that field concatenated end-to-end, plus a single
@@ -45,10 +45,12 @@ public interface INestedColumn : IColumn
     /// The flat column for the field at <paramref name="index"/>: every row's elements for that field concatenated
     /// end-to-end. Its row count is the total element count across all rows — the same for every field — not the
     /// nested column's row count. A field whose type is itself a composite pattern-matches to that type's own
-    /// columnar view. A borrowed view valid only while the owning block is alive.
+    /// columnar view. A borrowed view valid only while the owning block is alive — it is the block's to dispose,
+    /// never the caller's.
     /// </summary>
     /// <param name="index">The zero-based field index.</param>
     /// <returns>That field's flat column.</returns>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="index"/> is negative or not less than <see cref="FieldCount"/>.</exception>
     IColumn GetField(int index);
 
     /// <summary>The flat column for the field named <paramref name="name"/>, matched ordinally.</summary>
