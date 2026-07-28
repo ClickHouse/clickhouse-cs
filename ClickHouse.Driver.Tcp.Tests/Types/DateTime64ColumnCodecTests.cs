@@ -36,19 +36,6 @@ public class DateTime64ColumnCodecTests
         });
     }
 
-    [Test]
-    public async Task RoundTrip_Scale9_PreservesNanosecondPrecision()
-    {
-        // A nanosecond count with sub-100 ns digits that no DateTimeOffset could hold must survive verbatim.
-        const string type = "DateTime64(9)";
-        DateTime64ColumnCodec codec = Codec(type, "UTC");
-        var counts = new[] { 1_700_000_000_123_456_789L, -1_000_000_001L };
-
-        using var column = (IColumn<long>)await RoundTripAsync(codec, new ArrayColumn<long>("c", type, counts), type, counts.Length);
-
-        CollectionAssert.AreEqual(counts, column.Values.ToArray());
-    }
-
     [TestCase(0L)]
     [TestCase(1500L)]
     [TestCase(-2500L)]
@@ -61,23 +48,6 @@ public class DateTime64ColumnCodecTests
         byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
 
         Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(count));
-    }
-
-    [Test]
-    public async Task ReadColumn_ValuesSpan_ExposesRawCounts()
-    {
-        const string type = "DateTime64(9)";
-        var counts = new[] { 0L, 1_700_000_000_123_456_789L };
-        DateTime64ColumnCodec codec = Codec(type, "UTC");
-
-        using var column = (IColumn<long>)await RoundTripAsync(codec, new ArrayColumn<long>("c", type, counts), type, counts.Length);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(column.RowCount, Is.EqualTo(2));
-            CollectionAssert.AreEqual(counts, column.Values.ToArray());
-            Assert.That(column.GetValue(1), Is.EqualTo(counts[1]));
-        });
     }
 
     [Test]

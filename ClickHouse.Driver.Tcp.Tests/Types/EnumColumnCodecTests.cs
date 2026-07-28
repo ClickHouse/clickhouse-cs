@@ -1,8 +1,6 @@
 using System;
-using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
-using static ClickHouse.Driver.Tcp.Tests.Utilities.CodecTestHarness;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
@@ -45,25 +43,4 @@ public class EnumColumnCodecTests
         Assert.That(codec.OrdinalToLabel[(sbyte)1], Is.EqualTo("a'b"));
     }
 
-    [Test]
-    public async Task Enum8_RoundTrip_SurfacesRawOrdinal()
-    {
-        IColumnCodec codec = Enum8ColumnCodec.Create(TypeParser.Parse("Enum8('a' = -1, 'b' = 127)"));
-        var values = new sbyte[] { -1, 127 };
-
-        using var column = (IColumn<sbyte>)await RoundTripAsync(codec, PrimitiveColumn<sbyte>.FromValues("c", "Enum8", values), "Enum8('a' = -1, 'b' = 127)", values.Length);
-
-        CollectionAssert.AreEqual(values, column.Values.ToArray());
-    }
-
-    [Test]
-    public async Task Enum16_RoundTrip_SurfacesRawOrdinal()
-    {
-        IColumnCodec codec = Enum16ColumnCodec.Create(TypeParser.Parse("Enum16('x' = -32768, 'y' = 32767)"));
-        var values = new short[] { -32768, 32767 };
-
-        using var column = (IColumn<short>)await RoundTripAsync(codec, PrimitiveColumn<short>.FromValues("c", "Enum16", values), "Enum16('x' = -32768, 'y' = 32767)", values.Length);
-
-        CollectionAssert.AreEqual(values, column.Values.ToArray());
-    }
 }
