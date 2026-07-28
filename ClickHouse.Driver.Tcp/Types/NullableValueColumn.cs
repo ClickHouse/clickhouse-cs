@@ -18,7 +18,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </para>
 /// </summary>
 /// <typeparam name="T">The inner value type (e.g. <see cref="int"/> for <c>Nullable(Int32)</c>).</typeparam>
-internal sealed class NullableValueColumn<T> : IColumn<T?>
+internal sealed class NullableValueColumn<T> : IColumn<T?>, INullableColumn<T>
     where T : struct
 {
     private readonly IColumn<T> inner;
@@ -65,11 +65,11 @@ internal sealed class NullableValueColumn<T> : IColumn<T?>
     /// <inheritdoc/>
     public int RowCount => rowCount;
 
-    /// <summary>The dense inner column (one decoded value or placeholder per row) — the zero-copy write source.</summary>
-    internal IColumn<T> Inner => inner;
+    /// <inheritdoc/>
+    public IColumn<T> Inner => inner;
 
-    /// <summary>The per-row null-map (non-zero byte = null), sliced to <see cref="RowCount"/> — the zero-copy write source.</summary>
-    internal ReadOnlySpan<byte> NullMap => nullMap.AsSpan(0, rowCount);
+    /// <inheritdoc/>
+    public ReadOnlySpan<byte> NullMap => nullMap.AsSpan(0, rowCount);
 
     /// <summary>
     /// The rows as <see cref="Nullable{T}"/>, materialized once and cached. Prefer the indexer when only some
