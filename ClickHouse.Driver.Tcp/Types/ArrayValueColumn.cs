@@ -40,6 +40,8 @@ internal sealed class ArrayValueColumn<TElement> : IColumn<TElement[]>, IArrayCo
     /// <param name="offsets">The per-row offsets: <c>offsets[0]</c> is 0 and <c>offsets[i + 1]</c> is the exclusive end of row <c>i</c>'s slice; must have at least <paramref name="rowCount"/> + 1 entries.</param>
     /// <param name="rowCount">The number of rows.</param>
     /// <param name="pooledOffsets">Whether <paramref name="offsets"/> was rented and should be returned on dispose.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="inner"/> or <paramref name="offsets"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="offsets"/> holds fewer than <paramref name="rowCount"/> + 1 entries.</exception>
     public ArrayValueColumn(string name, string typeName, IColumn<TElement> inner, int[] offsets, int rowCount, bool pooledOffsets)
     {
         Name = name;
@@ -48,6 +50,17 @@ internal sealed class ArrayValueColumn<TElement> : IColumn<TElement[]>, IArrayCo
         this.offsets = offsets ?? throw new ArgumentNullException(nameof(offsets));
         this.rowCount = rowCount;
         this.pooledOffsets = pooledOffsets;
+
+        // The row count cannot be derived here: the inner column is flat (one entry per element across all rows, so
+        // its height is the element total) and the offsets are typically a pooled buffer longer than the column. So
+        // the one input that can disagree is checked instead — a short offsets array would leave the row bounds
+        // reading past its end.
+        if (offsets.Length < rowCount + 1)
+        {
+            throw new ArgumentException(
+                $"The offsets for column '{name}' ({typeName}) hold {offsets.Length} entries, fewer than the {rowCount + 1} needed for {rowCount} rows.",
+                nameof(offsets));
+        }
     }
 
     /// <inheritdoc/>
@@ -116,8 +129,12 @@ internal sealed class ArrayValueColumn<TElement> : IColumn<TElement[]>, IArrayCo
     /// <summary>Copies row <paramref name="row"/>'s slice of the inner values into a new array.</summary>
     private TElement[] Materialize(int row)
     {
-        int start = offsets[row];
-        int length = offsets[row + 1] - start;
+        // Index through the RowCount-sliced offsets, not the raw buffer: the buffer is usually a pooled array longer
+        // than the column, and a stale offset pair left in it by a previous, larger read is still monotonic — so an
+        // out-of-range row would quietly hand back a real-looking slice of the inner column instead of throwing.
+        ReadOnlySpan<int> bounds = Offsets;
+        int start = bounds[row];
+        int length = bounds[row + 1] - start;
         return length == 0 ? Array.Empty<TElement>() : inner.Values.Slice(start, length).ToArray();
     }
 }
