@@ -479,6 +479,7 @@ public class ColumnarReadSurfaceIntegrationTests
         int rowCount = 0;
         int keyCount = 0;
         int dictionarySize = 0;
+        int reservedSlots = 0;
         string[] dictionary = null;
         string[] materialized = null;
         var resolvedThroughKeys = new List<string>();
@@ -494,6 +495,7 @@ public class ColumnarReadSurfaceIntegrationTests
             rowCount = lc.RowCount;
             keyCount = lc.Keys.Length;
             dictionarySize = lc.Dictionary.RowCount;
+            reservedSlots = lc.ReservedSlotCount;
             dictionary = lc.Dictionary.Values.ToArray();
             materialized = ((IColumn<string>)column).Values.ToArray();
 
@@ -509,7 +511,8 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(rowCount, Is.EqualTo(12));
             Assert.That(keyCount, Is.EqualTo(rowCount), "one key per row, sliced to the row count rather than the pooled buffer length");
             Assert.That(dictionarySize, Is.EqualTo(4), "three distinct values plus the reserved default slot at [0]");
-            Assert.That(dictionary[0], Is.Empty, "a non-nullable inner reserves exactly one slot, holding the type default");
+            Assert.That(reservedSlots, Is.EqualTo(1), "a non-nullable inner reserves exactly one slot, so key 0 is a value and not NULL");
+            Assert.That(dictionary[0], Is.Empty, "and that slot holds the type default");
             Assert.That(dictionary.Skip(1), Is.EquivalentTo(new[] { "v0", "v1", "v2" }));
             Assert.That(resolvedThroughKeys, Is.EqualTo(materialized), "Dictionary[Keys[i]] reproduces the materialized rows");
         });
@@ -526,9 +529,11 @@ public class ColumnarReadSurfaceIntegrationTests
 
         bool matched = false;
         int dictionarySize = 0;
+        int reservedSlots = 0;
         int[] keys = null;
         string[] dictionary = null;
         string[] materialized = null;
+        var nullRowsFromKeys = new List<int>();
 
         await foreach (Block block in connection.QueryAsync(
             """
@@ -542,19 +547,32 @@ public class ColumnarReadSurfaceIntegrationTests
 
             var lc = (ILowCardinalityColumn<string>)column;
             dictionarySize = lc.Dictionary.RowCount;
+            reservedSlots = lc.ReservedSlotCount;
             keys = lc.Keys.ToArray();
             dictionary = lc.Dictionary.Values.ToArray();
             materialized = ((IColumn<string>)column).Values.ToArray();
+
+            // Identify the null rows from the keys alone, the way a consumer should: ReservedSlotCount says whether
+            // slot 0 is a NULL marker, so nothing here parses the type string.
+            for (int row = 0; row < lc.RowCount; row++)
+            {
+                if (lc.ReservedSlotCount == 2 && lc.Keys[row] == 0)
+                {
+                    nullRowsFromKeys.Add(row);
+                }
+            }
         }
 
         Assert.Multiple(() =>
         {
             Assert.That(matched, Is.True, "spelled with the bare inner type, as for the non-nullable column");
             Assert.That(materialized, Is.EqualTo(new[] { "v0", null, "v0", "v1" }));
+            Assert.That(reservedSlots, Is.EqualTo(2), "a nullable inner reserves two slots — this is what makes key 0 mean NULL");
             Assert.That(dictionarySize, Is.EqualTo(4), "two reserved slots plus the two distinct values");
             Assert.That(keys[1], Is.Zero, "the null row's key is 0 — the reserved NULL slot");
-            Assert.That(keys.Where((_, i) => i != 1), Is.All.GreaterThanOrEqualTo(2), "real values start at slot 2, past NULL and the default");
-            Assert.That(dictionary.Skip(2), Is.EquivalentTo(new[] { "v0", "v1" }));
+            Assert.That(keys.Where((_, i) => i != 1), Is.All.GreaterThanOrEqualTo(reservedSlots), "real values start past the reserve");
+            Assert.That(dictionary.Skip(reservedSlots), Is.EquivalentTo(new[] { "v0", "v1" }));
+            Assert.That(nullRowsFromKeys, Is.EqualTo(new[] { 1 }), "the keys alone identify the null rows, with no type-string parsing");
         });
     }
 

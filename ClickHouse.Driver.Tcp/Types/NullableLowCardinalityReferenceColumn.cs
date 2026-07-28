@@ -75,6 +75,10 @@ internal sealed class NullableLowCardinalityReferenceColumn<T> : IColumn<T>, IDe
     /// <inheritdoc/>
     public ReadOnlySpan<int> Keys => keys.AsSpan(0, rowCount);
 
+    /// <inheritdoc/>
+    // Two reserved slots: the NULL marker at 0 and the inner default at 1, so real values start at 2.
+    public int ReservedSlotCount => 2;
+
     /// <summary>The rows, materialized once and cached, with <see langword="null"/> at the reserved-NULL-slot rows.</summary>
     public ReadOnlySpan<T> Values
     {
