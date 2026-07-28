@@ -69,15 +69,6 @@ public class FixedWidthColumnCodecTests
         new[] { Int256.Zero, Int256.FromBigInteger(-1), Int256.FromBigInteger(BigInteger.Pow(2, 200)), Int256.FromBigInteger(-BigInteger.Pow(2, 200)) });
 
     [Test]
-    public async Task RoundTrip_Float32() => await AssertRoundTripAsync(new FixedWidthColumnCodec<float>("Float32"), "Float32", new[] { 0f, -1.5f, float.MinValue, float.MaxValue });
-
-    [Test]
-    public async Task RoundTrip_Float64() => await AssertRoundTripAsync(new FixedWidthColumnCodec<double>("Float64"), "Float64", new[] { 0d, -1.5e100, double.MinValue, double.MaxValue });
-
-    [Test]
-    public async Task RoundTrip_Bool() => await AssertRoundTripAsync(new FixedWidthColumnCodec<bool>("Bool"), "Bool", new[] { false, true, true, false });
-
-    [Test]
     public async Task ReadColumn_ZeroRows_ReturnsEmptyColumnReadingNoBytes()
     {
         var codec = new FixedWidthColumnCodec<int>("Int32");

@@ -53,52 +53,23 @@ public class DecimalColumnCodecTests
     public void Create_ScaleEqualsPrecision_CreatesCodec(string type)
         => Assert.DoesNotThrow(() => DecimalColumnCodec.Create(TypeParser.Parse(type)));
 
-    [TestCase("Decimal(9, 2)")]
-    [TestCase("Decimal(18, 6)")]
-    public async Task RoundTrip_SmallDecimal_PreservesValue(string type)
-    {
-        var values = new[] { 0m, 1.23m, -1.23m, 100.5m };
-        IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
-
-        using var column = (IColumn<decimal>)await RoundTripAsync(codec, new ArrayColumn<decimal>("c", type, values), type, values.Length);
-
-        CollectionAssert.AreEqual(values, column.Values.ToArray());
-    }
-
     [Test]
-    public async Task RoundTrip_WideDecimal_PreservesValueAndSign()
+    public async Task WriteColumn_NegativeWideDecimal_SignExtendsAcrossFullWidth()
     {
-        const string type = "Decimal(38, 4)";
-        var values = new[]
-        {
-            new ClickHouseDecimal(BigInteger.Zero, 4),
-            new ClickHouseDecimal(new BigInteger(123456789), 4),
-            new ClickHouseDecimal(new BigInteger(-123456789), 4),
-        };
-        IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
-
-        using var column = (IColumn<ClickHouseDecimal>)await RoundTripAsync(codec, new ArrayColumn<ClickHouseDecimal>("c", type, values), type, values.Length);
-
-        Assert.Multiple(() =>
-        {
-            for (int i = 0; i < values.Length; i++)
-            {
-                Assert.That(column[i], Is.EqualTo(values[i]));
-            }
-        });
-    }
-
-    [Test]
-    public async Task RoundTrip_NegativeWideDecimal_SignExtendsAcrossFullWidth()
-    {
-        // A negative Decimal256 mantissa must sign-extend into the high limbs, not zero-fill.
+        // A negative Decimal256 mantissa must sign-extend into the high limbs, not zero-fill. Asserted on the
+        // encoded bytes rather than through a read-back, because a symmetric sign bug cancels out in a round-trip
+        // — and the value round-trip is already covered against a real server by the Decimal(76, 20) case in
+        // InsertRoundTripCase. Two's complement: -2^200 is 2^256 - 2^200 = (2^56 - 1) << 200, so every bit from
+        // 200 up is set, i.e. bytes 0..24 are zero and bytes 25..31 are 0xFF in the little-endian 32-byte limb.
         const string type = "Decimal(76, 0)";
         var value = new ClickHouseDecimal(-BigInteger.Pow(2, 200), 0);
         IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
 
-        using var column = (IColumn<ClickHouseDecimal>)await RoundTripAsync(codec, new ArrayColumn<ClickHouseDecimal>("c", type, new[] { value }), type, 1);
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<ClickHouseDecimal>("c", type, new[] { value })));
 
-        Assert.That(column[0], Is.EqualTo(value));
+        var expected = new byte[32];
+        expected.AsSpan(25).Fill(0xFF);
+        CollectionAssert.AreEqual(expected, bytes);
     }
 
     [Test]

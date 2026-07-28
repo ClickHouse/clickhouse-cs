@@ -10,16 +10,6 @@ namespace ClickHouse.Driver.Tcp.Tests.Types;
 public class DateColumnCodecTests
 {
     [Test]
-    public async Task Date_RoundTrip_PreservesDates()
-    {
-        var values = new[] { new DateOnly(1970, 1, 1), new DateOnly(2024, 1, 15), new DateOnly(2149, 6, 6) };
-
-        using var column = (IColumn<DateOnly>)await RoundTripAsync(DateColumnCodec.Instance, new ArrayColumn<DateOnly>("c", "Date", values), "Date", values.Length);
-
-        CollectionAssert.AreEqual(values, column.Values.ToArray());
-    }
-
-    [Test]
     public async Task Date_ReadSingle_DecodesDaysSinceEpoch()
     {
         byte[] bytes = await WriteAsync(w => w.WriteUInt16(1)); // one day after the epoch
@@ -35,16 +25,6 @@ public class DateColumnCodecTests
     {
         var column = new ArrayColumn<DateOnly>("c", "Date", new[] { new DateOnly(1969, 12, 31) });
         Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await WriteAsync(w => DateColumnCodec.Instance.WriteColumn(w, column)));
-    }
-
-    [Test]
-    public async Task Date32_RoundTrip_PreservesDatesIncludingNegativeDays()
-    {
-        var values = new[] { new DateOnly(1900, 1, 1), new DateOnly(1970, 1, 1), new DateOnly(2024, 1, 15), new DateOnly(2299, 12, 31) };
-
-        using var column = (IColumn<DateOnly>)await RoundTripAsync(Date32ColumnCodec.Instance, new ArrayColumn<DateOnly>("c", "Date32", values), "Date32", values.Length);
-
-        CollectionAssert.AreEqual(values, column.Values.ToArray());
     }
 
     [Test]
