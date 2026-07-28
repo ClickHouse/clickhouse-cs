@@ -216,6 +216,34 @@ public sealed class InsertRoundTripCase
         yield return NullableDateTime64s(3, 0L, null, 1_700_000_000_123L, null);
         yield return NullableDateTime64s(9, 1_700_000_000_123_456_789L, null, -1_000_000_001L);
 
+        // Nullable re-offers every CLR write spelling the bare inner accepts, each with its own-typed null
+        // placeholder — so Nullable(DateTime) takes DateTimeOffset? or DateTime?, and Nullable(DateTime64) takes
+        // long?, DateTimeOffset? or DateTime?. The cases above only cover the first spelling of each, which left
+        // the alternates proven by unit tests alone; these send them to a server.
+        var nullableDateTimes = new DateTime?[] { DateTime.UnixEpoch.AddSeconds(1_700_000_000), null, DateTime.UnixEpoch };
+        yield return new InsertRoundTripCase(
+            "Nullable(DateTime) <- DateTime?",
+            "Nullable(DateTime)",
+            name => new ArrayColumn<DateTime?>(name, "Nullable(DateTime)", nullableDateTimes),
+            name => new ArrayColumn<uint?>(name, "Nullable(DateTime)", Array.ConvertAll(nullableDateTimes, v => v is null ? (uint?)null : (uint)new DateTimeOffset(v.Value.ToUniversalTime()).ToUnixTimeSeconds())),
+            settings: null);
+
+        var nullableOffsets = new DateTimeOffset?[] { DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123), null };
+        yield return new InsertRoundTripCase(
+            "Nullable(DateTime64(3)) <- DateTimeOffset?",
+            "Nullable(DateTime64(3))",
+            name => new ArrayColumn<DateTimeOffset?>(name, "Nullable(DateTime64(3))", nullableOffsets),
+            name => new ArrayColumn<long?>(name, "Nullable(DateTime64(3))", Array.ConvertAll(nullableOffsets, o => o?.ToUnixTimeMilliseconds())),
+            settings: null);
+
+        var nullable64DateTimes = new DateTime?[] { DateTime.UnixEpoch.AddMilliseconds(1_700_000_000_123), null };
+        yield return new InsertRoundTripCase(
+            "Nullable(DateTime64(3)) <- DateTime?",
+            "Nullable(DateTime64(3))",
+            name => new ArrayColumn<DateTime?>(name, "Nullable(DateTime64(3))", nullable64DateTimes),
+            name => new ArrayColumn<long?>(name, "Nullable(DateTime64(3))", Array.ConvertAll(nullable64DateTimes, v => v is null ? (long?)null : new DateTimeOffset(v.Value.ToUniversalTime()).ToUnixTimeMilliseconds())),
+            settings: null);
+
         // Experimental server types: enable their flag on the round-trip (same as their non-nullable cases).
         yield return NullableValues<float>("BFloat16", BFloat16Settings, 0f, null, 1f, -2f);
         yield return NullableValues<int>("Time", TimeSettings, 0, null, (12 * 3600) + (34 * 60) + 56);
