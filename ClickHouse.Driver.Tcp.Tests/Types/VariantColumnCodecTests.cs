@@ -147,6 +147,38 @@ public class VariantColumnCodecTests
     }
 
     [Test]
+    public void Indexer_RowPastRowCount_ThrowsRatherThanReadingStaleDiscriminators()
+    {
+        // The discriminator buffer is normally a pooled array longer than the column, so a row past RowCount read a
+        // stale byte from its tail — and the outcome depended on the leftover value: a stale 255 (the NULL
+        // discriminator) reported the row as an existing NULL, while any other value fell through to the
+        // exactly-sized local-index array and threw. Both spellings must be a bounds failure.
+        using var alternative = new ArrayColumn<uint>("v", "UInt32", new uint[] { 7 });
+        var discriminators = new byte[] { 0, VariantColumn.NullDiscriminator, 0 };
+        using var variant = new VariantColumn(
+            "v", "Variant(UInt32)", discriminators, new IColumn[] { alternative }, rowCount: 1, pooledDiscriminators: false, ownsColumns: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(variant[0], Is.EqualTo(7u));
+            Assert.That(() => variant[1], Throws.InstanceOf<IndexOutOfRangeException>(), "a stale NULL discriminator must not read as an existing NULL row");
+            Assert.That(() => variant[2], Throws.InstanceOf<IndexOutOfRangeException>());
+        });
+    }
+
+    [Test]
+    public void Constructor_DiscriminatorsShorterThanRowCount_Throws()
+    {
+        // rowCount is load-bearing here — each child holds only the rows that selected it, and a NULL row takes a slot
+        // in none of them — so it is validated rather than derived.
+        using var alternative = new ArrayColumn<uint>("v", "UInt32", new uint[] { 7 });
+
+        Assert.That(
+            () => new VariantColumn("v", "Variant(UInt32)", new byte[] { 0 }, new IColumn[] { alternative }, rowCount: 2, pooledDiscriminators: false, ownsColumns: false),
+            Throws.ArgumentException.With.Message.Contains("fewer than"));
+    }
+
+    [Test]
     public void RestrictOwnership_DisposesOnlyFlaggedTypeColumns()
     {
         // The mechanism the partial densify rebuild relies on: after RestrictOwnership, Dispose frees exactly the

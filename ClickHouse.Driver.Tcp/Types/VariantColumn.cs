@@ -49,6 +49,8 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
     /// <param name="rowCount">The number of rows.</param>
     /// <param name="pooledDiscriminators">Whether <paramref name="discriminators"/> was rented and should be returned on dispose.</param>
     /// <param name="ownsColumns">Whether this column owns and disposes <paramref name="typeColumns"/> (false when a caller retains them).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="discriminators"/> or <paramref name="typeColumns"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="discriminators"/> holds fewer than <paramref name="rowCount"/> entries.</exception>
     public VariantColumn(string name, string typeName, byte[] discriminators, IColumn[] typeColumns, int rowCount, bool pooledDiscriminators, bool ownsColumns)
     {
         Name = name;
@@ -58,6 +60,17 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
         this.rowCount = rowCount;
         this.pooledDiscriminators = pooledDiscriminators;
         this.ownsColumns = ownsColumns;
+
+        // The row count cannot be derived here: each child holds only the rows that selected it and a NULL row takes
+        // a slot in none of them, so the children say nothing about the height, and the discriminators are typically
+        // a pooled buffer longer than the column. So the one input that can disagree is checked instead — otherwise
+        // the walk below would fault on a short buffer with nothing naming the cause.
+        if (discriminators.Length < rowCount)
+        {
+            throw new ArgumentException(
+                $"The discriminators for column '{name}' ({typeName}) hold {discriminators.Length} entries, fewer than the {rowCount} rows.",
+                nameof(discriminators));
+        }
 
         // Precompute each row's index into its selected type's child column: walk the discriminators once,
         // keeping a per-type running counter. A NULL row gets -1 (it addresses no child value).
@@ -135,11 +148,15 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
     }
 
     /// <inheritdoc/>
+    // Index through the RowCount-sliced discriminators, not the raw buffer: the buffer is usually a pooled array
+    // longer than the column, so a row past RowCount read a stale byte from its tail. That made the failure depend on
+    // the leftover value — a stale 255 returned null as though the row existed, anything else fell through to the
+    // exactly-sized local index and threw. Slicing makes it a bounds failure either way.
     public object this[int row]
     {
         get
         {
-            byte d = discriminators[row];
+            byte d = Discriminators[row];
             return d == NullDiscriminator ? null : typeColumns[d].GetValue(localIndex[row]);
         }
     }
