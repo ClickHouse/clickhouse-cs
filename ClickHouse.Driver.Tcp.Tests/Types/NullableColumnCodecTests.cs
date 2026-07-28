@@ -1,5 +1,4 @@
 using System;
-using System.Net;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -14,38 +13,28 @@ public class NullableColumnCodecTests
     private static IColumnCodec Resolve(string type) => ColumnCodecRegistry.Default.Resolve(type, default);
 
     [Test]
-    public async Task ReadColumn_WriteThenRead_ValueInnerRoundTripsWithNulls()
+    public async Task Values_ValueAndReferenceInners_MaterializeEveryRowIncludingNulls()
     {
-        IColumnCodec codec = Resolve("Nullable(Int32)");
-        var expected = new int?[] { 7, null, -3, null, 0 };
-        var column = new ArrayColumn<int?>("c", "Nullable(Int32)", expected);
+        // Per-type value/null round-tripping is covered against a real server by the Nullable(T) cases in
+        // InsertRoundTripCase. What that cannot reach is this accessor: the integration comparison comes from
+        // AssertColumnsEqual, which only ever calls GetValue(row), so the lazily-materialized ArrayPool-rented
+        // Values cache on NullableValueColumn/NullableReferenceColumn is exercised nowhere else. Both the value
+        // and reference shapes have their own copy of it, hence both here.
+        IColumnCodec valueCodec = Resolve("Nullable(Int32)");
+        var valueExpected = new int?[] { 7, null, -3, null, 0 };
+        var valueColumn = new ArrayColumn<int?>("c", "Nullable(Int32)", valueExpected);
 
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Nullable(Int32)", column.RowCount);
+        IColumnCodec referenceCodec = Resolve("Nullable(String)");
+        var referenceExpected = new[] { "hi", null, string.Empty, "world" };
+        var referenceColumn = new ArrayColumn<string>("c", "Nullable(String)", referenceExpected);
+
+        using IColumn valueRead = await CodecTestHarness.RoundTripAsync(valueCodec, valueColumn, "Nullable(Int32)", valueColumn.RowCount);
+        using IColumn referenceRead = await CodecTestHarness.RoundTripAsync(referenceCodec, referenceColumn, "Nullable(String)", referenceColumn.RowCount);
 
         Assert.Multiple(() =>
         {
-            Assert.That(read.TypeName, Is.EqualTo("Nullable(Int32)"));
-            Assert.That(read.RowCount, Is.EqualTo(5));
-            Assert.That(((IColumn<int?>)read).Values.ToArray(), Is.EqualTo(expected));
-            Assert.That(read.GetValue(0), Is.EqualTo(7));
-            Assert.That(read.GetValue(1), Is.Null);
-        });
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_ReferenceInnerRoundTripsWithNulls()
-    {
-        IColumnCodec codec = Resolve("Nullable(String)");
-        var expected = new[] { "hi", null, string.Empty, "world" };
-        var column = new ArrayColumn<string>("c", "Nullable(String)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Nullable(String)", column.RowCount);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(read.RowCount, Is.EqualTo(4));
-            Assert.That(((IColumn<string>)read).Values.ToArray(), Is.EqualTo(expected));
-            Assert.That(read.GetValue(1), Is.Null);
+            Assert.That(((IColumn<int?>)valueRead).Values.ToArray(), Is.EqualTo(valueExpected));
+            Assert.That(((IColumn<string>)referenceRead).Values.ToArray(), Is.EqualTo(referenceExpected));
         });
     }
 
@@ -62,69 +51,6 @@ public class NullableColumnCodecTests
         using IColumn read = await CodecTestHarness.RoundTripAsync(codec, dense, "Nullable(Int32)", dense.RowCount);
 
         Assert.That(((IColumn<int?>)read).Values.ToArray(), Is.EqualTo(new int?[] { 7, null, 9 }));
-    }
-
-    [Test]
-    public async Task ReadColumn_EveryRowNull_RoundTripsAsAllNull()
-    {
-        IColumnCodec codec = Resolve("Nullable(Int32)");
-        var column = new ArrayColumn<int?>("c", "Nullable(Int32)", new int?[] { null, null, null });
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Nullable(Int32)", column.RowCount);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(read.RowCount, Is.EqualTo(3));
-            Assert.That(read.GetValue(0), Is.Null);
-            Assert.That(read.GetValue(2), Is.Null);
-        });
-    }
-
-    [Test]
-    public async Task ReadColumn_ValueInnerWhoseDefaultIsOutOfRange_WritesPlaceholderTheCodecAccepts()
-    {
-        // default(DateOnly) is 0001-01-01, which the Date codec rejects; the null rows must borrow a present
-        // value as the placeholder instead, so writing does not throw.
-        IColumnCodec codec = Resolve("Nullable(Date)");
-        var expected = new DateOnly?[] { new DateOnly(2000, 1, 1), null, new DateOnly(1970, 1, 1) };
-        var column = new ArrayColumn<DateOnly?>("c", "Nullable(Date)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Nullable(Date)", column.RowCount);
-
-        Assert.That(((IColumn<DateOnly?>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_FixedWidthReferenceInnerWithNulls_WritesPlaceholderNotDereferenced()
-    {
-        // IPv4 is reference-typed (IPAddress) but fixed-width; the IP codec dereferences each value, so a null
-        // row must be written as a placeholder rather than passed through. This would NRE if it were.
-        IColumnCodec codec = Resolve("Nullable(IPv4)");
-        var expected = new[] { IPAddress.Parse("127.0.0.1"), null, IPAddress.Parse("10.0.0.1") };
-        var column = new ArrayColumn<IPAddress>("c", "Nullable(IPv4)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Nullable(IPv4)", column.RowCount);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(((IColumn<IPAddress>)read).Values.ToArray(), Is.EqualTo(expected));
-            Assert.That(read.GetValue(1), Is.Null);
-        });
-    }
-
-    [Test]
-    public async Task ReadColumn_FixedWidthReferenceInnerAllNull_RoundTripsAsAllNull()
-    {
-        IColumnCodec codec = Resolve("Nullable(IPv6)");
-        var column = new ArrayColumn<IPAddress>("c", "Nullable(IPv6)", new IPAddress[] { null, null });
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Nullable(IPv6)", column.RowCount);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(read.GetValue(0), Is.Null);
-            Assert.That(read.GetValue(1), Is.Null);
-        });
     }
 
     [Test]
