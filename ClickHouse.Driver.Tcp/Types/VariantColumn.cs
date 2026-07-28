@@ -235,8 +235,12 @@ public interface IVariantColumn : IColumn
     /// </summary>
     ReadOnlySpan<int> LocalIndices { get; }
 
-    /// <summary>The child column for the given discriminator (holding the values of the rows that selected it).</summary>
-    /// <param name="discriminator">The alternative-type index.</param>
+    /// <summary>
+    /// The child column for the given discriminator (holding the values of the rows that selected it). A borrowed
+    /// view valid only while the owning block is alive — it is the block's to dispose, never the caller's.
+    /// </summary>
+    /// <param name="discriminator">The alternative-type index. Must be a real type index: <see cref="NullDiscriminator"/> selects no column, so guard for it before calling.</param>
     /// <returns>That type's child column.</returns>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="discriminator"/> is negative or not less than <see cref="TypeCount"/> — which includes passing <see cref="NullDiscriminator"/>.</exception>
     IColumn GetTypeColumn(int discriminator);
 }
