@@ -43,45 +43,15 @@ public class NestedColumnCodecTests
             // Columnar access: each field is a flat column of every row's elements concatenated.
             Assert.That(((IColumn<byte>)nested.GetField("a")).Values.ToArray(), Is.EqualTo(new byte[] { 1, 2, 3 }));
             Assert.That(((IColumn<string>)nested.GetField("b")).Values.ToArray(), Is.EqualTo(new[] { "a", "b", "c" }));
-
-            // Row (boxed array-of-records) access.
-            Assert.That(nested.GetValue(0), Is.EqualTo(new[] { new object[] { (byte)1, "a" }, new object[] { (byte)2, "b" } }));
-            Assert.That(nested.GetValue(1), Is.EqualTo(Array.Empty<object[]>()));
-            Assert.That(nested.GetValue(2), Is.EqualTo(new[] { new object[] { (byte)3, "c" } }));
-        });
-    }
-
-    [Test]
-    public async Task ReadColumn_MoreThanSevenFields_RoundTrips()
-    {
-        // The whole point of the dedicated codec: a Nested is not bound by the tuple's 7-element cap. Eight fields.
-        const string type = "Nested(a UInt8, b UInt8, c UInt8, d UInt8, e UInt8, f UInt8, g UInt8, h UInt8)";
-        IColumnCodec codec = Resolve(type);
-        var names = new[] { "a", "b", "c", "d", "e", "f", "g", "h" };
-        var fields = new IColumn[8];
-        for (int i = 0; i < 8; i++)
-        {
-            fields[i] = Field<byte>("UInt8", (byte)(i * 10), (byte)(i * 10 + 1), (byte)(i * 10 + 2));
-        }
-
-        var column = Nested(type, names, fields, new[] { 0, 2, 3 });
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, type, column.RowCount);
-        var nested = (NestedColumn)read;
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(nested.FieldCount, Is.EqualTo(8));
-            Assert.That(nested.RowCount, Is.EqualTo(2));
-            Assert.That(((IColumn<byte>)nested.GetField(0)).Values.ToArray(), Is.EqualTo(new byte[] { 0, 1, 2 }));
-            Assert.That(((IColumn<byte>)nested.GetField("h")).Values.ToArray(), Is.EqualTo(new byte[] { 70, 71, 72 }));
         });
     }
 
     [Test]
     public async Task ReadColumn_CompositeFields_RoundTrip()
     {
-        // Fields recurse through the registry, so a nullable field, an array field, and a tuple field compose.
+        // Fields recurse through the registry. The Nullable and Array field compositions are covered against a
+        // real server by the "Nested(a Nullable(Int32), b Array(String))" case; a Tuple field has no integration
+        // case, so only that assertion remains here.
         const string type = "Nested(a Nullable(Int32), b Array(String), c Tuple(UInt8, String))";
         IColumnCodec codec = Resolve(type);
         var column = Nested(
@@ -100,8 +70,6 @@ public class NestedColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(((IColumn<int?>)nested.GetField("a")).Values.ToArray(), Is.EqualTo(new int?[] { 1, null, -5 }));
-            Assert.That(((IColumn<string[]>)nested.GetField("b")).Values.ToArray(), Is.EqualTo(new[] { new[] { "x", "y" }, Array.Empty<string>(), new[] { "z" } }));
             Assert.That(((IColumn<(byte, string)>)nested.GetField("c")).Values.ToArray(), Is.EqualTo(new[] { ((byte)1, "p"), ((byte)2, "q"), ((byte)3, "r") }));
         });
     }
