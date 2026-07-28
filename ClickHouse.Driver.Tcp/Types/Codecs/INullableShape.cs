@@ -13,8 +13,12 @@ internal interface INullableShape
     /// <summary>The CLR element type the wrapped column surfaces (<c>T?</c> for a value inner, <c>T</c> for a reference inner).</summary>
     Type NullableElementType { get; }
 
-    /// <summary>Wraps a decoded inner column and its null-map into the typed nullable column.</summary>
-    IColumn Wrap(string name, string typeName, IColumn inner, byte[] nullMap, int rowCount, bool pooledMap);
+    /// <summary>
+    /// Wraps a decoded inner column and its null-map into the typed nullable column. The inner column's row count
+    /// becomes the wrapper's, so the two cannot disagree; <paramref name="nullMap"/> may be longer (a pooled buffer)
+    /// but not shorter.
+    /// </summary>
+    IColumn Wrap(string name, string typeName, IColumn inner, byte[] nullMap, bool pooledMap);
 
     /// <summary>Whether <paramref name="column"/> is a nullable column of this element type, writable by the codec.</summary>
     bool CanWrite(IColumn column);
