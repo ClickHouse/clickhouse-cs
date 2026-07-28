@@ -92,7 +92,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
         columnConstructor = columnType.GetConstructor(
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
             binder: null,
-            new[] { typeof(string), typeof(string), typeof(IColumn[]), typeof(IReadOnlyList<string>), typeof(int), typeof(bool) },
+            new[] { typeof(string), typeof(string), typeof(IColumn[]), typeof(IReadOnlyList<string>), typeof(bool) },
             modifiers: null)
             ?? throw new InvalidOperationException($"The tuple column type '{columnType}' is missing its expected constructor.");
 
@@ -202,8 +202,9 @@ internal sealed class TupleColumnCodec : IColumnCodec
             throw;
         }
 
-        // The constructed column takes ownership of the child columns and disposes them with the block.
-        return (IColumn)columnConstructor.Invoke(new object[] { columnName, columnType, childColumns, fieldNames, rowCount, true });
+        // The constructed column takes ownership of the child columns and disposes them with the block. Its row count
+        // comes from the children, every one of which was just read at this block's rowCount.
+        return (IColumn)columnConstructor.Invoke(new object[] { columnName, columnType, childColumns, fieldNames, true });
     }
 
     /// <inheritdoc/>

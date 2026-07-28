@@ -190,13 +190,38 @@ public class TupleColumnCodecTests
         => Assert.Throws<NotSupportedException>(() => Resolve("Tuple(Int32, NoSuchType)"));
 
     [Test]
+    public void Constructor_ChildrenDisagreeingOnRowCount_Throws()
+    {
+        // A tuple stores one value per element per row, so its children are its height and no separate row count is
+        // accepted — those two can no longer disagree. What a caller can still get wrong is handing over children of
+        // different heights, which would otherwise surface much later as one child's out-of-range read partway
+        // through materializing a row.
+        var two = new ArrayColumn<int>("c", "Int32", new[] { 1, 2 });
+        var three = new ArrayColumn<int>("c", "Int32", new[] { 1, 2, 3 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => new TupleColumn<int, int>("c", "Tuple(Int32, Int32)", new IColumn[] { two, three }, null, ownsChildren: false),
+                Throws.ArgumentException.With.Message.Contains("disagree on their row count"));
+            Assert.That(
+                () => new TupleColumn<int, int>("c", "Tuple(Int32, Int32)", Array.Empty<IColumn>(), null, ownsChildren: false),
+                Throws.ArgumentException.With.Message.Contains("at least one child"));
+            Assert.That(
+                new TupleColumn<int, int>("c", "Tuple(Int32, Int32)", new IColumn[] { two, two }, null, ownsChildren: false).RowCount,
+                Is.EqualTo(2),
+                "the row count comes from the children");
+        });
+    }
+
+    [Test]
     public void RestrictOwnership_DisposesOnlyFlaggedChildren()
     {
         // The mechanism the partial densify rebuild relies on: after RestrictOwnership, Dispose frees exactly the
         // children flagged true (the freshly built ones) and leaves the rest (borrowed) untouched.
         var owned = new DisposeSpyColumn<int>("c", "Int32", new[] { 1 });
         var borrowed = new DisposeSpyColumn<int>("c", "Int32", new[] { 2 });
-        var tuple = new TupleColumn<int, int>("c", "Tuple(Int32, Int32)", new IColumn[] { owned, borrowed }, null, rowCount: 1, ownsChildren: false);
+        var tuple = new TupleColumn<int, int>("c", "Tuple(Int32, Int32)", new IColumn[] { owned, borrowed }, null, ownsChildren: false);
 
         tuple.RestrictOwnership(new[] { true, false });
         tuple.Dispose();

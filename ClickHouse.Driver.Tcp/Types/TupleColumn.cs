@@ -23,16 +23,36 @@ internal abstract class TupleColumnBase : ITupleColumn
     /// <param name="typeName">The full <c>Tuple(...)</c> type string (element names included when named).</param>
     /// <param name="children">The child columns, one per element; each must be an <see cref="IColumn{T}"/> of the corresponding element type.</param>
     /// <param name="fieldNames">The element names (one per element, null entry for an unnamed element), or null when the tuple is unnamed.</param>
-    /// <param name="rowCount">The number of rows; every child must have this many.</param>
     /// <param name="ownsChildren">Whether disposing this column disposes the child columns.</param>
-    protected TupleColumnBase(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, int rowCount, bool ownsChildren)
+    /// <exception cref="ArgumentNullException"><paramref name="children"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="children"/> is empty, or the children disagree on their row count.</exception>
+    protected TupleColumnBase(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, bool ownsChildren)
     {
         this.children = children ?? throw new ArgumentNullException(nameof(children));
         Name = name;
         TypeName = typeName;
         FieldNames = fieldNames;
-        RowCount = rowCount;
         this.ownsChildren = ownsChildren;
+
+        // A tuple stores one value per element per row, so every child is exactly as tall as the tuple and no
+        // separate row count is accepted — the children are the height. They do have to agree on it, which is the
+        // one thing a caller can still get wrong, so it is checked here rather than surfacing later as a child's
+        // own out-of-range read partway through materializing a row.
+        if (children.Length == 0)
+        {
+            throw new ArgumentException("A tuple column must have at least one child column.", nameof(children));
+        }
+
+        RowCount = children[0].RowCount;
+        for (int i = 1; i < children.Length; i++)
+        {
+            if (children[i].RowCount != RowCount)
+            {
+                throw new ArgumentException(
+                    $"The children of column '{name}' ({typeName}) disagree on their row count: child 0 has {RowCount} rows, child {i} has {children[i].RowCount}.",
+                    nameof(children));
+            }
+        }
     }
 
     /// <inheritdoc/>
@@ -97,14 +117,14 @@ internal sealed class TupleColumn<T1> : TupleColumnBase, IColumn<ValueTuple<T1>>
     private readonly IColumn<T1> item1;
     private ValueTuple<T1>[] cache;
 
-    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, int rowCount, bool ownsChildren)
-        : base(name, typeName, children, fieldNames, rowCount, ownsChildren)
+    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, bool ownsChildren)
+        : base(name, typeName, children, fieldNames, ownsChildren)
     {
         item1 = (IColumn<T1>)Child(0);
     }
 
     internal TupleColumn(string name, string typeName, ValueTuple<T1>[] rows)
-        : this(name, typeName, BuildChildren(name, typeName, rows), null, rows.Length, ownsChildren: true)
+        : this(name, typeName, BuildChildren(name, typeName, rows), null, ownsChildren: true)
     {
     }
 
@@ -154,15 +174,15 @@ internal sealed class TupleColumn<T1, T2> : TupleColumnBase, IColumn<(T1, T2)>
     private readonly IColumn<T2> item2;
     private (T1, T2)[] cache;
 
-    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, int rowCount, bool ownsChildren)
-        : base(name, typeName, children, fieldNames, rowCount, ownsChildren)
+    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, bool ownsChildren)
+        : base(name, typeName, children, fieldNames, ownsChildren)
     {
         item1 = (IColumn<T1>)Child(0);
         item2 = (IColumn<T2>)Child(1);
     }
 
     internal TupleColumn(string name, string typeName, (T1, T2)[] rows)
-        : this(name, typeName, BuildChildren(name, typeName, rows), null, rows.Length, ownsChildren: true)
+        : this(name, typeName, BuildChildren(name, typeName, rows), null, ownsChildren: true)
     {
     }
 
@@ -219,8 +239,8 @@ internal sealed class TupleColumn<T1, T2, T3> : TupleColumnBase, IColumn<(T1, T2
     private readonly IColumn<T3> item3;
     private (T1, T2, T3)[] cache;
 
-    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, int rowCount, bool ownsChildren)
-        : base(name, typeName, children, fieldNames, rowCount, ownsChildren)
+    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, bool ownsChildren)
+        : base(name, typeName, children, fieldNames, ownsChildren)
     {
         item1 = (IColumn<T1>)Child(0);
         item2 = (IColumn<T2>)Child(1);
@@ -228,7 +248,7 @@ internal sealed class TupleColumn<T1, T2, T3> : TupleColumnBase, IColumn<(T1, T2
     }
 
     internal TupleColumn(string name, string typeName, (T1, T2, T3)[] rows)
-        : this(name, typeName, BuildChildren(name, typeName, rows), null, rows.Length, ownsChildren: true)
+        : this(name, typeName, BuildChildren(name, typeName, rows), null, ownsChildren: true)
     {
     }
 
@@ -289,8 +309,8 @@ internal sealed class TupleColumn<T1, T2, T3, T4> : TupleColumnBase, IColumn<(T1
     private readonly IColumn<T4> item4;
     private (T1, T2, T3, T4)[] cache;
 
-    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, int rowCount, bool ownsChildren)
-        : base(name, typeName, children, fieldNames, rowCount, ownsChildren)
+    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, bool ownsChildren)
+        : base(name, typeName, children, fieldNames, ownsChildren)
     {
         item1 = (IColumn<T1>)Child(0);
         item2 = (IColumn<T2>)Child(1);
@@ -299,7 +319,7 @@ internal sealed class TupleColumn<T1, T2, T3, T4> : TupleColumnBase, IColumn<(T1
     }
 
     internal TupleColumn(string name, string typeName, (T1, T2, T3, T4)[] rows)
-        : this(name, typeName, BuildChildren(name, typeName, rows), null, rows.Length, ownsChildren: true)
+        : this(name, typeName, BuildChildren(name, typeName, rows), null, ownsChildren: true)
     {
     }
 
@@ -364,8 +384,8 @@ internal sealed class TupleColumn<T1, T2, T3, T4, T5> : TupleColumnBase, IColumn
     private readonly IColumn<T5> item5;
     private (T1, T2, T3, T4, T5)[] cache;
 
-    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, int rowCount, bool ownsChildren)
-        : base(name, typeName, children, fieldNames, rowCount, ownsChildren)
+    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, bool ownsChildren)
+        : base(name, typeName, children, fieldNames, ownsChildren)
     {
         item1 = (IColumn<T1>)Child(0);
         item2 = (IColumn<T2>)Child(1);
@@ -375,7 +395,7 @@ internal sealed class TupleColumn<T1, T2, T3, T4, T5> : TupleColumnBase, IColumn
     }
 
     internal TupleColumn(string name, string typeName, (T1, T2, T3, T4, T5)[] rows)
-        : this(name, typeName, BuildChildren(name, typeName, rows), null, rows.Length, ownsChildren: true)
+        : this(name, typeName, BuildChildren(name, typeName, rows), null, ownsChildren: true)
     {
     }
 
@@ -444,8 +464,8 @@ internal sealed class TupleColumn<T1, T2, T3, T4, T5, T6> : TupleColumnBase, ICo
     private readonly IColumn<T6> item6;
     private (T1, T2, T3, T4, T5, T6)[] cache;
 
-    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, int rowCount, bool ownsChildren)
-        : base(name, typeName, children, fieldNames, rowCount, ownsChildren)
+    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, bool ownsChildren)
+        : base(name, typeName, children, fieldNames, ownsChildren)
     {
         item1 = (IColumn<T1>)Child(0);
         item2 = (IColumn<T2>)Child(1);
@@ -456,7 +476,7 @@ internal sealed class TupleColumn<T1, T2, T3, T4, T5, T6> : TupleColumnBase, ICo
     }
 
     internal TupleColumn(string name, string typeName, (T1, T2, T3, T4, T5, T6)[] rows)
-        : this(name, typeName, BuildChildren(name, typeName, rows), null, rows.Length, ownsChildren: true)
+        : this(name, typeName, BuildChildren(name, typeName, rows), null, ownsChildren: true)
     {
     }
 
@@ -529,8 +549,8 @@ internal sealed class TupleColumn<T1, T2, T3, T4, T5, T6, T7> : TupleColumnBase,
     private readonly IColumn<T7> item7;
     private (T1, T2, T3, T4, T5, T6, T7)[] cache;
 
-    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, int rowCount, bool ownsChildren)
-        : base(name, typeName, children, fieldNames, rowCount, ownsChildren)
+    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, bool ownsChildren)
+        : base(name, typeName, children, fieldNames, ownsChildren)
     {
         item1 = (IColumn<T1>)Child(0);
         item2 = (IColumn<T2>)Child(1);
@@ -542,7 +562,7 @@ internal sealed class TupleColumn<T1, T2, T3, T4, T5, T6, T7> : TupleColumnBase,
     }
 
     internal TupleColumn(string name, string typeName, (T1, T2, T3, T4, T5, T6, T7)[] rows)
-        : this(name, typeName, BuildChildren(name, typeName, rows), null, rows.Length, ownsChildren: true)
+        : this(name, typeName, BuildChildren(name, typeName, rows), null, ownsChildren: true)
     {
     }
 
