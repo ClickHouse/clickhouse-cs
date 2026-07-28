@@ -24,91 +24,24 @@ public class MapColumnCodecTests
     }
 
     [Test]
-    public async Task ReadColumn_WriteThenRead_FixedWidthKeyAndValueRoundTripsWithEmptyRows()
-    {
-        IColumnCodec codec = Resolve("Map(UInt8, UInt8)");
-        var expected = new[]
-        {
-            Row<byte, byte>((1, 10), (2, 20)),
-            Array.Empty<KeyValuePair<byte, byte>>(),
-            Row<byte, byte>((3, 30)),
-        };
-        var column = new ArrayColumn<KeyValuePair<byte, byte>[]>("c", "Map(UInt8, UInt8)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Map(UInt8, UInt8)", column.RowCount);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(read.TypeName, Is.EqualTo("Map(UInt8, UInt8)"));
-            Assert.That(read.RowCount, Is.EqualTo(3));
-            Assert.That(((IColumn<KeyValuePair<byte, byte>[]>)read).Values.ToArray(), Is.EqualTo(expected));
-            Assert.That(read.GetValue(1), Is.EqualTo(Array.Empty<KeyValuePair<byte, byte>>()));
-        });
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_StringKeyRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Map(String, UInt32)");
-        var expected = new[]
-        {
-            Row<string, uint>(("a", 1), ("b", 2)),
-            Row<string, uint>(("héllo✓", uint.MaxValue)),
-        };
-        var column = new ArrayColumn<KeyValuePair<string, uint>[]>("c", "Map(String, UInt32)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Map(String, UInt32)", column.RowCount);
-
-        Assert.That(((IColumn<KeyValuePair<string, uint>[]>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
     public async Task ReadColumn_WriteThenRead_DuplicateKeysWithinRowArePreserved()
     {
         // A Map surfaces as KeyValuePair<K, V>[] precisely so duplicate keys and pair order round-trip intact —
         // a Dictionary would silently collapse the duplicate. The wire tolerates duplicates within a row.
+        // It also owns the Values coverage for Map: MapColumn.Values materializes the whole jagged cache in one
+        // pass, while GetValue -- the only accessor AssertColumnsEqual uses -- goes through the uncached indexer.
+        // The empty row is here for the same reason: Values' length == 0 branch is otherwise unreached.
         IColumnCodec codec = Resolve("Map(String, UInt8)");
-        var expected = new[] { Row<string, byte>(("A", 1), ("A", 2), ("B", 3)) };
+        var expected = new[] { Row<string, byte>(("A", 1), ("A", 2), ("B", 3)), Array.Empty<KeyValuePair<string, byte>>() };
         var column = new ArrayColumn<KeyValuePair<string, byte>[]>("c", "Map(String, UInt8)", expected);
 
         using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Map(String, UInt8)", column.RowCount);
 
-        Assert.That(((IColumn<KeyValuePair<string, byte>[]>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_NullableValueRoundTrips()
-    {
-        // Map keys are non-nullable in ClickHouse and Nullable(Map(...)) is server-rejected, so nullability
-        // composes inside the value: Map(K, Nullable(V)).
-        IColumnCodec codec = Resolve("Map(String, Nullable(UInt32))");
-        var expected = new[]
+        Assert.Multiple(() =>
         {
-            Row<string, uint?>(("a", 1), ("b", null)),
-            Array.Empty<KeyValuePair<string, uint?>>(),
-            Row<string, uint?>(("c", null)),
-        };
-        var column = new ArrayColumn<KeyValuePair<string, uint?>[]>("c", "Map(String, Nullable(UInt32))", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Map(String, Nullable(UInt32))", column.RowCount);
-
-        Assert.That(((IColumn<KeyValuePair<string, uint?>[]>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_ArrayValueRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Map(String, Array(Int32))");
-        var expected = new[]
-        {
-            Row<string, int[]>(("a", new[] { 1, 2, 3 }), ("b", Array.Empty<int>())),
-            Row<string, int[]>(("c", new[] { -1 })),
-        };
-        var column = new ArrayColumn<KeyValuePair<string, int[]>[]>("c", "Map(String, Array(Int32))", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Map(String, Array(Int32))", column.RowCount);
-
-        Assert.That(((IColumn<KeyValuePair<string, int[]>[]>)read).Values.ToArray(), Is.EqualTo(expected));
+            Assert.That(read.RowCount, Is.EqualTo(2));
+            Assert.That(((IColumn<KeyValuePair<string, byte>[]>)read).Values.ToArray(), Is.EqualTo(expected));
+        });
     }
 
     [Test]
@@ -123,41 +56,6 @@ public class MapColumnCodecTests
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
         using IColumn read = await codec.ReadColumnAsync(reader, "c", "Map(String, UInt32)", 0, CodecTestHarness.None);
         Assert.That(read.RowCount, Is.Zero);
-    }
-
-    [Test]
-    public async Task ReadColumn_EveryRowEmpty_RoundTripsAsAllEmpty()
-    {
-        IColumnCodec codec = Resolve("Map(String, UInt32)");
-        var expected = new[]
-        {
-            Array.Empty<KeyValuePair<string, uint>>(),
-            Array.Empty<KeyValuePair<string, uint>>(),
-        };
-        var column = new ArrayColumn<KeyValuePair<string, uint>[]>("c", "Map(String, UInt32)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Map(String, UInt32)", column.RowCount);
-
-        Assert.That(((IColumn<KeyValuePair<string, uint>[]>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task WriteColumn_DenseMapColumn_RoundTripsWithoutRebuildingStreams()
-    {
-        // A dense MapColumn<TKey, TValue> (flat key/value columns + offsets, the wire's own layout) is the
-        // zero-copy write path — the same shape a read produces. Writing one and reading it back preserves the rows.
-        IColumnCodec codec = Resolve("Map(String, UInt32)");
-        var keys = new ArrayColumn<string>("c", "String", new[] { "a", "b", "c" });
-        var values = PrimitiveColumn<uint>.FromValues("c", "UInt32", new uint[] { 1, 2, 3 });
-        var dense = new MapColumn<string, uint>("c", "Map(String, UInt32)", keys, values, new[] { 0, 2, 3 }, rowCount: 2, pooledOffsets: false);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, dense, "Map(String, UInt32)", dense.RowCount);
-
-        Assert.That(((IColumn<KeyValuePair<string, uint>[]>)read).Values.ToArray(), Is.EqualTo(new[]
-        {
-            Row<string, uint>(("a", 1), ("b", 2)),
-            Row<string, uint>(("c", 3)),
-        }));
     }
 
     [Test]
