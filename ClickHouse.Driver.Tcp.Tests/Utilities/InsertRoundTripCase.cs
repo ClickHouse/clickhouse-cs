@@ -557,6 +557,18 @@ public sealed class InsertRoundTripCase
         yield return Maps<string, int[]>("String", "Array(Int32)", Pairs<string, int[]>(("a", new[] { 1, 2, 3 }), ("b", Array.Empty<int>())), Pairs<string, int[]>(("c", new[] { -1 })));
         yield return Maps<string, (int, string)>("String", "Tuple(Int32, String)", Pairs<string, (int, string)>(("a", (1, "x")), ("b", (-5, string.Empty))), Array.Empty<KeyValuePair<string, (int, string)>>());
 
+        // Both key and value fixed-width: the cases above pair a variable key with a fixed value or the reverse,
+        // never both fixed.
+        yield return Maps<byte, byte>("UInt8", "UInt8", Pairs<byte, byte>((1, 10), (2, 20)), Array.Empty<KeyValuePair<byte, byte>>(), Pairs<byte, byte>((3, 30)));
+
+        // A Map whose value is itself a Map — the only path that recurses the map shape through itself. Neither a
+        // unit test nor an integration case reached it; Array(Map(...)) covers a different composition.
+        yield return Maps<string, KeyValuePair<string, uint>[]>(
+            "String",
+            "Map(String, UInt32)",
+            Pairs<string, KeyValuePair<string, uint>[]>(("outer", Pairs<string, uint>(("x", 1), ("y", 2)))),
+            Array.Empty<KeyValuePair<string, KeyValuePair<string, uint>[]>>());
+
         // Nested: Array(Map(...)) recurses the offsets-plus-streams shape one level up through the array codec.
         yield return Arrays<KeyValuePair<string, uint>[]>("Map(String, UInt32)", new[]
         {
