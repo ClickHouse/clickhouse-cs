@@ -115,6 +115,21 @@ public sealed class InsertRoundTripCase
         yield return DateTime64s("DateTime64(3)", 0L, 1_700_000_000_123L, -6_000_000_000_000L);
         yield return DateTime64s("DateTime64(9)", 0L, 1_700_000_000_123_456_789L, -1_000_000_001L);
 
+        // DateTime64 also accepts a DateTimeOffset on write, converting the instant to the column's scale; the
+        // read-back is still the raw count, so at scale 3 the expected column carries epoch milliseconds. The
+        // mirror of the "DateTime <- DateTimeOffset" case above.
+        var dateTime64Offsets = new[]
+        {
+            DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123),
+            new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)),
+        };
+        yield return new InsertRoundTripCase(
+            "DateTime64(3) <- DateTimeOffset",
+            "DateTime64(3)",
+            name => new ArrayColumn<DateTimeOffset>(name, "DateTime64(3)", dateTime64Offsets),
+            name => new ArrayColumn<long>(name, "DateTime64(3)", Array.ConvertAll(dateTime64Offsets, o => o.ToUnixTimeMilliseconds())),
+            settings: null);
+
         yield return Uuids("UUID", Guid.Empty, new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff"));
 
         yield return IpAddresses("IPv4", "0.0.0.0", "127.0.0.1", "192.168.1.1", "255.255.255.255");
@@ -125,6 +140,10 @@ public sealed class InsertRoundTripCase
         yield return Decimals("Decimal(18, 4)", 0m, 12345.6789m, -12345.6789m, 99999999999999.9999m);
         yield return WideDecimals("Decimal(38, 10)", "0", "12345.6789", "-98765.4321");
         yield return WideDecimals("Decimal(76, 20)", "0", "1.00000000000000000001", "-1.00000000000000000001");
+
+        // The DecimalN(S) alias spellings resolve to the same codecs as Decimal(P, S); one case proves the server
+        // round-trips the alias type name as declared.
+        yield return Decimals("Decimal64(4)", 0m, 12345.6789m, -12345.6789m);
 
         // Interval<Unit> surfaces its underlying Int64 count; the unit is kept in the type name.
         yield return Primitive("IntervalSecond", new[] { 0L, 1L, -5L, long.MaxValue });
@@ -137,6 +156,26 @@ public sealed class InsertRoundTripCase
         // inserted values are the exact wire values, returned verbatim.
         yield return TimeSeconds("Time", TimeSettings, 0, (12 * 3600) + (34 * 60) + 56, -((1 * 3600) + (2 * 60) + 3));
         yield return Time64Counts("Time64(3)", TimeSettings, 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456, -((((1 * 3600) + (2 * 60) + 3) * 1000L) + 456));
+        yield return Time64Counts("Time64(9)", TimeSettings, 0L, 3_723_123_456_789L, -3_723_123_456_789L);
+
+        // Time/Time64 also accept a TimeSpan on write, truncating toward zero at the column's scale. The read-back
+        // is the raw count, so the expected column carries the truncated count — integer division on Ticks, which
+        // is the truncation the codecs perform. The sub-scale entries prove the truncation survives the server.
+        var timeSpans = new[] { TimeSpan.Zero, new TimeSpan(12, 34, 56), new TimeSpan(0, 0, 0, 1, 500) };
+        yield return new InsertRoundTripCase(
+            "Time <- TimeSpan",
+            "Time",
+            name => new ArrayColumn<TimeSpan>(name, "Time", timeSpans),
+            name => new ArrayColumn<int>(name, "Time", Array.ConvertAll(timeSpans, t => (int)(t.Ticks / TimeSpan.TicksPerSecond))),
+            TimeSettings);
+
+        var time64Spans = new[] { TimeSpan.Zero, new TimeSpan(0, 1, 2, 3, 456), TimeSpan.FromTicks(4_560_789) };
+        yield return new InsertRoundTripCase(
+            "Time64(3) <- TimeSpan",
+            "Time64(3)",
+            name => new ArrayColumn<TimeSpan>(name, "Time64(3)", time64Spans),
+            name => new ArrayColumn<long>(name, "Time64(3)", Array.ConvertAll(time64Spans, t => t.Ticks / TimeSpan.TicksPerMillisecond)),
+            TimeSettings);
     }
 
     private static InsertRoundTripCase Primitive<T>(string clickHouseType, T[] values)
