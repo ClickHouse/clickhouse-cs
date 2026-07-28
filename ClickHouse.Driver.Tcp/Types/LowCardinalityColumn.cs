@@ -75,6 +75,11 @@ internal sealed class LowCardinalityColumn<T> : IColumn<T>, ILowCardinalityColum
     /// <inheritdoc/>
     public ReadOnlySpan<int> Keys => keys.AsSpan(0, rowCount);
 
+    /// <inheritdoc/>
+    // One reserved slot: the inner type's default at slot 0. A non-nullable dictionary has no NULL marker, so a key
+    // of 0 here is an ordinary default value, not an absent one.
+    public int ReservedSlotCount => 1;
+
     /// <summary>
     /// The rows as values, materialized once and cached. Prefer the indexer when only some rows are needed, to
     /// avoid reconstructing the whole column.
