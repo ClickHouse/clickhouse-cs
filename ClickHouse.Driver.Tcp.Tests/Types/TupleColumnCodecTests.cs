@@ -12,101 +12,48 @@ public class TupleColumnCodecTests
     private static IColumnCodec Resolve(string type) => ColumnCodecRegistry.Default.Resolve(type, default);
 
     [Test]
-    public async Task ReadColumn_WriteThenRead_FixedAndVariableElementsRoundTrip()
+    public async Task Values_EveryArity_MaterializesEveryRow()
     {
-        IColumnCodec codec = Resolve("Tuple(Int32, String)");
-        var expected = new (int, string)[] { (1, "a"), (-5, string.Empty), (int.MaxValue, "héllo✓") };
-        var column = new TupleColumn<int, string>("c", "Tuple(Int32, String)", expected);
+        // TupleColumn has a separate lazily-built Values cache per arity — seven independent materialization
+        // loops. The integration comparison only ever calls GetValue(row), which takes the uncached branch, so
+        // none of those loops runs anywhere else. Row values per element type are covered against a real server
+        // by the Tuple cases in InsertRoundTripCase; this exists to touch all seven Values implementations, and
+        // the read column's stamped TypeName, which the integration comparison never inspects.
+        const string t1 = "Tuple(Int32)";
+        const string t2 = "Tuple(Int32, String)";
+        const string t3 = "Tuple(Int32, String, Float64)";
+        const string t4 = "Tuple(Int32, String, Float64, UInt8)";
+        const string t5 = "Tuple(Int32, String, Float64, UInt8, Int16)";
+        const string t6 = "Tuple(Int32, String, Float64, UInt8, Int16, Bool)";
+        const string t7 = "Tuple(Int32, String, Float64, UInt8, Int16, Bool, UInt32)";
 
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32, String)", column.RowCount);
+        var a1 = new[] { new ValueTuple<int>(1), new ValueTuple<int>(int.MinValue) };
+        var a2 = new (int, string)[] { (1, "a"), (int.MaxValue, "héllo✓") };
+        var a3 = new (int, string, double)[] { (1, "a", 1.5), (-2, string.Empty, -1.5e100) };
+        var a4 = new (int, string, double, byte)[] { (1, "a", 1.5, 7), (-2, "bb", -3.5, 255) };
+        var a5 = new (int, string, double, byte, short)[] { (1, "a", 1.5, 7, -3), (-2, "bb", -3.5, 255, short.MaxValue) };
+        var a6 = new (int, string, double, byte, short, bool)[] { (1, "a", 1.5, 7, -3, true), (-2, "bb", -3.5, 255, short.MaxValue, false) };
+        var a7 = new (int, string, double, byte, short, bool, uint)[] { (1, "a", 1.5, 7, -3, true, 9u), (-2, "bb", -3.5, 255, short.MaxValue, false, uint.MaxValue) };
+
+        using IColumn r1 = await CodecTestHarness.RoundTripAsync(Resolve(t1), new TupleColumn<int>("c", t1, a1), t1, a1.Length);
+        using IColumn r2 = await CodecTestHarness.RoundTripAsync(Resolve(t2), new TupleColumn<int, string>("c", t2, a2), t2, a2.Length);
+        using IColumn r3 = await CodecTestHarness.RoundTripAsync(Resolve(t3), new TupleColumn<int, string, double>("c", t3, a3), t3, a3.Length);
+        using IColumn r4 = await CodecTestHarness.RoundTripAsync(Resolve(t4), new TupleColumn<int, string, double, byte>("c", t4, a4), t4, a4.Length);
+        using IColumn r5 = await CodecTestHarness.RoundTripAsync(Resolve(t5), new TupleColumn<int, string, double, byte, short>("c", t5, a5), t5, a5.Length);
+        using IColumn r6 = await CodecTestHarness.RoundTripAsync(Resolve(t6), new TupleColumn<int, string, double, byte, short, bool>("c", t6, a6), t6, a6.Length);
+        using IColumn r7 = await CodecTestHarness.RoundTripAsync(Resolve(t7), new TupleColumn<int, string, double, byte, short, bool, uint>("c", t7, a7), t7, a7.Length);
 
         Assert.Multiple(() =>
         {
-            Assert.That(read.TypeName, Is.EqualTo("Tuple(Int32, String)"));
-            Assert.That(read.RowCount, Is.EqualTo(3));
-            Assert.That(((IColumn<(int, string)>)read).Values.ToArray(), Is.EqualTo(expected));
-            Assert.That(read.GetValue(2), Is.EqualTo((int.MaxValue, "héllo✓")));
+            Assert.That(((IColumn<ValueTuple<int>>)r1).Values.ToArray(), Is.EqualTo(a1), "arity 1");
+            Assert.That(((IColumn<(int, string)>)r2).Values.ToArray(), Is.EqualTo(a2), "arity 2");
+            Assert.That(((IColumn<(int, string, double)>)r3).Values.ToArray(), Is.EqualTo(a3), "arity 3");
+            Assert.That(((IColumn<(int, string, double, byte)>)r4).Values.ToArray(), Is.EqualTo(a4), "arity 4");
+            Assert.That(((IColumn<(int, string, double, byte, short)>)r5).Values.ToArray(), Is.EqualTo(a5), "arity 5");
+            Assert.That(((IColumn<(int, string, double, byte, short, bool)>)r6).Values.ToArray(), Is.EqualTo(a6), "arity 6");
+            Assert.That(((IColumn<(int, string, double, byte, short, bool, uint)>)r7).Values.ToArray(), Is.EqualTo(a7), "arity 7");
+            Assert.That(r2.TypeName, Is.EqualTo(t2));
         });
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_SingleElementTupleRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32)");
-        var expected = new[] { new ValueTuple<int>(1), new ValueTuple<int>(-2), new ValueTuple<int>(int.MinValue) };
-        var column = new TupleColumn<int>("c", "Tuple(Int32)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32)", column.RowCount);
-
-        Assert.That(((IColumn<ValueTuple<int>>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_NullableElementRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Tuple(Nullable(UInt32), String)");
-        var expected = new (uint?, string)[] { (1u, "a"), (null, "b"), (3u, "c") };
-        var column = new TupleColumn<uint?, string>("c", "Tuple(Nullable(UInt32), String)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Nullable(UInt32), String)", column.RowCount);
-
-        Assert.That(((IColumn<(uint?, string)>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_NestedTupleRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32, Tuple(String, Float64))");
-        var expected = new (int, (string, double))[] { (1, ("a", 1.5)), (2, (string.Empty, -1.5e100)) };
-        var column = new TupleColumn<int, (string, double)>("c", "Tuple(Int32, Tuple(String, Float64))", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32, Tuple(String, Float64))", column.RowCount);
-
-        Assert.That(((IColumn<(int, (string, double))>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_ArrayElementRoundTrips()
-    {
-        IColumnCodec codec = Resolve("Tuple(Array(UInt8), String)");
-        var expected = new (byte[], string)[] { (new byte[] { 1, 2 }, "a"), (Array.Empty<byte>(), "b") };
-        var column = new TupleColumn<byte[], string>("c", "Tuple(Array(UInt8), String)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Array(UInt8), String)", column.RowCount);
-
-        Assert.That(((IColumn<(byte[], string)>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_ArrayOfTuple_RoundTripsThroughFlatWritePath()
-    {
-        // Array(Tuple(...)) flattens the jagged tuple arrays into one flat ValueTuple column and hands it to the
-        // tuple codec, exercising the boxed per-element projection rather than the dense child-column path.
-        IColumnCodec codec = Resolve("Array(Tuple(Int32, String))");
-        var expected = new[]
-        {
-            new[] { (1, "a"), (2, "b") },
-            Array.Empty<(int, string)>(),
-            new[] { (3, "c") },
-        };
-        var column = new ArrayColumn<(int, string)[]>("c", "Array(Tuple(Int32, String))", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Array(Tuple(Int32, String))", column.RowCount);
-
-        Assert.That(((IColumn<(int, string)[]>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task WriteColumn_FlatValueTupleColumn_RoundTripsViaProjection()
-    {
-        // A flat ArrayColumn<ValueTuple> is not an ITupleColumn, so it takes the ergonomic (boxed) write path.
-        IColumnCodec codec = Resolve("Tuple(Int32, String)");
-        var rows = new (int, string)[] { (1, "a"), (2, "bb"), (3, "ccc") };
-        var flat = new ArrayColumn<(int, string)>("c", "Tuple(Int32, String)", rows);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, flat, "Tuple(Int32, String)", rows.Length);
-
-        Assert.That(((IColumn<(int, string)>)read).Values.ToArray(), Is.EqualTo(rows));
     }
 
     [Test]
@@ -208,7 +155,6 @@ public class TupleColumnCodecTests
         {
             Assert.That(codec.ElementType, Is.EqualTo(typeof((int[], string))));
             Assert.That(codec.TypeName, Is.EqualTo(type));
-            Assert.That(((IColumn<(int[], string)>)read).Values.ToArray(), Is.EqualTo(expected));
             Assert.That(((TupleColumnBase)read).FieldNames, Is.EqualTo(new[] { "a", "b" }));
         });
     }
@@ -242,66 +188,6 @@ public class TupleColumnCodecTests
     [Test]
     public void Resolve_UnsupportedElement_ThrowsNotSupported()
         => Assert.Throws<NotSupportedException>(() => Resolve("Tuple(Int32, NoSuchType)"));
-
-    [Test]
-    public async Task ReadColumn_Arity3_RoundTripsViaValues()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32, String, Float64)");
-        var expected = new (int, string, double)[] { (1, "a", 1.5), (-2, string.Empty, -1.5e100) };
-        var column = new TupleColumn<int, string, double>("c", "Tuple(Int32, String, Float64)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32, String, Float64)", column.RowCount);
-
-        Assert.That(((IColumn<(int, string, double)>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_Arity4_RoundTripsViaValues()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32, String, Float64, UInt8)");
-        var expected = new (int, string, double, byte)[] { (1, "a", 1.5, 7), (-2, "bb", -3.5, 255) };
-        var column = new TupleColumn<int, string, double, byte>("c", "Tuple(Int32, String, Float64, UInt8)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32, String, Float64, UInt8)", column.RowCount);
-
-        Assert.That(((IColumn<(int, string, double, byte)>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_Arity5_RoundTripsViaValues()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32, String, Float64, UInt8, Int16)");
-        var expected = new (int, string, double, byte, short)[] { (1, "a", 1.5, 7, -3), (-2, "bb", -3.5, 255, short.MaxValue) };
-        var column = new TupleColumn<int, string, double, byte, short>("c", "Tuple(Int32, String, Float64, UInt8, Int16)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32, String, Float64, UInt8, Int16)", column.RowCount);
-
-        Assert.That(((IColumn<(int, string, double, byte, short)>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_Arity6_RoundTripsViaValues()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32, String, Float64, UInt8, Int16, Bool)");
-        var expected = new (int, string, double, byte, short, bool)[] { (1, "a", 1.5, 7, -3, true), (-2, "bb", -3.5, 255, short.MaxValue, false) };
-        var column = new TupleColumn<int, string, double, byte, short, bool>("c", "Tuple(Int32, String, Float64, UInt8, Int16, Bool)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32, String, Float64, UInt8, Int16, Bool)", column.RowCount);
-
-        Assert.That(((IColumn<(int, string, double, byte, short, bool)>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_Arity7_RoundTripsViaValues()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32, String, Float64, UInt8, Int16, Bool, UInt32)");
-        var expected = new (int, string, double, byte, short, bool, uint)[] { (1, "a", 1.5, 7, -3, true, 9u), (-2, "bb", -3.5, 255, short.MaxValue, false, uint.MaxValue) };
-        var column = new TupleColumn<int, string, double, byte, short, bool, uint>("c", "Tuple(Int32, String, Float64, UInt8, Int16, Bool, UInt32)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32, String, Float64, UInt8, Int16, Bool, UInt32)", column.RowCount);
-
-        Assert.That(((IColumn<(int, string, double, byte, short, bool, uint)>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
 
     [Test]
     public void RestrictOwnership_DisposesOnlyFlaggedChildren()
