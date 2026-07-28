@@ -4,16 +4,19 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// Covers the public columnar read surface of the composite column types against a real server. Every concrete
-/// column class is internal, so these interfaces — obtained by pattern-matching an <see cref="IColumn"/> — are the
-/// only way a consumer reaches the wire layout underneath a composite. These tests assert the shape a real decoded
-/// block presents: that the view is reachable at all, that its spans are sliced to the column's row count rather
-/// than to a pooled buffer's length, and that the raw columnar data it exposes agrees with the materialized rows.
+/// Covers the public columnar surface of the composite column types against a real server. Every concrete column
+/// class is internal, so these interfaces — obtained by pattern-matching an <see cref="IColumn"/> — are the only way
+/// a consumer reaches the wire layout underneath a composite. These tests assert the shape a real decoded block
+/// presents: that the view is reachable at all, that its spans are sliced to the column's row count rather than to a
+/// pooled buffer's length, and that the raw columnar data it exposes agrees with the materialized rows. Where the
+/// same data doubles as a zero-copy <em>write</em> source, the invariant deciding whether it may be re-emitted
+/// verbatim is pinned here too, alongside the layout rules it depends on.
 ///
 /// <para>
 /// A yielded <see cref="Block"/> is borrowed — valid only for its iteration — so every test reads or copies what it
@@ -461,5 +464,155 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(byNameMatchesByIndex, Is.True, "name lookup resolves to the same column as the index");
             Assert.That(recordsOfLastRow, Is.EqualTo(new[] { ((byte)0, "f0"), ((byte)1, "f1") }));
         });
+    }
+
+    [Test]
+    public async Task QueryAsync_LowCardinalityColumn_ExposesDictionaryAndKeysThroughILowCardinalityColumn()
+    {
+        // LowCardinality is the type with the widest gap between the two surfaces: the materialized one resolves
+        // every row to its dictionary entry, so N rows over a K-entry dictionary produce N values. Reading the
+        // dictionary and keys instead means touching each distinct value once — the whole reason the encoding exists.
+        // Here 12 rows collapse onto 3 distinct values.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool matched = false;
+        int rowCount = 0;
+        int keyCount = 0;
+        int dictionarySize = 0;
+        string[] dictionary = null;
+        string[] materialized = null;
+        var resolvedThroughKeys = new List<string>();
+
+        await foreach (Block block in connection.QueryAsync(
+            "SELECT CAST(concat('v', toString(number % 3)), 'LowCardinality(String)') FROM system.numbers LIMIT 12",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is ILowCardinalityColumn<string>;
+
+            var lc = (ILowCardinalityColumn<string>)column;
+            rowCount = lc.RowCount;
+            keyCount = lc.Keys.Length;
+            dictionarySize = lc.Dictionary.RowCount;
+            dictionary = lc.Dictionary.Values.ToArray();
+            materialized = ((IColumn<string>)column).Values.ToArray();
+
+            for (int row = 0; row < lc.RowCount; row++)
+            {
+                resolvedThroughKeys.Add(lc.Dictionary[lc.Keys[row]]);
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(rowCount, Is.EqualTo(12));
+            Assert.That(keyCount, Is.EqualTo(rowCount), "one key per row, sliced to the row count rather than the pooled buffer length");
+            Assert.That(dictionarySize, Is.EqualTo(4), "three distinct values plus the reserved default slot at [0]");
+            Assert.That(dictionary[0], Is.Empty, "a non-nullable inner reserves exactly one slot, holding the type default");
+            Assert.That(dictionary.Skip(1), Is.EquivalentTo(new[] { "v0", "v1", "v2" }));
+            Assert.That(resolvedThroughKeys, Is.EqualTo(materialized), "Dictionary[Keys[i]] reproduces the materialized rows");
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_LowCardinalityNullableColumn_ReservesTwoDictionarySlotsAndMarksNullWithKeyZero()
+    {
+        // LowCardinality(Nullable(T)) decodes to a different column class whose dictionary reserves *two* leading
+        // slots — [0] NULL, [1] the default — so real values start at [2] and a key of 0 means NULL. That shift is
+        // the one thing a consumer reading Keys directly has to know, and it is invisible from the materialized
+        // surface. Note the view is still spelled with the bare inner type, matching the non-nullable case.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool matched = false;
+        int dictionarySize = 0;
+        int[] keys = null;
+        string[] dictionary = null;
+        string[] materialized = null;
+
+        await foreach (Block block in connection.QueryAsync(
+            """
+            SELECT CAST(number = 1 ? NULL : concat('v', toString(number % 2)), 'LowCardinality(Nullable(String))')
+            FROM system.numbers LIMIT 4
+            """,
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is ILowCardinalityColumn<string>;
+
+            var lc = (ILowCardinalityColumn<string>)column;
+            dictionarySize = lc.Dictionary.RowCount;
+            keys = lc.Keys.ToArray();
+            dictionary = lc.Dictionary.Values.ToArray();
+            materialized = ((IColumn<string>)column).Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True, "spelled with the bare inner type, as for the non-nullable column");
+            Assert.That(materialized, Is.EqualTo(new[] { "v0", null, "v0", "v1" }));
+            Assert.That(dictionarySize, Is.EqualTo(4), "two reserved slots plus the two distinct values");
+            Assert.That(keys[1], Is.Zero, "the null row's key is 0 — the reserved NULL slot");
+            Assert.That(keys.Where((_, i) => i != 1), Is.All.GreaterThanOrEqualTo(2), "real values start at slot 2, past NULL and the default");
+            Assert.That(dictionary.Skip(2), Is.EquivalentTo(new[] { "v0", "v1" }));
+        });
+    }
+
+    [Test]
+    public async Task InsertAsync_NonNullableLowCardinalityColumnIntoNullableTarget_RebuildsRatherThanReemitting()
+    {
+        // The reserved-slot difference the two tests above describe is not just a reading hazard: it decides whether
+        // a decoded column may be written back verbatim. Both low-cardinality shapes expose the dictionary/keys pair
+        // through ILowCardinalityColumn<T>, but only the nullable ones additionally claim IDenseLowCardinality<T> —
+        // the internal marker meaning "a nullable codec may re-emit this pair as-is". The non-nullable column must
+        // not claim it, because its dictionary reserves one leading slot where a nullable dictionary reserves two, so
+        // a verbatim re-emit shifts every key by one and makes the reader decode slot 0 as NULL.
+        //
+        // Conflating the two interfaces corrupts data silently, and nothing else covers it, so it is pinned here
+        // rather than in the insert fixture — this is where the slot semantics are documented.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = $"tcp_lc_dense_exclusion_{Guid.NewGuid():N}";
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {table} (value LowCardinality(Nullable(String))) ENGINE = Memory");
+
+            // Row 0's key is 0 deliberately. To a non-nullable dictionary slot 0 is the type default — an ordinary
+            // value for a row to reference — while to a nullable dictionary it is the NULL marker. A row keyed at 0
+            // is therefore the only row that can distinguish the two paths: rows keyed above the reserve survive a
+            // verbatim re-emit unharmed, so a case without a slot-0 row passes whether or not the bug is present.
+            var dictionary = new ArrayColumn<string>("value", "String", new[] { string.Empty, "alpha", "beta" });
+            using var nonNullableDense = new LowCardinalityColumn<string>(
+                "value",
+                "LowCardinality(String)",
+                dictionary,
+                new[] { 0, 1, 2, 1 },
+                rowCount: 4,
+                pooledKeys: false);
+
+            Assert.That(nonNullableDense, Is.Not.InstanceOf<IDenseLowCardinality<string>>(), "the non-nullable column must not claim dense write eligibility");
+            Assert.That(nonNullableDense, Is.InstanceOf<ILowCardinalityColumn<string>>(), "though it still exposes the pair for reading");
+
+            await connection.InsertAsync($"INSERT INTO {table} (value) VALUES", new IColumn[] { nonNullableDense }, cancellationToken: None);
+
+            var readBack = new List<string>();
+            await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table}", cancellationToken: None))
+            {
+                readBack.AddRange(((IColumn<string>)block[0]).Values.ToArray());
+            }
+
+            Assert.That(readBack, Is.EqualTo(new[] { string.Empty, "alpha", "beta", "alpha" }), "the slot-0 row stays the empty string rather than turning into NULL");
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    private static async Task ExecuteAsync(ClickHouseTcpConnection connection, string sql)
+    {
+        await foreach (Block block in connection.QueryAsync(sql, cancellationToken: None))
+        {
+            _ = block;
+        }
     }
 }
