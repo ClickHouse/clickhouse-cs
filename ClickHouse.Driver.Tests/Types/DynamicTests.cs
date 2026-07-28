@@ -373,6 +373,55 @@ public class DynamicTests : AbstractConnectionTestFixture
         Assert.That(result, Is.EqualTo(new ClickHouseDecimal(123.456789m)));
     }
 
+    // Regression coverage for issue #466: a decimal written to a Dynamic column was inferred from
+    // the .NET type via a per-Type cache that hardcoded Decimal128(38, 9), so any value with scale
+    // greater than 9 was silently truncated on write. These cases exercise scales the fixed scale
+    // could not represent, spanning the Decimal32/64/128/256 widths, plus a low-scale contrast case
+    // that must keep round-tripping unchanged.
+    public static IEnumerable<TestCaseData> DynamicDecimalRoundTripCases
+    {
+        get
+        {
+            yield return new TestCaseData(0.0123456789012345m, "scale16").SetName("Write_DynamicDecimal_Scale16");
+            yield return new TestCaseData(0.0000000001m, "tiny_scale10").SetName("Write_DynamicDecimal_TinyScale10");
+            yield return new TestCaseData(12345.6789012345m, "intpart_scale10").SetName("Write_DynamicDecimal_IntegerPartScale10");
+            // 28 significant digits with scale 10: the width must be chosen by the digit count
+            // (forces Decimal128), not the scale alone (which would only need Decimal64).
+            yield return new TestCaseData(123456789012345678.0123456789m, "digits28_scale10").SetName("Write_DynamicDecimal_DigitsDominatedScale10");
+            yield return new TestCaseData(-0.0123456789012345m, "negative_scale16").SetName("Write_DynamicDecimal_NegativeScale16");
+            yield return new TestCaseData(0.1234567890123456789012345678m, "scale28").SetName("Write_DynamicDecimal_MaxDecimalScale28");
+            // Scale 40 is beyond System.Decimal's 28-digit limit, so it can only arrive as a
+            // ClickHouseDecimal; it must widen to Decimal256.
+            yield return new TestCaseData(
+                new ClickHouseDecimal(BigInteger.Parse("123456789012345678901234567890"), 40), "scale40")
+                .SetName("Write_DynamicClickHouseDecimal_Scale40");
+            // Contrast: scale 6 already fit inside the old fixed scale of 9 and round-tripped; it must
+            // keep round-tripping (now via a narrower Decimal32) with the same value.
+            yield return new TestCaseData(123.456789m, "contrast_scale6").SetName("Write_DynamicDecimal_Scale6_Contrast");
+        }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCaseSource(typeof(DynamicTests), nameof(DynamicDecimalRoundTripCases))]
+    public async Task Write_DecimalWithScaleAbove9_ShouldRoundTripWithoutTruncation(object value, string caseId)
+    {
+        var targetTable = "test." + SanitizeTableName($"dynamic_write_decimal_{caseId}_{Guid.NewGuid():N}");
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        var expected = value is ClickHouseDecimal chd ? chd : new ClickHouseDecimal((decimal)value);
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, value }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        var result = (ClickHouseDecimal)reader.GetValue(0);
+        Assert.That(result, Is.EqualTo(expected));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
     [Test]
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_IntArray_ShouldRoundTrip()

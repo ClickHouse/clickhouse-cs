@@ -18,6 +18,7 @@ Unreleased
 
 **Bug Fixes:**
 * Fixed `ClickHouseServerException` carrying a blank `Message` and an `ErrorCode` of `-1` when the server — or an upstream component such as a load balancer or the ClickHouse Cloud edge — returned a non-2xx HTTP response with an empty (or whitespace-only) body. The exception now reports the HTTP status code and reason phrase, and uses the `X-ClickHouse-Exception-Code` response header as the error code when the server sets it (issue #440). Non-empty error bodies are unaffected.
+* Fixed silent decimal precision loss when writing a `decimal` or `ClickHouseDecimal` into a `Dynamic` column. The ClickHouse type was inferred from the .NET type via a per-type cache that hardcoded `Decimal128(38, 9)`, so any value with a scale above 9 was truncated toward zero on write (e.g. `0.0000000001` was stored as `0`). The `Dynamic` write path now derives the scale from the value itself and selects the narrowest Decimal width (`Decimal32`/`Decimal64`/`Decimal128`/`Decimal256`) that preserves it, throwing only when the value needs more than the 76 digits ClickHouse supports (issue #466).
 
 v1.3.0
 ---
