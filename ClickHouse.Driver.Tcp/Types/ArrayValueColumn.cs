@@ -72,8 +72,8 @@ internal sealed class ArrayValueColumn<TElement> : IColumn<TElement[]>, IArrayCo
     /// <inheritdoc/>
     public int RowCount => rowCount;
 
-    /// <summary>The flat inner column (every row's elements concatenated) — the zero-copy write source.</summary>
-    internal IColumn<TElement> Inner => inner;
+    /// <inheritdoc/>
+    public IColumn<TElement> Inner => inner;
 
     /// <inheritdoc/>
     public ReadOnlySpan<TElement> InnerValues => inner.Values;
