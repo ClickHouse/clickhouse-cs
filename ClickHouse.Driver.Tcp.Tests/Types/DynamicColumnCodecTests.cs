@@ -148,6 +148,38 @@ public class DynamicColumnCodecTests
     }
 
     [Test]
+    public void Indexer_RowPastRowCount_ThrowsRatherThanReadingStaleDiscriminators()
+    {
+        // The discriminator buffer is normally a pooled array longer than the column, so a row past RowCount read a
+        // stale value from its tail — and the outcome depended on the leftover: a stale NULL discriminator (which is
+        // just typeColumns.Length, here 1) reported the row as an existing NULL, while any other value fell through to
+        // the exactly-sized local-index array and threw. Both spellings must be a bounds failure.
+        using var alternative = new ArrayColumn<long>("d", "Int64", new[] { 7L });
+        var discriminators = new[] { 0, 1, 0 };
+        using var column = new DynamicColumn(
+            "d", "Dynamic", new[] { "Int64" }, discriminators, new IColumn[] { alternative }, rowCount: 1, pooledDiscriminators: false, ownsColumns: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[0], Is.EqualTo(7L));
+            Assert.That(() => column[1], Throws.InstanceOf<IndexOutOfRangeException>(), "a stale NULL discriminator must not read as an existing NULL row");
+            Assert.That(() => column[2], Throws.InstanceOf<IndexOutOfRangeException>());
+        });
+    }
+
+    [Test]
+    public void Constructor_DiscriminatorsShorterThanRowCount_Throws()
+    {
+        // rowCount is load-bearing here — each child holds only the rows that selected it, and a NULL row takes a slot
+        // in none of them — so it is validated rather than derived.
+        using var alternative = new ArrayColumn<long>("d", "Int64", new[] { 7L });
+
+        Assert.That(
+            () => new DynamicColumn("d", "Dynamic", new[] { "Int64" }, new[] { 0 }, new IColumn[] { alternative }, rowCount: 2, pooledDiscriminators: false, ownsColumns: false),
+            Throws.ArgumentException.With.Message.Contains("fewer than"));
+    }
+
+    [Test]
     public void Create_UnknownArgument_Throws()
         => Assert.Throws<FormatException>(() => Resolve("Dynamic(max_sizes=5)"));
 }
