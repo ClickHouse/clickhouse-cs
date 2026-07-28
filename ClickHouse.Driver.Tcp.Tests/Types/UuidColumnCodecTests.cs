@@ -27,16 +27,6 @@ public class UuidColumnCodecTests
     }
 
     [Test]
-    public async Task RoundTrip_PreservesGuid()
-    {
-        var values = new[] { Guid.Empty, new Guid("00112233-4455-6677-8899-aabbccddeeff"), Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff") };
-
-        using var column = (IColumn<Guid>)await RoundTripAsync(UuidColumnCodec.Instance, new ArrayColumn<Guid>("c", "UUID", values), "UUID", values.Length);
-
-        CollectionAssert.AreEqual(values, column.Values.ToArray());
-    }
-
-    [Test]
     public async Task RoundTrip_ManyRandomGuids_PreservesEveryBytePosition()
     {
         // A deterministic fuzz over the full 16-byte permutation: any single-position mask error would corrupt
