@@ -45,7 +45,7 @@ internal sealed class DynamicColumn : IColumn<object>, IDynamicColumn
     /// <param name="rowCount">The number of rows.</param>
     /// <param name="pooledDiscriminators">Whether <paramref name="discriminators"/> was rented and should be returned on dispose.</param>
     /// <param name="ownsColumns">Whether this column owns and disposes <paramref name="typeColumns"/> (false when a caller retains them).</param>
-    /// <exception cref="ArgumentException"><paramref name="typeNames"/> and <paramref name="typeColumns"/> differ in length.</exception>
+    /// <exception cref="ArgumentException"><paramref name="typeNames"/> and <paramref name="typeColumns"/> differ in length, or <paramref name="discriminators"/> holds fewer than <paramref name="rowCount"/> entries.</exception>
     public DynamicColumn(
         string name,
         string typeName,
@@ -70,6 +70,17 @@ internal sealed class DynamicColumn : IColumn<object>, IDynamicColumn
         this.rowCount = rowCount;
         this.pooledDiscriminators = pooledDiscriminators;
         this.ownsColumns = ownsColumns;
+
+        // The row count cannot be derived here: each child holds only the rows that selected it and a NULL row takes
+        // a slot in none of them, so the children say nothing about the height, and the discriminators are typically
+        // a pooled buffer longer than the column. So the one input that can disagree is checked instead — otherwise
+        // the walk below would fault on a short buffer with nothing naming the cause.
+        if (discriminators.Length < rowCount)
+        {
+            throw new ArgumentException(
+                $"The discriminators for column '{name}' ({typeName}) hold {discriminators.Length} entries, fewer than the {rowCount} rows.",
+                nameof(discriminators));
+        }
 
         // Precompute each row's index into its selected type's child column: one walk of the discriminators,
         // keeping a per-type running counter. A NULL row gets -1 (it addresses no child value). The counters are
@@ -130,11 +141,15 @@ internal sealed class DynamicColumn : IColumn<object>, IDynamicColumn
     }
 
     /// <inheritdoc/>
+    // Index through the RowCount-sliced discriminators, not the raw buffer: the buffer is usually a pooled array
+    // longer than the column, so a row past RowCount read a stale value from its tail. That made the failure depend on
+    // the leftover value — a stale NULL discriminator reported the row as an existing NULL, anything else fell through
+    // to the exactly-sized local index and threw. Slicing makes it a bounds failure either way.
     public object this[int row]
     {
         get
         {
-            int d = discriminators[row];
+            int d = Discriminators[row];
             return d == typeColumns.Length ? null : typeColumns[d].GetValue(localIndex[row]);
         }
     }
