@@ -346,6 +346,28 @@ public sealed class InsertRoundTripCase
             "Tuple(Int32)",
             name => new TupleColumn<int>(name, "Tuple(Int32)", new[] { new ValueTuple<int>(1), new ValueTuple<int>(int.MinValue), new ValueTuple<int>(int.MaxValue) }));
 
+        // Arity 3 was the one arity between 1 and 7 with no case at all.
+        yield return Same(
+            "Tuple(Int32, String, Float64) [arity 3]",
+            "Tuple(Int32, String, Float64)",
+            name => new TupleColumn<int, string, double>(name, "Tuple(Int32, String, Float64)", new (int, string, double)[]
+            {
+                (1, "a", 1.5),
+                (-2, string.Empty, -1.5e100),
+            }));
+
+        // A flat ArrayColumn<ValueTuple> is not an ITupleColumn, so a top-level Tuple supplied that way takes the
+        // ergonomic boxed per-element projection instead of the dense child-column path. Every other Tuple case
+        // builds the dense TupleColumn, so the projection was only reachable at top level from a unit test; the
+        // read still comes back dense, hence the differing expected builder.
+        var flatTupleRows = new (int, string)[] { (1, "a"), (2, "bb"), (3, "ccc") };
+        yield return new InsertRoundTripCase(
+            "Tuple(Int32, String) <- flat ArrayColumn",
+            "Tuple(Int32, String)",
+            name => new ArrayColumn<(int, string)>(name, "Tuple(Int32, String)", flatTupleRows),
+            name => new TupleColumn<int, string>(name, "Tuple(Int32, String)", flatTupleRows),
+            settings: null);
+
         yield return Same(
             "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32)",
             "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32)",
