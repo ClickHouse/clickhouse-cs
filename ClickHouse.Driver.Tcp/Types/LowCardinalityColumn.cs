@@ -23,7 +23,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </para>
 /// </summary>
 /// <typeparam name="T">The inner codec's CLR element type; each row surfaces as <typeparamref name="T"/>.</typeparam>
-internal sealed class LowCardinalityColumn<T> : IColumn<T>
+internal sealed class LowCardinalityColumn<T> : IColumn<T>, ILowCardinalityColumn<T>
 {
     private readonly IColumn<T> dictionary;
     private readonly int rowCount;
@@ -69,11 +69,11 @@ internal sealed class LowCardinalityColumn<T> : IColumn<T>
     /// <inheritdoc/>
     public int RowCount => rowCount;
 
-    /// <summary>The dictionary of distinct values (including reserved slots) — the zero-copy write source.</summary>
-    internal IColumn<T> Dictionary => dictionary;
+    /// <inheritdoc/>
+    public IColumn<T> Dictionary => dictionary;
 
-    /// <summary>The per-row keys, sliced to <see cref="RowCount"/> entries — the zero-copy write source.</summary>
-    internal ReadOnlySpan<int> Keys => keys.AsSpan(0, rowCount);
+    /// <inheritdoc/>
+    public ReadOnlySpan<int> Keys => keys.AsSpan(0, rowCount);
 
     /// <summary>
     /// The rows as values, materialized once and cached. Prefer the indexer when only some rows are needed, to
