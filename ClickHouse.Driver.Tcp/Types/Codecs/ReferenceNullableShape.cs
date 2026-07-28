@@ -12,8 +12,8 @@ internal sealed class ReferenceNullableShape<T> : INullableShape
     public Type NullableElementType => typeof(T);
 
     /// <inheritdoc/>
-    public IColumn Wrap(string name, string typeName, IColumn inner, byte[] nullMap, int rowCount, bool pooledMap)
-        => new NullableReferenceColumn<T>(name, typeName, (IColumn<T>)inner, nullMap, rowCount, pooledMap);
+    public IColumn Wrap(string name, string typeName, IColumn inner, byte[] nullMap, bool pooledMap)
+        => new NullableReferenceColumn<T>(name, typeName, (IColumn<T>)inner, nullMap, pooledMap);
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => column is IColumn<T>;

@@ -105,7 +105,7 @@ internal sealed class NullableColumnCodec : IColumnCodec
         if (rowCount == 0)
         {
             IColumn emptyInner = await inner.ReadColumnAsync(reader, columnName, inner.TypeName, 0, cancellationToken).ConfigureAwait(false);
-            return canonicalShape.Wrap(columnName, columnType, emptyInner, Array.Empty<byte>(), rowCount: 0, pooledMap: false);
+            return canonicalShape.Wrap(columnName, columnType, emptyInner, Array.Empty<byte>(), pooledMap: false);
         }
 
         byte[] nullMap = ArrayPool<byte>.Shared.Rent(rowCount);
@@ -117,9 +117,10 @@ internal sealed class NullableColumnCodec : IColumnCodec
 
             // Wrap pairs the null-map with the inner column (which holds a real inner value at every row — a
             // placeholder at the null positions) into the typed nullable column that surfaces each null row as
-            // null. Wrap inside the try: only a successful Wrap takes ownership of the rented map and the inner
-            // column, so if it throws (e.g. an element-type mismatch surfacing as a cast failure) neither is leaked.
-            return canonicalShape.Wrap(columnName, columnType, innerColumn, nullMap, rowCount, pooledMap: true);
+            // null; the inner column's row count becomes the wrapper's. Wrap inside the try: only a successful Wrap
+            // takes ownership of the rented map and the inner column, so if it throws (e.g. an element-type mismatch
+            // surfacing as a cast failure) neither is leaked.
+            return canonicalShape.Wrap(columnName, columnType, innerColumn, nullMap, pooledMap: true);
         }
         catch
         {

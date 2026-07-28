@@ -23,18 +23,30 @@ internal sealed class NullableReferenceColumn<T> : IColumn<T>
     /// <summary>Initializes a nullable column over an inner reference column and its null-map.</summary>
     /// <param name="name">The column name.</param>
     /// <param name="typeName">The full <c>Nullable(...)</c> type string.</param>
-    /// <param name="inner">The inner column holding one decoded value (or placeholder) per row.</param>
-    /// <param name="nullMap">The per-row null-map: a non-zero byte marks the row null. May be longer than <paramref name="rowCount"/>.</param>
-    /// <param name="rowCount">The number of rows.</param>
+    /// <param name="inner">The inner column holding one decoded value (or placeholder) per row; it sets this column's <see cref="RowCount"/>.</param>
+    /// <param name="nullMap">The per-row null-map: a non-zero byte marks the row null. May be longer than the row count.</param>
     /// <param name="pooledMap">Whether <paramref name="nullMap"/> was rented and should be returned on dispose.</param>
-    public NullableReferenceColumn(string name, string typeName, IColumn<T> inner, byte[] nullMap, int rowCount, bool pooledMap)
+    /// <exception cref="ArgumentNullException"><paramref name="inner"/> or <paramref name="nullMap"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="nullMap"/> is shorter than the inner column's row count.</exception>
+    public NullableReferenceColumn(string name, string typeName, IColumn<T> inner, byte[] nullMap, bool pooledMap)
     {
         Name = name;
         TypeName = typeName;
         this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
         this.nullMap = nullMap ?? throw new ArgumentNullException(nameof(nullMap));
-        this.rowCount = rowCount;
         this.pooledMap = pooledMap;
+
+        // The inner column holds one value per row, so it is the single source of truth for the height and no
+        // separate count is accepted — the two cannot disagree. The null-map is the one input that still can: it is
+        // typically a pooled buffer longer than the row count, so only a short map is an error, and rejecting it
+        // here is what keeps NullMap's slice and the indexer in bounds.
+        rowCount = inner.RowCount;
+        if (nullMap.Length < rowCount)
+        {
+            throw new ArgumentException(
+                $"The null-map for column '{name}' ({typeName}) is {nullMap.Length} bytes, shorter than the inner column's {rowCount} rows.",
+                nameof(nullMap));
+        }
     }
 
     /// <inheritdoc/>
