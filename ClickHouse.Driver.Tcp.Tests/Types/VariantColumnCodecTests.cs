@@ -154,7 +154,7 @@ public class VariantColumnCodecTests
         // discriminator) reported the row as an existing NULL, while any other value fell through to the
         // exactly-sized local-index array and threw. Both spellings must be a bounds failure.
         using var alternative = new ArrayColumn<uint>("v", "UInt32", new uint[] { 7 });
-        var discriminators = new byte[] { 0, VariantColumn.NullDiscriminator, 0 };
+        var discriminators = new byte[] { 0, IVariantColumn.NullDiscriminator, 0 };
         using var variant = new VariantColumn(
             "v", "Variant(UInt32)", discriminators, new IColumn[] { alternative }, rowCount: 1, pooledDiscriminators: false, ownsColumns: false);
 
