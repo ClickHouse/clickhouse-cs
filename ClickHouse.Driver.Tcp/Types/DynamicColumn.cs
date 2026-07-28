@@ -35,6 +35,7 @@ internal sealed class DynamicColumn : IColumn<object>, IDynamicColumn
     private readonly int[] localIndex;
     private int[] discriminators;
     private object[] cache;
+    private IReadOnlyList<string> typeNameView;
 
     /// <summary>Initializes a dynamic column over its runtime type list, discriminator stream, and per-type child columns.</summary>
     /// <param name="name">The column name.</param>
@@ -108,7 +109,11 @@ internal sealed class DynamicColumn : IColumn<object>, IDynamicColumn
     public int TypeCount => typeColumns.Length;
 
     /// <inheritdoc/>
-    public IReadOnlyList<string> TypeNames => typeNames;
+    // Wrapped rather than returned directly: IReadOnlyList<string> is castable back to the string[] behind it, so
+    // handing out the field would let a caller rewrite this column's decoded type list — and a re-insert then
+    // resolves a codec from the rewritten name while the child column still holds the original values. Built once
+    // on demand; the wrapper is a thin view, not a copy.
+    public IReadOnlyList<string> TypeNames => typeNameView ??= Array.AsReadOnly(typeNames);
 
     /// <inheritdoc/>
     public ReadOnlySpan<int> Discriminators => discriminators.AsSpan(0, rowCount);
@@ -182,9 +187,10 @@ internal sealed class DynamicColumn : IColumn<object>, IDynamicColumn
 }
 
 /// <summary>
-/// The zero-copy read surface of a decoded <c>Dynamic</c> column, and the shape its codec writes from without
-/// copying: the runtime type-name list discovered on the wire, a per-row discriminator stream, and one child column
-/// per runtime type, each holding only the values of the rows that selected it, in row order.
+/// The columnar read surface of a decoded <c>Dynamic</c> column: the runtime type-name list discovered on the wire, a
+/// per-row discriminator stream, and one child column per runtime type, each holding only the values of the rows that
+/// selected it, in row order. It is a read view only — implementing it does not make a column insertable, because the
+/// codec's zero-copy write path accepts only columns this driver decoded, whose invariants it has checked.
 ///
 /// <para>
 /// Like <see cref="IVariantColumn"/>, a <c>Dynamic</c> has no useful materialized element type — its
