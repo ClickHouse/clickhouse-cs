@@ -25,6 +25,16 @@ namespace ClickHouse.Driver.Tcp.Types;
 public interface IArrayColumn<TElement> : IColumn<TElement[]>
 {
     /// <summary>
+    /// The flat inner column itself — every row's elements concatenated end-to-end, as a column rather than a
+    /// span. Use this when <typeparamref name="TElement"/> is itself a composite and
+    /// <see cref="InnerValues"/> would hand back materialized values: for <c>Array(Tuple(...))</c> the inner
+    /// column pattern-matches to <see cref="ITupleColumn"/>, for <c>Array(Array(T))</c> to another
+    /// <see cref="IArrayColumn{TElement}"/>, and so on, so a nested composite can be walked all the way down
+    /// without materializing an intermediate level. A borrowed view valid only while the owning block is alive.
+    /// </summary>
+    IColumn<TElement> Inner { get; }
+
+    /// <summary>
     /// Every row's elements concatenated end-to-end — the flat wire layout, paired with <see cref="Offsets"/>. A
     /// borrowed span valid only while the owning block is alive.
     /// </summary>
