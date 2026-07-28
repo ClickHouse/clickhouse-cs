@@ -11,7 +11,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// <see cref="Dispose"/>.
 /// </summary>
 /// <typeparam name="T">The inner reference type (e.g. <see cref="string"/> for <c>Nullable(String)</c>).</typeparam>
-internal sealed class NullableReferenceColumn<T> : IColumn<T>
+internal sealed class NullableReferenceColumn<T> : IColumn<T>, INullableColumn<T>
     where T : class
 {
     private readonly IColumn<T> inner;
@@ -58,11 +58,11 @@ internal sealed class NullableReferenceColumn<T> : IColumn<T>
     /// <inheritdoc/>
     public int RowCount => rowCount;
 
-    /// <summary>The dense inner column (one decoded value or placeholder per row) — the zero-copy write source.</summary>
-    internal IColumn<T> Inner => inner;
+    /// <inheritdoc/>
+    public IColumn<T> Inner => inner;
 
-    /// <summary>The per-row null-map (non-zero byte = null), sliced to <see cref="RowCount"/> — the zero-copy write source.</summary>
-    internal ReadOnlySpan<byte> NullMap => nullMap.AsSpan(0, rowCount);
+    /// <inheritdoc/>
+    public ReadOnlySpan<byte> NullMap => nullMap.AsSpan(0, rowCount);
 
     /// <summary>The rows, materialized once and cached, with <see langword="null"/> at the null-marked rows.</summary>
     public ReadOnlySpan<T> Values
