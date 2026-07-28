@@ -101,10 +101,10 @@ public static class BulkInsert
         // LZ4 ships in the core driver (no extra package needed). Lz4Compressor.Default uses fast mode
         // (Lz4Level.Fast), the recommended setting for almost all inserts — it is fastest and puts the
         // least decompression load on the server. Higher levels cost noticeably more CPU for
-        // little-to-no extra compression on typical data. Here we pass High3 just to show how to set it.
+        // little-to-no extra compression on typical data.
         var lz4Options = new InsertOptions
         {
-            Compressor = new Lz4Compressor(Lz4Level.High3),
+            Compressor = new Lz4Compressor(Lz4Level.Fast),
         };
 
         var lz4Data = GenerateSampleData(10000, startId: 30001);
