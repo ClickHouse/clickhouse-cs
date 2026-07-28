@@ -197,9 +197,10 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
 }
 
 /// <summary>
-/// The zero-copy read surface of a decoded <c>Variant(T1, ..., Tn)</c> column, and the shape its codec writes from
-/// without copying: a per-row discriminator stream plus one child column per alternative type, each holding only the
-/// values of the rows that selected it, in row order. That is exactly the wire layout.
+/// The columnar read surface of a decoded <c>Variant(T1, ..., Tn)</c> column: a per-row discriminator stream plus one
+/// child column per alternative type, each holding only the values of the rows that selected it, in row order. That
+/// is exactly the wire layout. It is a read view only — implementing it does not make a column insertable, because
+/// the codec's zero-copy write path accepts only columns this driver decoded, whose invariants it has checked.
 ///
 /// <para>
 /// Unlike the other composites, a <c>Variant</c> has no useful materialized element type — the
