@@ -712,6 +712,80 @@ public class ColumnarReadSurfaceIntegrationTests
         });
     }
 
+    [Test]
+    public async Task QueryAsync_DynamicColumn_ExposesRuntimeTypeNamesAndPerTypeChildColumnsThroughIDynamicColumn()
+    {
+        // Dynamic differs from Variant in two ways the columnar view has to expose. Its type list is discovered per
+        // block rather than declared, so TypeNames carries the wire's own spelling of each runtime type — that is how
+        // a caller knows which typed column to cast a child to. And because the list is discovered, NULL cannot use a
+        // fixed sentinel: it is encoded as TypeCount, one past the last type, rather than Variant's 255.
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["allow_experimental_dynamic_type"] = "1",
+
+            // The client reads only the flattened serialization (version 3); without this the server sends version 1
+            // and the codec refuses the block rather than guessing at the layout.
+            ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
+        };
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool matched = false;
+        int typeCount = 0;
+        int rowCount = 0;
+        string[] typeNames = null;
+        int[] discriminators = null;
+        int discriminatorLength = 0;
+        int[] localIndices = null;
+        var materialized = new List<object>();
+        var childRowCounts = new List<int>();
+
+        // Rows: 'a', NULL, 100, 'b' — two runtime types plus a NULL.
+        await foreach (Block block in connection.QueryAsync(
+            """
+            SELECT CAST(multiIf(number = 1, CAST(NULL, 'Dynamic'),
+                                number = 2, CAST(toInt64(100), 'Dynamic'),
+                                CAST(concat('s', toString(number)), 'Dynamic')), 'Dynamic')
+            FROM system.numbers LIMIT 4
+            """,
+            settings: settings,
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IDynamicColumn;
+
+            var dynamicColumn = (IDynamicColumn)column;
+            typeCount = dynamicColumn.TypeCount;
+            rowCount = dynamicColumn.RowCount;
+            typeNames = dynamicColumn.TypeNames.ToArray();
+            discriminators = dynamicColumn.Discriminators.ToArray();
+            discriminatorLength = dynamicColumn.Discriminators.Length;
+            localIndices = dynamicColumn.LocalIndices.ToArray();
+
+            for (int i = 0; i < dynamicColumn.TypeCount; i++)
+            {
+                childRowCounts.Add(dynamicColumn.GetTypeColumn(i).RowCount);
+            }
+
+            for (int row = 0; row < dynamicColumn.RowCount; row++)
+            {
+                materialized.Add(column.GetValue(row));
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(rowCount, Is.EqualTo(4));
+            Assert.That(typeCount, Is.EqualTo(2), "two runtime types appeared in this block");
+            Assert.That(typeNames, Is.EquivalentTo(new[] { "Int64", "String" }), "the wire's own spelling, so a caller knows how to read each child");
+            Assert.That(discriminatorLength, Is.EqualTo(rowCount), "sliced to the row count, not the pooled buffer length");
+            Assert.That(discriminators[1], Is.EqualTo(typeCount), "NULL is TypeCount — one past the last type, not a fixed sentinel");
+            Assert.That(localIndices[1], Is.EqualTo(-1), "a NULL row addresses no child");
+            Assert.That(childRowCounts.Sum(), Is.EqualTo(rowCount - 1), "the children together hold every non-NULL row exactly once");
+            Assert.That(materialized, Is.EqualTo(new object[] { "s0", null, 100L, "s3" }));
+        });
+    }
+
     private static async Task ExecuteAsync(ClickHouseTcpConnection connection, string sql)
     {
         await foreach (Block block in connection.QueryAsync(sql, cancellationToken: None))
