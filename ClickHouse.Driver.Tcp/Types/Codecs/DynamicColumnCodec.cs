@@ -190,7 +190,13 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     // The dense DynamicColumn is the zero-copy source; a flat IColumn<object> is scattered by each value's
     // inferred type. A value whose CLR type has no inferred ClickHouse type throws at write time (inference
     // cannot be pre-validated here, since the type set is data-derived).
-    public bool CanWrite(IColumn column) => column is IDynamicColumn or IColumn<object>;
+    //
+    // The dense test is the concrete DynamicColumn, not the public IDynamicColumn: the dense planner trusts
+    // invariants only that class's constructor establishes — the type-name list matches the child-column count, and
+    // every discriminator is a valid type index or the NULL marker. Matching on the public interface would let a
+    // caller-supplied implementation reach the planner unchecked. Anything else writable arrives as IColumn<object>
+    // and takes the scattered path, which infers and validates per value.
+    public bool CanWrite(IColumn column) => column is DynamicColumn or IColumn<object>;
 
     /// <inheritdoc/>
     public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
@@ -294,12 +300,12 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     // Computes the shared write plan for rows [start, start + length): the runtime type list, the per-row
     // discriminators, and the per-type child column each type's run is written from.
     private DynamicWriteState BuildState(IColumn column, int start, int length)
-        => column is IDynamicColumn dense ? BuildDenseState(dense, start, length) : BuildScatteredState(column, start, length);
+        => column is DynamicColumn dense ? BuildDenseState(dense, start, length) : BuildScatteredState(column, start, length);
 
     // The dense path: the type list, discriminators, and per-type child columns already exist. Copy the slice's
     // discriminators and, per type, find its child-column run within the slice (the count before and within it,
     // from the precomputed local indices — the same slicing the variant codec does).
-    private DynamicWriteState BuildDenseState(IDynamicColumn dense, int start, int length)
+    private DynamicWriteState BuildDenseState(DynamicColumn dense, int start, int length)
     {
         int typeCount = dense.TypeCount;
         var names = new string[typeCount];
@@ -311,12 +317,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         }
 
         ReadOnlySpan<int> discriminators = dense.Discriminators;
-        int[] slice = ArrayPool<int>.Shared.Rent(length);
-        for (int i = 0; i < length; i++)
-        {
-            slice[i] = discriminators[start + i];
-        }
-
         ReadOnlySpan<int> localIndices = dense.LocalIndices;
         var before = new int[typeCount];
         var within = new int[typeCount];
@@ -334,6 +334,15 @@ internal sealed class DynamicColumnCodec : IColumnCodec
             }
 
             within[d]++;
+        }
+
+        // Rent only once the fallible indexing above is done. This loop and the per-type walk both index by
+        // discriminator, so renting first would leak the buffer if either ever faulted — nothing between the rent
+        // and the try below would return it.
+        int[] slice = ArrayPool<int>.Shared.Rent(length);
+        for (int i = 0; i < length; i++)
+        {
+            slice[i] = discriminators[start + i];
         }
 
         var childColumns = new IColumn[typeCount];
