@@ -71,23 +71,12 @@ public class DynamicColumnCodecTests
     }
 
     [Test]
-    public async Task ReadColumn_DocumentedBytes_ReconstructsValuesAndNull()
+    public async Task ReadColumn_DocumentedBytes_ReconstructsValuesAndSurfacesTheRuntimeTypeList()
     {
-        IColumnCodec codec = Resolve("Dynamic");
-
-        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
-        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
-        using IColumn column = await codec.ReadColumnAsync(reader, "d", "Dynamic", 3, CodecTestHarness.None);
-
-        Assert.That(column.RowCount, Is.EqualTo(3));
-        Assert.That(column.GetValue(0), Is.EqualTo(42UL));
-        Assert.That(column.GetValue(1), Is.EqualTo("hi"));
-        Assert.That(column.GetValue(2), Is.Null);
-    }
-
-    [Test]
-    public async Task ReadColumn_DocumentedBytes_SurfacesTheRuntimeTypeList()
-    {
+        // Decoding the golden vector: the type list and discriminators are the dynamic-structure surface no
+        // integration test can see (it only calls GetValue), and keeping the value assertions alongside them
+        // guards the decoder against drifting even if a future server emits a different type ordering. The
+        // values on their own are covered by the "Dynamic [scalars + null]" case in InsertRoundTripCase.
         IColumnCodec codec = Resolve("Dynamic");
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
@@ -95,9 +84,16 @@ public class DynamicColumnCodecTests
         using IColumn column = await codec.ReadColumnAsync(reader, "d", "Dynamic", 3, CodecTestHarness.None);
 
         var dynamic = (IDynamicColumn)column;
-        Assert.That(dynamic.TypeCount, Is.EqualTo(2));
-        Assert.That(dynamic.TypeNames, Is.EqualTo(new[] { "String", "UInt64" }));
-        Assert.That(dynamic.Discriminators.ToArray(), Is.EqualTo(new[] { 1, 0, 2 }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(dynamic.TypeCount, Is.EqualTo(2));
+            Assert.That(dynamic.TypeNames, Is.EqualTo(new[] { "String", "UInt64" }));
+            Assert.That(dynamic.Discriminators.ToArray(), Is.EqualTo(new[] { 1, 0, 2 }));
+            Assert.That(column.RowCount, Is.EqualTo(3));
+            Assert.That(column.GetValue(0), Is.EqualTo(42UL));
+            Assert.That(column.GetValue(1), Is.EqualTo("hi"));
+            Assert.That(column.GetValue(2), Is.Null);
+        });
     }
 
     [Test]
