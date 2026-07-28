@@ -38,6 +38,8 @@ internal sealed class LowCardinalityColumn<T> : IColumn<T>
     /// <param name="keys">The per-row indices into <paramref name="dictionary"/>; must have at least <paramref name="rowCount"/> entries.</param>
     /// <param name="rowCount">The number of rows.</param>
     /// <param name="pooledKeys">Whether <paramref name="keys"/> was rented and should be returned on dispose.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="dictionary"/> or <paramref name="keys"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="keys"/> holds fewer than <paramref name="rowCount"/> entries.</exception>
     public LowCardinalityColumn(string name, string typeName, IColumn<T> dictionary, int[] keys, int rowCount, bool pooledKeys)
     {
         Name = name;
@@ -46,6 +48,16 @@ internal sealed class LowCardinalityColumn<T> : IColumn<T>
         this.keys = keys ?? throw new ArgumentNullException(nameof(keys));
         this.rowCount = rowCount;
         this.pooledKeys = pooledKeys;
+
+        // The row count cannot be derived here: the dictionary holds one entry per distinct value (plus any reserved
+        // slots), and the keys are typically a pooled buffer longer than the column. So the one input that can
+        // disagree is checked instead — with a short keys array the per-row lookup would read past its end.
+        if (keys.Length < rowCount)
+        {
+            throw new ArgumentException(
+                $"The keys for column '{name}' ({typeName}) hold {keys.Length} entries, fewer than the {rowCount} rows.",
+                nameof(keys));
+        }
     }
 
     /// <inheritdoc/>
@@ -88,7 +100,10 @@ internal sealed class LowCardinalityColumn<T> : IColumn<T>
     }
 
     /// <inheritdoc/>
-    public T this[int row] => cache is not null ? cache[row] : dictionary[keys[row]];
+    // Index through the RowCount-sliced keys, not the raw buffer: the buffer is usually a pooled array longer than
+    // the column, and a stale key left in its tail by a previous read is a perfectly valid dictionary index — so an
+    // out-of-range row would quietly return a real value from the dictionary instead of throwing.
+    public T this[int row] => cache is not null ? cache[row] : dictionary[Keys[row]];
 
     /// <inheritdoc/>
     public object GetValue(int row) => this[row];
