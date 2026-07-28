@@ -237,8 +237,16 @@ internal sealed class VariantColumnCodec : IColumnCodec
     // A dense variant column is only writable when its alternatives match this codec's; a bare IColumn<object> is
     // scattered by runtime CLR type. A variant column of a different arity is rejected here rather than silently
     // re-scattered (which could reorder its discriminators).
+    //
+    // The dense test is the concrete VariantColumn, not the public IVariantColumn: the dense writer trusts
+    // invariants only that class's constructor establishes (every discriminator is either a valid alternative index
+    // or the NULL marker, and LocalIndices is exactly as long as the column with a correct per-type running index).
+    // Matching on the public interface would let a caller-supplied implementation reach the writer with none of
+    // that checked, and the first thing the writer does is put the discriminators on the wire — so a bad value
+    // would desync the block mid-stream rather than fail cleanly. Anything else writable arrives as IColumn<object>
+    // and goes down the scattered path, which validates as it goes.
     public bool CanWrite(IColumn column)
-        => allChildrenWritable && (column is IVariantColumn dense ? dense.TypeCount == children.Length : column is IColumn<object>);
+        => allChildrenWritable && (column is VariantColumn dense ? dense.TypeCount == children.Length : column is IColumn<object>);
 
     /// <inheritdoc/>
     // The prefix is a fixed mode word followed by the alternatives' own prefixes; every alternative supported
@@ -255,7 +263,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        if (column is IVariantColumn dense && dense.TypeCount == children.Length)
+        if (column is VariantColumn dense && dense.TypeCount == children.Length)
         {
             WriteDense(writer, dense, start, length);
             return;
@@ -268,7 +276,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
     // discriminators verbatim, then each child's slice. A child's slice is the contiguous run of its values whose
     // originating rows fall in [start, start + length) — found by counting that type's discriminators before and
     // within the slice, since values are stored in row order.
-    private void WriteDense(ClickHouseBinaryWriter writer, IVariantColumn dense, int start, int length)
+    private void WriteDense(ClickHouseBinaryWriter writer, VariantColumn dense, int start, int length)
     {
         ReadOnlySpan<byte> discriminators = dense.Discriminators;
         writer.WriteBytes(discriminators.Slice(start, length));
