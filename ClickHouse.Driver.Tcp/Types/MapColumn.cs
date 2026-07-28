@@ -29,7 +29,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </summary>
 /// <typeparam name="TKey">The key codec's CLR element type.</typeparam>
 /// <typeparam name="TValue">The value codec's CLR element type.</typeparam>
-internal sealed class MapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValue>[]>
+internal sealed class MapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValue>[]>, IMapColumn<TKey, TValue>
 {
     private readonly IColumn<TKey> keys;
     private readonly IColumn<TValue> values;
@@ -96,17 +96,14 @@ internal sealed class MapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValu
     /// <inheritdoc/>
     public int RowCount => rowCount;
 
-    /// <summary>The flat key column (every row's keys concatenated) — a zero-copy write source.</summary>
-    internal IColumn<TKey> KeyColumn => keys;
+    /// <inheritdoc/>
+    public IColumn<TKey> KeyColumn => keys;
 
-    /// <summary>The flat value column (every row's values concatenated, aligned with <see cref="KeyColumn"/>) — a zero-copy write source.</summary>
-    internal IColumn<TValue> ValueColumn => values;
+    /// <inheritdoc/>
+    public IColumn<TValue> ValueColumn => values;
 
-    /// <summary>
-    /// The per-row offsets, sliced to <see cref="RowCount"/> + 1 entries: <c>[0]</c> is 0 and <c>[i + 1]</c> is
-    /// the exclusive end of row <c>i</c>'s slice of the key/value columns — a zero-copy write source.
-    /// </summary>
-    internal ReadOnlySpan<int> Offsets => offsets.AsSpan(0, rowCount + 1);
+    /// <inheritdoc/>
+    public ReadOnlySpan<int> Offsets => offsets.AsSpan(0, rowCount + 1);
 
     /// <summary>
     /// The rows as key/value-pair arrays, materialized once and cached. Prefer the indexer when only some rows are
