@@ -29,7 +29,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// block is alive.
 /// </para>
 /// </summary>
-internal sealed class NestedColumn : IColumn<object[][]>
+internal sealed class NestedColumn : IColumn<object[][]>, INestedColumn
 {
     private readonly IColumn[] fields;
     private readonly string[] fieldNames;
@@ -101,28 +101,19 @@ internal sealed class NestedColumn : IColumn<object[][]>
     /// <inheritdoc/>
     public int RowCount => rowCount;
 
-    /// <summary>The number of fields.</summary>
+    /// <inheritdoc/>
     public int FieldCount => fields.Length;
 
-    /// <summary>The field names, in declaration order.</summary>
+    /// <inheritdoc/>
     public IReadOnlyList<string> FieldNames => fieldNames;
 
-    /// <summary>
-    /// The per-row offsets, sliced to <see cref="RowCount"/> + 1 entries: <c>[0]</c> is 0 and <c>[i + 1]</c> is
-    /// the exclusive end of row <c>i</c>'s slice of every field column — a zero-copy write source and the way to
-    /// address a single row's elements within the flat field columns from <see cref="GetField(int)"/>.
-    /// </summary>
-    internal ReadOnlySpan<int> Offsets => offsets.AsSpan(0, rowCount + 1);
+    /// <inheritdoc/>
+    public ReadOnlySpan<int> Offsets => offsets.AsSpan(0, rowCount + 1);
 
-    /// <summary>The flat column for field <paramref name="index"/> (every row's elements concatenated) — a zero-copy access.</summary>
-    /// <param name="index">The zero-based field index.</param>
-    /// <returns>The field's flat column, holding the same total-element count as every other field.</returns>
+    /// <inheritdoc/>
     public IColumn GetField(int index) => fields[index];
 
-    /// <summary>The flat column for the field named <paramref name="name"/> (ordinal match) — a zero-copy access.</summary>
-    /// <param name="name">The field name.</param>
-    /// <returns>The field's flat column.</returns>
-    /// <exception cref="KeyNotFoundException">No field has that name.</exception>
+    /// <inheritdoc/>
     public IColumn GetField(string name)
     {
         for (int i = 0; i < fieldNames.Length; i++)
