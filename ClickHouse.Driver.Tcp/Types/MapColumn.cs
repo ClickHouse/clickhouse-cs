@@ -51,6 +51,8 @@ internal sealed class MapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValu
     /// <param name="offsets">The per-row offsets: <c>offsets[0]</c> is 0 and <c>offsets[i + 1]</c> is the exclusive end of row <c>i</c>'s pairs; must have at least <paramref name="rowCount"/> + 1 entries.</param>
     /// <param name="rowCount">The number of rows.</param>
     /// <param name="pooledOffsets">Whether <paramref name="offsets"/> was rented and should be returned on dispose.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="keys"/>, <paramref name="values"/> or <paramref name="offsets"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="offsets"/> holds fewer than <paramref name="rowCount"/> + 1 entries.</exception>
     public MapColumn(string name, string typeName, IColumn<TKey> keys, IColumn<TValue> values, int[] offsets, int rowCount, bool pooledOffsets)
     {
         Name = name;
@@ -60,6 +62,17 @@ internal sealed class MapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValu
         this.offsets = offsets ?? throw new ArgumentNullException(nameof(offsets));
         this.rowCount = rowCount;
         this.pooledOffsets = pooledOffsets;
+
+        // The row count cannot be derived here: the key and value columns are flat (one entry per pair across all
+        // rows, so their height is the pair total) and the offsets are typically a pooled buffer longer than the
+        // column. So the one input that can disagree is checked instead — a short offsets array would leave the row
+        // bounds reading past its end.
+        if (offsets.Length < rowCount + 1)
+        {
+            throw new ArgumentException(
+                $"The offsets for column '{name}' ({typeName}) hold {offsets.Length} entries, fewer than the {rowCount + 1} needed for {rowCount} rows.",
+                nameof(offsets));
+        }
     }
 
     /// <summary>
@@ -149,8 +162,12 @@ internal sealed class MapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValu
     /// <summary>Copies row <paramref name="row"/>'s slice of the key and value columns into a new pair array, preserving order and duplicate keys.</summary>
     private KeyValuePair<TKey, TValue>[] Materialize(int row)
     {
-        int start = offsets[row];
-        int length = offsets[row + 1] - start;
+        // Index through the RowCount-sliced offsets, not the raw buffer: the buffer is usually a pooled array longer
+        // than the column, and a stale offset pair left in it by a previous, larger read is still monotonic — so an
+        // out-of-range row would quietly hand back real-looking pairs instead of throwing.
+        ReadOnlySpan<int> bounds = Offsets;
+        int start = bounds[row];
+        int length = bounds[row + 1] - start;
         if (length == 0)
         {
             return Array.Empty<KeyValuePair<TKey, TValue>>();

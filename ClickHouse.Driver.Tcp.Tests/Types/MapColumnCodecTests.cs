@@ -174,6 +174,37 @@ public class MapColumnCodecTests
     }
 
     [Test]
+    public void Indexer_RowPastRowCount_ThrowsRatherThanReadingStaleOffsets()
+    {
+        // The offsets buffer is normally a pooled array longer than the column, and a previous, larger read leaves
+        // monotonic offsets behind in the tail. Reading a row past RowCount through the raw buffer would therefore
+        // hand back real-looking pairs instead of failing — silent wrong data, not a crash. Here row 0 is the whole
+        // column; the 4 is the stale tail a longer read would have left.
+        var keys = new ArrayColumn<int>("c", "Int32", new[] { 1, 2, 3, 4 });
+        var values = new ArrayColumn<string>("c", "String", new[] { "a", "b", "c", "d" });
+        using var map = new MapColumn<int, string>("c", "Map(Int32, String)", keys, values, new[] { 0, 2, 4 }, rowCount: 1, pooledOffsets: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(map[0], Is.EqualTo(new[] { new KeyValuePair<int, string>(1, "a"), new KeyValuePair<int, string>(2, "b") }));
+            Assert.That(() => map[1], Throws.InstanceOf<IndexOutOfRangeException>());
+        });
+    }
+
+    [Test]
+    public void Constructor_OffsetsShorterThanRowCountPlusOne_Throws()
+    {
+        // rowCount is load-bearing here — the key and value columns are flat and the offsets are pooled — so it is
+        // validated rather than derived. One offset per row plus the leading zero is the minimum.
+        var keys = new ArrayColumn<int>("c", "Int32", new[] { 1, 2 });
+        var values = new ArrayColumn<string>("c", "String", new[] { "a", "b" });
+
+        Assert.That(
+            () => new MapColumn<int, string>("c", "Map(Int32, String)", keys, values, new[] { 0, 2 }, rowCount: 2, pooledOffsets: false),
+            Throws.ArgumentException.With.Message.Contains("fewer than"));
+    }
+
+    [Test]
     public void RestrictOwnership_DisposesOnlyOwnedChildColumn()
     {
         // The mechanism the partial densify rebuild relies on: after RestrictOwnership, Dispose frees exactly the
