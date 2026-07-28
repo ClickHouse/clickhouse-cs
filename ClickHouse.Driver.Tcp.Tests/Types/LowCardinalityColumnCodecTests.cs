@@ -42,31 +42,31 @@ public class LowCardinalityColumnCodecTests
     }
 
     [Test]
-    public async Task ReadColumn_WriteThenRead_StringRoundTrips()
+    public async Task Values_MaterializesTheDictionaryBackedCacheAndAgreesWithGetValue()
     {
+        // Row values are covered against a real server by the LowCardinality cases in InsertRoundTripCase. What
+        // those cannot reach is this accessor: GetValue routes to the indexer, which short-circuits on
+        // `cache is not null ? cache[row] : dictionary[keys[row]]`, and AssertColumnsEqual only ever calls
+        // GetValue -- so the lazily materialized ArrayPool-rented Values cache runs nowhere else. Reading Values
+        // twice pins the cache reuse, and reading GetValue afterwards pins the cached and uncached paths against
+        // each other; each test previously picked one or the other and never compared them.
         IColumnCodec codec = Resolve("LowCardinality(String)");
         var expected = new[] { "a", "b", "a", "c", "b" };
         var column = new ArrayColumn<string>("c", "LowCardinality(String)", expected);
 
         using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "LowCardinality(String)", column.RowCount);
+        var typed = (IColumn<string>)read;
 
         Assert.Multiple(() =>
         {
             Assert.That(read.RowCount, Is.EqualTo(5));
-            Assert.That(((IColumn<string>)read).Values.ToArray(), Is.EqualTo(expected));
+            Assert.That(typed.Values.ToArray(), Is.EqualTo(expected), "first access materializes the cache");
+            Assert.That(typed.Values.ToArray(), Is.EqualTo(expected), "second access reuses it");
+            for (int row = 0; row < expected.Length; row++)
+            {
+                Assert.That(read.GetValue(row), Is.EqualTo(expected[row]), $"row {row} through the warm cache");
+            }
         });
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_FixedWidthInnerRoundTrips()
-    {
-        IColumnCodec codec = Resolve("LowCardinality(UInt32)");
-        var expected = new uint[] { 7, 7, 42, 7, 42 };
-        var column = new ArrayColumn<uint>("c", "LowCardinality(UInt32)", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "LowCardinality(UInt32)", column.RowCount);
-
-        Assert.That(((IColumn<uint>)read).Values.ToArray(), Is.EqualTo(expected));
     }
 
     [Test]
@@ -354,32 +354,6 @@ public class LowCardinalityColumnCodecTests
         };
 
         CollectionAssert.AreEqual(expected, bytes);
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_NullableStringRoundTrips()
-    {
-        // A present "" must read back as "" (present), not NULL — it points at the reserved default slot 1, not slot 0.
-        IColumnCodec codec = Resolve("LowCardinality(Nullable(String))");
-        var expected = new[] { "a", null, string.Empty, "b", "a", null };
-        var column = new ArrayColumn<string>("c", "LowCardinality(Nullable(String))", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "LowCardinality(Nullable(String))", column.RowCount);
-
-        Assert.That(((IColumn<string>)read).Values.ToArray(), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public async Task ReadColumn_WriteThenRead_NullableValueTypeRoundTrips()
-    {
-        // A value-type inner surfaces uint?; a present 0 (the inner default) round-trips as 0, distinct from NULL.
-        IColumnCodec codec = Resolve("LowCardinality(Nullable(UInt32))");
-        var expected = new uint?[] { 7, null, 0, 7, null, 42 };
-        var column = new ArrayColumn<uint?>("c", "LowCardinality(Nullable(UInt32))", expected);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "LowCardinality(Nullable(UInt32))", column.RowCount);
-
-        Assert.That(((IColumn<uint?>)read).Values.ToArray(), Is.EqualTo(expected));
     }
 
     [Test]
