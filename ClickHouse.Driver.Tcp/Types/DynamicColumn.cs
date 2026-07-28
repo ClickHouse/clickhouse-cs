@@ -216,7 +216,10 @@ public interface IDynamicColumn : IColumn
     /// </summary>
     int TypeCount { get; }
 
-    /// <summary>The runtime type names, in wire (discriminator) order.</summary>
+    /// <summary>
+    /// The runtime type names, in wire (discriminator) order — the ClickHouse type string for each child column,
+    /// which is how a caller knows what to read that child as. Read-only; the underlying storage is not exposed.
+    /// </summary>
     IReadOnlyList<string> TypeNames { get; }
 
     /// <summary>One discriminator per row; <see cref="TypeCount"/> marks a NULL row.</summary>
@@ -229,8 +232,12 @@ public interface IDynamicColumn : IColumn
     /// </summary>
     ReadOnlySpan<int> LocalIndices { get; }
 
-    /// <summary>The child column for the given discriminator (holding the values of the rows that selected it).</summary>
-    /// <param name="discriminator">The runtime-type index.</param>
+    /// <summary>
+    /// The child column for the given discriminator (holding the values of the rows that selected it). A borrowed
+    /// view valid only while the owning block is alive — it is the block's to dispose, never the caller's.
+    /// </summary>
+    /// <param name="discriminator">The runtime-type index. Must be a real type index: the NULL discriminator (<see cref="TypeCount"/>) selects no column, so guard for it before calling.</param>
     /// <returns>That type's child column.</returns>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="discriminator"/> is negative or not less than <see cref="TypeCount"/> — which includes passing the NULL discriminator.</exception>
     IColumn GetTypeColumn(int discriminator);
 }
