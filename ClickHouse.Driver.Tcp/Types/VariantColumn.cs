@@ -11,7 +11,8 @@ namespace ClickHouse.Driver.Tcp.Types;
 ///
 /// <para>
 /// A row's discriminator is an index into the alternative types (<c>0</c> = the first type, and so on), or
-/// <see cref="NullDiscriminator"/> (<c>255</c>) for a NULL row, which consumes no value from any child column.
+/// <see cref="IVariantColumn.NullDiscriminator"/> (<c>255</c>) for a NULL row, which consumes no value from any
+/// child column.
 /// Random access maps a row to its value through a per-row index into the selected type's child column,
 /// precomputed once by a single walk of the discriminators.
 /// </para>
@@ -24,9 +25,6 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </summary>
 internal sealed class VariantColumn : IColumn<object>, IVariantColumn
 {
-    /// <summary>The discriminator value marking a NULL row; it selects no alternative type.</summary>
-    internal const byte NullDiscriminator = 255;
-
     private readonly IColumn[] typeColumns;
     private readonly int rowCount;
     private readonly bool ownsColumns;
@@ -44,7 +42,7 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
     /// <summary>Initializes a variant column over its discriminator stream and per-type child columns.</summary>
     /// <param name="name">The column name.</param>
     /// <param name="typeName">The full <c>Variant(...)</c> type string.</param>
-    /// <param name="discriminators">One discriminator per row; <see cref="NullDiscriminator"/> marks a NULL row.</param>
+    /// <param name="discriminators">One discriminator per row; <see cref="IVariantColumn.NullDiscriminator"/> marks a NULL row.</param>
     /// <param name="typeColumns">One child column per alternative type, in declared (discriminator) order; each holds the values of the rows that selected it, in row order.</param>
     /// <param name="rowCount">The number of rows.</param>
     /// <param name="pooledDiscriminators">Whether <paramref name="discriminators"/> was rented and should be returned on dispose.</param>
@@ -84,7 +82,7 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
         for (int row = 0; row < rowCount; row++)
         {
             byte d = discriminators[row];
-            localIndex[row] = d == NullDiscriminator ? -1 : counters[d]++;
+            localIndex[row] = d == IVariantColumn.NullDiscriminator ? -1 : counters[d]++;
         }
     }
 
@@ -157,7 +155,7 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
         get
         {
             byte d = Discriminators[row];
-            return d == NullDiscriminator ? null : typeColumns[d].GetValue(localIndex[row]);
+            return d == IVariantColumn.NullDiscriminator ? null : typeColumns[d].GetValue(localIndex[row]);
         }
     }
 
@@ -199,15 +197,34 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
 }
 
 /// <summary>
-/// The dense-column contract a <c>Variant(...)</c> codec writes from without copying: the per-row discriminator
-/// stream and the per-type child columns. Implemented by <see cref="VariantColumn"/>.
+/// The zero-copy read surface of a decoded <c>Variant(T1, ..., Tn)</c> column, and the shape its codec writes from
+/// without copying: a per-row discriminator stream plus one child column per alternative type, each holding only the
+/// values of the rows that selected it, in row order. That is exactly the wire layout.
+///
+/// <para>
+/// Unlike the other composites, a <c>Variant</c> has no useful materialized element type — the
+/// <see cref="IColumn{T}"/> surface is <c>IColumn&lt;object&gt;</c>, so every row read through it is boxed. Reading
+/// columnar avoids that: dispatch on <see cref="Discriminators"/>, then read the selected type's child column,
+/// which is typed. Row <c>i</c>'s value lives at <c>LocalIndices[i]</c> within
+/// <c>GetTypeColumn(Discriminators[i])</c>, unless its discriminator is
+/// <see cref="NullDiscriminator"/>, in which case the row is NULL and occupies no slot in any child.
+/// </para>
+///
+/// <para>
+/// Child columns and both spans are borrowed views over the owning block's storage: read them in place, and copy out
+/// only what must outlive the block. A child whose type is itself a composite pattern-matches to that type's own
+/// columnar view. Obtain this view by pattern-matching a column, e.g. <c>if (column is IVariantColumn variant)</c>.
+/// </para>
 /// </summary>
-internal interface IVariantColumn : IColumn
+public interface IVariantColumn : IColumn
 {
+    /// <summary>The discriminator value marking a NULL row; it selects no alternative type.</summary>
+    public const byte NullDiscriminator = 255;
+
     /// <summary>The number of alternative types.</summary>
     int TypeCount { get; }
 
-    /// <summary>One discriminator per row; <see cref="VariantColumn.NullDiscriminator"/> marks a NULL row.</summary>
+    /// <summary>One discriminator per row; <see cref="NullDiscriminator"/> marks a NULL row.</summary>
     ReadOnlySpan<byte> Discriminators { get; }
 
     /// <summary>
