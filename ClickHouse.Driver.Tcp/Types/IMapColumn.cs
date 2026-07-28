@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// The zero-copy read surface of a decoded <c>Map(K, V)</c> column. A map column materializes each row as a freshly
+/// The columnar read surface of a decoded <c>Map(K, V)</c> column. A map column materializes each row as a freshly
 /// allocated <see cref="KeyValuePair{TKey, TValue}"/>[] (see the column's <c>Values</c>/indexer), which is
 /// convenient and lets the pairs outlive the block, but allocates an array — and a pair struct per entry — for
 /// every row. This interface exposes the underlying wire layout instead: two flat, positionally aligned columns
@@ -35,13 +35,14 @@ public interface IMapColumn<TKey, TValue> : IColumn<KeyValuePair<TKey, TValue>[]
     /// <summary>
     /// The flat key column: every row's keys concatenated end-to-end, addressed through <see cref="Offsets"/> and
     /// positionally aligned with <see cref="ValueColumn"/>. Its row count is the total entry count across all
-    /// rows, not the map's row count. A borrowed view valid only while the owning block is alive.
+    /// rows, not the map's row count. A borrowed view valid only while the owning block is alive — it is the
+    /// block's to dispose, never the caller's.
     /// </summary>
     IColumn<TKey> KeyColumn { get; }
 
     /// <summary>
     /// The flat value column: every row's values concatenated end-to-end, aligned entry-for-entry with
-    /// <see cref="KeyColumn"/>. A borrowed view valid only while the owning block is alive.
+    /// <see cref="KeyColumn"/>. Borrowed on the same terms as <see cref="KeyColumn"/>.
     /// </summary>
     IColumn<TValue> ValueColumn { get; }
 
