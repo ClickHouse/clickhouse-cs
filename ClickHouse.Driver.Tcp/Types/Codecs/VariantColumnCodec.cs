@@ -199,7 +199,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
             for (int row = 0; row < rowCount; row++)
             {
                 byte d = discriminators[row];
-                if (d == VariantColumn.NullDiscriminator)
+                if (d == IVariantColumn.NullDiscriminator)
                 {
                     continue;
                 }
@@ -293,7 +293,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
         for (int i = start; i < start + length; i++)
         {
             byte d = discriminators[i];
-            if (d == VariantColumn.NullDiscriminator)
+            if (d == IVariantColumn.NullDiscriminator)
             {
                 continue;
             }
@@ -333,7 +333,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
                 object value = column.GetValue(start + row);
                 if (value is null)
                 {
-                    discriminators[row] = VariantColumn.NullDiscriminator;
+                    discriminators[row] = IVariantColumn.NullDiscriminator;
                     continue;
                 }
 
