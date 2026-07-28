@@ -46,11 +46,40 @@ public class NullableColumnCodecTests
         // reading it back must preserve the values and nulls.
         IColumnCodec codec = Resolve("Nullable(Int32)");
         var inner = PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 7, 0, 9 });
-        var dense = new NullableValueColumn<int>("c", "Nullable(Int32)", inner, new byte[] { 0, 1, 0 }, rowCount: 3, pooledMap: false);
+        var dense = new NullableValueColumn<int>("c", "Nullable(Int32)", inner, new byte[] { 0, 1, 0 }, pooledMap: false);
 
         using IColumn read = await CodecTestHarness.RoundTripAsync(codec, dense, "Nullable(Int32)", dense.RowCount);
 
-        Assert.That(((IColumn<int?>)read).Values.ToArray(), Is.EqualTo(new int?[] { 7, null, 9 }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(dense.RowCount, Is.EqualTo(3), "the row count comes from the inner column, not a separate argument");
+            Assert.That(((IColumn<int?>)read).Values.ToArray(), Is.EqualTo(new int?[] { 7, null, 9 }));
+        });
+    }
+
+    [Test]
+    public void Constructor_NullMapShorterThanInner_Throws()
+    {
+        // The inner column sets the row count, so those two can no longer disagree; the null-map is the one input
+        // that still can. A pooled map is routinely longer than the row count (and must stay accepted), so only a
+        // short one is rejected — unchecked it would leave NullMap's slice and the indexer reading out of bounds.
+        var inner = PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1, 2, 3 });
+        var longer = new byte[8];
+        var reference = new ArrayColumn<string>("c", "String", new[] { "a", "b", "c" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => new NullableValueColumn<int>("c", "Nullable(Int32)", inner, new byte[] { 0, 1 }, pooledMap: false),
+                Throws.ArgumentException.With.Message.Contains("shorter than"));
+            Assert.That(
+                () => new NullableReferenceColumn<string>("c", "Nullable(String)", reference, new byte[] { 0, 1 }, pooledMap: false),
+                Throws.ArgumentException.With.Message.Contains("shorter than"));
+            Assert.That(
+                new NullableValueColumn<int>("c", "Nullable(Int32)", inner, longer, pooledMap: false).RowCount,
+                Is.EqualTo(3),
+                "an over-long pooled map is accepted and does not inflate the row count");
+        });
     }
 
     [Test]
