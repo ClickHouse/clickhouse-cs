@@ -28,11 +28,14 @@ public class DateTimeBinaryRangeTests : AbstractConnectionTestFixture
     [SetUp]
     public async Task SetUp()
     {
-        var testName = SanitizeTableName(TestContext.CurrentContext.Test.Name);
-        var suffix = $"{testName}_{Guid.NewGuid():N}";
-        DateTimeTable = $"test.dt_range_{suffix}";
-        DateTable = $"test.date_range_{suffix}";
-        Date32Table = $"test.date32_range_{suffix}";
+        // Deliberately the static helper rather than the fixture's tracking overload: TearDown below
+        // keeps the table when a test fails so it can be inspected, and a registered name would be
+        // dropped by the fixture's own teardown regardless.
+        // [CallerMemberName] would resolve to SetUp here, so the owning test's name is passed explicitly.
+        var testName = TestContext.CurrentContext.Test.Name;
+        DateTimeTable = TestUtilities.CreateTableName($"dt_range_{testName}");
+        DateTable = TestUtilities.CreateTableName($"date_range_{testName}");
+        Date32Table = TestUtilities.CreateTableName($"date32_range_{testName}");
 
         // Range validation happens in client-side RowBinary serialization; Memory is enough here.
         await client.ExecuteNonQueryAsync($"CREATE TABLE {DateTimeTable} (t DateTime('UTC')) ENGINE = Memory");

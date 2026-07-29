@@ -113,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout docs source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           # On a release, take the docs as of the released tag; otherwise take
           # the default checkout (post-merge default branch / dispatched ref).
