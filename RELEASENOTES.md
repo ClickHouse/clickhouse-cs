@@ -23,6 +23,7 @@ Unreleased
 **Bug Fixes:**
 * Fixed `ClickHouseServerException` carrying a blank `Message` and an `ErrorCode` of `-1` when the server — or an upstream component such as a load balancer or the ClickHouse Cloud edge — returned a non-2xx HTTP response with an empty (or whitespace-only) body. The exception now reports the HTTP status code and reason phrase, and uses the `X-ClickHouse-Exception-Code` response header as the error code when the server sets it (issue #440). Non-empty error bodies are unaffected.
 * Fixed `ClickHouseDataReader.GetSchemaTable()` leaving `NumericScale` unset (`DBNull`) for `DateTime64(N)` and `Time64(N)` columns (including their `Nullable(...)` variants). The schema table now reports the fractional-seconds precision `N` in `NumericScale`, matching how `Decimal` columns are already reported (issue #438).
+* Fixed `ClickHouseCommand` returning wrong results (or a syntax error) for `CommandBehavior.SchemaOnly` and `CommandBehavior.SingleRow` when `CommandText` ended with a single-line comment (`--` / `#`) or a statement-terminating `;`. The ` LIMIT 0` / ` LIMIT 1` clause was appended verbatim, so a trailing comment swallowed it (returning unbounded rows instead of schema-only / a single row) and a trailing `;` produced a `Multi-statements are not allowed` error. The clause is now appended on its own line, and a trailing terminator is stripped, using a string/comment-aware scan so semicolons and comment markers inside string literals are left intact (issue #471).
 
 v1.3.0
 ---

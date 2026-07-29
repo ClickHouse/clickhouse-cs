@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Net.Http;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Parameters;
@@ -193,20 +192,18 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             throw new InvalidOperationException("Connection is not set");
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
-        var sqlBuilder = new StringBuilder(CommandText);
-        switch (behavior)
+        var limitClause = behavior switch
         {
-            case CommandBehavior.SingleRow:
-                sqlBuilder.Append(" LIMIT 1");
-                break;
-            case CommandBehavior.SchemaOnly:
-                sqlBuilder.Append(" LIMIT 0");
-                break;
-            default:
-                break;
-        }
+            CommandBehavior.SingleRow => "LIMIT 1",
+            CommandBehavior.SchemaOnly => "LIMIT 0",
+            _ => null,
+        };
 
-        var result = await PostSqlQueryAsync(sqlBuilder.ToString(), lcts.Token).ConfigureAwait(false);
+        // Append the LIMIT out-of-band so a trailing comment or statement terminator in CommandText
+        // cannot swallow it or turn the query into a rejected multi-statement (issue #471).
+        var sql = limitClause is null ? CommandText : RowLimitAppender.Append(CommandText, limitClause);
+
+        var result = await PostSqlQueryAsync(sql, lcts.Token).ConfigureAwait(false);
         return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.ClickHouseClient.TypeSettings, connection.ClickHouseClient.PocoRegistry, connection.ClickHouseClient.Settings.ReadBufferSize, connection.ClickHouseClient.Settings.ReadValueConverter).ConfigureAwait(false);
     }
 
