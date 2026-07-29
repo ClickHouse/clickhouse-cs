@@ -257,6 +257,104 @@ public class ExceptionTagAwareStreamTests
         Assert.That(result.Message, Is.EqualTo("Overflow test error"));
     }
 
+    // ----- Read(Span<byte>) — must record into the ring buffer exactly as the byte[] overload does,
+    // otherwise mid-stream exception detection silently stops working on span reads. -----
+
+    [Test]
+    public void ReadSpan_PassesThroughToInnerStream()
+    {
+        var data = new byte[] { 1, 2, 3, 4, 5 };
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken);
+
+        Span<byte> buffer = new byte[5];
+        int bytesRead = stream.Read(buffer);
+
+        Assert.That(bytesRead, Is.EqualTo(5));
+        Assert.That(buffer.ToArray(), Is.EqualTo(data));
+    }
+
+    [Test]
+    public void RingBuffer_RecordsBytes_FromSpanRead()
+    {
+        var prefix = new byte[100];
+        var message = "Span read error";
+        var exceptionData = $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__";
+        var data = new byte[prefix.Length + Encoding.UTF8.GetByteCount(exceptionData)];
+        Array.Copy(prefix, 0, data, 0, prefix.Length);
+        Encoding.UTF8.GetBytes(exceptionData, 0, exceptionData.Length, data, prefix.Length);
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken);
+
+        _ = stream.Read(new byte[data.Length].AsSpan());
+
+        var result = stream.TryExtractMidStreamException();
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result.Message, Is.EqualTo("Span read error"));
+    }
+
+    [Test]
+    public void RingBuffer_WrapsCorrectly_FromSpanRead()
+    {
+        // Exceeds the 4 KiB ring buffer, so the span path must handle the wrap branch too.
+        var prefix = new byte[5000];
+        var message = "Span overflow error";
+        var suffix = Encoding.UTF8.GetBytes(
+            $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__");
+
+        var data = new byte[prefix.Length + suffix.Length];
+        Array.Copy(prefix, 0, data, 0, prefix.Length);
+        Array.Copy(suffix, 0, data, prefix.Length, suffix.Length);
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken);
+
+        // Small spans so the ring buffer wraps repeatedly instead of taking the single-copy shortcut.
+        Span<byte> chunk = new byte[64];
+        while (stream.Read(chunk) > 0)
+        {
+        }
+
+        var result = stream.TryExtractMidStreamException();
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result.Message, Is.EqualTo("Span overflow error"));
+    }
+
+    [Test]
+    public void RingBuffer_SpanAndArrayReads_ExtractIdenticalException()
+    {
+        var message = "Interleaved error";
+        var data = Encoding.UTF8.GetBytes(
+            new string('x', 200) +
+            $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__");
+
+        // Same payload, one stream driven through spans and one through arrays: both must detect it.
+        using var spanInner = new MemoryStream(data);
+        using var spanStream = new ExceptionTagAwareStream(spanInner, TestToken);
+        Span<byte> spanChunk = new byte[7];
+        while (spanStream.Read(spanChunk) > 0)
+        {
+        }
+
+        using var arrayInner = new MemoryStream(data);
+        using var arrayStream = new ExceptionTagAwareStream(arrayInner, TestToken);
+        var arrayChunk = new byte[7];
+        while (arrayStream.Read(arrayChunk, 0, arrayChunk.Length) > 0)
+        {
+        }
+
+        var viaSpan = spanStream.TryExtractMidStreamException();
+        var viaArray = arrayStream.TryExtractMidStreamException();
+
+        Assert.That(viaSpan, Is.Not.Null);
+        Assert.That(viaArray, Is.Not.Null);
+        Assert.That(viaSpan.Message, Is.EqualTo(viaArray.Message));
+        Assert.That(viaSpan.Message, Is.EqualTo("Interleaved error"));
+    }
+
     [Test]
     public void StreamProperties_DelegateToInnerStream()
     {

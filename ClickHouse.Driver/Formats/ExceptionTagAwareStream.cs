@@ -57,6 +57,21 @@ internal sealed class ExceptionTagAwareStream : Stream
         return bytesRead;
     }
 
+    /// <summary>
+    /// Span counterpart of <see cref="Read(byte[], int, int)"/>. Without it the base
+    /// <see cref="Stream.Read(Span{byte})"/> fallback rents and copies through a pooled array on every
+    /// call, which would defeat both the span reads issued per scalar and the bulk array reads.
+    /// </summary>
+    public override int Read(Span<byte> buffer)
+    {
+        int bytesRead = innerStream.Read(buffer);
+
+        if (bytesRead > 0)
+            RecordBytes(buffer.Slice(0, bytesRead));
+
+        return bytesRead;
+    }
+
     public override int ReadByte()
     {
         int b = innerStream.ReadByte();
@@ -71,25 +86,28 @@ internal sealed class ExceptionTagAwareStream : Stream
     }
 
     private void RecordBytes(byte[] buffer, int offset, int count)
+        => RecordBytes(buffer.AsSpan(offset, count));
+
+    private void RecordBytes(ReadOnlySpan<byte> source)
     {
         // If count >= buffer capacity, only keep last BufferCapacity bytes
-        if (count >= BufferCapacity)
+        if (source.Length >= BufferCapacity)
         {
-            Array.Copy(buffer, offset + count - BufferCapacity, recentBytes, 0, BufferCapacity);
+            source.Slice(source.Length - BufferCapacity).CopyTo(recentBytes);
             writePosition = 0;
             bytesRecorded = BufferCapacity;
             return;
         }
 
         // Copy into circular buffer, wrapping as needed
-        int firstPart = Math.Min(count, BufferCapacity - writePosition);
-        Array.Copy(buffer, offset, recentBytes, writePosition, firstPart);
+        int firstPart = Math.Min(source.Length, BufferCapacity - writePosition);
+        source.Slice(0, firstPart).CopyTo(recentBytes.AsSpan(writePosition));
 
-        if (firstPart < count)
-            Array.Copy(buffer, offset + firstPart, recentBytes, 0, count - firstPart);
+        if (firstPart < source.Length)
+            source.Slice(firstPart).CopyTo(recentBytes);
 
-        writePosition = (writePosition + count) % BufferCapacity;
-        bytesRecorded = Math.Min(bytesRecorded + count, BufferCapacity);
+        writePosition = (writePosition + source.Length) % BufferCapacity;
+        bytesRecorded = Math.Min(bytesRecorded + source.Length, BufferCapacity);
     }
 
     /// <summary>

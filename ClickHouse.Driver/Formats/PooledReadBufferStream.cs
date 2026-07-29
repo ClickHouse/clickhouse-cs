@@ -92,6 +92,37 @@ internal sealed class PooledReadBufferStream : Stream
         return CopyOut(array, offset, count);
     }
 
+    /// <summary>
+    /// Span counterpart of <see cref="Read(byte[], int, int)"/>, with the same short-read contract.
+    /// </summary>
+    /// <remarks>
+    /// Without this override the base <see cref="Stream.Read(Span{byte})"/> implementation rents an array
+    /// from <see cref="ArrayPool{T}"/> and copies through it on <em>every</em> call — including the 4- and
+    /// 8-byte reads <see cref="System.IO.BinaryReader"/> issues per scalar. <see cref="PeekableStreamWrapper"/>
+    /// overrides the span read for exactly this reason; that is wasted unless this stream does too, since it
+    /// sits directly underneath.
+    /// </remarks>
+    public override int Read(Span<byte> destination)
+    {
+        ThrowIfDisposed();
+        if (destination.Length == 0)
+            return 0;
+
+        // Buffer still has unread bytes: hand back whatever fits (may be a short read).
+        if (position < filled)
+            return CopyOut(destination);
+
+        // Buffer exhausted. A request at least as large as the buffer reads straight into the caller's
+        // span, skipping the copy through our buffer (matches the byte[] overload).
+        if (destination.Length >= buffer.Length)
+            return inner.Read(destination);
+
+        if (!Refill())
+            return 0;
+
+        return CopyOut(destination);
+    }
+
     public override int ReadByte()
     {
         ThrowIfDisposed();
@@ -138,6 +169,15 @@ internal sealed class PooledReadBufferStream : Stream
     {
         int available = Math.Min(count, filled - position);
         Buffer.BlockCopy(buffer, position, array, offset, available);
+        position += available;
+        return available;
+    }
+
+    // Span counterpart of CopyOut.
+    private int CopyOut(Span<byte> destination)
+    {
+        int available = Math.Min(destination.Length, filled - position);
+        buffer.AsSpan(position, available).CopyTo(destination);
         position += available;
         return available;
     }
