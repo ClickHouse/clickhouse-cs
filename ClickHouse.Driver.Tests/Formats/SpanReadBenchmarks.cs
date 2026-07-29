@@ -21,6 +21,18 @@ namespace ClickHouse.Driver.Tests.Formats;
 [Explicit("Benchmark, not an assertion. Run manually.")]
 public class SpanReadBenchmarks
 {
+    /// <summary>
+    /// Where <see cref="ExceptionTagAwareStream"/> sits relative to <see cref="PooledReadBufferStream"/>.
+    /// <see cref="BelowBuffer"/> is what the reader actually builds; <see cref="AboveBuffer"/> is retained
+    /// to document what the other ordering costs, so a later refactor cannot quietly reintroduce it.
+    /// </summary>
+    private enum TagMode
+    {
+        None,
+        AboveBuffer,
+        BelowBuffer,
+    }
+
     private const int Reps = 5;
     private const int PayloadBytes = 32 * 1024 * 1024;
 
@@ -28,19 +40,19 @@ public class SpanReadBenchmarks
     public void BenchmarkScalarReads()
     {
         Console.WriteLine($"{PayloadBytes / (1024 * 1024)} MiB payload per case, min of {Reps}");
-        Console.WriteLine($"{"scalar",-8} {"exceptionTag",13} {"ns/value",10} {"MB/s",9}");
+        Console.WriteLine($"{"scalar",-8} {"tagStream",13} {"ns/value",10} {"MB/s",9}");
         Console.WriteLine(new string('-', 45));
 
-        foreach (var tagged in new[] { false, true })
+        foreach (var mode in new[] { TagMode.None, TagMode.AboveBuffer, TagMode.BelowBuffer })
         {
-            Run("Int16", sizeof(short), tagged);
-            Run("Int32", sizeof(int), tagged);
-            Run("Int64", sizeof(long), tagged);
-            Run("Double", sizeof(double), tagged);
+            Run("Int16", sizeof(short), mode);
+            Run("Int32", sizeof(int), mode);
+            Run("Int64", sizeof(long), mode);
+            Run("Double", sizeof(double), mode);
         }
     }
 
-    private static void Run(string name, int width, bool tagged)
+    private static void Run(string name, int width, TagMode mode)
     {
         var payload = new byte[PayloadBytes];
         for (var i = 0; i < payload.Length; i++)
@@ -48,7 +60,7 @@ public class SpanReadBenchmarks
         var count = payload.Length / width;
 
         // Warm up this exact chain + loop shape before timing.
-        ReadAll(name, payload, tagged, Math.Min(count, 200_000));
+        ReadAll(name, payload, mode, Math.Min(count, 200_000));
 
         var best = double.MaxValue;
         for (var rep = 0; rep < Reps; rep++)
@@ -58,27 +70,41 @@ public class SpanReadBenchmarks
             GC.Collect();
 
             var sw = Stopwatch.StartNew();
-            ReadAll(name, payload, tagged, count);
+            ReadAll(name, payload, mode, count);
             sw.Stop();
             best = Math.Min(best, sw.Elapsed.TotalMilliseconds);
         }
 
-        Console.WriteLine($"{name,-8} {(tagged ? "yes" : "no"),13} " +
+        Console.WriteLine($"{name,-8} {mode,13} " +
                           $"{best * 1_000_000.0 / count,10:F2} " +
                           $"{payload.Length / (best / 1000.0) / (1024 * 1024),9:F0}");
     }
 
-    private static void ReadAll(string name, byte[] payload, bool tagged, int count)
+    private static void ReadAll(string name, byte[] payload, TagMode mode, int count)
     {
         using var source = new MemoryStream(payload, writable: false);
-        using var buffered = new PooledReadBufferStream(source, 64 * 1024, leaveOpen: true);
 
-        Stream forReader = buffered;
+        // AboveBuffer is today's topology: the tag stream wraps the buffering stream, so it observes
+        // every per-scalar read. BelowBuffer inverts it, so it observes only 64 KiB refills.
         ExceptionTagAwareStream tagStream = null;
-        if (tagged)
+        PooledReadBufferStream buffered;
+        Stream forReader;
+        switch (mode)
         {
-            tagStream = new ExceptionTagAwareStream(buffered, "BENCHTOKEN");
-            forReader = tagStream;
+            case TagMode.AboveBuffer:
+                buffered = new PooledReadBufferStream(source, 64 * 1024, leaveOpen: true);
+                tagStream = new ExceptionTagAwareStream(buffered, "BENCHTOKEN");
+                forReader = tagStream;
+                break;
+            case TagMode.BelowBuffer:
+                tagStream = new ExceptionTagAwareStream(source, "BENCHTOKEN");
+                buffered = new PooledReadBufferStream(tagStream, 64 * 1024, leaveOpen: true);
+                forReader = buffered;
+                break;
+            default:
+                buffered = new PooledReadBufferStream(source, 64 * 1024, leaveOpen: true);
+                forReader = buffered;
+                break;
         }
 
         try
@@ -110,6 +136,7 @@ public class SpanReadBenchmarks
         }
         finally
         {
+            buffered.Dispose();
             tagStream?.Dispose();
         }
     }

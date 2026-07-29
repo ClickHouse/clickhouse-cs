@@ -14,6 +14,7 @@ internal sealed class ExceptionTagAwareStream : Stream
     private const int BufferCapacity = 4096; // 4KB ring buffer
 
     private readonly Stream innerStream;
+    private readonly bool leaveOpen;
     private readonly byte[] exceptionPrefixBytes; // "__exception__"
     private readonly byte[] tagBytes;             // exception tag/token
 
@@ -22,9 +23,13 @@ internal sealed class ExceptionTagAwareStream : Stream
     private int writePosition;
     private int bytesRecorded;
 
-    public ExceptionTagAwareStream(Stream innerStream, string exceptionTag)
+    /// <param name="innerStream">The stream reads are pulled from and recorded off.</param>
+    /// <param name="exceptionTag">The per-query token the server brackets a mid-stream exception with.</param>
+    /// <param name="leaveOpen">When <c>true</c> the inner stream is not disposed with this wrapper.</param>
+    public ExceptionTagAwareStream(Stream innerStream, string exceptionTag, bool leaveOpen = false)
     {
         this.innerStream = innerStream ?? throw new ArgumentNullException(nameof(innerStream));
+        this.leaveOpen = leaveOpen;
 
         if (string.IsNullOrEmpty(exceptionTag))
             throw new ArgumentException("Exception tag cannot be null or empty", nameof(exceptionTag));
@@ -271,7 +276,7 @@ internal sealed class ExceptionTagAwareStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !leaveOpen)
             innerStream.Dispose();
 
         base.Dispose(disposing);
