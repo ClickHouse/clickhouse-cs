@@ -25,26 +25,17 @@ internal class StreamCallbackContent : HttpContent
     protected override Task SerializeToStreamAsync(Stream stream, TransportContext context)
         => SerializeToStreamAsync(stream, context, CancellationToken.None);
 
-    // HttpClient supplies its own cancellation token here (folding in HttpClient.Timeout and internal
-    // aborts). Serialization should observe both it and the caller's token, but only pay for a linked
-    // CancellationTokenSource when both can actually fire — the caller often passes a non-cancelable
-    // token, and this content is created per insert batch.
+    // The caller's token wins when it can fire, otherwise the callback gets the one HttpClient supplies
+    // here (which folds in HttpClient.Timeout and internal aborts), so serialization is never handed a
+    // token that cannot be cancelled at all.
+    //
+    // The two are deliberately not combined into a linked CancellationTokenSource. Callbacks use this
+    // token to bail out before writing, not to poll mid-write, and a transport-side abort tears the
+    // request stream down regardless — the write then fails on its own. Linking would allocate a
+    // CancellationTokenSource plus two registrations per call (per batch, on the insert path) to
+    // forward a signal the stream already delivers.
     protected override Task SerializeToStreamAsync(Stream stream, TransportContext context, CancellationToken httpCancellationToken)
-    {
-        if (!cancellationToken.CanBeCanceled)
-            return callback(stream, httpCancellationToken);
-
-        if (!httpCancellationToken.CanBeCanceled)
-            return callback(stream, cancellationToken);
-
-        return SerializeLinkedAsync(stream, httpCancellationToken);
-    }
-
-    private async Task SerializeLinkedAsync(Stream stream, CancellationToken httpCancellationToken)
-    {
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, httpCancellationToken);
-        await callback(stream, linked.Token).ConfigureAwait(false);
-    }
+        => callback(stream, cancellationToken.CanBeCanceled ? cancellationToken : httpCancellationToken);
 
     protected override bool TryComputeLength(out long length)
     {
