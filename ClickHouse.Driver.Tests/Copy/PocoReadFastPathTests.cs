@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Readers;
 
@@ -15,6 +16,9 @@ namespace ClickHouse.Driver.Tests.Copy;
 [TestFixture]
 public class PocoReadFastPathTests : AbstractConnectionTestFixture
 {
+    private string CreateTestTableName([CallerMemberName] string testName = null)
+        => SanitizeTableName($"test_pocofast_{testName}_{Guid.NewGuid():N}");
+
     public class ScalarPoco
     {
         public long Id { get; set; }
@@ -178,6 +182,100 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
             row = r;
 
         Assert.That(row.Amount, Is.EqualTo(123.45m));
+    }
+
+    public class EnumIntPoco
+    {
+        public int Status { get; set; }
+    }
+
+    public class EnumLabelPoco
+    {
+        public string Status { get; set; }
+    }
+
+    // Enum8 stores its value in one signed byte and Enum16 in two, so the negative and beyond-sbyte cases
+    // pin each width. The int binding also proves the typed read is used: the boxed fallback for an enum
+    // column yields the label string, which is not assignable to an int property and would throw.
+    [TestCase("Enum8('a' = -5, 'b' = 7)", "a", -5)]
+    [TestCase("Enum8('a' = -5, 'b' = 7)", "b", 7)]
+    [TestCase("Enum16('a' = -300, 'b' = 4000)", "a", -300)]
+    [TestCase("Enum16('a' = -300, 'b' = 4000)", "b", 4000)]
+    public async Task QueryAsync_EnumColumn_ReadsAsIntAndAsLabel(string enumType, string label, int expected)
+    {
+        client.RegisterPocoType<EnumIntPoco>();
+        client.RegisterPocoType<EnumLabelPoco>();
+        var sql = $"SELECT CAST('{label}', '{enumType.Replace("'", "''")}') AS Status";
+
+        EnumIntPoco asInt = null;
+        await foreach (var r in client.QueryAsync<EnumIntPoco>(sql))
+            asInt = r;
+
+        EnumLabelPoco asLabel = null;
+        await foreach (var r in client.QueryAsync<EnumLabelPoco>(sql))
+            asLabel = r;
+
+        Assert.That(asInt.Status, Is.EqualTo(expected));
+        Assert.That(asLabel.Status, Is.EqualTo(label));
+    }
+
+    public class NullableEnumIntPoco
+    {
+        public int? Status { get; set; }
+    }
+
+    [Test]
+    public async Task QueryAsync_NullableEnumColumn_ReadsIntsAndNulls()
+    {
+        client.RegisterPocoType<NullableEnumIntPoco>();
+        const string enumType = "Nullable(Enum8(''a'' = -5, ''b'' = 7))";
+        const string sql =
+            "SELECT if(number % 2 = 0, CAST('b', '" + enumType + "'), CAST(NULL, '" + enumType + "')) AS Status " +
+            "FROM system.numbers LIMIT 4";
+
+        var rows = new List<NullableEnumIntPoco>();
+        await foreach (var r in client.QueryAsync<NullableEnumIntPoco>(sql))
+            rows.Add(r);
+
+        Assert.That(rows.Select(r => r.Status), Is.EqualTo(new int?[] { 7, null, 7, null }));
+    }
+
+    // A Nullable(Enum) column needs an int? property: a non-nullable int cannot represent the null, so there
+    // is no fast path, and the boxed fallback yields the label string — not assignable to int. Fails fast
+    // with the standard diagnostic rather than at whichever row happens to be null.
+    [Test]
+    public void QueryAsync_NullableEnumColumnWithNonNullableIntProperty_ThrowsFailFast()
+    {
+        client.RegisterPocoType<EnumIntPoco>();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<EnumIntPoco>(
+                "SELECT CAST('b', 'Nullable(Enum8(''a'' = -5, ''b'' = 7))') AS Status"))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("Status"));
+    }
+
+    // The numeric read is the inverse of the insert path, which already accepts an int for an enum column,
+    // so an int property round-trips through a real Enum8 column.
+    [Test]
+    public async Task InsertBinaryAsync_EnumColumnFromIntProperty_RoundTripsThroughQueryAsync()
+    {
+        var table = $"test.{CreateTestTableName()}";
+        client.RegisterPocoType<EnumIntPoco>();
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (Status Enum8('a' = -5, 'b' = 7)) ENGINE = MergeTree() ORDER BY Status");
+
+        await client.InsertBinaryAsync(table, new[] { new EnumIntPoco { Status = -5 }, new EnumIntPoco { Status = 7 } });
+
+        var values = new List<int>();
+        await foreach (var r in client.QueryAsync<EnumIntPoco>($"SELECT Status FROM {table} ORDER BY Status"))
+            values.Add(r.Status);
+
+        Assert.That(values, Is.EqualTo(new[] { -5, 7 }));
     }
 
 #if NET8_0_OR_GREATER
