@@ -51,11 +51,22 @@ internal static class SchemaDescriber
             row["IsKey"] = false;
             row["IsAutoIncrement"] = false;
 
-            if (chType is DecimalType dt)
+            // Numeric precision/scale describe the underlying type, so unwrap Nullable(...)
+            // exactly as the DataType column above does.
+            var effectiveType = reader.GetEffectiveClickHouseType(ordinal);
+            if (effectiveType is DecimalType dt)
             {
                 row["ColumnSize"] = dt.Size;
                 row["NumericPrecision"] = dt.Precision;
                 row["NumericScale"] = dt.Scale;
+            }
+            else if (effectiveType is DateTime64Type dateTime64)
+            {
+                row["NumericScale"] = dateTime64.Scale;
+            }
+            else if (effectiveType is Time64Type time64)
+            {
+                row["NumericScale"] = time64.Scale;
             }
             table.Rows.Add(row);
         }

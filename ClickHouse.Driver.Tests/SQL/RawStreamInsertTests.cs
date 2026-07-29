@@ -43,8 +43,7 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
     [TestCase("TSV", TsvData, true, true, TestName = "TSV")]
     public async Task ShouldInsertCsv(string format, string data, bool useColumns, bool useCompression)
     {
-        var tableName = $"test.raw_csv_{format}_{useColumns}_{useCompression}";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName($"raw_csv_{format}_{useColumns}_{useCompression}");
         await connection.ExecuteStatementAsync($"""
             CREATE TABLE {tableName} (
                 id UInt64,
@@ -75,9 +74,9 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldInsertJsonCompactEachRow()
     {
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.raw_json_compact");
-        await connection.ExecuteStatementAsync("""
-            CREATE TABLE test.raw_json_compact (
+        var tableName = CreateTableName();
+        await connection.ExecuteStatementAsync($"""
+            CREATE TABLE {tableName} (
                 date Date,
                 season UInt16,
                 home_team String,
@@ -89,28 +88,28 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(JsonCompactEachRowData));
         using var response = await client.InsertRawStreamAsync(
-            table: "test.raw_json_compact",
+            table: tableName,
             stream: stream,
             format: "JSONCompactEachRow",
             columns: new[] { "date", "season", "home_team", "away_team", "home_score", "away_score" });
 
         Assert.That(response.IsSuccessStatusCode, Is.True);
 
-        var count = await connection.ExecuteScalarAsync("SELECT count() FROM test.raw_json_compact");
+        var count = await connection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
         Assert.That(count, Is.EqualTo(7));
 
         // Verify specific data
         var bradfordAwayScore = await connection.ExecuteScalarAsync(
-            "SELECT away_score FROM test.raw_json_compact WHERE home_team = 'Sutton United'");
+            $"SELECT away_score FROM {tableName} WHERE home_team = 'Sutton United'");
         Assert.That(bradfordAwayScore, Is.EqualTo(4));
     }
 
     [Test]
     public async Task ShouldInsertWithQueryId()
     {
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.raw_query_id");
-        await connection.ExecuteStatementAsync("""
-            CREATE TABLE test.raw_query_id (
+        var tableName = CreateTableName();
+        await connection.ExecuteStatementAsync($"""
+            CREATE TABLE {tableName} (
                 id UInt64,
                 name String,
                 value Float32
@@ -121,7 +120,7 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(CsvDataNoHeader));
         using var response = await client.InsertRawStreamAsync(
-            table: "test.raw_query_id",
+            table: tableName,
             stream: stream,
             format: "CSV",
             columns: new[] { "id", "name", "value" },
@@ -137,9 +136,9 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldInsertPartialColumns()
     {
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.raw_partial_columns");
-        await connection.ExecuteStatementAsync("""
-            CREATE TABLE test.raw_partial_columns (
+        var tableName = CreateTableName();
+        await connection.ExecuteStatementAsync($"""
+            CREATE TABLE {tableName} (
                 id UInt64,
                 name String,
                 value Float32 DEFAULT 0.0,
@@ -155,18 +154,18 @@ public class RawStreamInsertTests : AbstractConnectionTestFixture
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(partialCsv));
         using var response = await client.InsertRawStreamAsync(
-            table: "test.raw_partial_columns",
+            table: tableName,
             stream: stream,
             format: "CSV",
             columns: new[] { "id", "name" });
 
         Assert.That(response.IsSuccessStatusCode, Is.True);
 
-        var count = await connection.ExecuteScalarAsync("SELECT count() FROM test.raw_partial_columns");
+        var count = await connection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
         Assert.That(count, Is.EqualTo(2));
 
         // Verify defaults were applied
-        var valueSum = await connection.ExecuteScalarAsync("SELECT sum(value) FROM test.raw_partial_columns");
+        var valueSum = await connection.ExecuteScalarAsync($"SELECT sum(value) FROM {tableName}");
         Assert.That((double)valueSum, Is.EqualTo(0.0));
     }
 }
