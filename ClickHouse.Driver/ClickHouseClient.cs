@@ -866,11 +866,8 @@ public sealed class ClickHouseClient : IClickHouseClient
     }
 
     /// <inheritdoc />
-    public async Task<HttpResponseMessage> PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, bool isCompressed, CancellationToken token, QueryOptions queryOptions = null)
-    {
-        var content = new StreamCallbackContent(callback, token);
-        return await PostStreamAsync(sql, content, isCompressed ? "gzip" : null, queryOptions, token).ConfigureAwait(false);
-    }
+    public Task<HttpResponseMessage> PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, bool isCompressed, CancellationToken token, QueryOptions queryOptions = null)
+        => PostStreamAsync(sql, callback, isCompressed ? "gzip" : null, queryOptions, token);
 
     private Task<HttpResponseMessage> PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, string contentEncoding, QueryOptions queryOptions, CancellationToken token)
     {
