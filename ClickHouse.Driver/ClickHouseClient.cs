@@ -965,12 +965,19 @@ public sealed class ClickHouseClient : IClickHouseClient
         {
             // Older ClickHouse servers (23.x-24.8) can return a success HTTP status but still report a
             // processing error (a truncated insert stream, a timeout, ...) only through the
-            // X-ClickHouse-Exception-Code header (or trailer). Without inspecting it, a rejected insert
-            // is silently treated as success, causing data loss.
+            // X-ClickHouse-Exception-Code header. Without inspecting it, a rejected insert is silently
+            // treated as success, causing data loss. On the bulk-insert/stream path the whole response
+            // is buffered (ResponseContentRead), so a code the server delivers as an HTTP trailer is
+            // visible here too; on the streaming query path (ResponseHeadersRead) only the leading
+            // header is available at this point.
             if (TryGetExceptionCodeHeader(response) is int exceptionCode && exceptionCode != 0)
             {
                 var headerException = await CreateExceptionFromExceptionCodeAsync(response, query, exceptionCode).ConfigureAwait(false);
                 activity?.SetException(headerException);
+
+                // The response is not returned to the caller on this throw path, so dispose it here to
+                // release the pooled connection promptly instead of waiting for GC finalization.
+                response.Dispose();
                 throw headerException;
             }
 
@@ -1033,7 +1040,10 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <summary>
     /// Reads the numeric <c>X-ClickHouse-Exception-Code</c> value the server set, checking both the
     /// leading response headers and the trailing headers (the server may append it as a trailer when
-    /// the error is discovered after the status line has already been sent). Returns
+    /// the error is discovered after the status line has already been sent). Trailing headers are only
+    /// populated once the response body has been consumed, so the trailer check is effective on
+    /// fully-buffered responses (the bulk-insert/stream path, which reads the whole response); on the
+    /// streaming query path only the leading header is available when <c>HandleError</c> runs. Returns
     /// <see langword="null"/> if it is absent from both or is not a valid integer.
     /// </summary>
     private static int? TryGetExceptionCodeHeader(HttpResponseMessage response)

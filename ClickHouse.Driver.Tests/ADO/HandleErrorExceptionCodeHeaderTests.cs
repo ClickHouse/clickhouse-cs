@@ -164,4 +164,45 @@ public class HandleErrorExceptionCodeHeaderTests
             Assert.That(ex.Message, Does.Contain("Syntax error"));
         });
     }
+
+    [Test]
+    public void HandleError_When200WithNonZeroExceptionCodeHeader_DisposesResponseBeforeThrow()
+    {
+        // The success-with-exception-code branch throws instead of returning the response to the
+        // caller, so it must dispose the response (releasing the pooled connection) rather than
+        // leaving it for GC finalization.
+        var content = new DisposeTrackingContent();
+        var handler = new TrackingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+            response.Headers.TryAddWithoutValidation(ExceptionCodeHeader, "159");
+            return response;
+        });
+        using var client = new ClickHouseClient(new ClickHouseClientSettings { HttpClient = new HttpClient(handler) });
+
+        Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("INSERT INTO t VALUES (1)"));
+
+        Assert.That(content.Disposed, Is.True);
+    }
+
+    /// <summary>
+    /// <see cref="StringContent"/> that records whether it was disposed, so a test can assert that
+    /// <c>HandleError</c> disposed the HTTP response on its throw path.
+    /// </summary>
+    private sealed class DisposeTrackingContent : StringContent
+    {
+        public DisposeTrackingContent()
+            : base(string.Empty)
+        {
+        }
+
+        public bool Disposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
+    }
 }
