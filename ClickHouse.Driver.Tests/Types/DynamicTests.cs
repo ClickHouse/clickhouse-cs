@@ -234,7 +234,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_Int32_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_int32";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -250,7 +250,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_Int64_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_int64";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -266,7 +266,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_Double_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_double";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -282,7 +282,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_String_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_string";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -298,7 +298,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_Bool_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_bool";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -316,7 +316,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_DateTime_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_datetime";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -340,7 +340,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_Guid_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_guid";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -358,7 +358,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_Decimal_ShouldPreservePrecision()
     {
-        var targetTable = "test.dynamic_write_decimal";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -406,7 +406,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [TestCaseSource(typeof(DynamicTests), nameof(DynamicDecimalRoundTripCases))]
     public async Task Write_DecimalWithScaleAbove9_ShouldRoundTripWithoutTruncation(object value, string caseId)
     {
-        var targetTable = "test." + SanitizeTableName($"dynamic_write_decimal_{caseId}_{Guid.NewGuid():N}");
+        var targetTable = CreateTableName($"dynamic_write_decimal_{caseId}");
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -426,7 +426,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_IntArray_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_int_array";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -445,7 +445,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_StringList_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_string_list";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -464,7 +464,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_Dictionary_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_dictionary";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -484,7 +484,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_MixedTypesInSameColumn_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_mixed";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 
@@ -515,7 +515,7 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_Null_ShouldRoundTrip()
     {
-        var targetTable = "test.dynamic_write_null";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
 

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
@@ -15,9 +14,6 @@ namespace ClickHouse.Driver.Tests.Copy;
 [TestFixture]
 public class PocoReadTests : AbstractConnectionTestFixture
 {
-    private string CreateTestTableName([CallerMemberName] string testName = null)
-        => SanitizeTableName($"test_pocoread_{testName}_{Guid.NewGuid():N}");
-
     public class SimplePoco
     {
         public ulong Id { get; set; }

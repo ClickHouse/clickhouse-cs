@@ -181,6 +181,7 @@ public class WriteDateTimeHttpParamTests : IDisposable
     protected readonly ClickHouseClient client;
     private readonly string tableName;
     private readonly string sessionTimezone;
+    private bool disposed;
 
     public WriteDateTimeHttpParamTests(string sessionTimezone)
     {
@@ -190,12 +191,29 @@ public class WriteDateTimeHttpParamTests : IDisposable
         client = new ClickHouseClient(settings);
         connection = client.CreateConnection();
         client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test;").GetAwaiter().GetResult();
-        tableName = $"test.datetime_http_test_{sessionTimezone.Replace('/', '_').Replace('-', '_')}";
+        // One table per fixture instance, recreated per test below, so the session_timezone
+        // cases stay apart from each other and from the other concurrent test suites.
+        tableName = TestUtilities.CreateTableName($"datetime_http_{sessionTimezone}");
     }
 
     [OneTimeTearDown]
     public void Dispose()
     {
+        // NUnit both invokes [OneTimeTearDown] and disposes the fixture instance, so this can run twice.
+        if (disposed)
+            return;
+        disposed = true;
+
+        try
+        {
+            connection?.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}").GetAwaiter().GetResult();
+        }
+        catch (Exception e)
+        {
+            // Best effort: a leftover table must not fail an otherwise passing fixture.
+            TestContext.Progress.WriteLine($"Failed to drop test table {tableName}: {e.Message}");
+        }
+
         connection?.Dispose();
         client?.Dispose();
     }
@@ -203,6 +221,7 @@ public class WriteDateTimeHttpParamTests : IDisposable
     [SetUp]
     public async Task SetUp()
     {
+        // Each test inserts a single row and reads it back, so the shared table is reset here.
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
         await connection.ExecuteStatementAsync($@"
             CREATE TABLE {tableName} (
@@ -430,6 +449,7 @@ public class InferredDateTimeHttpParamTests : IDisposable
     protected readonly ClickHouseClient client;
     private readonly string tableName;
     private readonly string sessionTimezone;
+    private bool disposed;
 
     public InferredDateTimeHttpParamTests(string sessionTimezone)
     {
@@ -439,12 +459,29 @@ public class InferredDateTimeHttpParamTests : IDisposable
         client = new ClickHouseClient(settings);
         connection = client.CreateConnection();
         client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test;").GetAwaiter().GetResult();
-        tableName = $"test.datetime_inferred_test_{sessionTimezone.Replace('/', '_').Replace('-', '_')}";
+        // One table per fixture instance, recreated per test below, so the session_timezone
+        // cases stay apart from each other and from the other concurrent test suites.
+        tableName = TestUtilities.CreateTableName($"datetime_inferred_{sessionTimezone}");
     }
 
     [OneTimeTearDown]
     public void Dispose()
     {
+        // NUnit both invokes [OneTimeTearDown] and disposes the fixture instance, so this can run twice.
+        if (disposed)
+            return;
+        disposed = true;
+
+        try
+        {
+            connection?.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}").GetAwaiter().GetResult();
+        }
+        catch (Exception e)
+        {
+            // Best effort: a leftover table must not fail an otherwise passing fixture.
+            TestContext.Progress.WriteLine($"Failed to drop test table {tableName}: {e.Message}");
+        }
+
         connection?.Dispose();
         client?.Dispose();
     }
@@ -452,6 +489,7 @@ public class InferredDateTimeHttpParamTests : IDisposable
     [SetUp]
     public async Task SetUp()
     {
+        // Each test inserts a single row and reads it back, so the shared table is reset here.
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
         await connection.ExecuteStatementAsync($@"
             CREATE TABLE {tableName} (
@@ -708,12 +746,21 @@ public class InferredDateTimeHttpParamTests : IDisposable
 [TestFixture]
 public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
 {
+    private readonly string tableName;
+
+    public WriteDateTimeBulkCopyTests()
+    {
+        // Shared by every test in the fixture (recreated per test below); the base fixture drops it.
+        tableName = CreateTableName("datetime_bulk_test");
+    }
+
     [SetUp]
     public async Task SetUp()
     {
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.datetime_bulk_test");
-        await connection.ExecuteStatementAsync(@"
-            CREATE TABLE test.datetime_bulk_test (
+        // Each test inserts a single row and reads it back, so the shared table is reset here.
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await connection.ExecuteStatementAsync($@"
+            CREATE TABLE {tableName} (
                 dt_utc DateTime('UTC'),
                 dt_amsterdam DateTime('Europe/Amsterdam'),
                 dt_no_tz DateTime
@@ -723,7 +770,7 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
     [TearDown]
     public async Task TearDown()
     {
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.datetime_bulk_test");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     [Test]
@@ -738,12 +785,12 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = [col],
         };
         await bulkCopy.WriteToServerAsync([[dt]]);
 
-        var result = (DateTime)await connection.ExecuteScalarAsync($"SELECT {col} FROM test.datetime_bulk_test");
+        var result = (DateTime)await connection.ExecuteScalarAsync($"SELECT {col} FROM {tableName}");
         Assert.That(result.Ticks, Is.EqualTo(dt.Ticks));
     }
 
@@ -755,12 +802,12 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = ["dt_amsterdam"],
         };
         await bulkCopy.WriteToServerAsync([[original]]);
 
-        var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync("SELECT dt_amsterdam FROM test.datetime_bulk_test");
+        var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync($"SELECT dt_amsterdam FROM {tableName}");
         Assert.That(reader.Read(), Is.True);
         var dto = reader.GetDateTimeOffset(0);
 
@@ -779,12 +826,12 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = [col],
         };
         await bulkCopy.WriteToServerAsync([[utcDt]]);
 
-        var unix = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp({col}) FROM test.datetime_bulk_test"));
+        var unix = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp({col}) FROM {tableName}"));
         Assert.That(unix, Is.EqualTo(expected));
     }
 
@@ -799,12 +846,12 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = [col],
         };
         await bulkCopy.WriteToServerAsync([[localDt]]);
 
-        var unix = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp({col}) FROM test.datetime_bulk_test"));
+        var unix = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp({col}) FROM {tableName}"));
         Assert.That(unix, Is.EqualTo(expected));
     }
 
@@ -819,12 +866,12 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = [col],
         };
         await bulkCopy.WriteToServerAsync([[dto]]);
 
-        var unix = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp({col}) FROM test.datetime_bulk_test"));
+        var unix = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp({col}) FROM {tableName}"));
         Assert.That(unix, Is.EqualTo(expected));
     }
 
@@ -838,13 +885,13 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = ["dt_utc"]
         };
         
         await bulkCopy.WriteToServerAsync([[dt]]);
 
-        var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_utc FROM test.datetime_bulk_test");
+        var result = (DateTime)await connection.ExecuteScalarAsync($"SELECT dt_utc FROM {tableName}");
         Assert.That(result, Is.EqualTo(DateTimeConversions.DateTimeEpochStart));
     }
 
@@ -858,13 +905,13 @@ public class WriteDateTimeBulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = ["dt_utc"]
         };
 
         await bulkCopy.WriteToServerAsync([[dto]]);
 
-        var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt_utc FROM test.datetime_bulk_test");
+        var result = (DateTime)await connection.ExecuteScalarAsync($"SELECT dt_utc FROM {tableName}");
         Assert.That(result, Is.EqualTo(DateTimeConversions.DateTimeEpochStart));
     }
 }
@@ -881,6 +928,7 @@ public class WriteDateTime64HttpParamTests : IDisposable
     protected readonly ClickHouseConnection connection;
     protected readonly ClickHouseClient client;
     private readonly string tableName;
+    private bool disposed;
 
     public WriteDateTime64HttpParamTests(string sessionTimezone)
     {
@@ -889,12 +937,29 @@ public class WriteDateTime64HttpParamTests : IDisposable
         client = new ClickHouseClient(settings);
         connection = client.CreateConnection();
         client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test;").GetAwaiter().GetResult();
-        tableName = $"test.datetime64_http_test_{sessionTimezone.Replace('/', '_').Replace('-', '_')}";
+        // One table per fixture instance, recreated per test below, so the session_timezone
+        // cases stay apart from each other and from the other concurrent test suites.
+        tableName = TestUtilities.CreateTableName($"datetime64_http_{sessionTimezone}");
     }
 
     [OneTimeTearDown]
     public void Dispose()
     {
+        // NUnit both invokes [OneTimeTearDown] and disposes the fixture instance, so this can run twice.
+        if (disposed)
+            return;
+        disposed = true;
+
+        try
+        {
+            connection?.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}").GetAwaiter().GetResult();
+        }
+        catch (Exception e)
+        {
+            // Best effort: a leftover table must not fail an otherwise passing fixture.
+            TestContext.Progress.WriteLine($"Failed to drop test table {tableName}: {e.Message}");
+        }
+
         connection?.Dispose();
         client?.Dispose();
     }
@@ -902,6 +967,7 @@ public class WriteDateTime64HttpParamTests : IDisposable
     [SetUp]
     public async Task SetUp()
     {
+        // Each test inserts a single row and reads it back, so the shared table is reset here.
         await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
         await connection.ExecuteStatementAsync($@"
             CREATE TABLE {tableName} (
@@ -1002,12 +1068,21 @@ public class WriteDateTime64HttpParamTests : IDisposable
 [TestFixture]
 public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
 {
+    private readonly string tableName;
+
+    public WriteDateTime64BulkCopyTests()
+    {
+        // Shared by every test in the fixture (recreated per test below); the base fixture drops it.
+        tableName = CreateTableName("datetime64_bulk_test");
+    }
+
     [SetUp]
     public async Task SetUp()
     {
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.datetime64_bulk_test");
-        await connection.ExecuteStatementAsync(@"
-            CREATE TABLE test.datetime64_bulk_test (
+        // Each test inserts a single row and reads it back, so the shared table is reset here.
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        await connection.ExecuteStatementAsync($@"
+            CREATE TABLE {tableName} (
                 dt64_utc DateTime64(3, 'UTC'),
                 dt64_amsterdam DateTime64(3, 'Europe/Amsterdam'),
                 dt64_no_tz DateTime64(3)
@@ -1017,7 +1092,7 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
     [TearDown]
     public async Task TearDown()
     {
-        await connection.ExecuteStatementAsync("DROP TABLE IF EXISTS test.datetime64_bulk_test");
+        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     [Test]
@@ -1027,13 +1102,13 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime64_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = ["dt64_utc"]
         };
         
         await bulkCopy.WriteToServerAsync([[dt]]);
 
-        var result = (DateTime)await connection.ExecuteScalarAsync("SELECT dt64_utc FROM test.datetime64_bulk_test");
+        var result = (DateTime)await connection.ExecuteScalarAsync($"SELECT dt64_utc FROM {tableName}");
         Assert.That(result, Is.EqualTo(DateTimeConversions.DateTimeEpochStart));
     }
 
@@ -1048,12 +1123,12 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime64_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = [col],
         };
         await bulkCopy.WriteToServerAsync([[utcDt]]);
 
-        var unixMs = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp64Milli({col}) FROM test.datetime64_bulk_test"));
+        var unixMs = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp64Milli({col}) FROM {tableName}"));
         Assert.That(unixMs, Is.EqualTo(expected));
     }
 
@@ -1069,12 +1144,12 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime64_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = [col],
         };
         await bulkCopy.WriteToServerAsync([[dt]]);
 
-        var result = (DateTime)await connection.ExecuteScalarAsync($"SELECT {col} FROM test.datetime64_bulk_test");
+        var result = (DateTime)await connection.ExecuteScalarAsync($"SELECT {col} FROM {tableName}");
         Assert.That(result.Ticks, Is.EqualTo(dt.Ticks));
     }
 
@@ -1089,12 +1164,12 @@ public class WriteDateTime64BulkCopyTests : AbstractConnectionTestFixture
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
-            DestinationTableName = "test.datetime64_bulk_test",
+            DestinationTableName = tableName,
             ColumnNames = [col],
         };
         await bulkCopy.WriteToServerAsync([[localDt]]);
 
-        var unixMs = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp64Milli({col}) FROM test.datetime64_bulk_test"));
+        var unixMs = Convert.ToInt64(await connection.ExecuteScalarAsync($"SELECT toUnixTimestamp64Milli({col}) FROM {tableName}"));
         Assert.That(unixMs, Is.EqualTo(expected));
     }
 }

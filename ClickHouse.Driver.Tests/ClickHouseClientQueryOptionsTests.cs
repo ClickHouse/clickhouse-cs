@@ -15,14 +15,11 @@ namespace ClickHouse.Driver.Tests;
 [TestFixture]
 public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
 {
-    private string CreateTestTableName([CallerMemberName] string testName = null)
-        => SanitizeTableName($"test_opts_{testName}_{Guid.NewGuid():N}");
-
     private async Task<string> CreateSimpleTestTableAsync([CallerMemberName] string testName = null)
     {
-        var tableName = $"test.{CreateTestTableName(testName)}";
+        var tableName = CreateTableName(testName);
         await client.ExecuteNonQueryAsync($@"
-            CREATE TABLE IF NOT EXISTS {tableName}
+            CREATE TABLE {tableName}
             (id UInt64, value String)
             ENGINE = MergeTree() ORDER BY id");
         return tableName;
@@ -30,9 +27,9 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
 
     private async Task<string> CreateTableWithDefaultsAsync([CallerMemberName] string testName = null)
     {
-        var tableName = $"test.{CreateTestTableName(testName)}";
+        var tableName = CreateTableName(testName);
         await client.ExecuteNonQueryAsync($@"
-            CREATE TABLE IF NOT EXISTS {tableName}
+            CREATE TABLE {tableName}
             (
                 id UInt64,
                 name String,
@@ -130,24 +127,20 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
     public async Task ExecuteNonQueryAsync_WithDatabaseOverride_CreatesTableInSpecifiedDatabase()
     {
         await client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test_secondary");
-        var tableName = $"test_table_{Guid.NewGuid():N}"[..30];
 
-        try
-        {
-            var options = new QueryOptions { Database = "test_secondary" };
-            await client.ExecuteNonQueryAsync(
-                $"CREATE TABLE {tableName} (id UInt64) ENGINE = MergeTree() ORDER BY id",
-                options: options);
+        // The query runs against test_secondary, and system.tables stores the unqualified name
+        var qualifiedTableName = CreateTableName(database: "test_secondary");
+        var tableName = TestUtilities.BareTableName(qualifiedTableName);
 
-            // Verify table exists in test_secondary
-            var exists = await client.ExecuteScalarAsync(
-                $"SELECT count() FROM system.tables WHERE database = 'test_secondary' AND name = '{tableName}'");
-            Assert.That(exists, Is.EqualTo(1UL));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test_secondary.{tableName}");
-        }
+        var options = new QueryOptions { Database = "test_secondary" };
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {tableName} (id UInt64) ENGINE = MergeTree() ORDER BY id",
+            options: options);
+
+        // Verify table exists in test_secondary
+        var exists = await client.ExecuteScalarAsync(
+            $"SELECT count() FROM system.tables WHERE database = 'test_secondary' AND name = '{tableName}'");
+        Assert.That(exists, Is.EqualTo(1UL));
     }
 
     [Test]
@@ -165,27 +158,23 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
     public async Task ExecuteReaderAsync_WithDatabaseOverride_ReturnsDataFromSpecifiedDatabase()
     {
         await client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test_secondary");
-        var tableName = $"test_data_{Guid.NewGuid():N}"[..30];
 
-        try
-        {
-            // Create and populate table in test_secondary
-            await client.ExecuteNonQueryAsync(
-                $"CREATE TABLE test_secondary.{tableName} (id UInt64, value String) ENGINE = MergeTree() ORDER BY id");
-            await client.ExecuteNonQueryAsync(
-                $"INSERT INTO test_secondary.{tableName} VALUES (1, 'from_secondary')");
+        // The SELECT resolves the name against the overridden database, so it has to be unqualified
+        var qualifiedTableName = CreateTableName(database: "test_secondary");
+        var tableName = TestUtilities.BareTableName(qualifiedTableName);
 
-            var options = new QueryOptions { Database = "test_secondary" };
-            using var reader = await client.ExecuteReaderAsync(
-                $"SELECT value FROM {tableName}", options: options);
+        // Create and populate table in test_secondary
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {qualifiedTableName} (id UInt64, value String) ENGINE = MergeTree() ORDER BY id");
+        await client.ExecuteNonQueryAsync(
+            $"INSERT INTO {qualifiedTableName} VALUES (1, 'from_secondary')");
 
-            Assert.That(reader.Read(), Is.True);
-            Assert.That(reader.GetString(0), Is.EqualTo("from_secondary"));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test_secondary.{tableName}");
-        }
+        var options = new QueryOptions { Database = "test_secondary" };
+        using var reader = await client.ExecuteReaderAsync(
+            $"SELECT value FROM {tableName}", options: options);
+
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo("from_secondary"));
     }
 
     [Test]
@@ -263,7 +252,6 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
         }
         finally
         {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
             await client.ExecuteNonQueryAsync($"DROP USER IF EXISTS {userName}");
             await client.ExecuteNonQueryAsync($"DROP ROLE IF EXISTS {roleName}");
         }
@@ -458,12 +446,16 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
             SessionId = sessionId
         };
 
+        // Static helper with database: null — a temporary table cannot be database-qualified, and
+        // registering it for the fixture drop would aim an unqualified DROP at the default database.
+        var tempTable = TestUtilities.CreateTableName(database: null);
+
         await client.ExecuteNonQueryAsync(
-            "CREATE TEMPORARY TABLE temp_test_persist (id UInt8)", options: options);
+            $"CREATE TEMPORARY TABLE {tempTable} (id UInt8)", options: options);
 
         // Should be accessible with same session
         var count = await client.ExecuteScalarAsync(
-            "SELECT count() FROM temp_test_persist", options: options);
+            $"SELECT count() FROM {tempTable}", options: options);
         Assert.That(count, Is.EqualTo(0UL));
     }
 
@@ -472,13 +464,14 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
     {
         // First create a temp table with session disabled
         var options = new QueryOptions { UseSession = false };
+        var tempTable = TestUtilities.CreateTableName(database: null);
 
         await client.ExecuteNonQueryAsync(
-            "CREATE TEMPORARY TABLE temp_test_nosession (id UInt8)", options: options);
+            $"CREATE TEMPORARY TABLE {tempTable} (id UInt8)", options: options);
 
         // Without session, temp table not accessible in next query
         var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
-            await client.ExecuteScalarAsync("SELECT count() FROM temp_test_nosession", options: options));
+            await client.ExecuteScalarAsync($"SELECT count() FROM {tempTable}", options: options));
 
         Assert.That(ex!.ErrorCode, Is.EqualTo(60)); // UNKNOWN_TABLE
     }
@@ -693,25 +686,19 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
     public async Task InsertBinaryAsync_WithSmallBatchSize_InsertsInMultipleBatches()
     {
         var tableName = await CreateSimpleTestTableAsync();
-        try
-        {
-            var options = new InsertOptions { BatchSize = 10 };
-            var rows = GenerateTestRows(100).ToList();
 
-            await client.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
+        var options = new InsertOptions { BatchSize = 10 };
+        var rows = GenerateTestRows(100).ToList();
 
-            // All rows should be inserted regardless of batch size
-            var count = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
-            Assert.That(count, Is.EqualTo(100UL));
+        await client.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
 
-            // Verify data integrity
-            var distinctCount = await client.ExecuteScalarAsync($"SELECT count(DISTINCT id) FROM {tableName}");
-            Assert.That(distinctCount, Is.EqualTo(100UL));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        // All rows should be inserted regardless of batch size
+        var count = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        Assert.That(count, Is.EqualTo(100UL));
+
+        // Verify data integrity
+        var distinctCount = await client.ExecuteScalarAsync($"SELECT count(DISTINCT id) FROM {tableName}");
+        Assert.That(distinctCount, Is.EqualTo(100UL));
     }
 
     [TestCase(0)]
@@ -744,208 +731,168 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
     public async Task InsertBinaryAsync_WithBatchesExceedingParallelism_ReturnsCorrectRowCount()
     {
         var tableName = await CreateSimpleTestTableAsync();
-        try
+
+        var options = new InsertOptions
         {
-            var options = new InsertOptions
-            {
-                BatchSize = 10,
-                MaxDegreeOfParallelism = 2
-            };
-            var rows = GenerateTestRows(50).ToList();
+            BatchSize = 10,
+            MaxDegreeOfParallelism = 2
+        };
+        var rows = GenerateTestRows(50).ToList();
 
-            var inserted = await client.InsertBinaryAsync(
-                tableName, new[] { "id", "value" }, rows, options);
+        var inserted = await client.InsertBinaryAsync(
+            tableName, new[] { "id", "value" }, rows, options);
 
-            // 50 rows in 5 batches with parallelism 2: must return 50, not 20
-            Assert.That(inserted, Is.EqualTo(50));
+        // 50 rows in 5 batches with parallelism 2: must return 50, not 20
+        Assert.That(inserted, Is.EqualTo(50));
 
-            var count = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
-            Assert.That(count, Is.EqualTo(50UL));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        var count = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        Assert.That(count, Is.EqualTo(50UL));
     }
 
     [Test]
     public async Task InsertBinaryAsync_WithRowBinaryFormat_InsertsSuccessfully()
     {
         var tableName = await CreateSimpleTestTableAsync();
-        try
-        {
-            var options = new InsertOptions { Format = RowBinaryFormat.RowBinary };
-            var rows = GenerateTestRows(50).ToList();
 
-            var inserted = await client.InsertBinaryAsync(
-                tableName, new[] { "id", "value" }, rows, options);
+        var options = new InsertOptions { Format = RowBinaryFormat.RowBinary };
+        var rows = GenerateTestRows(50).ToList();
 
-            Assert.That(inserted, Is.EqualTo(50));
+        var inserted = await client.InsertBinaryAsync(
+            tableName, new[] { "id", "value" }, rows, options);
 
-            var count = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
-            Assert.That(count, Is.EqualTo(50UL));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        Assert.That(inserted, Is.EqualTo(50));
+
+        var count = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        Assert.That(count, Is.EqualTo(50UL));
     }
 
     [Test]
     public async Task InsertBinaryAsync_WithRowBinaryWithDefaultsFormat_InsertsWithDefaults()
     {
         var tableName = await CreateTableWithDefaultsAsync();
-        try
+
+        var options = new InsertOptions { Format = RowBinaryFormat.RowBinaryWithDefaults };
+        var rows = new List<object[]>
         {
-            var options = new InsertOptions { Format = RowBinaryFormat.RowBinaryWithDefaults };
-            var rows = new List<object[]>
-            {
-                new object[] { 1UL, "Name1", DateTime.UtcNow, 1.5f },
-                new object[] { 2UL, "Name2", DateTime.UtcNow, 2.5f },
-            };
+            new object[] { 1UL, "Name1", DateTime.UtcNow, 1.5f },
+            new object[] { 2UL, "Name2", DateTime.UtcNow, 2.5f },
+        };
 
-            var inserted = await client.InsertBinaryAsync(
-                tableName, new[] { "id", "name", "created_at", "value" }, rows, options);
+        var inserted = await client.InsertBinaryAsync(
+            tableName, new[] { "id", "name", "created_at", "value" }, rows, options);
 
-            Assert.That(inserted, Is.EqualTo(2));
+        Assert.That(inserted, Is.EqualTo(2));
 
-            var count = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
-            Assert.That(count, Is.EqualTo(2UL));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        var count = await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        Assert.That(count, Is.EqualTo(2UL));
     }
 
     [Test]
     public async Task InsertBinaryAsync_WithRowBinaryWithDefaultsFormat_OmittedColumnsUseDefaults()
     {
         var tableName = await CreateTableWithDefaultsAsync();
-        try
+
+        var options = new InsertOptions { Format = RowBinaryFormat.RowBinaryWithDefaults };
+        var rows = new List<object[]>
         {
-            var options = new InsertOptions { Format = RowBinaryFormat.RowBinaryWithDefaults };
-            var rows = new List<object[]>
-            {
-                new object[] { 1UL, "Name1" },
-                new object[] { 2UL, "Name2" },
-            };
+            new object[] { 1UL, "Name1" },
+            new object[] { 2UL, "Name2" },
+        };
 
-            // Insert only id and name columns - created_at and value should use defaults
-            var inserted = await client.InsertBinaryAsync(
-                tableName, new[] { "id", "name" }, rows, options);
+        // Insert only id and name columns - created_at and value should use defaults
+        var inserted = await client.InsertBinaryAsync(
+            tableName, new[] { "id", "name" }, rows, options);
 
-            Assert.That(inserted, Is.EqualTo(2));
+        Assert.That(inserted, Is.EqualTo(2));
 
-            // Verify default values were used
-            using var reader = await client.ExecuteReaderAsync(
-                $"SELECT id, name, value FROM {tableName} ORDER BY id");
+        // Verify default values were used
+        using var reader = await client.ExecuteReaderAsync(
+            $"SELECT id, name, value FROM {tableName} ORDER BY id");
 
-            reader.Read();
-            Assert.That(reader.GetValue(0), Is.EqualTo(1UL));
-            Assert.That(reader.GetString(1), Is.EqualTo("Name1"));
-            Assert.That(reader.GetFloat(2), Is.EqualTo(42.5f)); // Default value
+        reader.Read();
+        Assert.That(reader.GetValue(0), Is.EqualTo(1UL));
+        Assert.That(reader.GetString(1), Is.EqualTo("Name1"));
+        Assert.That(reader.GetFloat(2), Is.EqualTo(42.5f)); // Default value
 
-            reader.Read();
-            Assert.That(reader.GetValue(0), Is.EqualTo(2UL));
-            Assert.That(reader.GetString(1), Is.EqualTo("Name2"));
-            Assert.That(reader.GetFloat(2), Is.EqualTo(42.5f)); // Default value
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        reader.Read();
+        Assert.That(reader.GetValue(0), Is.EqualTo(2UL));
+        Assert.That(reader.GetString(1), Is.EqualTo("Name2"));
+        Assert.That(reader.GetFloat(2), Is.EqualTo(42.5f)); // Default value
     }
 
     [Test]
     public async Task InsertBinaryAsync_WithDatabaseOverride_InsertsToSpecifiedDatabase()
     {
         await client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test_secondary");
-        var tableName = $"insert_test_{Guid.NewGuid():N}"[..30];
 
-        try
-        {
-            await client.ExecuteNonQueryAsync(
-                $"CREATE TABLE test_secondary.{tableName} (id UInt64, value String) ENGINE = MergeTree() ORDER BY id");
+        // The insert resolves the name against the overridden database, so it has to be unqualified
+        var qualifiedTableName = CreateTableName(database: "test_secondary");
+        var tableName = TestUtilities.BareTableName(qualifiedTableName);
 
-            var options = new InsertOptions { Database = "test_secondary" };
-            var rows = GenerateTestRows(10).ToList();
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {qualifiedTableName} (id UInt64, value String) ENGINE = MergeTree() ORDER BY id");
 
-            var inserted = await client.InsertBinaryAsync(
-                tableName, new[] { "id", "value" }, rows, options);
+        var options = new InsertOptions { Database = "test_secondary" };
+        var rows = GenerateTestRows(10).ToList();
 
-            Assert.That(inserted, Is.EqualTo(10));
+        var inserted = await client.InsertBinaryAsync(
+            tableName, new[] { "id", "value" }, rows, options);
 
-            var count = await client.ExecuteScalarAsync($"SELECT count() FROM test_secondary.{tableName}");
-            Assert.That(count, Is.EqualTo(10UL));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test_secondary.{tableName}");
-        }
+        Assert.That(inserted, Is.EqualTo(10));
+
+        var count = await client.ExecuteScalarAsync($"SELECT count() FROM {qualifiedTableName}");
+        Assert.That(count, Is.EqualTo(10UL));
     }
 
     [Test]
     public async Task InsertBinaryAsync_WithQueryId_QueryIdApplied()
     {
         var tableName = await CreateSimpleTestTableAsync();
-        try
-        {
-            var customQueryId = $"insert_qid_{Guid.NewGuid():N}";
-            var options = new InsertOptions { QueryId = customQueryId };
-            var rows = GenerateTestRows(10).ToList();
 
-            await client.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
+        var customQueryId = $"insert_qid_{Guid.NewGuid():N}";
+        var options = new InsertOptions { QueryId = customQueryId };
+        var rows = GenerateTestRows(10).ToList();
 
-            await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        await client.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
 
-            var count = await client.ExecuteScalarAsync(
-                $"SELECT count() FROM system.query_log WHERE query_id LIKE '{customQueryId}%'");
-            Assert.That(count, Is.GreaterThan(0UL), "Custom query ID should appear in query_log");
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+
+        var count = await client.ExecuteScalarAsync(
+            $"SELECT count() FROM system.query_log WHERE query_id LIKE '{customQueryId}%'");
+        Assert.That(count, Is.GreaterThan(0UL), "Custom query ID should appear in query_log");
     }
 
     [Test]
     public async Task InsertBinaryAsync_WithQueryId_SchemaProbeAndBatchesHaveUniqueQueryIds()
     {
         var tableName = await CreateSimpleTestTableAsync();
-        try
+
+        var (trackedClient, handler) = CreateClientWithTracking();
+        using (trackedClient)
         {
-            var (trackedClient, handler) = CreateClientWithTracking();
-            using (trackedClient)
+            var customQueryId = $"insert_unique_qid_{Guid.NewGuid():N}";
+            var options = new InsertOptions
             {
-                var customQueryId = $"insert_unique_qid_{Guid.NewGuid():N}";
-                var options = new InsertOptions
-                {
-                    QueryId = customQueryId,
-                    BatchSize = 5,
-                };
-                var rows = GenerateTestRows(15).ToList(); // 3 batches of 5
+                QueryId = customQueryId,
+                BatchSize = 5,
+            };
+            var rows = GenerateTestRows(15).ToList(); // 3 batches of 5
 
-                await trackedClient.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
+            await trackedClient.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
 
-                // Extract query_id from all captured requests
-                var queryIds = handler.Requests
-                    .Select(r => HttpUtility.ParseQueryString(r.RequestUri.Query).Get("query_id"))
-                    .Where(id => id != null)
-                    .ToList();
+            // Extract query_id from all captured requests
+            var queryIds = handler.Requests
+                .Select(r => HttpUtility.ParseQueryString(r.RequestUri.Query).Get("query_id"))
+                .Where(id => id != null)
+                .ToList();
 
-                // Should have 4 requests: 1 schema probe + 3 batch inserts
-                Assert.That(queryIds, Has.Count.EqualTo(4),
-                    $"Expected 4 requests (1 schema + 3 batches), got {queryIds.Count}");
+            // Should have 4 requests: 1 schema probe + 3 batch inserts
+            Assert.That(queryIds, Has.Count.EqualTo(4),
+                $"Expected 4 requests (1 schema + 3 batches), got {queryIds.Count}");
 
-                // All query IDs must be unique
-                Assert.That(queryIds, Is.Unique,
-                    "All requests within InsertBinaryAsync must have unique query IDs to avoid QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING");
-            }
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+            // All query IDs must be unique
+            Assert.That(queryIds, Is.Unique,
+                "All requests within InsertBinaryAsync must have unique query IDs to avoid QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING");
         }
     }
 
@@ -1019,27 +966,21 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
     public async Task InsertBinaryAsync_WithCustomSettings_SettingsApplied()
     {
         var tableName = await CreateSimpleTestTableAsync();
-        try
+
+        var options = new InsertOptions
         {
-            var options = new InsertOptions
+            CustomSettings = new Dictionary<string, object>
             {
-                CustomSettings = new Dictionary<string, object>
-                {
-                    { "insert_quorum", 0 }
-                }
-            };
-            var rows = GenerateTestRows(10).ToList();
+                { "insert_quorum", 0 }
+            }
+        };
+        var rows = GenerateTestRows(10).ToList();
 
-            // Should succeed with the custom setting
-            var inserted = await client.InsertBinaryAsync(
-                tableName, new[] { "id", "value" }, rows, options);
+        // Should succeed with the custom setting
+        var inserted = await client.InsertBinaryAsync(
+            tableName, new[] { "id", "value" }, rows, options);
 
-            Assert.That(inserted, Is.EqualTo(10));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        Assert.That(inserted, Is.EqualTo(10));
     }
 
     [Test]
@@ -1080,25 +1021,19 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
     public async Task InsertBinaryAsync_WithSessionAndSingleParallelism_Succeeds()
     {
         var tableName = await CreateSimpleTestTableAsync();
-        try
-        {
-            var options = new InsertOptions
-            {
-                UseSession = true,
-                MaxDegreeOfParallelism = 1,
-                BatchSize = 5,
-            };
-            var rows = GenerateTestRows(10).ToList();
 
-            var inserted = await client.InsertBinaryAsync(
-                tableName, new[] { "id", "value" }, rows, options);
-
-            Assert.That(inserted, Is.EqualTo(10));
-        }
-        finally
+        var options = new InsertOptions
         {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+            UseSession = true,
+            MaxDegreeOfParallelism = 1,
+            BatchSize = 5,
+        };
+        var rows = GenerateTestRows(10).ToList();
+
+        var inserted = await client.InsertBinaryAsync(
+            tableName, new[] { "id", "value" }, rows, options);
+
+        Assert.That(inserted, Is.EqualTo(10));
     }
 
     [Test]
