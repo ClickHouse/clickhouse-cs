@@ -32,6 +32,29 @@ public class TestTableNamingTests : AbstractConnectionTestFixture
         Assert.That(UniqueSuffix.IsMatch(name), Is.True, $"'{name}' should end in _net<major>_<12 hex>");
     }
 
+    // The moniker must track the compiled target framework, not Environment.Version, which reports the
+    // *runtime* version: under roll-forward (a net6.0 build on the .NET 10 runtime, when 6.0 is absent)
+    // every suite reports the same major and tables get attributed to the wrong one.
+    // The expectation is spelled out per target framework on purpose — deriving it from
+    // TargetFrameworkAttribute here would just re-read the same source the implementation uses, and
+    // would pass either way.
+    [Test]
+    public void CreateTableName_WithNoArguments_UsesCompiledTargetFrameworkNotRuntimeVersion()
+    {
+#if NET6_0
+        const string expected = "net6";
+#elif NET8_0
+        const string expected = "net8";
+#elif NET9_0
+        const string expected = "net9";
+#elif NET10_0
+        const string expected = "net10";
+#else
+#error Unhandled target framework — add it here and to the moniker expectation above.
+#endif
+        Assert.That(TestUtilities.CreateTableName(), Does.Contain($"_{expected}_"));
+    }
+
     [Test]
     public void CreateTableName_CalledRepeatedly_ReturnsDistinctNames()
     {

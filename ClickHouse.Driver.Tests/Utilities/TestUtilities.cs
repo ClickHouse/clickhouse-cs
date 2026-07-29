@@ -4,7 +4,9 @@ using System.Data.Common;
 using System.Linq;
 using System.Net;
 using System.Numerics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -89,11 +91,27 @@ public static class TestUtilities
     public const string TestDatabase = "test";
 
     /// <summary>
-    /// Identifies the process running the test. The suites for net6.0/net8.0/net9.0/net10.0 run
-    /// concurrently against a single shared server, so the target framework moniker keeps those
-    /// four runs from colliding with each other.
+    /// Identifies which of the concurrently running net6.0/net8.0/net9.0/net10.0 suites produced a
+    /// name. Uniqueness itself comes from the random token in <see cref="CreateTableName"/>, not from
+    /// this; the moniker is here so a table observed on the shared server can be attributed to a suite.
     /// </summary>
-    private static readonly string TargetFrameworkMoniker = $"net{Environment.Version.Major}";
+    private static readonly string TargetFrameworkMoniker = GetTargetFrameworkMoniker();
+
+    /// <remarks>
+    /// Reads the assembly's compiled-in target framework rather than <see cref="Environment.Version"/>,
+    /// which reports the *runtime* version. Those differ under roll-forward — a net6.0 build runs on the
+    /// .NET 10 runtime when 6.0 is absent — and every suite would then report the same major, so the
+    /// moniker would point at the wrong one.
+    /// </remarks>
+    private static string GetTargetFrameworkMoniker()
+    {
+        // ".NETCoreApp,Version=v9.0" -> "net9"
+        var frameworkName = typeof(TestUtilities).Assembly
+            .GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName;
+        var major = frameworkName?.Split("Version=v").ElementAtOrDefault(1)?.Split('.').FirstOrDefault();
+
+        return string.IsNullOrEmpty(major) ? "netunknown" : $"net{major}";
+    }
 
     /// <summary>
     /// Strips everything that is not valid in an unquoted ClickHouse identifier. Note that this
