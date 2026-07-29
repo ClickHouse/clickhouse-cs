@@ -63,9 +63,10 @@ internal static class ArrayColumnCodec
 /// <see cref="ArrayValueColumn{TElement}"/> and slice inner values without boxing; the registry pipeline is
 /// non-generic, so <see cref="ArrayColumnCodec"/> closes this over the inner codec's runtime element type. The
 /// inner codec stays non-generic (<see cref="IColumnCodec"/>), so its column is cast to <c>IColumn&lt;TElement&gt;</c>
-/// once at the read boundary. On the write path the column is always the dense
-/// <see cref="ArrayValueColumn{TElement}"/> (the wire's own shape, written with no copy) — the ergonomic jagged
-/// form (<c>TElement[]</c> per row) is projected into it before the write.
+/// once at the read boundary. The write path takes either shape as it comes: the dense
+/// <see cref="ArrayValueColumn{TElement}"/> is the wire's own layout and is written with no copy, while the
+/// ergonomic jagged form (<c>TElement[]</c> per row) is written from its rows without its elements being copied
+/// into a flat buffer first.
 /// </para>
 /// </summary>
 /// <typeparam name="TElement">The inner codec's CLR element type; each row surfaces as <typeparamref name="TElement"/>[].</typeparam>
@@ -196,18 +197,13 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     public bool CanWrite(IColumn column) => innerCanWrite && column is IColumn<TElement[]>;
 
     /// <inheritdoc/>
-    // Computes the per-slice scratch the prefix and body phases share. A dense column exposes its flat inner column
-    // and this slice's element range; an ergonomic jagged column has its per-row lengths summed into a slice-
-    // relative offsets array once, and — for a sectioned inner (Nullable, LowCardinality, a nested Array, Dynamic)
-    // — a flattening view so the inner codec sees every element as one column and emits its section once. A leaf
-    // inner with no sections needs neither: its runs are blitted row by row at write time.
+    // Computed once per slice and handed to both the prefix and body phases; see BuildState for what it holds.
     public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
 
     /// <inheritdoc/>
-    // The Array's own state prefix is the inner codec's, written once over every element of the slice; a leaf inner
-    // has none. When an outer composite (e.g. Variant) forwards its own column here rather than an Array one — its
-    // alternatives' prefixes are all data-independent — there is nothing to flatten, so forward to the inner, which
-    // ignores the column and emits its fixed prefix (or none).
+    // The Array's own state prefix is the inner codec's, written once over every element of the slice (a leaf inner
+    // has none). An outer composite (e.g. Variant) may forward its own column here rather than an Array one, since
+    // prefixes are data-independent; there is nothing to flatten then, so the inner emits its fixed prefix directly.
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         if (!IsArrayColumn(column))
@@ -259,16 +255,14 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         WriteColumn(writer, column, start, length);
     }
 
-    // Writes the offsets stream (per-row cumulative element ends, relative to this slice) then the inner body. A
-    // sectioned inner receives every element as one column so a section it emits (Nullable's null-map,
-    // LowCardinality's dictionary, a nested Array's offsets, Dynamic's discriminators) spans the whole run rather
-    // than one row at a time. A leaf inner — whose encoding is a flat per-element stream — is driven one contiguous
-    // per-row run at a time (a bulk blit for a fixed-width inner) straight from the ergonomic arrays, no flat buffer
-    // built. A dense column reads its offsets and flat inner column directly for a zero-copy re-insert.
+    // Writes this slice's offsets stream — one UInt64 per row, the cumulative element end after that row — then its
+    // elements.
     private void WriteBody(ClickHouseBinaryWriter writer, IColumn column, int start, int length, ArrayWriteState state)
     {
         if (column is ArrayValueColumn<TElement> dense)
         {
+            // A dense column already carries offsets, but they count from the start of the whole column; rebase them
+            // on this slice's first element so each block's stream starts from zero.
             ReadOnlySpan<int> offsets = dense.Offsets;
             int elementBase = offsets[start];
             for (int i = 0; i < length; i++)
@@ -278,6 +272,8 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         }
         else
         {
+            // An ergonomic column has no offsets of its own; BuildState summed its per-row lengths into
+            // slice-relative ones.
             int[] sliceOffsets = state.SliceOffsets;
             for (int i = 0; i < length; i++)
             {
@@ -287,10 +283,18 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 
         if (state.Elements is not null)
         {
+            // Every element of the slice handed over as one column: the dense column's own flat inner (borrowed, so a
+            // re-insert copies nothing), or a flattening view over the ergonomic rows. A sectioned inner needs this —
+            // it emits each section (Nullable's null-map, LowCardinality's dictionary, a nested Array's offsets,
+            // Dynamic's discriminators) once spanning the whole run, so driving it a row at a time would interleave
+            // those sections and corrupt the stream.
             inner.WriteColumn(writer, state.Elements, state.ElementBase, state.ElementCount, state.InnerState);
             return;
         }
 
+        // A leaf inner (see ISpanWritableCodec) encodes as a flat per-element stream with no sections, so each row's
+        // array goes out as its own contiguous run — a bulk blit for a fixed-width inner — read straight from the
+        // ergonomic column with no flattened view or buffer in between.
         var spanCodec = (ISpanWritableCodec<TElement>)inner;
         var source = (IColumn<TElement[]>)column;
         for (int i = 0; i < length; i++)
@@ -303,13 +307,15 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     // to an outer composite's own column forwarded through the prefix phase.
     private static bool IsArrayColumn(IColumn column) => column is ArrayValueColumn<TElement> || column is IColumn<TElement[]>;
 
-    // Builds the per-slice write scratch: the element range plus the inner codec's own state over the flattened
-    // elements (the dense inner column, or a flattening view over the ergonomic rows) for a sectioned inner, or just
-    // the slice offsets for a leaf inner written as runs.
+    // Builds the scratch the prefix and body phases of one slice share: which elements the slice covers, plus
+    // whatever the inner codec needs to write them.
     private ArrayWriteState BuildState(IColumn column, int start, int length)
     {
         if (column is ArrayValueColumn<TElement> dense)
         {
+            // A dense column is already the wire's shape: its flat inner is the element column, and the slice's
+            // element range is the gap between the offsets bracketing the rows. Nothing is summed, and the inner
+            // column is borrowed rather than copied.
             ReadOnlySpan<int> offsets = dense.Offsets;
             int elementBase = offsets[start];
             int elementCount = offsets[start + length] - elementBase;
@@ -317,15 +323,20 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             return new ArrayWriteState((IColumn<TElement>)dense.Inner, elementBase, elementCount, innerState, sliceOffsets: null);
         }
 
+        // An ergonomic column has to have its offsets derived from the per-row lengths; doing it here means neither
+        // phase re-walks the rows.
         var source = (IColumn<TElement[]>)column;
         int[] sliceOffsets = ComputeOffsets(source, start, length);
         int total = sliceOffsets[length];
         if (inner is ISpanWritableCodec<TElement>)
         {
-            // Leaf inner: no sectioned prefix and no flattened column — the runs are blitted row by row at write time.
+            // A leaf inner emits no state prefix and needs no element column — the body writes each row as its own
+            // run straight from the source arrays — so the offsets are the whole of the scratch.
             return new ArrayWriteState(elements: null, elementBase: 0, total, innerState: null, sliceOffsets);
         }
 
+        // A sectioned inner has to see every element as one column, so give it a lazy flattening view over the rows
+        // instead of copying the elements into a flat buffer.
         var view = new ConcatColumn<TElement>(inner.TypeName, source, start, sliceOffsets, total);
         IColumnWriteState viewState = inner.BeginWrite(view, 0, total);
         return new ArrayWriteState(view, elementBase: 0, total, viewState, sliceOffsets);
@@ -360,11 +371,10 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         return offsets;
     }
 
-    // The write scratch of one slice, shared across the prefix and body phases. For a sectioned inner, Elements is
-    // the flattened element column (the dense inner column, borrowed; or a flattening view over the ergonomic rows)
-    // with its element range and the inner codec's own state. For a leaf inner written as runs, Elements is null and
-    // only SliceOffsets is carried. SliceOffsets is the ergonomic slice's cumulative element ends (null for a dense
-    // column, whose offsets are read directly). Nothing here is pooled; disposing releases the inner state.
+    // The write scratch of one slice, shared across the prefix and body phases; BuildState decides what goes in it.
+    // Elements is the slice's element column, null only for a leaf inner written as runs; SliceOffsets is the
+    // ergonomic slice's cumulative element ends, null for a dense column, which reads its own. Nothing here is
+    // pooled; disposing releases the inner state.
     private sealed class ArrayWriteState : IColumnWriteState
     {
         public ArrayWriteState(IColumn<TElement> elements, int elementBase, int elementCount, IColumnWriteState innerState, int[] sliceOffsets)
