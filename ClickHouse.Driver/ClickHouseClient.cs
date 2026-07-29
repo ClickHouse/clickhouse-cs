@@ -963,6 +963,17 @@ public sealed class ClickHouseClient : IClickHouseClient
     {
         if (response.IsSuccessStatusCode)
         {
+            // Older ClickHouse servers (23.x-24.8) can return a success HTTP status but still report a
+            // processing error (a truncated insert stream, a timeout, ...) only through the
+            // X-ClickHouse-Exception-Code header (or trailer). Without inspecting it, a rejected insert
+            // is silently treated as success, causing data loss.
+            if (TryGetExceptionCodeHeader(response) is int exceptionCode && exceptionCode != 0)
+            {
+                var headerException = await CreateExceptionFromExceptionCodeAsync(response, query, exceptionCode).ConfigureAwait(false);
+                activity?.SetException(headerException);
+                throw headerException;
+            }
+
             activity?.SetSuccess();
             return response;
         }
@@ -976,11 +987,26 @@ public sealed class ClickHouseClient : IClickHouseClient
     }
 
     /// <summary>
-    /// Builds an exception for a non-success HTTP response whose body is empty or whitespace-only.
-    /// This happens when an upstream component (a ClickHouse Cloud edge, a load balancer, a proxy)
-    /// fails the request before it reaches a ClickHouse node, so there is no server error body to
-    /// parse. Surface the HTTP status line — and the <c>X-ClickHouse-Exception-Code</c> header when
-    /// present — so the caller still gets actionable diagnostics instead of a blank message.
+    /// Builds the exception for a success HTTP response that nonetheless carries a non-zero
+    /// <c>X-ClickHouse-Exception-Code</c> (the older-server silent-failure case). The header code is
+    /// authoritative, so it is used as the error code; the response body is used as the message when
+    /// present, otherwise a status-line message is synthesized (see <see cref="CreateEmptyBodyException"/>).
+    /// </summary>
+    private static async Task<ClickHouseServerException> CreateExceptionFromExceptionCodeAsync(HttpResponseMessage response, string query, int exceptionCode)
+    {
+        var error = await ReadErrorBodyAsync(response).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(error)
+            ? CreateEmptyBodyException(response, query)
+            : new ClickHouseServerException(error, query, exceptionCode);
+    }
+
+    /// <summary>
+    /// Builds an exception for an HTTP response whose body is empty or whitespace-only. This happens
+    /// when an upstream component (a ClickHouse Cloud edge, a load balancer, a proxy) fails the
+    /// request before it reaches a ClickHouse node, or when an older server signals the error only
+    /// through the <c>X-ClickHouse-Exception-Code</c> header — so there is no server error body to
+    /// parse. Surface the HTTP status line — and that header when present — so the caller still gets
+    /// actionable diagnostics instead of a blank message.
     /// </summary>
     private static ClickHouseServerException CreateEmptyBodyException(HttpResponseMessage response, string query)
     {
@@ -1005,23 +1031,30 @@ public sealed class ClickHouseClient : IClickHouseClient
     }
 
     /// <summary>
-    /// Reads the numeric <c>X-ClickHouse-Exception-Code</c> response header, when the server set one.
-    /// Returns <see langword="null"/> if the header is absent or not a valid integer.
+    /// Reads the numeric <c>X-ClickHouse-Exception-Code</c> value the server set, checking both the
+    /// leading response headers and the trailing headers (the server may append it as a trailer when
+    /// the error is discovered after the status line has already been sent). Returns
+    /// <see langword="null"/> if it is absent from both or is not a valid integer.
     /// </summary>
     private static int? TryGetExceptionCodeHeader(HttpResponseMessage response)
     {
-        if (response.Headers.TryGetValues("X-ClickHouse-Exception-Code", out var values))
+        return ParseExceptionCode(response.Headers) ?? ParseExceptionCode(response.TrailingHeaders);
+
+        static int? ParseExceptionCode(HttpHeaders headers)
         {
-            foreach (var value in values)
+            if (headers.TryGetValues("X-ClickHouse-Exception-Code", out var values))
             {
-                if (int.TryParse(value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var code))
+                foreach (var value in values)
                 {
-                    return code;
+                    if (int.TryParse(value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var code))
+                    {
+                        return code;
+                    }
                 }
             }
-        }
 
-        return null;
+            return null;
+        }
     }
 
     /// <summary>

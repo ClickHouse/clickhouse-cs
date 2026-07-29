@@ -18,6 +18,7 @@ Unreleased
 
 **Bug Fixes:**
 * Fixed `ClickHouseServerException` carrying a blank `Message` and an `ErrorCode` of `-1` when the server — or an upstream component such as a load balancer or the ClickHouse Cloud edge — returned a non-2xx HTTP response with an empty (or whitespace-only) body. The exception now reports the HTTP status code and reason phrase, and uses the `X-ClickHouse-Exception-Code` response header as the error code when the server sets it (issue #440). Non-empty error bodies are unaffected.
+* Fixed silent insert/query failures against older ClickHouse servers (23.x–24.8) that respond with an HTTP 200 status while reporting the actual error only through the `X-ClickHouse-Exception-Code` response header or trailer (for example when an incoming request is truncated mid-stream or its processing times out). `ClickHouseClient` now inspects that header on success responses and throws a `ClickHouseServerException` carrying the header's error code, instead of treating the request as successful — which previously caused silent data loss on the insert path. Both the query path and the bulk-insert/stream path are covered. Success responses without the header, or with a `0` code, are unaffected (issue #468).
 
 v1.3.0
 ---
