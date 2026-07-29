@@ -84,6 +84,89 @@ public static class TestUtilities
     }
 
     /// <summary>
+    /// The database that tests should create their tables in.
+    /// </summary>
+    public const string TestDatabase = "test";
+
+    /// <summary>
+    /// Identifies the process running the test. The suites for net6.0/net8.0/net9.0/net10.0 run
+    /// concurrently against a single shared server, so the target framework moniker keeps those
+    /// four runs from colliding with each other.
+    /// </summary>
+    private static readonly string TargetFrameworkMoniker = $"net{Environment.Version.Major}";
+
+    /// <summary>
+    /// Strips everything that is not valid in an unquoted ClickHouse identifier. Note that this
+    /// also removes the <c>.</c> separator, so it must be applied to a bare name rather than to
+    /// an already database-qualified one.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately ASCII-only rather than <see cref="char.IsLetterOrDigit(char)"/>: that is
+    /// Unicode-aware and would keep letters like <c>Ç</c>, which the server rejects in an unquoted
+    /// identifier (<c>Code: 62, Unrecognized token</c>).
+    /// </remarks>
+    public static string SanitizeTableName(string input)
+    {
+        var builder = new StringBuilder(input?.Length ?? 0);
+        foreach (var c in input ?? string.Empty)
+        {
+            if (c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_')
+                builder.Append(c);
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Builds a unique, database-qualified table name for a test.
+    /// </summary>
+    /// <remarks>
+    /// Tests share a single ClickHouse server across concurrently executing target frameworks, so a
+    /// fixed table name lets one test truncate, drop or read another test's data. Every name produced
+    /// here carries the target framework moniker and a random token, which keeps parallel suites,
+    /// repeated runs and parametrized test cases apart.
+    /// </remarks>
+    /// <param name="prefix">
+    /// Readable part of the name, to make it possible to tell which test owns a table. Defaults to
+    /// the calling member's name. Sanitized, so interpolating test-case values into it is safe.
+    /// </param>
+    /// <param name="database">
+    /// Database to qualify the name with, <see cref="TestDatabase"/> by default. Pass <c>null</c>
+    /// for an unqualified name, for the rare test that has to use the connection's own database.
+    /// </param>
+    /// <param name="testName">Do not pass explicitly; filled in by the compiler.</param>
+    public static string CreateTableName(string prefix = null, string database = TestDatabase, [CallerMemberName] string testName = null)
+    {
+        var name = SanitizeTableName(prefix ?? testName);
+        if (name.Length == 0)
+            name = "table";
+
+        // Keep names short enough to stay readable in server logs and error messages.
+        if (name.Length > 80)
+            name = name[..80];
+
+        var token = Guid.NewGuid().ToString("N")[..12];
+        var unique = $"{name}_{TargetFrameworkMoniker}_{token}";
+        return database is null ? unique : $"{database}.{unique}";
+    }
+
+    /// <summary>
+    /// Strips the database qualifier from a name produced by <see cref="CreateTableName"/>.
+    /// </summary>
+    /// <remarks>
+    /// Needed in two situations. First, the server stores the unqualified name, so assertions against
+    /// <c>system.tables</c>/<c>system.columns</c>/<c>DESCRIBE</c> have to compare against this.
+    /// Second, an API whose database resolution is under test (<c>InsertOptions.Database</c>,
+    /// <c>QueryOptions.Database</c>) must be given the bare name — a qualified one resolves the
+    /// database by itself, making the override a no-op and the assertion vacuous.
+    /// </remarks>
+    public static string BareTableName(string qualifiedName)
+    {
+        var separator = qualifiedName?.IndexOf('.') ?? -1;
+        return separator < 0 ? qualifiedName : qualifiedName[(separator + 1)..];
+    }
+
+    /// <summary>
     /// Equality assertion with special handling for certain object types
     /// </summary>
     /// <param name="expected"></param>

@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -16,17 +16,45 @@ namespace ClickHouse.Driver.Tests.Logging;
 
 public class ClickHouseBulkCopyLoggingTests
 {
-    private string targetTable = "test.bulk_copy_logging_table";
-    
+    private readonly ConcurrentQueue<string> createdTables = new();
+
+    private string targetTable;
+
     [SetUp]
     public async Task SetUp()
     {
         var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder());
-        var connection = new ClickHouseConnection(settings);
+        using var connection = new ClickHouseConnection(settings);
+
+        targetTable = TestUtilities.CreateTableName("bulk_copy_logging");
+        createdTables.Enqueue(targetTable);
 
         await connection.ExecuteStatementAsync($"CREATE DATABASE IF NOT EXISTS test;");
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
-        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (int Int32) ENGINE Null");
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (int Int32) ENGINE Null");
+    }
+
+    /// <summary>
+    /// This fixture does not derive from <see cref="AbstractConnectionTestFixture"/>, so the tables
+    /// handed out by <see cref="SetUp"/> are dropped here. Best-effort: a table which cannot be
+    /// dropped must not fail an otherwise passing fixture.
+    /// </summary>
+    [OneTimeTearDown]
+    public async Task DropCreatedTables()
+    {
+        var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder());
+        using var connection = new ClickHouseConnection(settings);
+
+        foreach (var table in createdTables)
+        {
+            try
+            {
+                await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
+            }
+            catch (Exception e)
+            {
+                TestContext.Progress.WriteLine($"Failed to drop test table {table}: {e.Message}");
+            }
+        }
     }
 
     [Test]

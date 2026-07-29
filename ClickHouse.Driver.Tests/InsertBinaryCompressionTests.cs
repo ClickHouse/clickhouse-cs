@@ -14,9 +14,6 @@ namespace ClickHouse.Driver.Tests;
 [Category("Cloud")]
 public class InsertBinaryCompressionTests : AbstractConnectionTestFixture
 {
-    private string CreateTestTableName([CallerMemberName] string testName = null)
-        => SanitizeTableName($"test_compress_{testName}_{Guid.NewGuid():N}");
-
     private class SimplePoco
     {
         public ulong Id { get; set; }
@@ -25,9 +22,9 @@ public class InsertBinaryCompressionTests : AbstractConnectionTestFixture
 
     private async Task<string> CreateTableAsync([CallerMemberName] string testName = null)
     {
-        var tableName = CreateTestTableName(testName);
+        var tableName = CreateTableName(testName);
         await client.ExecuteNonQueryAsync($@"
-            CREATE TABLE IF NOT EXISTS test.{tableName}
+            CREATE TABLE {tableName}
             (Id UInt64, Value String)
             ENGINE = MergeTree() ORDER BY Id");
         return tableName;
@@ -55,46 +52,38 @@ public class InsertBinaryCompressionTests : AbstractConnectionTestFixture
         [ValueSource(nameof(Compressors))] IClickHouseCompressor compressor)
     {
         var tableName = await CreateTableAsync();
-        try
+        var options = new InsertOptions
         {
-            var options = new InsertOptions
+            Compressor = compressor,
+            ColumnTypes = new Dictionary<string, string>
             {
-                Database = "test",
-                Compressor = compressor,
-                ColumnTypes = new Dictionary<string, string>
-                {
-                    ["Id"] = "UInt64",
-                    ["Value"] = "String",
-                },
-            };
+                ["Id"] = "UInt64",
+                ["Value"] = "String",
+            },
+        };
 
-            await client.InsertBinaryAsync(
-                tableName,
-                new[] { "Id", "Value" },
-                new List<object[]>
-                {
-                    new object[] { 1UL, "hello" },
-                    new object[] { 2UL, "world" },
-                },
-                options);
+        await client.InsertBinaryAsync(
+            tableName,
+            new[] { "Id", "Value" },
+            new List<object[]>
+            {
+                new object[] { 1UL, "hello" },
+                new object[] { 2UL, "world" },
+            },
+            options);
 
-            using var reader = await client.ExecuteReaderAsync(
-                $"SELECT Id, Value FROM test.{tableName} ORDER BY Id");
+        using var reader = await client.ExecuteReaderAsync(
+            $"SELECT Id, Value FROM {tableName} ORDER BY Id");
 
-            Assert.That(reader.Read(), Is.True);
-            Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(1UL));
-            Assert.That(reader.GetString(1), Is.EqualTo("hello"));
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(1UL));
+        Assert.That(reader.GetString(1), Is.EqualTo("hello"));
 
-            Assert.That(reader.Read(), Is.True);
-            Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(2UL));
-            Assert.That(reader.GetString(1), Is.EqualTo("world"));
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(2UL));
+        Assert.That(reader.GetString(1), Is.EqualTo("world"));
 
-            Assert.That(reader.Read(), Is.False);
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
-        }
+        Assert.That(reader.Read(), Is.False);
     }
 
     [Test]
@@ -102,42 +91,34 @@ public class InsertBinaryCompressionTests : AbstractConnectionTestFixture
         [ValueSource(nameof(Compressors))] IClickHouseCompressor compressor)
     {
         var tableName = await CreateTableAsync();
-        try
-        {
-            client.RegisterBinaryInsertType<SimplePoco>();
+        client.RegisterBinaryInsertType<SimplePoco>();
 
-            var options = new InsertOptions
+        var options = new InsertOptions
+        {
+            Compressor = compressor,
+        };
+
+        await client.InsertBinaryAsync(
+            tableName,
+            new[]
             {
-                Database = "test",
-                Compressor = compressor,
-            };
+                new SimplePoco { Id = 1UL, Value = "hello" },
+                new SimplePoco { Id = 2UL, Value = "world" },
+            },
+            options);
 
-            await client.InsertBinaryAsync(
-                tableName,
-                new[]
-                {
-                    new SimplePoco { Id = 1UL, Value = "hello" },
-                    new SimplePoco { Id = 2UL, Value = "world" },
-                },
-                options);
+        using var reader = await client.ExecuteReaderAsync(
+            $"SELECT Id, Value FROM {tableName} ORDER BY Id");
 
-            using var reader = await client.ExecuteReaderAsync(
-                $"SELECT Id, Value FROM test.{tableName} ORDER BY Id");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(1UL));
+        Assert.That(reader.GetString(1), Is.EqualTo("hello"));
 
-            Assert.That(reader.Read(), Is.True);
-            Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(1UL));
-            Assert.That(reader.GetString(1), Is.EqualTo("hello"));
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(2UL));
+        Assert.That(reader.GetString(1), Is.EqualTo("world"));
 
-            Assert.That(reader.Read(), Is.True);
-            Assert.That(reader.GetFieldValue<ulong>(0), Is.EqualTo(2UL));
-            Assert.That(reader.GetString(1), Is.EqualTo("world"));
-
-            Assert.That(reader.Read(), Is.False);
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
-        }
+        Assert.That(reader.Read(), Is.False);
     }
 
     [Test]
@@ -147,38 +128,30 @@ public class InsertBinaryCompressionTests : AbstractConnectionTestFixture
         // to the (leave-open) memory stream, is seeked to 0, and posted without Content-Encoding.
         const int rowCount = 2500;
         var tableName = await CreateTableAsync();
-        try
+        var options = new InsertOptions
         {
-            var options = new InsertOptions
+            Compressor = null,
+            BatchSize = 1000,
+            ColumnTypes = new Dictionary<string, string>
             {
-                Database = "test",
-                Compressor = null,
-                BatchSize = 1000,
-                ColumnTypes = new Dictionary<string, string>
-                {
-                    ["Id"] = "UInt64",
-                    ["Value"] = "String",
-                },
-            };
+                ["Id"] = "UInt64",
+                ["Value"] = "String",
+            },
+        };
 
-            var rows = Enumerable.Range(0, rowCount)
-                .Select(i => new object[] { (ulong)i, $"value_{i}" })
-                .ToList();
+        var rows = Enumerable.Range(0, rowCount)
+            .Select(i => new object[] { (ulong)i, $"value_{i}" })
+            .ToList();
 
-            await client.InsertBinaryAsync(tableName, new[] { "Id", "Value" }, rows, options);
+        await client.InsertBinaryAsync(tableName, new[] { "Id", "Value" }, rows, options);
 
-            var count = (ulong)await client.ExecuteScalarAsync($"SELECT count() FROM test.{tableName}");
-            Assert.That(count, Is.EqualTo((ulong)rowCount));
+        var count = (ulong)await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        Assert.That(count, Is.EqualTo((ulong)rowCount));
 
-            var sum = await client.ExecuteScalarAsync($"SELECT sum(Id) FROM test.{tableName}");
-            // sum(Id) comes back as a UInt64 aggregate (ulong); it fits well within Int64 here, so
-            // Convert.ToInt64 normalizes it for comparison regardless of the exact returned CLR type.
-            var expected = ((long)rowCount - 1) * rowCount / 2;
-            Assert.That(Convert.ToInt64(sum), Is.EqualTo(expected));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
-        }
+        var sum = await client.ExecuteScalarAsync($"SELECT sum(Id) FROM {tableName}");
+        // sum(Id) comes back as a UInt64 aggregate (ulong); it fits well within Int64 here, so
+        // Convert.ToInt64 normalizes it for comparison regardless of the exact returned CLR type.
+        var expected = ((long)rowCount - 1) * rowCount / 2;
+        Assert.That(Convert.ToInt64(sum), Is.EqualTo(expected));
     }
 }

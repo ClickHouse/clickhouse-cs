@@ -87,16 +87,49 @@ var users = connection.Query<User>("SELECT * FROM users");
 - **Connection pooling**: Respect HTTP connection pool behavior, avoid connection leaks
 
 ### Testing Discipline
+
+> **Table names: never hard-code one.** Any test that touches a table must get its name from
+> `CreateTableName(...)`. This is not a style preference — the `net6/8/9/10` suites run
+> *simultaneously against one shared server*, so a fixed name lets one suite drop, truncate or read
+> another suite's table. This is the single most common way a new test becomes flaky here.
+>
+> ```csharp
+> // In a fixture deriving from AbstractConnectionTestFixture — preferred, cleans up for you:
+> var table = CreateTableName();                  // test.MyTestMethod_net9_a1b2c3d4e5f6
+>
+> // Anywhere else — you own the cleanup:
+> var table = TestUtilities.CreateTableName();    // + DROP TABLE IF EXISTS in your teardown
+> ```
+
 - **Integration tests**: Strongly prefer tests that actually call the db over unit tests.
-- **Test utilities**: before writing tests, read TestUtilities.cs to understand existing config and utility patterns.
+- **Test utilities**: before writing tests, read TestUtilities.cs to understand existing config and
+  utility patterns — including `CreateTableName`/`SanitizeTableName` (see the note above).
 - **Test matrix**: ADO provider, parameter binding, ORMs, multi-framework, multi-ClickHouse-version
 - **Negative tests**: Error handling, edge cases, concurrency scenarios
 - **Existing tests**: Only add new tests, never delete/weaken existing ones
 - **Test organization**: Client tests in `.Tests`, third-party integration tests in `.IntegrationTests`
-- **Test isolation**: Create tables in the dedicated `test` database (qualified `test.<name>`),
-  and give each table a **randomized** name (e.g. `SanitizeTableName($"...{Guid.NewGuid():N}")`,
-  as `BulkCopyTests`/`NestedArrayParameterTests` already do). Tests run across `net6/8/9/10`
-  simultaneously against a shared server, so fixed/unqualified table names collide and flake.
+- **Table naming details**:
+  - The inherited `AbstractConnectionTestFixture.CreateTableName()` registers the name so
+    `[OneTimeTearDown]` drops it. Prefer it over the static helper whenever the fixture allows.
+  - Pass a prefix only to carry a parametrized case, e.g. `CreateTableName($"bulk_{clickHouseType}")`.
+    Prefixes are sanitized, so interpolating type names, timezone ids etc. is safe — no manual
+    scrubbing needed.
+  - Names are already `test.`-qualified. Never prepend `test.` yourself. Pass
+    `database: "other_db"` to target another database, or `database: null` for an unqualified name
+    (required for `CREATE TEMPORARY TABLE`, which cannot be qualified).
+  - Because every name is unique, a plain `CREATE TABLE` cannot collide — don't add
+    `IF NOT EXISTS`, don't `DROP` before the `CREATE`, and don't wrap a test in `try/finally` just to
+    drop its table. `IF NOT EXISTS` on a unique name only hides a future isolation regression.
+    Keep it (with a `DROP`) solely in the `[SetUp]` of a fixture that deliberately shares one table.
+  - Gotcha: the server stores the *unqualified* name, so a test comparing against `system.tables` /
+    `system.columns` / `DESCRIBE` output, or against a table name in an exception message, must
+    split it: `var bare = name[(name.IndexOf('.') + 1)..];`.
+  - Gotcha: passing a qualified name to an API whose database resolution you are testing (e.g.
+    `InsertOptions.Database`, `QueryOptions.Database`) makes the override a no-op and silently voids
+    the assertion. Pass the bare name there, keeping the qualified one for read-back.
+  - A fixture may deliberately *share* one table across its tests and reset it in `[SetUp]`; that is
+    fine — hoist one `CreateTableName(...)` into the fixture rather than splitting it per test.
+  - `Utilities/TestTableNamingTests.cs` pins this contract; keep it passing.
 - **Deterministic literals**: When asserting stored values, match a literal's precision to the
   column scale (e.g. an 8-digit fractional for `DateTime64(8)`) instead of relying on
   server-side rounding/truncation, which can vary by version/settings.
