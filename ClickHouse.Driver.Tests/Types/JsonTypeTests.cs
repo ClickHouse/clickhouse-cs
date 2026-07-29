@@ -258,7 +258,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [TestCase("level1_int Int64, skip_items Int32, nested.level2_string String, SKIP path.to.skip, skip path.to.ignore")]
     public async Task ShouldSelectDataWithComplexHintedJsonType(string jsonDefinition)
     {
-        var targetTable = "test.select_data_complex_hinted_json";
+        var targetTable = CreateTableName();
 
         await connection.ExecuteStatementAsync(
             $@"
@@ -337,7 +337,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithUInt64Hint_ShouldPreservePrecision()
     {
-        var targetTable = "test.json_write_uint64_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -367,7 +367,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithMultipleRowsAndTrailingColumns_ShouldRoundTrip()
     {
-        var targetTable = "test.json_write_multiple_rows_trailing";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -414,7 +414,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithInt64Hint_ShouldWriteCorrectType()
     {
-        var targetTable = "test.json_write_int64_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -439,7 +439,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithUuidHint_ShouldPreserveGuid()
     {
-        var targetTable = "test.json_write_uuid_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -466,7 +466,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithDecimalHint_ShouldPreservePrecision()
     {
-        var targetTable = "test.json_write_decimal_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -493,7 +493,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithNestedHints_ShouldWriteNestedFields()
     {
-        var targetTable = "test.json_write_nested_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -518,7 +518,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithMixedHintedAndUnhinted_ShouldHandleBoth()
     {
-        var targetTable = "test.json_write_mixed_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -546,7 +546,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithArrayHint_ShouldWriteTypedArray()
     {
-        var targetTable = "test.json_write_array_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -573,7 +573,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithArrayHint_ShouldWriteTypedList()
     {
-        var targetTable = "test.json_write_list_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -601,7 +601,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithPocoObject_ShouldSerializeCorrectly()
     {
-        var targetTable = "test.json_write_poco";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -629,7 +629,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // DateTime hints require Binary mode for proper type conversion
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
 
-        var targetTable = "test.json_write_datetime_hint";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -662,7 +662,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     {
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<UnhintedDecimalData>();
-        var targetTable = "test.json_write_unhinted_decimal";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -689,7 +689,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithNoHints_ShouldUseExistingBehavior()
     {
-        var targetTable = "test.json_write_no_hints";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -719,7 +719,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<TestPocoWithPathAttribute>();
 
-        var targetTable = "test.json_write_poco_path_attr";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -748,7 +748,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<TestPocoWithIgnoreAttribute>();
 
-        var targetTable = "test.json_write_poco_ignore_attr";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -772,7 +772,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithCaseSensitiveHint_ShouldMatchExactCase()
     {
-        var targetTable = "test.json_write_case_sensitive";
+        var targetTable = CreateTableName();
         // Column has exact case hint "UserId" matching the POCO property
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
@@ -797,7 +797,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithCaseMismatchedHint_ShouldNotMatch()
     {
-        var targetTable = "test.json_write_case_mismatch";
+        var targetTable = CreateTableName();
         // Column has lowercase hint "userid", but POCO property is "UserId" - should NOT match
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
@@ -865,7 +865,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithNullableHintedProperty_ShouldWriteNull()
     {
-        var targetTable = "test.json_write_nullable_hinted";
+        var targetTable = CreateTableName();
         await client.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -891,7 +891,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     public async Task Write_WithNullableUnhintedProperty_ShouldSkipField()
     {
         // Nullable/LowCardinality(Nullable) types are not allowed inside Variant type
-        var targetTable = "test.json_write_nullable_unhinted";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -917,7 +917,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     public async Task Write_WithNonNullableNullProperty_ShouldSkipField()
     {
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
-        var targetTable = "test.json_write_nonnullable_null";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -955,7 +955,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // Tests the BinaryTypeIndex.Nothing path in WriteHintedValue
         // When a non-nullable hint (Int64) receives a null value, we write Nothing type
         // ClickHouse converts Nothing to the default value for the hinted type (0 for Int64)
-        var targetTable = "test.json_write_nonnullable_hint_null";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -988,7 +988,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithDictionaryHint_ShouldWriteMap()
     {
-        var targetTable = "test.json_write_dictionary_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1073,7 +1073,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<ComprehensiveTypesData>();
 
-        var targetTable = "test.json_write_comprehensive_types";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1224,7 +1224,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<CircularRefA>();
         binaryClient.RegisterJsonSerializationType<CircularRefB>();
-        var targetTable = "test.json_write_circular_ref";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1255,7 +1255,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     {
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<SelfReferencing>();
-        var targetTable = "test.json_write_self_ref";
+        var targetTable = CreateTableName();
         await client.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1282,7 +1282,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json | Feature.Time)]
     public async Task Write_WithTimeSpan_ShouldWriteAsTime64()
     {
-        var targetTable = "test.json_write_timespan";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1318,7 +1318,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     {
         using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
 
-        var targetTable = "test.json_write_unregistered_type";
+        var targetTable = CreateTableName();
         await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1356,7 +1356,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         binaryClient.RegisterJsonSerializationType<WrongTypeData>();
 
         // POCO has string property, but schema expects Int64
-        var targetTable = "test.json_write_wrong_type";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1388,7 +1388,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     public async Task Write_WithMissingHintedProperty_ShouldSucceedWithNull()
     {
         // POCO is missing a property that the schema hints for - should be default
-        var targetTable = "test.json_write_missing_property";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1421,7 +1421,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_WithEmptyPoco_ShouldWriteEmptyObject()
     {
-        var targetTable = "test.json_write_empty_poco";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1453,7 +1453,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_WithAllNullProperties_ShouldWriteEmptyObject()
     {
-        var targetTable = "test.json_write_all_nulls";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1489,7 +1489,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_PocoWithIndexer_ShouldIgnoreIndexer()
     {
-        var targetTable = "test.json_write_indexer";
+        var targetTable = CreateTableName();
         await client.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,

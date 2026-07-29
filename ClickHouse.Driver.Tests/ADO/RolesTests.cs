@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
@@ -8,6 +10,8 @@ namespace ClickHouse.Driver.Tests.ADO;
 [TestFixture]
 public class RolesTests
 {
+    private readonly ConcurrentQueue<string> createdTables = new();
+
     private ClickHouseConnection defaultConnection;
     private string database;
     private string username;
@@ -65,6 +69,19 @@ public class RolesTests
     {
         try
         {
+            // Best-effort: a table that cannot be dropped must not fail an otherwise passing fixture
+            while (createdTables.TryDequeue(out var tableName))
+            {
+                try
+                {
+                    await defaultConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {database}.{tableName}");
+                }
+                catch (Exception e)
+                {
+                    TestContext.Progress.WriteLine($"Failed to drop test table {tableName}: {e.Message}");
+                }
+            }
+
             // Drop user and roles
             await defaultConnection.ExecuteStatementAsync($"DROP USER IF EXISTS {username}");
             await defaultConnection.ExecuteStatementAsync($"DROP ROLE IF EXISTS {roleName1}");
@@ -74,6 +91,18 @@ public class RolesTests
         {
             defaultConnection?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Builds a unique table name and registers it to be dropped when the fixture tears down.
+    /// Deliberately unqualified: these tests run against the connection's own database, which is
+    /// also the database the roles are granted privileges on.
+    /// </summary>
+    private string CreateTableName([CallerMemberName] string testName = null)
+    {
+        var tableName = TestUtilities.CreateTableName(database: null, testName: testName);
+        createdTables.Enqueue(tableName);
+        return tableName;
     }
 
     private ClickHouseConnection CreateClientWithRoles(params string[] roles)
@@ -153,102 +182,74 @@ public class RolesTests
     [Test]
     public async Task Insert_WithRoleThatCanInsert_ShouldSucceed()
     {
-        var tableName = $"role_insert_test_{Guid.NewGuid():N}";
+        var tableName = CreateTableName();
         using var client = CreateClientWithRoles(roleName1);
 
-        try
-        {
-            // Create table and insert using role1 (has INSERT permission)
-            await defaultConnection.ExecuteStatementAsync(
-                $"CREATE TABLE IF NOT EXISTS {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
+        // Create table and insert using role1 (has INSERT permission)
+        await defaultConnection.ExecuteStatementAsync(
+            $"CREATE TABLE {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
 
-            await client.ExecuteStatementAsync($"INSERT INTO {tableName} VALUES (1)");
+        await client.ExecuteStatementAsync($"INSERT INTO {tableName} VALUES (1)");
 
-            // Verify insert worked
-            var count = await defaultConnection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
-            Assert.That(count, Is.EqualTo(1UL));
-        }
-        finally
-        {
-            await defaultConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        // Verify insert worked
+        var count = await defaultConnection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        Assert.That(count, Is.EqualTo(1UL));
     }
 
     [Test]
     public async Task Insert_WithRoleThatCannotInsert_ShouldFail()
     {
-        var tableName = $"role_insert_test_{Guid.NewGuid():N}";
+        var tableName = CreateTableName();
         using var client = CreateClientWithRoles(roleName2); // role2 has no INSERT permission
 
-        try
-        {
-            await defaultConnection.ExecuteStatementAsync(
-                $"CREATE TABLE IF NOT EXISTS {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
+        await defaultConnection.ExecuteStatementAsync(
+            $"CREATE TABLE {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
 
-            var ex = Assert.ThrowsAsync<ClickHouseServerException>(
-                async () => await client.ExecuteStatementAsync($"INSERT INTO {tableName} VALUES (1)"));
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            async () => await client.ExecuteStatementAsync($"INSERT INTO {tableName} VALUES (1)"));
 
-            Assert.That(ex.Message, Does.Contain("Not enough privileges").IgnoreCase
-                .Or.Contain("ACCESS_DENIED").IgnoreCase);
-        }
-        finally
-        {
-            await defaultConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        Assert.That(ex.Message, Does.Contain("Not enough privileges").IgnoreCase
+            .Or.Contain("ACCESS_DENIED").IgnoreCase);
     }
 
     [Test]
     public async Task Insert_CommandRoleOverrideAllowsInsert_ShouldSucceed()
     {
-        var tableName = $"role_insert_test_{Guid.NewGuid():N}";
+        var tableName = CreateTableName();
         using var client = CreateClientWithRoles(roleName2); // Connection has role2 (no INSERT)
 
-        try
-        {
-            await defaultConnection.ExecuteStatementAsync(
-                $"CREATE TABLE IF NOT EXISTS {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
+        await defaultConnection.ExecuteStatementAsync(
+            $"CREATE TABLE {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
 
-            // Override with role1 (has INSERT permission) at command level
-            using var command = client.CreateCommand($"INSERT INTO {tableName} VALUES (1)");
-            command.Roles.Add(roleName1);
-            await command.ExecuteNonQueryAsync();
+        // Override with role1 (has INSERT permission) at command level
+        using var command = client.CreateCommand($"INSERT INTO {tableName} VALUES (1)");
+        command.Roles.Add(roleName1);
+        await command.ExecuteNonQueryAsync();
 
-            // Verify insert worked
-            var count = await defaultConnection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
-            Assert.That(count, Is.EqualTo(1UL));
-        }
-        finally
-        {
-            await defaultConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        // Verify insert worked
+        var count = await defaultConnection.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
+        Assert.That(count, Is.EqualTo(1UL));
     }
 
     [Test]
     public async Task CreateTable_WithRoleThatCanCreate_ShouldSucceed()
     {
-        var tableName = $"role_create_test_{Guid.NewGuid():N}";
+        var tableName = CreateTableName();
         using var client = CreateClientWithRoles(roleName1); // role1 has CREATE TABLE permission
 
-        try
-        {
-            await client.ExecuteStatementAsync(
-                $"CREATE TABLE {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
+        await client.ExecuteStatementAsync(
+            $"CREATE TABLE {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
 
-            // Verify table was created
-            var exists = await defaultConnection.ExecuteScalarAsync(
-                $"SELECT count() FROM system.tables WHERE database = '{database}' AND name = '{tableName}'");
-            Assert.That(exists, Is.EqualTo(1UL));
-        }
-        finally
-        {
-            await defaultConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        // Verify table was created
+        var exists = await defaultConnection.ExecuteScalarAsync(
+            $"SELECT count() FROM system.tables WHERE database = '{database}' AND name = '{tableName}'");
+        Assert.That(exists, Is.EqualTo(1UL));
     }
 
     [Test]
     public void CreateTable_WithRoleThatCannotCreate_ShouldFail()
     {
-        var tableName = $"role_create_test_{Guid.NewGuid():N}";
+        var tableName = CreateTableName();
         using var client = CreateClientWithRoles(roleName2); // role2 has no CREATE TABLE permission
 
         var ex = Assert.ThrowsAsync<ClickHouseServerException>(
@@ -262,25 +263,18 @@ public class RolesTests
     [Test]
     public async Task CreateTable_CommandRoleOverrideAllowsCreate_ShouldSucceed()
     {
-        var tableName = $"role_create_test_{Guid.NewGuid():N}";
+        var tableName = CreateTableName();
         using var client = CreateClientWithRoles(roleName2); // Connection has role2 (no CREATE TABLE)
 
-        try
-        {
-            // Override with role1 (has CREATE TABLE permission) at command level
-            using var command = client.CreateCommand(
-                $"CREATE TABLE {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
-            command.Roles.Add(roleName1);
-            await command.ExecuteNonQueryAsync();
+        // Override with role1 (has CREATE TABLE permission) at command level
+        using var command = client.CreateCommand(
+            $"CREATE TABLE {tableName} (id Int32) ENGINE = MergeTree() ORDER BY id");
+        command.Roles.Add(roleName1);
+        await command.ExecuteNonQueryAsync();
 
-            // Verify table was created
-            var exists = await defaultConnection.ExecuteScalarAsync(
-                $"SELECT count() FROM system.tables WHERE database = '{database}' AND name = '{tableName}'");
-            Assert.That(exists, Is.EqualTo(1UL));
-        }
-        finally
-        {
-            await defaultConnection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
-        }
+        // Verify table was created
+        var exists = await defaultConnection.ExecuteScalarAsync(
+            $"SELECT count() FROM system.tables WHERE database = '{database}' AND name = '{tableName}'");
+        Assert.That(exists, Is.EqualTo(1UL));
     }
 }

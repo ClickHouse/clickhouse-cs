@@ -4,7 +4,9 @@ using System.Data.Common;
 using System.Linq;
 using System.Net;
 using System.Numerics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -81,6 +83,105 @@ public static class TestUtilities
         {
             SupportedFeatures = Feature.All;
         }
+    }
+
+    /// <summary>
+    /// The database that tests should create their tables in.
+    /// </summary>
+    public const string TestDatabase = "test";
+
+    /// <summary>
+    /// Identifies which of the concurrently running net6.0/net8.0/net9.0/net10.0 suites produced a
+    /// name. Uniqueness itself comes from the random token in <see cref="CreateTableName"/>, not from
+    /// this; the moniker is here so a table observed on the shared server can be attributed to a suite.
+    /// </summary>
+    private static readonly string TargetFrameworkMoniker = GetTargetFrameworkMoniker();
+
+    /// <remarks>
+    /// Reads the assembly's compiled-in target framework rather than <see cref="Environment.Version"/>,
+    /// which reports the *runtime* version. Those differ under roll-forward — a net6.0 build runs on the
+    /// .NET 10 runtime when 6.0 is absent — and every suite would then report the same major, so the
+    /// moniker would point at the wrong one.
+    /// </remarks>
+    private static string GetTargetFrameworkMoniker()
+    {
+        // ".NETCoreApp,Version=v9.0" -> "net9"
+        var frameworkName = typeof(TestUtilities).Assembly
+            .GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName;
+        var major = frameworkName?.Split("Version=v").ElementAtOrDefault(1)?.Split('.').FirstOrDefault();
+
+        return string.IsNullOrEmpty(major) ? "netunknown" : $"net{major}";
+    }
+
+    /// <summary>
+    /// Strips everything that is not valid in an unquoted ClickHouse identifier. Note that this
+    /// also removes the <c>.</c> separator, so it must be applied to a bare name rather than to
+    /// an already database-qualified one.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately ASCII-only rather than <see cref="char.IsLetterOrDigit(char)"/>: that is
+    /// Unicode-aware and would keep letters like <c>Ç</c>, which the server rejects in an unquoted
+    /// identifier (<c>Code: 62, Unrecognized token</c>).
+    /// </remarks>
+    public static string SanitizeTableName(string input)
+    {
+        var builder = new StringBuilder(input?.Length ?? 0);
+        foreach (var c in input ?? string.Empty)
+        {
+            if (c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_')
+                builder.Append(c);
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Builds a unique, database-qualified table name for a test.
+    /// </summary>
+    /// <remarks>
+    /// Tests share a single ClickHouse server across concurrently executing target frameworks, so a
+    /// fixed table name lets one test truncate, drop or read another test's data. Every name produced
+    /// here carries the target framework moniker and a random token, which keeps parallel suites,
+    /// repeated runs and parametrized test cases apart.
+    /// </remarks>
+    /// <param name="prefix">
+    /// Readable part of the name, to make it possible to tell which test owns a table. Defaults to
+    /// the calling member's name. Sanitized, so interpolating test-case values into it is safe.
+    /// </param>
+    /// <param name="database">
+    /// Database to qualify the name with, <see cref="TestDatabase"/> by default. Pass <c>null</c>
+    /// for an unqualified name, for the rare test that has to use the connection's own database.
+    /// </param>
+    /// <param name="testName">Do not pass explicitly; filled in by the compiler.</param>
+    public static string CreateTableName(string prefix = null, string database = TestDatabase, [CallerMemberName] string testName = null)
+    {
+        var name = SanitizeTableName(prefix ?? testName);
+        if (name.Length == 0)
+            name = "table";
+
+        // Keep names short enough to stay readable in server logs and error messages.
+        if (name.Length > 80)
+            name = name[..80];
+
+        var token = Guid.NewGuid().ToString("N")[..12];
+        var unique = $"{name}_{TargetFrameworkMoniker}_{token}";
+        return database is null ? unique : $"{database}.{unique}";
+    }
+
+    /// <summary>
+    /// Strips the database qualifier from a name produced by <see cref="CreateTableName"/>.
+    /// </summary>
+    /// <remarks>
+    /// Needed in two situations. First, the server stores the unqualified name, so assertions against
+    /// <c>system.tables</c>/<c>system.columns</c>/<c>DESCRIBE</c> have to compare against this.
+    /// Second, an API whose database resolution is under test (<c>InsertOptions.Database</c>,
+    /// <c>QueryOptions.Database</c>) must be given the bare name — a qualified one resolves the
+    /// database by itself, making the override a no-op and the assertion vacuous.
+    /// </remarks>
+    public static string BareTableName(string qualifiedName)
+    {
+        var separator = qualifiedName?.IndexOf('.') ?? -1;
+        return separator < 0 ? qualifiedName : qualifiedName[(separator + 1)..];
     }
 
     /// <summary>
