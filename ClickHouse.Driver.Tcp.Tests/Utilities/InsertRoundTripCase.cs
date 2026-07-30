@@ -596,6 +596,16 @@ public sealed class InsertRoundTripCase
         yield return Maps<string, int[]>("String", "Array(Int32)", Pairs<string, int[]>(("a", new[] { 1, 2, 3 }), ("b", Array.Empty<int>())), Pairs<string, int[]>(("c", new[] { -1 })));
         yield return Maps<string, (int, string)>("String", "Tuple(Int32, String)", Pairs<string, (int, string)>(("a", (1, "x")), ("b", (-5, string.Empty))), Array.Empty<KeyValuePair<string, (int, string)>>());
 
+        // A value that carries its own state prefix: the map has to emit LowCardinality's dictionary prefix for the
+        // value stream, which none of the value composites above have (Nullable, Array and Tuple of leaves emit no
+        // prefix of their own). Repeated values across rows exercise one dictionary spanning the whole value run.
+        yield return Maps<string, string>(
+            "String",
+            "LowCardinality(String)",
+            Pairs<string, string>(("a", "x"), ("b", "y")),
+            Array.Empty<KeyValuePair<string, string>>(),
+            Pairs<string, string>(("c", "x"), ("d", string.Empty)));
+
         // Both key and value fixed-width: the cases above pair a variable key with a fixed value or the reverse,
         // never both fixed.
         yield return Maps<byte, byte>("UInt8", "UInt8", Pairs<byte, byte>((1, 10), (2, 20)), Array.Empty<KeyValuePair<byte, byte>>(), Pairs<byte, byte>((3, 30)));
