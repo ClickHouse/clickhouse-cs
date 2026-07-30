@@ -392,7 +392,7 @@ internal sealed class MapShape<TKey, TValue> : IMapShape
     /// <inheritdoc/>
     public void WriteStatePrefix(IColumnCodec keyCodec, IColumnCodec valueCodec, ClickHouseBinaryWriter writer, IColumnWriteState state)
     {
-        var mapState = (MapWriteState)state;
+        MapWriteState mapState = StateOf(state, keyCodec, valueCodec);
         keyCodec.WriteStatePrefix(writer, mapState.FlatKeys, mapState.PairBase, mapState.PairCount, mapState.KeyState);
         valueCodec.WriteStatePrefix(writer, mapState.FlatValues, mapState.PairBase, mapState.PairCount, mapState.ValueState);
     }
@@ -400,7 +400,7 @@ internal sealed class MapShape<TKey, TValue> : IMapShape
     /// <inheritdoc/>
     public void WriteBody(IColumnCodec keyCodec, IColumnCodec valueCodec, ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        var mapState = (MapWriteState)state;
+        MapWriteState mapState = StateOf(state, keyCodec, valueCodec);
 
         // Offsets, relative to this slice's own pair streams: from the dense column's offsets, or each jagged row's
         // pair count. The key/value bodies come from the pre-flattened state.
@@ -431,6 +431,13 @@ internal sealed class MapShape<TKey, TValue> : IMapShape
     // The flatten of one slice's keys and values, shared across the prefix and body phases. For the ergonomic
     // jagged form the columns are backed by pooled buffers returned on dispose; for the dense form they are the
     // borrowed key/value columns (no buffers to return).
+    // Narrows the shared scratch to this shape's own state. The cast comes first so the succeeding path never builds
+    // the type name, which the shape has no way to cache: one shape instance is shared by every map codec with the
+    // same key and value CLR types, so it holds no per-codec data.
+    private static MapWriteState StateOf(IColumnWriteState state, IColumnCodec keyCodec, IColumnCodec valueCodec)
+        => state as MapWriteState
+            ?? state.Expect<MapWriteState>($"Map({keyCodec.TypeName}, {valueCodec.TypeName})");
+
     private sealed class MapWriteState : IColumnWriteState
     {
         private readonly TKey[] keyBuffer;
