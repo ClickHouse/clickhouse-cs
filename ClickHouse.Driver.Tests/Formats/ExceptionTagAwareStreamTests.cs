@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using ClickHouse.Driver.Formats;
 using NUnit.Framework;
 
@@ -320,5 +321,149 @@ public class ExceptionTagAwareStreamTests
         var result = stream.TryExtractMidStreamException();
 
         Assert.That(result, Is.Null); // Should not match wrong token
+    }
+
+    public enum ReadApi
+    {
+        SyncRead,
+        ReadByte,
+        AsyncReadArray,
+        AsyncReadMemory,
+    }
+
+    private static async Task DrainAsync(ExceptionTagAwareStream stream, ReadApi api)
+    {
+        var buffer = new byte[64];
+        switch (api)
+        {
+            case ReadApi.SyncRead:
+                while (stream.Read(buffer, 0, buffer.Length) > 0) { }
+                break;
+            case ReadApi.ReadByte:
+                while (stream.ReadByte() >= 0) { }
+                break;
+            case ReadApi.AsyncReadArray:
+                while (await stream.ReadAsync(buffer, 0, buffer.Length) > 0) { }
+                break;
+            default: // AsyncReadMemory
+                while (await stream.ReadAsync(buffer.AsMemory()) > 0) { }
+                break;
+        }
+    }
+
+    // In throwAtEndOfStream mode the wrapper must surface the in-band exception no matter which read
+    // API drains it, and whether the body ends cleanly (a 0-byte read) or the connection drops
+    // mid-stream (an IOException — how a live truncated HTTP response actually terminates).
+    [TestCase(ReadApi.SyncRead, false)]
+    [TestCase(ReadApi.SyncRead, true)]
+    [TestCase(ReadApi.ReadByte, false)]
+    [TestCase(ReadApi.ReadByte, true)]
+    [TestCase(ReadApi.AsyncReadArray, false)]
+    [TestCase(ReadApi.AsyncReadArray, true)]
+    [TestCase(ReadApi.AsyncReadMemory, false)]
+    [TestCase(ReadApi.AsyncReadMemory, true)]
+    public void ThrowAtEndOfStream_SurfacesServerException_AcrossReadApisAndTerminations(ReadApi api, bool prematureClose)
+    {
+        var message = "Code: 395. DB::Exception: boom";
+        var data = Encoding.UTF8.GetBytes(
+            $"data\r\n__exception__\r\n{TestToken}\r\n{message}\n{message.Length} {TestToken}\r\n__exception__\r\n");
+
+        Stream inner = prematureClose ? new ThrowAtEndStream(data) : new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(inner, TestToken, throwAtEndOfStream: true);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => DrainAsync(stream, api));
+
+        Assert.That(ex.Message, Does.Contain("boom"));
+        Assert.That(ex.ErrorCode, Is.EqualTo(395));
+    }
+
+    [Test]
+    public void ThrowAtEndOfStream_DetectsException_WhenBlockFollowsLargeData()
+    {
+        // The in-band block arrives after >4 KiB of row data (larger than the ring buffer) and the
+        // stream is drained in small chunks; the block at the tail must still survive and be detected.
+        var message = "Code: 395. DB::Exception: boom";
+        var prefix = new string('x', 8192);
+        var data = Encoding.UTF8.GetBytes(
+            $"{prefix}\r\n__exception__\r\n{TestToken}\r\n{message}\n{message.Length} {TestToken}\r\n__exception__\r\n");
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken, throwAtEndOfStream: true);
+
+        var ex = Assert.Throws<ClickHouseServerException>(() =>
+        {
+            var buffer = new byte[64];
+            while (stream.Read(buffer, 0, buffer.Length) > 0) { }
+        });
+
+        Assert.That(ex.Message, Does.Contain("boom"));
+    }
+
+    [Test]
+    public void Read_WithThrowAtEndOfStream_DoesNotThrow_WhenNoMarkerPresent()
+    {
+        // Tag present but the query succeeded: no in-band block, so the full body must pass through cleanly.
+        var data = Encoding.UTF8.GetBytes("clean,csv\r\ndata,rows\r\nno,error\r\n");
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken, throwAtEndOfStream: true);
+        using var sink = new MemoryStream();
+
+        Assert.DoesNotThrow(() => stream.CopyTo(sink));
+        Assert.That(sink.ToArray(), Is.EqualTo(data));
+    }
+
+    [Test]
+    public void Read_WithoutThrowAtEndOfStream_DoesNotThrow_EvenWithMarker()
+    {
+        // Default (passive-observer) mode used by the native reader path must be unchanged: reading never
+        // throws by itself; the marker is only surfaced when the caller asks via TryExtractMidStreamException.
+        var message = "Code: 395. DB::Exception: boom";
+        var data = Encoding.UTF8.GetBytes(
+            $"data\r\n__exception__\r\n{TestToken}\r\n{message}\n{message.Length} {TestToken}\r\n__exception__\r\n");
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken); // default: throwAtEndOfStream = false
+
+        Assert.DoesNotThrow(() =>
+        {
+            var buffer = new byte[64];
+            while (stream.Read(buffer, 0, buffer.Length) > 0) { }
+        });
+
+        Assert.That(stream.TryExtractMidStreamException(), Is.Not.Null);
+    }
+
+    /// <summary>Stream that yields its content, then throws an IOException at end-of-stream (like a dropped HTTP connection).</summary>
+    private sealed class ThrowAtEndStream : Stream
+    {
+        private readonly MemoryStream inner;
+
+        public ThrowAtEndStream(byte[] data) => inner = new MemoryStream(data);
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int n = inner.Read(buffer, offset, count);
+            if (n == 0)
+                throw new IOException("The response ended prematurely.");
+            return n;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                inner.Dispose();
+            base.Dispose(disposing);
+        }
     }
 }

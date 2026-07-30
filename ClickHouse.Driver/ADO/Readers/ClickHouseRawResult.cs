@@ -1,8 +1,10 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -16,10 +18,19 @@ namespace ClickHouse.Driver.ADO;
 public class ClickHouseRawResult : IDisposable
 {
     private readonly HttpResponseMessage response;
+    private readonly string exceptionTag;
 
     internal ClickHouseRawResult(HttpResponseMessage response)
     {
         this.response = response;
+
+        // When the server-side setting http_write_exception_in_output_format is enabled it sends this
+        // leading header carrying a per-query token, and — if the query fails after the 200 OK is already
+        // committed and rows are streaming — appends an in-band exception block delimited by that token to
+        // the body before closing the connection. Capture the token so the accessors below can surface a
+        // ClickHouseServerException instead of leaking the raw block / a truncated body to the caller.
+        if (response.Headers.TryGetValues(ExceptionTagAwareStream.HeaderName, out var tagValues))
+            exceptionTag = tagValues.FirstOrDefault();
     }
 
     /// <summary>
@@ -51,26 +62,77 @@ public class ClickHouseRawResult : IDisposable
     /// Reads the response content as a stream.
     /// </summary>
     /// <returns>A task that resolves to the response content stream.</returns>
-    public Task<Stream> ReadAsStreamAsync() => response.Content.ReadAsStreamAsync();
+    /// <remarks>
+    /// If the server reports an in-band mid-stream exception, reading the returned stream throws a
+    /// <see cref="ClickHouseServerException"/> once the end of the body is reached.
+    /// </remarks>
+    public Task<Stream> ReadAsStreamAsync() =>
+        string.IsNullOrEmpty(exceptionTag) ? response.Content.ReadAsStreamAsync() : WrapContentStreamAsync();
+
+    private async Task<Stream> WrapContentStreamAsync()
+    {
+        var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        return new ExceptionTagAwareStream(stream, exceptionTag, throwAtEndOfStream: true);
+    }
 
     /// <summary>
     /// Reads the response content as a byte array.
     /// </summary>
     /// <returns>A task that resolves to the response content as bytes.</returns>
-    public Task<byte[]> ReadAsByteArrayAsync() => response.Content.ReadAsByteArrayAsync();
+    /// <remarks>
+    /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream exception.
+    /// </remarks>
+    public Task<byte[]> ReadAsByteArrayAsync() =>
+        string.IsNullOrEmpty(exceptionTag) ? response.Content.ReadAsByteArrayAsync() : ReadAllBytesAsync();
+
+    private async Task<byte[]> ReadAllBytesAsync()
+    {
+        using var stream = await WrapContentStreamAsync().ConfigureAwait(false);
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory).ConfigureAwait(false);
+        return memory.ToArray();
+    }
 
     /// <summary>
     /// Reads the response content as a string.
     /// </summary>
     /// <returns>A task that resolves to the response content as a string.</returns>
-    public Task<string> ReadAsStringAsync() => response.Content.ReadAsStringAsync();
+    /// <remarks>
+    /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream exception.
+    /// </remarks>
+    public Task<string> ReadAsStringAsync() =>
+        string.IsNullOrEmpty(exceptionTag) ? response.Content.ReadAsStringAsync() : ReadAllStringAsync();
+
+    private async Task<string> ReadAllStringAsync()
+    {
+        var bytes = await ReadAllBytesAsync().ConfigureAwait(false);
+
+        // Decode the buffered body exactly as HttpContent.ReadAsStringAsync would — honouring the
+        // response Content-Type charset and stripping a BOM — so a successful tagged response returns
+        // the same string the untagged path returns for identical bytes.
+        using var content = new ByteArrayContent(bytes);
+        var contentType = response.Content.Headers.ContentType;
+        if (contentType != null)
+            content.Headers.ContentType = new MediaTypeHeaderValue(contentType.MediaType) { CharSet = contentType.CharSet };
+        return await content.ReadAsStringAsync().ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Copies the response content to the specified stream.
     /// </summary>
     /// <param name="stream">The destination stream to copy the content to.</param>
     /// <returns>A task that completes when the copy operation is finished.</returns>
-    public Task CopyToAsync(Stream stream) => response.Content.CopyToAsync(stream);
+    /// <remarks>
+    /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream exception.
+    /// </remarks>
+    public Task CopyToAsync(Stream stream) =>
+        string.IsNullOrEmpty(exceptionTag) ? response.Content.CopyToAsync(stream) : CopyViaWrapperAsync(stream);
+
+    private async Task CopyViaWrapperAsync(Stream destination)
+    {
+        using var source = await WrapContentStreamAsync().ConfigureAwait(false);
+        await source.CopyToAsync(destination).ConfigureAwait(false);
+    }
 
     public void Dispose()
     {
