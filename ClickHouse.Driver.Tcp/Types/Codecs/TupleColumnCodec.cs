@@ -189,6 +189,12 @@ internal sealed class TupleColumnCodec : IColumnCodec
                 childColumns[i] = await children[i].ReadColumnAsync(reader, columnName, children[i].TypeName, rowCount, cancellationToken).ConfigureAwait(false);
                 read = i + 1;
             }
+
+            // Construct inside the try, because ownership transfers only once the column exists: a child whose
+            // element type does not match this arity's IColumn<Ti> surfaces as a cast failure out of the reflected
+            // constructor, and the catch below then disposes the children rather than leaking them. The column's row
+            // count comes from the children, every one of which was just read at this block's rowCount.
+            return (IColumn)columnConstructor.Invoke(new object[] { columnName, columnType, childColumns, fieldNames, true });
         }
         catch
         {
@@ -201,10 +207,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
             throw;
         }
-
-        // The constructed column takes ownership of the child columns and disposes them with the block. Its row count
-        // comes from the children, every one of which was just read at this block's rowCount.
-        return (IColumn)columnConstructor.Invoke(new object[] { columnName, columnType, childColumns, fieldNames, true });
     }
 
     /// <inheritdoc/>
