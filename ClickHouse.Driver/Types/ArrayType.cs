@@ -41,11 +41,17 @@ internal class ArrayType : ParameterizedType
     {
         var length = reader.Read7BitEncodedInt();
 
-        if (TypedReaders.TryGetValue(UnderlyingType.FrameworkType, out var typedReader))
+        // Resolve the element FrameworkType once. Wrapper types build it reflectively on every
+        // access (NullableType -> MakeGenericType, ArrayType -> MakeArrayType), so caching avoids
+        // a redundant reflective call on the fallback path, which needs it both for the reader
+        // lookup and the array allocation.
+        var elementType = UnderlyingType.FrameworkType;
+
+        if (TypedReaders.TryGetValue(elementType, out var typedReader))
             return typedReader(UnderlyingType, reader, length);
 
         // Fallback: reflection-based read for element types without a typed reader.
-        var data = Array.CreateInstance(UnderlyingType.FrameworkType, length);
+        var data = Array.CreateInstance(elementType, length);
         for (var i = 0; i < length; i++)
         {
             data.SetValue(ClearDBNull(UnderlyingType.Read(reader)), i);
