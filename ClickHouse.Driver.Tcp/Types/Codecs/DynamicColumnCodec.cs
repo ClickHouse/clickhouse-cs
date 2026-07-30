@@ -214,13 +214,14 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is DynamicWriteState dynamicState)
+        // A null state is the caller saying it has none to share, so build one for this call alone.
+        if (state is null)
         {
-            WriteStatePrefixCore(writer, dynamicState);
+            WriteStatePrefix(writer, column, start, length);
             return;
         }
 
-        WriteStatePrefix(writer, column, start, length);
+        WriteStatePrefixCore(writer, state.Expect<DynamicWriteState>(TypeName));
     }
 
     /// <inheritdoc/>
@@ -233,13 +234,13 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is DynamicWriteState dynamicState)
+        if (state is null)
         {
-            WriteBodyCore(writer, dynamicState);
+            WriteColumn(writer, column, start, length);
             return;
         }
 
-        WriteColumn(writer, column, start, length);
+        WriteBodyCore(writer, state.Expect<DynamicWriteState>(TypeName));
     }
 
     // Writes the state prefix from a computed write plan: version, the runtime type list, then each type's own
