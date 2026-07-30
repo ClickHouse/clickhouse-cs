@@ -202,16 +202,9 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 
     /// <inheritdoc/>
     // The Array's own state prefix is the inner codec's, written once over every element of the slice (a leaf inner
-    // has none). An outer composite (e.g. Variant) may forward its own column here rather than an Array one, since
-    // prefixes are data-independent; there is nothing to flatten then, so the inner emits its fixed prefix directly.
+    // has none). Callers that already hold the slice's state use the overload below; this one builds its own.
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        if (!IsArrayColumn(column))
-        {
-            inner.WriteStatePrefix(writer, column, start, length);
-            return;
-        }
-
         using ArrayWriteState state = BuildState(column, start, length);
         WriteStatePrefixCore(writer, state);
     }
@@ -302,10 +295,6 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             spanCodec.WriteValues(writer, source[start + i]);
         }
     }
-
-    // Whether the column is one this codec owns — the dense wire column or the ergonomic jagged form — as opposed
-    // to an outer composite's own column forwarded through the prefix phase.
-    private static bool IsArrayColumn(IColumn column) => column is ArrayValueColumn<TElement> || column is IColumn<TElement[]>;
 
     // Builds the scratch the prefix and body phases of one slice share: which elements the slice covers, plus
     // whatever the inner codec needs to write them.
