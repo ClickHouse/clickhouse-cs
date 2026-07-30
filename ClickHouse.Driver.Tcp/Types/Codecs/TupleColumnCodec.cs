@@ -219,19 +219,8 @@ internal sealed class TupleColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        if (IsTupleColumn(column))
-        {
-            using TupleWriteState state = BuildState(column, start, length);
-            WriteStatePrefixCore(writer, state);
-            return;
-        }
-
-        // An outer composite forwarded its own column (its children's prefixes are written from its own slice);
-        // the children ignore it, preserving the prior contract for a Tuple nested in Variant/Map/Nested.
-        foreach (IColumnCodec child in children)
-        {
-            child.WriteStatePrefix(writer, column, start, length);
-        }
+        using TupleWriteState state = BuildState(column, start, length);
+        WriteStatePrefixCore(writer, state);
     }
 
     /// <inheritdoc/>
@@ -283,9 +272,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
             children[i].WriteColumn(writer, state.ChildColumns[i], state.ChildStart, state.Length, state.ChildStates[i]);
         }
     }
-
-    private bool IsTupleColumn(IColumn column)
-        => (column is ITupleColumn dense && dense.Children.Count == children.Length) || icolumnOfTupleType.IsInstanceOfType(column);
 
     // Builds the per-element write state for a slice. A dense tuple column exposes each child column directly; an
     // ergonomic flat ValueTuple column is projected into one lazy per-element view per child (strided through the
