@@ -8,6 +8,12 @@
     <IsTestProject>true</IsTestProject>
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
     <NoWarn>CS8002</NoWarn>
+    <!-- Vendored third-party source (ClickHouse.Driver.Common/Vendor/K4os) is a verbatim copy we
+         don't own; its coverage is already excluded from codecov (see codecov.yml). Exclude it from
+         coverlet instrumentation too: the heavy unsafe/pointer LZ4 code trips a Windows-only coverlet
+         crash ("Unable to read beyond the end of the stream" in CalculateCoverage) during coverage
+         calculation. Path-based so it also covers the System-namespace polyfill under Vendor. -->
+    <ExcludeByFile>**/Vendor/**/*.cs</ExcludeByFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -49,6 +55,14 @@
     <!-- ClickHouse.Driver references Common with PrivateAssets="all" (bundled, not a public dependency),
          so it does not flow transitively; reference it directly to use the compression types. -->
     <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
+  </ItemGroup>
+
+  <!-- The real K4os packages are a test-only dependency used as a differential oracle: what the
+       driver's vendored LZ4 codec (Common/Vendor/K4os) encodes must decode with upstream K4os and
+       vice versa. They are NOT a runtime dependency of the driver. See Common/Vendor/K4os/README.md. -->
+  <ItemGroup>
+    <PackageReference Include="K4os.Compression.LZ4" />
+    <PackageReference Include="K4os.Compression.LZ4.Streams" />
   </ItemGroup>
 
 </Project>
