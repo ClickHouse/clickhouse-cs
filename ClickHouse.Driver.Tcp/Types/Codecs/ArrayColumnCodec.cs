@@ -212,13 +212,14 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is ArrayWriteState arrayState)
+        // A null state is the caller saying it has none to share, so build one for this call alone.
+        if (state is null)
         {
-            WriteStatePrefixCore(writer, arrayState);
+            WriteStatePrefix(writer, column, start, length);
             return;
         }
 
-        WriteStatePrefix(writer, column, start, length);
+        WriteStatePrefixCore(writer, state.Expect<ArrayWriteState>(TypeName));
     }
 
     private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, ArrayWriteState state)
@@ -239,13 +240,13 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is ArrayWriteState arrayState)
+        if (state is null)
         {
-            WriteBody(writer, column, start, length, arrayState);
+            WriteColumn(writer, column, start, length);
             return;
         }
 
-        WriteColumn(writer, column, start, length);
+        WriteBody(writer, column, start, length, state.Expect<ArrayWriteState>(TypeName));
     }
 
     // Writes this slice's offsets stream — one UInt64 per row, the cumulative element end after that row — then its

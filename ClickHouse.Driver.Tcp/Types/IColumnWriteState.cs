@@ -23,3 +23,27 @@ namespace ClickHouse.Driver.Tcp.Types;
 internal interface IColumnWriteState : IDisposable
 {
 }
+
+/// <summary>Helpers for consuming a write state handed back through <see cref="IColumnWriteState"/>.</summary>
+internal static class ColumnWriteStateExtensions
+{
+    /// <summary>
+    /// Narrows the shared scratch to the codec's own state type. A state of any other type means a composite paired
+    /// one codec's scratch with a different codec's column — a bug where it was opened, not something the receiving
+    /// codec can recover from, so this throws instead of quietly rebuilding a state and writing correct bytes that
+    /// hide it.
+    /// </summary>
+    /// <typeparam name="TState">The receiving codec's own state type.</typeparam>
+    /// <param name="state">The state to narrow.</param>
+    /// <param name="typeName">The receiving codec's ClickHouse type name, for the message.</param>
+    /// <returns><paramref name="state"/> as <typeparamref name="TState"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="state"/> is null or another codec's state.</exception>
+    public static TState Expect<TState>(this IColumnWriteState state, string typeName)
+        where TState : class, IColumnWriteState
+        => state as TState
+            ?? throw new ArgumentException(
+                $"The codec for '{typeName}' needs a {typeof(TState).Name} write state but was given " +
+                $"{(state is null ? "null" : state.GetType().Name)}. Each child of a composite must be given the " +
+                "state its own BeginWrite returned, alongside the column that state was opened over.",
+                nameof(state));
+}
