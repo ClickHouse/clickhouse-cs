@@ -892,9 +892,8 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<object>(name, "Variant(Array(UInt64), String)", new object[] { "hello", new ulong[] { 1, 2, 3 }, null, Array.Empty<ulong>() }),
             VariantSettings);
 
-        // A Tuple alternative. Worth a case of its own because the variant has no per-slice write state: it forwards
-        // its own column to every alternative's prefix phase, so the tuple codec is handed a column it cannot project
-        // into per-element children and has to walk its children instead. A row selecting it carries the ValueTuple.
+        // A Tuple alternative: the variant projects the rows that selected it into a column of its own, which the
+        // tuple codec then distributes across its per-element children. A row selecting it carries the ValueTuple.
         yield return Same(
             "Variant(String, Tuple(UInt8, String))",
             "Variant(String, Tuple(UInt8, String))",
@@ -904,9 +903,9 @@ public sealed class InsertRoundTripCase
                 new object[] { "hi", ((byte)1, "x"), null, ((byte)0, string.Empty) }),
             VariantSettings);
 
-        // The same shape, but with an element inside the tuple that carries its own state prefix. LowCardinality's
-        // dictionary prefix has to reach the wire through that forwarded column, so losing the forwarding walk
-        // desyncs the block mid-stream instead of failing cleanly.
+        // The same shape, but with an element inside the tuple that carries its own state prefix, so LowCardinality's
+        // dictionary prefix has to travel two composites down to reach the wire. Losing it desyncs the block
+        // mid-stream instead of failing cleanly.
         yield return Same(
             "Variant(String, Tuple(LowCardinality(String), UInt8))",
             "Variant(String, Tuple(LowCardinality(String), UInt8))",
@@ -914,6 +913,25 @@ public sealed class InsertRoundTripCase
                 name,
                 "Variant(String, Tuple(LowCardinality(String), UInt8))",
                 new object[] { "hi", ("lc", (byte)7), null, (string.Empty, (byte)0) }),
+            VariantSettings);
+
+        // A Map alternative, whose value in turn carries a state prefix. The map is the composite whose own write
+        // state is most easily bypassed — it reaches its key and value codecs through a shape object rather than
+        // directly — so this pins that a map nested in a variant still emits its offsets, keys, and the value
+        // stream's dictionary prefix.
+        yield return Same(
+            "Variant(Map(String, LowCardinality(String)), UInt64)",
+            "Variant(Map(String, LowCardinality(String)), UInt64)",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(Map(String, LowCardinality(String)), UInt64)",
+                new object[]
+                {
+                    1UL,
+                    Pairs<string, string>(("a", "x"), ("b", "x")),
+                    null,
+                    Array.Empty<KeyValuePair<string, string>>(),
+                }),
             VariantSettings);
 
         // An alternative that carries a state prefix but is selected by no row in the block. The variant's
