@@ -234,13 +234,14 @@ internal sealed class NestedColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is NestedWriteState nestedState)
+        // A null state is the caller saying it has none to share, so build one for this call alone.
+        if (state is null)
         {
-            WriteStatePrefixCore(writer, nestedState);
+            WriteStatePrefix(writer, column, start, length);
             return;
         }
 
-        WriteStatePrefix(writer, column, start, length);
+        WriteStatePrefixCore(writer, state.Expect<NestedWriteState>(TypeName));
     }
 
     /// <inheritdoc/>
@@ -253,13 +254,13 @@ internal sealed class NestedColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is NestedWriteState nestedState)
+        if (state is null)
         {
-            WriteBodyCore(writer, column, start, length, nestedState);
+            WriteColumn(writer, column, start, length);
             return;
         }
 
-        WriteColumn(writer, column, start, length);
+        WriteBodyCore(writer, column, start, length, state.Expect<NestedWriteState>(TypeName));
     }
 
     private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, NestedWriteState state)
