@@ -485,6 +485,20 @@ public sealed class InsertRoundTripCase
             "Tuple(Array(UInt32), String)",
             name => new TupleColumn<uint[], string>(name, "Tuple(Array(UInt32), String)", new (uint[], string)[] { (new uint[] { 1, 2, 3 }, "a"), (Array.Empty<uint>(), "b") }));
 
+        // A Map element inside a tuple: the map's own offsets and key/value streams have to be emitted from the
+        // per-element column the tuple projects, not from the tuple's own column.
+        yield return Same(
+            "Tuple(Map(String, UInt32), String) [map element]",
+            "Tuple(Map(String, UInt32), String)",
+            name => new TupleColumn<KeyValuePair<string, uint>[], string>(
+                name,
+                "Tuple(Map(String, UInt32), String)",
+                new (KeyValuePair<string, uint>[], string)[]
+                {
+                    (Pairs<string, uint>(("a", 1), ("b", 2)), "first"),
+                    (Array.Empty<KeyValuePair<string, uint>>(), "second"),
+                }));
+
         // A max-arity (7) tuple mixing fixed-width and variable-width elements.
         yield return Same(
             "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32, String) [arity 7]",
