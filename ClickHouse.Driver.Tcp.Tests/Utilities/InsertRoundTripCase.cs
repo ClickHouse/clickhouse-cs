@@ -892,6 +892,30 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<object>(name, "Variant(Array(UInt64), String)", new object[] { "hello", new ulong[] { 1, 2, 3 }, null, Array.Empty<ulong>() }),
             VariantSettings);
 
+        // A Tuple alternative. Worth a case of its own because the variant has no per-slice write state: it forwards
+        // its own column to every alternative's prefix phase, so the tuple codec is handed a column it cannot project
+        // into per-element children and has to walk its children instead. A row selecting it carries the ValueTuple.
+        yield return Same(
+            "Variant(String, Tuple(UInt8, String))",
+            "Variant(String, Tuple(UInt8, String))",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(String, Tuple(UInt8, String))",
+                new object[] { "hi", ((byte)1, "x"), null, ((byte)0, string.Empty) }),
+            VariantSettings);
+
+        // The same shape, but with an element inside the tuple that carries its own state prefix. LowCardinality's
+        // dictionary prefix has to reach the wire through that forwarded column, so losing the forwarding walk
+        // desyncs the block mid-stream instead of failing cleanly.
+        yield return Same(
+            "Variant(String, Tuple(LowCardinality(String), UInt8))",
+            "Variant(String, Tuple(LowCardinality(String), UInt8))",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(String, Tuple(LowCardinality(String), UInt8))",
+                new object[] { "hi", ("lc", (byte)7), null, (string.Empty, (byte)0) }),
+            VariantSettings);
+
         // Array(Variant(...)) composition: the array flattens its elements into one Variant value stream, so each
         // element is a variant value (or NULL) and empty rows ride along.
         yield return Arrays(
