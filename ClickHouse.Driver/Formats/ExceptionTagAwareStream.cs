@@ -14,9 +14,8 @@ internal sealed class ExceptionTagAwareStream : Stream
     private const int BufferCapacity = 4096; // 4KB ring buffer
 
     private readonly Stream innerStream;
-    private readonly string exceptionToken;
-    private readonly byte[] exceptionMarker; // "__exception__" + token
-    private readonly byte[] closingMarker;   // token + "__exception__"
+    private readonly byte[] exceptionPrefixBytes; // "__exception__"
+    private readonly byte[] tagBytes;             // exception tag/token
 
     // Ring buffer for recent bytes
     private readonly byte[] recentBytes = new byte[BufferCapacity];
@@ -30,9 +29,8 @@ internal sealed class ExceptionTagAwareStream : Stream
         if (string.IsNullOrEmpty(exceptionTag))
             throw new ArgumentException("Exception tag cannot be null or empty", nameof(exceptionTag));
 
-        exceptionToken = exceptionTag;
-        exceptionMarker = Encoding.UTF8.GetBytes(ExceptionPrefix + exceptionTag);
-        closingMarker = Encoding.UTF8.GetBytes(exceptionTag + ExceptionPrefix);
+        exceptionPrefixBytes = Encoding.UTF8.GetBytes(ExceptionPrefix);
+        tagBytes = Encoding.UTF8.GetBytes(exceptionTag);
     }
 
     public override bool CanRead => innerStream.CanRead;
@@ -101,16 +99,17 @@ internal sealed class ExceptionTagAwareStream : Stream
     /// <returns>ClickHouseServerException if marker found, null otherwise</returns>
     public ClickHouseServerException TryExtractMidStreamException()
     {
-        if (bytesRecorded < exceptionMarker.Length)
+        if (bytesRecorded < exceptionPrefixBytes.Length + tagBytes.Length)
             return null;
 
         byte[] buffer = GetLinearBuffer();
-        int markerIndex = FindPattern(buffer, exceptionMarker);
 
+        // Opening marker: "__exception__" <optional CR/LF> "<tag>".
+        int markerIndex = FindDelimitedMarker(buffer, exceptionPrefixBytes, tagBytes, 0, out int messageStart);
         if (markerIndex < 0)
             return null;
 
-        return ParseExceptionFormat(buffer, markerIndex);
+        return ParseExceptionFormat(buffer, messageStart);
     }
 
     private byte[] GetLinearBuffer()
@@ -133,18 +132,16 @@ internal sealed class ExceptionTagAwareStream : Stream
         return result;
     }
 
-    private ClickHouseServerException ParseExceptionFormat(byte[] buffer, int markerIndex)
+    private ClickHouseServerException ParseExceptionFormat(byte[] buffer, int messageStart)
     {
-        // Format: __exception__TOKEN\n<message>\n<size> TOKEN__exception__
-        // We ignore the size
-        int messageStart = markerIndex + exceptionMarker.Length;
-
-        // Skip newlines after opening marker
+        // Full block: __exception__<sep><tag><sep><message>\n<size> <tag><sep>__exception__
+        // where <sep> is the CR/LF run the server writes. messageStart points just past the
+        // opening "<tag>"; skip the separator before the message text. We ignore <size>.
         while (messageStart < buffer.Length && (buffer[messageStart] == '\n' || buffer[messageStart] == '\r'))
             messageStart++;
 
-        // Find closing marker: TOKEN__exception__
-        int closingIndex = FindPattern(buffer, closingMarker, messageStart);
+        // Closing marker: "<tag>" <optional CR/LF> "__exception__".
+        int closingIndex = FindDelimitedMarker(buffer, tagBytes, exceptionPrefixBytes, messageStart, out _);
 
         // Determine where message ends
         int messageEnd = closingIndex >= 0 ? closingIndex : buffer.Length;
@@ -153,17 +150,59 @@ internal sealed class ExceptionTagAwareStream : Stream
         while (messageEnd > messageStart && char.IsWhiteSpace((char)buffer[messageEnd - 1]))
             messageEnd--;
 
-        // Also trim any trailing digits and space (the size number)
-        while (messageEnd > messageStart && char.IsDigit((char)buffer[messageEnd - 1]))
-            messageEnd--;
-        while (messageEnd > messageStart && char.IsWhiteSpace((char)buffer[messageEnd - 1]))
-            messageEnd--;
+        // The "<size> " token sits between the message and the closing marker, so only strip a
+        // trailing number when a closing marker was actually found. Otherwise a message captured
+        // without its closing marker that legitimately ends in a digit would be mangled.
+        if (closingIndex >= 0)
+        {
+            while (messageEnd > messageStart && char.IsDigit((char)buffer[messageEnd - 1]))
+                messageEnd--;
+            while (messageEnd > messageStart && char.IsWhiteSpace((char)buffer[messageEnd - 1]))
+                messageEnd--;
+        }
 
         if (messageEnd <= messageStart)
             return ClickHouseServerException.FromMidStreamException("Unknown error (could not parse exception message)");
 
         var errorMessage = Encoding.UTF8.GetString(buffer, messageStart, messageEnd - messageStart);
         return ClickHouseServerException.FromMidStreamException(errorMessage);
+    }
+
+    /// <summary>
+    /// Finds <paramref name="first"/> followed by <paramref name="second"/>, allowing an optional
+    /// run of CR/LF bytes between them. The ClickHouse server frames the in-band exception block as
+    /// "__exception__\r\n&lt;tag&gt;" (open) and "&lt;tag&gt;\r\n__exception__" (close); tolerating the
+    /// separator — and its absence — keeps detection robust across server framings.
+    /// </summary>
+    /// <param name="afterSecond">Index immediately past <paramref name="second"/> when found; -1 otherwise.</param>
+    /// <returns>Index of <paramref name="first"/> when the delimited pair is found; -1 otherwise.</returns>
+    private static int FindDelimitedMarker(byte[] buffer, byte[] first, byte[] second, int startIndex, out int afterSecond)
+    {
+        afterSecond = -1;
+        int searchFrom = startIndex;
+
+        while (true)
+        {
+            int firstIndex = FindPattern(buffer, first, searchFrom);
+            if (firstIndex < 0)
+                return -1;
+
+            int pos = firstIndex + first.Length;
+
+            // Skip an optional CR/LF separator run between the two parts.
+            while (pos < buffer.Length && (buffer[pos] == (byte)'\r' || buffer[pos] == (byte)'\n'))
+                pos++;
+
+            if (pos + second.Length <= buffer.Length &&
+                buffer.AsSpan(pos, second.Length).SequenceEqual(second))
+            {
+                afterSecond = pos + second.Length;
+                return firstIndex;
+            }
+
+            // This occurrence of `first` is not followed by `second`; keep searching.
+            searchFrom = firstIndex + 1;
+        }
     }
 
     private static int FindPattern(byte[] buffer, byte[] pattern, int startIndex = 0)
