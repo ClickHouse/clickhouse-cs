@@ -349,10 +349,9 @@ public class ConnectionTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldPostDynamicallyGeneratedRawStream()
     {
-        var targetTable = "test.raw_stream";
+        var targetTable = CreateTableName();
 
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
-        await connection.ExecuteStatementAsync($"CREATE TABLE IF NOT EXISTS {targetTable} (value Int32) ENGINE Null");
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (value Int32) ENGINE Null");
         await connection.PostStreamAsync($"INSERT INTO {targetTable} FORMAT CSV", async (stream, ct) =>
         {
 

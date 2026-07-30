@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Utility;
-using NUnit.Framework;
 using NUnit.Framework.Legacy;
 
 namespace ClickHouse.Driver.Tests.Types;
@@ -15,70 +14,58 @@ public class VariantTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Variant)]
     public async Task Read_NoneDiscriminator_ShouldReturnDbNull()
     {
-        var targetTable = "test.test_variant_read_null";
-        try
-        {
-            await connection.ExecuteStatementAsync(
-                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(String, UInt64)) ENGINE = Memory");
+        var targetTable = CreateTableName();
 
-            await connection.ExecuteStatementAsync(
-                $"INSERT INTO {targetTable} VALUES (1, 'hello'), (2, 42), (3, NULL)");
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(String, UInt64)) ENGINE = Memory");
 
-            using var reader = await connection.ExecuteReaderAsync(
-                $"SELECT id, val FROM {targetTable} ORDER BY id");
+        await connection.ExecuteStatementAsync(
+            $"INSERT INTO {targetTable} VALUES (1, 'hello'), (2, 42), (3, NULL)");
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(0), Is.EqualTo(1u));
-            Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
+        using var reader = await connection.ExecuteReaderAsync(
+            $"SELECT id, val FROM {targetTable} ORDER BY id");
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(0), Is.EqualTo(2u));
-            Assert.That(reader.GetValue(1), Is.EqualTo((ulong)42));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(1u));
+        Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(0), Is.EqualTo(3u));
-            Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(2u));
+        Assert.That(reader.GetValue(1), Is.EqualTo((ulong)42));
 
-            ClassicAssert.IsFalse(reader.Read());
-        }
-        finally
-        {
-            await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
-        }
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(3u));
+        Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
+
+        ClassicAssert.IsFalse(reader.Read());
     }
 
     [Test]
     [RequiredFeature(Feature.Variant)]
     public async Task Write_Null_ShouldRoundTrip()
     {
-        var targetTable = "test.test_variant_write_null";
-        try
-        {
-            await client.ExecuteNonQueryAsync(
-                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(String, UInt64)) ENGINE = Memory");
+        var targetTable = CreateTableName();
 
-            await client.InsertBinaryAsync(targetTable, ["id", "val"], [
-                new object[] { 1u, "hello" },
-                new object[] { 2u, null },
-            ]);
+        await client.ExecuteNonQueryAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(String, UInt64)) ENGINE = Memory");
 
-            using var reader = await connection.ExecuteReaderAsync(
-                $"SELECT id, val FROM {targetTable} ORDER BY id");
+        await client.InsertBinaryAsync(targetTable, ["id", "val"], [
+            new object[] { 1u, "hello" },
+            new object[] { 2u, null },
+        ]);
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(0), Is.EqualTo(1u));
-            Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
+        using var reader = await connection.ExecuteReaderAsync(
+            $"SELECT id, val FROM {targetTable} ORDER BY id");
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(0), Is.EqualTo(2u));
-            Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(1u));
+        Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
 
-            ClassicAssert.IsFalse(reader.Read());
-        }
-        finally
-        {
-            await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
-        }
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(2u));
+        Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
+
+        ClassicAssert.IsFalse(reader.Read());
     }
 
     [Test]
@@ -139,45 +126,39 @@ public class VariantTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Variant)]
     public async Task InsertBinaryAsync_VariantIPv4IPv6_ShouldRoundTrip()
     {
-        var targetTable = "test.test_variant_ip";
-        try
-        {
-            await client.ExecuteNonQueryAsync(
-                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, addr Variant(IPv4, IPv6)) ENGINE = Memory");
+        var targetTable = CreateTableName();
 
-            var ipv4 = IPAddress.Parse("10.0.0.1");
-            var ipv6 = IPAddress.Parse("2001:db8::1");
+        await client.ExecuteNonQueryAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, addr Variant(IPv4, IPv6)) ENGINE = Memory");
 
-            await client.InsertBinaryAsync(targetTable, ["id", "addr"], [
-                new object[] { 1u, ipv4 },
-                new object[] { 2u, ipv6 },
-                new object[] { 3u, null },
-            ]);
+        var ipv4 = IPAddress.Parse("10.0.0.1");
+        var ipv6 = IPAddress.Parse("2001:db8::1");
 
-            using var reader = await connection.ExecuteReaderAsync(
-                $"SELECT id, addr, variantType(addr) FROM {targetTable} ORDER BY id");
+        await client.InsertBinaryAsync(targetTable, ["id", "addr"], [
+            new object[] { 1u, ipv4 },
+            new object[] { 2u, ipv6 },
+            new object[] { 3u, null },
+        ]);
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(0), Is.EqualTo(1u));
-            Assert.That(reader.GetValue(1), Is.EqualTo(ipv4));
-            Assert.That(reader.GetString(2), Is.EqualTo("IPv4"));
+        using var reader = await connection.ExecuteReaderAsync(
+            $"SELECT id, addr, variantType(addr) FROM {targetTable} ORDER BY id");
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(0), Is.EqualTo(2u));
-            Assert.That(reader.GetValue(1), Is.EqualTo(ipv6));
-            Assert.That(reader.GetString(2), Is.EqualTo("IPv6"));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(1u));
+        Assert.That(reader.GetValue(1), Is.EqualTo(ipv4));
+        Assert.That(reader.GetString(2), Is.EqualTo("IPv4"));
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(0), Is.EqualTo(3u));
-            Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
-            Assert.That(reader.GetString(2), Is.EqualTo("None"));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(2u));
+        Assert.That(reader.GetValue(1), Is.EqualTo(ipv6));
+        Assert.That(reader.GetString(2), Is.EqualTo("IPv6"));
 
-            ClassicAssert.IsFalse(reader.Read());
-        }
-        finally
-        {
-            await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
-        }
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(3u));
+        Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
+        Assert.That(reader.GetString(2), Is.EqualTo("None"));
+
+        ClassicAssert.IsFalse(reader.Read());
     }
 
     // Three-type variant: exercises the write path's O(1) lookup (VariantType builds the lookup for
@@ -187,47 +168,41 @@ public class VariantTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Variant)]
     public async Task InsertBinaryAsync_ThreeTypeVariantIPv4IPv6String_ShouldRoundTrip()
     {
-        var targetTable = "test.test_variant_ip3";
-        try
-        {
-            await client.ExecuteNonQueryAsync(
-                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(IPv4, IPv6, String)) ENGINE = Memory");
+        var targetTable = CreateTableName();
 
-            var ipv4 = IPAddress.Parse("10.0.0.1");
-            var ipv6 = IPAddress.Parse("2001:db8::1");
+        await client.ExecuteNonQueryAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(IPv4, IPv6, String)) ENGINE = Memory");
 
-            await client.InsertBinaryAsync(targetTable, ["id", "val"], [
-                new object[] { 1u, ipv4 },
-                new object[] { 2u, ipv6 },
-                new object[] { 3u, "hello" },
-                new object[] { 4u, null },
-            ]);
+        var ipv4 = IPAddress.Parse("10.0.0.1");
+        var ipv6 = IPAddress.Parse("2001:db8::1");
 
-            using var reader = await connection.ExecuteReaderAsync(
-                $"SELECT id, val, variantType(val) FROM {targetTable} ORDER BY id");
+        await client.InsertBinaryAsync(targetTable, ["id", "val"], [
+            new object[] { 1u, ipv4 },
+            new object[] { 2u, ipv6 },
+            new object[] { 3u, "hello" },
+            new object[] { 4u, null },
+        ]);
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(1), Is.EqualTo(ipv4));
-            Assert.That(reader.GetString(2), Is.EqualTo("IPv4"));
+        using var reader = await connection.ExecuteReaderAsync(
+            $"SELECT id, val, variantType(val) FROM {targetTable} ORDER BY id");
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(1), Is.EqualTo(ipv6));
-            Assert.That(reader.GetString(2), Is.EqualTo("IPv6"));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo(ipv4));
+        Assert.That(reader.GetString(2), Is.EqualTo("IPv4"));
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
-            Assert.That(reader.GetString(2), Is.EqualTo("String"));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo(ipv6));
+        Assert.That(reader.GetString(2), Is.EqualTo("IPv6"));
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
-            Assert.That(reader.GetString(2), Is.EqualTo("None"));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
+        Assert.That(reader.GetString(2), Is.EqualTo("String"));
 
-            ClassicAssert.IsFalse(reader.Read());
-        }
-        finally
-        {
-            await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
-        }
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo(DBNull.Value));
+        Assert.That(reader.GetString(2), Is.EqualTo("None"));
+
+        ClassicAssert.IsFalse(reader.Read());
     }
 
     // Multi-type variant with distinct FrameworkTypes: exercises the general lookup path (3 types,
@@ -239,40 +214,34 @@ public class VariantTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Variant)]
     public async Task InsertBinaryAsync_MultiTypeVariant_ShouldRoundTrip()
     {
-        var targetTable = "test.test_variant_multi";
-        try
-        {
-            await client.ExecuteNonQueryAsync(
-                $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(Int64, String, Array(Int64))) ENGINE = Memory");
+        var targetTable = CreateTableName();
 
-            var array = new long[] { 10, 20, 30 };
+        await client.ExecuteNonQueryAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt32, val Variant(Int64, String, Array(Int64))) ENGINE = Memory");
 
-            await client.InsertBinaryAsync(targetTable, ["id", "val"], [
-                new object[] { 1u, 42L },
-                new object[] { 2u, "hello" },
-                new object[] { 3u, array },
-            ]);
+        var array = new long[] { 10, 20, 30 };
 
-            using var reader = await connection.ExecuteReaderAsync(
-                $"SELECT id, val, variantType(val) FROM {targetTable} ORDER BY id");
+        await client.InsertBinaryAsync(targetTable, ["id", "val"], [
+            new object[] { 1u, 42L },
+            new object[] { 2u, "hello" },
+            new object[] { 3u, array },
+        ]);
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(1), Is.EqualTo(42L));
-            Assert.That(reader.GetString(2), Is.EqualTo("Int64"));
+        using var reader = await connection.ExecuteReaderAsync(
+            $"SELECT id, val, variantType(val) FROM {targetTable} ORDER BY id");
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
-            Assert.That(reader.GetString(2), Is.EqualTo("String"));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo(42L));
+        Assert.That(reader.GetString(2), Is.EqualTo("Int64"));
 
-            ClassicAssert.IsTrue(reader.Read());
-            Assert.That(reader.GetValue(1), Is.EqualTo(array));
-            Assert.That(reader.GetString(2), Is.EqualTo("Array(Int64)"));
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo("hello"));
+        Assert.That(reader.GetString(2), Is.EqualTo("String"));
 
-            ClassicAssert.IsFalse(reader.Read());
-        }
-        finally
-        {
-            await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {targetTable}");
-        }
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(1), Is.EqualTo(array));
+        Assert.That(reader.GetString(2), Is.EqualTo("Array(Int64)"));
+
+        ClassicAssert.IsFalse(reader.Read());
     }
 }
