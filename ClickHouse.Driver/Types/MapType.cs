@@ -44,9 +44,12 @@ internal class MapType : ParameterizedType
 
     public override object Read(ExtendedBinaryReader reader)
     {
-        var dict = (IDictionary)Activator.CreateInstance(FrameworkType);
-
         var length = reader.Read7BitEncodedInt();
+
+        // The number of key-value pairs is known up front, so size the dictionary
+        // to it and avoid repeated rehashing/resizing as entries are inserted
+        // (mirrors ArrayType.Read pre-allocating the result array with its length).
+        var dict = (IDictionary)Activator.CreateInstance(FrameworkType, length);
 
         for (var i = 0; i < length; i++)
         {
