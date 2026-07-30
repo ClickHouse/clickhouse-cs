@@ -34,7 +34,7 @@ public class ColumnCodecRegistryTests
 
     [Test]
     public void Resolve_UnsupportedButWellFormedType_ThrowsNotSupported()
-        => Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve("Variant(UInt8, String)", default));
+        => Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve("Point", default));
 
     [Test]
     public void Resolve_MalformedType_ThrowsFormat()
