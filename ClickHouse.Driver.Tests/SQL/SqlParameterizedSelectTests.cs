@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
@@ -90,6 +91,47 @@ public class SqlParameterizedSelectTests : IDisposable
 
         var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
         TestUtilities.AssertEqual(result, value);
+    }
+
+    // --- Issue #483: byte[] and TimeOnly parameter binding over the HTTP parameter path --------
+
+    [Test]
+    public async Task ShouldExecuteParameterizedSelectWithByteArrayForString()
+    {
+        // A byte[] bound to String used to fall through to value.ToString() and insert the literal
+        // text "System.Byte[]"; it must decode to the payload text instead.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {var:String} as res";
+        command.AddParameter("var", new byte[] { 0x41, 0x42, 0x43 }); // "ABC"
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo("ABC"));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Time)]
+    public async Task ShouldExecuteParameterizedSelectWithTimeOnlyForTime()
+    {
+        // TimeOnly bound to Time used to throw InvalidCastException on the HTTP parameter path.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {var:Time} as res";
+        command.AddParameter("var", new TimeOnly(14, 30, 0));
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(new TimeSpan(14, 30, 0)));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Time)]
+    public async Task ShouldExecuteParameterizedSelectWithTimeOnlyForTime64()
+    {
+        // TimeOnly bound to Time64 used to hit the default throw on the HTTP parameter path.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {var:Time64(3)} as res";
+        command.AddParameter("var", new TimeOnly(14, 30, 0, 500));
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(new TimeSpan(0, 14, 30, 0, 500)).Within(TimeSpan.FromMilliseconds(1)));
     }
 
     [Test]

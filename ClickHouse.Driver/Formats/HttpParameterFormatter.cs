@@ -90,8 +90,14 @@ internal static class HttpParameterFormatter
                     Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                     quote);
 
-            case FixedStringType tt when value is byte[] fsb:
-                return quote ? Encoding.UTF8.GetString(fsb).Escape().QuoteSingle() : Encoding.UTF8.GetString(fsb).Escape();
+            // byte[] / ReadOnlyMemory<byte> must decode to the payload text, mirroring the binary
+            // write path (Types/StringType.cs). Without these arms a byte[] fell through to the
+            // value.ToString() arm below and was inserted as the literal text "System.Byte[]".
+            case StringType or FixedStringType when value is byte[] bytes:
+                return quote ? Encoding.UTF8.GetString(bytes).Escape().QuoteSingle() : Encoding.UTF8.GetString(bytes).Escape();
+
+            case StringType or FixedStringType when value is ReadOnlyMemory<byte> bytesMemory:
+                return quote ? Encoding.UTF8.GetString(bytesMemory.Span).Escape().QuoteSingle() : Encoding.UTF8.GetString(bytesMemory.Span).Escape();
 
             case StringType st:
             case FixedStringType tt:
@@ -141,12 +147,19 @@ internal static class HttpParameterFormatter
 
             case TimeType tt when value is TimeSpan ts:
                 return TimeType.FormatTimeString(ts);
-
+#if NET6_0_OR_GREATER
+            case TimeType tt when value is TimeOnly timeOnly:
+                return TimeType.FormatTimeString(timeOnly.ToTimeSpan());
+#endif
             case TimeType tt:
                 return TimeType.FormatTimeString(Convert.ToInt32(value, CultureInfo.InvariantCulture));
 
             case Time64Type t64 when value is TimeSpan ts:
                 return t64.FormatTime64String(ts);
+#if NET6_0_OR_GREATER
+            case Time64Type t64 when value is TimeOnly timeOnly:
+                return t64.FormatTime64String(timeOnly.ToTimeSpan());
+#endif
 
             case NullableType nt:
                 return value is null || value is DBNull ? quote ? "null" : NullValueString : Format(nt.UnderlyingType, value, quote, customFormatter, parameterName);

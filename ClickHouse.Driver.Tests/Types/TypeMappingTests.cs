@@ -103,6 +103,7 @@ public class TypeMappingTests
     [TestCase(typeof(List<List<string>>), ExpectedResult = "Array(Array(String))")]
 #if NET6_0_OR_GREATER
     [TestCase(typeof(DateOnly), ExpectedResult = "Date")]
+    [TestCase(typeof(TimeOnly), ExpectedResult = "Time64(7)")]
 #endif
     [TestCase(typeof(Tuple<int, byte, float?, string[]>), ExpectedResult = "Tuple(Int32,UInt8,Nullable(Float32),Array(String))")]
     // System.Tuple with >7 elements (TRest nesting, same as ValueTuple)

@@ -195,6 +195,8 @@ internal static class TypeConverter
         ReverseMapping.Add(typeof(decimal), new Decimal128Type { Scale = 9 });
 #if NET6_0_OR_GREATER
         ReverseMapping.Add(typeof(DateOnly), new DateType());
+        // TimeOnly is the natural time-of-day analogue of TimeSpan; infer it as Time64(7) to match.
+        ReverseMapping.Add(typeof(TimeOnly), new Time64Type { Scale = 7 });
 #endif
         ReverseMapping[typeof(DateTime)] = new DateTimeType();
         ReverseMapping[typeof(DateTimeOffset)] = new DateTimeType();

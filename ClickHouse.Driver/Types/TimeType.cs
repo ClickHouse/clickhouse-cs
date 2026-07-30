@@ -49,6 +49,9 @@ internal class TimeType : ClickHouseType, ITypedWriter<TimeSpan>
         return value switch
         {
             TimeSpan ts => (int)Math.Round(ts.TotalSeconds),
+#if NET6_0_OR_GREATER
+            TimeOnly to => (int)Math.Round(to.ToTimeSpan().TotalSeconds),
+#endif
             int i => i,
             _ => throw new NotSupportedException($"Cannot convert {value?.GetType().Name ?? "null"} to Time")
         };
