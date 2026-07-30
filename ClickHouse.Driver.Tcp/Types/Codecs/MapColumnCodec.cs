@@ -186,17 +186,8 @@ internal sealed class MapColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        if (shape.CanWrite(column))
-        {
-            using IColumnWriteState state = shape.BeginWrite(keyCodec, valueCodec, column, start, length);
-            shape.WriteStatePrefix(keyCodec, valueCodec, writer, state);
-            return;
-        }
-
-        // An outer composite forwarded its own column (its children's prefixes are written from its own slice);
-        // the key/value codecs ignore it, preserving the prior contract for a Map nested in Variant/Nested/Tuple.
-        keyCodec.WriteStatePrefix(writer, column, start, length);
-        valueCodec.WriteStatePrefix(writer, column, start, length);
+        using IColumnWriteState state = shape.BeginWrite(keyCodec, valueCodec, column, start, length);
+        shape.WriteStatePrefix(keyCodec, valueCodec, writer, state);
     }
 
     /// <inheritdoc/>
