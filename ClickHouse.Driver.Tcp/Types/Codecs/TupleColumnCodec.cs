@@ -226,19 +226,20 @@ internal sealed class TupleColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is TupleWriteState tupleState)
+        // A null state is the caller saying it has none to share, so build one for this call alone.
+        if (state is null)
         {
-            WriteStatePrefixCore(writer, tupleState);
+            WriteStatePrefix(writer, column, start, length);
             return;
         }
 
-        WriteStatePrefix(writer, column, start, length);
+        WriteStatePrefixCore(writer, state.Expect<TupleWriteState>(TypeName));
     }
 
     /// <inheritdoc/>
-    // Every column is densified before the write, so it is always the dense TupleColumn; each child is written
-    // through its own codec and pre-built state, no copy. The flat ValueTuple form was un-transposed into the
-    // per-child columns before the write.
+    // Each child writes its own element column through its own codec and pre-built state. Which column that is
+    // depends on the shape BuildState was handed: a dense TupleColumn exposes its children directly, while a flat
+    // ValueTuple column is projected into one lazy per-element view per child.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         using TupleWriteState state = BuildState(column, start, length);
@@ -248,13 +249,13 @@ internal sealed class TupleColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is TupleWriteState tupleState)
+        if (state is null)
         {
-            WriteBodyCore(writer, tupleState);
+            WriteColumn(writer, column, start, length);
             return;
         }
 
-        WriteColumn(writer, column, start, length);
+        WriteBodyCore(writer, state.Expect<TupleWriteState>(TypeName));
     }
 
     private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, TupleWriteState state)
