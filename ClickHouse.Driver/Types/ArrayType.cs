@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.Generic;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
 
@@ -7,6 +8,19 @@ namespace ClickHouse.Driver.Types;
 
 internal class ArrayType : ParameterizedType
 {
+    // Typed readers for common leaf element types, keyed by the element's CLR framework type.
+    // These build a strongly-typed T[] and store elements through the array indexer, which
+    // avoids the two reflection costs on the generic Read path below:
+    //   - Array.CreateInstance(Type, int): a per-array reflection-driven allocation, and
+    //   - Array.SetValue(object, int): a per-element reflection store with a type check and
+    //     possible widening conversion.
+    // Every element type maps to exactly one FrameworkType whose Read() returns exactly that
+    // boxed type, so the typed (T) unbox is behaviourally equivalent to SetValue (minus the
+    // reflection). Element types without an entry fall through to the reflection path, so
+    // correctness is unchanged for everything (nested/composite elements, big integers,
+    // decimals read as ClickHouseDecimal, IP addresses, etc.).
+    private static readonly Dictionary<Type, Func<ClickHouseType, ExtendedBinaryReader, int, Array>> TypedReaders = BuildTypedReaders();
+
     public ClickHouseType UnderlyingType { get; set; }
 
     public override Type FrameworkType => UnderlyingType.FrameworkType.MakeArrayType();
@@ -26,12 +40,63 @@ internal class ArrayType : ParameterizedType
     public override object Read(ExtendedBinaryReader reader)
     {
         var length = reader.Read7BitEncodedInt();
+
+        if (TypedReaders.TryGetValue(UnderlyingType.FrameworkType, out var typedReader))
+            return typedReader(UnderlyingType, reader, length);
+
+        // Fallback: reflection-based read for element types without a typed reader.
         var data = Array.CreateInstance(UnderlyingType.FrameworkType, length);
         for (var i = 0; i < length; i++)
         {
             data.SetValue(ClearDBNull(UnderlyingType.Read(reader)), i);
         }
         return data;
+    }
+
+    private static Array ReadTyped<T>(ClickHouseType elementType, ExtendedBinaryReader reader, int length)
+    {
+        var data = new T[length];
+        for (var i = 0; i < length; i++)
+        {
+            data[i] = (T)ClearDBNull(elementType.Read(reader));
+        }
+        return data;
+    }
+
+    private static Dictionary<Type, Func<ClickHouseType, ExtendedBinaryReader, int, Array>> BuildTypedReaders()
+    {
+        var readers = new Dictionary<Type, Func<ClickHouseType, ExtendedBinaryReader, int, Array>>();
+
+        // Register a value type and its Nullable<T> form (Array(Nullable(T)) reports the
+        // Nullable<T> framework type). ClearDBNull maps the DBNull null-sentinel to a real
+        // null before the (T?) unbox.
+        void AddValue<T>()
+            where T : struct
+        {
+            readers[typeof(T)] = ReadTyped<T>;
+            readers[typeof(T?)] = ReadTyped<T?>;
+        }
+
+        AddValue<sbyte>();
+        AddValue<byte>();
+        AddValue<short>();
+        AddValue<ushort>();
+        AddValue<int>();
+        AddValue<uint>();
+        AddValue<long>();
+        AddValue<ulong>();
+        AddValue<float>();
+        AddValue<double>();
+        AddValue<decimal>();
+        AddValue<bool>();
+        AddValue<DateTime>();
+        AddValue<Guid>();
+
+        // Reference type: Nullable(String) shares the same framework type (string), so one
+        // entry covers both String and Nullable(String).
+        readers[typeof(string)] = ReadTyped<string>;
+
+        return readers;
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
