@@ -233,24 +233,23 @@ public class DapperTests : AbstractConnectionTestFixture
     [TestCase(0.0001)]
     public async Task ShouldWriteDecimalWithTypeInference(decimal expected)
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_decimal");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_decimal (balance Decimal64(4)) ENGINE Memory");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (balance Decimal64(4)) ENGINE Memory");
 
-
-        var sql = @"INSERT INTO test.dapper_decimal (balance) VALUES (@balance)";
+        var sql = $@"INSERT INTO {targetTable} (balance) VALUES (@balance)";
         await connection.ExecuteAsync(sql, new { balance = expected });
 
-        var actual = (ClickHouseDecimal) await connection.ExecuteScalarAsync("SELECT * FROM test.dapper_decimal");
+        var actual = (ClickHouseDecimal) await connection.ExecuteScalarAsync($"SELECT * FROM {targetTable}");
         Assert.That(actual.ToDecimal(CultureInfo.InvariantCulture), Is.EqualTo(expected));
     }
 
     [Test]
     public async Task ShouldWriteTwoFieldsWithTheSamePrefix()
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_prefixes");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_prefixes (testField Int32, testFieldWithSuffix Int32) ENGINE Memory");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (testField Int32, testFieldWithSuffix Int32) ENGINE Memory");
 
-        const string sql = "INSERT INTO test.dapper_prefixes (testField, testFieldWithSuffix) VALUES (@testField, @testFieldWithSuffix)";
+        var sql = $"INSERT INTO {targetTable} (testField, testFieldWithSuffix) VALUES (@testField, @testFieldWithSuffix)";
         await connection.ExecuteAsync(sql, new { testField = 1, testFieldWithSuffix = 2 });
     }
 
@@ -259,13 +258,13 @@ public class DapperTests : AbstractConnectionTestFixture
     [TestCase(null)]
     public async Task ShouldWriteNullableDoubleWithTypeInference(double? expected)
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_nullable_double");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_nullable_double (balance Nullable(Float64)) ENGINE Memory");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (balance Nullable(Float64)) ENGINE Memory");
 
-        var sql = @"INSERT INTO test.dapper_nullable_double (balance) VALUES (@balance)";
+        var sql = $@"INSERT INTO {targetTable} (balance) VALUES (@balance)";
         await connection.ExecuteAsync(sql, new { balance = expected });
 
-        var actual = await connection.ExecuteScalarAsync("SELECT * FROM test.dapper_nullable_double");
+        var actual = await connection.ExecuteScalarAsync($"SELECT * FROM {targetTable}");
         if (expected is null)
             Assert.That(actual, Is.InstanceOf<DBNull>());
         else
@@ -283,15 +282,15 @@ public class DapperTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldInsertAndSelectWithAnonymousObject()
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_anon");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_anon (id Int32, name String, value Float64) ENGINE Memory");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, name String, value Float64) ENGINE Memory");
 
         // Anonymous object as parameter source - the most common Dapper pattern
         await connection.ExecuteAsync(
-            "INSERT INTO test.dapper_anon (id, name, value) VALUES (@Id, @Name, @Value)",
+            $"INSERT INTO {targetTable} (id, name, value) VALUES (@Id, @Name, @Value)",
             new { Id = 1, Name = "alice", Value = 3.14 });
 
-        var rows = (await connection.QueryAsync<SimpleRow>("SELECT id, name, value FROM test.dapper_anon")).ToList();
+        var rows = (await connection.QueryAsync<SimpleRow>($"SELECT id, name, value FROM {targetTable}")).ToList();
         Assert.That(rows, Has.Count.EqualTo(1));
         Assert.That(rows[0].Id, Is.EqualTo(1));
         Assert.That(rows[0].Name, Is.EqualTo("alice"));
@@ -301,15 +300,15 @@ public class DapperTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldInsertWithPocoParameters()
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_poco");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_poco (id Int32, name String, value Float64) ENGINE Memory");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, name String, value Float64) ENGINE Memory");
 
         // POCO class as parameter source - Dapper reflects its properties identically to anonymous objects
         var param = new SimpleRow { Id = 42, Name = "bob", Value = 99.9 };
         await connection.ExecuteAsync(
-            "INSERT INTO test.dapper_poco (id, name, value) VALUES (@Id, @Name, @Value)", param);
+            $"INSERT INTO {targetTable} (id, name, value) VALUES (@Id, @Name, @Value)", param);
 
-        var rows = (await connection.QueryAsync<SimpleRow>("SELECT id, name, value FROM test.dapper_poco")).ToList();
+        var rows = (await connection.QueryAsync<SimpleRow>($"SELECT id, name, value FROM {targetTable}")).ToList();
         Assert.That(rows, Has.Count.EqualTo(1));
         Assert.That(rows[0].Id, Is.EqualTo(42));
         Assert.That(rows[0].Name, Is.EqualTo("bob"));
@@ -318,16 +317,16 @@ public class DapperTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldSelectWithDynamicParametersFromDictionary()
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_dynparams");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_dynparams (id Int32, name String) ENGINE Memory");
-        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_dynparams VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, name String) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
 
         // DynamicParameters constructed from a dictionary
         var dict = new Dictionary<string, object> { { "Id", 2 } };
         var dynParams = new DynamicParameters(dict);
 
         var rows = (await connection.QueryAsync<SimpleRow>(
-            "SELECT id, name FROM test.dapper_dynparams WHERE id = @Id", dynParams)).ToList();
+            $"SELECT id, name FROM {targetTable} WHERE id = @Id", dynParams)).ToList();
 
         Assert.That(rows, Has.Count.EqualTo(1));
         Assert.That(rows[0].Name, Is.EqualTo("bob"));
@@ -336,15 +335,15 @@ public class DapperTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldSelectWithDynamicParametersFromAnonymousObject()
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_dynparams2");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_dynparams2 (id Int32, name String) ENGINE Memory");
-        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_dynparams2 VALUES (1, 'alice'), (2, 'bob')");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, name String) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES (1, 'alice'), (2, 'bob')");
 
         // DynamicParameters constructed from an anonymous object
         var dynParams = new DynamicParameters(new { Id = 1 });
 
         var rows = (await connection.QueryAsync<SimpleRow>(
-            "SELECT id, name FROM test.dapper_dynparams2 WHERE id = @Id", dynParams)).ToList();
+            $"SELECT id, name FROM {targetTable} WHERE id = @Id", dynParams)).ToList();
 
         Assert.That(rows, Has.Count.EqualTo(1));
         Assert.That(rows[0].Name, Is.EqualTo("alice"));
@@ -366,11 +365,11 @@ public class DapperTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldSelectPureFromTable_MappingToPoco()
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_pure");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_pure (id Int32, name String, value Float64) ENGINE Memory");
-        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_pure VALUES (10, 'test', 1.5), (20, 'test2', 2.5)");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, name String, value Float64) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES (10, 'test', 1.5), (20, 'test2', 2.5)");
 
-        var rows = (await connection.QueryAsync<SimpleRow>("SELECT id, name, value FROM test.dapper_pure ORDER BY id")).ToList();
+        var rows = (await connection.QueryAsync<SimpleRow>($"SELECT id, name, value FROM {targetTable} ORDER BY id")).ToList();
 
         Assert.That(rows, Has.Count.EqualTo(2));
         Assert.That(rows[0].Id, Is.EqualTo(10));
@@ -380,13 +379,13 @@ public class DapperTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldSelectWithMultipleAnonymousParameters()
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_multi");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_multi (id Int32, name String, value Float64) ENGINE Memory");
-        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_multi VALUES (1, 'alice', 1.0), (2, 'bob', 2.0), (3, 'carol', 3.0)");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, name String, value Float64) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES (1, 'alice', 1.0), (2, 'bob', 2.0), (3, 'carol', 3.0)");
 
         // Multiple parameters from a single anonymous object
         var rows = (await connection.QueryAsync<SimpleRow>(
-            "SELECT id, name, value FROM test.dapper_multi WHERE id >= @MinId AND name = @Name",
+            $"SELECT id, name, value FROM {targetTable} WHERE id >= @MinId AND name = @Name",
             new { MinId = 1, Name = "bob" })).ToList();
 
         Assert.That(rows, Has.Count.EqualTo(1));
@@ -405,12 +404,12 @@ public class DapperTests : AbstractConnectionTestFixture
     {
         // Pure SELECT returning a tuple column - no tuple PARAMETER, just tuple in RESULT
         // This tests whether Dapper can materialize a tuple column into a POCO
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_tuple_col");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_tuple_col (id Int32, coords Tuple(Int32, Int32)) ENGINE Memory");
-        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_tuple_col VALUES (1, (10, 20))");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, coords Tuple(Int32, Int32)) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES (1, (10, 20))");
 
         var rows = (await connection.QueryAsync<RowWithTuple>(
-            "SELECT id, coords FROM test.dapper_tuple_col")).ToList();
+            $"SELECT id, coords FROM {targetTable}")).ToList();
 
         Assert.That(rows, Has.Count.EqualTo(1));
         Assert.That(rows[0].Id, Is.EqualTo(1));
@@ -433,13 +432,13 @@ public class DapperTests : AbstractConnectionTestFixture
     {
         // ClickHouse doesn't support Dapper's automatic IN expansion (@Ids -> @Ids1, @Ids2, ...).
         // Instead, use has() with an Array parameter and ClickHouse native {param:Type} syntax.
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_in");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_in (id Int32, name String) ENGINE Memory");
-        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_in VALUES (1, 'alice'), (2, 'bob'), (3, 'carol'), (4, 'dave')");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, name String) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES (1, 'alice'), (2, 'bob'), (3, 'carol'), (4, 'dave')");
 
         var parameters = new Dictionary<string, object> { { "ids", new[] { 1, 3 } } };
         var rows = (await connection.QueryAsync<SimpleRow>(
-            "SELECT id, name FROM test.dapper_in WHERE has({ids:Array(Int32)}, id) ORDER BY id",
+            $"SELECT id, name FROM {targetTable} WHERE has({{ids:Array(Int32)}}, id) ORDER BY id",
             parameters)).ToList();
 
         Assert.That(rows, Has.Count.EqualTo(2));
@@ -453,12 +452,12 @@ public class DapperTests : AbstractConnectionTestFixture
         // Test Dapper's native IN expansion: WHERE id IN @Ids
         // Dapper rewrites this to WHERE id IN (@Ids1, @Ids2, ...) with individual params.
         // Each @IdsN then gets replaced by {IdsN:Type} via ReplacePlaceholders.
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_in2");
-        await connection.ExecuteStatementAsync("CREATE TABLE IF NOT EXISTS test.dapper_in2 (id Int32, name String) ENGINE Memory");
-        await connection.ExecuteStatementAsync("INSERT INTO test.dapper_in2 VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (id Int32, name String) ENGINE Memory");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
 
         var rows = (await connection.QueryAsync<SimpleRow>(
-            "SELECT id, name FROM test.dapper_in2 WHERE id IN @Ids ORDER BY id",
+            $"SELECT id, name FROM {targetTable} WHERE id IN @Ids ORDER BY id",
             new { Ids = new[] { 1, 3 } })).ToList();
 
         Assert.That(rows, Has.Count.EqualTo(2));
@@ -469,9 +468,9 @@ public class DapperTests : AbstractConnectionTestFixture
     [Test]
     public async Task ShouldInsertWithExceptSyntax()
     {
-        await connection.ExecuteStatementAsync("TRUNCATE TABLE IF EXISTS test.dapper_except");
-        await connection.ExecuteStatementAsync(@"
-            CREATE TABLE IF NOT EXISTS test.dapper_except (
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($@"
+            CREATE TABLE {targetTable} (
                 id UInt32,
                 name String,
                 value Float64,
@@ -481,11 +480,11 @@ public class DapperTests : AbstractConnectionTestFixture
         ");
 
         // Insert using Dapper with EXCEPT syntax
-        var sql = "INSERT INTO test.dapper_except (* EXCEPT (created, updated)) VALUES (@id, @name, @value)";
+        var sql = $"INSERT INTO {targetTable} (* EXCEPT (created, updated)) VALUES (@id, @name, @value)";
         await connection.ExecuteAsync(sql, new { id = 100, name = "dapper-test", value = 123.45 });
 
         // Verify the insert worked and defaults were applied
-        var result = await connection.QueryAsync("SELECT * FROM test.dapper_except");
+        var result = await connection.QueryAsync($"SELECT * FROM {targetTable}");
         var row = result.Single() as IDictionary<string, object>;
         
         Assert.That(row, Is.Not.Null);

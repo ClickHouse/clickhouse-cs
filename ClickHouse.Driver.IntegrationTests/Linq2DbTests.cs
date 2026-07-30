@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Numerics;
 using ClickHouse.Driver.Numerics;
@@ -49,6 +50,27 @@ public class Tests
         ];
     }
 
+    // Tables created by the tests, dropped on teardown in case a test fails before dropping its own.
+    private readonly ConcurrentQueue<string> createdTables = new();
+
+    [OneTimeTearDown]
+    public async Task DropCreatedTables()
+    {
+        using var client = TestUtilities.GetTestClickHouseClient();
+
+        while (createdTables.TryDequeue(out var table))
+        {
+            try
+            {
+                await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+            }
+            catch (Exception e)
+            {
+                await TestContext.Progress.WriteLineAsync($"Failed to drop test table {table}: {e.Message}");
+            }
+        }
+    }
+
     [Test]
     public async Task Linq2DbBulkCopy()
     {
@@ -57,44 +79,45 @@ public class Tests
         // Covers: ClickHouseConnection::..ctor(string)
         await using var db = new DataConnection(new DataOptions().UseClickHouse(connectionString, ClickHouseProvider.ClickHouseDriver));
 
+        // linq2db takes the table name from the mapping class, which cannot carry a per-run name, so
+        // the name is overridden explicitly here. For ClickHouse, linq2db builds "database.table" from
+        // the database name component, so the database has to be passed separately from the name.
+        var tableName = TestUtilities.CreateTableName(database: null);
+        createdTables.Enqueue($"{TestUtilities.TestDatabase}.{tableName}");
+
         // cannot use temp table as we need to test WithoutSession option, incompatible with session tables
-        var tb = await db.CreateTableAsync<Linq2DbTestTable>();
+        var tb = await db.CreateTableAsync<Linq2DbTestTable>(tableName: tableName, databaseName: TestUtilities.TestDatabase);
 
-        try
+        var options = new BulkCopyOptions()
         {
-            var options = new BulkCopyOptions()
-            {
-                // Covers: ClickHouseBulkCopy::BatchSize
-                MaxBatchSize = 10,
-                // Covers: ClickHouseBulkCopy::MaxDegreeOfParallelism
-                MaxDegreeOfParallelism = 1,
-                // Covers:
-                // ClickHouseConnectionStringBuilder::.ctor(string)
-                // ClickHouseConnectionStringBuilder::UseSession
-                // ClickHouseConnectionStringBuilder::ToString
-                WithoutSession = true
-            };
-
+            // Covers: ClickHouseBulkCopy::BatchSize
+            MaxBatchSize = 10,
+            // Covers: ClickHouseBulkCopy::MaxDegreeOfParallelism
+            MaxDegreeOfParallelism = 1,
             // Covers:
-            // ClickHouseBulkCopy::.ctor(ClickHouseConnection)
-            // ClickHouseBulkCopy::Dispose()
-            // ClickHouseBulkCopy::DestinationTableName
-            // ClickHouseBulkCopy::RowsWritten
-            // ClickHouseBulkCopy::InitAsync
-            // ClickHouseBulkCopy::ColumnNames
-            await tb.BulkCopyAsync(options, Linq2DbTestTable.TestData);
+            // ClickHouseConnectionStringBuilder::.ctor(string)
+            // ClickHouseConnectionStringBuilder::UseSession
+            // ClickHouseConnectionStringBuilder::ToString
+            WithoutSession = true
+        };
 
-            db.InlineParameters = true;
-            // Covers:
-            // ClickHouseDecimal::ToString(IFormatProvider)
-            var record = await tb.Where(r => r.Decimal == new ClickHouseDecimal(12.3M)).SingleAsync();
+        // Covers:
+        // ClickHouseBulkCopy::.ctor(ClickHouseConnection)
+        // ClickHouseBulkCopy::Dispose()
+        // ClickHouseBulkCopy::DestinationTableName
+        // ClickHouseBulkCopy::RowsWritten
+        // ClickHouseBulkCopy::InitAsync
+        // ClickHouseBulkCopy::ColumnNames
+        await tb.BulkCopyAsync(options, Linq2DbTestTable.TestData);
 
-            // optional assert could be added
-        }
-        finally
-        {
-            await tb.DropAsync();
-        }
+        db.InlineParameters = true;
+        // Covers:
+        // ClickHouseDecimal::ToString(IFormatProvider)
+        var record = await tb.Where(r => r.Decimal == new ClickHouseDecimal(12.3M)).SingleAsync();
+
+        // optional assert could be added
+
+        await tb.DropAsync();
 
         Assert.Pass();
     }

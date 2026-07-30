@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Types;
@@ -15,11 +17,23 @@ namespace ClickHouse.Driver.Tests.SQL;
 public class SqlParameterizedSelectTests : IDisposable
 {
     private readonly ClickHouseConnection connection;
+    private readonly ConcurrentQueue<string> createdTables = new();
 
     public SqlParameterizedSelectTests(bool useCompression)
     {
         connection = TestUtilities.GetTestClickHouseConnection(useCompression);
         connection.Open();
+    }
+
+    /// <summary>
+    /// This fixture does not derive from <see cref="AbstractConnectionTestFixture"/>, so it tracks
+    /// the names it hands out and drops them itself in <see cref="Dispose"/>.
+    /// </summary>
+    private string CreateTableName(string prefix = null, [CallerMemberName] string testName = null)
+    {
+        var name = TestUtilities.CreateTableName(prefix, testName: testName);
+        createdTables.Enqueue(name);
+        return name;
     }
 
     public static IEnumerable<TestCaseData> TypedQueryParameters => TestCases.GetDataTypeSamples()
@@ -229,7 +243,7 @@ public class SqlParameterizedSelectTests : IDisposable
         // the value verbatim and the server applies its own backtick quoting/escaping, so a backtick
         // cannot break out. If the client escaped the value (e.g. via Escape()), this column would not
         // resolve.
-        var table = $"poly_ident_{Guid.NewGuid():N}";
+        var table = CreateTableName("poly_ident");
         using (var createCmd = connection.CreateCommand())
         {
             // Column literally named  weird`col  (inner backtick doubled per ClickHouse DDL quoting).
@@ -237,27 +251,18 @@ public class SqlParameterizedSelectTests : IDisposable
             await createCmd.ExecuteNonQueryAsync();
         }
 
-        try
+        using (var insertCmd = connection.CreateCommand())
         {
-            using (var insertCmd = connection.CreateCommand())
-            {
-                insertCmd.CommandText = $"INSERT INTO {table} VALUES (7, 9)";
-                await insertCmd.ExecuteNonQueryAsync();
-            }
-
-            using var selectCmd = connection.CreateCommand();
-            selectCmd.CommandText = $"SELECT {{c:Identifier}} FROM {table}";
-            selectCmd.AddParameter("c", "weird`col"); // raw value, single backtick, no client-side escaping
-
-            var result = (await selectCmd.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
-            Assert.That(result, Is.EqualTo(7));
+            insertCmd.CommandText = $"INSERT INTO {table} VALUES (7, 9)";
+            await insertCmd.ExecuteNonQueryAsync();
         }
-        finally
-        {
-            using var dropCmd = connection.CreateCommand();
-            dropCmd.CommandText = $"DROP TABLE IF EXISTS {table}";
-            await dropCmd.ExecuteNonQueryAsync();
-        }
+
+        using var selectCmd = connection.CreateCommand();
+        selectCmd.CommandText = $"SELECT {{c:Identifier}} FROM {table}";
+        selectCmd.AddParameter("c", "weird`col"); // raw value, single backtick, no client-side escaping
+
+        var result = (await selectCmd.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(7));
     }
 
     [Test]
@@ -304,5 +309,31 @@ public class SqlParameterizedSelectTests : IDisposable
         Assert.That(result, Is.EqualTo(0UL)); // value of the `number` column, not the literal "number"
     }
 
-    public void Dispose() => connection?.Dispose();
+    /// <summary>
+    /// Drops every name handed out by <see cref="CreateTableName"/>. Best-effort: a table that
+    /// cannot be dropped must not fail an otherwise passing fixture.
+    /// </summary>
+    private void DropCreatedTables()
+    {
+        while (createdTables.TryDequeue(out var table))
+        {
+            try
+            {
+                connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}").GetAwaiter().GetResult();
+            }
+            catch (Exception e)
+            {
+                TestContext.Progress.WriteLine($"Failed to drop test table {table}: {e.Message}");
+            }
+        }
+    }
+
+    [OneTimeTearDown]
+    public void Dispose()
+    {
+        // NUnit both invokes [OneTimeTearDown] and disposes the fixture instance, so this can run
+        // twice; draining the queue and disposing the connection are both idempotent.
+        DropCreatedTables();
+        connection?.Dispose();
+    }
 }

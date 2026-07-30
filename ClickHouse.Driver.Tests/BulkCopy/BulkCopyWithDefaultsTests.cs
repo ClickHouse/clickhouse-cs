@@ -31,11 +31,10 @@ public class BulkCopyWithDefaultsTests : AbstractConnectionTestFixture
     [TestCaseSource(typeof(BulkCopyWithDefaultsTests), nameof(Get))]
     public async Task ShouldExecuteSingleValueInsertViaBulkCopyWithDefaults(string clickhouseType, object insertValue, object expectedValue, string tableName)
     {
-        var targetTable = "test." + SanitizeTableName($"bulk_single_default_{tableName}");
+        var targetTable = CreateTableName($"bulk_single_default_{tableName}");
 
-        await connection.ExecuteStatementAsync($"TRUNCATE TABLE IF EXISTS {targetTable}");
         await connection.ExecuteStatementAsync(
-            $"CREATE TABLE IF NOT EXISTS {targetTable} (`value` {clickhouseType}) ENGINE Memory");
+            $"CREATE TABLE {targetTable} (`value` {clickhouseType}) ENGINE Memory");
 
         using var bulkCopyWithDefaults = new ClickHouseBulkCopy(connection, RowBinaryFormat.RowBinaryWithDefaults)
         {
