@@ -249,55 +249,100 @@ internal sealed class VariantColumnCodec : IColumnCodec
         => allChildrenWritable && (column is VariantColumn dense ? dense.TypeCount == children.Length : column is IColumn<object>);
 
     /// <inheritdoc/>
-    // The prefix is a fixed mode word followed by the alternatives' own prefixes; every alternative supported
-    // today has a data-independent prefix, so the outer column/slice is forwarded unchanged and ignored.
+    // Project the slice into one column per alternative once, and open each alternative's own write state over it,
+    // so the prefix and body phases share a single projection and a child never sees the variant's own column.
+    // Every alternative gets a column and a state even when no row selects it: the alternative set is fixed by the
+    // type rather than by the data, so each one's prefix belongs on the wire regardless of which rows arrived.
+    public IColumnWriteState BeginWrite(IColumn column, int start, int length)
+        => column is VariantColumn dense && dense.TypeCount == children.Length
+            ? BuildDenseState(dense, start, length)
+            : BuildScatteredState(column, start, length);
+
+    /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        writer.WriteUInt64(VariantWire.BasicDiscriminatorsMode);
-        foreach (IColumnCodec child in children)
+        using VariantWriteState state = BeginWriteCore(column, start, length);
+        WriteStatePrefixCore(writer, state);
+    }
+
+    /// <inheritdoc/>
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+    {
+        if (state is VariantWriteState variantState)
         {
-            child.WriteStatePrefix(writer, column, start, length);
+            WriteStatePrefixCore(writer, variantState);
+            return;
         }
+
+        WriteStatePrefix(writer, column, start, length);
     }
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        if (column is VariantColumn dense && dense.TypeCount == children.Length)
+        using VariantWriteState state = BeginWriteCore(column, start, length);
+        WriteBodyCore(writer, state);
+    }
+
+    /// <inheritdoc/>
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+    {
+        if (state is VariantWriteState variantState)
         {
-            WriteDense(writer, dense, start, length);
+            WriteBodyCore(writer, variantState);
             return;
         }
 
-        WriteScattered(writer, column, start, length);
+        WriteColumn(writer, column, start, length);
     }
 
-    // The dense path: the discriminators and per-type child columns already exist, so write the slice's
-    // discriminators verbatim, then each child's slice. A child's slice is the contiguous run of its values whose
-    // originating rows fall in [start, start + length) — found by counting that type's discriminators before and
-    // within the slice, since values are stored in row order.
-    private void WriteDense(ClickHouseBinaryWriter writer, VariantColumn dense, int start, int length)
+    // A fixed mode word, then every alternative's own prefix over its projected column — including the alternatives
+    // no row selected, whose column is simply empty.
+    private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, VariantWriteState state)
     {
-        ReadOnlySpan<byte> discriminators = dense.Discriminators;
-        writer.WriteBytes(discriminators.Slice(start, length));
+        writer.WriteUInt64(VariantWire.BasicDiscriminatorsMode);
+        for (int i = 0; i < children.Length; i++)
+        {
+            children[i].WriteStatePrefix(writer, state.ChildColumns[i], state.ChildStart[i], state.ChildLength[i], state.ChildStates[i]);
+        }
+    }
+
+    // The row-order discriminator stream, then each alternative's values in alternative order.
+    private void WriteBodyCore(ClickHouseBinaryWriter writer, VariantWriteState state)
+    {
+        writer.WriteBytes(state.Discriminators is not null
+            ? state.Discriminators.AsSpan(0, state.Length)
+            : state.Dense.Discriminators.Slice(state.Start, state.Length));
+
+        for (int i = 0; i < children.Length; i++)
+        {
+            children[i].WriteColumn(writer, state.ChildColumns[i], state.ChildStart[i], state.ChildLength[i], state.ChildStates[i]);
+        }
+    }
+
+    private VariantWriteState BeginWriteCore(IColumn column, int start, int length)
+        => (VariantWriteState)BeginWrite(column, start, length);
+
+    // The dense path: the discriminators and per-type child columns already exist, so each alternative's slice is
+    // the contiguous run of its values whose originating rows fall in [start, start + length) — found by counting
+    // that type's discriminators before and within the slice, since values are stored in row order. The child
+    // columns are borrowed from the dense column, so nothing is copied and the state owns none of them.
+    private VariantWriteState BuildDenseState(VariantColumn dense, int start, int length)
+    {
+        int typeCount = children.Length;
+        var childColumns = new IColumn[typeCount];
 
         // Each type's values sit contiguously in its child column in row order, so writing this slice needs, per
         // type, the count of its values before the slice (the child-column start offset) and within it (the length
         // to write). Both come from a single pass over the slice: the precomputed LocalIndices give each row its
         // index within its type's child column, so the first in-slice row of a given discriminator already carries
         // that type's before-slice count. This avoids rescanning [0, start) per slice, which would make a
-        // multi-block insert quadratic. within[d] == 0 flags the first in-slice occurrence, and an absent type
-        // keeps before/within 0 (writing nothing) — so both spans must start zeroed.
+        // multi-block insert quadratic. A length of 0 flags the first in-slice occurrence, and an absent type keeps
+        // start/length 0 — an empty slice its codec still writes a prefix for.
+        var childStart = new int[typeCount];
+        var childLength = new int[typeCount];
+        ReadOnlySpan<byte> discriminators = dense.Discriminators;
         ReadOnlySpan<int> localIndices = dense.LocalIndices;
-        Span<int> before = stackalloc int[children.Length];
-        Span<int> within = stackalloc int[children.Length];
-
-        // Explicitly zero the stack spans. stackalloc is zeroed today only because the compiler emits `.locals
-        // init`; a future `[SkipLocalsInit]` would silently drop that and leave the counters holding garbage, so
-        // do not depend on it — the Clear is a cheap memset that keeps this correct regardless.
-        before.Clear();
-        within.Clear();
-
         for (int i = start; i < start + length; i++)
         {
             byte d = discriminators[i];
@@ -306,24 +351,28 @@ internal sealed class VariantColumnCodec : IColumnCodec
                 continue;
             }
 
-            if (within[d] == 0)
+            if (childLength[d] == 0)
             {
-                before[d] = localIndices[i];
+                childStart[d] = localIndices[i];
             }
 
-            within[d]++;
+            childLength[d]++;
         }
 
-        for (int i = 0; i < children.Length; i++)
+        for (int i = 0; i < typeCount; i++)
         {
-            children[i].WriteColumn(writer, dense.GetTypeColumn(i), before[i], within[i]);
+            childColumns[i] = dense.GetTypeColumn(i);
         }
+
+        return OpenChildStates(childColumns, childStart, childLength, dense, start, length, discriminators: null);
     }
 
-    // The ergonomic path: scatter a flat column of boxed values into per-type buffers by each value's runtime CLR
-    // type, writing the discriminator stream as it goes, then hand each type's bucket to its child codec. Mirrors
-    // the tuple codec's flat write, bucketing by discriminator instead of distributing across parallel columns.
-    private void WriteScattered(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    // The ergonomic path: scatter a flat column of boxed values into per-type buckets by each value's runtime CLR
+    // type, building the discriminator stream as it goes, then project each bucket into its alternative's own typed
+    // column. Mirrors the tuple codec's flat write, bucketing by discriminator instead of distributing across
+    // parallel columns. The buckets are pooled scratch for the projection only, so they go back before returning;
+    // the discriminator buffer outlives this call because the body phase writes it, so the state owns it.
+    private VariantWriteState BuildScatteredState(IColumn column, int start, int length)
     {
         int typeCount = children.Length;
         byte[] discriminators = ArrayPool<byte>.Shared.Rent(length);
@@ -350,22 +399,76 @@ internal sealed class VariantColumnCodec : IColumnCodec
                 buckets[discriminator][filled[discriminator]++] = value;
             }
 
-            writer.WriteBytes(discriminators.AsSpan(0, length));
-
+            var childColumns = new IColumn[typeCount];
             for (int i = 0; i < typeCount; i++)
             {
-                IColumn childColumn = childFlatBuilders[i](column.Name, children[i].TypeName, buckets[i], filled[i]);
-                children[i].WriteColumn(writer, childColumn, 0, filled[i]);
+                childColumns[i] = childFlatBuilders[i](column.Name, children[i].TypeName, buckets[i], filled[i]);
             }
+
+            // Each projected column starts at 0 and runs for the rows that selected that alternative.
+            return OpenChildStates(childColumns, new int[typeCount], filled, dense: null, start, length, discriminators);
+        }
+        catch
+        {
+            ArrayPool<byte>.Shared.Return(discriminators);
+            throw;
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(discriminators);
             for (int i = 0; i < typeCount; i++)
             {
                 ArrayPool<object>.Shared.Return(buckets[i], clearArray: true);
             }
         }
+    }
+
+    // Opens each alternative's own write state over its projected column and assembles the slice's state. A later
+    // alternative's BeginWrite throwing must not leak the states already opened, nor the rented discriminators.
+    private VariantWriteState OpenChildStates(
+        IColumn[] childColumns,
+        int[] childStart,
+        int[] childLength,
+        VariantColumn dense,
+        int start,
+        int length,
+        byte[] discriminators)
+    {
+        var childStates = new IColumnWriteState[children.Length];
+        int opened = 0;
+        try
+        {
+            for (int i = 0; i < children.Length; i++)
+            {
+                childStates[i] = children[i].BeginWrite(childColumns[i], childStart[i], childLength[i]);
+                opened = i + 1;
+            }
+        }
+        catch
+        {
+            for (int i = 0; i < opened; i++)
+            {
+                childStates[i]?.Dispose();
+            }
+
+            if (discriminators is not null)
+            {
+                ArrayPool<byte>.Shared.Return(discriminators);
+            }
+
+            throw;
+        }
+
+        return new VariantWriteState
+        {
+            ChildColumns = childColumns,
+            ChildStart = childStart,
+            ChildLength = childLength,
+            ChildStates = childStates,
+            Dense = dense,
+            Start = start,
+            Length = length,
+            Discriminators = discriminators,
+        };
     }
 
     // Resolves the discriminator for a value's runtime CLR type, or throws if no alternative accepts it.
@@ -378,6 +481,40 @@ internal sealed class VariantColumnCodec : IColumnCodec
 
         throw new ArgumentException(
             $"Variant '{TypeName}' has no alternative for a value of CLR type '{clrType}'. Supported CLR types: {string.Join(", ", discriminatorByClrType.Keys)}.");
+    }
+
+    // The write scratch of one slice, shared across the prefix and body phases. ChildColumns holds one column per
+    // alternative — borrowed from the dense column, or projected out of the boxed values — with the slice of it that
+    // alternative occupies and its own codec's state; an alternative no row selected carries an empty slice rather
+    // than being absent, so its prefix is still written. Discriminators is the scattered path's own row-order stream,
+    // rented and returned on dispose; for a dense column it is null and Dense supplies the stream instead.
+    private sealed class VariantWriteState : IColumnWriteState
+    {
+        public IColumn[] ChildColumns;
+        public int[] ChildStart;
+        public int[] ChildLength;
+        public IColumnWriteState[] ChildStates;
+        public VariantColumn Dense;
+        public int Start;
+        public int Length;
+        public byte[] Discriminators;
+
+        public void Dispose()
+        {
+            if (ChildStates is not null)
+            {
+                foreach (IColumnWriteState state in ChildStates)
+                {
+                    state?.Dispose();
+                }
+            }
+
+            if (Discriminators is not null)
+            {
+                ArrayPool<byte>.Shared.Return(Discriminators);
+                Discriminators = null;
+            }
+        }
     }
 
     // Builds a flat typed column from boxed values — the ergonomic write path's per-type projection.

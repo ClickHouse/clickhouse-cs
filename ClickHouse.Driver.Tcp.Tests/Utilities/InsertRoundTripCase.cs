@@ -916,6 +916,30 @@ public sealed class InsertRoundTripCase
                 new object[] { "hi", ("lc", (byte)7), null, (string.Empty, (byte)0) }),
             VariantSettings);
 
+        // An alternative that carries a state prefix but is selected by no row in the block. The variant's
+        // alternatives are fixed by its type, not by the data, so every alternative's prefix belongs on the wire
+        // whether or not any row picks it — here LowCardinality's dictionary prefix, with every row a UInt64 or
+        // NULL. Omitting it desyncs the block, so the server rejects the insert rather than storing bad data.
+        yield return Same(
+            "Variant(LowCardinality(String), UInt64) [absent alternative]",
+            "Variant(LowCardinality(String), UInt64)",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(LowCardinality(String), UInt64)",
+                new object[] { 1UL, null, 2UL, null }),
+            VariantSettings);
+
+        // The same, one level deeper: the absent alternative is a Tuple whose own element carries the prefix, so the
+        // tuple's children have to be walked over an empty slice for that prefix to be emitted at all.
+        yield return Same(
+            "Variant(Tuple(LowCardinality(String), UInt8), UInt64) [absent alternative]",
+            "Variant(Tuple(LowCardinality(String), UInt8), UInt64)",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(Tuple(LowCardinality(String), UInt8), UInt64)",
+                new object[] { 7UL, null, 9UL }),
+            VariantSettings);
+
         // Array(Variant(...)) composition: the array flattens its elements into one Variant value stream, so each
         // element is a variant value (or NULL) and empty rows ride along.
         yield return Arrays(
