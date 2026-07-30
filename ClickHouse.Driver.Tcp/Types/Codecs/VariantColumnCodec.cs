@@ -268,13 +268,14 @@ internal sealed class VariantColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is VariantWriteState variantState)
+        // A null state is the caller saying it has none to share, so build one for this call alone.
+        if (state is null)
         {
-            WriteStatePrefixCore(writer, variantState);
+            WriteStatePrefix(writer, column, start, length);
             return;
         }
 
-        WriteStatePrefix(writer, column, start, length);
+        WriteStatePrefixCore(writer, state.Expect<VariantWriteState>(TypeName));
     }
 
     /// <inheritdoc/>
@@ -287,13 +288,13 @@ internal sealed class VariantColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is VariantWriteState variantState)
+        if (state is null)
         {
-            WriteBodyCore(writer, variantState);
+            WriteColumn(writer, column, start, length);
             return;
         }
 
-        WriteColumn(writer, column, start, length);
+        WriteBodyCore(writer, state.Expect<VariantWriteState>(TypeName));
     }
 
     // A fixed mode word, then every alternative's own prefix over its projected column — including the alternatives
