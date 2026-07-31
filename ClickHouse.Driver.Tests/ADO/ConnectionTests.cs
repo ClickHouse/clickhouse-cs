@@ -325,6 +325,36 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public void GetSchema_ColumnsWithTableRestrictionOnly_FiltersByTableAcrossAllDatabases()
+    {
+        // "columns" exists in system, information_schema and INFORMATION_SCHEMA, so an
+        // unrestricted database matches several of them.
+        var schema = connection.GetSchema("Columns", [null, "columns"]);
+        var rows = schema.Rows.Cast<DataRow>().ToList();
+        Assert.That(rows, Is.Not.Empty);
+        Assert.That(rows.Select(r => (string)r["Table"]), Is.All.EqualTo("columns"));
+        Assert.That(rows.Select(r => (string)r["Database"]).Distinct().Count(), Is.GreaterThan(1));
+    }
+
+    private static readonly TestCaseData[] EmptyColumnRestrictions =
+    [
+        new TestCaseData((object)null),
+        new TestCaseData((object)new string[] { }),
+        new TestCaseData((object)new string[] { null }),
+        new TestCaseData((object)new string[] { null, null }),
+    ];
+
+    [Test]
+    [TestCaseSource(nameof(EmptyColumnRestrictions))]
+    public void GetSchema_ColumnsWithoutRestrictions_ReturnsColumnsFromMultipleTables(string[] restrictions)
+    {
+        var schema = connection.GetSchema("Columns", restrictions);
+        var rows = schema.Rows.Cast<DataRow>().ToList();
+        Assert.That(rows, Is.Not.Empty);
+        Assert.That(rows.Select(r => (string)r["Table"]).Distinct().Count(), Is.GreaterThan(1));
+    }
+
+    [Test]
     public void ChangeDatabaseShouldChangeDatabase()
     {
         // Using separate connection instance here to avoid conflicting with other tests
