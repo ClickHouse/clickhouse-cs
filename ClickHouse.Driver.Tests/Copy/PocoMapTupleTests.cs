@@ -1,7 +1,6 @@
-using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tests.Copy;
 
@@ -13,9 +12,6 @@ namespace ClickHouse.Driver.Tests.Copy;
 [TestFixture]
 public class PocoMapTupleTests : AbstractConnectionTestFixture
 {
-    private string CreateTestTableName([CallerMemberName] string testName = null)
-        => SanitizeTableName($"test_pocomap_{testName}_{Guid.NewGuid():N}");
-
     // map(...) literal preserves argument order, so the on-wire order is 1, 2, 3.
     private const string MapProjection = "SELECT map(toInt64(1), 'a', toInt64(2), 'b', toInt64(3), 'c') AS Attrs";
 
@@ -89,40 +85,38 @@ public class PocoMapTupleTests : AbstractConnectionTestFixture
     [Test]
     public async Task InsertBinaryAsync_KeyValuePairListProperty_RoundTripsToMapColumn()
     {
-        var tableName = CreateTestTableName();
-        try
+        var qualifiedTableName = CreateTableName();
+
+        // InsertOptions.Database is what resolves the table here, so the insert must get the bare
+        // name — a qualified one would make the option a no-op and void what this asserts.
+        var tableName = TestUtilities.BareTableName(qualifiedTableName);
+
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {qualifiedTableName} (Id Int64, Attrs Map(Int64, String)) " +
+            "ENGINE = MergeTree() ORDER BY Id");
+
+        client.RegisterPocoType<MapRoundTripPoco>();
+
+        var row = new MapRoundTripPoco
         {
-            await client.ExecuteNonQueryAsync(
-                $"CREATE TABLE IF NOT EXISTS test.{tableName} (Id Int64, Attrs Map(Int64, String)) " +
-                "ENGINE = MergeTree() ORDER BY Id");
-
-            client.RegisterPocoType<MapRoundTripPoco>();
-
-            var row = new MapRoundTripPoco
+            Id = 1,
+            Attrs = new List<KeyValuePair<long, string>>
             {
-                Id = 1,
-                Attrs = new List<KeyValuePair<long, string>>
-                {
-                    new(10, "ten"),
-                    new(20, "twenty"),
-                },
-            };
+                new(10, "ten"),
+                new(20, "twenty"),
+            },
+        };
 
-            var inserted = await client.InsertBinaryAsync(
-                tableName, new[] { row }, new InsertOptions { Database = "test" });
-            Assert.That(inserted, Is.EqualTo(1));
+        var inserted = await client.InsertBinaryAsync(
+            tableName, new[] { row }, new InsertOptions { Database = "test" });
+        Assert.That(inserted, Is.EqualTo(1));
 
-            MapRoundTripPoco readBack = null;
-            await foreach (var r in client.QueryAsync<MapRoundTripPoco>(
-                $"SELECT Id, Attrs FROM test.{tableName}"))
-                readBack = r;
+        MapRoundTripPoco readBack = null;
+        await foreach (var r in client.QueryAsync<MapRoundTripPoco>(
+            $"SELECT Id, Attrs FROM {qualifiedTableName}"))
+            readBack = r;
 
-            Assert.That(readBack.Id, Is.EqualTo(1L));
-            Assert.That(readBack.Attrs, Is.EquivalentTo(row.Attrs));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS test.{tableName}");
-        }
+        Assert.That(readBack.Id, Is.EqualTo(1L));
+        Assert.That(readBack.Attrs, Is.EquivalentTo(row.Attrs));
     }
 }
