@@ -8,17 +8,9 @@ namespace ClickHouse.Driver.Types;
 
 internal class ArrayType : ParameterizedType
 {
-    // Typed readers for common leaf element types, keyed by the element's CLR framework type.
-    // These build a strongly-typed T[] and store elements through the array indexer, which
-    // avoids the two reflection costs on the generic Read path below:
-    //   - Array.CreateInstance(Type, int): a per-array reflection-driven allocation, and
-    //   - Array.SetValue(object, int): a per-element reflection store with a type check and
-    //     possible widening conversion.
-    // Every element type maps to exactly one FrameworkType whose Read() returns exactly that
-    // boxed type, so the typed (T) unbox is behaviourally equivalent to SetValue (minus the
-    // reflection). Element types without an entry fall through to the reflection path, so
-    // correctness is unchanged for everything (nested/composite elements, big integers,
-    // decimals read as ClickHouseDecimal, IP addresses, etc.).
+    // Typed readers for common leaf element types (keyed by element CLR type) fill a strongly-typed
+    // T[] via the indexer instead of the reflective Array.CreateInstance/SetValue fallback below.
+    // Unregistered types (nested/composite, big integers, ClickHouseDecimal, IP) use the fallback.
     private static readonly Dictionary<Type, Func<ClickHouseType, ExtendedBinaryReader, int, Array>> TypedReaders = BuildTypedReaders();
 
     public ClickHouseType UnderlyingType { get; set; }
@@ -41,10 +33,7 @@ internal class ArrayType : ParameterizedType
     {
         var length = reader.Read7BitEncodedInt();
 
-        // Resolve the element FrameworkType once. Wrapper types build it reflectively on every
-        // access (NullableType -> MakeGenericType, ArrayType -> MakeArrayType), so caching avoids
-        // a redundant reflective call on the fallback path, which needs it both for the reader
-        // lookup and the array allocation.
+        // Resolve the element FrameworkType once (wrapper types rebuild it reflectively per access).
         var elementType = UnderlyingType.FrameworkType;
 
         if (TypedReaders.TryGetValue(elementType, out var typedReader))
@@ -73,9 +62,7 @@ internal class ArrayType : ParameterizedType
     {
         var readers = new Dictionary<Type, Func<ClickHouseType, ExtendedBinaryReader, int, Array>>();
 
-        // Register a value type and its Nullable<T> form (Array(Nullable(T)) reports the
-        // Nullable<T> framework type). ClearDBNull maps the DBNull null-sentinel to a real
-        // null before the (T?) unbox.
+        // Register a value type and its Nullable<T> form (ClearDBNull restores the null sentinel).
         void AddValue<T>()
             where T : struct
         {
@@ -98,8 +85,7 @@ internal class ArrayType : ParameterizedType
         AddValue<DateTime>();
         AddValue<Guid>();
 
-        // Reference type: Nullable(String) shares the same framework type (string), so one
-        // entry covers both String and Nullable(String).
+        // String and Nullable(String) share the same framework type (string).
         readers[typeof(string)] = ReadTyped<string>;
 
         return readers;
