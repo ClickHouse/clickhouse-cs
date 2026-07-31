@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -413,5 +414,77 @@ public class ClickHouseRawResultMidStreamTests : AbstractConnectionTestFixture
 
         Assert.That(Encoding.UTF8.GetString(buffered), Is.EqualTo("0,0\n1,2\n2,4\n"));
         Assert.That(streamed, Is.EqualTo(buffered));
+    }
+
+    /// <summary>
+    /// Consumes the underlying content stream through a streaming accessor without buffering it: Stream is
+    /// partially drained and left open (a caller that stopped mid-read — the reported scenario); CopyTo is
+    /// fully drained. Either way the content stream can no longer be re-materialized from the start.
+    /// </summary>
+    private static async Task ConsumeViaStreamingAccessorAsync(ClickHouseRawResult result, Accessor consumer)
+    {
+        if (consumer == Accessor.CopyTo)
+        {
+            using var sink = new MemoryStream();
+            await result.CopyToAsync(sink);
+            return;
+        }
+
+        var stream = await result.ReadAsStreamAsync();
+        var probe = new byte[4];
+        Assert.That(await stream.ReadAsync(probe, 0, probe.Length), Is.GreaterThan(0));
+    }
+
+    [TestCase(Accessor.Stream, Accessor.Bytes)]
+    [TestCase(Accessor.Stream, Accessor.String)]
+    [TestCase(Accessor.Stream, Accessor.CopyTo)]
+    [TestCase(Accessor.CopyTo, Accessor.Bytes)]
+    [TestCase(Accessor.CopyTo, Accessor.String)]
+    [TestCase(Accessor.CopyTo, Accessor.CopyTo)]
+    [FromVersion(25, 11)]
+    public async Task ExecuteRawResultAsync_ReMaterializingAccessorAfterStreamingConsumer_ThrowsLikeUntaggedContent(Accessor consumer, Accessor rematerializer)
+    {
+        // Once a streaming accessor (ReadAsStream or CopyTo) has consumed the underlying content stream it
+        // cannot be re-read from the start. A read that has to re-materialize the whole body — ReadAsByteArray,
+        // ReadAsString or CopyTo — must then fail with the same InvalidOperationException the untagged
+        // HttpContent path raises, rather than silently caching/copying a truncated body the caller cannot
+        // tell apart from a complete one.
+        using var command = connection.CreateCommand();
+        command.CustomSettings["http_write_exception_in_output_format"] = 1;
+        command.CommandText = "SELECT number, number * 2 FROM system.numbers LIMIT 3 FORMAT CSV";
+
+        using var result = await command.ExecuteRawResultAsync(default);
+
+        await ConsumeViaStreamingAccessorAsync(result, consumer);
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => DrainAsync(result, rematerializer));
+    }
+
+    [TestCase(Accessor.Stream)]
+    [TestCase(Accessor.CopyTo)]
+    [FromVersion(25, 11)]
+    public async Task ExecuteRawResultAsync_StreamAccessorAfterStreamingConsumer_ContinuesWithoutThrowing(Accessor consumer)
+    {
+        // The consumed-stream guard is deliberately scoped to the re-materializing accessors: re-requesting
+        // the stream itself must NOT throw, matching untagged HttpContent whose second ReadAsStreamAsync hands
+        // back the same, now-drained stream. Pins the fix as targeted rather than a blanket "any second
+        // accessor throws".
+        using var command = connection.CreateCommand();
+        command.CustomSettings["http_write_exception_in_output_format"] = 1;
+        command.CommandText = "SELECT number, number * 2 FROM system.numbers LIMIT 3 FORMAT CSV";
+
+        using var result = await command.ExecuteRawResultAsync(default);
+
+        await ConsumeViaStreamingAccessorAsync(result, consumer);
+
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            using var again = await result.ReadAsStreamAsync();
+            var buffer = new byte[64];
+            while (await again.ReadAsync(buffer, 0, buffer.Length) > 0)
+            {
+                // Drain whatever remains; the point is that re-reading the stream does not throw.
+            }
+        });
     }
 }

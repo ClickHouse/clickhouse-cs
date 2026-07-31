@@ -20,6 +20,7 @@ public class ClickHouseRawResult : IDisposable
     private readonly HttpResponseMessage response;
     private readonly string exceptionTag;
     private byte[] bufferedContent;
+    private bool contentConsumed;
 
     internal ClickHouseRawResult(HttpResponseMessage response)
     {
@@ -83,7 +84,20 @@ public class ClickHouseRawResult : IDisposable
             return new MemoryStream(bufferedContent, writable: false);
 
         var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        contentConsumed = true;
         return new ExceptionTagAwareStream(stream, exceptionTag, throwAtEndOfStream: true);
+    }
+
+    // A streaming accessor (ReadAsStreamAsync/CopyToAsync) already handed out — and thereby consumed — the
+    // underlying content stream, which cannot be re-read from the start. An accessor that has to re-materialize
+    // the whole body (ReadAsByteArray/ReadAsString/CopyTo) must then fail with the same InvalidOperationException
+    // the untagged HttpContent path raises once its stream is consumed, rather than caching/copying only the
+    // bytes left after a partial drain — a truncated body the caller cannot tell apart from a complete one.
+    // A buffering accessor that ran to completion first leaves bufferedContent set and is served from that.
+    private void ThrowIfContentAlreadyConsumed()
+    {
+        if (contentConsumed && bufferedContent == null)
+            throw new InvalidOperationException("The stream was already consumed. It cannot be read again.");
     }
 
     /// <summary>
@@ -101,6 +115,8 @@ public class ClickHouseRawResult : IDisposable
     {
         if (bufferedContent != null)
             return bufferedContent;
+
+        ThrowIfContentAlreadyConsumed();
 
         // The wrapper is deliberately not disposed: doing so closes the response's content stream, which
         // HttpContent caches and hands back on the next call. Buffering the body here instead preserves
@@ -153,6 +169,8 @@ public class ClickHouseRawResult : IDisposable
 
     private async Task CopyViaWrapperAsync(Stream destination)
     {
+        ThrowIfContentAlreadyConsumed();
+
         // Not disposed, for the same reason as ReadAllBytesAsync: HttpContent.CopyToAsync leaves the
         // content stream open too, so closing it here would break any subsequent read of this result.
         var source = await WrapContentStreamAsync().ConfigureAwait(false);
