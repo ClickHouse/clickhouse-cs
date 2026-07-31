@@ -239,7 +239,7 @@ internal sealed class ExceptionTagAwareStream : Stream
     private ClickHouseServerException ParseExceptionFormat(byte[] buffer, int messageStart)
     {
         // Full block: __exception__<sep><tag><sep><message>\n<size> <tag><sep>__exception__
-        // where <sep> is the CR/LF run the server writes. messageStart points just past the
+        // where <sep> is the "\r\n" the server always writes. messageStart points just past the
         // opening "<tag>"; skip the separator before the message text. We ignore <size>.
         while (messageStart < buffer.Length && (buffer[messageStart] == '\n' || buffer[messageStart] == '\r'))
             messageStart++;
@@ -273,10 +273,14 @@ internal sealed class ExceptionTagAwareStream : Stream
     }
 
     /// <summary>
-    /// Finds <paramref name="first"/> followed by <paramref name="second"/>, allowing an optional
-    /// run of CR/LF bytes between them. The ClickHouse server frames the in-band exception block as
-    /// "__exception__\r\n&lt;tag&gt;" (open) and "&lt;tag&gt;\r\n__exception__" (close); tolerating the
-    /// separator — and its absence — keeps detection robust across server framings.
+    /// Finds <paramref name="first"/> followed by <paramref name="second"/>, tolerating an optional
+    /// run of CR/LF bytes between them. On the wire the separator is <b>not</b> optional: the
+    /// ClickHouse server always writes a literal "\r\n" here, framing the in-band block as
+    /// "__exception__\r\n&lt;tag&gt;" (open) and "&lt;tag&gt;\r\n__exception__" (close) — hardcoded in its
+    /// WriteBufferFromHTTPServerResponse. The match is nonetheless lenient about the separator
+    /// (mirroring the server's own conformance test, which greps "__exception__\r?\n&lt;tag&gt;\r?\n"):
+    /// silently missing the block was the original bug, so degrading toward detection is safer than a
+    /// strict match, and the 16-char random tag — not the separator — is what discriminates the marker.
     /// </summary>
     /// <param name="afterSecond">Index immediately past <paramref name="second"/> when found; -1 otherwise.</param>
     /// <returns>Index of <paramref name="first"/> when the delimited pair is found; -1 otherwise.</returns>
@@ -293,7 +297,8 @@ internal sealed class ExceptionTagAwareStream : Stream
 
             int pos = firstIndex + first.Length;
 
-            // Skip an optional CR/LF separator run between the two parts.
+            // Skip the "\r\n" separator the server writes between the two parts (tolerating its
+            // absence/variation defensively — see the method summary).
             while (pos < buffer.Length && (buffer[pos] == (byte)'\r' || buffer[pos] == (byte)'\n'))
                 pos++;
 
