@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
+using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Readers;
+using ClickHouse.Driver.Numerics;
 
 namespace ClickHouse.Driver.Tests.Copy;
 
@@ -108,16 +111,6 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
 
     // ---- Multiple read representations: bindings the boxed MapTo<T> rejects, but the fast path supports ----
 
-    public class DateTimeOffsetPoco
-    {
-        public DateTimeOffset Ts { get; set; }
-    }
-
-    public class DateOnlyPoco
-    {
-        public DateOnly D { get; set; }
-    }
-
     public class ByteArrayPoco
     {
         public long Id { get; set; }
@@ -129,31 +122,8 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
         public decimal Amount { get; set; }
     }
 
-    [Test]
-    public async Task QueryAsync_DateTimeColumn_ReadsAsDateTimeOffset()
-    {
-        client.RegisterPocoType<DateTimeOffsetPoco>();
-        const string sql = "SELECT toDateTime64('2021-06-15 12:30:00.000', 3, 'UTC') AS Ts";
-
-        DateTimeOffsetPoco row = null;
-        await foreach (var r in client.QueryAsync<DateTimeOffsetPoco>(sql))
-            row = r;
-
-        Assert.That(row.Ts.UtcDateTime, Is.EqualTo(new DateTime(2021, 6, 15, 12, 30, 0, DateTimeKind.Utc)));
-        Assert.That(row.Ts.Offset, Is.EqualTo(TimeSpan.Zero));
-    }
-
-    [Test]
-    public async Task QueryAsync_DateColumn_ReadsAsDateOnly()
-    {
-        client.RegisterPocoType<DateOnlyPoco>();
-
-        DateOnlyPoco row = null;
-        await foreach (var r in client.QueryAsync<DateOnlyPoco>("SELECT toDate('2023-03-14') AS D"))
-            row = r;
-
-        Assert.That(row.D, Is.EqualTo(new DateOnly(2023, 3, 14)));
-    }
+    // Date -> DateOnly and DateTime64 -> DateTimeOffset are covered, across all four date/time columns and
+    // with the offset asserted, by QueryAsync_DateTimeColumn_ReadsAsDateOnlyAndDateTimeOffset below.
 
     [Test]
     public async Task QueryAsync_StringColumn_ReadsAsByteArray()
@@ -428,6 +398,90 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
         Assert.That(row.Id, Is.EqualTo(7L));
     }
 
+    // ...and when a null actually arrives on that same binding, the boxed fallback is what reports it. This
+    // is the deferred failure the fast path defers to, so it needs to name the property and the column.
+    [Test]
+    public void QueryAsync_NonNullablePropertyOnNullableColumn_ThrowsOnNullValue()
+    {
+        client.RegisterPocoType<NonNullablePropPoco>();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<NonNullablePropPoco>(
+                "SELECT CAST(NULL, 'Nullable(Int64)') AS Id"))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("Id"));
+        Assert.That(ex.Message, Does.Contain("Nullable(Int64)"));
+    }
+
+    // An object property has no typed reader, so a Nullable(String) column falls back to the boxed reader;
+    // that reader must translate the DBNull sentinel back to a plain null before assigning.
+    [TestCase("CAST('abc', 'Nullable(String)')", "abc")]
+    [TestCase("CAST(NULL, 'Nullable(String)')", null)]
+    public async Task QueryAsync_NullableColumnToObjectProperty_AssignsValueOrNull(string expression, object expected)
+    {
+        client.RegisterPocoType<PolymorphicPoco>();
+
+        PolymorphicPoco row = null;
+        await foreach (var r in client.QueryAsync<PolymorphicPoco>($"SELECT {expression} AS Value"))
+            row = r;
+
+        Assert.That(row.Value, Is.EqualTo(expected));
+    }
+
+    public class PolymorphicPoco
+    {
+        public object Value { get; set; }
+    }
+
+    // Variant/Dynamic/JSON report a FrameworkType of object, which PocoColumnAssignment accepts for any
+    // property up front and re-checks per row when the setter runs. Neither the accept nor the per-row
+    // InvalidCastException rewrite had a POCO-level test.
+    [TestCase("CAST(toInt64(42), 'Variant(Int64, String)')", Feature.Variant, 42L)]
+    [TestCase("CAST(toInt64(42), 'Dynamic')", Feature.Dynamic, 42L)]
+    public async Task QueryAsync_PolymorphicColumnToObjectProperty_ReadsViaBoxedFallback(
+        string expression, Feature feature, object expected)
+    {
+        if (!TestUtilities.SupportedFeatures.HasFlag(feature))
+            Assert.Ignore($"Server does not support {feature}");
+
+        client.RegisterPocoType<PolymorphicPoco>();
+
+        PolymorphicPoco row = null;
+        await foreach (var r in client.QueryAsync<PolymorphicPoco>($"SELECT {expression} AS Value"))
+            row = r;
+
+        Assert.That(row.Value, Is.EqualTo(expected));
+    }
+
+    public class PolymorphicMismatchPoco
+    {
+        public Guid Value { get; set; } // a Variant never yields a Guid -> per-row cast failure
+    }
+
+    [Test]
+    [Tests.Attributes.RequiredFeature(Feature.Variant)]
+    public void QueryAsync_PolymorphicColumnWithWrongPropertyType_ThrowsWithRuntimeType()
+    {
+        client.RegisterPocoType<PolymorphicMismatchPoco>();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<PolymorphicMismatchPoco>(
+                "SELECT CAST(toInt64(42), 'Variant(Int64, String)') AS Value"))
+            {
+            }
+        });
+
+        // "Variant(Int64, String)" already contains the column name and "Int64", so assert on the
+        // runtime-type clause specifically — otherwise the declared column type satisfies the check.
+        Assert.That(ex.Message, Does.Contain("returned System.Int64"));
+        Assert.That(ex.Message, Does.Contain("PolymorphicMismatchPoco.Value"));
+    }
+
     public class InvalidCompositeBindingPoco
     {
         public string Values { get; set; } // bound to an Array column -> not assignable
@@ -466,5 +520,88 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
 
         Assert.That(ex.Message, Does.Contain("UnregisteredScalarPoco"));
         Assert.That(ex.Message, Does.Contain("RegisterPocoType"));
+    }
+
+    // ---- End-to-end reads over the real wire format ----
+    //
+    // Scoped deliberately: the (column type x CLR type) dispatch matrix lives in PocoReadFastPathParityTests
+    // (server-free), and the per-type decoding of every column ClickHouse can return is already round-tripped
+    // by SerialisationTests and read off a real server by SqlSimpleSelectTests, both over
+    // TestCases.GetDataTypeSamples(). What neither covers is a representation the boxed reader cannot
+    // produce, because MapTo<T> would reject it — those have no other real-wire coverage, and a successful
+    // read is itself proof the typed reader ran. Only those are tested here.
+
+    private sealed class Holder<T>
+    {
+        public T Value { get; set; }
+    }
+
+    private async Task<T> QuerySingleValue<T>(string sqlExpression, ClickHouseClient useClient = null)
+    {
+        var c = useClient ?? client;
+        c.RegisterPocoType<Holder<T>>();
+
+        var rows = new List<Holder<T>>();
+        await foreach (var r in c.QueryAsync<Holder<T>>($"SELECT {sqlExpression} AS Value"))
+            rows.Add(r);
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        return rows[0].Value;
+    }
+
+    // byte[] on a client whose boxed reader yields string. String -> byte[] is already covered by
+    // QueryAsync_StringColumn_ReadsAsByteArray above; FixedString has its own fixed-width read.
+    [Test]
+    public async Task QueryAsync_FixedStringColumn_ReadsAsByteArray()
+        => Assert.That(await QuerySingleValue<byte[]>("CAST('abcde', 'FixedString(5)')"),
+            Is.EqualTo(new[] { (byte)'a', (byte)'b', (byte)'c', (byte)'d', (byte)'e' }));
+
+#if NET8_0_OR_GREATER
+    // The native decoder's only distinct behaviour is the little-endian byte order, and UInt128.MaxValue is
+    // all 0xFF — a byte-order palindrome. This value (0x0102...0F10) is asymmetric and catches a flip.
+    [Test]
+    [Tests.Attributes.RequiredFeature(Feature.WideTypes)]
+    public async Task QueryAsync_UInt128Column_ReadsAsNativeUInt128()
+        => Assert.That(await QuerySingleValue<UInt128>("toUInt128('1339673755198158349044581307228491536')"),
+            Is.EqualTo(new UInt128(0x0102030405060708UL, 0x090A0B0C0D0E0F10UL)));
+#endif
+
+    // DateOnly and DateTimeOffset are fast-path-only. Date32 additionally had no fast-path coverage at all,
+    // and its pre-1970 value pins the signed day count that Date (unsigned) cannot express.
+    [TestCase("toDate32('1950-03-14')", "1950-03-14", Feature.Date32)]
+    [TestCase("toDate('2023-03-14')", "2023-03-14", Feature.None)]
+    [TestCase("toDateTime('2021-06-15 00:00:00', 'UTC')", "2021-06-15", Feature.None)]
+    [TestCase("toDateTime64('2021-06-15 00:00:00.000', 3, 'UTC')", "2021-06-15", Feature.None)]
+    public async Task QueryAsync_DateTimeColumn_ReadsAsDateOnlyAndDateTimeOffset(
+        string expression, string expectedIsoDate, Feature feature)
+    {
+        if (feature != Feature.None && !TestUtilities.SupportedFeatures.HasFlag(feature))
+            Assert.Ignore($"Server does not support {feature}");
+
+        var expectedDate = DateOnly.Parse(expectedIsoDate, CultureInfo.InvariantCulture);
+
+        Assert.That(await QuerySingleValue<DateOnly>(expression), Is.EqualTo(expectedDate));
+
+        var offset = await QuerySingleValue<DateTimeOffset>(expression);
+        Assert.That(offset.UtcDateTime, Is.EqualTo(expectedDate.ToDateTime(TimeOnly.MinValue)));
+        Assert.That(offset.Offset, Is.EqualTo(TimeSpan.Zero));
+    }
+
+    // A ClickHouseDecimal property against a client whose boxed reader yields System.Decimal — the mirror of
+    // QueryAsync_DecimalColumn_ReadsAsDecimal, which pins the other direction on the default client. Scale is
+    // asserted explicitly: ClickHouseDecimal.Equals rescales before comparing, so the value alone would not
+    // pin the very property that makes ClickHouseDecimal worth choosing.
+    [TestCase("Decimal(10, 2)", "123.45", 2)]
+    [TestCase("Decimal(38, 8)", "12345.67890000", 8)] // size 16 -> the BigInteger mantissa branch
+    public async Task QueryAsync_DecimalColumnOnPlainDecimalClient_ReadsAsClickHouseDecimal(
+        string columnType, string literal, int expectedScale)
+    {
+        using var plainDecimalClient = TestUtilities.GetTestClickHouseClient(customDecimals: false);
+
+        var value = await QuerySingleValue<ClickHouseDecimal>(
+            $"CAST('{literal}', '{columnType}')", plainDecimalClient);
+
+        Assert.That((decimal)value, Is.EqualTo(decimal.Parse(literal, CultureInfo.InvariantCulture)));
+        Assert.That(value.Scale, Is.EqualTo(expectedScale));
     }
 }
