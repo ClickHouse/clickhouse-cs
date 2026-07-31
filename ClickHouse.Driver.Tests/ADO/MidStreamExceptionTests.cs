@@ -37,6 +37,43 @@ public class MidStreamExceptionTests : AbstractConnectionTestFixture
 
         Assert.That(ex.Message, Does.Contain("boom"));
     }
+
+    [Test]
+    [FromVersion(25, 11)]
+    public void ShouldDetectMidStreamException_AfterResponseIsCommitted()
+    {
+        // ShouldDetectMidStreamException above throws so early that the server returns a plain
+        // HTTP 500 before committing a response, so it never exercises the in-band exception path.
+        // Here the server streams a committed 200 OK plus rows before the throwIf fires, so the
+        // failure is delivered in-band (X-ClickHouse-Exception-Tag) and reading past the truncated
+        // body raises an HttpIOException that ExceptionTagAwareStream must convert into the real
+        // server error. Compression is disabled so the server streams the response incrementally
+        // rather than buffering it (a buffered response instead fails pre-commit as a 500).
+        using var streamingClient = TestUtilities.GetTestClickHouseClient(compression: false);
+        using var streamingConnection = streamingClient.CreateConnection();
+        using var command = streamingConnection.CreateCommand();
+        command.CustomSettings["http_write_exception_in_output_format"] = 1;
+        command.CustomSettings["max_block_size"] = 1000;
+        command.CustomSettings["http_response_buffer_size"] = 0;
+        command.CustomSettings["wait_end_of_query"] = 0;
+
+        command.CommandText = @"
+            SELECT toInt32(number) AS n,
+                   throwIf(number = 200000, 'boom mid stream') AS e
+            FROM system.numbers
+            LIMIT 400000";
+
+        var ex = Assert.Throws<ClickHouseServerException>(() =>
+        {
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                // Drain until the in-band mid-stream exception surfaces
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("boom mid stream"));
+    }
 }
 
 /// <summary>
