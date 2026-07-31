@@ -950,6 +950,7 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
         ReadValueConverter = new DictionaryReadValueConverter().For<int>(v => v),
         MaxExecutionTime = TimeSpan.FromSeconds(30),
         AcceptEncoding = "zstd",
+        ResponseCompressor = Lz4Compressor.Default,
     };
 
     private static InsertOptions FullyPopulatedInsertOptions() => new()
@@ -967,6 +968,7 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
         ReadValueConverter = new DictionaryReadValueConverter().For<int>(v => v),
         MaxExecutionTime = TimeSpan.FromSeconds(30),
         AcceptEncoding = "zstd",
+        ResponseCompressor = Lz4Compressor.Default,
         BatchSize = 500,
         MaxDegreeOfParallelism = 4,
         Format = RowBinaryFormat.RowBinaryWithDefaults,

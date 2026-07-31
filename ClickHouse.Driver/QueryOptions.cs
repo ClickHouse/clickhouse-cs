@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
+using ClickHouse.Driver.Compression;
 
 namespace ClickHouse.Driver;
 
@@ -133,6 +134,26 @@ public class QueryOptions
     public string? AcceptEncoding { get; init; }
 
     /// <summary>
+    /// Gets or sets the codec used to decode this query's transport-compressed response, overriding
+    /// <see cref="ADO.ClickHouseClientSettings.ResponseCompressor"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When set, the codec's <see cref="IClickHouseCompressor.ContentEncoding"/> is contributed to this
+    /// request's <c>Accept-Encoding</c> header and <c>enable_http_compression=1</c> is forced on the URL.
+    /// An explicit <see cref="AcceptEncoding"/> still wins for the header — this compressor then only
+    /// decodes when the <b>response's</b> <c>Content-Encoding</c> matches its token.
+    /// </para>
+    /// <para>
+    /// Whether the body is decoded at all is decided by the response header, never by this property:
+    /// ClickHouse picks the response codec by its own preference order (zstd &gt; br &gt; lz4 &gt; gzip)
+    /// and ignores client ordering and q-values.
+    /// </para>
+    /// Default: null (use the client-level compressor)
+    /// </remarks>
+    public IClickHouseCompressor? ResponseCompressor { get; init; }
+
+    /// <summary>
     /// Creates a new <see cref="QueryOptions"/> with the same settings but a different <see cref="QueryId"/>.
     /// </summary>
     internal QueryOptions WithQueryId(string queryId)
@@ -152,6 +173,7 @@ public class QueryOptions
             ReadValueConverter = ReadValueConverter,
             MaxExecutionTime = MaxExecutionTime,
             AcceptEncoding = AcceptEncoding,
+            ResponseCompressor = ResponseCompressor,
         };
     }
 }

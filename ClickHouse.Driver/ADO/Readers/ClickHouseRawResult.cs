@@ -3,6 +3,8 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Compression;
+using ClickHouse.Driver.Http;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -16,10 +18,17 @@ namespace ClickHouse.Driver.ADO;
 public class ClickHouseRawResult : IDisposable
 {
     private readonly HttpResponseMessage response;
+    private readonly IClickHouseCompressor responseCompressor;
 
     internal ClickHouseRawResult(HttpResponseMessage response)
+        : this(response, responseCompressor: null)
+    {
+    }
+
+    internal ClickHouseRawResult(HttpResponseMessage response, IClickHouseCompressor responseCompressor)
     {
         this.response = response;
+        this.responseCompressor = responseCompressor;
     }
 
     /// <summary>
@@ -52,6 +61,35 @@ public class ClickHouseRawResult : IDisposable
     /// </summary>
     /// <returns>A task that resolves to the response content stream.</returns>
     public Task<Stream> ReadAsStreamAsync() => response.Content.ReadAsStreamAsync();
+
+    /// <summary>
+    /// Reads the response content as a stream, transparently decoding it when the response is
+    /// transport-compressed. Unlike <see cref="ReadAsStreamAsync"/> — which is a verbatim pass-through of
+    /// the raw bytes — this applies the driver's response-decompression rules, driven by the response's
+    /// <c>Content-Encoding</c> header:
+    /// <list type="bullet">
+    /// <item>no encoding (or <c>identity</c>): the raw content stream is returned unchanged;</item>
+    /// <item>the codec of the configured response compressor (see
+    /// <see cref="ClickHouseClientSettings.ResponseCompressor"/> / <see cref="QueryOptions.ResponseCompressor"/>,
+    /// e.g. <c>lz4</c>): decoded by that compressor;</item>
+    /// <item><c>gzip</c>, <c>deflate</c>, <c>br</c>: decoded with the BCL codec.</item>
+    /// </list>
+    /// </summary>
+    /// <returns>A task that resolves to a plaintext stream over the response content.</returns>
+    /// <exception cref="NotSupportedException">
+    /// The response is encoded with a codec this client cannot decode (e.g. <c>zstd</c>); the message names
+    /// the codec and how to configure it.
+    /// </exception>
+    /// <remarks>
+    /// The returned stream is wrapped with <c>leaveOpen</c>, so disposing it does not dispose the
+    /// underlying HTTP content stream — this <see cref="ClickHouseRawResult"/> still owns the response
+    /// and must be disposed.
+    /// </remarks>
+    public async Task<Stream> ReadDecompressedStreamAsync()
+    {
+        var rawStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        return ResponseDecompression.Wrap(rawStream, response, responseCompressor, leaveOpen: true);
+    }
 
     /// <summary>
     /// Reads the response content as a byte array.

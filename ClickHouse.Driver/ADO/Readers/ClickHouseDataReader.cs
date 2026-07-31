@@ -12,7 +12,9 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Formats;
+using ClickHouse.Driver.Http;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Types;
@@ -29,6 +31,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly HttpResponseMessage httpResponse; // Used to dispose at the end of reader
     private readonly ExtendedBinaryReader reader;
     private readonly PooledReadBufferStream pooledReadBuffer; // Returns its pooled buffer on dispose
+    private readonly Stream decompressor; // Can be null: only set when the response body was transport-compressed
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
     private readonly IReadValueConverter readValueConverter; // Can be null
     private readonly string[] columnTypeNames; // Raw server-sent type strings; null when no converter
@@ -36,11 +39,12 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly Dictionary<Type, object> bindingPlanCache = new();
     private bool hasCurrentRow;
 
-    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, PooledReadBufferStream pooledReadBuffer, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
+    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, PooledReadBufferStream pooledReadBuffer, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null, Stream decompressor = null)
     {
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
         this.pooledReadBuffer = pooledReadBuffer;
+        this.decompressor = decompressor;
         this.exceptionTagStream = exceptionTagStream;
         this.readValueConverter = readValueConverter;
         // pocoRegistry may be null when the reader is used purely for ADO.NET-style access
@@ -58,7 +62,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
         => FromHttpResponseAsync(httpResponse, settings, pocoRegistry: null);
 
-    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, PocoTypeRegistry pocoRegistry, int readBufferSize = DefaultBufferSize, IReadValueConverter readValueConverter = null)
+    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, PocoTypeRegistry pocoRegistry, int readBufferSize = DefaultBufferSize, IReadValueConverter readValueConverter = null, IClickHouseCompressor responseCompressor = null)
     {
         if (httpResponse is null) throw new ArgumentNullException(nameof(httpResponse));
         if (readBufferSize < 1) throw new ArgumentOutOfRangeException(nameof(readBufferSize), readBufferSize, "Read buffer size must be greater than zero");
@@ -71,16 +75,28 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         ExtendedBinaryReader reader = null;
         ExceptionTagAwareStream exceptionStream = null;
         PooledReadBufferStream buffered = null;
+        Stream decompressingStream = null;
         try
         {
             var rawStream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+            // Decompression sits INNERMOST, directly on the transport stream, so that everything layered
+            // above it — the pooled read buffer and the mid-stream exception scanner alike — sees
+            // PLAINTEXT. Driven by the response's Content-Encoding, never by what we asked for.
+            // leaveOpen: true because httpResponse owns rawStream and disposes it.
+            var plaintext = ResponseDecompression.Wrap(rawStream, httpResponse, responseCompressor, leaveOpen: true);
+
+            // Reference-equal means the body needed no decoding, so there is no extra stream to own.
+            decompressingStream = ReferenceEquals(plaintext, rawStream) ? null : plaintext;
+
             // Buffer reads through a pooled buffer (rented from ArrayPool) rather than BufferedStream's
-            // fresh per-query array. leaveOpen: true because httpResponse owns rawStream and disposes it;
-            // the reader disposes this wrapper explicitly to return the buffer (the BinaryReader ->
-            // PeekableStreamWrapper chain does not propagate Dispose to inner streams).
+            // fresh per-query array. leaveOpen: true because the stream below is owned by either
+            // httpResponse or this reader; the reader disposes this wrapper explicitly to return the
+            // buffer (the BinaryReader -> PeekableStreamWrapper chain does not propagate Dispose to inner
+            // streams).
             // Its Read may return fewer bytes than requested; the ExtendedBinaryReader below loops to
             // satisfy exact-count reads.
-            buffered = new PooledReadBufferStream(rawStream, readBufferSize, leaveOpen: true);
+            buffered = new PooledReadBufferStream(plaintext, readBufferSize, leaveOpen: true);
 
             // Conditionally wrap with exception-aware stream
             Stream streamForReader = buffered;
@@ -92,13 +108,14 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
             reader = new ExtendedBinaryReader(streamForReader);
             var (names, types, rawTypeNames) = ReadHeaders(reader, settings, readValueConverter != null);
-            return new ClickHouseDataReader(httpResponse, reader, buffered, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter);
+            return new ClickHouseDataReader(httpResponse, reader, buffered, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter, decompressingStream);
         }
         catch (Exception)
         {
             httpResponse?.Dispose();
             reader?.Dispose();
             buffered?.Dispose(); // returns the rented buffer if we failed before handing it to the reader
+            decompressingStream?.Dispose();
             throw;
         }
     }
@@ -484,6 +501,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             // Explicit: the BinaryReader -> PeekableStreamWrapper chain does not propagate Dispose to the
             // inner buffering stream, so return its pooled buffer here (idempotent if already disposed).
             pooledReadBuffer?.Dispose();
+            // Innermost wrapper, disposed last. Null unless the body was transport-compressed; created
+            // with leaveOpen: true, so this releases the codec's own state without touching the
+            // transport stream that httpResponse owns.
+            decompressor?.Dispose();
         }
     }
 #pragma warning restore CA2215 // Dispose methods should call base class dispose
@@ -495,14 +516,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             return ([], [], []);
         }
 
+        // No magic-byte sniffing here: a still-compressed body is detected up front from the response's
+        // Content-Encoding header and either decoded by ResponseDecompression or rejected with an
+        // actionable error naming the codec — instead of being misread as a column count and surfacing
+        // as a bogus type-parse failure.
         var count = reader.Read7BitEncodedInt();
-
-        // Check for GZip marker: 0x1F (31) as column count, followed by 0x8B
-        // This happens when compression is misconfigured
-        if (count == 0x1F && reader.PeekChar() == 0x8B)
-        {
-            throw new InvalidOperationException("ClickHouse server returned compressed data but HttpClient did not decompress it. Ensure HttpClientHandler.AutomaticDecompression is set to DecompressionMethods.All or DecompressionMethods.GZip.");
-        }
 
         var names = new string[count];
         var types = new ClickHouseType[count];

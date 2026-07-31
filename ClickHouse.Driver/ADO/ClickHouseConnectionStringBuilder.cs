@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data.Common;
 using System.Globalization;
 using System.Linq;
+using ClickHouse.Driver.Http;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -166,6 +167,19 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["JsonWriteMode"] = value.ToString();
     }
 
+    /// <summary>
+    /// Gets or sets the codec used to decode transport-compressed query responses:
+    /// <c>lz4</c>, <c>gzip</c>, <c>br</c> or <c>none</c>. Maps onto
+    /// <see cref="ClickHouseClientSettings.ResponseCompressor"/>; setting it also adds the codec to
+    /// <c>Accept-Encoding</c> and forces <c>enable_http_compression=1</c>.
+    /// Default: null (none)
+    /// </summary>
+    public string ResponseCompression
+    {
+        get => GetStringOrDefault("ResponseCompression", null);
+        set => this["ResponseCompression"] = value;
+    }
+
     private bool GetBooleanOrDefault(string name, bool @default)
     {
         if (TryGetValue(name, out var value))
@@ -237,6 +251,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Roles = settings.Roles,
             JsonReadMode = settings.JsonReadMode,
             JsonWriteMode = settings.JsonWriteMode,
+            ResponseCompression = ResponseCompressionSetting.Format(settings.ResponseCompressor),
         };
 
         // Add custom settings with the set_ prefix

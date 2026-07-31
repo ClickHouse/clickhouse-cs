@@ -35,8 +35,19 @@ public class ConnectionTests : AbstractConnectionTestFixture
         using var httpClient = new HttpClient(); // No decompression handler
         using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString(), httpClient);
         await conn.OpenAsync();
-        // Exception is thrown when executing a query, not on OpenAsync (which no longer makes requests)
-        Assert.ThrowsAsync<InvalidOperationException>(async () => await conn.ExecuteScalarAsync("SELECT 1"));
+
+        // A handler without AutomaticDecompression is no longer fatal for gzip/deflate/br: the driver
+        // decodes those itself from the response's Content-Encoding. A codec the driver cannot decode
+        // still is fatal, and must fail loudly naming the codec rather than parsing compressed bytes as
+        // the result format. Exception is thrown when executing a query, not on OpenAsync (which no
+        // longer makes requests).
+        using var command = conn.CreateCommand();
+        command.CommandText = "SELECT number FROM numbers(100)";
+        command.AcceptEncoding = "zstd";
+
+        var ex = Assert.ThrowsAsync<NotSupportedException>(() => command.ExecuteScalarAsync(CancellationToken.None));
+
+        Assert.That(ex.Message, Does.Contain("zstd"));
     }
 
     [Test]

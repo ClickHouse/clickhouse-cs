@@ -60,6 +60,10 @@ public sealed class Lz4Compressor : IClickHouseCompressor
         => new PooledWriteBufferStream(LZ4Stream.Encode(destination, this.level, extraMemory: 0, leaveOpen: leaveOpen), this.bufferSize);
 
     /// <inheritdoc />
+    public Stream Decompress(Stream source, bool leaveOpen)
+        => LZ4Stream.Decode(source, leaveOpen: leaveOpen);
+
+    /// <inheritdoc />
     public int MaxEncodedLength(int sourceLength) => LZ4Codec.MaximumOutputSize(sourceLength);
 
     /// <inheritdoc />

@@ -7,9 +7,11 @@ namespace ClickHouse.Driver.Compression;
 /// Compresses ClickHouse payloads. Two independent paths are exposed:
 /// <list type="bullet">
 /// <item>
-/// the <b>HTTP request-body path</b> (<see cref="ContentEncoding"/> + <see cref="Compress"/>) used by
-/// the HTTP driver for binary inserts, where the presence of a compressor is itself the on/off switch —
-/// pass <see langword="null"/> where a compressor is accepted to send the body uncompressed;
+/// the <b>HTTP body path</b> (<see cref="ContentEncoding"/> + <see cref="Compress"/> for the request
+/// body, <see cref="Decompress"/> for the response body) used by the HTTP driver for binary inserts and
+/// for transport-compressed query responses, where the presence of a compressor is itself the on/off
+/// switch — pass <see langword="null"/> where a compressor is accepted to send/receive the body
+/// uncompressed;
 /// </item>
 /// <item>
 /// the <b>native-TCP block path</b> (<see cref="MethodByte"/>, <see cref="MaxEncodedLength"/>,
@@ -45,6 +47,22 @@ public interface IClickHouseCompressor
     /// can continue using it (e.g. seek and read the compressed result).
     /// </summary>
     Stream Compress(Stream destination, bool leaveOpen);
+
+    /// <summary>
+    /// The HTTP <b>response-body</b> counterpart to <see cref="Compress"/>. Wraps
+    /// <paramref name="source"/> in a decompressing read stream: bytes read from the returned stream are
+    /// the plaintext produced by decoding <paramref name="source"/>, which must carry a payload this codec's
+    /// <see cref="ContentEncoding"/> describes. When <paramref name="leaveOpen"/> is
+    /// <see langword="true"/>, <paramref name="source"/> is left open after the returned stream is
+    /// disposed — the caller (e.g. the HTTP response that owns the transport stream) keeps ownership.
+    /// <para>
+    /// Only meaningful for codecs that support the HTTP path with a frame/stream format; the default
+    /// throws <see cref="NotSupportedException"/>. This is <b>not</b> the native block path — see
+    /// <see cref="Decode"/> for that.
+    /// </para>
+    /// </summary>
+    Stream Decompress(Stream source, bool leaveOpen)
+        => throw new NotSupportedException($"{GetType().Name} does not support decompression.");
 
     /// <summary>
     /// The maximum number of bytes <see cref="Encode"/> may write for a source of
