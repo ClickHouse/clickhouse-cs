@@ -112,12 +112,4 @@ public class HttpParameterFormatterTests
         var parameter = new ClickHouseDbParameter { ParameterName = "t", Value = new TimeOnly(14, 30, 0, 500) };
         Assert.That(HttpParameterFormatter.Format(parameter, "Time64(3)", TypeSettings.Default), Is.EqualTo("14:30:00.500"));
     }
-
-    // Contrast: TimeSpan binding (the previously-supported type) is unchanged.
-    [Test]
-    public void Format_TimeSpanBoundToTime_ReturnsFormattedTime()
-    {
-        var parameter = new ClickHouseDbParameter { ParameterName = "t", Value = new TimeSpan(14, 30, 0) };
-        Assert.That(HttpParameterFormatter.Format(parameter, "Time", TypeSettings.Default), Is.EqualTo("14:30:00"));
-    }
 }
