@@ -439,12 +439,6 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override bool Read()
     {
-        if (reader.PeekChar() == -1)
-        {
-            hasCurrentRow = false;
-            return false; // End of stream reached
-        }
-
         var count = RawTypes.Length;
         var data = CurrentRow;
 
@@ -453,6 +447,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         hasCurrentRow = false;
         try
         {
+            // PeekChar is inside the try: a mid-stream failure truncates the body at a row
+            // boundary too, so the end-of-stream probe can itself hit the truncation.
+            if (reader.PeekChar() == -1)
+                return false; // End of stream reached
+
             for (var i = 0; i < count; i++)
             {
                 var rawType = RawTypes[i];
@@ -461,7 +460,12 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             hasCurrentRow = true;
             return true;
         }
-        catch (EndOfStreamException) when (exceptionTagStream != null)
+        // A mid-stream server failure truncates the HTTP body; reading past the truncation surfaces
+        // as an IOException — EndOfStreamException for a buffered body, but HttpIOException
+        // ("response ended prematurely") for a live streamed response. Both derive from IOException.
+        // When the server tagged the response (exceptionTagStream != null) the in-band exception block
+        // is captured in the ring buffer, so convert it to the real server error; otherwise re-throw.
+        catch (IOException) when (exceptionTagStream != null)
         {
             var serverEx = exceptionTagStream.TryExtractMidStreamException();
             if (serverEx != null)
