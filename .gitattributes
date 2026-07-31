@@ -4,3 +4,7 @@
 # Custom for Visual Studio
 *.cs     diff=csharp
 *.sln    merge=union
+
+# Changelogs are append-only lists — take both sides instead of raising a conflict.
+CHANGELOG.md     merge=union
+RELEASENOTES.md  merge=union
