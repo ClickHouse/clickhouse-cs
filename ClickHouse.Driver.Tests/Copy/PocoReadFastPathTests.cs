@@ -185,6 +185,34 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
         Assert.That(asLabel.Status, Is.EqualTo(label));
     }
 
+    // PocoTypeRegistry caches the compiled row readers under the column name plus the column type's
+    // ToString(), and the compiled delegate closes over that specific enum instance's label map. Two
+    // same-named enum columns whose definitions differ must therefore produce different keys, or the second
+    // query silently returns the first query's labels. Enum16Type used to return a bare "Enum16" here.
+    [TestCase("Enum8('a' = 1, 'b' = 2)", "Enum8('c' = 1, 'd' = 2)")]
+    [TestCase("Enum16('a' = 1, 'b' = 2)", "Enum16('c' = 1, 'd' = 2)")]
+    public async Task QueryAsync_SameColumnNameDifferentEnumDefinitions_UsesEachColumnsLabels(
+        string firstEnum, string secondEnum)
+    {
+        client.RegisterPocoType<EnumLabelPoco>();
+
+        Assert.That(await ReadLabel(firstEnum, "a"), Is.EqualTo("a"));
+        Assert.That(await ReadLabel(secondEnum, "c"), Is.EqualTo("c"),
+            "row-reader cache reused the first column's label map");
+
+        async Task<string> ReadLabel(string enumType, string label)
+        {
+            EnumLabelPoco row = null;
+            await foreach (var r in client.QueryAsync<EnumLabelPoco>(
+                $"SELECT CAST('{label}', '{enumType.Replace("'", "''")}') AS Status"))
+            {
+                row = r;
+            }
+
+            return row.Status;
+        }
+    }
+
     public class NullableEnumIntPoco
     {
         public int? Status { get; set; }

@@ -14,6 +14,11 @@ internal class Enum16Type : EnumType, ITypedReader<string>, ITypedReader<int>
 
     public override string Name => "Enum16";
 
+    // No ToString() override: EnumType's includes the member list, which distinguishes two Enum16 columns
+    // that share a name but not a label map. A bare "Enum16" would collide in PocoTypeRegistry's row-reader
+    // cache key, so the second query would reuse a delegate holding the first column's labels. Enum8Type
+    // never overrode it either; registration keys off Name, not ToString.
+
     // See Enum8Type for why the label and numeric reads are explicit impls, and why the numeric read skips
     // the label lookup.
     public override object Read(ExtendedBinaryReader reader) => ReadLabel(reader);
