@@ -55,9 +55,9 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task ReadJson_WithDynamicStringPathsAndReadStringsAsByteArrays_ReturnsDecodedStrings()
     {
-        using var connection = CreateByteArrayConnection();
+        using var byteArrayConnection = CreateByteArrayConnection();
 
-        var result = await SelectJsonAsync(connection, $"SELECT '{SampleJson}'::Json");
+        var result = await SelectJsonAsync(byteArrayConnection, $"SELECT '{SampleJson}'::Json");
 
         Assert.Multiple(() =>
         {
@@ -86,9 +86,9 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task ReadJson_WithReadStringsAsByteArrays_BacksStringLeavesWithString()
     {
-        using var connection = CreateByteArrayConnection();
+        using var byteArrayConnection = CreateByteArrayConnection();
 
-        var result = await SelectJsonAsync(connection, $"SELECT '{SampleJson}'::Json");
+        var result = await SelectJsonAsync(byteArrayConnection, $"SELECT '{SampleJson}'::Json");
 
         Assert.Multiple(() =>
         {
@@ -107,9 +107,9 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
             "plain String, low LowCardinality(String), maybe Nullable(String), " +
             "fixed FixedString(5), list Array(String)";
 
-        using var connection = CreateByteArrayConnection();
+        using var byteArrayConnection = CreateByteArrayConnection();
 
-        var result = await SelectJsonAsync(connection, $"SELECT '{json}'::Json({typeDefinition})");
+        var result = await SelectJsonAsync(byteArrayConnection, $"SELECT '{json}'::Json({typeDefinition})");
 
         Assert.Multiple(() =>
         {
@@ -134,13 +134,49 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     {
         const string json = "{\"attrs\":{\"colour\":\"green\",\"size\":\"large\"}}";
 
-        using var connection = CreateByteArrayConnection();
+        using var byteArrayConnection = CreateByteArrayConnection();
 
-        var result = await SelectJsonAsync(connection, $"SELECT '{json}'::Json(attrs Map(String, String))");
+        var result = await SelectJsonAsync(byteArrayConnection, $"SELECT '{json}'::Json(attrs Map(String, String))");
 
         var expected = new JsonObject { ["colour"] = "green", ["size"] = "large" };
         Assert.That(JsonNode.DeepEquals(result["attrs"], expected), Is.True,
             $"Expected: {expected.ToJsonString()}, Actual: {result["attrs"]?.ToJsonString()}");
+    }
+
+    /// <summary>
+    /// A <c>byte[]</c> value does not on its own mean "string": <c>Array(UInt8)</c> materializes as one
+    /// too, with or without the flag. So decoding must key off the originating ClickHouse type, and
+    /// these cases pin that.
+    /// </summary>
+    /// <remarks>
+    /// Asserted against fixed expected values rather than by comparing the flag on and off. That
+    /// distinction matters — <c>Array(UInt8)</c> reads identically under both flag settings, so the
+    /// flag-on-equals-flag-off invariant below is structurally incapable of catching a regression here.
+    /// Only pinning the literal output can. The expected base64 is the pre-existing representation for
+    /// a byte array reached through a wrapper (<c>Variant</c>/<c>SimpleAggregateFunction</c> are not
+    /// intercepted by <c>ReadJsonNode</c>, so they land in the value decoder): it is not ideal, but it
+    /// is lossless and reversible, whereas UTF-8-decoding it would destroy every byte that is not
+    /// valid UTF-8 on its own.
+    /// </remarks>
+    [Test]
+    [RequiredFeature(Feature.Json | Feature.Variant)]
+    [TestCase("{\"v\":[1,2]}", "v Variant(Array(UInt8), String)", "AQI=", TestName = "VariantOfByteArrayAndString")]
+    [TestCase("{\"v\":[1,2]}", "v Variant(Array(UInt8), UInt64)", "AQI=", TestName = "VariantOfByteArrayAndInt")]
+    [TestCase("{\"v\":[255,254]}", "v Variant(Array(UInt8), String)", "//4=", TestName = "VariantOfByteArrayNotValidUtf8")]
+    [TestCase("{\"v\":[1,2]}", "v SimpleAggregateFunction(anyLast, Array(UInt8))", "AQI=", TestName = "SimpleAggregateFunctionOfByteArray")]
+    public async Task ReadJson_WithNonTextByteArrayPath_IsNotDecodedAsText(string json, string typeDefinition, string expected)
+    {
+        using var byteArrayConnection = CreateByteArrayConnection();
+        var sql = $"SELECT '{json}'::Json({typeDefinition})";
+
+        var withFlag = await SelectJsonAsync(byteArrayConnection, sql);
+        var withoutFlag = await SelectJsonAsync(connection, sql);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(withFlag["v"].GetValue<string>(), Is.EqualTo(expected));
+            Assert.That(withoutFlag["v"].GetValue<string>(), Is.EqualTo(expected));
+        });
     }
 
     /// <summary>
