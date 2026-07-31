@@ -265,15 +265,11 @@ public class MidStreamExceptionMockTests
 }
 
 /// <summary>
-/// Tests that the raw / custom-FORMAT streaming surface (<see cref="ClickHouseRawResult"/>) surfaces an
-/// in-band mid-stream server exception as a <see cref="ClickHouseServerException"/> across every accessor,
-/// using mock HTTP responses (no ClickHouse server required).
+/// Integration tests for <see cref="ClickHouseRawResult"/> mid-stream exception detection against a real
+/// server, covering every accessor of the raw / custom-FORMAT streaming surface.
 /// </summary>
-public class ClickHouseRawResultMidStreamMockTests
+public class ClickHouseRawResultMidStreamTests : AbstractConnectionTestFixture
 {
-    private const string Token = "PU1FNUFH98";
-    private const string ErrorMessage = "Code: 395. DB::Exception: boom";
-
     public enum Accessor
     {
         Stream,
@@ -282,107 +278,64 @@ public class ClickHouseRawResultMidStreamMockTests
         CopyTo,
     }
 
-    // Real server framing: <rows>\r\n__exception__\r\n<token>\r\n<message>\n<size> <token>\r\n__exception__\r\n
-    private static byte[] MidStreamBody() =>
-        Encoding.UTF8.GetBytes($"1,0\r\n2,0\r\n__exception__\r\n{Token}\r\n{ErrorMessage}\n{ErrorMessage.Length} {Token}\r\n__exception__\r\n");
-
-    private static HttpResponseMessage Response(byte[] content, string exceptionTag)
-    {
-        var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(content) };
-        if (exceptionTag != null)
-            response.Headers.Add("X-ClickHouse-Exception-Tag", exceptionTag);
-        return response;
-    }
-
-    private static async Task<byte[]> DrainAsync(ClickHouseRawResult raw, Accessor accessor)
+    /// <summary>
+    /// Drains a raw result through the given accessor and returns the bytes it produced. The buffered
+    /// accessors materialize the whole body, so a mid-stream failure surfaces before they hand anything
+    /// back; the streaming ones surface it while the caller is draining.
+    /// </summary>
+    private static async Task<byte[]> DrainAsync(ClickHouseRawResult result, Accessor accessor)
     {
         switch (accessor)
         {
             case Accessor.Bytes:
-                return await raw.ReadAsByteArrayAsync();
+                return await result.ReadAsByteArrayAsync();
             case Accessor.String:
-                return Encoding.UTF8.GetBytes(await raw.ReadAsStringAsync());
-            case Accessor.Stream:
+                return Encoding.UTF8.GetBytes(await result.ReadAsStringAsync());
+            case Accessor.CopyTo:
             {
-                using var stream = await raw.ReadAsStreamAsync();
                 using var sink = new MemoryStream();
-                await stream.CopyToAsync(sink);
+                await result.CopyToAsync(sink);
                 return sink.ToArray();
             }
-            default: // CopyTo
+            default: // Stream, drained through the array ReadAsync overload
             {
+                using var stream = await result.ReadAsStreamAsync();
                 using var sink = new MemoryStream();
-                await raw.CopyToAsync(sink);
+                var buffer = new byte[64 * 1024];
+                int read;
+                while ((read = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                    sink.Write(buffer, 0, read);
                 return sink.ToArray();
             }
         }
     }
 
-    [TestCase(Accessor.Stream)]
-    [TestCase(Accessor.Bytes)]
-    [TestCase(Accessor.String)]
-    [TestCase(Accessor.CopyTo)]
-    public void Accessor_WithExceptionTag_AndInBandException_ThrowsServerException(Accessor accessor)
+    private static ClickHouseCommand CreateStreamingCommand(ClickHouseConnection streamingConnection)
     {
-        using var response = Response(MidStreamBody(), Token);
-        using var raw = new ClickHouseRawResult(response);
-
-        var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => DrainAsync(raw, accessor));
-
-        Assert.That(ex.Message, Does.Contain("boom"));
-        Assert.That(ex.ErrorCode, Is.EqualTo(395));
-    }
-
-    [TestCase(Accessor.Stream)]
-    [TestCase(Accessor.Bytes)]
-    [TestCase(Accessor.String)]
-    [TestCase(Accessor.CopyTo)]
-    public async Task Accessor_WithExceptionTag_ButSuccessfulBody_ReturnsFullBody(Accessor accessor)
-    {
-        var body = Encoding.UTF8.GetBytes("1,0\r\n2,0\r\n3,0\r\n"); // tag present but query succeeded (no in-band block)
-        using var response = Response(body, Token);
-        using var raw = new ClickHouseRawResult(response);
-
-        var read = await DrainAsync(raw, accessor);
-
-        Assert.That(read, Is.EqualTo(body));
-    }
-
-    [Test]
-    public async Task ReadAsByteArrayAsync_WithoutExceptionTag_ReturnsBodyVerbatim()
-    {
-        // No tag header => the untagged path must be byte-for-byte unchanged (no wrapping, no detection),
-        // even if the body coincidentally contains "__exception__" bytes.
-        var body = MidStreamBody();
-        using var response = Response(body, exceptionTag: null);
-        using var raw = new ClickHouseRawResult(response);
-
-        var bytes = await raw.ReadAsByteArrayAsync();
-
-        Assert.That(bytes, Is.EqualTo(body));
-    }
-}
-
-/// <summary>
-/// Integration test for <see cref="ClickHouseRawResult"/> mid-stream exception detection against a real server.
-/// </summary>
-public class ClickHouseRawResultMidStreamTests : AbstractConnectionTestFixture
-{
-    [Test]
-    [FromVersion(25, 11)]
-    public async Task ExecuteRawResultAsync_MidStreamException_SurfacesServerException()
-    {
-        // The query streams a committed 200 OK plus rows before throwIf fires, so the failure is delivered
-        // in-band (X-ClickHouse-Exception-Tag) and the truncated body surfaces as an HttpIOException that the
-        // raw path used to leak instead of the real server error. Compression is disabled and buffering
-        // minimized so the server streams incrementally (a buffered response instead fails pre-commit as 500).
-        using var streamingClient = TestUtilities.GetTestClickHouseClient(compression: false);
-        using var streamingConnection = streamingClient.CreateConnection();
-        using var command = streamingConnection.CreateCommand();
+        // Compression is disabled by the caller and buffering minimized here so the server streams the
+        // response incrementally; a buffered response instead fails pre-commit as a plain HTTP 500, which
+        // never exercises the in-band path.
+        var command = streamingConnection.CreateCommand();
         command.CustomSettings["http_write_exception_in_output_format"] = 1;
         command.CustomSettings["max_block_size"] = 1000;
         command.CustomSettings["http_response_buffer_size"] = 0;
         command.CustomSettings["wait_end_of_query"] = 0;
+        return command;
+    }
+
+    [TestCase(Accessor.Stream)]
+    [TestCase(Accessor.Bytes)]
+    [TestCase(Accessor.String)]
+    [TestCase(Accessor.CopyTo)]
+    [FromVersion(25, 11)]
+    public async Task ExecuteRawResultAsync_MidStreamException_SurfacesServerException(Accessor accessor)
+    {
+        // The query streams a committed 200 OK plus rows before throwIf fires, so the failure is delivered
+        // in-band (X-ClickHouse-Exception-Tag) and the truncated body surfaced as an HttpIOException that
+        // the raw path used to leak instead of the real server error.
+        using var streamingClient = TestUtilities.GetTestClickHouseClient(compression: false);
+        using var streamingConnection = streamingClient.CreateConnection();
+        using var command = CreateStreamingCommand(streamingConnection);
 
         command.CommandText = @"
             SELECT toInt32(number) AS n,
@@ -392,17 +345,49 @@ public class ClickHouseRawResultMidStreamTests : AbstractConnectionTestFixture
             FORMAT CSV";
 
         using var result = await command.ExecuteRawResultAsync(default);
-        using var stream = await result.ReadAsStreamAsync();
 
-        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
-        {
-            var buffer = new byte[64 * 1024];
-            while (await stream.ReadAsync(buffer, 0, buffer.Length) > 0)
-            {
-                // Drain until the in-band mid-stream exception surfaces
-            }
-        });
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => DrainAsync(result, accessor));
 
         Assert.That(ex.Message, Does.Contain("boom mid stream"));
+        Assert.That(ex.ErrorCode, Is.EqualTo(395)); // FUNCTION_THROW_IF_VALUE_IS_NON_ZERO
+    }
+
+    [TestCase(Accessor.Stream)]
+    [TestCase(Accessor.Bytes)]
+    [TestCase(Accessor.String)]
+    [TestCase(Accessor.CopyTo)]
+    [FromVersion(25, 11)]
+    public async Task ExecuteRawResultAsync_SuccessfulQuery_ReturnsCompleteBody(Accessor accessor)
+    {
+        // Contrast case. The server sends X-ClickHouse-Exception-Tag on every response, so detection is
+        // engaged for successful queries too; the body must still come back complete and unmodified.
+        using var command = connection.CreateCommand();
+        command.CustomSettings["http_write_exception_in_output_format"] = 1;
+        command.CommandText = "SELECT number, number * 2 FROM system.numbers LIMIT 3 FORMAT CSV";
+
+        using var result = await command.ExecuteRawResultAsync(default);
+
+        var body = await DrainAsync(result, accessor);
+
+        Assert.That(Encoding.UTF8.GetString(body), Is.EqualTo("0,0\n1,2\n2,4\n"));
+    }
+
+    [TestCase(Accessor.Bytes)]
+    [TestCase(Accessor.String)]
+    [FromVersion(25, 11)]
+    public async Task ExecuteRawResultAsync_BufferedAccessorReadTwice_ReturnsSameBody(Accessor accessor)
+    {
+        // The buffering accessors materialize the whole body, so — as when reading straight off
+        // HttpContent — asking twice must hand back the same body rather than failing on a consumed stream.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT number, number * 2 FROM system.numbers LIMIT 3 FORMAT CSV";
+
+        using var result = await command.ExecuteRawResultAsync(default);
+
+        var first = await DrainAsync(result, accessor);
+        var second = await DrainAsync(result, accessor);
+
+        Assert.That(Encoding.UTF8.GetString(first), Is.EqualTo("0,0\n1,2\n2,4\n"));
+        Assert.That(second, Is.EqualTo(first));
     }
 }

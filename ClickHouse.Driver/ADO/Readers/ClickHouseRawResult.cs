@@ -19,6 +19,7 @@ public class ClickHouseRawResult : IDisposable
 {
     private readonly HttpResponseMessage response;
     private readonly string exceptionTag;
+    private byte[] bufferedContent;
 
     internal ClickHouseRawResult(HttpResponseMessage response)
     {
@@ -64,7 +65,9 @@ public class ClickHouseRawResult : IDisposable
     /// <returns>A task that resolves to the response content stream.</returns>
     /// <remarks>
     /// If the server reports an in-band mid-stream exception, reading the returned stream throws a
-    /// <see cref="ClickHouseServerException"/> once the end of the body is reached.
+    /// <see cref="ClickHouseServerException"/> once the end of the body is reached. Bytes read before
+    /// that point are returned as-is, so a caller that parses incrementally may already have consumed
+    /// a partial result — including the server's raw in-band exception block — before the throw.
     /// </remarks>
     public Task<Stream> ReadAsStreamAsync() =>
         string.IsNullOrEmpty(exceptionTag) ? response.Content.ReadAsStreamAsync() : WrapContentStreamAsync();
@@ -80,17 +83,25 @@ public class ClickHouseRawResult : IDisposable
     /// </summary>
     /// <returns>A task that resolves to the response content as bytes.</returns>
     /// <remarks>
-    /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream exception.
+    /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream
+    /// exception; no truncated body is returned. The body is buffered, so repeat calls return the same bytes.
     /// </remarks>
     public Task<byte[]> ReadAsByteArrayAsync() =>
         string.IsNullOrEmpty(exceptionTag) ? response.Content.ReadAsByteArrayAsync() : ReadAllBytesAsync();
 
     private async Task<byte[]> ReadAllBytesAsync()
     {
-        using var stream = await WrapContentStreamAsync().ConfigureAwait(false);
+        if (bufferedContent != null)
+            return bufferedContent;
+
+        // The wrapper is deliberately not disposed: doing so closes the response's content stream, which
+        // HttpContent caches and hands back on the next call. Buffering the body here instead preserves
+        // the repeat-read behaviour of HttpContent.ReadAsByteArrayAsync/ReadAsStringAsync that callers
+        // get on the untagged path. The stream is released when this instance disposes the response.
+        var stream = await WrapContentStreamAsync().ConfigureAwait(false);
         using var memory = new MemoryStream();
         await stream.CopyToAsync(memory).ConfigureAwait(false);
-        return memory.ToArray();
+        return bufferedContent = memory.ToArray();
     }
 
     /// <summary>
@@ -98,7 +109,8 @@ public class ClickHouseRawResult : IDisposable
     /// </summary>
     /// <returns>A task that resolves to the response content as a string.</returns>
     /// <remarks>
-    /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream exception.
+    /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream
+    /// exception; no truncated body is returned. The body is buffered, so repeat calls return the same string.
     /// </remarks>
     public Task<string> ReadAsStringAsync() =>
         string.IsNullOrEmpty(exceptionTag) ? response.Content.ReadAsStringAsync() : ReadAllStringAsync();
@@ -123,14 +135,19 @@ public class ClickHouseRawResult : IDisposable
     /// <param name="stream">The destination stream to copy the content to.</param>
     /// <returns>A task that completes when the copy operation is finished.</returns>
     /// <remarks>
-    /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream exception.
+    /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream
+    /// exception. The copy is streamed, so the destination may already hold the partial result — including
+    /// the server's raw in-band exception block — by the time the exception is raised; treat a destination
+    /// written by a failed copy as incomplete.
     /// </remarks>
     public Task CopyToAsync(Stream stream) =>
         string.IsNullOrEmpty(exceptionTag) ? response.Content.CopyToAsync(stream) : CopyViaWrapperAsync(stream);
 
     private async Task CopyViaWrapperAsync(Stream destination)
     {
-        using var source = await WrapContentStreamAsync().ConfigureAwait(false);
+        // Not disposed, for the same reason as ReadAllBytesAsync: HttpContent.CopyToAsync leaves the
+        // content stream open too, so closing it here would break any subsequent read of this result.
+        var source = await WrapContentStreamAsync().ConfigureAwait(false);
         await source.CopyToAsync(destination).ConfigureAwait(false);
     }
 
