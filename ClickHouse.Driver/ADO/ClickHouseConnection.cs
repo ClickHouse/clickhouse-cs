@@ -222,7 +222,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// May change in future versions
     /// </summary>
     /// <param name="sql">SQL query to add to URL, may be empty</param>
-    /// <param name="data">Raw stream to be sent. May contain SQL query at the beginning. May be gzip-compressed</param>
+    /// <param name="data">Raw stream to be sent. May contain SQL query at the beginning. May be gzip-compressed. The caller keeps ownership of it: the driver reads from the stream but never disposes it</param>
     /// <param name="isCompressed">indicates whether "Content-Encoding: gzip" header should be added</param>
     /// <param name="token">Cancellation token</param>
     /// <param name="queryId">Query id</param>

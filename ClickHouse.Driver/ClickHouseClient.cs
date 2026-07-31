@@ -839,7 +839,9 @@ public sealed class ClickHouseClient : IClickHouseClient
         var columnList = columns != null ? $"({string.Join(", ", columns)})" : string.Empty;
         var query = $"INSERT INTO {table} {columnList} FORMAT {format}";
 
-        HttpContent content = new StreamContent(stream);
+        // The wrapper keeps the request content - and the request message that carries it - from
+        // disposing a stream the caller owns; the content itself is disposed with the request message.
+        HttpContent content = new StreamContent(new NonDisposingStream(stream));
         if (useCompression)
         {
             // CompressedContent handles compression and adds Content-Encoding header
@@ -847,21 +849,16 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         // Pass contentEncoding=null since CompressedContent already adds the Content-Encoding header
-        try
-        {
-            return await PostStreamAsync(query, content, contentEncoding: null, options, cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            content.Dispose();
-            throw;
-        }
+        return await PostStreamAsync(query, content, contentEncoding: null, options, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task<HttpResponseMessage> PostStreamAsync(string sql, Stream data, bool isCompressed, CancellationToken token, QueryOptions queryOptions = null)
     {
-        var content = new StreamContent(data);
+        if (data == null)
+            throw new ArgumentNullException(nameof(data));
+
+        var content = new StreamContent(new NonDisposingStream(data));
         return await PostStreamAsync(sql, content, isCompressed ? "gzip" : null, queryOptions, token).ConfigureAwait(false);
     }
 
