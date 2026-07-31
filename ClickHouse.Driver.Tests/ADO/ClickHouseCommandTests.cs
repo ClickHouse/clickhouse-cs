@@ -73,7 +73,7 @@ public class ClickHouseCommandTests
     {
         // Arrange
         var command = new ClickHouseCommand();
-        Assume.That(command.Cancel, Throws.Nothing);
+        Assert.That(command.Cancel, Throws.Nothing);
 
         // Act
         command.Dispose();
