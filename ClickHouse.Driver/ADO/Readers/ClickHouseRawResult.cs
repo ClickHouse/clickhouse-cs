@@ -74,6 +74,14 @@ public class ClickHouseRawResult : IDisposable
 
     private async Task<Stream> WrapContentStreamAsync()
     {
+        // If a buffering accessor already materialized (and validated) the whole body, serve the streaming
+        // accessors from that buffer too. Re-reading response.Content here would hand back the underlying
+        // content stream the buffering read already drained to EOF — yielding an empty body. Buffering once
+        // and re-serving keeps all four accessors consistent with each other and with the untagged
+        // HttpContent path. The buffer is only ever set after a clean read, so no marker scan is needed.
+        if (bufferedContent != null)
+            return new MemoryStream(bufferedContent, writable: false);
+
         var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
         return new ExceptionTagAwareStream(stream, exceptionTag, throwAtEndOfStream: true);
     }

@@ -390,4 +390,28 @@ public class ClickHouseRawResultMidStreamTests : AbstractConnectionTestFixture
         Assert.That(Encoding.UTF8.GetString(first), Is.EqualTo("0,0\n1,2\n2,4\n"));
         Assert.That(second, Is.EqualTo(first));
     }
+
+    [TestCase(Accessor.Bytes, Accessor.Stream)]
+    [TestCase(Accessor.Bytes, Accessor.CopyTo)]
+    [TestCase(Accessor.String, Accessor.Stream)]
+    [TestCase(Accessor.String, Accessor.CopyTo)]
+    [FromVersion(25, 11)]
+    public async Task ExecuteRawResultAsync_StreamingAccessorAfterBufferedRead_ReturnsCompleteBody(Accessor buffering, Accessor streaming)
+    {
+        // The exception tag is present on every response, so a buffering accessor materializes the whole
+        // body into an internal buffer. A subsequent streaming accessor must serve that buffer — matching
+        // the untagged HttpContent path, which buffers once and re-serves it — rather than re-reading the
+        // now-exhausted underlying content stream and handing back an empty body.
+        using var command = connection.CreateCommand();
+        command.CustomSettings["http_write_exception_in_output_format"] = 1;
+        command.CommandText = "SELECT number, number * 2 FROM system.numbers LIMIT 3 FORMAT CSV";
+
+        using var result = await command.ExecuteRawResultAsync(default);
+
+        var buffered = await DrainAsync(result, buffering);
+        var streamed = await DrainAsync(result, streaming);
+
+        Assert.That(Encoding.UTF8.GetString(buffered), Is.EqualTo("0,0\n1,2\n2,4\n"));
+        Assert.That(streamed, Is.EqualTo(buffered));
+    }
 }
