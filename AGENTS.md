@@ -116,7 +116,9 @@ var users = connection.Query<User>("SELECT * FROM users");
 - **Don't restate existing coverage**: `Utilities/TestCases.cs` (`GetDataTypeSamples()`) already
   round-trips every type — plus its `Nullable`/`Array`/composite forms — through the select,
   parameter, bulk-copy and serialisation suites. Check there first, add tests only for what those
-  don't reach, and say in the PR what that is.
+  don't reach, and say in the PR what that is. The usual offender is a "control" case pinning
+  behavior your change never touched (the sibling type, the untouched overload); that is already
+  covered, and you'll be asked to drop it.
 - **Test utilities**: before writing tests, read TestUtilities.cs to understand existing config and
   utility patterns — including `CreateTableName`/`SanitizeTableName` (see the note above).
 - **Test matrix**: ADO provider, parameter binding, ORMs, multi-framework, multi-ClickHouse-version
