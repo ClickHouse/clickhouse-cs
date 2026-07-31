@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types;
@@ -64,6 +65,33 @@ public class HttpParameterFormatterTests
         // Composite contexts (e.g. Array(String)) format elements with quote=true.
         var formatted = HttpParameterFormatter.Format(new StringType(), new byte[] { 0x41, 0x42, 0x43 }, true);
         Assert.That(formatted, Is.EqualTo("'ABC'"));
+    }
+
+    // A byte[] is escaped byte-for-byte into ClickHouse escaped-string text, so a payload that is
+    // NOT valid UTF-8 round-trips losslessly (via \xHH) instead of collapsing to the U+FFFD
+    // replacement char Encoding.UTF8.GetString would produce. '\' and '\'' are backslash-escaped;
+    // printable ASCII passes through; every other byte becomes \xHH.
+    [TestCaseSource(nameof(ByteArrayEscapingCases))]
+    public string Format_ByteArrayBoundToString_EscapesRawBytesFaithfully(byte[] payload)
+        => HttpParameterFormatter.Format(
+            new ClickHouseDbParameter { ParameterName = "b", Value = payload }, "String", TypeSettings.Default);
+
+    private static IEnumerable<TestCaseData> ByteArrayEscapingCases()
+    {
+        yield return new TestCaseData((object)new byte[] { 0x41, 0x42, 0x43 }).Returns("ABC").SetName("Format_ByteArray_PrintableAscii");
+        yield return new TestCaseData((object)new byte[] { 0xFF }).Returns(@"\xFF").SetName("Format_ByteArray_SingleInvalidUtf8Byte");
+        yield return new TestCaseData((object)new byte[] { 0xFF, 0xFE }).Returns(@"\xFF\xFE").SetName("Format_ByteArray_InvalidUtf8Sequence");
+        yield return new TestCaseData((object)new byte[] { 0x41, 0xFF, 0x42 }).Returns(@"A\xFFB").SetName("Format_ByteArray_PrintableAroundInvalidByte");
+        yield return new TestCaseData((object)new byte[] { 0xC3, 0xA9 }).Returns(@"\xC3\xA9").SetName("Format_ByteArray_ValidUtf8Multibyte"); // "é"
+        yield return new TestCaseData((object)new byte[] { 0x00, 0x0A, 0x09, 0x7F }).Returns(@"\x00\x0A\x09\x7F").SetName("Format_ByteArray_ControlAndDelBytes");
+        yield return new TestCaseData((object)new byte[] { 0x27, 0x5C }).Returns(@"\'\\").SetName("Format_ByteArray_QuoteAndBackslash");
+    }
+
+    [Test]
+    public void Format_ReadOnlyMemoryOfByte_NonUtf8_EscapesRawBytesFaithfully()
+    {
+        var parameter = new ClickHouseDbParameter { ParameterName = "b", Value = (ReadOnlyMemory<byte>)new byte[] { 0xFF, 0x00, 0x41 } };
+        Assert.That(HttpParameterFormatter.Format(parameter, "String", TypeSettings.Default), Is.EqualTo(@"\xFF\x00A"));
     }
 
     // --- Issue #483: TimeOnly bound to Time / Time64 ------------------------------------------

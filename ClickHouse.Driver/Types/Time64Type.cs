@@ -139,9 +139,7 @@ internal class Time64Type : ParameterizedType, ITypedWriter<TimeSpan>
         return value switch
         {
             TimeSpan ts => ts,
-#if NET6_0_OR_GREATER
             TimeOnly to => to.ToTimeSpan(),
-#endif
             decimal d => TimeSpan.FromSeconds((double)d),
             double db => TimeSpan.FromSeconds(db),
             float f => TimeSpan.FromSeconds(f),

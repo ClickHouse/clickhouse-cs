@@ -109,6 +109,22 @@ public class SqlParameterizedSelectTests : IDisposable
     }
 
     [Test]
+    public async Task ShouldRoundTripNonUtf8ByteArrayThroughStringParameter()
+    {
+        // A byte[] that is not valid UTF-8 must round-trip byte-for-byte, not collapse to the U+FFFD
+        // replacement char (which is what decoding through UTF-8 would produce). The payload mixes a
+        // null byte, printable ASCII, the escape-sensitive ' and \ bytes, a control byte, and several
+        // invalid-UTF-8 bytes. Asserted via hex() so the check is on the exact stored bytes.
+        var payload = new byte[] { 0x00, 0x41, 0xFF, 0xFE, 0x27, 0x5C, 0x0A, 0x80, 0xC3, 0x28 };
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT hex({var:String}) as res";
+        command.AddParameter("var", payload);
+
+        var result = (string)(await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(Convert.ToHexString(payload)));
+    }
+
+    [Test]
     [RequiredFeature(Feature.Time)]
     public async Task ShouldExecuteParameterizedSelectWithTimeOnlyForTime()
     {

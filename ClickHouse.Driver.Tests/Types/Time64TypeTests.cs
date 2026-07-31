@@ -296,7 +296,6 @@ public class Time64TypeTests
         Assert.That(ex.Message, Does.Contain("Cannot convert"));
     }
 
-#if NET6_0_OR_GREATER
     [Test]
     public void CoerceToTimeSpan_TimeOnly_ConvertsCorrectly()
     {
@@ -314,7 +313,6 @@ public class Time64TypeTests
 
         Assert.That(result, Is.EqualTo(timeOnly.ToTimeSpan()).Within(TimeSpan.FromMilliseconds(1)));
     }
-#endif
 
     [Test]
     public void Write_ValueBeyondMaxRange_ClampedToMax()

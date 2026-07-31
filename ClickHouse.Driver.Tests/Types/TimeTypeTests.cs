@@ -58,7 +58,6 @@ public class TimeTypeTests
         Assert.That(actualSeconds, Is.EqualTo(expectedSeconds));
     }
 
-#if NET6_0_OR_GREATER
     [Test]
     [TestCase(14, 30, 0, 52200)]  // 14:30:00
     [TestCase(0, 0, 0, 0)]        // midnight
@@ -79,8 +78,6 @@ public class TimeTypeTests
 
         Assert.That(actualSeconds, Is.EqualTo(expectedSeconds));
     }
-#endif
-
 
     [Test]
     public void Write_IntValue_WritesCorrectly()

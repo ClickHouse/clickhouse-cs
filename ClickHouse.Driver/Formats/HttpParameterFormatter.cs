@@ -81,23 +81,24 @@ internal static class HttpParameterFormatter
 
             case DateType dt when value is DateTimeOffset @dto:
                 return QuoteIfNeeded(@dto.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
-#if NET6_0_OR_GREATER
             case DateType dt when value is DateOnly @do:
                 return QuoteIfNeeded(@do.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
-#endif
             case DateType dt:
                 return QuoteIfNeeded(
                     Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                     quote);
 
-            // byte[] / ReadOnlyMemory<byte> must decode to the payload text, mirroring the binary
-            // write path (Types/StringType.cs). Without these arms a byte[] fell through to the
-            // value.ToString() arm below and was inserted as the literal text "System.Byte[]".
+            // byte[] / ReadOnlyMemory<byte> bind faithfully to String/FixedString by escaping the
+            // raw bytes into ClickHouse escaped-string text (EscapeBytes), mirroring the binary write
+            // path (Types/StringType.cs) which writes the bytes verbatim. Decoding through UTF-8 here
+            // would be lossy for payloads that are not valid UTF-8 (invalid sequences collapse to the
+            // U+FFFD replacement char); \xHH escapes preserve every byte. Without these arms a byte[]
+            // fell through to the value.ToString() arm below and was inserted as text "System.Byte[]".
             case StringType or FixedStringType when value is byte[] bytes:
-                return quote ? Encoding.UTF8.GetString(bytes).Escape().QuoteSingle() : Encoding.UTF8.GetString(bytes).Escape();
+                return QuoteIfNeeded(EscapeBytes(bytes), quote);
 
             case StringType or FixedStringType when value is ReadOnlyMemory<byte> bytesMemory:
-                return quote ? Encoding.UTF8.GetString(bytesMemory.Span).Escape().QuoteSingle() : Encoding.UTF8.GetString(bytesMemory.Span).Escape();
+                return QuoteIfNeeded(EscapeBytes(bytesMemory.Span), quote);
 
             case StringType st:
             case FixedStringType tt:
@@ -147,19 +148,15 @@ internal static class HttpParameterFormatter
 
             case TimeType tt when value is TimeSpan ts:
                 return TimeType.FormatTimeString(ts);
-#if NET6_0_OR_GREATER
             case TimeType tt when value is TimeOnly timeOnly:
                 return TimeType.FormatTimeString(timeOnly.ToTimeSpan());
-#endif
             case TimeType tt:
                 return TimeType.FormatTimeString(Convert.ToInt32(value, CultureInfo.InvariantCulture));
 
             case Time64Type t64 when value is TimeSpan ts:
                 return t64.FormatTime64String(ts);
-#if NET6_0_OR_GREATER
             case Time64Type t64 when value is TimeOnly timeOnly:
                 return t64.FormatTime64String(timeOnly.ToTimeSpan());
-#endif
 
             case NullableType nt:
                 return value is null || value is DBNull ? quote ? "null" : NullValueString : Format(nt.UnderlyingType, value, quote, customFormatter, parameterName);
@@ -229,6 +226,41 @@ internal static class HttpParameterFormatter
 
     private static string QuoteIfNeeded(string value, bool quote)
         => quote ? value.QuoteSingle() : value;
+
+    private static readonly char[] HexDigits = "0123456789ABCDEF".ToCharArray();
+
+    /// <summary>
+    /// Escapes a raw byte payload into ClickHouse escaped-string text so that ANY byte sequence
+    /// (including data that is not valid UTF-8) round-trips faithfully through the text-based HTTP
+    /// parameter channel, matching the binary write path in <see cref="Types.StringType"/> which
+    /// writes the bytes verbatim. Printable ASCII is emitted as-is; <c>\</c> and <c>'</c> are
+    /// backslash-escaped; every other byte (control characters and any byte &gt;= 0x7F) is emitted as
+    /// a <c>\xHH</c> hex escape, which the server decodes back to the exact byte.
+    /// </summary>
+    private static string EscapeBytes(ReadOnlySpan<byte> bytes)
+    {
+        var sb = new StringBuilder(bytes.Length);
+        foreach (var b in bytes)
+        {
+            switch (b)
+            {
+                case (byte)'\\':
+                    sb.Append(@"\\");
+                    break;
+                case (byte)'\'':
+                    sb.Append(@"\'");
+                    break;
+                default:
+                    if (b >= 0x20 && b <= 0x7E)
+                        sb.Append((char)b);
+                    else
+                        sb.Append('\\').Append('x').Append(HexDigits[b >> 4]).Append(HexDigits[b & 0xF]);
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
 
     private static bool IsTransparentWrapper(ClickHouseType type)
         => type is NullableType or LowCardinalityType or VariantType;
