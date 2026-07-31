@@ -960,6 +960,8 @@ using var bodyReader = new StreamReader(body);
 var json = await bodyReader.ReadToEndAsync();
 ```
 
+Read the returned stream to completion before it goes out of scope, as above. When the response *is* compressed you get a decoder created with `leaveOpen`, so disposing it leaves the response intact; when it is **not** compressed you get the HTTP content stream itself, so disposing it ends the body. Either way the `ClickHouseRawResult` owns the response — don't call its other read members after the stream has been disposed.
+
 <Note>
 Any codec can be plugged in by implementing `IClickHouseCompressor.Decompress(Stream source, bool leaveOpen)` and returning the matching `ContentEncoding` token; the built-in `Lz4Compressor`, `GZipCompressor` and `BrotliCompressor` implement it. The same interface compresses insert bodies via `InsertOptions.Compressor`, but the two directions are independent: `ResponseCompressor` never affects what is sent.
 </Note>
