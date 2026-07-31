@@ -91,9 +91,10 @@ var users = connection.Query<User>("SELECT * FROM users");
 - **Don't tax a common path for a niche case**: if a fix adds per-row or per-call work to a path
   everyone hits in order to serve an uncommon one, measure the cost and prefer an opt-in API over
   charging everybody for it.
-- **Benchmarks**: measure with the existing `ClickHouse.Driver.Benchmark` harness, or ask a
-  maintainer for a `/benchmark-compare` run on the PR, and put the numbers in the PR description.
-  Don't commit a new benchmark file alongside a fix or perf change.
+- **Benchmarks**: measure performance-related changes with BenchmarkDotNet
+  (`ClickHouse.Driver.Benchmark`) and put the numbers in the PR description. An ad-hoc benchmark
+  written only to answer a question doesn't need to ship with the PR; commit one that is worth
+  re-running later. A maintainer can also trigger a `/benchmark-compare` run on the PR.
 
 ### Testing Discipline
 
