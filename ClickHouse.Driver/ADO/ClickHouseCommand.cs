@@ -199,9 +199,15 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             _ => null,
         };
 
+        // Normalize CommandText the way the pre-#471 code did (via `new StringBuilder(CommandText)`):
+        // a null CommandText is treated as an empty query for every behavior, so an unset command
+        // reaches the server as an empty query (rejected there) rather than throwing a client-side
+        // ArgumentNullException when the null reaches StringContent.
+        var commandText = CommandText ?? string.Empty;
+
         // Append the LIMIT out-of-band so a trailing comment or statement terminator in CommandText
         // cannot swallow it or turn the query into a rejected multi-statement (issue #471).
-        var sql = limitClause is null ? CommandText : RowLimitAppender.Append(CommandText, limitClause);
+        var sql = limitClause is null ? commandText : RowLimitAppender.Append(commandText, limitClause);
 
         var result = await PostSqlQueryAsync(sql, lcts.Token).ConfigureAwait(false);
         return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.ClickHouseClient.TypeSettings, connection.ClickHouseClient.PocoRegistry, connection.ClickHouseClient.Settings.ReadBufferSize, connection.ClickHouseClient.Settings.ReadValueConverter).ConfigureAwait(false);
