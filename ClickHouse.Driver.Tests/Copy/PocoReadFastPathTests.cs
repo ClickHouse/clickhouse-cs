@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Readers;
 
@@ -16,9 +15,6 @@ namespace ClickHouse.Driver.Tests.Copy;
 [TestFixture]
 public class PocoReadFastPathTests : AbstractConnectionTestFixture
 {
-    private string CreateTestTableName([CallerMemberName] string testName = null)
-        => SanitizeTableName($"test_pocofast_{testName}_{Guid.NewGuid():N}");
-
     public class ScalarPoco
     {
         public long Id { get; set; }
@@ -264,7 +260,7 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
     [Test]
     public async Task InsertBinaryAsync_EnumColumnFromIntProperty_RoundTripsThroughQueryAsync()
     {
-        var table = $"test.{CreateTestTableName()}";
+        var table = CreateTableName();
         client.RegisterPocoType<EnumIntPoco>();
         await client.ExecuteNonQueryAsync(
             $"CREATE TABLE {table} (Status Enum8('a' = -5, 'b' = 7)) ENGINE = MergeTree() ORDER BY Status");
