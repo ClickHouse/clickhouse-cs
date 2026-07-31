@@ -107,6 +107,31 @@ public class ExceptionTagAwareStreamTests
     }
 
     [Test]
+    public void TryExtractMidStreamException_DetectsMarker_WithServerCrlfFraming()
+    {
+        // Real ClickHouse (>= 25.11) frames the in-band block with a CRLF between the
+        // "__exception__" literal and the tag, which the contiguous fixtures do not cover:
+        // "\r\n__exception__\r\n<tag>\r\n<message>\n<len> <tag>\r\n__exception__\r\n".
+        var message = "Code: 395. DB::Exception: boom mid stream";
+        var messageLength = Encoding.UTF8.GetByteCount(message);
+        var exceptionData =
+            $"\r\n__exception__\r\n{TestToken}\r\n{message}\n{messageLength} {TestToken}\r\n__exception__\r\n";
+        var data = Encoding.UTF8.GetBytes("some rows before" + exceptionData);
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken);
+
+        var buffer = new byte[data.Length];
+        _ = stream.Read(buffer, 0, buffer.Length);
+
+        var result = stream.TryExtractMidStreamException();
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result.Message, Is.EqualTo(message));
+        Assert.That(result.ErrorCode, Is.EqualTo(395));
+    }
+
+    [Test]
     public void TryExtractMidStreamException_DetectsMarker_WithMultilineMessage()
     {
         var message = "Error on line 1\nMore details on line 2\nAnd line 3";
@@ -262,6 +287,28 @@ public class ExceptionTagAwareStreamTests
         var wrongToken = "WRONGTOKEN";
         var message = "Wrong token error";
         var exceptionData = $"__exception__{wrongToken}\n{message}\n{message.Length} {wrongToken}__exception__";
+        var data = Encoding.UTF8.GetBytes(exceptionData);
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken); // Looking for TestToken
+
+        var buffer = new byte[data.Length];
+        _ = stream.Read(buffer, 0, buffer.Length);
+
+        var result = stream.TryExtractMidStreamException();
+
+        Assert.That(result, Is.Null); // Should not match wrong token
+    }
+
+    [Test]
+    public void TryExtractMidStreamException_IgnoresWrongToken_WithServerCrlfFraming()
+    {
+        // The CRLF-tolerant matcher must not loosen tag matching: a real-framed block whose tag
+        // differs from the configured one must still be ignored.
+        var wrongToken = "WRONGTOKEN";
+        var message = "Wrong token error";
+        var exceptionData =
+            $"\r\n__exception__\r\n{wrongToken}\r\n{message}\n{message.Length} {wrongToken}\r\n__exception__\r\n";
         var data = Encoding.UTF8.GetBytes(exceptionData);
 
         using var ms = new MemoryStream(data);
