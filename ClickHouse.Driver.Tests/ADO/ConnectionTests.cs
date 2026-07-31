@@ -324,6 +324,39 @@ public class ConnectionTests : AbstractConnectionTestFixture
         Assert.That(new[] { "Database", "Table", "DataType", "ProviderType" }, Is.SubsetOf(GetColumnNames(schema)));
     }
 
+    private static readonly TestCaseData[] UnsupportedColumnRestrictions =
+    [
+        new TestCaseData((object)new[] { "system", "functions", "name" }),
+        new TestCaseData((object)new[] { "system", "functions", string.Empty }),
+        new TestCaseData((object)new[] { null, null, "name" }),
+        new TestCaseData((object)new[] { "system", "functions", null, "name" }),
+    ];
+
+    [Test]
+    [TestCaseSource(nameof(UnsupportedColumnRestrictions))]
+    public void GetSchema_ColumnsWithRestrictionBeyondDatabaseAndTable_ThrowsArgumentException(string[] restrictions)
+    {
+        var exception = Assert.Throws<ArgumentException>(() => connection.GetSchema("Columns", restrictions));
+        Assert.That(exception.Message, Does.Contain("Columns").And.Contain("database, table"));
+    }
+
+    [Test]
+    public void GetSchema_ColumnsWithEmptySupportedRestriction_FiltersOnTheEmptyValue()
+    {
+        var schema = connection.GetSchema("Columns", ["system", string.Empty]);
+        Assert.That(schema.Rows, Is.Empty);
+    }
+
+    [Test]
+    public void GetSchema_ColumnsWithUnspecifiedRestrictionsBeyondTable_AppliesSupportedRestrictions()
+    {
+        var schema = connection.GetSchema("Columns", ["system", "functions", null, null]);
+        var rows = schema.Rows.Cast<DataRow>().ToList();
+        Assert.That(rows, Is.Not.Empty);
+        Assert.That(rows.Select(r => (string)r["Database"]), Is.All.EqualTo("system"));
+        Assert.That(rows.Select(r => (string)r["Table"]), Is.All.EqualTo("functions"));
+    }
+
     [Test]
     public void ChangeDatabaseShouldChangeDatabase()
     {
