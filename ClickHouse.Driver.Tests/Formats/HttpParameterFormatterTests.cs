@@ -78,6 +78,7 @@ public class HttpParameterFormatterTests
 
     private static IEnumerable<TestCaseData> ByteArrayEscapingCases()
     {
+        yield return new TestCaseData((object)Array.Empty<byte>()).Returns("").SetName("Format_ByteArray_Empty");
         yield return new TestCaseData((object)new byte[] { 0x41, 0x42, 0x43 }).Returns("ABC").SetName("Format_ByteArray_PrintableAscii");
         yield return new TestCaseData((object)new byte[] { 0xFF }).Returns(@"\xFF").SetName("Format_ByteArray_SingleInvalidUtf8Byte");
         yield return new TestCaseData((object)new byte[] { 0xFF, 0xFE }).Returns(@"\xFF\xFE").SetName("Format_ByteArray_InvalidUtf8Sequence");
