@@ -8,3 +8,8 @@ coverage:
       default:
         threshold: 1%
         target: 75%
+
+# Vendored third-party source (e.g. the K4os LZ4/xxHash codec) is a verbatim,
+# re-derivable copy we don't own; its coverage is not meaningful for this repo.
+ignore:
+  - "ClickHouse.Driver.Common/Vendor/**"

@@ -30,7 +30,8 @@ public class InsertBinaryCompressionTests : AbstractConnectionTestFixture
         return tableName;
     }
 
-    // null => uncompressed; then GZip (default + level knob) and Brotli, exercising both Content-Encodings.
+    // null => uncompressed; then GZip (default + level knob), Brotli, and LZ4 (vendored codec),
+    // exercising each Content-Encoding the driver can send.
     private static IEnumerable<IClickHouseCompressor> Compressors()
     {
         yield return null;
@@ -38,6 +39,7 @@ public class InsertBinaryCompressionTests : AbstractConnectionTestFixture
         yield return new GZipCompressor(CompressionLevel.Optimal);
         yield return BrotliCompressor.Default;
         yield return new BrotliCompressor(CompressionLevel.Optimal);
+        yield return Lz4Compressor.Default;
     }
 
     [Test]

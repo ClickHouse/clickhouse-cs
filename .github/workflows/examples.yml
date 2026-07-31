@@ -6,12 +6,14 @@ on:
     paths:
       - "examples/**"
       - "ClickHouse.Driver/**"
+      - "ClickHouse.Driver.Common/**"
       - ".github/workflows/examples.yml"
   pull_request:
     branches: [main]
     paths:
       - "examples/**"
       - "ClickHouse.Driver/**"
+      - "ClickHouse.Driver.Common/**"
       - ".github/workflows/examples.yml"
   workflow_dispatch:
     inputs:
