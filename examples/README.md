@@ -51,6 +51,7 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Select_004_ExportToFile.cs](Select/Select_004_ExportToFile.cs) - Exporting query results to files (JSONEachRow, Parquet, etc.)
 - [Select_005_CompressedRawExport.cs](Select/Select_005_CompressedRawExport.cs) - Per-query `AcceptEncoding` override for raw exports (e.g. gzipped Parquet) using `ExecuteRawResultAsync`
 - [Select_006_PocoSelect.cs](Select/Select_006_PocoSelect.cs) - Reading query results into strongly-typed POCO objects with `QueryAsync<T>` (streaming) and `reader.MapTo<T>` (per-row), including `[ClickHouseColumn(Name)]` aliases and `[ClickHouseNotMapped]` exclusion
+- [Select_007_Lz4ResponseRead.cs](Select/Select_007_Lz4ResponseRead.cs) - Reading LZ4-compressed query responses via `ResponseCompressor` — a codec .NET cannot decode itself — on the reader, scalar and raw paths
 
 ### Data Types
 

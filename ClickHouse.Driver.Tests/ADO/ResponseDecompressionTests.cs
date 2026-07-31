@@ -141,6 +141,78 @@ public class ResponseDecompressionTests
         Assert.That(decoded.ToArray(), Is.EqualTo(plaintext));
     }
 
+    /// <summary>
+    /// HTTP's <c>deflate</c> is the zlib format (RFC 1950), NOT raw DEFLATE, and zlib is what ClickHouse
+    /// emits — its bodies begin <c>78 5E</c>. A bare <see cref="DeflateStream"/> throws
+    /// <see cref="InvalidDataException"/> on those bytes, so this pins the zlib-wrapped form specifically.
+    /// The raw-DEFLATE spelling stays covered by
+    /// <see cref="Wrap_WithBclCodecAndNoConfiguredCompressor_DecodesWithTheBclStream"/>, whose encoder is a
+    /// raw <see cref="DeflateStream"/>; between them both forms are exercised rather than only the one our
+    /// own encoder happens to produce.
+    /// </summary>
+    [Test]
+    public void Wrap_WithZLibWrappedDeflate_DecodesIt()
+    {
+        var plaintext = Encoding.UTF8.GetBytes("zlib-wrapped deflate, exactly as ClickHouse sends it");
+        using var buffer = new MemoryStream();
+        using (var encoder = new ZLibStream(buffer, CompressionLevel.Fastest, leaveOpen: true))
+        {
+            encoder.Write(plaintext, 0, plaintext.Length);
+        }
+
+        var encoded = buffer.ToArray();
+        Assert.That(encoded[0], Is.EqualTo(0x78), "a zlib stream must start with the 0x78 CMF byte");
+
+        using var source = new MemoryStream(encoded);
+        using var decoded = ResponseDecompression.Wrap(source, "deflate", responseCompressor: null, leaveOpen: true);
+        using var result = new MemoryStream();
+        decoded.CopyTo(result);
+
+        Assert.That(result.ToArray(), Is.EqualTo(plaintext));
+    }
+
+    [Test]
+    public async Task ExecuteReaderAsync_WithZLibWrappedDeflateResponse_DecodesTheRows()
+    {
+        var plaintext = BuildRowBinaryResult(11, 22, 33);
+        using var buffer = new MemoryStream();
+        using (var encoder = new ZLibStream(buffer, CompressionLevel.Fastest, leaveOpen: true))
+        {
+            encoder.Write(plaintext, 0, plaintext.Length);
+        }
+
+        using var response = CreateResponse(buffer.ToArray(), "deflate");
+        using var client = CreateClient(response);
+
+        var values = new List<int>();
+        using var reader = await client.ExecuteReaderAsync("SELECT n");
+        while (await reader.ReadAsync())
+            values.Add(reader.GetInt32(0));
+
+        Assert.That(values, Is.EqualTo(new[] { 11, 22, 33 }));
+    }
+
+    /// <summary>
+    /// A server that stacks codecs (<c>Content-Encoding: gzip, lz4</c>) is not supported, but it must say
+    /// so rather than decode with only one of them and hand back garbage.
+    /// </summary>
+    [Test]
+    public void Wrap_WithStackedContentEncodings_ThrowsNamingBoth()
+    {
+        var body = new byte[] { 0x1F, 0x8B, 0x00 };
+        using var source = new MemoryStream(body);
+        var content = new ByteArrayContent(body);
+        content.Headers.ContentEncoding.Add("gzip");
+        content.Headers.ContentEncoding.Add("lz4");
+        using var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+
+        Assert.That(ResponseDecompression.GetContentEncoding(response), Is.EqualTo("gzip, lz4"));
+
+        var ex = Assert.Throws<NotSupportedException>(
+            () => ResponseDecompression.Wrap(source, response, Lz4Compressor.Default, leaveOpen: true));
+        Assert.That(ex.Message, Does.Contain("gzip, lz4"));
+    }
+
     [TestCase("zstd")]
     [TestCase("snappy")]
     [TestCase("xz")]
@@ -627,6 +699,49 @@ public class ResponseDecompressionTests
             Assert.That(
                 new ClickHouseClientSettings { ResponseCompressor = Lz4Compressor.Default }.ToString(),
                 Does.Contain("ResponseCompression=lz4"));
+        });
+    }
+
+    /// <summary>
+    /// A CORRUPT compressed error body must not turn the server's error into a codec crash. The status
+    /// line is the information that matters, so it has to survive a failed decode — the decompressor
+    /// here is handed lz4-declared bytes that are not valid lz4.
+    /// </summary>
+    [Test]
+    public void HandleError_WithCorruptCompressedErrorBody_StillSurfacesTheServerError()
+    {
+        using var response = CreateResponse(
+            new byte[] { 0x04, 0x22, 0x4D, 0x18, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x02 },
+            "lz4",
+            HttpStatusCode.InternalServerError);
+        response.ReasonPhrase = "Internal Server Error";
+        using var client = CreateClient(response, Lz4Compressor.Default);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => client.ExecuteNonQueryAsync("SELECT 1"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Does.Contain("500"));
+            Assert.That(ex.Message, Does.Contain("system.query_log"));
+        });
+    }
+
+    /// <summary>
+    /// <c>ToString()</c> must stay parseable by this type's own connection-string parser. A custom codec
+    /// has no connection-string spelling, so it is omitted rather than emitted as a token
+    /// (e.g. <c>ResponseCompression=zstd</c>) that <c>Parse</c> would reject.
+    /// </summary>
+    [Test]
+    public void ClickHouseClientSettings_ToString_OmitsCustomResponseCompressorSoTheResultStaysParseable()
+    {
+        var settings = new ClickHouseClientSettings { ResponseCompressor = new TrackingCompressor() };
+
+        var text = settings.ToString();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Not.Contain("ResponseCompression"));
+            Assert.DoesNotThrow(() => new ClickHouseClientSettings(text));
         });
     }
 

@@ -580,9 +580,14 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode};" +
                $"UseFormDataParameters={UseFormDataParameters}";
 
-        if (ResponseCompressor != null)
+        // Only the built-in codecs have a connection-string spelling. Emitting a custom compressor's
+        // ContentEncoding here would produce a string this type's own parser rejects (e.g.
+        // "ResponseCompression=zstd" throws), so a custom codec — which can only be set in code
+        // anyway — is omitted rather than round-tripped into an unparseable value.
+        var responseCompression = ResponseCompressionSetting.Format(ResponseCompressor);
+        if (responseCompression != null)
         {
-            result += $";ResponseCompression={ResponseCompressionSetting.Format(ResponseCompressor) ?? ResponseCompressor.ContentEncoding}";
+            result += $";ResponseCompression={responseCompression}";
         }
 
         if (Roles.Count > 0)

@@ -113,7 +113,9 @@ internal static class ResponseDecompression
 
         if (IsToken(token, "deflate"))
         {
-            decompressed = new DeflateStream(source, CompressionMode.Decompress, leaveOpen);
+            // NOT a bare DeflateStream: HTTP's "deflate" is the zlib format (RFC 1950) and that is what
+            // ClickHouse emits, which raw DEFLATE cannot parse. This sniffs and handles both forms.
+            decompressed = new ZLibOrDeflateStream(source, leaveOpen);
             return true;
         }
 

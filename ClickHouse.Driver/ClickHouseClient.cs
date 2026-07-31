@@ -1188,10 +1188,24 @@ public sealed class ClickHouseClient : IClickHouseClient
                 "please re-run the request without compression or inspect 'system.query_log' on the ClickHouse server to read the original error message.>";
         }
 
-        using (decompressed)
-        using (var reader = new StreamReader(decompressed, GetErrorBodyEncoding(response), detectEncodingFromByteOrderMarks: true))
+        try
         {
-            return await reader.ReadToEndAsync().ConfigureAwait(false);
+            using (decompressed)
+            using (var reader = new StreamReader(decompressed, GetErrorBodyEncoding(response), detectEncodingFromByteOrderMarks: true))
+            {
+                return await reader.ReadToEndAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Decoding the error body failed — a truncated or corrupt compressed payload, or a custom
+            // compressor whose Decompress throws. The server's status line is the information that
+            // actually matters, so it must survive: never let a decompression failure replace the
+            // ClickHouseServerException with an obscure codec error.
+            return
+                $"<server returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}, but its error body " +
+                $"(Content-Encoding: {encoding}) could not be decoded: {ex.GetType().Name}: {ex.Message}. " +
+                "Inspect 'system.query_log' on the ClickHouse server to read the original error message.>";
         }
     }
 
