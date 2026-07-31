@@ -34,12 +34,12 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
         "\"tags\":[\"p+q/r==\",\"li6Wu)\"],\"unicode\":\"héllo 世界\"," +
         "\"count\":42,\"ratio\":0.5,\"ok\":true}";
 
-    private static ClickHouseClientSettings GetByteArraySettings() =>
-        new(TestUtilities.GetTestClickHouseClientSettings()) { ReadStringsAsByteArrays = true };
+    private static ClickHouseClientSettings GetByteArraySettings(JsonReadMode readMode = JsonReadMode.Binary) =>
+        new(TestUtilities.GetTestClickHouseClientSettings(jsonReadMode: readMode)) { ReadStringsAsByteArrays = true };
 
-    private static ClickHouseConnection CreateByteArrayConnection()
+    private static ClickHouseConnection CreateByteArrayConnection(JsonReadMode readMode = JsonReadMode.Binary)
     {
-        var connection = new ClickHouseConnection(GetByteArraySettings());
+        var connection = new ClickHouseConnection(GetByteArraySettings(readMode));
         connection.Open();
         return connection;
     }
@@ -141,6 +141,56 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
         var expected = new JsonObject { ["colour"] = "green", ["size"] = "large" };
         Assert.That(JsonNode.DeepEquals(result["attrs"], expected), Is.True,
             $"Expected: {expected.ToJsonString()}, Actual: {result["attrs"]?.ToJsonString()}");
+    }
+
+    /// <summary>
+    /// Both read modes that decode JSON structurally are affected, not just the default. <c>None</c>
+    /// differs from <c>Binary</c> only in not sending the server-side format setting (for read-only
+    /// connections that may not set one), so it decodes through the same path and carried the same bug.
+    /// </summary>
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCase(JsonReadMode.Binary, TestName = "BinaryReadMode")]
+    [TestCase(JsonReadMode.None, TestName = "NoneReadMode")]
+    public async Task ReadJson_WithReadStringsAsByteArrays_DecodesStringsInEveryStructuredReadMode(JsonReadMode readMode)
+    {
+        using var byteArrayConnection = CreateByteArrayConnection(readMode);
+
+        var result = await SelectJsonAsync(byteArrayConnection, $"SELECT '{SampleJson}'::Json");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result["event"].GetValue<string>(), Is.EqualTo("info"));
+            Assert.That(result["props"]["region"].GetValue<string>(), Is.EqualTo("NYIp"));
+            Assert.That(result["tags"][0].GetValue<string>(), Is.EqualTo("p+q/r=="));
+        });
+    }
+
+    /// <summary>
+    /// <see cref="JsonReadMode.String"/> never had this bug, and this pins that it stays that way: the
+    /// server sends the whole document as one string, which <c>JsonType.Read</c> returns via
+    /// <c>ExtendedBinaryReader.ReadString()</c> before any per-path type dispatch happens — so
+    /// <c>ReadStringsAsByteArrays</c> cannot reach it.
+    /// </summary>
+    /// <remarks>
+    /// Worth stating because it is the precedent for this whole change rather than a footnote: one of
+    /// the driver's three JSON read modes already returned real text regardless of the flag. Treating
+    /// JSON strings as text is therefore not a new convention introduced here — <c>Binary</c> and
+    /// <c>None</c> were simply the inconsistent ones. The lenient decoding matches too, since
+    /// <c>ExtendedBinaryReader</c> is built with a replacement-fallback UTF-8 decoder.
+    /// </remarks>
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ReadJson_InStringReadMode_IsUnaffectedByReadStringsAsByteArrays()
+    {
+        using var byteArrayConnection = CreateByteArrayConnection(JsonReadMode.String);
+
+        using var reader = await byteArrayConnection.ExecuteReaderAsync($"SELECT '{SampleJson}'::Json");
+        ClassicAssert.IsTrue(reader.Read());
+        var value = reader.GetValue(0);
+
+        Assert.That(value, Is.TypeOf<string>());
+        Assert.That(JsonNode.Parse((string)value)["event"].GetValue<string>(), Is.EqualTo("info"));
     }
 
     /// <summary>
