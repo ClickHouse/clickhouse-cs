@@ -343,19 +343,30 @@ internal class JsonType : ParameterizedType
         var obj = new JsonObject();
         for (int i = 0; i < count; i++)
         {
-            var key = (string)mapType.KeyType.Read(reader);
+            var key = DecodeString(mapType.KeyType.Read(reader));
             var value = ReadJsonNode(reader, mapType.ValueType);
             obj[key] = value;
         }
         return obj;
     }
 
+    /// <summary>
+    /// Decodes a value produced by a String or FixedString path into text.
+    /// </summary>
+    /// <remarks>
+    /// A ClickHouse String column holds arbitrary bytes that need not be valid UTF-8, which is what
+    /// <c>ReadStringsAsByteArrays</c> exists for and why the type readers can hand back a
+    /// <see cref="byte"/> array here. That distinction does not carry into a JSON document: RFC 8259
+    /// defines JSON strings as text and <see cref="JsonValue"/> has no byte-array representation, so a
+    /// JSON string is always decoded as UTF-8 regardless of the setting. Decoding is lenient, matching
+    /// the rest of the driver: an invalid sequence in one leaf yields U+FFFD rather than failing the
+    /// whole row.
+    /// </remarks>
+    private static string DecodeString(object value)
+        => value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : (string)value;
+
     private static JsonValue ReadJsonFixedString(ExtendedBinaryReader reader, ClickHouseType type)
-    {
-        var value = type.Read(reader);
-        var str = value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : (string)value;
-        return JsonValue.Create(str);
-    }
+        => JsonValue.Create(DecodeString(type.Read(reader)));
 
     private static JsonNode ReadJsonValue(ExtendedBinaryReader reader, ClickHouseType type)
     {
@@ -370,6 +381,11 @@ internal class JsonType : ParameterizedType
             null => null,
             JsonObject jo => jo,
             string s => JsonValue.Create(s),
+
+            // Under ReadStringsAsByteArrays a String path reads as a byte array; see DecodeString for
+            // why it still becomes text here. Without this arm it reaches the JsonSerializer fallback
+            // below, which renders a byte array as base64 with no error and no visible type change.
+            byte[] bytes => JsonValue.Create(DecodeString(bytes)),
             bool b => JsonValue.Create(b),
             byte by => JsonValue.Create(by),
             sbyte sb => JsonValue.Create(sb),
