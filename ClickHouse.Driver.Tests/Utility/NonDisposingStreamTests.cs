@@ -29,6 +29,15 @@ public class NonDisposingStreamTests
         }
     }
 
+    private sealed class TimeoutCapableStream : MemoryStream
+    {
+        public override bool CanTimeout => true;
+
+        public override int ReadTimeout { get; set; } = 1000;
+
+        public override int WriteTimeout { get; set; } = 2000;
+    }
+
     [Test]
     public void Constructor_WithNullInnerStream_ShouldThrowArgumentNullException()
     {
@@ -117,5 +126,84 @@ public class NonDisposingStreamTests
         wrapper.Flush();
 
         Assert.That(inner.ToArray(), Is.EqualTo(Encoding.UTF8.GetBytes("clickhouse!")));
+    }
+
+    [Test]
+    public async Task SpanAndMemoryReads_ShouldDelegateToWrappedStreamAndAdvanceIt()
+    {
+        using var inner = new MemoryStream(Payload, writable: false);
+        var wrapper = new NonDisposingStream(inner);
+
+        var buffer = new byte[5];
+        Assert.That(wrapper.Read(buffer.AsSpan(0, 4)), Is.EqualTo(4));
+        Assert.That(buffer[..4], Is.EqualTo(Payload[..4]));
+
+        Assert.That(await wrapper.ReadAsync(buffer.AsMemory(0, 5)), Is.EqualTo(5));
+        Assert.That(buffer, Is.EqualTo(Payload[4..9]));
+        Assert.That(inner.Position, Is.EqualTo(9));
+    }
+
+    [Test]
+    public async Task SpanAndMemoryWrites_ShouldDelegateToWrappedStream()
+    {
+        using var inner = new MemoryStream();
+        var wrapper = new NonDisposingStream(inner);
+
+        wrapper.Write(Payload.AsSpan(0, 5));
+        await wrapper.WriteAsync(Payload, 5, Payload.Length - 5);
+        await wrapper.WriteAsync(new ReadOnlyMemory<byte>(new[] { (byte)'!' }));
+        await wrapper.FlushAsync();
+
+        Assert.That(inner.ToArray(), Is.EqualTo(Encoding.UTF8.GetBytes("clickhouse!")));
+    }
+
+    [Test]
+    public void CopyTo_WithExplicitBufferSize_ShouldDelegateToWrappedStream()
+    {
+        using var inner = new MemoryStream(Payload, writable: false);
+        var wrapper = new NonDisposingStream(inner);
+
+        using var destination = new MemoryStream();
+        wrapper.CopyTo(destination, 4);
+
+        Assert.That(destination.ToArray(), Is.EqualTo(Payload));
+        Assert.That(inner.Position, Is.EqualTo(Payload.Length));
+    }
+
+    [Test]
+    public void SetLength_ShouldDelegateToWrappedStream()
+    {
+        using var inner = new MemoryStream();
+        var wrapper = new NonDisposingStream(inner);
+
+        wrapper.SetLength(3);
+
+        Assert.That(inner.Length, Is.EqualTo(3));
+        Assert.That(wrapper.Length, Is.EqualTo(3));
+    }
+
+    [Test]
+    public void TimeoutMembers_ShouldDelegateToWrappedStream()
+    {
+        using var timeoutCapable = new TimeoutCapableStream();
+        var wrapper = new NonDisposingStream(timeoutCapable);
+
+        Assert.That(wrapper.CanTimeout, Is.True);
+        Assert.That(wrapper.ReadTimeout, Is.EqualTo(1000));
+        Assert.That(wrapper.WriteTimeout, Is.EqualTo(2000));
+
+        wrapper.ReadTimeout = 250;
+        wrapper.WriteTimeout = 500;
+
+        Assert.That(timeoutCapable.ReadTimeout, Is.EqualTo(250));
+        Assert.That(timeoutCapable.WriteTimeout, Is.EqualTo(500));
+    }
+
+    [Test]
+    public void CanTimeout_WithNonTimeoutCapableWrappedStream_ShouldBeFalse()
+    {
+        using var inner = new MemoryStream(Payload, writable: false);
+
+        Assert.That(new NonDisposingStream(inner).CanTimeout, Is.False);
     }
 }
