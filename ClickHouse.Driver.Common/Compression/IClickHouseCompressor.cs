@@ -56,6 +56,12 @@ public interface IClickHouseCompressor
     /// <see langword="true"/>, <paramref name="source"/> is left open after the returned stream is
     /// disposed — the caller (e.g. the HTTP response that owns the transport stream) keeps ownership.
     /// <para>
+    /// The returned stream must tolerate being disposed more than once: the driver disposes decoders it
+    /// inserted, and a caller handed one (e.g. by <c>ClickHouseRawResult.ReadDecompressedStreamAsync</c>)
+    /// may dispose it too. If the implementation holds pooled buffers, guard their release so a second
+    /// disposal cannot return the same array to the pool twice — as the built-in codecs' streams do.
+    /// </para>
+    /// <para>
     /// Only meaningful for codecs that support the HTTP path with a frame/stream format; the default
     /// throws <see cref="NotSupportedException"/>. This is <b>not</b> the native block path — see
     /// <see cref="Decode"/> for that.

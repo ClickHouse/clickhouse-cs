@@ -739,6 +739,94 @@ public class ResponseDecompressionTests
         }
     }
 
+    /// <summary>
+    /// A decoder holds pooled buffers — the LZ4 one rents from <c>ArrayPool&lt;byte&gt;.Shared</c> and
+    /// returns them only on disposal, with no finalizer — so the raw result must release the decoder it
+    /// inserted, not just the HTTP response.
+    /// </summary>
+    [Test]
+    public async Task RawResultDispose_DisposesTheDecoderItInserted()
+    {
+        var codec = new TrackingCompressor();
+        using var response = CreateResponse(Encoding.UTF8.GetBytes("0\n1\n2\n"), codec.ContentEncoding);
+        var raw = new ClickHouseRawResult(response, codec);
+
+        await raw.ReadDecompressedStreamAsync();
+        Assume.That(codec.Last, Is.Not.Null, "the codec's Decompress must have been used");
+        Assume.That(codec.Last.DisposeCount, Is.Zero, "not disposed yet");
+
+        raw.Dispose();
+
+        Assert.That(codec.Last.DisposeCount, Is.EqualTo(1), "the raw result owns the decoder it created");
+
+        raw.Dispose();
+
+        Assert.That(codec.Last.DisposeCount, Is.EqualTo(1),
+            "a second Dispose() must not release the decoder's pooled buffers twice");
+    }
+
+    /// <summary>
+    /// A second call must not stack a fresh decoder over a body the first one has already partly
+    /// consumed (which would both mis-decode and leak the first decoder).
+    /// </summary>
+    [Test]
+    public async Task ReadDecompressedStreamAsync_CalledTwice_ReturnsTheSameDecoder()
+    {
+        var codec = new TrackingCompressor();
+        using var response = CreateResponse(Encoding.UTF8.GetBytes("0\n1\n2\n"), codec.ContentEncoding);
+        using var raw = new ClickHouseRawResult(response, codec);
+
+        var first = await raw.ReadDecompressedStreamAsync();
+        var second = await raw.ReadDecompressedStreamAsync();
+
+        Assert.That(second, Is.SameAs(first));
+    }
+
+    /// <summary>
+    /// When the codec is undecodable the call throws — but it must leave the body readable, because the
+    /// caller's recourse is to read the still-compressed bytes and decode them itself. The content here is
+    /// deliberately <b>unbuffered</b> (<see cref="StreamContent"/> over a forward-only stream), matching a
+    /// real raw result, which is fetched with <c>HttpCompletionOption.ResponseHeadersRead</c> — so the
+    /// recovery has to work through <c>ReadAsStreamAsync</c> rather than a re-read of a buffered body.
+    /// Disposal stays the caller's single obligation and must not fail either.
+    /// </summary>
+    [Test]
+    public async Task ReadDecompressedStreamAsync_WithUnsupportedCodec_LeavesTheBodyReadableForManualDecoding()
+    {
+        var body = Encoding.UTF8.GetBytes("not really zstd");
+        var content = new StreamContent(new ForwardOnlyStream(body));
+        content.Headers.ContentEncoding.Add("zstd");
+        var raw = new ClickHouseRawResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content }, Lz4Compressor.Default);
+
+        Assert.ThrowsAsync<NotSupportedException>(() => raw.ReadDecompressedStreamAsync());
+
+        using var buffer = new MemoryStream();
+        await (await raw.ReadAsStreamAsync()).CopyToAsync(buffer);
+
+        Assert.That(buffer.ToArray(), Is.EqualTo(body),
+            "the content stream must not have been disposed by the failed call");
+        Assert.DoesNotThrow(raw.Dispose);
+    }
+
+    /// <summary>
+    /// The examples use <c>await using</c> on the returned stream, so the decoder can be disposed by the
+    /// caller and then again by the raw result that owns it. That must be harmless — a decoder holding
+    /// pooled buffers must not return the same array to the pool twice.
+    /// </summary>
+    [Test]
+    public async Task RawResultDispose_AfterTheCallerAlreadyDisposedTheDecoder_IsHarmless()
+    {
+        var codec = new TrackingCompressor();
+        using var response = CreateResponse(Encoding.UTF8.GetBytes("0\n1\n2\n"), codec.ContentEncoding);
+        var raw = new ClickHouseRawResult(response, codec);
+
+        (await raw.ReadDecompressedStreamAsync()).Dispose();
+
+        Assert.DoesNotThrow(raw.Dispose);
+        Assert.That(codec.Last.DisposeCount, Is.EqualTo(2),
+            "both the caller's and the owner's disposal reach the decoder, which must tolerate it");
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Settings plumbing. There is precedent (the AcceptEncoding bug, CHANGELOG.md) for a new property
     // being silently dropped by exactly these copy helpers.
@@ -968,6 +1056,50 @@ public class ResponseDecompressionTests
         public Stream Compress(Stream destination, bool leaveOpen) => destination;
 
         public Stream Decompress(Stream source, bool leaveOpen) => Last = new CountingStream(source);
+    }
+
+    /// <summary>
+    /// A non-seekable, forward-only source, so <see cref="StreamContent"/> over it behaves like the
+    /// unbuffered content of a real streamed response instead of a re-readable buffer.
+    /// </summary>
+    private sealed class ForwardOnlyStream : Stream
+    {
+        private readonly byte[] bytes;
+        private int offset;
+
+        public ForwardOnlyStream(byte[] bytes) => this.bytes = bytes;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int bufferOffset, int count)
+        {
+            var take = Math.Min(count, bytes.Length - offset);
+            Array.Copy(bytes, offset, buffer, bufferOffset, take);
+            offset += take;
+            return take;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class CountingStream : Stream

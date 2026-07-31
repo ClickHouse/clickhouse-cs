@@ -20,6 +20,15 @@ public class ClickHouseRawResult : IDisposable
     private readonly HttpResponseMessage response;
     private readonly IClickHouseCompressor responseCompressor;
 
+    /// <summary>
+    /// The decoder <see cref="ReadDecompressedStreamAsync"/> inserted over the content stream, if any.
+    /// Kept so (a) repeated calls hand back the same decoder rather than stacking a second one over an
+    /// already-partly-consumed body, and (b) <see cref="Dispose"/> releases it — a decoder holds pooled
+    /// buffers (the LZ4 one rents from <c>ArrayPool&lt;byte&gt;.Shared</c> and returns them only on
+    /// disposal, with no finalizer to fall back on).
+    /// </summary>
+    private Stream decompressedStream;
+
     internal ClickHouseRawResult(HttpResponseMessage response)
         : this(response, responseCompressor: null)
     {
@@ -81,20 +90,45 @@ public class ClickHouseRawResult : IDisposable
     /// the codec and how to configure it.
     /// </exception>
     /// <remarks>
-    /// Ownership stays with this <see cref="ClickHouseRawResult"/> in both cases — dispose it, not the
-    /// returned stream:
+    /// <para>
+    /// Disposing this <see cref="ClickHouseRawResult"/> is always sufficient: it releases both the
+    /// response and any decoder this method inserted. Disposing the returned stream yourself is also
+    /// safe (and is what the <c>await using</c> examples do), with one difference between the two cases:
     /// <list type="bullet">
     /// <item>when a decoder is added it is created with <c>leaveOpen</c>, so disposing the returned
-    /// stream does not dispose the underlying HTTP content stream;</item>
+    /// stream releases the decoder but leaves the underlying HTTP content stream open;</item>
     /// <item>when the response is <b>not</b> transport-compressed the raw HTTP content stream itself is
     /// returned (reference-equal to <see cref="ReadAsStreamAsync"/>'s result), so disposing it
-    /// <i>does</i> dispose the content stream and ends the response body.</item>
+    /// <i>does</i> dispose the content stream and ends the response body — dispose only this
+    /// <see cref="ClickHouseRawResult"/> if you still need the other members afterwards.</item>
     /// </list>
+    /// </para>
+    /// <para>
+    /// Repeated (sequential) calls return the same stream, rather than stacking a second decoder over a
+    /// body the first one has already partly consumed. Like the rest of this type, the method is not
+    /// safe to call concurrently from several threads.
+    /// </para>
     /// </remarks>
     public async Task<Stream> ReadDecompressedStreamAsync()
     {
+        if (decompressedStream != null)
+            return decompressedStream;
+
         var rawStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-        return ResponseDecompression.Wrap(rawStream, response, responseCompressor, leaveOpen: true);
+
+        // Throws for a codec we cannot decode. Nothing is leaked in that case: rawStream is owned by
+        // `response` and released by Dispose(), and leaving it open is what lets a caller recover by
+        // reading the still-compressed body and decoding it themselves. That recovery has to go through
+        // ReadAsStreamAsync() — which hands back this very same stream — because a raw result is fetched
+        // with HttpCompletionOption.ResponseHeadersRead, so the content is unbuffered and
+        // ReadAsByteArrayAsync()/ReadAsStringAsync() cannot re-read a body that has been consumed.
+        var wrapped = ResponseDecompression.Wrap(rawStream, response, responseCompressor, leaveOpen: true);
+
+        // Only a decoder we inserted is ours to dispose; the content stream belongs to the response.
+        if (!ReferenceEquals(wrapped, rawStream))
+            decompressedStream = wrapped;
+
+        return wrapped;
     }
 
     /// <summary>
@@ -118,6 +152,12 @@ public class ClickHouseRawResult : IDisposable
 
     public void Dispose()
     {
+        // Decoder first (it reads from the content stream), then the response that owns that stream.
+        // Nulled so a second Dispose() does not release a decoder's pooled buffers twice.
+        var decoder = decompressedStream;
+        decompressedStream = null;
+        decoder?.Dispose();
+
         response?.Dispose();
         GC.SuppressFinalize(this);
     }
