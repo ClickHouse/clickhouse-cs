@@ -83,15 +83,17 @@ public class CommandBehaviorRowLimitTests : AbstractConnectionTestFixture
         // StringBuilder(CommandText) path did), so it is rejected server-side rather than throwing a
         // client-side ArgumentNullException when the null reaches StringContent. The no-LIMIT Default
         // path must keep this normalization; the SchemaOnly/SingleRow cases already had it.
+        // The contract is "the request reaches the server", so we assert the exception type
+        // (a server-side ClickHouseServerException, not a client-side ArgumentNullException). The
+        // concrete server error code is intentionally not asserted: it varies by ClickHouse version
+        // (observed 62 on 26.x, 354 on 25.8 for the empty-query Default path).
         using var command = connection.CreateCommand();
         command.CommandText = null;
 
-        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        Assert.ThrowsAsync<ClickHouseServerException>(async () =>
         {
             using var reader = await command.ExecuteReaderAsync(behavior);
         });
-
-        Assert.That(ex.ErrorCode, Is.EqualTo(62), "unset CommandText must reach the server (SYNTAX_ERROR 62), not throw ArgumentNullException client-side");
     }
 
     [Test]
@@ -99,11 +101,11 @@ public class CommandBehaviorRowLimitTests : AbstractConnectionTestFixture
     {
         // ExecuteScalarAsync routes through the same no-LIMIT Default path, so a null CommandText must
         // reach the server as an empty query rather than throwing a client-side ArgumentNullException.
+        // Only the exception type is asserted; the concrete server error code varies by version
+        // (observed 62 on 26.x, 354 on 25.8 for the empty-query path).
         using var command = connection.CreateCommand();
         command.CommandText = null;
 
-        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () => await command.ExecuteScalarAsync());
-
-        Assert.That(ex.ErrorCode, Is.EqualTo(62), "unset CommandText must reach the server (SYNTAX_ERROR 62), not throw ArgumentNullException client-side");
+        Assert.ThrowsAsync<ClickHouseServerException>(async () => await command.ExecuteScalarAsync());
     }
 }
