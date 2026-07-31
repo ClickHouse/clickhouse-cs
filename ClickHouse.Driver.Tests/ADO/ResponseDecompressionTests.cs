@@ -125,6 +125,30 @@ public class ResponseDecompressionTests
         });
     }
 
+    /// <summary>
+    /// The whitespace tolerance is symmetric: the padding may sit on the <i>compressor's</i> declared token
+    /// rather than on the response header. A custom codec declaring <c>"  lz4  "</c> must still be selected
+    /// for the server's clean <c>lz4</c> — otherwise the driver silently skips the configured decoder and
+    /// falls through to "unsupported codec".
+    /// </summary>
+    [TestCase("lz4", TestName = "{m}(clean response token)")]
+    [TestCase("  lz4 ", TestName = "{m}(both sides padded)")]
+    public void Wrap_WhenConfiguredCompressorTokenHasSurroundingWhitespace_StillMatches(string contentEncoding)
+    {
+        var plaintext = Encoding.UTF8.GetBytes("payload the BCL cannot decode");
+        using var source = new MemoryStream(Encode("lz4", plaintext));
+
+        using var result = ResponseDecompression.Wrap(source, contentEncoding, new PaddedTokenLz4Compressor(), leaveOpen: true);
+        using var decoded = new MemoryStream();
+        result.CopyTo(decoded);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.Not.SameAs(source));
+            Assert.That(decoded.ToArray(), Is.EqualTo(plaintext));
+        });
+    }
+
     [TestCase("gzip")]
     [TestCase("deflate")]
     [TestCase("br")]
@@ -227,6 +251,31 @@ public class ResponseDecompressionTests
         {
             Assert.That(ex.Message, Does.Contain(contentEncoding));
             Assert.That(ex.Message, Does.Contain("ResponseCompressor"));
+        });
+    }
+
+    /// <summary>
+    /// The remediation advice must not imply that dropping down to <c>lz4</c> needs no configuration: lz4
+    /// is only decodable once a matching <c>ResponseCompressor</c> is set, so only gzip/deflate/br may be
+    /// offered as the zero-configuration fallback. Pinned because a message that mis-states which codecs
+    /// work out of the box actively misleads whoever is debugging the failure.
+    /// </summary>
+    [Test]
+    public void DescribeUnsupported_WithNoConfiguredCompressor_OffersOnlyZeroConfigurationCodecsAsTheFallback()
+    {
+        var message = ResponseDecompression.DescribeUnsupported("zstd", responseCompressor: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(message, Does.Contain("no response compressor is configured"));
+            Assert.That(
+                message,
+                Does.Contain("needs no configuration (gzip, deflate or br)"),
+                "lz4 must not be listed among the codecs that work without a ResponseCompressor");
+            Assert.That(
+                message,
+                Does.Contain("lz4 is only decodable once such a compressor is configured"),
+                "the message must say what lz4 requires");
         });
     }
 
@@ -530,6 +579,40 @@ public class ResponseDecompressionTests
             Assert.That(request.Headers.AcceptEncoding.Select(e => e.Value), Is.EqualTo(new[] { "gzip", "deflate", "lz4" }));
             Assert.That(request.RequestUri.Query, Does.Contain("enable_http_compression=true"));
         });
+    }
+
+    /// <summary>
+    /// A padded compressor token is normalized once and used for both the duplicate check and the header
+    /// value, so it is advertised exactly once and in clean form — never as a second, whitespace-bearing
+    /// copy of a codec already in the list.
+    /// </summary>
+    [Test]
+    public async Task AddDefaultHttpHeaders_WithPaddedResponseCompressorToken_AdvertisesItOnceTrimmed()
+    {
+        var (client, handler) = CreateTrackingClient(new PaddedTokenLz4Compressor(), useCompression: true);
+        using (client)
+        {
+            await client.ExecuteNonQueryAsync("SELECT 1");
+        }
+
+        Assert.That(
+            handler.Requests.Single().Headers.AcceptEncoding.Select(e => e.Value),
+            Is.EqualTo(new[] { "gzip", "deflate", "lz4" }));
+    }
+
+    [Test]
+    public async Task AddDefaultHttpHeaders_WithPaddedResponseCompressorTokenAlreadyAdvertised_DoesNotDuplicateIt()
+    {
+        var (client, handler) = CreateTrackingClient(new PaddedTokenGZipCompressor(), useCompression: true);
+        using (client)
+        {
+            await client.ExecuteNonQueryAsync("SELECT 1");
+        }
+
+        Assert.That(
+            handler.Requests.Single().Headers.AcceptEncoding.Select(e => e.Value),
+            Is.EqualTo(new[] { "gzip", "deflate" }),
+            "gzip is already advertised by default, so the padded token must not add a second entry");
     }
 
     [Test]
@@ -844,6 +927,32 @@ public class ResponseDecompressionTests
         public string ContentEncoding => "  ";
 
         public Stream Compress(Stream destination, bool leaveOpen) => destination;
+    }
+
+    /// <summary>
+    /// A real lz4 codec that declares its token with sloppy surrounding whitespace — the shape a
+    /// third-party <see cref="IClickHouseCompressor"/> can easily have.
+    /// </summary>
+    private sealed class PaddedTokenLz4Compressor : IClickHouseCompressor
+    {
+        public string ContentEncoding => "  lz4  ";
+
+        public Stream Compress(Stream destination, bool leaveOpen) => Lz4Compressor.Default.Compress(destination, leaveOpen);
+
+        public Stream Decompress(Stream source, bool leaveOpen) => Lz4Compressor.Default.Decompress(source, leaveOpen);
+    }
+
+    /// <summary>
+    /// Same idea, but for a codec already present in the default <c>Accept-Encoding</c> list, so the
+    /// duplicate check has to normalize before comparing.
+    /// </summary>
+    private sealed class PaddedTokenGZipCompressor : IClickHouseCompressor
+    {
+        public string ContentEncoding => " gzip ";
+
+        public Stream Compress(Stream destination, bool leaveOpen) => GZipCompressor.Default.Compress(destination, leaveOpen);
+
+        public Stream Decompress(Stream source, bool leaveOpen) => GZipCompressor.Default.Decompress(source, leaveOpen);
     }
 
     /// <summary>

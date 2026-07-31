@@ -98,8 +98,11 @@ internal static class ResponseDecompression
             return true;
         }
 
-        // The configured response compressor wins whenever the server actually used its codec.
-        if (responseCompressor != null && IsToken(token, responseCompressor.ContentEncoding))
+        // The configured response compressor wins whenever the server actually used its codec. Both sides
+        // of the comparison are trimmed: the response token above, and the compressor's own token here —
+        // a custom IClickHouseCompressor declaring "  lz4 " must still match the server's clean "lz4",
+        // exactly as the Accept-Encoding contribution trims it before advertising it.
+        if (responseCompressor != null && IsToken(token, responseCompressor.ContentEncoding?.Trim()))
         {
             decompressed = responseCompressor.Decompress(source, leaveOpen);
             return true;
@@ -137,13 +140,14 @@ internal static class ResponseDecompression
     {
         var configured = responseCompressor is null
             ? "no response compressor is configured"
-            : $"the configured response compressor decodes '{responseCompressor.ContentEncoding}'";
+            : $"the configured response compressor decodes '{responseCompressor.ContentEncoding?.Trim()}'";
 
         return
             $"ClickHouse returned a response compressed with Content-Encoding: '{contentEncoding?.Trim()}', which this client cannot decode ({configured}). " +
             "Set ClickHouseClientSettings.ResponseCompressor (or QueryOptions.ResponseCompressor, or 'ResponseCompression=lz4|gzip|br' in the connection string) " +
-            "to a compressor whose ContentEncoding matches, drop the codec from Accept-Encoding so the server falls back to one the client supports " +
-            "(gzip, deflate, br or lz4), or use ExecuteRawResultAsync and decode the body yourself.";
+            "to a compressor whose ContentEncoding matches — lz4 is only decodable once such a compressor is configured — " +
+            "or drop the codec from Accept-Encoding so the server falls back to one that needs no configuration (gzip, deflate or br), " +
+            "or use ExecuteRawResultAsync and decode the body yourself.";
     }
 
     private static bool IsToken(string value, string expected)

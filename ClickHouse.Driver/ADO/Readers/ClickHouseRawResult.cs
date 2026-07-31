@@ -81,9 +81,15 @@ public class ClickHouseRawResult : IDisposable
     /// the codec and how to configure it.
     /// </exception>
     /// <remarks>
-    /// The returned stream is wrapped with <c>leaveOpen</c>, so disposing it does not dispose the
-    /// underlying HTTP content stream — this <see cref="ClickHouseRawResult"/> still owns the response
-    /// and must be disposed.
+    /// Ownership stays with this <see cref="ClickHouseRawResult"/> in both cases — dispose it, not the
+    /// returned stream:
+    /// <list type="bullet">
+    /// <item>when a decoder is added it is created with <c>leaveOpen</c>, so disposing the returned
+    /// stream does not dispose the underlying HTTP content stream;</item>
+    /// <item>when the response is <b>not</b> transport-compressed the raw HTTP content stream itself is
+    /// returned (reference-equal to <see cref="ReadAsStreamAsync"/>'s result), so disposing it
+    /// <i>does</i> dispose the content stream and ends the response body.</item>
+    /// </list>
     /// </remarks>
     public async Task<Stream> ReadDecompressedStreamAsync()
     {

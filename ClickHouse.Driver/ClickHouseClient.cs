@@ -1032,11 +1032,14 @@ public sealed class ClickHouseClient : IClickHouseClient
         var responseCompressor = GetResponseCompressor(queryOverride);
         if (responseCompressor != null)
         {
-            var token = responseCompressor.ContentEncoding;
-            if (!string.IsNullOrWhiteSpace(token) &&
+            // Trim once, then use the trimmed token for BOTH the duplicate check and the header value —
+            // comparing the raw token while adding the trimmed one would let "  gzip " slip past the
+            // dedup and be advertised twice.
+            var token = responseCompressor.ContentEncoding?.Trim();
+            if (!string.IsNullOrEmpty(token) &&
                 !headers.AcceptEncoding.Any(e => string.Equals(e.Value, token, StringComparison.OrdinalIgnoreCase)))
             {
-                headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(token.Trim()));
+                headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(token));
             }
         }
 
