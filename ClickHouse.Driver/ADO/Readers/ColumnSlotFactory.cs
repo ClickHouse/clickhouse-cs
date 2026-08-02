@@ -58,6 +58,12 @@ internal static class ColumnSlotFactory
 
     private static ColumnSlot TryCreateTyped(ClickHouseType type, bool nullable)
     {
+        // Order matters, and not only for speed: FrameworkType is not safe to evaluate on every column type.
+        // AggregateFunctionType throws AggregateFunctionException from it (deliberately — you are meant to
+        // learn you need xMerge() when you read the value, not when you open the reader), and the composite
+        // types build a fresh Type object on each call. Slots are created for every column in the ctor, so
+        // hoisting this read above the no-typed-reader bail-out would turn merely *selecting* an
+        // AggregateFunction column into a failure to construct the reader at all.
         var targets = TypedReadTargets.GetOrAdd(type.GetType(), FindTypedReadTargets);
         if (targets.Length == 0)
             return null;

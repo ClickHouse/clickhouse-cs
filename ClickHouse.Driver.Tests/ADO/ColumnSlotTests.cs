@@ -241,6 +241,19 @@ public class ColumnSlotTests
         Assert.That(ColumnSlotFactory.Create(type), Is.TypeOf<ValueSlot<long>>());
     }
 
+    // AggregateFunctionType throws from FrameworkType (and from Read and ToString) so that you learn you need
+    // xMerge() when you read the value. Slots are built for every column when the reader is constructed, so
+    // the factory must reach its no-typed-reader bail-out without ever evaluating FrameworkType — otherwise
+    // merely selecting such a column would fail to open the reader at all. Guards the ordering in
+    // TryCreateTyped, which is otherwise easy to "tidy up" into a regression.
+    [Test]
+    public void Create_AggregateFunctionColumn_FallsBackToBoxedWithoutEvaluatingFrameworkType()
+    {
+        var type = Parse("AggregateFunction(quantile(0.5), UInt64)");
+        Assert.That(() => ColumnSlotFactory.Create(type), Throws.Nothing);
+        Assert.That(ColumnSlotFactory.Create(type), Is.TypeOf<BoxedSlot>());
+    }
+
     // The factory's pre-filter finds the ITypedReader<> interfaces a class implements; the binding rule is
     // narrower than that — the reader has to be for the column's own FrameworkType, or the slot's GetBoxed()
     // would hand back a different CLR type than the boxed Read did. No shipped type is shaped this way, so
