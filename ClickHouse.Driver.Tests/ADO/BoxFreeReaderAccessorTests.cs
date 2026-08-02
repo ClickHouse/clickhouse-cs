@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Readers;
+using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Tests.ADO;
@@ -114,6 +115,20 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
     {
         using var reader = await ReadOneAsync("array(toInt32(1), toInt32(2), toInt32(3)) AS c");
         Assert.That(reader.GetFieldValue<int[]>(0), Is.EqualTo(new[] { 1, 2, 3 }));
+    }
+
+    // End-to-end counterpart to ColumnSlotTests' factory guard: an AggregateFunction column must still open a
+    // reader and fail only where it always did — on the value, with the message that tells you to use
+    // xMerge(). Building a slot per column at construction time is what puts that at risk.
+    [Test]
+    public async Task Read_AggregateFunctionColumn_OpensTheReaderAndFailsOnlyOnTheValue()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
+            "SELECT quantileState(0.5)(number) AS c FROM numbers(10)");
+
+        Assert.That(reader.FieldCount, Is.EqualTo(1));
+        var ex = Assert.Throws<AggregateFunctionType.AggregateFunctionException>(() => reader.Read());
+        Assert.That(ex.Message, Does.Contain("Merge()"));
     }
 
     // ---- IsDBNull now answers from the slot's presence flag rather than inspecting a boxed value ----
