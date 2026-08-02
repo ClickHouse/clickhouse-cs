@@ -1,7 +1,8 @@
 using System;
-using System.Collections.Concurrent;
-using System.Linq;
-using System.Reflection;
+using System.Collections.Generic;
+using System.Net;
+using System.Numerics;
+using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types;
 
 namespace ClickHouse.Driver.ADO.Readers;
@@ -17,28 +18,56 @@ namespace ClickHouse.Driver.ADO.Readers;
 /// path always produce the same value from the same bytes. Anything else gets a <see cref="BoxedSlot"/>.</para>
 ///
 /// <para>Slots are built from the resolved type <i>instance</i>, never from a cached shape, so settings that
-/// change <c>FrameworkType</c> — <c>ReadStringsAsByteArrays</c> (string vs byte[]), <c>UseBigDecimal</c>
+/// change <c>FrameworkType</c> — <c>ReadStringsAsByteArrays</c> (string vs byte[]), <c>UseCustomDecimals</c>
 /// (decimal vs ClickHouseDecimal) — are handled without any of the cache-key hazards a per-query-shape cache
 /// would have.</para>
 /// </summary>
 internal static class ColumnSlotFactory
 {
-    private static readonly MethodInfo CreateValueSlotMethod =
-        typeof(ColumnSlotFactory).GetMethod(nameof(CreateValueSlot), BindingFlags.NonPublic | BindingFlags.Static);
-
-    private static readonly MethodInfo CreateNullableSlotMethod =
-        typeof(ColumnSlotFactory).GetMethod(nameof(CreateNullableSlot), BindingFlags.NonPublic | BindingFlags.Static);
-
-    // Concrete ClickHouseType class -> the CLR types it can read box-free. Keyed on the class, not the
-    // instance, because the implemented interface list is fixed per class. Bounded by the number of
-    // ClickHouseType subclasses (~60), and it is what keeps SlotConstructors below bounded too: without it,
-    // a composite column's FrameworkType (long[], Dictionary<K,V>, Tuple<...>, ...) would be an unbounded
-    // family of keys, none of which could ever produce a typed slot.
-    private static readonly ConcurrentDictionary<Type, Type[]> TypedReadTargets = new();
-
-    // CLR type -> closed-generic slot constructors. Bounded by the union of every ITypedReader<T>'s T
-    // (~25 types), because a key only ever gets here after passing the TypedReadTargets check.
-    private static readonly ConcurrentDictionary<Type, SlotConstructors> ConstructorCache = new();
+    /// <summary>
+    /// CLR type → the slot constructor for it. Every entry is a static generic instantiation the compiler
+    /// emits, rather than a <c>MakeGenericMethod</c> built at runtime, so NativeAOT and trimming can see
+    /// every <c>ValueSlot&lt;T&gt;</c>/<c>NullableSlot&lt;T&gt;</c> the reader will ever need. Runtime generic
+    /// construction over value types is exactly what NativeAOT cannot satisfy, and this sits on the read path
+    /// of every scalar column, so it is worth spelling out.
+    /// </summary>
+    /// <remarks>
+    /// A few entries are unreachable today — <see cref="DateTimeOffset"/>, <see cref="DateOnly"/> and the
+    /// native <c>Int128</c>/<c>UInt128</c> are alternative read representations offered <i>alongside</i> a
+    /// type's <c>FrameworkType</c>, never as it. They are listed anyway so the table is exactly "every
+    /// <c>ITypedReader&lt;T&gt;</c> target", which
+    /// <c>ColumnSlotTests.Binders_CoverEveryTypedReadTarget</c> can then check mechanically. Over-inclusion
+    /// is inert; a missing entry would silently demote a column to the boxed path.
+    /// </remarks>
+    private static readonly Dictionary<Type, Func<ClickHouseType, bool, ColumnSlot>> Binders = new()
+    {
+        [typeof(sbyte)] = Bind<sbyte>,
+        [typeof(short)] = Bind<short>,
+        [typeof(int)] = Bind<int>,
+        [typeof(long)] = Bind<long>,
+        [typeof(byte)] = Bind<byte>,
+        [typeof(ushort)] = Bind<ushort>,
+        [typeof(uint)] = Bind<uint>,
+        [typeof(ulong)] = Bind<ulong>,
+        [typeof(BigInteger)] = Bind<BigInteger>,
+        [typeof(float)] = Bind<float>,
+        [typeof(double)] = Bind<double>,
+        [typeof(decimal)] = Bind<decimal>,
+        [typeof(ClickHouseDecimal)] = Bind<ClickHouseDecimal>,
+        [typeof(bool)] = Bind<bool>,
+        [typeof(string)] = Bind<string>,
+        [typeof(byte[])] = Bind<byte[]>,
+        [typeof(Guid)] = Bind<Guid>,
+        [typeof(IPAddress)] = Bind<IPAddress>,
+        [typeof(DateTime)] = Bind<DateTime>,
+        [typeof(DateTimeOffset)] = Bind<DateTimeOffset>,
+        [typeof(DateOnly)] = Bind<DateOnly>,
+        [typeof(TimeSpan)] = Bind<TimeSpan>,
+#if NET8_0_OR_GREATER
+        [typeof(Int128)] = Bind<Int128>,
+        [typeof(UInt128)] = Bind<UInt128>,
+#endif
+    };
 
     /// <summary>
     /// Returns the slot for <paramref name="type"/>. Never null: falls back to a <see cref="BoxedSlot"/>
@@ -62,46 +91,19 @@ internal static class ColumnSlotFactory
         // AggregateFunctionType throws AggregateFunctionException from it (deliberately — you are meant to
         // learn you need xMerge() when you read the value, not when you open the reader), and the composite
         // types build a fresh Type object on each call. Slots are created for every column in the ctor, so
-        // hoisting this read above the no-typed-reader bail-out would turn merely *selecting* an
-        // AggregateFunction column into a failure to construct the reader at all.
-        var targets = TypedReadTargets.GetOrAdd(type.GetType(), FindTypedReadTargets);
-        if (targets.Length == 0)
+        // reading FrameworkType before this bail-out would turn merely *selecting* an AggregateFunction
+        // column into a failure to construct the reader at all.
+        if (type is not ITypedReader)
             return null;
 
-        var clrType = type.FrameworkType;
-        if (Array.IndexOf(targets, clrType) < 0)
-            return null;
-
-        var constructors = ConstructorCache.GetOrAdd(clrType, BuildSlotConstructors);
-        return nullable ? constructors.Nullable(type) : constructors.Value(type);
+        return Binders.TryGetValue(type.FrameworkType, out var bind) ? bind(type, nullable) : null;
     }
 
-    private static Type[] FindTypedReadTargets(Type clickHouseTypeClass) => clickHouseTypeClass
-        .GetInterfaces()
-        .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ITypedReader<>))
-        .Select(i => i.GetGenericArguments()[0])
-        .ToArray();
-
-    private static SlotConstructors BuildSlotConstructors(Type clrType) => new(
-        (Func<ClickHouseType, ColumnSlot>)CreateValueSlotMethod
-            .MakeGenericMethod(clrType)
-            .CreateDelegate(typeof(Func<ClickHouseType, ColumnSlot>)),
-        (Func<ClickHouseType, ColumnSlot>)CreateNullableSlotMethod
-            .MakeGenericMethod(clrType)
-            .CreateDelegate(typeof(Func<ClickHouseType, ColumnSlot>)));
-
-    // The `is ITypedReader<T>` here is the real check; TypedReadTargets is only a cheap pre-filter that keeps
-    // the constructor cache bounded, so these still return null rather than assuming the cast succeeds.
-    private static ColumnSlot CreateValueSlot<T>(ClickHouseType type)
-        => type is ITypedReader<T> typedReader ? new ValueSlot<T>(typedReader) : null;
-
-    private static ColumnSlot CreateNullableSlot<T>(ClickHouseType type)
-        => type is ITypedReader<T> typedReader ? new NullableSlot<T>(typedReader) : null;
-
-    private readonly struct SlotConstructors(Func<ClickHouseType, ColumnSlot> value, Func<ClickHouseType, ColumnSlot> nullable)
-    {
-        public Func<ClickHouseType, ColumnSlot> Value { get; } = value;
-
-        public Func<ClickHouseType, ColumnSlot> Nullable { get; } = nullable;
-    }
+    // Binds only when the type's typed reader is for its *own* FrameworkType — the CLR type its boxed Read
+    // returns. A type offering extra representations (a DateTime column also readable as DateTimeOffset, a
+    // Decimal column as either decimal or ClickHouseDecimal) must not have a slot bound to one the boxed path
+    // would not have produced, or GetValue would start handing back a different CLR type.
+    private static ColumnSlot Bind<T>(ClickHouseType type, bool nullable)
+        => type is not ITypedReader<T> typedReader ? null
+            : nullable ? new NullableSlot<T>(typedReader) : new ValueSlot<T>(typedReader);
 }
