@@ -160,30 +160,65 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     private protected ClickHouseType[] RawTypes { get; set; }
 
-    public override bool GetBoolean(int ordinal) => Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
+    /// <summary>
+    /// Shared body for the strict typed accessors — every one of which was <c>(T)GetValue(ordinal)</c> before
+    /// column slots, and keeps exactly that meaning here. This is the path compiled ORM mappers drive
+    /// (linq2db registers <c>GetInt64</c>/<c>GetDouble</c>/<c>GetDateTime</c>/… and inlines them per column
+    /// per row), so it is where the boxing elimination is worth the most.
+    /// </summary>
+    /// <remarks>
+    /// With an <see cref="IReadValueConverter"/> configured the accessor keeps routing through
+    /// <see cref="GetValue"/>, so it still calls <c>ConvertValue(object, …)</c> exactly as it did before.
+    /// De-boxing here would mean calling <c>ConvertValue&lt;T&gt;</c> instead, which is observable to a
+    /// converter whose two overloads disagree — the generic one matching on <c>typeof(T)</c>, the object one
+    /// on the value's runtime type. Not worth a silent semantic change for the rare converter case;
+    /// everyone else gets the fast path. <see cref="GetFieldValue{T}"/> is unaffected either way, because it
+    /// already called <c>ConvertValue&lt;T&gt;</c>.
+    /// </remarks>
+    private T GetTypedValue<T>(int ordinal)
+        => readValueConverter == null ? GetSlotValue<T>(ordinal) : (T)GetValue(ordinal);
 
-    public override byte GetByte(int ordinal) => (byte)GetValue(ordinal);
+    // Unlike its neighbours this one coerces rather than casts, so only an exact Bool column can take the
+    // fast path; anything else keeps Convert.ToBoolean's widening (and its exception messages).
+    public override bool GetBoolean(int ordinal)
+        => readValueConverter == null && slots[ordinal] is ValueSlot<bool> boolSlot
+            ? boolSlot.Value
+            : Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
+
+    public override byte GetByte(int ordinal) => GetTypedValue<byte>(ordinal);
 
     public override long GetBytes(int ordinal, long dataOffset, byte[] buffer, int bufferOffset, int length) => throw new NotImplementedException();
 
+    // No ClickHouse type reads as char, so there is no slot to hit — left on the boxed cast.
     public override char GetChar(int ordinal) => (char)GetValue(ordinal);
 
     public override long GetChars(int ordinal, long dataOffset, char[] buffer, int bufferOffset, int length) => throw new NotImplementedException();
 
     public override string GetDataTypeName(int ordinal) => GetClickHouseType(ordinal).ToString();
 
-    public override DateTime GetDateTime(int ordinal) => (DateTime)GetValue(ordinal);
+    public override DateTime GetDateTime(int ordinal) => GetTypedValue<DateTime>(ordinal);
 
+    // Box-free by construction once GetDateTime is: CoerceToDateTimeOffset has a DateTime overload.
     public virtual DateTimeOffset GetDateTimeOffset(int ordinal) => GetEffectiveClickHouseType(ordinal) is AbstractDateTimeType adt ?
         adt.CoerceToDateTimeOffset(GetDateTime(ordinal)) : throw new InvalidCastException();
 
     public override decimal GetDecimal(int ordinal)
     {
+        if (readValueConverter == null)
+        {
+            // Which of these two a Decimal column resolves to is the UseBigDecimal setting's doing; both
+            // reach the same decimal without a box.
+            if (slots[ordinal] is ValueSlot<decimal> decimalSlot)
+                return decimalSlot.Value;
+            if (slots[ordinal] is ValueSlot<ClickHouseDecimal> bigDecimalSlot)
+                return bigDecimalSlot.Value.ToDecimal(CultureInfo.InvariantCulture);
+        }
+
         var value = GetValue(ordinal);
         return value is ClickHouseDecimal clickHouseDecimal ? clickHouseDecimal.ToDecimal(CultureInfo.InvariantCulture) : (decimal)value;
     }
 
-    public override double GetDouble(int ordinal) => (double)GetValue(ordinal);
+    public override double GetDouble(int ordinal) => GetTypedValue<double>(ordinal);
 
     public override Type GetFieldType(int ordinal)
     {
@@ -191,15 +226,15 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         return rawType is NullableType nt ? nt.UnderlyingType.FrameworkType : rawType.FrameworkType;
     }
 
-    public override float GetFloat(int ordinal) => (float)GetValue(ordinal);
+    public override float GetFloat(int ordinal) => GetTypedValue<float>(ordinal);
 
-    public override Guid GetGuid(int ordinal) => (Guid)GetValue(ordinal);
+    public override Guid GetGuid(int ordinal) => GetTypedValue<Guid>(ordinal);
 
-    public override short GetInt16(int ordinal) => (short)GetValue(ordinal);
+    public override short GetInt16(int ordinal) => GetTypedValue<short>(ordinal);
 
-    public override int GetInt32(int ordinal) => (int)GetValue(ordinal);
+    public override int GetInt32(int ordinal) => GetTypedValue<int>(ordinal);
 
-    public override long GetInt64(int ordinal) => (long)GetValue(ordinal);
+    public override long GetInt64(int ordinal) => GetTypedValue<long>(ordinal);
 
     public override string GetName(int ordinal) => FieldNames[ordinal];
 
@@ -214,7 +249,13 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         return index;
     }
 
-    public override string GetString(int ordinal) => GetValue(ordinal)?.ToString();
+    // Deliberately narrower than the other accessors: only a non-nullable String column short-circuits. Every
+    // other shape keeps ToString()'s coercion, including the quirk that a NULL cell yields "" rather than
+    // null, because DBNull.Value.ToString() is the empty string.
+    public override string GetString(int ordinal)
+        => readValueConverter == null && slots[ordinal] is ValueSlot<string> stringSlot
+            ? stringSlot.Value
+            : GetValue(ordinal)?.ToString();
 
     /// <summary>
     /// The one boxing entry point on the read path. Boxes lazily, per call, so a query that projects ten
@@ -360,25 +401,25 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken) => Task.FromResult(false);
 
     // Custom extension
-    public ushort GetUInt16(int ordinal) => (ushort)GetValue(ordinal);
+    public ushort GetUInt16(int ordinal) => GetTypedValue<ushort>(ordinal);
 
     // Custom extension
-    public uint GetUInt32(int ordinal) => (uint)GetValue(ordinal);
+    public uint GetUInt32(int ordinal) => GetTypedValue<uint>(ordinal);
 
     // Custom extension
-    public ulong GetUInt64(int ordinal) => (ulong)GetValue(ordinal);
+    public ulong GetUInt64(int ordinal) => GetTypedValue<ulong>(ordinal);
 
     // Custom extension
-    public IPAddress GetIPAddress(int ordinal) => (IPAddress)GetValue(ordinal);
+    public IPAddress GetIPAddress(int ordinal) => GetTypedValue<IPAddress>(ordinal);
 
-    // Custom extension
+    // Custom extension. Tuple columns have no typed slot, so this stays on the boxed cast.
     public ITuple GetTuple(int ordinal) => (ITuple)GetValue(ordinal);
 
     // Custom extension
-    public sbyte GetSByte(int ordinal) => (sbyte)GetValue(ordinal);
+    public sbyte GetSByte(int ordinal) => GetTypedValue<sbyte>(ordinal);
 
     // Custom extension
-    public BigInteger GetBigInteger(int ordinal) => (BigInteger)GetValue(ordinal);
+    public BigInteger GetBigInteger(int ordinal) => GetTypedValue<BigInteger>(ordinal);
 
     /// <summary>
     /// Materializes the current row into a new instance of <typeparamref name="T"/>.
