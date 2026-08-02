@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -58,6 +58,10 @@ internal class EnumType : ParameterizedType
 
     public string Lookup(int value) => reverseValues.TryGetValue(value, out var key) ? key : throw new KeyNotFoundException($"Enum value {value} not found");
 
+    // Renders the ClickHouse declaration form, e.g. Enum8('a' = 1, 'b' = 2), so the result round-trips
+    // through TypeConverter.ParseClickHouseType — SchemaDescriber writes this into GetSchemaTable()'s
+    // ProviderType, and PocoTypeRegistry keys its row-reader cache on it. Labels are quoted and escaped
+    // because an unquoted label containing a comma or a quote would otherwise re-parse as the wrong members.
     public override string ToString() =>
         $"{Name}({string.Join(", ", Values.Select(kvp => $"{kvp.Key.Escape().QuoteSingle()} = {kvp.Value.ToString(CultureInfo.InvariantCulture)}"))})";
 
