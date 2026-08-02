@@ -14,7 +14,17 @@ namespace ClickHouse.Driver.Types;
 /// representation, so every <see cref="ReadValue"/> is byte-identical to the boxed path by construction.
 /// </summary>
 /// <typeparam name="T">The exact CLR type this type can read without boxing (e.g. <see cref="System.Guid"/>).</typeparam>
-internal interface ITypedReader<T>
+internal interface ITypedReader<T> : ITypedReader
 {
     T ReadValue(ExtendedBinaryReader reader);
+}
+
+/// <summary>
+/// Non-generic base of <see cref="ITypedReader{T}"/>, so "can this type read anything box-free?" is a plain
+/// type test rather than an interface-list walk. <see cref="ClickHouse.Driver.ADO.Readers.ColumnSlotFactory"/>
+/// asks that question for every column of every reader, and has to ask it before touching
+/// <see cref="ClickHouseType.FrameworkType"/>.
+/// </summary>
+internal interface ITypedReader
+{
 }
