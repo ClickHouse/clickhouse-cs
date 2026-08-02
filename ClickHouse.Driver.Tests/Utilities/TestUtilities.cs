@@ -375,7 +375,12 @@ public static class TestUtilities
 
         var data = reader.GetFieldValues();
 
-        ClassicAssert.IsFalse(reader.Read(), "Unexpected extra row: " + string.Join(",", reader.GetFieldValues()));
+        // Read the extra row's values only once there is one. The argument to IsFalse is evaluated eagerly,
+        // so inlining GetFieldValues() there read the row *after* Read() had returned false — which the
+        // reader now rejects — and allocated a joined string of every column on every successful call just
+        // to discard it.
+        if (reader.Read())
+            Assert.Fail("Unexpected extra row: " + string.Join(",", reader.GetFieldValues()));
 
         return data;
     }
