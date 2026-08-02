@@ -181,7 +181,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     // Unlike its neighbours this one coerces rather than casts, so only an exact Bool column can take the
     // fast path; anything else keeps Convert.ToBoolean's widening (and its exception messages).
     public override bool GetBoolean(int ordinal)
-        => readValueConverter == null && slots[ordinal] is ValueSlot<bool> boolSlot
+        => readValueConverter == null && Slot(ordinal) is ValueSlot<bool> boolSlot
             ? boolSlot.Value
             : Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
 
@@ -208,7 +208,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         {
             // Which of these two a Decimal column resolves to is the UseBigDecimal setting's doing; both
             // reach the same decimal without a box.
-            if (slots[ordinal] is ValueSlot<decimal> decimalSlot)
+            if (Slot(ordinal) is ValueSlot<decimal> decimalSlot)
                 return decimalSlot.Value;
             if (slots[ordinal] is ValueSlot<ClickHouseDecimal> bigDecimalSlot)
                 return bigDecimalSlot.Value.ToDecimal(CultureInfo.InvariantCulture);
@@ -253,7 +253,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     // other shape keeps ToString()'s coercion, including the quirk that a NULL cell yields "" rather than
     // null, because DBNull.Value.ToString() is the empty string.
     public override string GetString(int ordinal)
-        => readValueConverter == null && slots[ordinal] is ValueSlot<string> stringSlot
+        => readValueConverter == null && Slot(ordinal) is ValueSlot<string> stringSlot
             ? stringSlot.Value
             : GetValue(ordinal)?.ToString();
 
@@ -268,12 +268,18 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// (the ADO.NET-relevant comparison) but no longer by <see cref="object.ReferenceEquals"/>.
     /// </remarks>
     public override object GetValue(int ordinal)
-        => readValueConverter == null
-            ? slots[ordinal].GetBoxed()
-            : readValueConverter.ConvertValue(slots[ordinal].GetBoxed(), FieldNames[ordinal], columnTypeNames[ordinal]);
+    {
+        var value = Slot(ordinal).GetBoxed();
+        return readValueConverter == null
+            ? value
+            : readValueConverter.ConvertValue(value, FieldNames[ordinal], columnTypeNames[ordinal]);
+    }
 
     public override int GetValues(object[] values)
     {
+        if (!hasCurrentRow)
+            ThrowNoCurrentRow();
+
         var count = Math.Min(slots.Length, values.Length);
 
         if (readValueConverter != null)
@@ -294,7 +300,36 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         // Asks the slot directly rather than going through GetValue, for two reasons: a configured
         // IReadValueConverter must not run during a null check (it could throw, do expensive work, or
         // change the nullness of the result), and a null check has no business materializing a box.
-        => slots[ordinal].IsNull;
+        => Slot(ordinal).IsNull;
+
+    /// <summary>
+    /// The single gate every value accessor passes through. Column metadata (<see cref="FieldCount"/>,
+    /// <see cref="GetName"/>, <see cref="GetFieldType"/>, <see cref="GetSchemaTable"/>, …) is available
+    /// without a current row and is deliberately not gated.
+    /// </summary>
+    /// <remarks>
+    /// Slots hold typed storage, so before the first <see cref="Read"/> a non-nullable value column would
+    /// otherwise read back as a perfectly plausible <c>0</c> / <c>false</c> / <c>Guid.Empty</c> rather than
+    /// as nothing. Answering a question the reader cannot yet answer, with a value indistinguishable from
+    /// real data, is the one failure mode worth spending a branch to prevent — so this reports the mistake
+    /// instead, matching what <c>SqlClient</c> and the rest of ADO.NET do.
+    /// </remarks>
+    private ColumnSlot Slot(int ordinal)
+    {
+        if (!hasCurrentRow)
+            ThrowNoCurrentRow();
+
+        return slots[ordinal];
+    }
+
+    // Separate and non-inlined so the check above stays small enough for the JIT to inline into the hot
+    // accessors.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowNoCurrentRow()
+        => throw new InvalidOperationException(
+            "The reader has no current row. Call Read() and check that it returned true before reading " +
+            "column values. Column metadata (FieldCount, GetName, GetFieldType, GetSchemaTable) is " +
+            "available without a current row.");
 
     public override bool NextResult() => false;
 
@@ -367,7 +402,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// </remarks>
     private T GetSlotValue<T>(int ordinal)
     {
-        var slot = slots[ordinal];
+        var slot = Slot(ordinal);
 
         if (slot is ValueSlot<T> valueSlot)
             return valueSlot.Value;

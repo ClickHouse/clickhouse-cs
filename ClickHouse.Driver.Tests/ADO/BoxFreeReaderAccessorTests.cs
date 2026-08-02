@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Readers;
@@ -129,6 +130,71 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
         Assert.That(reader.FieldCount, Is.EqualTo(1));
         var ex = Assert.Throws<AggregateFunctionType.AggregateFunctionException>(() => reader.Read());
         Assert.That(ex.Message, Does.Contain("Merge()"));
+    }
+
+    // ---- No current row ----
+    //
+    // Slots hold typed storage, so without this guard a non-nullable value column would read back as a
+    // perfectly plausible 0 / false / Guid.Empty before the first Read() — data-shaped, and indistinguishable
+    // from a real value. (The old object[] buffer started all-null, so GetValue returned null and a typed
+    // accessor threw NullReferenceException.) Every value accessor now reports the mistake instead.
+
+    private static IEnumerable<TestCaseData> ValueAccessors()
+    {
+        yield return Accessor("GetValue", r => r.GetValue(0));
+        yield return Accessor("Indexer", r => r[0]);
+        yield return Accessor("IndexerByName", r => r["a"]);
+        yield return Accessor("GetValues", r => r.GetValues(new object[3]));
+        yield return Accessor("GetFieldValue", r => r.GetFieldValue<long>(0));
+        yield return Accessor("IsDBNull", r => r.IsDBNull(0));
+        yield return Accessor("GetInt64", r => r.GetInt64(0));
+        yield return Accessor("GetString", r => r.GetString(1));
+        yield return Accessor("GetBoolean", r => r.GetBoolean(0));
+        yield return Accessor("GetDecimal", r => r.GetDecimal(2));
+        yield return Accessor("GetDateTime", r => r.GetDateTime(0));
+
+        static TestCaseData Accessor(string name, Func<ClickHouseDataReader, object> read)
+            => new TestCaseData(read).SetArgDisplayNames(name);
+    }
+
+    private const string ThreeColumns = "toInt64(1) AS a, 's' AS b, toDecimal64(1.5, 2) AS c";
+
+    [TestCaseSource(nameof(ValueAccessors))]
+    public async Task ValueAccessor_BeforeFirstRead_ThrowsInvalidOperation(Func<ClickHouseDataReader, object> read)
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync($"SELECT {ThreeColumns}");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => read(reader));
+        Assert.That(ex.Message, Does.Contain("Read()"));
+    }
+
+    [TestCaseSource(nameof(ValueAccessors))]
+    public async Task ValueAccessor_AfterReadReturnsFalse_ThrowsInvalidOperation(Func<ClickHouseDataReader, object> read)
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync($"SELECT {ThreeColumns}");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.Read(), Is.False);
+
+        Assert.Throws<InvalidOperationException>(() => read(reader));
+    }
+
+    // Column metadata does not depend on a row and must stay reachable — this is what a caller inspecting the
+    // shape of an empty result set needs, and what DataTable.Load asks for before its first Read().
+    [Test]
+    public async Task ColumnMetadata_WithNoCurrentRow_IsStillAvailable()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
+            $"SELECT {ThreeColumns} FROM system.numbers WHERE 0");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.FieldCount, Is.EqualTo(3));
+            Assert.That(reader.GetName(0), Is.EqualTo("a"));
+            Assert.That(reader.GetOrdinal("b"), Is.EqualTo(1));
+            Assert.That(reader.GetFieldType(0), Is.EqualTo(typeof(long)));
+            Assert.That(reader.GetDataTypeName(0), Is.EqualTo("Int64"));
+            Assert.That(reader.GetSchemaTable().Rows, Has.Count.EqualTo(3));
+        });
     }
 
     // ---- IsDBNull now answers from the slot's presence flag rather than inspecting a boxed value ----
