@@ -1,9 +1,11 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Numerics;
+using System.Reflection;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
@@ -239,6 +241,33 @@ public class ColumnSlotTests
     {
         var type = new ObjectType { UnderlyingType = new Int64Type() };
         Assert.That(ColumnSlotFactory.Create(type), Is.TypeOf<ValueSlot<long>>());
+    }
+
+    // The factory dispatches through a hand-written table of ValueSlot<T>/NullableSlot<T> constructors rather
+    // than MakeGenericMethod, so that NativeAOT and trimming can see every instantiation the reader needs.
+    // The cost of giving up runtime generic construction is that the table no longer maintains itself: adding
+    // an ITypedReader<T> for a new T and forgetting the entry would silently demote that column to the boxed
+    // path — values still correct, allocation quietly back. Nothing else would catch it, so this does.
+    [Test]
+    public void Binders_CoverEveryTypedReadTarget()
+    {
+        var declared = typeof(ClickHouseType).Assembly
+            .GetTypes()
+            .Where(t => typeof(ClickHouseType).IsAssignableFrom(t))
+            .SelectMany(t => t.GetInterfaces())
+            .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ITypedReader<>))
+            .Select(i => i.GetGenericArguments()[0])
+            .Distinct()
+            .ToArray();
+
+        Assert.That(declared, Is.Not.Empty, "found no ITypedReader<T> implementations at all — check the query");
+
+        var bound = (IDictionary)typeof(ColumnSlotFactory)
+            .GetField("Binders", BindingFlags.NonPublic | BindingFlags.Static)
+            .GetValue(null);
+
+        Assert.That(declared.Where(t => !bound.Contains(t)), Is.Empty,
+            "every CLR type some ClickHouseType can read box-free needs a ColumnSlotFactory.Binders entry");
     }
 
     // AggregateFunctionType throws from FrameworkType (and from Read and ToString) so that you learn you need
