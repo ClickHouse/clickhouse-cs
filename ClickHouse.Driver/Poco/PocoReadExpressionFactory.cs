@@ -21,7 +21,8 @@ namespace ClickHouse.Driver.Poco;
 /// property CLR type iff it implements <c>ITypedReader&lt;thatType&gt;</c>. This also unlocks multiple read
 /// representations of one column (e.g. a DateTime column as <see cref="DateTime"/>/<see cref="DateTimeOffset"/>/
 /// <see cref="DateOnly"/>, a String column as <see cref="string"/>/<c>byte[]</c>), each an exact-typed read.
-/// <see cref="NullableType"/> and <see cref="LowCardinalityType"/> are handled transparently. Anything with
+/// <see cref="NullableType"/> and the wire-transparent wrappers (see <see cref="TransparentWrapper"/>) are
+/// handled transparently. Anything with
 /// no typed reader (composites, Variant/Dynamic/JSON, or an unsupported target type) returns <c>null</c> and
 /// the caller falls back to the boxed path for that column.
 /// </summary>
@@ -46,10 +47,10 @@ internal static class PocoReadExpressionFactory
     /// <param name="targetClrType">The bound property's CLR type; the returned expression has this type.</param>
     public static Expression TryBuildReadBody(ClickHouseType type, Expression reader, Type targetClrType)
     {
-        // LowCardinality is transparent on the RowBinary wire (LowCardinalityType.Read delegates to the
-        // underlying), so read the underlying value directly.
-        if (type is LowCardinalityType lowCardinality)
-            return TryBuildReadBody(lowCardinality.UnderlyingType, reader, targetClrType);
+        // LowCardinality / SimpleAggregateFunction / Object are transparent on the RowBinary wire (their
+        // Read delegates to the wrapped type), so read the wrapped value directly. Without this a wrapped
+        // column would silently fall back to the boxed path despite decoding identically to a bare one.
+        type = TransparentWrapper.Unwrap(type);
 
         if (type is NullableType nullableType)
             return TryBuildNullableRead(nullableType, reader, targetClrType);

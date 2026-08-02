@@ -390,6 +390,35 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
         Assert.That(rows[7].Name, Is.EqualTo("n7"));
     }
 
+    public class AggregatePoco
+    {
+        public string Name { get; set; }
+        public ulong Total { get; set; }
+    }
+
+    [Test]
+    public async Task QueryAsync_SimpleAggregateFunctionColumn_ReadsUnderlyingBoxFree()
+    {
+        client.RegisterPocoType<AggregatePoco>();
+        var table = CreateTableName();
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (Name String, Total SimpleAggregateFunction(sum, UInt64)) " +
+            "ENGINE AggregatingMergeTree ORDER BY Name");
+        await client.ExecuteNonQueryAsync($"INSERT INTO {table} VALUES ('a', 3), ('a', 4), ('b', 10)");
+
+        var sql = $"SELECT Name, sum(Total) AS Total FROM {table} GROUP BY Name ORDER BY Name";
+
+        using (var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync($"SELECT Name, Total FROM {table}"))
+            Assert.That(reader.TryGetRowMaterializer<AggregatePoco>(out _, out _), Is.True,
+                "SimpleAggregateFunction is wire-transparent and must reach the wrapped typed reader");
+
+        var rows = new List<AggregatePoco>();
+        await foreach (var row in client.QueryAsync<AggregatePoco>(sql))
+            rows.Add(row);
+
+        Assert.That(rows.Select(r => (r.Name, r.Total)), Is.EqualTo(new[] { ("a", 7ul), ("b", 10ul) }));
+    }
+
     public class NullablePropPoco
     {
         public long? Id { get; set; }
