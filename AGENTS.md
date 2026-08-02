@@ -22,7 +22,7 @@ ClickHouse.Driver.sln
 │   ├── Types/                          # 60+ ClickHouse type implementations + TypeConverter.cs
 │   ├── Copy/                           # Binary serialization (used internally by ClickHouseClient)
 │   ├── Http/                           # HTTP layer & connection pooling
-│   └── PublicAPI/                      # Public API surface tracking (analyzer-enforced)
+│   └── PublicAPI/                      # Public API surface tracking (hand-maintained)
 ├── ClickHouse.Driver.Tests/            # NUnit tests (multi-framework)
 ├── ClickHouse.Driver.IntegrationTests/ # Integration tests (net10.0)
 └── ClickHouse.Driver.Benchmark/        # BenchmarkDotNet performance tests
@@ -35,7 +35,9 @@ Prefer using LSP to grep when navigating the codebase.
 - **Type system**: `Types/TypeConverter.cs` (14KB, complex), `Types/Grammar/` (type parsing)
 - **ADO.NET layer**: `ADO/ClickHouseConnection.cs`, `ADO/ClickHouseCommand.cs`, `ADO/Readers/`
 - **Feature detection**: `Utility/ClickHouseFeatureMap.cs` (version-based capabilities)
-- **Public API**: `PublicAPI/*.txt` (Roslyn analyzer enforces shipped signatures)
+- **Public API**: `PublicAPI/*.txt` (hand-maintained record of shipped signatures; the
+  `Microsoft.CodeAnalysis.PublicApiAnalyzers` package is *not* referenced, so nothing checks these
+  files at build time — keep them in sync yourself)
 - **Config**: `.editorconfig` (file-scoped namespaces, StyleCop suppressions)
 
 ### API Architecture
@@ -241,7 +243,7 @@ If the value is null/`DBNull` and no explicit type or hint is provided, resoluti
 - **Connection state**: Clear logging of connection lifecycle events
 
 ### Public API Surface
-- **Breaking changes**: Must update `PublicAPI/*.txt` files (analyzer enforces)
+- **Breaking changes**: Must update `PublicAPI/*.txt` files (by hand — no analyzer enforces this)
 - **ADO.NET compliance**: Follow ADO.NET patterns and interfaces correctly
 - **Dispose patterns**: Proper `IDisposable` implementation, no resource leaks
 
