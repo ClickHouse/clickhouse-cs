@@ -36,6 +36,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly string[] columnTypeNames; // Raw server-sent type strings, exactly as declared
     private readonly PocoTypeRegistry pocoRegistry;
     private readonly Dictionary<Type, object> bindingPlanCache = new();
+
+    // Per-column typed storage for the current row; replaces the old shared object[] buffer. Built once per
+    // reader, mutated in place by every Read(). Always non-null and always FieldNames.Length long.
+    private readonly ColumnSlot[] slots;
     private bool hasCurrentRow;
 
     private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, PooledReadBufferStream pooledReadBuffer, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null, Stream decompressor = null)
@@ -52,8 +56,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         this.pocoRegistry = pocoRegistry;
         RawTypes = types;
         FieldNames = names;
-        CurrentRow = new object[FieldNames.Length];
         columnTypeNames = rawTypeNames;
+
+        slots = new ColumnSlot[types.Length];
+        for (var i = 0; i < types.Length; i++)
+            slots[i] = ColumnSlotFactory.Create(types[i]);
     }
 
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
@@ -149,8 +156,6 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override int RecordsAffected { get; }
 
-    protected object[] CurrentRow { get; set; }
-
     protected string[] FieldNames { get; set; }
 
     private protected ClickHouseType[] RawTypes { get; set; }
@@ -211,41 +216,44 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override string GetString(int ordinal) => GetValue(ordinal)?.ToString();
 
+    /// <summary>
+    /// The one boxing entry point on the read path. Boxes lazily, per call, so a query that projects ten
+    /// columns and reads two pays for two — where the old <c>object[]</c> buffer boxed all ten during
+    /// <see cref="Read"/> regardless.
+    /// </summary>
+    /// <remarks>
+    /// Consequence of boxing per call rather than once per row: two <c>GetValue(i)</c> calls on the same
+    /// value-type cell now return two distinct boxes. They compare equal by <see cref="object.Equals(object)"/>
+    /// (the ADO.NET-relevant comparison) but no longer by <see cref="object.ReferenceEquals"/>.
+    /// </remarks>
     public override object GetValue(int ordinal)
         => readValueConverter == null
-            ? CurrentRow[ordinal]
-            : readValueConverter.ConvertValue(CurrentRow[ordinal], FieldNames[ordinal], columnTypeNames[ordinal]);
+            ? slots[ordinal].GetBoxed()
+            : readValueConverter.ConvertValue(slots[ordinal].GetBoxed(), FieldNames[ordinal], columnTypeNames[ordinal]);
 
     public override int GetValues(object[] values)
     {
-        if (CurrentRow == null)
-        {
-            throw new InvalidOperationException();
-        }
-
-        var count = Math.Min(CurrentRow.Length, values.Length);
+        var count = Math.Min(slots.Length, values.Length);
 
         if (readValueConverter != null)
         {
             for (var i = 0; i < count; i++)
-                values[i] = readValueConverter.ConvertValue(CurrentRow[i], FieldNames[i], columnTypeNames[i]);
+                values[i] = readValueConverter.ConvertValue(slots[i].GetBoxed(), FieldNames[i], columnTypeNames[i]);
         }
         else
         {
-            Array.Copy(CurrentRow, values, count);
+            for (var i = 0; i < count; i++)
+                values[i] = slots[i].GetBoxed();
         }
 
         return count;
     }
 
     public override bool IsDBNull(int ordinal)
-    {
-        // Read CurrentRow directly rather than going through GetValue so a configured
-        // IReadValueConverter does not run during a null check — it could throw, do
-        // expensive work, or change the nullness of the result.
-        var value = CurrentRow[ordinal];
-        return value is DBNull || value is null;
-    }
+        // Asks the slot directly rather than going through GetValue, for two reasons: a configured
+        // IReadValueConverter must not run during a null check (it could throw, do expensive work, or
+        // change the nullness of the result), and a null check has no business materializing a box.
+        => slots[ordinal].IsNull;
 
     public override bool NextResult() => false;
 
@@ -293,7 +301,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             }
         }
 
-        var value = (T)CurrentRow[ordinal];
+        var value = (T)slots[ordinal].GetBoxed();
         if (readValueConverter != null)
             return readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
         return value;
@@ -515,11 +523,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override bool Read()
     {
-        var count = RawTypes.Length;
-        var data = CurrentRow;
-
         // Clear before the per-column loop so a mid-row throw cannot leave a stale
-        // CurrentRow visible to MapTo<T> if the caller catches and continues.
+        // row visible to MapTo<T> if the caller catches and continues.
         hasCurrentRow = false;
         try
         {
@@ -528,10 +533,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             if (reader.PeekChar() == -1)
                 return false; // End of stream reached
 
-            for (var i = 0; i < count; i++)
+            for (var i = 0; i < slots.Length; i++)
             {
-                var rawType = RawTypes[i];
-                data[i] = rawType.Read(reader);
+                slots[i].Read(reader);
             }
             hasCurrentRow = true;
             return true;
