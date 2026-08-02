@@ -231,6 +231,37 @@ public class ColumnSlotTests
         Assert.That(ColumnSlotFactory.Create(Parse("Decimal(10, 2)", settings)), Is.TypeOf(expected));
     }
 
+    // Object(...) is wire-transparent too, but the grammar never yields an ObjectType instance —
+    // ObjectType.Parse returns a SimpleAggregateFunctionType — so the only way to reach that unwrap branch is
+    // to construct one. Worth pinning: if Parse is ever corrected, this is already covered.
+    [Test]
+    public void Create_ObjectWrappedColumn_ResolvesToWrappedTypedSlot()
+    {
+        var type = new ObjectType { UnderlyingType = new Int64Type() };
+        Assert.That(ColumnSlotFactory.Create(type), Is.TypeOf<ValueSlot<long>>());
+    }
+
+    // The factory's pre-filter finds the ITypedReader<> interfaces a class implements; the binding rule is
+    // narrower than that — the reader has to be for the column's own FrameworkType, or the slot's GetBoxed()
+    // would hand back a different CLR type than the boxed Read did. No shipped type is shaped this way, so
+    // only a purpose-built one can prove the factory declines rather than mis-binding.
+    [Test]
+    public void Create_TypeWhoseTypedReaderIsNotItsFrameworkType_FallsBackToBoxed()
+        => Assert.That(ColumnSlotFactory.Create(new MismatchedRepresentationType()), Is.TypeOf<BoxedSlot>());
+
+    private sealed class MismatchedRepresentationType : ClickHouseType, ITypedReader<int>
+    {
+        public override Type FrameworkType => typeof(string);
+
+        public override object Read(ExtendedBinaryReader reader) => reader.ReadString();
+
+        public int ReadValue(ExtendedBinaryReader reader) => reader.ReadInt32();
+
+        public override void Write(ExtendedBinaryWriter writer, object value) => throw new NotSupportedException();
+
+        public override string ToString() => nameof(MismatchedRepresentationType);
+    }
+
     // ---- IsNull: no boxed counterpart, so parity cannot cover it ----
 
     [Test]

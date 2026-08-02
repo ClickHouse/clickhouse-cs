@@ -358,6 +358,20 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
         });
     }
 
+    // GetDecimal's fast path is skipped when a converter is configured, so this exercises its boxed
+    // fallback — including the ClickHouseDecimal branch, which is what a Decimal column boxes as by default.
+    [Test]
+    public async Task GetDecimal_WithConverter_FallsBackToTheBoxedPath()
+    {
+        var settings = TestUtilities.GetTestClickHouseClientSettings();
+        settings = new ClickHouseClientSettings(settings) { ReadValueConverter = new ObjectOnlyDoublingConverter() };
+        using var client = new ClickHouseClient(settings);
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toDecimal64(12.34, 2) AS c");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetDecimal(0), Is.EqualTo(12.34m));
+    }
+
     // Doubles longs in the object overload only, so which overload an accessor picks is directly observable.
     private sealed class ObjectOnlyDoublingConverter : IReadValueConverter
     {
