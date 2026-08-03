@@ -1,25 +1,25 @@
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
-using NUnit.Framework;
+using ClickHouse.Driver.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tests;
 
 /// <summary>
 /// Verifies which code paths own the <see cref="HttpResponseMessage"/> produced by a query, and that
-/// the owning path releases it. Disposal is observed by replacing the response content with a
-/// <see cref="HttpContent"/> that records its own disposal (disposing a response disposes its
-/// content), so these tests run against a real server.
+/// the owning path releases it. Disposal is observed with <see cref="ResponseDisposalTrackingHandler"/>,
+/// so these tests run against a real server.
 /// </summary>
-[TestFixture]
-public class ResponseDisposalTests
+/// <remarks>
+/// The inherited fixture client (which has its own <see cref="HttpClient"/>) does all setup and
+/// cleanup, so the tracking client only ever issues the requests of the operation under test — which
+/// is what makes the exact response counts below meaningful.
+/// </remarks>
+public class ResponseDisposalTests : AbstractConnectionTestFixture
 {
     /// <summary>
     /// Builds a client over a tracking handler. The <see cref="HttpClient"/> is handed back because
@@ -27,9 +27,9 @@ public class ResponseDisposalTests
     /// wrapped in a <c>CannedHttpClientFactory</c> and never added to the client's disposables), so
     /// the test has to dispose it — otherwise every test would leak a handler and its sockets.
     /// </summary>
-    private static (ClickHouseClient client, HttpClient httpClient, ResponseContentTrackingHandler handler) CreateClient()
+    private static (ClickHouseClient client, HttpClient httpClient, ResponseDisposalTrackingHandler handler) CreateTrackingClient()
     {
-        var handler = new ResponseContentTrackingHandler(new HttpClientHandler
+        var handler = new ResponseDisposalTrackingHandler(new HttpClientHandler
         {
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
         });
@@ -44,112 +44,109 @@ public class ResponseDisposalTests
     [Test]
     public async Task ExecuteNonQueryAsync_WhenQuerySucceeds_DisposesHttpResponse()
     {
-        var (client, httpClient, handler) = CreateClient();
+        var (trackingClient, httpClient, handler) = CreateTrackingClient();
         using (httpClient)
-        using (client)
+        using (trackingClient)
         {
-            await client.ExecuteNonQueryAsync("SELECT 1");
+            await trackingClient.ExecuteNonQueryAsync("SELECT 1");
 
-            Assert.That(handler.Responses.Single().IsDisposed, Is.True);
+            Assert.That(handler.Responses, Has.Count.EqualTo(1));
+            Assert.That(handler.Responses[0].IsDisposed, Is.True);
         }
     }
 
     [Test]
     public void ExecuteNonQueryAsync_WhenServerReturnsError_DisposesHttpResponse()
     {
-        var (client, httpClient, handler) = CreateClient();
+        var (trackingClient, httpClient, handler) = CreateTrackingClient();
         using (httpClient)
-        using (client)
+        using (trackingClient)
         {
             // Never created, so the query is guaranteed to fail with UNKNOWN_TABLE regardless of what
-            // the concurrently executing suites of the other target frameworks are doing.
+            // the concurrently executing suites of the other target frameworks are doing. Deliberately
+            // not registered with the fixture for cleanup, since it never exists.
             var missingTable = TestUtilities.CreateTableName();
 
             Assert.ThrowsAsync<ClickHouseServerException>(
-                () => client.ExecuteNonQueryAsync($"SELECT * FROM {missingTable}"));
+                () => trackingClient.ExecuteNonQueryAsync($"SELECT * FROM {missingTable}"));
 
-            Assert.That(handler.Responses.Single().IsDisposed, Is.True);
+            Assert.That(handler.Responses, Has.Count.EqualTo(1));
+            Assert.That(handler.Responses[0].IsDisposed, Is.True);
         }
     }
 
     [Test]
     public async Task InsertBinaryAsync_WhenBatchIsSent_DisposesHttpResponse()
     {
-        var (client, httpClient, handler) = CreateClient();
-        using (httpClient)
-        using (client)
-        {
-            var targetTable = TestUtilities.CreateTableName();
-            try
-            {
-                await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (value Int32) ENGINE Memory");
-                await client.InsertBinaryAsync(targetTable, new[] { "value" }, new[] { new object[] { 1 } });
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (value Int32) ENGINE Memory");
 
-                Assert.That(handler.Responses, Is.Not.Empty);
-                Assert.That(handler.Responses.Select(c => c.IsDisposed), Is.All.True);
-            }
-            finally
-            {
-                await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {targetTable}");
-            }
+        var (trackingClient, httpClient, handler) = CreateTrackingClient();
+        using (httpClient)
+        using (trackingClient)
+        {
+            await trackingClient.InsertBinaryAsync(targetTable, new[] { "value" }, new[] { new object[] { 1 } });
+
+            // Fetching the target's schema and sending the batch, one request each.
+            Assert.That(handler.Responses, Has.Count.EqualTo(2));
+            Assert.That(handler.Responses.Select(c => c.IsDisposed), Is.All.True);
         }
     }
 
     [Test]
     public async Task InsertBinaryAsync_WhenPocoBatchIsSent_DisposesHttpResponse()
     {
-        var (client, httpClient, handler) = CreateClient();
-        using (httpClient)
-        using (client)
-        {
-            client.RegisterBinaryInsertType<PocoRow>();
-            var targetTable = TestUtilities.CreateTableName();
-            try
-            {
-                await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (Value Int32) ENGINE Memory");
-                await client.InsertBinaryAsync(targetTable, new[] { new PocoRow { Value = 1 } });
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (Value Int32) ENGINE Memory");
 
-                Assert.That(handler.Responses, Is.Not.Empty);
-                Assert.That(handler.Responses.Select(c => c.IsDisposed), Is.All.True);
-            }
-            finally
-            {
-                await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {targetTable}");
-            }
+        var (trackingClient, httpClient, handler) = CreateTrackingClient();
+        using (httpClient)
+        using (trackingClient)
+        {
+            trackingClient.RegisterBinaryInsertType<PocoRow>();
+
+            await trackingClient.InsertBinaryAsync(targetTable, new[] { new PocoRow { Value = 1 } });
+
+            // Fetching the target's schema and sending the batch, one request each.
+            Assert.That(handler.Responses, Has.Count.EqualTo(2));
+            Assert.That(handler.Responses.Select(c => c.IsDisposed), Is.All.True);
         }
     }
 
     [Test]
     public void InsertRawStreamAsync_WhenServerReturnsError_DisposesHttpResponse()
     {
-        var (client, httpClient, handler) = CreateClient();
+        var (trackingClient, httpClient, handler) = CreateTrackingClient();
         using (httpClient)
-        using (client)
+        using (trackingClient)
         {
             using var payload = new MemoryStream(Encoding.UTF8.GetBytes("1\n"));
 
             // Never created, so the insert is guaranteed to fail with UNKNOWN_TABLE regardless of what
-            // the concurrently executing suites of the other target frameworks are doing.
+            // the concurrently executing suites of the other target frameworks are doing. Deliberately
+            // not registered with the fixture for cleanup, since it never exists.
             var missingTable = TestUtilities.CreateTableName();
 
             Assert.ThrowsAsync<ClickHouseServerException>(
-                () => client.InsertRawStreamAsync(missingTable, payload, "TSV"));
+                () => trackingClient.InsertRawStreamAsync(missingTable, payload, "TSV"));
 
-            Assert.That(handler.Responses.Single().IsDisposed, Is.True);
+            Assert.That(handler.Responses, Has.Count.EqualTo(1));
+            Assert.That(handler.Responses[0].IsDisposed, Is.True);
         }
     }
 
     [Test]
     public async Task ExecuteReaderAsync_WhileReaderIsOpen_KeepsHttpResponseAliveUntilReaderIsDisposed()
     {
-        var (client, httpClient, handler) = CreateClient();
+        var (trackingClient, httpClient, handler) = CreateTrackingClient();
         using (httpClient)
-        using (client)
+        using (trackingClient)
         {
-            var reader = await client.ExecuteReaderAsync("SELECT number FROM system.numbers LIMIT 10");
+            var reader = await trackingClient.ExecuteReaderAsync("SELECT number FROM system.numbers LIMIT 10");
             try
             {
-                Assert.That(handler.Responses.Single().IsDisposed, Is.False);
+                Assert.That(handler.Responses, Has.Count.EqualTo(1));
+                Assert.That(handler.Responses[0].IsDisposed, Is.False);
                 Assert.That(reader.Read(), Is.True);
             }
             finally
@@ -157,21 +154,23 @@ public class ResponseDisposalTests
                 reader.Dispose();
             }
 
-            Assert.That(handler.Responses.Single().IsDisposed, Is.True);
+            Assert.That(handler.Responses, Has.Count.EqualTo(1));
+            Assert.That(handler.Responses[0].IsDisposed, Is.True);
         }
     }
 
     [Test]
     public async Task ExecuteRawResultAsync_WhileResultIsOpen_KeepsHttpResponseAliveUntilResultIsDisposed()
     {
-        var (client, httpClient, handler) = CreateClient();
+        var (trackingClient, httpClient, handler) = CreateTrackingClient();
         using (httpClient)
-        using (client)
+        using (trackingClient)
         {
-            var rawResult = await client.ExecuteRawResultAsync("SELECT 1 FORMAT CSV");
+            var rawResult = await trackingClient.ExecuteRawResultAsync("SELECT 1 FORMAT CSV");
             try
             {
-                Assert.That(handler.Responses.Single().IsDisposed, Is.False);
+                Assert.That(handler.Responses, Has.Count.EqualTo(1));
+                Assert.That(handler.Responses[0].IsDisposed, Is.False);
                 Assert.That(await rawResult.ReadAsStringAsync(), Does.Contain("1"));
             }
             finally
@@ -179,54 +178,13 @@ public class ResponseDisposalTests
                 rawResult.Dispose();
             }
 
-            Assert.That(handler.Responses.Single().IsDisposed, Is.True);
-        }
-    }
-
-    /// <summary>
-    /// Replaces every response's content with a <see cref="DisposalTrackingContent"/>, so disposal of
-    /// the response (which disposes its content) becomes observable from the test.
-    /// </summary>
-    private sealed class ResponseContentTrackingHandler : DelegatingHandler
-    {
-        private readonly ConcurrentQueue<DisposalTrackingContent> responses = new();
-
-        public ResponseContentTrackingHandler(HttpMessageHandler innerHandler) : base(innerHandler) { }
-
-        public IEnumerable<DisposalTrackingContent> Responses => responses.ToArray();
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
-
-            var trackingContent = new DisposalTrackingContent(
-                await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false));
-            foreach (var header in response.Content.Headers)
-            {
-                trackingContent.Headers.TryAddWithoutValidation(header.Key, header.Value);
-            }
-
-            responses.Enqueue(trackingContent);
-            response.Content = trackingContent;
-            return response;
+            Assert.That(handler.Responses, Has.Count.EqualTo(1));
+            Assert.That(handler.Responses[0].IsDisposed, Is.True);
         }
     }
 
     private sealed class PocoRow
     {
         public int Value { get; set; }
-    }
-
-    private sealed class DisposalTrackingContent : StreamContent
-    {
-        public DisposalTrackingContent(Stream content) : base(content) { }
-
-        public bool IsDisposed { get; private set; }
-
-        protected override void Dispose(bool disposing)
-        {
-            IsDisposed = true;
-            base.Dispose(disposing);
-        }
     }
 }
