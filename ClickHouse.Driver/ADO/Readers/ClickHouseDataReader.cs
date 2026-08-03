@@ -37,9 +37,20 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly PocoTypeRegistry pocoRegistry;
     private readonly Dictionary<Type, object> bindingPlanCache = new();
 
-    // Per-column typed storage for the current row; replaces the old shared object[] buffer. Built once per
-    // reader, mutated in place by every Read(). Always non-null and always FieldNames.Length long.
-    private readonly ColumnSlot[] slots;
+    // Per-column typed storage for the current row; replaces the old shared object[] buffer. Built on the
+    // first Read() and mutated in place by every one after it.
+    //
+    // Deliberately not built in the constructor. QueryAsync<T>'s box-free POCO path materializes straight
+    // from the stream through TryMaterializeNextRow and never touches a slot, so constructing them eagerly
+    // would allocate one permanently dead object per column on the driver's primary read API. Empty result
+    // sets and readers opened only for their metadata likewise never pay for storage they do not use.
+    //
+    // Built once and never nulled again, so `hasCurrentRow` implies non-null. That is the whole safety
+    // argument, and every value accessor establishes it by going through Slot(). GetValues is the one
+    // exception — it indexes this array directly and carries its own copy of the guard, so if that guard is
+    // ever "simplified" away it produces a NullReferenceException rather than the intended
+    // InvalidOperationException.
+    private ColumnSlot[] slots;
     private bool hasCurrentRow;
 
     private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, PooledReadBufferStream pooledReadBuffer, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null, Stream decompressor = null)
@@ -57,10 +68,6 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         RawTypes = types;
         FieldNames = names;
         columnTypeNames = rawTypeNames;
-
-        slots = new ColumnSlot[types.Length];
-        for (var i = 0; i < types.Length; i++)
-            slots[i] = ColumnSlotFactory.Create(types[i]);
     }
 
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
@@ -568,8 +575,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 
     /// <summary>
-    /// Reads the next row straight from the stream via the fast-path delegates, bypassing the shared
-    /// <c>object[]</c> row buffer and its per-value boxing. Returns false at end of stream, and mirrors
+    /// Reads the next row straight from the stream via the fast-path delegates, bypassing the reader's column
+    /// slots, which this path never allocates. Returns false at end of stream, and mirrors
     /// <see cref="Read"/>'s mid-stream server-exception handling. The delegates consume every wire column in
     /// order, so the stream stays aligned even for columns the POCO does not map.
     /// </summary>
@@ -657,9 +664,13 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             if (reader.PeekChar() == -1)
                 return false; // End of stream reached
 
-            for (var i = 0; i < slots.Length; i++)
+            // Built on the first row rather than in the ctor: the POCO fast path materializes straight
+            // from the stream and never touches a slot, so eager construction would allocate a
+            // permanently dead object per column on the primary read API. An empty result never gets here.
+            var columns = slots ??= CreateSlots();
+            for (var i = 0; i < columns.Length; i++)
             {
-                slots[i].Read(reader);
+                columns[i].Read(reader);
             }
             hasCurrentRow = true;
             return true;
@@ -676,6 +687,17 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                 throw serverEx;
             throw;
         }
+    }
+
+    // Runs at most once per reader, so it is kept out of Read() to leave that method small enough for the
+    // JIT to treat the slot loop as the hot path it is.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ColumnSlot[] CreateSlots()
+    {
+        var created = new ColumnSlot[RawTypes.Length];
+        for (var i = 0; i < created.Length; i++)
+            created[i] = ColumnSlotFactory.Create(RawTypes[i]);
+        return created;
     }
 
 #pragma warning disable CA2215 // Dispose methods should call base class dispose

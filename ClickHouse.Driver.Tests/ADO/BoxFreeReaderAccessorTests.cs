@@ -118,9 +118,14 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
         Assert.That(reader.GetFieldValue<int[]>(0), Is.EqualTo(new[] { 1, 2, 3 }));
     }
 
-    // End-to-end counterpart to ColumnSlotTests' factory guard: an AggregateFunction column must still open a
-    // reader and fail only where it always did — on the value, with the message that tells you to use
-    // xMerge(). Building a slot per column at construction time is what puts that at risk.
+    // Pins the user-visible contract for an AggregateFunction column: the reader opens, FieldCount answers,
+    // and the failure arrives on the row with the message that tells you to use xMerge().
+    //
+    // Deliberately not the guard on ColumnSlotFactory's bail-out ordering, though it reads like one. Slots are
+    // built on the first Read(), so an ordering regression would throw the same exception with the same
+    // message from this same call; only the unit test
+    // (ColumnSlotTests.Create_AggregateFunctionColumn_FallsBackToBoxedWithoutEvaluatingFrameworkType) can
+    // distinguish them.
     [Test]
     public async Task Read_AggregateFunctionColumn_OpensTheReaderAndFailsOnlyOnTheValue()
     {
