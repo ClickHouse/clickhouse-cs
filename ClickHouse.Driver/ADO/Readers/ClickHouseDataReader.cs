@@ -74,23 +74,32 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         try
         {
             var rawStream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+            // Conditionally record recent bytes for mid-stream exception detection. This sits *below*
+            // the buffering stream on purpose: there it observes one read per buffer refill instead of
+            // one per scalar the reader decodes, which is the difference between recording a few bytes
+            // millions of times and recording a 64 KiB block a few times. The ring buffer then holds the
+            // last bytes received rather than the last bytes consumed — equivalent for this purpose,
+            // because TryExtractMidStreamException is only consulted once a read has failed with an
+            // IOException, by which point the transport is drained and the server's trailing marker has
+            // been recorded.
+            // leaveOpen: true because httpResponse owns rawStream and disposes it.
+            Stream bufferedInner = rawStream;
+            if (!string.IsNullOrEmpty(exceptionTag))
+            {
+                exceptionStream = new ExceptionTagAwareStream(rawStream, exceptionTag, leaveOpen: true);
+                bufferedInner = exceptionStream;
+            }
+
             // Buffer reads through a pooled buffer (rented from ArrayPool) rather than BufferedStream's
-            // fresh per-query array. leaveOpen: true because httpResponse owns rawStream and disposes it;
+            // fresh per-query array. leaveOpen: true because the streams below are owned elsewhere;
             // the reader disposes this wrapper explicitly to return the buffer (the BinaryReader ->
             // PeekableStreamWrapper chain does not propagate Dispose to inner streams).
             // Its Read may return fewer bytes than requested; the ExtendedBinaryReader below loops to
             // satisfy exact-count reads.
-            buffered = new PooledReadBufferStream(rawStream, readBufferSize, leaveOpen: true);
+            buffered = new PooledReadBufferStream(bufferedInner, readBufferSize, leaveOpen: true);
 
-            // Conditionally wrap with exception-aware stream
-            Stream streamForReader = buffered;
-            if (!string.IsNullOrEmpty(exceptionTag))
-            {
-                exceptionStream = new ExceptionTagAwareStream(buffered, exceptionTag);
-                streamForReader = exceptionStream;
-            }
-
-            reader = new ExtendedBinaryReader(streamForReader);
+            reader = new ExtendedBinaryReader(buffered);
             var (names, types, rawTypeNames) = ReadHeaders(reader, settings, readValueConverter != null);
             return new ClickHouseDataReader(httpResponse, reader, buffered, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter);
         }
