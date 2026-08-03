@@ -143,7 +143,7 @@ under `changelog.d/`, which maintainers fold into `CHANGELOG.md` at release time
 dotnet run scripts/changelog.cs -- --new fixes 512-variant-null
 ```
 
-Write the entry into the file that creates — one or two sentences on the user-visible change, plus
+Write the entry into the file it creates — one or two sentences on the user-visible change, plus
 the issue number. Preview how it will render with `--render`, and run `--check` to see what CI will
 say.
 

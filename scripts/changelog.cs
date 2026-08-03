@@ -311,7 +311,7 @@ List<Fragment> LoadFragments(List<string> problems)
 
         if (!body.StartsWith("* ", StringComparison.Ordinal) && !body.StartsWith("- ", StringComparison.Ordinal))
         {
-            problems.Add($"{Rel(path)}: must start with a top-level markdown bullet ('* '), since entries are concatenated into a bulleted section.");
+            problems.Add($"{Rel(path)}: must start with a top-level markdown bullet ('* ' or '- '), since entries are concatenated into a bulleted section.");
             continue;
         }
 
