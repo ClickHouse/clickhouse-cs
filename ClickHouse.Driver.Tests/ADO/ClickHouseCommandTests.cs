@@ -67,4 +67,18 @@ public class ClickHouseCommandTests
 
         Assert.That(ex.Message, Is.EqualTo("Connection is not set"));
     }
+
+    [Test]
+    public void Dispose_NewCommand_DisposesCancellationTokenSource()
+    {
+        // Arrange
+        var command = new ClickHouseCommand();
+        Assert.That(command.Cancel, Throws.Nothing);
+
+        // Act
+        command.Dispose();
+
+        // Assert
+        Assert.Throws<ObjectDisposedException>(command.Cancel);
+    }
 }
