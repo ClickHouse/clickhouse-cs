@@ -336,6 +336,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [TestCase("JSON(`a)b` Int64)", "a)b")]
     [TestCase("JSON(`a b` Decimal(10, 2))", "a b")]
     [TestCase(@"JSON(`a\`b` Int64)", "a`b")]
+    [TestCase(@"JSON(`a\` b` Int64)", "a` b")]
     [TestCase(@"JSON(`a\'b` Int64)", "a'b")]
     [TestCase("JSON(`a b` Map(String, Array(Int32)))", "a b")]
     [TestCase("JSON(max_dynamic_paths=8, `a b` Int64, SKIP `x,y`)", "a b")]
