@@ -36,6 +36,45 @@ internal static class StringExtensions
         return builder.ToString();
     }
 
+    /// <summary>
+    /// Removes the enclosing backticks (`) from an identifier and unescapes the escape sequences
+    /// ClickHouse uses inside a quoted identifier. Does nothing if the identifier is not enclosed.
+    /// </summary>
+    /// <param name="str">Possibly backtick-enclosed identifier</param>
+    /// <returns>Bare identifier</returns>
+    public static string DiscloseColumnName(this string str)
+    {
+        if (str == null || str.Length < 2 || str[0] != '`' || str[str.Length - 1] != '`')
+            return str;
+
+        var builder = new StringBuilder(str.Length - 2);
+        for (var i = 1; i < str.Length - 1; i++)
+        {
+            var c = str[i];
+            if (c != '\\' || i == str.Length - 2)
+            {
+                builder.Append(c);
+                continue;
+            }
+
+            c = str[++i];
+            builder.Append(c switch
+            {
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                '0' => '\0',
+                'a' => '\a',
+                'b' => '\b',
+                'f' => '\f',
+                'v' => '\v',
+                _ => c, // \\, \`, \' and anything else stand for the character itself
+            });
+        }
+
+        return builder.ToString();
+    }
+
     public static string ToSnakeCase(this string str)
     {
         var result = new StringBuilder();

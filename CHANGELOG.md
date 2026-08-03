@@ -32,6 +32,7 @@ Unreleased
 * Fixed mid-stream server exceptions never surfacing on the streaming read path (`ExecuteReader`/`ExecuteReaderAsync`). A query that fails after the HTTP response is committed (for example a `throwIf` partway through a large result) now raises a `ClickHouseServerException` with the real server error, instead of a bare `HttpIOException` or `EndOfStreamException` (issue #476).
 * Fixed `ClickHouseConnection.GetSchema("Columns", ...)` building invalid SQL when the table restriction is supplied without the database restriction (for example `[null, "functions"]`). The `WHERE` clause is now composed from the restrictions that are actually set, so filtering by table alone no longer fails with a server syntax error.
 * Fixed `DbConnection.GetSchema("Columns", ...)` not disposing the command it creates internally, which delayed the release of that command's cancellation-token source until garbage collection.
+* Fixed `JSON` columns being unreadable when a typed path name requires backtick quoting — for example ``JSON(`a b` Int64)`` or ``JSON(`a,b` Int64)``. Such a path made the whole query fail with `SerializationException: Unsupported path in JSON hint`, because the type parser split each hint on every space and did not treat backticks as quotes. Quoted path names (including ones containing spaces, commas, parentheses and escaped characters) are now parsed and unescaped correctly (issue #502).
 
 v1.3.0
 ---

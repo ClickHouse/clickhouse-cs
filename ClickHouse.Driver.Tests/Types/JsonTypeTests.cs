@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Numerics;
+using System.Runtime.Serialization;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -243,6 +244,51 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             "code",
             "ABC1234567"
         ).SetName("FixedString(10)");
+
+        // Backtick-quoted paths: the path name itself contains characters which require quoting
+        yield return new TestCaseData(
+            "`a b` Int64",
+            "{\"a b\": 1}",
+            "a b",
+            1L
+        ).SetName("QuotedPathWithSpace");
+
+        yield return new TestCaseData(
+            "`a b` Decimal(10, 2)",
+            "{\"a b\": 1.25}",
+            "a b",
+            new ClickHouseDecimal(1.25m)
+        ).SetName("QuotedPathWithSpaceAndParameterizedType");
+
+        yield return new TestCaseData(
+            "`a,b` Int64",
+            "{\"a,b\": 1}",
+            "a,b",
+            1L
+        ).SetName("QuotedPathWithComma");
+
+        yield return new TestCaseData(
+            "`a)b` Int64",
+            "{\"a)b\": 1}",
+            "a)b",
+            1L
+        ).SetName("QuotedPathWithParenthesis");
+
+        // `` inside a quoted path is escaped by the server as \`
+        yield return new TestCaseData(
+            "`a\\`b` Int64",
+            "{\"a`b\": 1}",
+            "a`b",
+            1L
+        ).SetName("QuotedPathWithBacktick");
+
+        // ' inside a quoted path is escaped by the server as \' ; '' is the SQL literal escape
+        yield return new TestCaseData(
+            "`a\\'b` Int64",
+            "{\"a''b\": 1}",
+            "a'b",
+            1L
+        ).SetName("QuotedPathWithSingleQuote");
     }
     
     [Test]
@@ -282,6 +328,71 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // Assert non-hinted property
         ClassicAssert.IsInstanceOf<JsonValue>(result["unhinted_float"]);
         Assert.That((double)result["unhinted_float"], Is.EqualTo(99.9));
+    }
+
+    [Test]
+    [TestCase("JSON(`a b` Int64)", "a b")]
+    [TestCase("JSON(`a,b` Int64)", "a,b")]
+    [TestCase("JSON(`a)b` Int64)", "a)b")]
+    [TestCase("JSON(`a b` Decimal(10, 2))", "a b")]
+    [TestCase(@"JSON(`a\`b` Int64)", "a`b")]
+    [TestCase(@"JSON(`a\'b` Int64)", "a'b")]
+    [TestCase("JSON(`a b` Map(String, Array(Int32)))", "a b")]
+    [TestCase("JSON(max_dynamic_paths=8, `a b` Int64, SKIP `x,y`)", "a b")]
+    [TestCase(@"JSON(`a\nb` Int64)", "a\nb")]
+    [TestCase(@"JSON(`a\\b` Int64)", @"a\b")]
+    [TestCase("JSON(`a.b c` Int64)", "a.b c")]
+    public void ParseShouldUnquotePathWhenPathIsBacktickQuoted(string typeName, string expectedPath)
+    {
+        var type = (JsonType)TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default);
+
+        Assert.That(type.HintedTypes.Keys, Is.EquivalentTo(new[] { expectedPath }));
+    }
+
+    [Test]
+    [TestCase("JSON(`a b` Int64)", "a b", "Int64")]
+    [TestCase("JSON(`a b` Decimal(10, 2))", "a b", "Decimal64(2)")]
+    [TestCase("JSON(`a b` Map(String, Array(Int32)))", "a b", "Map(String, Array(Int32))")]
+    public void ParseShouldMapQuotedPathToItsHintedType(string typeName, string path, string expectedHintedType)
+    {
+        var type = (JsonType)TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default);
+
+        Assert.That(type.HintedTypes[path].ToString(), Is.EqualTo(expectedHintedType));
+    }
+
+    [Test]
+    [TestCase("JSON(a Int64)", "a")]
+    [TestCase("JSON(nested.b String)", "nested.b")]
+    [TestCase("JSON(a Decimal(10, 2))", "a")]
+    [TestCase("JSON(max_dynamic_paths=8, a Int64, SKIP x.y, SKIP REGEXP 'regex.path.*')", "a")]
+    public void ParseShouldKeepPathWhenPathIsNotQuoted(string typeName, string expectedPath)
+    {
+        var type = (JsonType)TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default);
+
+        Assert.That(type.HintedTypes.Keys, Is.EquivalentTo(new[] { expectedPath }));
+    }
+
+    [Test]
+    public async Task ShouldSelectQuotedTypedPathWhenPathIsNested()
+    {
+        // The server quotes the whole path, not the component which needs quoting:
+        // JSON(a.`b c` Int64) is reported back as JSON(`a.b c` Int64)
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT '{\"a\": {\"b c\": 1}}'::JSON(`a.b c` Int64)");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((long)result["a"]["b c"], Is.EqualTo(1L));
+    }
+
+    [Test]
+    [TestCase("JSON(a)")]
+    [TestCase("JSON(`a b`)")]
+    public void ParseShouldThrowWhenHintHasNoType(string typeName)
+    {
+        Assert.Throws<SerializationException>(
+            () => TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default));
     }
 
     [Test]

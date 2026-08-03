@@ -113,15 +113,16 @@ internal class JsonType : ParameterizedType
             .Where(childNode => !JsonSettingNames.Any(jsonSettingName => childNode.Value.StartsWith(jsonSettingName, StringComparison.OrdinalIgnoreCase)))
             .Select(childNode =>
             {
-                var hintParts = childNode.Value.Split(' ');
-                if (hintParts.Length != 2)
+                var separator = IndexOfPathTypeSeparator(childNode.Value);
+                var hintedTypeName = separator > 0 ? childNode.Value.Substring(separator + 1).Trim() : string.Empty;
+                if (separator <= 0 || hintedTypeName.Length == 0)
                 {
                     throw new SerializationException($"Unsupported path in JSON hint: {childNode.Value}");
                 }
 
                 var hintTypeSyntaxTreeNode = new SyntaxTreeNode
                 {
-                    Value = hintParts[1],
+                    Value = hintedTypeName,
                 };
 
                 foreach (var childNodeChildNode in childNode.ChildNodes)
@@ -130,7 +131,7 @@ internal class JsonType : ParameterizedType
                 }
 
                 return (
-                    path: hintParts[0].Trim('`'),
+                    path: childNode.Value.Substring(0, separator).DiscloseColumnName(),
                     type: parseClickHouseType(hintTypeSyntaxTreeNode));
             })
             .ToDictionary(
@@ -144,6 +145,40 @@ internal class JsonType : ParameterizedType
     }
 
     public override string ToString() => Name;
+
+    /// <summary>
+    /// Finds the space separating the path from its type in a JSON type hint (e.g. <c>`a b` Int64</c>).
+    /// A path which needs quoting is enclosed in backticks by the server and may itself contain
+    /// spaces, so the enclosed identifier is skipped before looking for the separator.
+    /// </summary>
+    /// <returns>Index of the separator, or -1 if the hint contains no separator.</returns>
+    private static int IndexOfPathTypeSeparator(string hint)
+    {
+        var i = 0;
+
+        if (hint.Length > 0 && hint[0] == '`')
+        {
+            for (i++; i < hint.Length; i++)
+            {
+                if (hint[i] == '\\')
+                {
+                    i++;
+                }
+                else if (hint[i] == '`')
+                {
+                    i++;
+                    break;
+                }
+            }
+
+            if (i >= hint.Length)
+            {
+                return -1; // unterminated identifier
+            }
+        }
+
+        return hint.IndexOf(' ', i);
+    }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
