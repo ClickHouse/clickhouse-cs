@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using ClickHouse.Driver.ADO.Parameters;
 using NUnit.Framework;
 
@@ -50,5 +51,20 @@ public class ParameterCollectionTests
         Assert.That(collection.Count, Is.EqualTo(2));
         collection.Clear();
         Assert.That(collection.Count, Is.EqualTo(0));
+    }
+
+    [Test]
+    [TestCase("SELECT {a}, {dt:DateTime64(3, 'UTC')}")]
+    [TestCase("SELECT 1 AS `x{y`, {dt:DateTime64(3, 'UTC')}")]
+    public void ResolveTypeNames_HintPrecededByBraceWithoutType_UsesHint(string sql)
+    {
+        var collection = new ClickHouseParameterCollection
+        {
+            new ClickHouseDbParameter { ParameterName = "dt", Value = new DateTime(2020, 1, 2, 3, 4, 5, 123, DateTimeKind.Utc) },
+        };
+
+        var resolvedTypes = collection.ResolveTypeNames(sql, null);
+
+        Assert.That(resolvedTypes["dt"], Is.EqualTo("DateTime64(3, 'UTC')"));
     }
 }

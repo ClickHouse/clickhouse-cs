@@ -442,4 +442,56 @@ public class SqlParameterTypeExtractorTests
         Assert.That(hints, Has.Count.EqualTo(1));
         Assert.That(hints["val"], Is.EqualTo("String"));
     }
+
+    [Test]
+    [TestCase("SELECT {a}, {val:Int32}")]
+    [TestCase("SELECT {a} -- x:y\n{val:Int32}")]
+    [TestCase("SELECT { }, {val:Int32}")]
+    [TestCase("SELECT {a b}, {val:Int32}")]
+    [TestCase("SELECT {a b:Int32}, {val:Int32}")]
+    [TestCase("SELECT {a-b}, {val:Int32}")]
+    [TestCase("SELECT {a-b:Int32}, {val:Int32}")]
+    [TestCase("SELECT {, {val:Int32}")]
+    [TestCase("SELECT {a:Int32, {val:Int32}")]
+    [TestCase("SELECT 1 AS `x{y`, {val:Int32}")]
+    public void ExtractTypeHints_BraceWithoutTypeHintPrecedingHint_HintStillExtracted(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    [TestCase("SELECT {a}")]
+    [TestCase("SELECT {a}, {b}")]
+    public void ExtractTypeHints_ParameterWithoutType_NotIncluded(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Is.Empty);
+    }
+
+    [Test]
+    [TestCase("SELECT {a b:Int32}")]
+    [TestCase("SELECT {a-b:Int32}")]
+    [TestCase("SELECT {a.b:Int32}")]
+    public void ExtractTypeHints_NameThatIsNotAnIdentifier_NotIncluded(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Is.Empty);
+    }
+
+    [Test]
+    [TestCase("SELECT {$p_1:Int32}", "$p_1")]
+    [TestCase("SELECT {1a:Int32}", "1a")]
+    [TestCase("SELECT {a\n:Int32}", "a")]
+    public void ExtractTypeHints_UnusualButValidParameterName_ReturnsType(string sql, string expectedName)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints[expectedName], Is.EqualTo("Int32"));
+    }
 }

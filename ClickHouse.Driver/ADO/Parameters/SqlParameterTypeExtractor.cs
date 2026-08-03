@@ -107,8 +107,35 @@ internal static class SqlParameterTypeExtractor
         if (sql[startIndex] != '{')
             return (null, null, 0);
 
-        // Find the colon that separates name from type
-        var colonIndex = sql.IndexOf(':', startIndex + 1);
+        // Find the colon that separates name from type, searching only within this parameter's own
+        // name: it must be a single run of parameter name characters, optionally surrounded by
+        // whitespace. Otherwise a brace that is not a type hint, such as {name}, would consume the
+        // colon of a later parameter and silently drop its hint.
+        var colonIndex = -1;
+        var nameLength = 0;
+        var afterName = false;
+
+        for (var j = startIndex + 1; j < sql.Length; j++)
+        {
+            var nameChar = sql[j];
+            if (nameChar == ':')
+            {
+                colonIndex = j;
+                break;
+            }
+
+            if (char.IsWhiteSpace(nameChar))
+            {
+                afterName = nameLength > 0;
+                continue;
+            }
+
+            if (afterName || !IsParameterNameChar(nameChar))
+                return (null, null, 0);
+
+            nameLength++;
+        }
+
         if (colonIndex < 0)
             return (null, null, 0);
 
@@ -150,6 +177,12 @@ internal static class SqlParameterTypeExtractor
                 inQuote = true;
                 i++;
             }
+            else if (c == '{')
+            {
+                // A type definition never contains an opening brace, so this parameter is
+                // unterminated and the brace starts a new one
+                return (null, null, 0);
+            }
             else if (c == '}')
             {
                 // End of parameter
@@ -169,6 +202,13 @@ internal static class SqlParameterTypeExtractor
         // Unterminated parameter
         return (null, null, 0);
     }
+
+    /// <summary>
+    /// Determines whether the character can appear in a ClickHouse query parameter name,
+    /// which is an identifier: ASCII word characters plus $.
+    /// </summary>
+    private static bool IsParameterNameChar(char c) =>
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
 
     /// <summary>
     /// Skips to the end of a line
