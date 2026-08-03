@@ -16,6 +16,7 @@
 //   dotnet run scripts/changelog.cs -- --check          # CI gate
 //   dotnet run scripts/changelog.cs -- --render         # preview pending entries
 //   dotnet run scripts/changelog.cs -- --release v1.4.0
+//   dotnet run scripts/changelog.cs -- --verify-release 1.4.0   # release-workflow gate
 //   dotnet run scripts/changelog.cs -- --sync-notes     # regenerate RELEASENOTES.md only
 //
 // On Unix the shebang also allows ./scripts/changelog.cs --check.
@@ -58,6 +59,7 @@ return args.Length == 0 ? Usage() : args[0] switch
     "--check" => Check(),
     "--render" => Render(),
     "--release" => args.Length >= 2 ? Release(args[1]) : Fail("--release needs a version, e.g. --release v1.4.0"),
+    "--verify-release" => args.Length >= 2 ? VerifyRelease(args[1]) : Fail("--verify-release needs a version, e.g. --verify-release 1.4.0"),
     "--sync-notes" => SyncNotes(),
     "--new" => args.Length >= 3 ? NewFragment(args[1], args[2]) : Fail("--new needs a category and a name, e.g. --new fixes 512-variant-null"),
     "--help" or "-h" => Usage(0),
@@ -161,6 +163,61 @@ int Release(string rawVersion)
     Console.WriteLine($"changelog: released {version} from {fragments.Count} fragment(s).");
     Console.WriteLine($"  updated {Rel(changelogPath)}, regenerated {Rel(releaseNotesPath)}, removed {fragments.Count} fragment(s).");
     Console.WriteLine("  review the diff, then commit on a release-prep branch.");
+    return 0;
+}
+
+// Gate for the release workflow: refuse to publish a version whose changelog was never assembled.
+// Publishing to NuGet cannot be undone (packages can only be delisted), and RELEASENOTES.md is
+// baked into the package via PackageReleaseNotes, so shipping before --release runs means shipping
+// a package whose notes describe the *previous* version -- silently, with nothing to roll back.
+int VerifyRelease(string rawVersion)
+{
+    var version = NormalizeVersion(rawVersion);
+    if (version is null)
+        return Fail($"'{rawVersion}' is not a version like 1.4.0");
+
+    var problems = new List<string>();
+
+    // Fragment *validity* is the pull request gate's job; here only their presence matters.
+    var pending = LoadFragments([]);
+    if (pending.Count > 0)
+    {
+        problems.Add(
+            $"{pending.Count} fragment(s) still pending in changelog.d/, so their changes are in "
+            + $"this build but not in its notes. Run: dotnet run scripts/changelog.cs -- --release {version}");
+    }
+
+    var changelog = ReadLines(changelogPath);
+    var sections = FindSections(changelog);
+    var newest = sections.FirstOrDefault(s => s.Title != "Unreleased");
+    var newestVersion = newest is null ? null : ParseVersion(newest.Title);
+
+    // Compare base versions, not titles: prereleases are cut against the section for the version
+    // they lead up to (1.3.0-rc1 shipped against the v1.3.0 section), so requiring an exact title
+    // match would block every release candidate.
+    if (newestVersion is null)
+        problems.Add("CHANGELOG.md has no released section to publish.");
+    else if (newestVersion != ParseVersion(version))
+        problems.Add(
+            $"CHANGELOG.md's newest released section is {newest!.Title}, but this release is {version}. "
+            + $"Either the changelog was not assembled for {version}, or the wrong version was entered.");
+
+    if (Normalize(File.ReadAllText(releaseNotesPath)) != TrimToFloor(string.Join("\n", changelog)))
+    {
+        problems.Add(
+            "RELEASENOTES.md is out of sync with CHANGELOG.md, so the package would ship stale notes. "
+            + "Run: dotnet run scripts/changelog.cs -- --sync-notes");
+    }
+
+    if (problems.Count > 0)
+    {
+        Console.Error.WriteLine($"changelog: refusing to release {version} -- {problems.Count} problem(s):\n");
+        foreach (var p in problems)
+            Console.Error.WriteLine($"  - {p}\n");
+        return 1;
+    }
+
+    Console.WriteLine($"changelog: {version} is ready to release (CHANGELOG.md section {newest!.Title}, no pending fragments).");
     return 0;
 }
 
@@ -381,6 +438,7 @@ int Usage(int exitCode = 1)
           --check                  Validate fragments, empty Unreleased, notes in sync (CI gate)
           --render                 Print the pending Unreleased section
           --release <version>      Fold fragments into the changelog as <version> and delete them
+          --verify-release <ver>   Assert the changelog was assembled for <ver> (release gate)
           --sync-notes             Regenerate RELEASENOTES.md from CHANGELOG.md
 
         Categories: breaking, features, improvements, internal, deprecations, fixes, docs

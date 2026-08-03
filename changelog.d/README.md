@@ -61,8 +61,9 @@ Sections are emitted in that order, and empty ones are skipped.
 
 ```bash
 dotnet run scripts/changelog.cs -- --render       # preview the pending Unreleased section
-dotnet run scripts/changelog.cs -- --check        # what CI runs
+dotnet run scripts/changelog.cs -- --check        # what the pull request gate runs
 dotnet run scripts/changelog.cs -- --release v1.4.0
+dotnet run scripts/changelog.cs -- --verify-release 1.4.0   # what the release gate runs
 dotnet run scripts/changelog.cs -- --sync-notes   # regenerate RELEASENOTES.md
 ```
 

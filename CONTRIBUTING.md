@@ -189,6 +189,12 @@ fresh empty `Unreleased`, regenerates `RELEASENOTES.md`, and deletes the consume
 on a release-prep branch and open it as a normal pull request — the release workflow builds from a
 commit and does not write to the repository.
 
+If you forget, the release workflow stops before building: its first job runs
+`--verify-release <version>` and fails unless the changelog was actually assembled for the version
+being released and no fragments are left pending. That gate exists because both outputs are
+permanent — a NuGet package can only be delisted, never unpublished, and `RELEASENOTES.md` is baked
+into it via `PackageReleaseNotes`.
+
 ### Release workflow
 
 The release is triggered manually via GitHub Actions:
