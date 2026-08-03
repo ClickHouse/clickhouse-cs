@@ -89,10 +89,14 @@ internal static class ColumnSlotFactory
     {
         // Order matters, and not only for speed: FrameworkType is not safe to evaluate on every column type.
         // AggregateFunctionType throws AggregateFunctionException from it (deliberately — you are meant to
-        // learn you need xMerge() when you read the value, not when you open the reader), and the composite
-        // types build a fresh Type object on each call. Slots are created for every column in the ctor, so
-        // reading FrameworkType before this bail-out would turn merely *selecting* an AggregateFunction
-        // column into a failure to construct the reader at all.
+        // learn you need xMerge() when you read the value), and the composite types build a fresh Type object
+        // on each call. Testing the marker first is what keeps slot construction total: it has to work for
+        // every column of every row the reader is handed, and so may depend only on the FrameworkType of
+        // types that advertise a typed reader in the first place.
+        //
+        // ColumnSlotTests.Create_AggregateFunctionColumn_FallsBackToBoxedWithoutEvaluatingFrameworkType is
+        // the guard on this ordering. It has to be a unit test: end to end both orderings raise the same
+        // exception from the same Read() call, so no reader-level test can tell them apart.
         if (type is not ITypedReader)
             return null;
 
