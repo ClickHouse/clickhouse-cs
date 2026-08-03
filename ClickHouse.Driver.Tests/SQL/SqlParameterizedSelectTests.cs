@@ -309,6 +309,21 @@ public class SqlParameterizedSelectTests : IDisposable
         Assert.That(result, Is.EqualTo(0UL)); // value of the `number` column, not the literal "number"
     }
 
+    [Test]
+    public async Task AddParameter_AdoPlaceholderInsideStringLiteral_LeavesLiteralIntact()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 'user@id' AS s, @id AS v";
+        command.AddParameter("id", 42);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result[0], Is.EqualTo("user@id"));
+            Assert.That(result[1], Is.EqualTo(42));
+        });
+    }
+
     /// <summary>
     /// Drops every name handed out by <see cref="CreateTableName"/>. Best-effort: a table that
     /// cannot be dropped must not fail an otherwise passing fixture.

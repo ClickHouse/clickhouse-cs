@@ -37,6 +37,7 @@ Unreleased
 * Fixed `ClickHouseConnection.GetSchema("Columns", ...)` silently ignoring restriction values beyond the supported `database` and `table` positions. A call such as `GetSchema("Columns", ["system", "functions", "name"])` used to run and return **all** columns of the table, quietly dropping the extra filter; it now throws `ArgumentException`, matching how ADO.NET providers report more restrictions than a metadata collection supports. Trailing positions left `null` are still treated as unspecified and ignored, so `["system", "functions", null, null]` keeps working.
 * Fixed `ClickHouseConnection.GetSchema("Columns", ...)` building invalid SQL when the table restriction is supplied without the database restriction (for example `[null, "functions"]`). The `WHERE` clause is now composed from the restrictions that are actually set, so filtering by table alone no longer fails with a server syntax error.
 * Fixed `DbConnection.GetSchema("Columns", ...)` not disposing the command it creates internally, which delayed the release of that command's cancellation-token source until garbage collection.
+* Fixed ADO-style `@name` parameter placeholders being rewritten inside string literals, quoted identifiers, heredocs and comments, which corrupted values such as `'user@id'` into `'user{id:Int32}'`. Placeholders are now only replaced in code positions (issue #512).
 
 v1.3.0
 ---
