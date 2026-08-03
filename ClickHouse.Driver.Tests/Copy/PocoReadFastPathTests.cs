@@ -406,17 +406,34 @@ public class PocoReadFastPathTests : AbstractConnectionTestFixture
             "ENGINE AggregatingMergeTree ORDER BY Name");
         await client.ExecuteNonQueryAsync($"INSERT INTO {table} VALUES ('a', 3), ('a', 4), ('b', 10)");
 
-        var sql = $"SELECT Name, sum(Total) AS Total FROM {table} GROUP BY Name ORDER BY Name";
+        // FINAL, so the two 'a' parts are merged whether or not the background merge has run yet, while the
+        // column stays declared — and therefore encoded on the wire — as SimpleAggregateFunction(sum, UInt64).
+        // This is the query that actually exercises the wrapper: sum(Total) below projects to a plain UInt64
+        // and would pass with no wrapper support at all.
+        var rawSql = $"SELECT Name, Total FROM {table} FINAL ORDER BY Name";
 
-        using (var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync($"SELECT Name, Total FROM {table}"))
+        using (var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(rawSql))
+        {
+            Assert.That(reader.GetDataTypeName(1), Does.StartWith("SimpleAggregateFunction("),
+                "the wrapper must survive to the wire, or this test is not covering it");
             Assert.That(reader.TryGetRowMaterializer<AggregatePoco>(out _, out _), Is.True,
                 "SimpleAggregateFunction is wire-transparent and must reach the wrapped typed reader");
+        }
 
-        var rows = new List<AggregatePoco>();
-        await foreach (var row in client.QueryAsync<AggregatePoco>(sql))
-            rows.Add(row);
+        var raw = new List<AggregatePoco>();
+        await foreach (var row in client.QueryAsync<AggregatePoco>(rawSql))
+            raw.Add(row);
 
-        Assert.That(rows.Select(r => (r.Name, r.Total)), Is.EqualTo(new[] { ("a", 7ul), ("b", 10ul) }));
+        Assert.That(raw.Select(r => (r.Name, r.Total)), Is.EqualTo(new[] { ("a", 7ul), ("b", 10ul) }),
+            "the wrapped column must materialize through the fast path");
+
+        // And separately the aggregate result, whose Total is an ordinary UInt64.
+        var aggregated = new List<AggregatePoco>();
+        await foreach (var row in client.QueryAsync<AggregatePoco>(
+            $"SELECT Name, sum(Total) AS Total FROM {table} GROUP BY Name ORDER BY Name"))
+            aggregated.Add(row);
+
+        Assert.That(aggregated.Select(r => (r.Name, r.Total)), Is.EqualTo(new[] { ("a", 7ul), ("b", 10ul) }));
     }
 
     public class NullablePropPoco
