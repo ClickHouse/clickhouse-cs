@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
@@ -198,4 +199,142 @@ public class TupleTypeTests : AbstractConnectionTestFixture
         });
     }
 
+    [Test]
+    [TestCase("Tuple(`a b` Int64, c String)", "Int64", "String")]
+    [TestCase("Tuple(`a b` Decimal(10, 2), c String)", "Decimal64(2)", "String")]
+    [TestCase("Tuple(`a b` Map(String, Array(Int32)), c String)", "Map(String, Array(Int32))", "String")]
+    [TestCase("Tuple(`a,b` Int64, c String)", "Int64", "String")]
+    [TestCase("Tuple(`a(b)` Int64, c String)", "Int64", "String")]
+    [TestCase(@"Tuple(`a\`b` Int64, c String)", "Int64", "String")]
+    [TestCase(@"Tuple(`a\'b` Int64, c String)", "Int64", "String")]
+    [TestCase("Tuple(`a.b c` Int64, `d e` String)", "Int64", "String")]
+    [TestCase(@"Tuple(`a\nb c` Int64, d String)", "Int64", "String")]
+    [TestCase(@"Tuple(`a\\` Int64, d String)", "Int64", "String")]
+    [TestCase("Tuple(`a``b c` Int64, d String)", "Int64", "String")]
+    [TestCase("Nested(`a b` Int64, c String)", "Int64", "String")]
+    [TestCase("Nested(`a b` Decimal(10, 2), c String)", "Decimal64(2)", "String")]
+    [TestCase("Nested(`a,b` Nullable(String), c String)", "Nullable(String)", "String")]
+    public void ParseClickHouseType_ElementNameIsBacktickQuoted_ResolvesElementTypes(string typeString, string firstElementType, string secondElementType)
+    {
+        var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        var tupleType = (TupleType)type;
+        Assert.That(
+            tupleType.UnderlyingTypes.Select(t => t.ToString()),
+            Is.EqualTo(new[] { firstElementType, secondElementType }).AsCollection);
+    }
+
+    [Test]
+    [TestCase("Tuple(String, Int32)", "String", "Int32")]
+    [TestCase("Tuple(name String, age Int32)", "String", "Int32")]
+    [TestCase("Tuple(id Int32, value Decimal(10, 2))", "Int32", "Decimal64(2)")]
+    [TestCase("Nested(Id Nullable(String), Comment Nullable(String))", "Nullable(String)", "Nullable(String)")]
+    [TestCase("Nested(Id Int64, Text String)", "Int64", "String")]
+    public void ParseClickHouseType_ElementNameIsNotQuoted_ResolvesElementTypes(string typeString, string firstElementType, string secondElementType)
+    {
+        var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        var tupleType = (TupleType)type;
+        Assert.That(
+            tupleType.UnderlyingTypes.Select(t => t.ToString()),
+            Is.EqualTo(new[] { firstElementType, secondElementType }).AsCollection);
+    }
+
+    [Test]
+    [TestCase("Array(Tuple(`a b` Int64, c String))", "Array(Tuple(Int64,String))")]
+    [TestCase("Map(String, Tuple(`a b` Int64, c String))", "Map(String, Tuple(Int64,String))")]
+    [TestCase("Tuple(`a b` Tuple(`c d` Int64, e String))", "Tuple(Tuple(Int64,String))")]
+    [TestCase("Tuple(`a b` Int64)", "Tuple(Int64)")]
+    public void ParseClickHouseType_QuotedElementNameIsWrappedInAnotherType_ResolvesWholeType(string typeString, string expectedType)
+    {
+        var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.That(type.ToString(), Is.EqualTo(expectedType));
+    }
+
+    [Test]
+    public void ParseClickHouseType_QuotedElementNameWithSingleQuotedElementType_ResolvesElementTypes()
+    {
+        // A backtick-quoted element name next to an element type carrying single-quoted arguments:
+        // both quote kinds have to be honoured by the same declaration.
+        var type = (TupleType)TypeConverter.ParseClickHouseType(
+            "Tuple(`a b` Enum8('x y' = 1, 'z' = 2), c DateTime64(3, 'Europe/Amsterdam'))", TypeSettings.Default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(type.UnderlyingTypes[0], Is.InstanceOf<Enum8Type>());
+            Assert.That(type.UnderlyingTypes[1], Is.InstanceOf<DateTime64Type>());
+        });
+    }
+
+    [Test]
+    [TestCase("Tuple(`a b Int64, c String)")]
+    [TestCase("Tuple(`a b`, c String)")]
+    [TestCase("Nested(`a b Int64, c String)")]
+    [TestCase("Nested(`a b`, c String)")]
+    public void ParseClickHouseType_ElementQuotingIsMalformed_ThrowsArgumentException(string typeString)
+    {
+        Assert.Throws<ArgumentException>(
+            () => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default));
+    }
+
+    [Test]
+    public async Task ShouldReadTuple_WithBacktickQuotedElementName_ReturnsElements()
+    {
+        var result = await connection.ExecuteScalarAsync(
+            "select cast(tuple(toInt64(1), 'a') as Tuple(`p q` Int64, r String))");
+
+        var tuple = result as ITuple;
+        Assert.Multiple(() =>
+        {
+            Assert.That(tuple, Is.Not.Null);
+            Assert.That(tuple.Length, Is.EqualTo(2));
+            Assert.That(tuple[0], Is.EqualTo(1L));
+            Assert.That(tuple[1], Is.EqualTo("a"));
+        });
+    }
+
+    [Test]
+    public async Task ShouldReadNested_WithBacktickQuotedElementName_ReturnsElements()
+    {
+        var result = await connection.ExecuteScalarAsync(
+            "select cast([tuple(toDecimal64(1.25, 2), 'x')] as Nested(`a b` Decimal(10, 2), c String))");
+
+        var rows = (IList)result;
+        Assert.That(rows, Has.Count.EqualTo(1));
+        var tuple = rows[0] as ITuple;
+        Assert.Multiple(() =>
+        {
+            Assert.That(tuple, Is.Not.Null);
+            Assert.That(tuple.Length, Is.EqualTo(2));
+            Assert.That(tuple[0], Is.EqualTo(new ClickHouseDecimal(1.25m)));
+            Assert.That(tuple[1], Is.EqualTo("x"));
+        });
+    }
+
+    [Test]
+    public async Task ShouldInsertBinary_IntoTupleColumnWithBacktickQuotedElementName_RoundTripsElements()
+    {
+        // The insert path resolves the destination column types from the server too, so it parses
+        // the same quoted element name as the read path.
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {targetTable} (id Int32, t Tuple(`p q` Int64, r String)) ENGINE Memory");
+
+        await client.InsertBinaryAsync(
+            targetTable,
+            ["id", "t"],
+            [[1, Tuple.Create(2L, "a")]]);
+
+        var result = await client.ExecuteScalarAsync($"SELECT t FROM {targetTable}");
+
+        var tuple = result as ITuple;
+        Assert.Multiple(() =>
+        {
+            Assert.That(tuple, Is.Not.Null);
+            Assert.That(tuple.Length, Is.EqualTo(2));
+            Assert.That(tuple[0], Is.EqualTo(2L));
+            Assert.That(tuple[1], Is.EqualTo("a"));
+        });
+    }
 }

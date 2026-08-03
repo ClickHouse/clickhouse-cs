@@ -75,6 +75,46 @@ internal static class StringExtensions
         return builder.ToString();
     }
 
+    /// <summary>
+    /// Finds the space separating a leading identifier from the type which follows it, as used by
+    /// named type elements (for example <c>`a b` Int64</c> in a named tuple, a Nested element or a
+    /// JSON typed path). An identifier which needs quoting is enclosed in backticks by the server
+    /// and may itself contain spaces, so the enclosed identifier is skipped before looking for the
+    /// separator.
+    /// </summary>
+    /// <param name="str">Element declaration, optionally prefixed with an identifier</param>
+    /// <returns>Index of the separator, or -1 if there is none (including an unterminated identifier).</returns>
+    public static int IndexOfNameTypeSeparator(this string str)
+    {
+        if (string.IsNullOrEmpty(str))
+            return -1;
+
+        var i = 0;
+
+        if (str[0] == '`')
+        {
+            for (i++; i < str.Length; i++)
+            {
+                // The server escapes a backtick inside a quoted identifier as \` ; a hand-written
+                // type name may double it instead, the way SQL does.
+                if (str[i] == '\\' || (str[i] == '`' && i + 1 < str.Length && str[i + 1] == '`'))
+                {
+                    i++;
+                }
+                else if (str[i] == '`')
+                {
+                    i++;
+                    break;
+                }
+            }
+
+            if (i >= str.Length)
+                return -1; // unterminated identifier
+        }
+
+        return str.IndexOf(' ', i);
+    }
+
     public static string ToSnakeCase(this string str)
     {
         var result = new StringBuilder();

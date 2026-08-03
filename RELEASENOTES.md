@@ -33,6 +33,7 @@ Unreleased
 * Fixed `ClickHouseConnection.GetSchema("Columns", ...)` building invalid SQL when the table restriction is supplied without the database restriction (for example `[null, "functions"]`). The `WHERE` clause is now composed from the restrictions that are actually set, so filtering by table alone no longer fails with a server syntax error.
 * Fixed `DbConnection.GetSchema("Columns", ...)` not disposing the command it creates internally, which delayed the release of that command's cancellation-token source until garbage collection.
 * Fixed `JSON` columns being unreadable when a typed path name requires backtick quoting — for example ``JSON(`a b` Int64)`` or ``JSON(`a,b` Int64)``. Such a path made the whole query fail with `SerializationException: Unsupported path in JSON hint`, because the type parser split each hint on every space and did not treat backticks as quotes. Quoted path names (including ones containing spaces, commas, parentheses and escaped characters) are now parsed and unescaped correctly (issue #502).
+* Fixed named `Tuple` and `Nested` columns being unreadable when an element name requires backtick quoting and contains a space — for example ``Tuple(`p q` Int64, r String)`` or ``Nested(`a b` Decimal(10, 2), c String)``. Reading such a column failed with `ArgumentException: Unknown type`, because the type parser split the element declaration on its first space and so cut the quoted name in half. The element name is now skipped as a whole before the name/type separator is located.
 
 v1.3.0
 ---
