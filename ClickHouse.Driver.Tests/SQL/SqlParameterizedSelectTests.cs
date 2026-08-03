@@ -93,13 +93,12 @@ public class SqlParameterizedSelectTests : IDisposable
         TestUtilities.AssertEqual(result, value);
     }
 
-    // --- Issue #483: byte[] and TimeOnly parameter binding over the HTTP parameter path --------
+    // Issue #483: byte[] and TimeOnly parameter binding over the HTTP parameter path.
 
     [Test]
     public async Task ShouldExecuteParameterizedSelectWithByteArrayForString()
     {
-        // A byte[] bound to String used to fall through to value.ToString() and insert the literal
-        // text "System.Byte[]"; it must decode to the payload text instead.
+        // A byte[] used to be formatted as the literal text "System.Byte[]".
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT {var:String} as res";
         command.AddParameter("var", new byte[] { 0x41, 0x42, 0x43 }); // "ABC"
@@ -111,10 +110,8 @@ public class SqlParameterizedSelectTests : IDisposable
     [Test]
     public async Task ShouldRoundTripNonUtf8ByteArrayThroughStringParameter()
     {
-        // A byte[] that is not valid UTF-8 must round-trip byte-for-byte, not collapse to the U+FFFD
-        // replacement char (which is what decoding through UTF-8 would produce). The payload mixes a
-        // null byte, printable ASCII, the escape-sensitive ' and \ bytes, a control byte, and several
-        // invalid-UTF-8 bytes. Asserted via hex() so the check is on the exact stored bytes.
+        // Payload mixes a null byte, printable ASCII, the escape-sensitive ' and \ bytes, a control
+        // byte and invalid-UTF-8 bytes; hex() asserts on the exact bytes the server received.
         var payload = new byte[] { 0x00, 0x41, 0xFF, 0xFE, 0x27, 0x5C, 0x0A, 0x80, 0xC3, 0x28 };
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT hex({var:String}) as res";
@@ -124,30 +121,19 @@ public class SqlParameterizedSelectTests : IDisposable
         Assert.That(result, Is.EqualTo(Convert.ToHexString(payload)));
     }
 
-    [Test]
+    // TimeOnly used to throw InvalidCastException (Time) or hit the default throw (Time64).
     [RequiredFeature(Feature.Time)]
-    public async Task ShouldExecuteParameterizedSelectWithTimeOnlyForTime()
+    [TestCase("Time", 14, 30, 0, 0)]
+    [TestCase("Time64(3)", 14, 30, 0, 500)]
+    public async Task ShouldExecuteParameterizedSelectWithTimeOnly(string clickHouseType, int hour, int minute, int second, int millisecond)
     {
-        // TimeOnly bound to Time used to throw InvalidCastException on the HTTP parameter path.
+        var value = new TimeOnly(hour, minute, second, millisecond);
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT {var:Time} as res";
-        command.AddParameter("var", new TimeOnly(14, 30, 0));
+        command.CommandText = $"SELECT {{var:{clickHouseType}}} as res";
+        command.AddParameter("var", value);
 
         var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
-        Assert.That(result, Is.EqualTo(new TimeSpan(14, 30, 0)));
-    }
-
-    [Test]
-    [RequiredFeature(Feature.Time)]
-    public async Task ShouldExecuteParameterizedSelectWithTimeOnlyForTime64()
-    {
-        // TimeOnly bound to Time64 used to hit the default throw on the HTTP parameter path.
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT {var:Time64(3)} as res";
-        command.AddParameter("var", new TimeOnly(14, 30, 0, 500));
-
-        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
-        Assert.That(result, Is.EqualTo(new TimeSpan(0, 14, 30, 0, 500)).Within(TimeSpan.FromMilliseconds(1)));
+        Assert.That(result, Is.EqualTo(value.ToTimeSpan()).Within(TimeSpan.FromMilliseconds(1)));
     }
 
     [Test]

@@ -88,12 +88,10 @@ internal static class HttpParameterFormatter
                     Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                     quote);
 
-            // byte[] / ReadOnlyMemory<byte> bind faithfully to String/FixedString by escaping the
-            // raw bytes into ClickHouse escaped-string text (EscapeBytes), mirroring the binary write
-            // path (Types/StringType.cs) which writes the bytes verbatim. Decoding through UTF-8 here
-            // would be lossy for payloads that are not valid UTF-8 (invalid sequences collapse to the
-            // U+FFFD replacement char); \xHH escapes preserve every byte. Without these arms a byte[]
-            // fell through to the value.ToString() arm below and was inserted as text "System.Byte[]".
+            // Byte payloads are escaped byte-for-byte (see EscapeBytes), mirroring the binary write
+            // path (Types/StringType.cs) which writes them verbatim; UTF-8 decoding here would mangle
+            // data that is not valid UTF-8. Without these arms a byte[] fell through to the
+            // value.ToString() arm below and was sent as the text "System.Byte[]".
             case StringType or FixedStringType when value is byte[] bytes:
                 return QuoteIfNeeded(EscapeBytes(bytes), quote);
 
@@ -230,12 +228,10 @@ internal static class HttpParameterFormatter
     private static readonly char[] HexDigits = "0123456789ABCDEF".ToCharArray();
 
     /// <summary>
-    /// Escapes a raw byte payload into ClickHouse escaped-string text so that ANY byte sequence
-    /// (including data that is not valid UTF-8) round-trips faithfully through the text-based HTTP
-    /// parameter channel, matching the binary write path in <see cref="Types.StringType"/> which
-    /// writes the bytes verbatim. Printable ASCII is emitted as-is; <c>\</c> and <c>'</c> are
-    /// backslash-escaped; every other byte (control characters and any byte &gt;= 0x7F) is emitted as
-    /// a <c>\xHH</c> hex escape, which the server decodes back to the exact byte.
+    /// Escapes a raw byte payload into ClickHouse escaped-string text, so that any byte sequence
+    /// (including data that is not valid UTF-8) round-trips through the text-based HTTP parameter
+    /// channel. Printable ASCII is emitted as-is, <c>\</c> and <c>'</c> are backslash-escaped, and
+    /// every other byte becomes a <c>\xHH</c> escape which the server decodes back to that byte.
     /// </summary>
     private static string EscapeBytes(ReadOnlySpan<byte> bytes)
     {
