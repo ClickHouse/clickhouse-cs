@@ -494,6 +494,8 @@ public class DynamicTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Dynamic)]
     [TestCase("sumState(number)", "sum")]
     [TestCase("quantilesState(0.5, 0.9)(number)", "quantiles")]
+    // A non-zero state serialization version leaves the header layout unchanged, so it decodes too.
+    [TestCase("CAST(uniqExactState(number), 'AggregateFunction(1, uniqExact, UInt64)')", "uniqExact")]
     public async Task Read_AggregateFunctionInDynamic_ThrowsAggregateFunctionException(string stateSql, string expectedFunction)
     {
         using var reader = await connection.ExecuteReaderAsync(

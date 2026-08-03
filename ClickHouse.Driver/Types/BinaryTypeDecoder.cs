@@ -294,7 +294,12 @@ internal static class BinaryTypeDecoder
 
     private static AggregateFunctionType DecodeAggregateFunction(ExtendedBinaryReader reader, TypeSettings typeSettings)
     {
-        var serializationVersion = reader.Read7BitEncodedInt();
+        // The leading varint is the aggregate function's own state serialization version (it is what
+        // AggregateFunction(1, uniqExact, UInt64) spells out explicitly). It selects how the state
+        // VALUES are serialized, not how this header is laid out, and it is deliberately not validated
+        // here: the header layout below is identical for every version, and the states themselves are
+        // never deserialized (AggregateFunctionType throws, pointing at the -Merge combinator).
+        _ = reader.Read7BitEncodedInt();
         var functionName = reader.ReadString();
         SkipAggregateFunctionParameters(reader);
 

@@ -132,6 +132,19 @@ public class BinaryTypeDecoderTests
         BinaryTypeIndex.UInt64,
     ];
 
+    // AggregateFunction(1, uniqExact, UInt64), as the server writes it: the leading varint is the
+    // aggregate function's state serialization version, and a non-zero version leaves the rest of the
+    // header layout unchanged.
+    private static readonly byte[] AggregateFunctionUniqExactVersion1Header =
+    [
+        BinaryTypeIndex.AggregateFunction,
+        0x01,                          // serialization version 1
+        0x09, (byte)'u', (byte)'n', (byte)'i', (byte)'q', (byte)'E', (byte)'x', (byte)'a', (byte)'c', (byte)'t',
+        0x00,                          // no parameters
+        0x01,                          // one argument type
+        BinaryTypeIndex.UInt64,
+    ];
+
     [Test]
     public void FromByteCode_SimpleAggregateFunction_DecodesFunctionNameAndStorageType()
     {
@@ -182,6 +195,7 @@ public class BinaryTypeDecoderTests
     [
         (AggregateFunctionSumHeader, "sum"),
         (AggregateFunctionQuantilesHeader, "quantiles"),
+        (AggregateFunctionUniqExactVersion1Header, "uniqExact"),
     ];
 
     [Test]
