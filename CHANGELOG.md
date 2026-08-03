@@ -31,6 +31,7 @@ Unreleased
 * Fixed `ClickHouseDataReader.GetSchemaTable()` leaving `NumericScale` unset (`DBNull`) for `DateTime64(N)` and `Time64(N)` columns (including their `Nullable(...)` variants). The schema table now reports the fractional-seconds precision `N` in `NumericScale`, matching how `Decimal` columns are already reported (issue #438).
 * Fixed mid-stream server exceptions never surfacing on the streaming read path (`ExecuteReader`/`ExecuteReaderAsync`). A query that fails after the HTTP response is committed (for example a `throwIf` partway through a large result) now raises a `ClickHouseServerException` with the real server error, instead of a bare `HttpIOException` or `EndOfStreamException` (issue #476).
 * Fixed `ClickHouseConnection.GetSchema("Columns", ...)` building invalid SQL when the table restriction is supplied without the database restriction (for example `[null, "functions"]`). The `WHERE` clause is now composed from the restrictions that are actually set, so filtering by table alone no longer fails with a server syntax error.
+* Fixed `DbConnection.GetSchema("Columns", ...)` not disposing the command it creates internally, which delayed the release of that command's cancellation-token source until garbage collection.
 
 v1.3.0
 ---
