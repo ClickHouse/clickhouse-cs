@@ -307,6 +307,17 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [TestCase("JSON(max_dynamic_paths = 10, a String)")]
+    [TestCase("JSON(max_dynamic_paths  =  10, a String)")]
+    [TestCase("JSON(max_dynamic_types =3, a String)")]
+    public void ShouldExcludeSettingsFromHintedPathsWhenParsingSpacedAssignments(string typeString)
+    {
+        var type = (JsonType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.That(type.HintedTypes.Keys, Is.EquivalentTo(new[] { "a" }));
+    }
+
+    [Test]
     [TestCaseSource(nameof(JsonTypeTestCases))]
     public async Task ShouldParseJsonWithTypedPath(string typeDefinition, string jsonData, string pathName, object expectedValue)
     {
