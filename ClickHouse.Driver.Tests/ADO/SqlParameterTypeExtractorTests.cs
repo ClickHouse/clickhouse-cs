@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ClickHouse.Driver.ADO.Parameters;
 using NUnit.Framework;
 
@@ -288,13 +289,15 @@ public class SqlParameterTypeExtractorTests
     }
 
     [Test]
-    public void ExtractTypeHints_ParameterInHashCommentNoSpace_IgnoresComment()
+    public void ExtractTypeHints_BareHash_NotTreatedAsComment()
     {
-        var sql = "SELECT {val:Int32} #{val:String}";
+        // Only "# " and "#!" start a comment; a bare "#" is not a comment marker for the server either
+        var sql = "SELECT {val:Int32} #{other:String}";
         var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
 
-        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints, Has.Count.EqualTo(2));
         Assert.That(hints["val"], Is.EqualTo("Int32"));
+        Assert.That(hints["other"], Is.EqualTo("String"));
     }
 
     [Test]
@@ -441,5 +444,66 @@ public class SqlParameterTypeExtractorTests
 
         Assert.That(hints, Has.Count.EqualTo(1));
         Assert.That(hints["val"], Is.EqualTo("String"));
+    }
+
+    private static IEnumerable<string> HintInsideCommentOrQuotedToken()
+    {
+        yield return "SELECT {val:Int32} // {val:String}";
+        yield return "SELECT {val:Int32} /* a /* b */ {val:String} */";
+        yield return "SELECT {val:Int32} AS `x {val:String}`";
+        yield return "SELECT {val:Int32} AS \"x {val:String}\"";
+        yield return "SELECT {val:Int32}, $$ {val:String} $$";
+        yield return "SELECT {val:Int32}, $tag$ {val:String} $tag$";
+        yield return "SELECT {val:Int32}, 'a\\' {val:String} b'";
+    }
+
+    [TestCaseSource(nameof(HintInsideCommentOrQuotedToken))]
+    public void ExtractTypeHints_HintInsideCommentOrQuotedToken_HintIgnored(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    private static IEnumerable<string> CommentOrQuotedTokenPrecedingHint()
+    {
+        yield return "SELECT 1 // comment\n, {val:Int32}";
+        yield return "SELECT 1 AS `a--b`, {val:Int32}";
+        yield return "SELECT 1 AS `a\\`--b`, {val:Int32}";
+        yield return "SELECT 1 AS `a`` --b`, {val:Int32}";
+        yield return "SELECT 1 AS \"a'b\", {val:Int32}";
+        yield return "SELECT 1 AS \"a\"\" --b\", {val:Int32}";
+        yield return "SELECT $$--$$, {val:Int32}";
+        yield return "SELECT $tag$ # $tag$, {val:Int32}";
+        yield return "SELECT 'a\\'b', {val:Int32}";
+        yield return "SELECT 'a\\\\', {val:Int32}";
+    }
+
+    private static IEnumerable<string> DollarSignThatDoesNotOpenAHeredoc()
+    {
+        // No closing tag
+        yield return "SELECT $tag$, {val:Int32}";
+        // Tags are empty or ASCII word characters only
+        yield return "SELECT $a-b$, {val:Int32}, $a-b$";
+        yield return "SELECT $a b$, {val:Int32}, $a b$";
+    }
+
+    [TestCaseSource(nameof(DollarSignThatDoesNotOpenAHeredoc))]
+    public void ExtractTypeHints_DollarSignNotOpeningHeredoc_HintStillExtracted(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [TestCaseSource(nameof(CommentOrQuotedTokenPrecedingHint))]
+    public void ExtractTypeHints_CommentOrQuotedTokenPrecedingHint_HintStillExtracted(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
     }
 }

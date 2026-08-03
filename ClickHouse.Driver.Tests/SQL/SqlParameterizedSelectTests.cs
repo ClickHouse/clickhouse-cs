@@ -163,6 +163,35 @@ public class SqlParameterizedSelectTests : IDisposable
     }
 
     [Test]
+    [TestCase("SELECT {val:Int32} AS res // {val:String}")]
+    [TestCase("SELECT {val:Int32} AS res /* a /* b */ {val:String} */")]
+    [TestCase("SELECT {val:Int32} AS res, $$ {val:String} $$ AS heredoc")]
+    public async Task AddParameter_ConflictingTypeHintInsideCommentOrHeredoc_UsesRealHint(string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.AddParameter("val", 42);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result[0], Is.EqualTo(42));
+    }
+
+    [Test]
+    [TestCase("SELECT 1 AS `a--b`, toString({val:DateTime64(3, 'UTC')}) AS res")]
+    [TestCase("SELECT 1 AS \"a'b\", toString({val:DateTime64(3, 'UTC')}) AS res")]
+    [TestCase("SELECT $$--$$ AS heredoc, toString({val:DateTime64(3, 'UTC')}) AS res")]
+    public async Task AddParameter_TypeHintAfterQuotedIdentifierOrHeredoc_UsesTypeHint(string sql)
+    {
+        // Without the hint the value would be formatted as DateTime (no sub-second part)
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.AddParameter("val", new DateTime(2020, 1, 2, 3, 4, 5, 123, DateTimeKind.Utc));
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result[1], Is.EqualTo("2020-01-02 03:04:05.123"));
+    }
+
+    [Test]
     [TestCase("String")]
     [TestCase("Int32")]
     [TestCase("Int64")]

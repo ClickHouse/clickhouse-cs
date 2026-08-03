@@ -27,6 +27,7 @@ Unreleased
 * `ClickHouseClient.MemoryStreamManager` is now `[Obsolete]`. Since binary inserts stream directly into the request body (see above), this property is no longer used and has no effect; it will be removed in a future version.
 
 **Bug Fixes:**
+* Fixed `{name:Type}` parameter type hints being mis-detected in queries containing `//` comments, nested block comments, backtick/double-quoted identifiers, backslash escapes or `$tag$` heredocs. A bare `#` no longer starts a comment (only `# ` and `#!` do) (issue #508).
 * Fixed JSON typed paths whose names start with `max_dynamic_paths` or `max_dynamic_types` being mistaken for JSON settings and decoded as dynamic values.
 * Fixed `InsertOptions.WithColumnTypes()` and `InsertOptions.WithQueryId()` silently dropping some caller-set options (such as `AcceptEncoding`) when copying.
 * Fixed `ClickHouseServerException` carrying a blank `Message` and an `ErrorCode` of `-1` when the server — or an upstream component such as a load balancer or the ClickHouse Cloud edge — returned a non-2xx HTTP response with an empty (or whitespace-only) body. The exception now reports the HTTP status code and reason phrase, and uses the `X-ClickHouse-Exception-Code` response header as the error code when the server sets it (issue #440). Non-empty error bodies are unaffected.
