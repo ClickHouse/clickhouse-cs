@@ -9,6 +9,9 @@
 - **Critical priorities**: Stability, correctness, performance, and comprehensive testing
 - **Tech stack**: C#/.NET targeting `net6.0`, `net8.0`, `net9.0`, `net10.0`
 - **Tests run on**: `net6.0`, `net8.0`, `net9.0`, `net10.0`; Integration tests: `net10.0`; Benchmarks: `net10.0`
+- **Supported ClickHouse versions**: `25.8` LTS and newer — the floor of the CI matrix in
+  `.github/workflows/tests.yml`. Behavior that only affects older servers is out of scope; don't add
+  code paths or workarounds for it.
 
 ### Solution Structure
 ```
@@ -85,6 +88,13 @@ var users = connection.Query<User>("SELECT * FROM users");
 - **Hot paths**: Core code in `ADO/`, `Types/`, `Utility/` - avoid allocations, boxing, unnecessary copies
 - **Streaming**: Maintain streaming behavior, avoid buffering entire responses
 - **Connection pooling**: Respect HTTP connection pool behavior, avoid connection leaks
+- **Don't tax a common path for a niche case**: if a fix adds per-row or per-call work to a path
+  everyone hits in order to serve an uncommon one, measure the cost and prefer an opt-in API over
+  charging everybody for it.
+- **Benchmarks**: measure performance-related changes with BenchmarkDotNet
+  (`ClickHouse.Driver.Benchmark`) and put the numbers in the PR description. An ad-hoc benchmark
+  written only to answer a question doesn't need to ship with the PR; commit one that is worth
+  re-running later. A maintainer can also trigger a `/benchmark-compare` run on the PR.
 
 ### Testing Discipline
 
@@ -101,7 +111,15 @@ var users = connection.Query<User>("SELECT * FROM users");
 > var table = TestUtilities.CreateTableName();    // + DROP TABLE IF EXISTS in your teardown
 > ```
 
-- **Integration tests**: Strongly prefer tests that actually call the db over unit tests.
+- **Integration tests**: Strongly prefer tests that actually call the db over unit tests. A test that
+  hand-builds wire bytes or mocks the HTTP response only proves the code agrees with *your model* of
+  the server — it keeps passing when the real server does something else. Assert against a real server.
+- **Don't restate existing coverage**: `Utilities/TestCases.cs` (`GetDataTypeSamples()`) already
+  round-trips every type — plus its `Nullable`/`Array`/composite forms — through the select,
+  parameter, bulk-copy and serialisation suites. Check there first, add tests only for what those
+  don't reach, and say in the PR what that is. The usual offender is a "control" case pinning
+  behavior your change never touched (the sibling type, the untouched overload); that is already
+  covered, and you'll be asked to drop it.
 - **Test utilities**: before writing tests, read TestUtilities.cs to understand existing config and
   utility patterns — including `CreateTableName`/`SanitizeTableName` (see the note above).
 - **Test matrix**: ADO provider, parameter binding, ORMs, multi-framework, multi-ClickHouse-version
@@ -143,6 +161,11 @@ var users = connection.Query<User>("SELECT * FROM users");
 ### Code Style
 - **Namespaces**: File-scoped namespaces (warning-level)
 - **Analyzers**: Respect `.editorconfig`, StyleCop suppressions, nullable contexts
+- **No redundant framework guards**: the library floors at `net6.0`, so `#if NET5_0_OR_GREATER` /
+  `#if NET6_0_OR_GREATER` are always true — don't add them. Guard only APIs newer than .NET 6, with
+  the narrowest symbol that applies.
+- **Comments**: short, and only claims you have verified. Don't assert server or protocol behavior
+  ("the separator is optional") without confirming it against a real server or the server source.
 
 ### Configuration & Settings
 - **Client configuration**: Connection string or `ClickHouseClientSettings` for client-level settings
@@ -268,6 +291,10 @@ After completing a unit of work and making sure code coverage is good, launch a 
 ## Changelog and release notes
 
 After completing a unit of work, if it should be included in the changelog (any behavioral change in the client should be), then update CHANGELOG.md and RELEASENOTES.md.
+
+**Keep entries short** — one or two sentences on the user-visible change, plus the issue number. No
+root-cause analysis, no benchmark tables, no implementation detail, and don't claim more than the
+code actually guarantees. Everything else belongs in the PR description.
 
 ---
 
