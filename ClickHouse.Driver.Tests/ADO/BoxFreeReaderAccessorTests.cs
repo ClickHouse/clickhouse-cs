@@ -343,14 +343,18 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
     {
         using var reader = await ReadOneAsync(
             "toInt64OrNull('7') AS a, toFloat64OrNull('1.5') AS b, " +
-            "CAST('s' AS Nullable(String)) AS c, CAST(true AS Nullable(Bool)) AS d");
+            "CAST('s' AS Nullable(String)) AS c, CAST(true AS Nullable(Bool)) AS d, " +
+            "CAST(false AS Nullable(Bool)) AS e");
 
         Assert.Multiple(() =>
         {
             Assert.That(reader.GetInt64(0), Is.EqualTo(7L));
             Assert.That(reader.GetDouble(1), Is.EqualTo(1.5d));
             Assert.That(reader.GetString(2), Is.EqualTo("s"));
+
+            // Both polarities, so the assertion cannot be satisfied by a branch that hard-codes one.
             Assert.That(reader.GetBoolean(3), Is.True);
+            Assert.That(reader.GetBoolean(4), Is.False);
         });
     }
 
@@ -401,7 +405,8 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
     }
 
     // A Decimal column resolves to a decimal or a ClickHouseDecimal slot depending on UseCustomDecimals;
-    // GetDecimal has to reach the same decimal either way.
+    // GetDecimal has to reach the same decimal either way. Nullable() doubles that again — it is a different
+    // slot kind, so a different branch — and a NULL cell has to keep throwing off the boxed fallback.
     [TestCase(false)]
     [TestCase(true)]
     public async Task GetDecimal_UnderEitherDecimalRepresentation_ReturnsTheSameValue(bool useCustomDecimals)
@@ -410,9 +415,17 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
         settings = new ClickHouseClientSettings(settings) { UseCustomDecimals = useCustomDecimals };
         using var client = new ClickHouseClient(settings);
 
-        using var reader = await client.ExecuteReaderAsync("SELECT toDecimal64(12.34, 2) AS c");
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toDecimal64(12.34, 2) AS c, toDecimal64OrNull('56.78', 2) AS n, " +
+            "CAST(NULL AS Nullable(Decimal64(2))) AS z");
         Assert.That(reader.Read(), Is.True);
-        Assert.That(reader.GetDecimal(0), Is.EqualTo(12.34m));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.GetDecimal(0), Is.EqualTo(12.34m));
+            Assert.That(reader.GetDecimal(1), Is.EqualTo(56.78m));
+            Assert.Throws<InvalidCastException>(() => reader.GetDecimal(2));
+        });
     }
 
     // ---- Converter routing ----

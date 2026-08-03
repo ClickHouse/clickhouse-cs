@@ -181,11 +181,21 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         => readValueConverter == null ? GetSlotValue<T>(ordinal) : (T)GetValue(ordinal);
 
     // Unlike its neighbours this one coerces rather than casts, so only an exact Bool column can take the
-    // fast path; anything else keeps Convert.ToBoolean's widening (and its exception messages).
+    // fast path; anything else keeps Convert.ToBoolean's widening (and its exception messages). A NULL cell
+    // falls through as well, so Convert.ToBoolean(DBNull.Value) still throws exactly as it did.
     public override bool GetBoolean(int ordinal)
-        => readValueConverter == null && Slot(ordinal) is ValueSlot<bool> boolSlot
-            ? boolSlot.Value
-            : Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
+    {
+        if (readValueConverter == null)
+        {
+            var slot = Slot(ordinal);
+            if (slot is ValueSlot<bool> boolSlot)
+                return boolSlot.Value;
+            if (slot is NullableSlot<bool> nullableSlot && nullableSlot.HasValue)
+                return nullableSlot.Value;
+        }
+
+        return Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
+    }
 
     public override byte GetByte(int ordinal) => GetTypedValue<byte>(ordinal);
 
@@ -208,12 +218,18 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     {
         if (readValueConverter == null)
         {
-            // Which of these two a Decimal column resolves to is the UseBigDecimal setting's doing; both
-            // reach the same decimal without a box.
-            if (Slot(ordinal) is ValueSlot<decimal> decimalSlot)
+            // Which of these two representations a Decimal column resolves to is the UseBigDecimal setting's
+            // doing; both reach the same decimal without a box, nullable or not. A NULL cell falls through to
+            // the boxed path below, where casting DBNull.Value throws exactly as it did.
+            var slot = Slot(ordinal);
+            if (slot is ValueSlot<decimal> decimalSlot)
                 return decimalSlot.Value;
-            if (slots[ordinal] is ValueSlot<ClickHouseDecimal> bigDecimalSlot)
+            if (slot is NullableSlot<decimal> nullableDecimalSlot && nullableDecimalSlot.HasValue)
+                return nullableDecimalSlot.Value;
+            if (slot is ValueSlot<ClickHouseDecimal> bigDecimalSlot)
                 return bigDecimalSlot.Value.ToDecimal(CultureInfo.InvariantCulture);
+            if (slot is NullableSlot<ClickHouseDecimal> nullableBigDecimalSlot && nullableBigDecimalSlot.HasValue)
+                return nullableBigDecimalSlot.Value.ToDecimal(CultureInfo.InvariantCulture);
         }
 
         var value = GetValue(ordinal);
