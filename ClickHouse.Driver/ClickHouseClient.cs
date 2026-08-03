@@ -847,6 +847,8 @@ public sealed class ClickHouseClient : IClickHouseClient
         var columnList = columns != null ? $"({string.Join(", ", columns)})" : string.Empty;
         var query = $"INSERT INTO {table} {columnList} FORMAT {format}";
 
+        // The request message that carries this content disposes it - and, through StreamContent,
+        // the supplied stream - once the request completes, on success and on failure alike.
         HttpContent content = new StreamContent(stream);
         if (useCompression)
         {
@@ -855,15 +857,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         // Pass contentEncoding=null since CompressedContent already adds the Content-Encoding header
-        try
-        {
-            return await PostStreamAsync(query, content, contentEncoding: null, options, cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            content.Dispose();
-            throw;
-        }
+        return await PostStreamAsync(query, content, contentEncoding: null, options, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
