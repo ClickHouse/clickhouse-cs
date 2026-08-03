@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Formats;
+using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types;
 
 namespace ClickHouse.Driver.Tests.ADO;
@@ -29,35 +30,42 @@ public class BoxFreeReaderAllocationTests
     // measurement to boxing: anything left is the thing under test.
     private static readonly string[] ColumnTypes = ["Int64", "Float64", "Int32", "UInt64"];
 
-    private static byte[] BuildPayload()
+    private static byte[] BuildPayload() => BuildPayload(ColumnTypes, TypeSettings.Default, WriteNumericRow);
+
+    private static void WriteNumericRow(ExtendedBinaryWriter writer, ClickHouseType[] types, int row)
     {
-        var types = Array.ConvertAll(ColumnTypes, t => TypeConverter.ParseClickHouseType(t, TypeSettings.Default));
+        types[0].Write(writer, (long)row);
+        types[1].Write(writer, (double)row);
+        types[2].Write(writer, row);
+        types[3].Write(writer, (ulong)row);
+    }
+
+    private static byte[] BuildPayload(string[] columnTypes, TypeSettings settings, Action<ExtendedBinaryWriter, ClickHouseType[], int> writeRow, int rows = Rows)
+    {
+        var types = Array.ConvertAll(columnTypes, t => TypeConverter.ParseClickHouseType(t, settings));
 
         using var stream = new MemoryStream();
         using var writer = new ExtendedBinaryWriter(stream);
 
-        writer.Write7BitEncodedInt(ColumnTypes.Length);
-        for (var i = 0; i < ColumnTypes.Length; i++)
+        writer.Write7BitEncodedInt(columnTypes.Length);
+        for (var i = 0; i < columnTypes.Length; i++)
             writer.Write($"c{i}");
-        foreach (var name in ColumnTypes)
+        foreach (var name in columnTypes)
             writer.Write(name);
 
-        for (var row = 0; row < Rows; row++)
-        {
-            types[0].Write(writer, (long)row);
-            types[1].Write(writer, (double)row);
-            types[2].Write(writer, row);
-            types[3].Write(writer, (ulong)row);
-        }
+        for (var row = 0; row < rows; row++)
+            writeRow(writer, types, row);
 
         writer.Flush();
         return stream.ToArray();
     }
 
-    private static Task<ClickHouseDataReader> CreateReaderAsync(byte[] payload)
+    private static Task<ClickHouseDataReader> CreateReaderAsync(byte[] payload) => CreateReaderAsync(payload, TypeSettings.Default);
+
+    private static Task<ClickHouseDataReader> CreateReaderAsync(byte[] payload, TypeSettings settings)
         => ClickHouseDataReader.FromHttpResponseAsync(
             new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(payload) },
-            TypeSettings.Default);
+            settings);
 
     // Returns bytes allocated while draining the reader. Sums the values into `checksum` so nothing the
     // accessors produce can be optimized away as dead.
@@ -132,6 +140,92 @@ public class BoxFreeReaderAllocationTests
             // And the control: the untyped path still boxes, so the comparison above is measuring something.
             Assert.That(boxed, Is.GreaterThan(BoxedFloor),
                 $"GetValue is expected to still box; saw only {PerRow(boxed)} B/row, so this test is not measuring boxing");
+        });
+    }
+
+    // Bool and Decimal(10,2), read through the two accessors that coerce rather than cast.
+    private static readonly string[] CoercedColumnTypes = ["Bool", "Decimal(10,2)"];
+    private static readonly string[] NullableCoercedColumnTypes = ["Nullable(Bool)", "Nullable(Decimal(10,2))"];
+
+    // Every cell is populated: a NULL costs nothing on either path (DBNull.Value is a singleton), so it is
+    // the present value that can be left boxing.
+    private static void WriteCoercedRow(ExtendedBinaryWriter writer, ClickHouseType[] types, int row)
+    {
+        types[0].Write(writer, row % 2 == 0);
+        types[1].Write(writer, row / 100m);
+    }
+
+    private static double ReadCoerced(ClickHouseDataReader reader)
+        => (reader.GetBoolean(0) ? 1d : 0d) + (double)reader.GetDecimal(1);
+
+    // The control has to do the same *work* as ReadCoerced, not merely touch the same cells, or it measures
+    // the decimal conversion rather than the box. This is the pre-slot body of both accessors verbatim, so
+    // the difference between the two is exactly the two boxes.
+    private static double ReadCoercedBoxed(ClickHouseDataReader reader)
+    {
+        var flag = Convert.ToBoolean(reader.GetValue(0), System.Globalization.CultureInfo.InvariantCulture);
+        var raw = reader.GetValue(1);
+        var value = raw is ClickHouseDecimal chd
+            ? chd.ToDecimal(System.Globalization.CultureInfo.InvariantCulture)
+            : (decimal)raw;
+        return (flag ? 1d : 0d) + (double)value;
+    }
+
+    /// <summary>
+    /// <see cref="ClickHouseDataReader.GetBoolean"/> and <see cref="ClickHouseDataReader.GetDecimal"/> coerce
+    /// rather than cast, so neither can use the shared <c>GetSlotValue&lt;T&gt;</c> body and both match their
+    /// slot kinds by hand — which is how they came to recognise only the non-nullable <c>ValueSlot&lt;T&gt;</c>
+    /// and box every populated <c>Nullable(Bool)</c>/<c>Nullable(Decimal)</c> cell, on column types the
+    /// feature claims to cover.
+    /// </summary>
+    /// <remarks>
+    /// Measured against the identical non-nullable shape rather than against zero, because zero is not the
+    /// right answer here: under <c>useBigDecimal</c> the <c>ClickHouseDecimal</c>-to-<c>decimal</c> conversion
+    /// allocates two byte arrays per call (~72 B/row) whatever the reader does, and that cost is common to
+    /// both sides. The difference isolates exactly the property under test — a <c>Nullable</c> column must
+    /// cost no more than its non-nullable twin. Both decimal representations are covered because
+    /// <c>useBigDecimal</c> picks between two different slots reached by two different branches.
+    /// </remarks>
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task GetBooleanAndGetDecimal_PopulatedNullableCells_AllocateNoMoreThanNonNullable(bool useBigDecimal)
+    {
+        var settings = TypeSettings.Default with { useBigDecimal = useBigDecimal };
+        var plain = BuildPayload(CoercedColumnTypes, settings, WriteCoercedRow);
+        var nullable = BuildPayload(NullableCoercedColumnTypes, settings, WriteCoercedRow);
+
+        foreach (var payload in new[] { plain, nullable, nullable })
+        {
+            using var warmup = await CreateReaderAsync(payload, settings);
+            Measure(warmup, ReadCoerced, out _);
+            using var warmupBoxed = await CreateReaderAsync(payload, settings);
+            Measure(warmupBoxed, ReadCoercedBoxed, out _);
+        }
+
+        long plainAllocated, nullableAllocated, nullableBoxed;
+        using (var reader = await CreateReaderAsync(plain, settings))
+            plainAllocated = Measure(reader, ReadCoerced, out _);
+        using (var reader = await CreateReaderAsync(nullable, settings))
+            nullableAllocated = Measure(reader, ReadCoerced, out _);
+        using (var reader = await CreateReaderAsync(nullable, settings))
+            nullableBoxed = Measure(reader, ReadCoercedBoxed, out _);
+
+        TestContext.Out.WriteLine(
+            $"useBigDecimal={useBigDecimal} plain={PerRow(plainAllocated)} nullable={PerRow(nullableAllocated)} " +
+            $"nullableBoxed={PerRow(nullableBoxed)} (bytes/row)");
+
+        Assert.Multiple(() =>
+        {
+            // One byte per row of slack, which is far below the 24-byte box either accessor would take.
+            Assert.That(nullableAllocated, Is.LessThanOrEqualTo(plainAllocated + Rows),
+                $"a populated Nullable cell must cost no more than a non-nullable one; saw " +
+                $"{PerRow(nullableAllocated)} B/row against {PerRow(plainAllocated)} B/row");
+
+            // The control: the same two cells through GetValue do box, so the comparison above is measuring
+            // something rather than two equally-zero numbers.
+            Assert.That(nullableBoxed, Is.GreaterThan(nullableAllocated + (Rows * 12)),
+                $"GetValue is expected to box both cells; saw only {PerRow(nullableBoxed)} B/row, so this " +
+                $"test is not measuring boxing");
         });
     }
 
