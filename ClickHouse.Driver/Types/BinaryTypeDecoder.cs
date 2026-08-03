@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using ClickHouse.Driver.Formats;
 
@@ -143,7 +143,7 @@ internal static class BinaryTypeDecoder
                 return DecodeFunction(reader, typeSettings);
 
             case BinaryTypeIndex.AggregateFunction:
-                return DecodeAggregateFunction(reader);
+                return DecodeAggregateFunction(reader, typeSettings);
 
             case BinaryTypeIndex.LowCardinality:
                 return new LowCardinalityType() { UnderlyingType = FromByteCode(reader, typeSettings) };
@@ -173,7 +173,7 @@ internal static class BinaryTypeDecoder
                 return BooleanSingleton;
 
             case BinaryTypeIndex.SimpleAggregateFunction:
-                return DecodeSimpleAggregateFunction(reader);
+                return DecodeSimpleAggregateFunction(reader, typeSettings);
 
             case BinaryTypeIndex.Nested:
                 return DecodeNested(reader, typeSettings);
@@ -292,14 +292,48 @@ internal static class BinaryTypeDecoder
         return new NothingType();
     }
 
-    private static AggregateFunctionType DecodeAggregateFunction(ExtendedBinaryReader reader)
+    private static AggregateFunctionType DecodeAggregateFunction(ExtendedBinaryReader reader, TypeSettings typeSettings)
     {
-        throw new NotImplementedException("AggregateFunction decoding not implemented.");
+        var serializationVersion = reader.Read7BitEncodedInt();
+        var functionName = reader.ReadString();
+        SkipAggregateFunctionParameters(reader);
+
+        var argumentCount = reader.Read7BitEncodedInt();
+        for (int i = 0; i < argumentCount; i++)
+        {
+            FromByteCode(reader, typeSettings); // Skip argument types
+        }
+
+        // The values are aggregation states, which cannot be read directly. AggregateFunctionType
+        // reports that (pointing at the -Merge combinator) when the value is accessed.
+        return new AggregateFunctionType { Function = functionName };
     }
 
-    private static SimpleAggregateFunctionType DecodeSimpleAggregateFunction(ExtendedBinaryReader reader)
+    private static SimpleAggregateFunctionType DecodeSimpleAggregateFunction(ExtendedBinaryReader reader, TypeSettings typeSettings)
     {
-        throw new NotImplementedException("SimpleAggregateFunction decoding not implemented.");
+        var functionName = reader.ReadString();
+        SkipAggregateFunctionParameters(reader);
+
+        // Values are stored as the aggregate function's return type, which the server requires to be
+        // the first argument type.
+        var argumentCount = reader.Read7BitEncodedInt();
+        ClickHouseType storageType = null;
+        for (int i = 0; i < argumentCount; i++)
+        {
+            var argumentType = FromByteCode(reader, typeSettings);
+            storageType ??= argumentType;
+        }
+
+        if (storageType is null)
+        {
+            throw new NotSupportedException($"SimpleAggregateFunction({functionName}) without argument types cannot be decoded.");
+        }
+
+        return new SimpleAggregateFunctionType
+        {
+            AggregateFunction = functionName,
+            UnderlyingType = storageType,
+        };
     }
 
     private static VariantType DecodeVariant(ExtendedBinaryReader reader, TypeSettings typeSettings)
@@ -378,5 +412,145 @@ internal static class BinaryTypeDecoder
         }
 
         return new JsonType(typedPaths) { TypeSettings = typeSettings };
+    }
+
+    /// <summary>
+    /// Consumes the aggregate function parameters (the values in <c>quantiles(0.5, 0.9)</c>). They hold
+    /// nothing needed to deserialize values, but their bytes have to be consumed to keep the reader
+    /// aligned with the rest of the type encoding.
+    /// </summary>
+    private static void SkipAggregateFunctionParameters(ExtendedBinaryReader reader)
+    {
+        var parameterCount = reader.Read7BitEncodedInt();
+        for (int i = 0; i < parameterCount; i++)
+        {
+            SkipAggregateFunctionParameter(reader);
+        }
+    }
+
+    // Codes and layouts are the "aggregate function parameter binary encoding" table of
+    // https://clickhouse.com/docs/sql-reference/data-types/data-types-binary-encoding
+    private static void SkipAggregateFunctionParameter(ExtendedBinaryReader reader)
+    {
+        var parameterType = reader.ReadByte();
+        switch (parameterType)
+        {
+            case 0x00: // Null
+            case 0xFE: // Negative infinity
+            case 0xFF: // Positive infinity
+                break;
+
+            case 0x01: // UInt64
+            case 0x02: // Int64
+                SkipVarInt(reader);
+                break;
+
+            case 0x13: // Bool
+                SkipBytes(reader, 1);
+                break;
+
+            case 0x10: // IPv4
+                SkipBytes(reader, 4);
+                break;
+
+            case 0x07: // Float64
+                SkipBytes(reader, 8);
+                break;
+
+            case 0x03: // UInt128
+            case 0x04: // Int128
+            case 0x11: // IPv6
+            case 0x12: // UUID
+                SkipBytes(reader, 16);
+                break;
+
+            case 0x05: // UInt256
+            case 0x06: // Int256
+                SkipBytes(reader, 32);
+                break;
+
+            case 0x08: // Decimal32
+                SkipVarInt(reader); // scale
+                SkipBytes(reader, 4);
+                break;
+            case 0x09: // Decimal64
+                SkipVarInt(reader); // scale
+                SkipBytes(reader, 8);
+                break;
+            case 0x0A: // Decimal128
+                SkipVarInt(reader); // scale
+                SkipBytes(reader, 16);
+                break;
+            case 0x0B: // Decimal256
+                SkipVarInt(reader); // scale
+                SkipBytes(reader, 32);
+                break;
+
+            case 0x0C: // String
+                SkipSizePrefixedBytes(reader);
+                break;
+
+            case 0x0D: // Array
+            case 0x0E: // Tuple
+                SkipAggregateFunctionParameters(reader);
+                break;
+
+            case 0x0F: // Map
+                {
+                    var size = reader.Read7BitEncodedInt();
+                    for (int i = 0; i < size; i++)
+                    {
+                        SkipAggregateFunctionParameter(reader); // key
+                        SkipAggregateFunctionParameter(reader); // value
+                    }
+                }
+                break;
+
+            case 0x14: // Object
+                {
+                    var size = reader.Read7BitEncodedInt();
+                    for (int i = 0; i < size; i++)
+                    {
+                        SkipSizePrefixedBytes(reader); // key
+                        SkipAggregateFunctionParameter(reader);
+                    }
+                }
+                break;
+
+            case 0x15: // AggregateFunctionState
+                SkipSizePrefixedBytes(reader); // function name
+                SkipSizePrefixedBytes(reader); // state data
+                break;
+
+            default:
+                throw new NotSupportedException($"Unknown aggregate function parameter type code: {parameterType}");
+        }
+    }
+
+    private static void SkipSizePrefixedBytes(ExtendedBinaryReader reader) => SkipBytes(reader, reader.Read7BitEncodedInt());
+
+    private static void SkipBytes(ExtendedBinaryReader reader, int count)
+    {
+        Span<byte> discarded = stackalloc byte[32];
+        while (count > 0)
+        {
+            var chunk = Math.Min(count, discarded.Length);
+            reader.ReadBytes(discarded.Slice(0, chunk));
+            count -= chunk;
+        }
+    }
+
+    private static void SkipVarInt(ExtendedBinaryReader reader)
+    {
+        // LEB128, at most 10 bytes for a 64-bit value; every byte but the last has the high bit set.
+        for (int i = 0; i < 10; i++)
+        {
+            if ((reader.ReadByte() & 0x80) == 0)
+            {
+                return;
+            }
+        }
+
+        throw new FormatException("Malformed variable-length integer in aggregate function parameter.");
     }
 }

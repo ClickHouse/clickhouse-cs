@@ -462,6 +462,51 @@ public class DynamicTests : AbstractConnectionTestFixture
         Assert.That(reader.GetValue(1), Is.EqualTo(true));
     }
 
+    public static IEnumerable<TestCaseData> SimpleAggregateFunctionInDynamicCases
+    {
+        get
+        {
+            yield return new TestCaseData("42", "SimpleAggregateFunction(sum, UInt64)", 42UL).SetName("Saf_Scalar");
+            yield return new TestCaseData("1.25", "SimpleAggregateFunction(anyLast, Decimal(18, 4))", new ClickHouseDecimal(1.25m)).SetName("Saf_Decimal");
+            yield return new TestCaseData("[1, 2]", "SimpleAggregateFunction(groupArrayArray, Array(UInt32))", new uint[] { 1, 2 }).SetName("Saf_Array");
+            yield return new TestCaseData("map(1, 2)", "SimpleAggregateFunction(sumMap, Map(UInt32, UInt64))", new Dictionary<uint, ulong> { [1] = 2 }).SetName("Saf_Map");
+            yield return new TestCaseData("[1, 2]", "SimpleAggregateFunction(groupArrayArray(5), Array(UInt32))", new uint[] { 1, 2 }).SetName("Saf_ParameterizedFunction");
+        }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCaseSource(typeof(DynamicTests), nameof(SimpleAggregateFunctionInDynamicCases))]
+    public async Task Read_SimpleAggregateFunctionInDynamic_ReturnsUnderlyingValue(string valueSql, string clickHouseType, object expectedValue)
+    {
+        // The trailing column is read from the same stream, so it only decodes correctly if the
+        // SimpleAggregateFunction type header consumed exactly its own bytes.
+        using var reader = await connection.ExecuteReaderAsync(
+            $"SELECT CAST(CAST({valueSql}, '{clickHouseType}') AS Dynamic) AS value, 7::Int32 AS tail");
+
+        ClassicAssert.IsTrue(reader.Read());
+        TestUtilities.AssertEqual(expectedValue, reader.GetValue(0));
+        Assert.That(reader.GetValue(1), Is.EqualTo(7));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCase("sumState(number)", "sum")]
+    [TestCase("quantilesState(0.5, 0.9)(number)", "quantiles")]
+    public async Task Read_AggregateFunctionInDynamic_ThrowsAggregateFunctionException(string stateSql, string expectedFunction)
+    {
+        using var reader = await connection.ExecuteReaderAsync(
+            $"SELECT CAST({stateSql} AS Dynamic) AS value FROM numbers(2)");
+
+        var exception = Assert.Throws<AggregateFunctionType.AggregateFunctionException>(() =>
+        {
+            reader.Read();
+            reader.GetValue(0);
+        });
+        Assert.That(exception.Message, Does.Contain($"{expectedFunction}Merge()"));
+    }
+
     [Test]
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_Null_ShouldRoundTrip()

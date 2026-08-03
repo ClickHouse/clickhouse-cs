@@ -32,6 +32,7 @@ Unreleased
 * Fixed mid-stream server exceptions never surfacing on the streaming read path (`ExecuteReader`/`ExecuteReaderAsync`). A query that fails after the HTTP response is committed (for example a `throwIf` partway through a large result) now raises a `ClickHouseServerException` with the real server error, instead of a bare `HttpIOException` or `EndOfStreamException` (issue #476).
 * Fixed `ClickHouseConnection.GetSchema("Columns", ...)` building invalid SQL when the table restriction is supplied without the database restriction (for example `[null, "functions"]`). The `WHERE` clause is now composed from the restrictions that are actually set, so filtering by table alone no longer fails with a server syntax error.
 * Fixed `DbConnection.GetSchema("Columns", ...)` not disposing the command it creates internally, which delayed the release of that command's cancellation-token source until garbage collection.
+* Fixed reading `SimpleAggregateFunction(...)` values stored inside `Dynamic`, `Variant` or `JSON` columns, which threw `NotImplementedException` instead of returning the value (issue #505). Reading an `AggregateFunction(...)` value from those columns now reports the same actionable "use `<function>Merge()`" error as a top-level `AggregateFunction` column.
 
 v1.3.0
 ---
