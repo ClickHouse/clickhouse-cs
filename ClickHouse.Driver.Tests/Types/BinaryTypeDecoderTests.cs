@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using ClickHouse.Driver;
 using ClickHouse.Driver.Formats;
@@ -212,6 +213,128 @@ public class BinaryTypeDecoderTests
         ];
 
         Assert.Throws<System.NotSupportedException>(() => Decode(byteCode, TypeSettings.Default));
+    }
+
+    // SimpleAggregateFunction(any(<parameter>), UInt64): the parameter under test, followed by the
+    // storage type the decoder has to arrive at once that parameter is consumed.
+    private static byte[] SimpleAggregateFunctionHeaderWithParameter(byte[] parameter)
+    {
+        var header = new List<byte>
+        {
+            BinaryTypeIndex.SimpleAggregateFunction,
+            0x03, (byte)'a', (byte)'n', (byte)'y',
+            0x01, // one parameter
+        };
+        header.AddRange(parameter);
+        header.Add(0x01); // one argument type
+        header.Add(BinaryTypeIndex.UInt64);
+        return [.. header];
+    }
+
+    // A parameter type code followed by its fixed-width payload (contents are irrelevant, width is not).
+    private static byte[] FixedWidthParameter(byte typeCode, int payloadLength, byte[] prefix = null)
+    {
+        var parameter = new List<byte> { typeCode };
+        if (prefix is not null)
+        {
+            parameter.AddRange(prefix);
+        }
+
+        for (int i = 0; i < payloadLength; i++)
+        {
+            parameter.Add((byte)(i + 1));
+        }
+
+        return [.. parameter];
+    }
+
+    // One case per aggregate function parameter type code of the "aggregate function parameter binary
+    // encoding" table in https://clickhouse.com/docs/sql-reference/data-types/data-types-binary-encoding.
+    // The decoder keeps no parameter values, so what each case pins is how many bytes that code occupies —
+    // reading one byte too few or too many desynchronises the value (and the next column) that follows in
+    // the same stream. The codes a server actually emits for SQL literals were captured from a live
+    // server (UInt64 as `groupArray(3)`, Float64 as `quantileTDigest(0.5)`, String as
+    // `topK(3, 10, 'counts')`); the remaining layouts come from the documented table.
+    public static IEnumerable<TestCaseData> AggregateFunctionParameterCases
+    {
+        get
+        {
+            yield return new TestCaseData(new byte[] { 0x00 }).SetName("Parameter_Null");
+            yield return new TestCaseData(new byte[] { 0xFE }).SetName("Parameter_NegativeInfinity");
+            yield return new TestCaseData(new byte[] { 0xFF }).SetName("Parameter_PositiveInfinity");
+            yield return new TestCaseData(new byte[] { 0x01, 0xAC, 0x02 }).SetName("Parameter_UInt64_MultiByteVarInt");
+            yield return new TestCaseData(new byte[] { 0x02, 0x03 }).SetName("Parameter_Int64");
+            yield return new TestCaseData(FixedWidthParameter(0x13, 1)).SetName("Parameter_Bool");
+            yield return new TestCaseData(FixedWidthParameter(0x10, 4)).SetName("Parameter_IPv4");
+            yield return new TestCaseData(FixedWidthParameter(0x07, 8)).SetName("Parameter_Float64");
+            yield return new TestCaseData(FixedWidthParameter(0x03, 16)).SetName("Parameter_UInt128");
+            yield return new TestCaseData(FixedWidthParameter(0x04, 16)).SetName("Parameter_Int128");
+            yield return new TestCaseData(FixedWidthParameter(0x11, 16)).SetName("Parameter_IPv6");
+            yield return new TestCaseData(FixedWidthParameter(0x12, 16)).SetName("Parameter_UUID");
+            yield return new TestCaseData(FixedWidthParameter(0x05, 32)).SetName("Parameter_UInt256");
+            yield return new TestCaseData(FixedWidthParameter(0x06, 32)).SetName("Parameter_Int256");
+            yield return new TestCaseData(FixedWidthParameter(0x08, 4, [0x02])).SetName("Parameter_Decimal32");
+            yield return new TestCaseData(FixedWidthParameter(0x09, 8, [0x02])).SetName("Parameter_Decimal64");
+            yield return new TestCaseData(FixedWidthParameter(0x0A, 16, [0x02])).SetName("Parameter_Decimal128");
+            yield return new TestCaseData(FixedWidthParameter(0x0B, 32, [0x02])).SetName("Parameter_Decimal256");
+            yield return new TestCaseData(new byte[] { 0x0C, 0x06, (byte)'c', (byte)'o', (byte)'u', (byte)'n', (byte)'t', (byte)'s' })
+                .SetName("Parameter_String");
+            yield return new TestCaseData(new byte[] { 0x0C, 0x00 }).SetName("Parameter_EmptyString");
+            yield return new TestCaseData(new byte[] { 0x0D, 0x02, 0x01, 0x03, 0x07, 0, 0, 0, 0, 0, 0, 0xE0, 0x3F })
+                .SetName("Parameter_ArrayOfMixedParameters");
+            yield return new TestCaseData(new byte[] { 0x0D, 0x00 }).SetName("Parameter_EmptyArray");
+            yield return new TestCaseData(new byte[] { 0x0E, 0x02, 0x01, 0x03, 0x0C, 0x01, (byte)'a' })
+                .SetName("Parameter_Tuple");
+            yield return new TestCaseData(new byte[] { 0x0F, 0x01, 0x0C, 0x01, (byte)'k', 0x01, 0x07 })
+                .SetName("Parameter_Map");
+            yield return new TestCaseData(new byte[] { 0x0F, 0x00 }).SetName("Parameter_EmptyMap");
+            yield return new TestCaseData(new byte[] { 0x14, 0x01, 0x01, (byte)'k', 0x01, 0x07 })
+                .SetName("Parameter_Object");
+            yield return new TestCaseData(new byte[] { 0x14, 0x00 }).SetName("Parameter_EmptyObject");
+            yield return new TestCaseData(new byte[] { 0x15, 0x03, (byte)'s', (byte)'u', (byte)'m', 0x02, 0xAA, 0xBB })
+                .SetName("Parameter_AggregateFunctionState");
+        }
+    }
+
+    [TestCaseSource(nameof(AggregateFunctionParameterCases))]
+    public void FromByteCode_SimpleAggregateFunctionParameter_ConsumesExactlyItsOwnBytes(byte[] parameter)
+    {
+        var type = (SimpleAggregateFunctionType)DecodeWholeHeader(SimpleAggregateFunctionHeaderWithParameter(parameter), TypeSettings.Default);
+
+        Assert.That(type.AggregateFunction, Is.EqualTo("any"));
+        Assert.That(type.UnderlyingType, Is.TypeOf<UInt64Type>());
+    }
+
+    [Test]
+    public void FromByteCode_AggregateFunctionParameterWithMalformedVarInt_Throws()
+    {
+        // A UInt64 parameter whose LEB128 encoding never terminates: every byte has the continuation
+        // bit set, so it cannot be consumed and the stream position can no longer be trusted.
+        var parameter = new List<byte> { 0x01 };
+        for (int i = 0; i < 11; i++)
+        {
+            parameter.Add(0xFF);
+        }
+
+        Assert.Throws<System.FormatException>(
+            () => Decode(SimpleAggregateFunctionHeaderWithParameter([.. parameter]), TypeSettings.Default));
+    }
+
+    [Test]
+    public void FromByteCode_SimpleAggregateFunctionWithoutArgumentTypes_Throws()
+    {
+        // The server always writes at least the storage (return) type; without it there is no type to
+        // read values with, so this has to be reported rather than yielding a half-built type.
+        byte[] byteCode =
+        [
+            BinaryTypeIndex.SimpleAggregateFunction,
+            0x03, (byte)'s', (byte)'u', (byte)'m',
+            0x00,                      // no parameters
+            0x00,                      // no argument types
+        ];
+
+        var exception = Assert.Throws<System.NotSupportedException>(() => Decode(byteCode, TypeSettings.Default));
+        Assert.That(exception.Message, Does.Contain("SimpleAggregateFunction(sum)"));
     }
 
     [Test]
