@@ -290,7 +290,26 @@ After completing a unit of work and making sure code coverage is good, launch a 
 
 ## Changelog and release notes
 
-After completing a unit of work, if it should be included in the changelog (any behavioral change in the client should be), then update CHANGELOG.md and RELEASENOTES.md.
+After completing a unit of work, if it should be included in the changelog (any behavioral change in
+the client should be), add a **fragment** under `changelog.d/` — do not edit `CHANGELOG.md` or
+`RELEASENOTES.md`:
+
+```bash
+dotnet run scripts/changelog.cs -- --new fixes 512-variant-null
+```
+
+Then write the entry into the file it creates. Categories: `breaking`, `features`, `improvements`,
+`internal`, `deprecations`, `fixes`, `docs`. Full contract in `changelog.d/README.md`.
+
+Two rules the CI gate (`dotnet run scripts/changelog.cs -- --check`) enforces, so getting them wrong
+fails the build:
+
+- **Never edit the `Unreleased` section of `CHANGELOG.md`.** Concurrent pull requests editing one
+  shared section conflict every time, and GitHub ignores `.gitattributes` merge drivers when merging
+  pull requests, so `merge=union` cannot fix it. A fragment is a file only your branch adds, so
+  there is nothing to reconcile. Maintainers fold fragments in at release time with `--release`.
+- **Never edit `RELEASENOTES.md`.** It is generated from `CHANGELOG.md` (regenerate with
+  `--sync-notes`) and ships inside the NuGet package via `PackageReleaseNotes`.
 
 **Keep entries short** — one or two sentences on the user-visible change, plus the issue number. No
 root-cause analysis, no benchmark tables, no implementation detail, and don't claim more than the
