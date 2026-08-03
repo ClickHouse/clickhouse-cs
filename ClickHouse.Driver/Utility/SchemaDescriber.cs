@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text;
@@ -93,21 +94,31 @@ internal static class SchemaDescriber
                 $"Supported restrictions are: {string.Join(", ", ColumnsRestrictionNames)}.");
         }
 
-        var command = connection.CreateCommand();
+        using var command = connection.CreateCommand();
         var query = new StringBuilder("SELECT database as Database, table as Table, name as Name, type as ProviderType, type as DataType FROM system.columns");
         var database = restrictions != null && restrictions.Length > 0 ? restrictions[0] : null;
         var table = restrictions != null && restrictions.Length > 1 ? restrictions[1] : null;
 
+        // Restriction values are positional and individually optional, so predicates are
+        // collected and only then joined - appending " WHERE"/" AND" inline produces invalid
+        // SQL when a later restriction is set while an earlier one is omitted.
+        var predicates = new List<string>();
+
         if (database != null)
         {
-            query.Append(" WHERE database={database:String}");
+            predicates.Add("database={database:String}");
             command.AddParameter("database", database);
         }
 
         if (table != null)
         {
-            query.Append(" AND table={table:String}");
+            predicates.Add("table={table:String}");
             command.AddParameter("table", table);
+        }
+
+        if (predicates.Count > 0)
+        {
+            query.Append(" WHERE ").Append(string.Join(" AND ", predicates));
         }
 
         command.CommandText = query.ToString();
