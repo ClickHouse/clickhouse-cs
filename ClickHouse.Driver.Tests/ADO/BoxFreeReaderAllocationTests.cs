@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Formats;
@@ -104,8 +105,8 @@ public class BoxFreeReaderAllocationTests
     {
         var payload = BuildPayload();
 
-        // First pass per shape pays for JIT, generic instantiation and the slot factory's one-off reflection.
-        // None of that is per-row, and none of it should be attributed to the measurement.
+        // First pass per shape pays for JIT and generic instantiation. Neither is per-row, and neither should
+        // be attributed to the measurement.
         foreach (var warmup in new[] { Scan, ReadTyped, ReadFieldValue, ReadBoxed })
         {
             using var reader = await CreateReaderAsync(payload);
@@ -227,6 +228,56 @@ public class BoxFreeReaderAllocationTests
                 $"GetValue is expected to box both cells; saw only {PerRow(nullableBoxed)} B/row, so this " +
                 $"test is not measuring boxing");
         });
+    }
+
+    /// <summary>
+    /// The column slots are the reader's only per-column allocation, and <c>QueryAsync&lt;T&gt;</c>'s box-free
+    /// POCO path never reads one — it materializes straight from the stream. Building them in the constructor
+    /// would put one permanently dead object per column on the driver's primary read API, and on every empty
+    /// or metadata-only reader besides.
+    /// </summary>
+    /// <remarks>
+    /// Reached by reflection because the effect under test is an absence. No public surface reports whether
+    /// the storage exists, and measuring it in bytes would mean resolving a few hundred bytes against the row
+    /// materialization it is supposed to be dwarfed by.
+    /// </remarks>
+    [Test]
+    public async Task Read_BeforeFirstRow_HasNotBuiltColumnSlots()
+    {
+        var slotsField = SlotsField();
+
+        using var reader = await CreateReaderAsync(BuildPayload());
+        Assert.That(slotsField.GetValue(reader), Is.Null, "column slots must not be built before the first Read()");
+
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(slotsField.GetValue(reader), Is.Not.Null, "the first Read() must build the column slots");
+    }
+
+    [Test]
+    public async Task Read_EmptyResult_BuildsNoColumnSlotsAndKeepsMetadata()
+    {
+        var slotsField = SlotsField();
+        var payload = BuildPayload(ColumnTypes, TypeSettings.Default, WriteNumericRow, rows: 0);
+
+        using var reader = await CreateReaderAsync(payload);
+        Assert.That(reader.Read(), Is.False);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(slotsField.GetValue(reader), Is.Null, "an empty result must not build column slots");
+
+            // Metadata stays available with no row, which is what makes skipping the storage safe.
+            Assert.That(reader.FieldCount, Is.EqualTo(Columns));
+            Assert.That(reader.GetName(0), Is.EqualTo("c0"));
+            Assert.That(reader.GetFieldType(0), Is.EqualTo(typeof(long)));
+        });
+    }
+
+    private static FieldInfo SlotsField()
+    {
+        var field = typeof(ClickHouseDataReader).GetField("slots", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.That(field, Is.Not.Null, "the reader's column-slot storage was renamed; update these tests");
+        return field;
     }
 
     private static string PerRow(long allocated) => (allocated / (double)Rows).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);

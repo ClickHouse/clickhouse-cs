@@ -271,10 +271,13 @@ public class ColumnSlotTests
     }
 
     // AggregateFunctionType throws from FrameworkType (and from Read and ToString) so that you learn you need
-    // xMerge() when you read the value. Slots are built for every column when the reader is constructed, so
-    // the factory must reach its no-typed-reader bail-out without ever evaluating FrameworkType — otherwise
-    // merely selecting such a column would fail to open the reader at all. Guards the ordering in
-    // TryCreateTyped, which is otherwise easy to "tidy up" into a regression.
+    // xMerge() when you read the value. Slots are built for every column of the row on the reader's first
+    // Read(), so the factory must reach its no-typed-reader bail-out without ever evaluating FrameworkType —
+    // otherwise building the slots would throw before a single column had been decoded. Guards the ordering
+    // in TryCreateTyped, which is otherwise easy to "tidy up" into a regression.
+    //
+    // This is the only test that can guard it. End to end the two orderings are indistinguishable: both raise
+    // AggregateFunctionException, with the same message, from the same Read() call.
     [Test]
     public void Create_AggregateFunctionColumn_FallsBackToBoxedWithoutEvaluatingFrameworkType()
     {

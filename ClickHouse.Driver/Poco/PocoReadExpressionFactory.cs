@@ -10,11 +10,10 @@ namespace ClickHouse.Driver.Poco;
 /// <summary>
 /// Builds box-free read expressions for the POCO read (materialization) fast path.
 ///
-/// The default path boxes every value-type column through
-/// <see cref="ClickHouseType.Read(ExtendedBinaryReader)"/> into the reader's shared <c>object[]</c> row
-/// buffer, then unboxes it in a compiled <c>Action&lt;T,object&gt;</c> setter (<c>MapTo&lt;T&gt;</c>). Where a
-/// type can decode straight into the target CLR type, this compiles a fused read-and-assign delegate
-/// instead, dropping both the box and the unbox.
+/// The fallback path decodes each column into the reader's per-column slot, boxes it on the way out through
+/// <c>GetValue</c>, then unboxes it in a compiled <c>Action&lt;T,object&gt;</c> setter (<c>MapTo&lt;T&gt;</c>).
+/// Where a type can decode straight into the target CLR type, this compiles a fused read-and-assign delegate
+/// instead, dropping both the box and the unbox and bypassing the slots.
 ///
 /// Dispatch is driven by <see cref="ITypedReader{T}"/>: a column type takes the fast path for a property CLR
 /// type iff it implements <c>ITypedReader&lt;thatType&gt;</c>, which also lets one column offer several

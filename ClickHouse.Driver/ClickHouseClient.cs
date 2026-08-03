@@ -445,7 +445,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             // the underlying HTTP stream is buffered, so per-row reads do not perform real I/O.
             if (reader.TryGetRowMaterializer<T>(out var materializers, out var constructor))
             {
-                // Bypasses the shared object[] row buffer and the boxing/unboxing MapTo<T> setter.
+                // Bypasses the reader's column slots and the boxing/unboxing MapTo<T> setter.
                 while (reader.TryMaterializeNextRow(materializers, constructor, out var row))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
