@@ -81,7 +81,7 @@ internal static class SchemaDescriber
 
     private static DataTable DescribeColumns(ClickHouseConnection connection, string[] restrictions)
     {
-        var command = connection.CreateCommand();
+        using var command = connection.CreateCommand();
         var query = new StringBuilder("SELECT database as Database, table as Table, name as Name, type as ProviderType, type as DataType FROM system.columns");
         var database = restrictions != null && restrictions.Length > 0 ? restrictions[0] : null;
         var table = restrictions != null && restrictions.Length > 1 ? restrictions[1] : null;
