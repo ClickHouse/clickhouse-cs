@@ -908,7 +908,10 @@ public sealed class ClickHouseClient : IClickHouseClient
         var builder = CreateUriBuilder(sql, queryOptions);
 
         using var postMessage = new HttpRequestMessage(HttpMethod.Post, builder.ToString());
-        AddDefaultHttpHeaders(postMessage.Headers, queryOptions);
+        // rawBody: this method returns the HttpResponseMessage itself — PostStreamAsync and
+        // InsertRawStreamAsync are public — so its body belongs to the caller, exactly like a raw result.
+        // The driver must not negotiate a codec it will not be the one to decode.
+        AddDefaultHttpHeaders(postMessage.Headers, queryOptions, rawBody: true);
 
         postMessage.Content = content;
         postMessage.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
@@ -1032,11 +1035,18 @@ public sealed class ClickHouseClient : IClickHouseClient
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/csv"));
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
 
-        // Codecs the driver can decode, advertised only when the caller has not named their own and only
-        // for a body the driver itself consumes. ClickHouse resolves this header by its own fixed
-        // preference order and ignores q-values, so it is a capability announcement, not a demand.
-        if (Settings.UseCompression && string.IsNullOrEmpty(ExplicitAcceptEncoding(queryOverride)) && !rawBody)
+        // Client-level Accept-Encoding, then the driver's own default. Both go on *before* custom headers,
+        // so that a CustomHeaders["Accept-Encoding"] at either level still wins over them — only the
+        // per-query property outranks a custom header, which is the precedence that applied before
+        // client-level configuration existed. ClickHouse resolves this header by its own fixed preference
+        // order and ignores q-values, so it is a capability announcement, not a demand.
+        if (!string.IsNullOrEmpty(Settings.AcceptEncoding))
         {
+            ApplyAcceptEncodingOverride(headers, Settings.AcceptEncoding);
+        }
+        else if (Settings.UseCompression && string.IsNullOrEmpty(queryOverride?.AcceptEncoding) && !rawBody)
+        {
+            // The codecs the driver can decode, advertised only for a body it consumes itself.
             foreach (var token in ResponseDecompression.DefaultAcceptEncoding.Split(','))
             {
                 headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(token.Trim()));
@@ -1049,10 +1059,10 @@ public sealed class ClickHouseClient : IClickHouseClient
         // Override
         ApplyCustomHeaders(headers, queryOverride?.CustomHeaders);
 
-        // An explicit Accept-Encoding replaces whatever was attached above (the default codecs and any
-        // value injected via CustomHeaders), and applies to the raw path too — there the caller has asked
-        // for the encoding themselves, so honouring it is not a silent change.
-        ApplyAcceptEncodingOverride(headers, ExplicitAcceptEncoding(queryOverride));
+        // A per-query Accept-Encoding replaces whatever was attached above — the client-level value, the
+        // default codecs, and any value injected via CustomHeaders — and applies to the raw path too:
+        // there the caller has asked for the encoding themselves, so honouring it is not a silent change.
+        ApplyAcceptEncodingOverride(headers, queryOverride?.AcceptEncoding);
     }
 
     /// <summary>
@@ -1060,6 +1070,9 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// client-level setting — the same precedence the other per-query hooks (ReadValueConverter,
     /// ParameterFormatter, ParameterTypeResolver) use. <see langword="null"/> means "not chosen", which
     /// is what lets the driver fall back to <see cref="ResponseDecompression.DefaultAcceptEncoding"/>.
+    /// Naming a codec explicitly also implies asking for compression, so this drives
+    /// <c>enable_http_compression</c> even when <see cref="ClickHouseClientSettings.UseCompression"/> is
+    /// false.
     /// </summary>
     private string ExplicitAcceptEncoding(QueryOptions queryOverride)
     {
@@ -1168,10 +1181,8 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// Reads the error body of a non-success HTTP response as a string. When the response is
     /// transport-compressed (because the caller asked for <c>Accept-Encoding</c>), the server
     /// compresses error bodies the same way it would compress data — so we route the body through the
-    /// shared <see cref="ResponseDecompression"/> resolver (which also honours a configured
-    /// <see cref="ClickHouseClientSettings.ResponseCompressor"/>, e.g. lz4), and fall back to a
-    /// placeholder for codecs we can't decode (zstd, xz, snappy, …) rather than handing back garbled
-    /// binary bytes as a string. An error body must never turn a server error into an obscure
+    /// shared <see cref="ResponseDecompression"/> resolver, and fall back to a placeholder for codecs we
+    /// can't decode (zstd, snappy, …) rather than handing back garbled binary bytes as a string. An error body must never turn a server error into an obscure
     /// decompression crash, so this uses the non-throwing form of the resolver.
     /// </summary>
     private static async Task<string> ReadErrorBodyAsync(HttpResponseMessage response)

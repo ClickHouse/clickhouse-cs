@@ -240,7 +240,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets a custom HttpClient to use for connections.
-    /// Note: HttpClient must have AutomaticDecompression enabled if compression is not disabled.
+    /// Note: the driver decodes compressed responses itself, so AutomaticDecompression is optional.
     /// Default: null (driver will create its own)
     /// </summary>
     public HttpClient HttpClient { get; init; }

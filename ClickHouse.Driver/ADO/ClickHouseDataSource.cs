@@ -16,7 +16,7 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseDataSource"/> class using provided HttpClient.
-    /// Note that HttpClient must have AutomaticDecompression enabled if compression is not disabled in connection string
+    /// Note that the driver decodes compressed responses itself, so AutomaticDecompression is optional.
     /// </summary>
     /// <param name="connectionString">Connection string</param>
     /// <param name="httpClient">instance of HttpClient</param>
@@ -45,7 +45,8 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     /// <list type="bullet">
     /// <item>
     /// If compression is not disabled in the <paramref name="connectionString"/>, the <paramref name="httpClientFactory"/>
-    /// must be configured to enable <see cref="HttpClientHandler.AutomaticDecompression"/> for its generated clients.
+    /// may enable <see cref="HttpClientHandler.AutomaticDecompression"/> for its generated clients, though the
+    /// driver no longer needs it — it decodes compressed responses itself.
     /// <example>
     /// For example, you can do this while registering the HTTP client:
     /// <code>
@@ -89,7 +90,8 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     /// <list type="bullet">
     /// <item>
     /// If compression is not disabled in the <paramref name="settings"/>, and an HttpClient or HttpClientFactory is provided,
-    /// they must be configured to enable <see cref="HttpClientHandler.AutomaticDecompression"/> for its generated clients with GZip and Deflate methods.
+    /// they may enable <see cref="HttpClientHandler.AutomaticDecompression"/> for its generated clients, though
+    /// the driver no longer needs it — it decodes compressed responses itself.
     /// </item>
     /// </list>
     /// </remarks>

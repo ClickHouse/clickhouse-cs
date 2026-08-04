@@ -54,7 +54,8 @@ internal sealed class ZLibOrDeflateStream : Stream
 
     // Overridden, not inherited: Stream's base implementation of the span overload rents an array from
     // ArrayPool, copies through the byte[] overload and returns it — a rent plus a copy on every
-    // synchronous read, and the buffering stream above this one reads spans.
+    // synchronous read. PooledReadBufferStream, which sits directly above this stream, reads into the
+    // caller's span for any read at least as large as its buffer.
     public override int Read(Span<byte> buffer)
     {
         EnsureDecoder();
@@ -78,14 +79,30 @@ internal sealed class ZLibOrDeflateStream : Stream
 
     /// <summary>
     /// A zlib stream starts with CMF+FLG where the low nibble of CMF is 8 (the DEFLATE method) and the
-    /// big-endian 16-bit value is a multiple of 31. Raw DEFLATE cannot satisfy both, so this is a
-    /// reliable discriminator.
+    /// big-endian 16-bit value is a multiple of 31. Raw DEFLATE can satisfy both by coincidence — a
+    /// non-final stored block also begins with low nibble 8, and one in 31 of those passes the checksum —
+    /// so this is a heuristic, not a proof. It is the same one .NET's own <c>DecompressionHandler</c>
+    /// uses, and it is only reached for a codec ClickHouse sends as zlib anyway.
     /// </summary>
     private static bool LooksLikeZLibHeader(byte cmf, byte flg)
         => (cmf & 0x0F) == 0x08 && (((cmf << 8) | flg) % 31) == 0;
 
+    /// <summary>
+    /// Guards against reading after disposal, which would otherwise sniff and build a second decoder over
+    /// a source that may already be closed.
+    /// </summary>
+    private void ThrowIfDisposed()
+    {
+        // ObjectDisposedException.ThrowIf is unavailable on net6.0 (a supported target), so throw manually.
+#pragma warning disable CA1513
+        if (disposed)
+            throw new ObjectDisposedException(nameof(ZLibOrDeflateStream));
+#pragma warning restore CA1513
+    }
+
     private void EnsureDecoder()
     {
+        ThrowIfDisposed();
         if (decoder != null)
             return;
 
@@ -96,6 +113,7 @@ internal sealed class ZLibOrDeflateStream : Stream
 
     private async ValueTask EnsureDecoderAsync(CancellationToken cancellationToken)
     {
+        ThrowIfDisposed();
         if (decoder != null)
             return;
 
@@ -162,9 +180,10 @@ internal sealed class ZLibOrDeflateStream : Stream
 
     /// <summary>
     /// Serves a small in-memory prefix, then delegates to the underlying stream. Used to put the sniffed
-    /// header bytes back in front of the body.
+    /// header bytes back in front of the body. Internal rather than private so its overloads can be
+    /// exercised directly — the BCL decoder above it only reaches some of them.
     /// </summary>
-    private sealed class PrefixedStream : Stream
+    internal sealed class PrefixedStream : Stream
     {
         private readonly byte[] prefix;
         private readonly int prefixLength;
@@ -205,8 +224,10 @@ internal sealed class ZLibOrDeflateStream : Stream
             return fromPrefix > 0 ? fromPrefix : inner.Read(buffer, offset, count);
         }
 
-        // See the note on the outer class: the base span overload would rent and copy on every read, and
-        // both decoders (ZLibStream / DeflateStream) read spans from this stream.
+        // Which overload a BCL decoder reads with is an implementation detail that varies by target
+        // framework — on net10.0 both take the byte[] one — so this exists to keep the prefix replay
+        // correct and allocation-free either way, not because a measured path depends on it. The base
+        // implementation would also be correct, just via an ArrayPool rent and a copy per read.
         public override int Read(Span<byte> buffer)
         {
             if (buffer.Length == 0)

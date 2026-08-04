@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -138,6 +139,56 @@ public class AcceptEncodingTests
         var (client, handler) = CreateClient(useCompression: true);
 
         using var result = await client.ExecuteRawResultAsync("SELECT 1 FORMAT TSV");
+
+        Assert.That(AcceptEncodingOf(handler), Is.Empty);
+    }
+
+    /// <summary>
+    /// Accept-Encoding is not a blocked custom header, so it can be injected that way. Only the per-query
+    /// property outranks it — the precedence that applied before client-level configuration existed.
+    /// </summary>
+    [Test]
+    public async Task CustomHeaderAcceptEncoding_OutranksTheClientLevelSetting()
+    {
+        var (client, handler) = CreateClient(useCompression: true, acceptEncoding: "lz4");
+
+        await client.ExecuteNonQueryAsync(
+            "SELECT 1",
+            options: new QueryOptions
+            {
+                CustomHeaders = new Dictionary<string, string> { ["Accept-Encoding"] = "gzip" },
+            });
+
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "gzip" }));
+    }
+
+    [Test]
+    public async Task QueryOptionsAcceptEncoding_OutranksACustomHeader()
+    {
+        var (client, handler) = CreateClient(useCompression: true);
+
+        await client.ExecuteNonQueryAsync(
+            "SELECT 1",
+            options: new QueryOptions
+            {
+                AcceptEncoding = "br",
+                CustomHeaders = new Dictionary<string, string> { ["Accept-Encoding"] = "gzip" },
+            });
+
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "br" }));
+    }
+
+    /// <summary>
+    /// PostStreamAsync and InsertRawStreamAsync are public and return the HttpResponseMessage itself, so
+    /// their bodies belong to the caller — the driver must not negotiate a codec it will not decode.
+    /// </summary>
+    [Test]
+    public async Task PostStreamAsync_WithNoExplicitAcceptEncoding_DoesNotAdvertiseTheDefaultCodecs()
+    {
+        var (client, handler) = CreateClient(useCompression: true);
+
+        using var response = await client.PostStreamAsync(
+            "INSERT INTO t FORMAT RowBinary", new MemoryStream([1]), isCompressed: false, CancellationToken.None);
 
         Assert.That(AcceptEncodingOf(handler), Is.Empty);
     }

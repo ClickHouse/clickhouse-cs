@@ -99,7 +99,8 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
     /// <summary>
     /// Gets or sets the HTTP <c>Accept-Encoding</c> header value sent with this command's
-    /// request, overriding the connection-level default of <c>gzip, deflate</c>.
+    /// request, overriding both <see cref="ClickHouseClientSettings.AcceptEncoding"/> and the codecs the
+    /// driver advertises by default (<c>lz4, gzip, deflate</c>).
     /// </summary>
     /// <remarks>
     /// See <see cref="QueryOptions.AcceptEncoding"/> for full semantics. Setting this property
