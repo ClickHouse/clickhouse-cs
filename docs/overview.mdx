@@ -339,13 +339,11 @@ using var client = new ClickHouseClient(settings);
 For dependency injection scenarios, use `IHttpClientFactory`:
 
 ```csharp
-// In your DI configuration
+// In your DI configuration. No AutomaticDecompression needed — the driver decodes
+// compressed responses itself, and a mask here would widen its Accept-Encoding.
 services.AddHttpClient("ClickHouse", client =>
 {
     client.Timeout = TimeSpan.FromMinutes(5);
-}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-{
-    AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
 });
 
 // Create client with factory
@@ -869,7 +867,7 @@ Common formats: `JSONEachRow`, `CSV`, `TSV`, `Parquet`, `Native`. See the [forma
 
 ### Per-query transport compression {#per-query-accept-encoding}
 
-By default, the client negotiates `gzip, deflate` when `Compression=true` (the connection-string default) and the HTTP client decompresses the stream transparently.
+By default, the client negotiates `lz4, gzip, deflate` when `Compression=true` (the connection-string default) and decodes the stream itself, transparently.
 
 For raw exports (e.g. Parquet, Arrow, Native) you may want to negotiate a different codec (e.g. `zstd` or `lz4`) to trade CPU for bandwidth without changing the connection-wide setting. `QueryOptions.AcceptEncoding` and `ClickHouseCommand.AcceptEncoding` set the HTTP `Accept-Encoding` header for a single request, replacing whatever default was attached, and force `enable_http_compression=1` on the URL (which ClickHouse requires before it will honor `Accept-Encoding`).
 
@@ -884,11 +882,11 @@ await using var body = await result.ReadAsStreamAsync();
 
 #### HttpClient configuration {#per-query-accept-encoding-httpclient}
 
-The default `HttpClient` the driver builds has `AutomaticDecompression = GZip | Deflate`, which transparently decompresses those algorithms and strips `Content-Encoding` from the response. This is what you want for normal queries, but not if you want to handle the raw, compressed data yourself.
+Nothing to configure: the `HttpClient` the driver builds leaves `AutomaticDecompression` at `DecompressionMethods.None` and the driver decodes responses itself, so `Content-Encoding` is never stripped behind your back and a raw body reaches you exactly as the server sent it.
 
-In that case, pass an `HttpClient` or `HttpClientFactory` to the ClickHouseClient with `AutomaticDecompression = DecompressionMethods.None`
-
-Note that **`br` (Brotli) is not part of that mask**, even though .NET can decode Brotli: the driver's handler sets `GZip | Deflate` only. That no longer matters for the parsing paths — the driver decodes `br` (and `lz4`) itself, see [Response decompression](#response-decompression) — but it does mean a `br` or `lz4` body reaches `ExecuteRawResultAsync` still compressed.
+<Warning>
+If you supply your own `HttpClient`, leave `AutomaticDecompression` off too. It is not only a response-side setting: at send time the handler **adds every algorithm in its mask that is missing from the outgoing `Accept-Encoding`**. A handler with `GZip | Deflate` therefore turns an explicit `AcceptEncoding = "lz4"` into `lz4, gzip, deflate` and an explicit `"identity"` into `identity, gzip, deflate` on the wire — and since ClickHouse resolves the header by its own fixed codec preference (ignoring order and q-values), it can answer with a codec you never asked for, which the handler then decodes and strips so you cannot even see it happened. Leaving the mask off keeps the offer exactly what you chose.
+</Warning>
 
 <Warning>
 If `AcceptEncoding` requests a codec the driver cannot decode (`zstd`, `snappy`), only `ExecuteRawResultAsync` is safe. `ExecuteReaderAsync`, `ExecuteScalarAsync` and `ExecuteNonQueryAsync` fail with a `NotSupportedException` naming the codec (previously they parsed the compressed bytes as the result format and produced garbage).
@@ -931,9 +929,9 @@ Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse 
 
 **The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. That is why `br` is *decodable but not advertised by default*: including it would make every response brotli, whose server-side cost climbs steeply with `http_zlib_compression_level`, while `lz4` is the cheapest to produce and to decode.
 
-Because the decision is made from the response, a body is decoded whenever its `Content-Encoding` says so, whatever was requested: absent or `identity` passes through untouched, a supported codec is decoded, and anything else raises an error naming it. There is no risk of double-decoding — when the handler's `AutomaticDecompression` has already decoded a body it also strips `Content-Encoding`, so the driver sees plaintext and leaves it alone.
+Because the decision is made from the response, a body is decoded whenever its `Content-Encoding` says so, whatever was requested: absent or `identity` passes through untouched, a supported codec is decoded, and anything else raises an error naming it. There is no risk of double-decoding — if a caller-supplied handler's `AutomaticDecompression` has already decoded a body it also strips `Content-Encoding`, so the driver sees plaintext and leaves it alone.
 
-**Raw results keep the historical default.** `ExecuteRawResultAsync` (and the public `PostStreamAsync` / `InsertRawStreamAsync`) hand their body to you verbatim, so instead of the list above they advertise just `gzip, deflate` — exactly the codecs .NET's own `AutomaticDecompression` covers. Whatever your `HttpClient` is configured with, a raw export therefore yields the same bytes it did before this feature existed. Advertising `lz4` there would hand back a body neither the framework nor the driver decodes for you, silently turning an export into a compressed file.
+**Raw results advertise no codec.** `ExecuteRawResultAsync` (and the public `PostStreamAsync` / `InsertRawStreamAsync`) hand their body to you verbatim, so unless you name a codec yourself they ask for none at all — nothing in the driver decodes such a body, so offering a codec there would silently turn an export into a compressed file. The rule is therefore simple and independent of how any `HttpClient` is configured: **a verbatim body arrives exactly as the server sent it, and the server sends plaintext unless you asked for a codec.** Asking for one (client-wide or per query) is how you export compressed bytes on purpose.
 
 An explicit `AcceptEncoding` (at either level) still applies to raw requests, and `ClickHouseRawResult.ReadDecompressedStreamAsync()` decodes the result when you want that; `ReadAsStreamAsync`, `ReadAsByteArrayAsync`, `ReadAsStringAsync` and `CopyToAsync` always return the bytes exactly as they arrived.
 
@@ -1942,9 +1940,7 @@ using ClickHouse.Driver;
 
 var handler = new HttpClientHandler
 {
-    // Required when compression is enabled (default)
-    AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-
+    // No AutomaticDecompression needed: the driver decodes compressed responses itself.
     ServerCertificateCustomValidationCallback = (message, cert, chain, sslPolicyErrors) =>
     {
         // Example: Accept a specific certificate thumbprint
@@ -1974,7 +1970,7 @@ using var client = new ClickHouseClient(settings);
 
 <Note>
 Important considerations when providing a custom HttpClient
-- **Automatic decompression**: You must enable `AutomaticDecompression` if compression isn't disabled (compression is enabled by default).
+- **Automatic decompression**: leave `AutomaticDecompression` off. The driver decodes compressed responses itself, so it is not needed — and enabling it works against you on the request side: at send time the handler *also adds* every algorithm in its mask to the outgoing `Accept-Encoding`, widening whatever the driver advertised, so ClickHouse can answer with a codec you did not ask for. See [Response decompression](#response-decompression).
 - **Idle timeout**: Set `PooledConnectionIdleTimeout` smaller than the server's `keep_alive_timeout` (10 seconds for ClickHouse Cloud) to avoid connection errors from half-open connections.
 </Note>
 

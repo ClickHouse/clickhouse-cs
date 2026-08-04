@@ -58,9 +58,8 @@ public class ConnectionTests : AbstractConnectionTestFixture
 
     /// <summary>
     /// A codec the driver cannot decode must fail loudly, naming it, rather than parsing compressed bytes
-    /// as the result format. The <see cref="HttpClient"/> is incidental here — <c>zstd</c> is outside the
-    /// <c>GZip | Deflate</c> mask either way. Thrown when executing, not on <c>OpenAsync</c>, which no
-    /// longer makes requests.
+    /// as the result format. The <see cref="HttpClient"/> is incidental here — nothing decodes <c>zstd</c>
+    /// either way. Thrown when executing, not on <c>OpenAsync</c>, which no longer makes requests.
     /// </summary>
     [Test]
     public async Task ExecuteReaderAsync_WithACodecTheDriverCannotDecode_ThrowsNamingTheCodec()

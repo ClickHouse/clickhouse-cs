@@ -64,7 +64,7 @@ public static class ResponseCompression
             Console.WriteLine($"   ExecuteScalarAsync also works: {total} rows\n");
 
             // Example 2: which codec the server actually chose. ExecuteRawResultAsync is the only path
-            // that exposes it, and it does not advertise the defaults, so ask for them explicitly here.
+            // that exposes it, and it advertises no codec of its own, so ask for one explicitly here.
             Console.WriteLine("2. Observing the negotiated codec:");
             foreach (var acceptEncoding in new[] { "lz4, gzip, deflate", "br", "gzip", "identity" })
             {
@@ -75,8 +75,9 @@ public static class ResponseCompression
                 Console.WriteLine($"   Accept-Encoding: {acceptEncoding,-20} -> Content-Encoding: {probe.ContentEncoding ?? "(none)"}");
             }
 
-            Console.WriteLine("   (gzip reports none because .NET's own AutomaticDecompression decoded it");
-            Console.WriteLine("    and stripped the header — the driver only ever sees what is left.)");
+            Console.WriteLine("   (each line is the codec the server chose; `identity` reports none because");
+            Console.WriteLine("    the response really is uncompressed. Nothing strips Content-Encoding here:");
+            Console.WriteLine("    the driver's HttpClient leaves AutomaticDecompression off and decodes itself.)");
             Console.WriteLine();
 
             // Example 3: overriding the codec client-wide. Brotli compresses far better than LZ4 at a
@@ -107,10 +108,10 @@ public static class ResponseCompression
                 options: new QueryOptions { AcceptEncoding = "identity" });
             Console.WriteLine($"   Rows read uncompressed: {uncompressed}\n");
 
-            // Example 5: raw exports. These are handed to you verbatim, so the driver sticks to
-            // `gzip, deflate` for them — the codecs HttpClient decodes for itself — and the body below
-            // arrives as plaintext JSON. Ask for something else and you get those bytes untouched;
-            // ReadDecompressedStreamAsync will decode them for you, ReadAsStreamAsync will not.
+            // Example 5: raw exports. These are handed to you verbatim, so the driver asks for no codec
+            // at all and the body below arrives as plaintext JSON — exactly as the server sent it. Ask
+            // for a codec and you get those bytes untouched; ReadDecompressedStreamAsync will decode them
+            // for you, ReadAsStreamAsync will not.
             Console.WriteLine("5. Raw exports stay readable unless you ask for a codec:");
             using (var result = await client.ExecuteRawResultAsync(
                 $"SELECT * FROM {tableName} ORDER BY id FORMAT JSONEachRow"))
@@ -134,7 +135,7 @@ public static class ResponseCompression
             Console.WriteLine("   - By default the driver advertises `lz4, gzip, deflate` and decodes whatever comes back");
             Console.WriteLine("   - The server chooses from that list by its own preference order, ignoring q-values");
             Console.WriteLine("   - Override with AcceptEncoding on the settings, the connection string, or one query");
-            Console.WriteLine("   - Raw exports stay verbatim: they keep gzip/deflate unless you set AcceptEncoding");
+            Console.WriteLine("   - Raw exports stay verbatim: no codec is asked for unless you set AcceptEncoding");
             Console.WriteLine("   - An undecodable codec (zstd, snappy) raises an error naming it, never garbage rows");
         }
         finally

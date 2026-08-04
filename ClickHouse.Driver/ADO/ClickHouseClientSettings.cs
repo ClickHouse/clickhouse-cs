@@ -243,6 +243,14 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Note: the driver decodes compressed responses itself, so AutomaticDecompression is optional.
     /// Default: null (driver will create its own)
     /// </summary>
+    /// <remarks>
+    /// <c>AutomaticDecompression</c> is not only a response-side setting: at send time the handler also
+    /// <i>adds</i> every algorithm in its mask that is missing from <c>Accept-Encoding</c>. A handler
+    /// supplied here with a mask therefore widens whatever the driver advertises — including an exact
+    /// <see cref="AcceptEncoding"/> — and ClickHouse may then answer with a codec you did not ask for.
+    /// Leave the mask at <see cref="System.Net.DecompressionMethods.None"/> (as the driver's own handler
+    /// does) to keep an explicit codec choice intact.
+    /// </remarks>
     public HttpClient HttpClient { get; init; }
 
     /// <summary>
@@ -375,8 +383,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// <c>lz4</c> &gt; <c>snappy</c> &gt; <c>gzip</c> &gt; <c>deflate</c>) and ignores q-values, so the
     /// only way to steer its choice is which tokens are listed. Setting this forces
     /// <c>enable_http_compression=1</c> and applies to
-    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/> too, which otherwise keeps the driver's
-    /// historical <c>gzip, deflate</c> so that bytes handed over verbatim stay as they were.
+    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/> too, which otherwise advertises no codec at
+    /// all, so that a body handed over verbatim arrives exactly as the server sent it — naming a codec
+    /// here is how a caller asks for a compressed export on purpose.
     /// </remarks>
     public string AcceptEncoding { get; init; }
 

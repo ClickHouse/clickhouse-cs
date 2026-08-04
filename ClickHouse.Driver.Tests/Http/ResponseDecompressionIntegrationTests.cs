@@ -76,15 +76,19 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
     }
 
     /// <summary>
-    /// Only lz4 and br are listed: the driver's own handler sets <c>AutomaticDecompression</c> to
-    /// <c>GZip | Deflate</c>, so a gzip or deflate response is decoded by .NET before the driver sees it
-    /// and would not exercise the driver's decoder at all. Those two are covered against a real server by
-    /// <c>ConnectionTests.ExecuteReaderAsync_WithAnHttpClientThatCannotDecodeTheCodec_DecodesItInTheDriver</c>, which uses a
-    /// plain <see cref="HttpClient"/>.
+    /// Every codec the driver decodes, over the driver's own handler — which now leaves
+    /// <c>AutomaticDecompression</c> off, so gzip and deflate reach the driver still encoded and go through
+    /// its decoder just like lz4 and br. (While the handler carried a <c>GZip | Deflate</c> mask those two
+    /// were stripped by .NET before the driver saw them, and could only be exercised through a
+    /// caller-supplied plain <see cref="HttpClient"/>, as
+    /// <c>ConnectionTests.ExecuteReaderAsync_WithAnHttpClientThatCannotDecodeTheCodec_DecodesItInTheDriver</c>
+    /// still does.)
     /// </summary>
     [TestCase("lz4")]
     [TestCase("br")]
-    public async Task ExecuteReaderAsync_WithACodecDotNetCannotStrip_ReadsValuesIdenticalToUncompressed(string acceptEncoding)
+    [TestCase("gzip")]
+    [TestCase("deflate")]
+    public async Task ExecuteReaderAsync_WithACompressedResponse_ReadsValuesIdenticalToUncompressed(string acceptEncoding)
     {
         var table = CreateTableName($"codec_{acceptEncoding}");
         await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (id Int64, s String, d DateTime64(3)) ENGINE Memory");
@@ -173,15 +177,27 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
     }
 
     /// <summary>
-    /// A raw request keeps the driver's historical <c>gzip, deflate</c> rather than the default list, so
-    /// what a caller receives is unchanged. With the driver's own handler, whose mask covers exactly those
-    /// two, the framework decodes and strips them: plaintext body, no <c>Content-Encoding</c>.
+    /// The rule a raw export now follows, and the reason it no longer depends on anyone's decompression
+    /// mask: with nothing configured the driver advertises no codec, so the server sends plaintext and
+    /// there is nothing to decode. Asserted for both handlers that used to disagree here — the driver's own
+    /// (which stripped a gzip it had not asked for, so the body <i>looked</i> plaintext) and a
+    /// caller-supplied one with <c>AutomaticDecompression = None</c> (which received that gzip verbatim).
+    /// Both now see the same bytes, which is the whole point.
     /// </summary>
-    [Test]
-    public async Task ExecuteRawResultAsync_WithDefaultSettings_ReturnsAPlaintextBody()
+    [TestCase(false, TestName = "{m}(the driver's own handler)")]
+    [TestCase(true, TestName = "{m}(a caller-supplied handler that decodes nothing)")]
+    public async Task ExecuteRawResultAsync_WithNothingConfigured_ReturnsPlaintextWhateverTheCallersMask(bool callerSuppliedClient)
     {
-        using var result = await client.ExecuteRawResultAsync("SELECT number FROM numbers(2000) FORMAT TSV");
+        using var raw = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
+        using var httpClient = new HttpClient(raw);
+        using ClickHouseClient exporter = callerSuppliedClient
+            ? new ClickHouseClient(new ClickHouseClientSettings(TestUtilities.GetTestClickHouseClientSettings())
+            {
+                HttpClient = httpClient,
+            })
+            : null;
 
+        using var result = await (exporter ?? client).ExecuteRawResultAsync("SELECT number FROM numbers(2000) FORMAT TSV");
         var body = await result.ReadAsByteArrayAsync();
 
         Assert.Multiple(() =>
@@ -192,51 +208,17 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
     }
 
     /// <summary>
-    /// The configuration this exemption exists to protect: a caller-supplied <see cref="HttpClient"/> with
-    /// no <c>AutomaticDecompression</c>, taking a raw export with nothing configured. It used to receive
-    /// gzip bytes because the driver advertised <c>gzip, deflate</c> for every request, and it must still
-    /// receive gzip bytes — advertising the driver's own default here would hand it lz4 that neither the
-    /// framework nor the driver would decode for it.
-    /// </summary>
-    [Test]
-    public async Task ExecuteRawResultAsync_WithAnHttpClientThatDecodesNothing_StillReceivesGzip()
-    {
-        using var raw = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
-        using var httpClient = new HttpClient(raw);
-        using var exporter = new ClickHouseClient(new ClickHouseClientSettings(TestUtilities.GetTestClickHouseClientSettings())
-        {
-            HttpClient = httpClient,
-        });
-
-        using var result = await exporter.ExecuteRawResultAsync("SELECT number FROM numbers(2000) FORMAT TSV");
-        var body = await result.ReadAsByteArrayAsync();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.ContentEncoding, Is.EqualTo("gzip"));
-            Assert.That(body[..2], Is.EqualTo(new byte[] { 0x1F, 0x8B }), "expected a gzip magic number");
-        });
-    }
-
-    /// <summary>
-    /// Naming a codec .NET cannot strip is enough to get verbatim compressed bytes even over the driver's
-    /// default handler, whose <c>AutomaticDecompression</c> mask widens the offer. Two independent things
-    /// have to hold, and this asserts both rather than only their conjunction. First, .NET adds the codecs
-    /// its mask covers to <c>Accept-Encoding</c>, so the wire header here is <c>lz4, gzip, deflate</c> —
-    /// but the server resolves by its own fixed preference, which ranks lz4 above both, so it still answers
-    /// lz4. Second, no <c>HttpClient</c> decodes lz4, so <c>Content-Encoding</c> survives and the body
-    /// arrives as an LZ4 frame.
-    /// <para>
-    /// Note what this does NOT license: relying on the widened offer losing. A server that did not offer
-    /// lz4 would fall back to gzip and have it silently decoded, yielding plaintext. That is why the
-    /// <c>CompressedRawExport</c> example turns the mask off rather than depending on this precedence —
-    /// see <c>ExecuteRawResultAsync_WithAnHttpClientThatDecodesNothing_StillReceivesGzip</c> for that path.
-    /// </para>
+    /// Naming a codec is how a caller gets verbatim compressed bytes, and over the driver's own handler that
+    /// no longer depends on the server's codec ranking: the offer is exactly <c>lz4</c>, because the handler
+    /// leaves <c>AutomaticDecompression</c> off and so no longer appends gzip/deflate to it. (While it did,
+    /// this passed only because ClickHouse's fixed preference happens to rank lz4 above both — a server
+    /// without lz4 would have answered gzip and had it silently decoded to plaintext.) Nothing decodes lz4
+    /// on the way out either, so <c>Content-Encoding</c> survives and the body is an LZ4 frame.
     /// </summary>
     [Test]
     public async Task ExecuteRawResultAsync_AskingForLz4_OverTheDefaultHandler_ReceivesAnLz4Frame()
     {
-        // A default client: the driver's own handler, AutomaticDecompression = GZip | Deflate.
+        // A default client: the driver's own handler, AutomaticDecompression = None.
         using var result = await client.ExecuteRawResultAsync(
             "SELECT number FROM numbers(2000) FORMAT TSV",
             options: new QueryOptions { AcceptEncoding = "lz4" });
@@ -246,9 +228,31 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
         Assert.Multiple(() =>
         {
             Assert.That(result.ContentEncoding, Is.EqualTo("lz4"),
-                "the server must prefer lz4 over the gzip/deflate .NET appends, and .NET must leave it encoded");
+                "the exact codec asked for must reach the server, and nothing must decode it on the way back");
             Assert.That(body[..4], Is.EqualTo(new byte[] { 0x04, 0x22, 0x4D, 0x18 }),
                 "expected an LZ4 frame magic number, i.e. genuinely compressed bytes");
+        });
+    }
+
+    /// <summary>
+    /// The uncompressed baseline the comparisons in this fixture rest on, verified rather than assumed:
+    /// <c>AcceptEncoding = "identity"</c> really does get an uncompressed body. It did not while the
+    /// driver's handler carried a <c>GZip | Deflate</c> mask — the handler appended those two to the
+    /// request, ClickHouse answered gzip, and the handler decoded and stripped it, so the baseline read
+    /// correctly while the wire was compressed after all.
+    /// </summary>
+    [Test]
+    public async Task UncompressedClient_AgainstRealServer_ReceivesABodyWithNoContentEncoding()
+    {
+        using var uncompressed = CreateUncompressedClient();
+
+        using var result = await uncompressed.ExecuteRawResultAsync("SELECT number FROM numbers(2000) FORMAT TSV");
+        var body = await result.ReadAsByteArrayAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ContentEncoding, Is.Null);
+            Assert.That(body[..2], Is.EqualTo(new byte[] { (byte)'0', (byte)'\n' }), "expected plaintext TSV");
         });
     }
 

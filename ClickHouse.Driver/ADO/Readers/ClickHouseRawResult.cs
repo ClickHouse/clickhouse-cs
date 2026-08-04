@@ -49,10 +49,10 @@ public class ClickHouseRawResult : IDisposable
     /// </summary>
     /// <remarks>
     /// <para>
-    /// When the underlying <see cref="HttpClient"/> has <c>AutomaticDecompression</c> enabled
-    /// for the negotiated algorithm (e.g. gzip/deflate by default), the framework strips
-    /// <c>Content-Encoding</c> after decompressing, so this property will be <see langword="null"/>
-    /// even though compression was used on the wire.
+    /// When a caller-supplied <see cref="HttpClient"/> has <c>AutomaticDecompression</c> enabled for the
+    /// negotiated algorithm, the framework strips <c>Content-Encoding</c> after decompressing, so this
+    /// property will be <see langword="null"/> even though compression was used on the wire. The handler
+    /// the driver builds for itself leaves that mask off, so it does not happen there.
     /// </para>
     /// <para>
     /// The HTTP-standard <c>identity</c> token (meaning "no encoding") is normalized to

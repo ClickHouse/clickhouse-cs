@@ -7,13 +7,14 @@ namespace ClickHouse.Driver.Examples;
 /// <summary>
 /// Demonstrates streaming a compressed raw export straight to a file.
 ///
-/// A raw result hands you the bytes as they arrived, so the driver only ever negotiates `gzip, deflate`
-/// for it — the two codecs an <c>HttpClient</c> can decode for itself. To get compressed bytes on disk,
-/// name a codec with <see cref="QueryOptions.AcceptEncoding"/>; here that is `lz4`, which ClickHouse
-/// compresses cheaply.
+/// A raw result hands you the bytes as they arrived, so the driver negotiates no codec for it at all and
+/// the server answers with plaintext. To get compressed bytes on disk, name a codec with
+/// <see cref="QueryOptions.AcceptEncoding"/>; here that is `lz4`, which ClickHouse compresses cheaply.
 ///
-/// Two things are needed to be sure of what lands on disk: naming the codec, and an <c>HttpClient</c> with
-/// <c>AutomaticDecompression</c> off, so the framework neither widens the offer nor decodes the answer.
+/// The <c>HttpClient</c> below keeps <c>AutomaticDecompression</c> explicitly off. That is now
+/// belt-and-braces rather than required — the driver's own handler leaves the mask off too — but it is
+/// what you must do when you supply a handler yourself, since a mask both widens the offer and decodes
+/// the answer behind your back.
 ///
 /// Note the contrast with <see cref="ResponseCompression"/>: the reading APIs decode transparently, and
 /// only these raw members are verbatim.
@@ -25,10 +26,11 @@ public static class CompressedRawExport
         var connectionString = "Host=localhost";
         var tableName = "example_compressed_export";
 
-        // A raw export wants the bytes exactly as they arrived, so turn off the framework's own
-        // decoding: .NET otherwise adds the codecs its mask covers to Accept-Encoding, and a server
-        // that did not offer lz4 would fall back to gzip and have it silently decoded — plaintext in
-        // a .lz4 file. With the mask off, this request advertises lz4 and nothing else.
+        // A raw export wants the bytes exactly as they arrived, so keep the framework's own decoding off:
+        // .NET otherwise adds the codecs its mask covers to Accept-Encoding, and a server that did not
+        // offer lz4 would fall back to gzip and have it silently decoded — plaintext in a .lz4 file. With
+        // the mask off, this request advertises lz4 and nothing else. (The handler the driver builds for
+        // itself already does this; spelling it out matters only because we supply our own here.)
         using var handler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
         using var httpClient = new HttpClient(handler);
 
@@ -87,8 +89,8 @@ public static class CompressedRawExport
             Console.WriteLine($"File size: {fileInfo.Length} bytes");
 
             // Because the mask is off, "gzip" or "deflate" would work here just as well and land
-            // compressed. On a default HttpClient they would not: .NET decodes those two itself and
-            // strips Content-Encoding, so the bytes would arrive already decompressed.
+            // compressed. On a handler that did set GZip | Deflate they would not: .NET decodes those two
+            // itself and strips Content-Encoding, so the bytes would arrive already decompressed.
         }
         finally
         {

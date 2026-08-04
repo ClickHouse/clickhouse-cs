@@ -20,9 +20,9 @@ namespace ClickHouse.Driver.Tests.Http;
 
 /// <summary>
 /// Response-body decompression, driven by the response's <c>Content-Encoding</c> header. These cases use
-/// a stub <see cref="HttpMessageHandler"/> (<see cref="TrackingHandler"/>) because a real handler's
-/// <c>AutomaticDecompression</c> strips that header for gzip/deflate, which would make the codec
-/// unobservable. The end-to-end proof that the driver decodes what a real server actually sends lives in
+/// a stub <see cref="HttpMessageHandler"/> (<see cref="TrackingHandler"/>) so the response's headers and
+/// bytes can be dictated exactly, including codecs and malformed bodies a real server would never send.
+/// The end-to-end proof that the driver decodes what a real server actually sends lives in
 /// <c>ConnectionTests.ExecuteReaderAsync_WithAnHttpClientThatCannotDecodeTheCodec_DecodesItInTheDriver</c> and
 /// <see cref="ResponseDecompressionIntegrationTests"/>.
 /// </summary>

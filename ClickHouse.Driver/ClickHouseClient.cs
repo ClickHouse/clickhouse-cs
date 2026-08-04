@@ -910,7 +910,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         using var postMessage = new HttpRequestMessage(HttpMethod.Post, builder.ToString());
         // rawBody: this method returns the HttpResponseMessage itself — PostStreamAsync and
         // InsertRawStreamAsync are public — so its body belongs to the caller, exactly like a raw result,
-        // and keeps the historical Accept-Encoding rather than one the caller cannot decode.
+        // so it advertises no codec rather than one the caller never asked for and nothing would decode.
         AddDefaultHttpHeaders(postMessage.Headers, queryOptions, rawBody: true);
 
         postMessage.Content = content;
@@ -1011,9 +1011,11 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <summary>
     /// Adds default HTTP headers to a request. <paramref name="rawBody"/> marks a request whose body is
     /// handed to the caller verbatim (<see cref="ExecuteRawResultAsync"/>, <see cref="PostStreamAsync"/>),
-    /// which advertises <see cref="ResponseDecompression.RawBodyAcceptEncoding"/> rather than the driver's
-    /// own default: the driver must not change the shape of bytes it does not itself consume. An
-    /// <c>AcceptEncoding</c> the caller configured explicitly still applies, to either kind of request.
+    /// which advertises no codec at all rather than the driver's own default: the driver must not change
+    /// the shape of bytes it does not itself consume, and nothing else decodes them either now that the
+    /// handler's <c>AutomaticDecompression</c> is off. An <c>AcceptEncoding</c> the caller configured
+    /// explicitly still applies, to either kind of request — asking for a codec on a verbatim body is how
+    /// a caller exports compressed bytes on purpose.
     /// </summary>
     internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, QueryOptions queryOverride = null, bool rawBody = false)
     {
@@ -1045,15 +1047,12 @@ public sealed class ClickHouseClient : IClickHouseClient
         {
             ApplyAcceptEncodingOverride(headers, Settings.AcceptEncoding);
         }
-        else if (Settings.UseCompression && !CarriesACodec(queryOverride?.AcceptEncoding))
+        else if (!rawBody && Settings.UseCompression && !CarriesACodec(queryOverride?.AcceptEncoding))
         {
-            // The codecs the driver can decode — except for a body it hands over verbatim, which keeps the
-            // historical pair so that what the caller receives does not change.
-            var advertised = rawBody
-                ? ResponseDecompression.RawBodyAcceptEncoding
-                : ResponseDecompression.DefaultAcceptEncoding;
-
-            foreach (var token in advertised.Split(','))
+            // The codecs the driver can decode. A body handed over verbatim advertises nothing at all
+            // instead (the !rawBody guard above): the driver does not decode it, and no longer relies on
+            // the framework to, so any codec offered here would reach the caller still compressed.
+            foreach (var token in ResponseDecompression.DefaultAcceptEncoding.Split(','))
             {
                 headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(token.Trim()));
             }
