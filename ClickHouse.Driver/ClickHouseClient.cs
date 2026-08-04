@@ -234,8 +234,13 @@ public sealed class ClickHouseClient : IClickHouseClient
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        var response = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
-        using var reader = new ExtendedBinaryReader(await response.HttpResponseMessage.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false));
+        var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+
+        // The row count is fully consumed here, so this method owns the response: release it (and with it
+        // the pooled connection) before returning. ExtendedBinaryReader does not propagate Dispose to the
+        // response stream, so relying on the reader is not enough.
+        using var response = result.HttpResponseMessage;
+        using var reader = new ExtendedBinaryReader(await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false));
 
         return reader.PeekChar() != -1 ? reader.Read7BitEncodedInt() : 0;
     }
@@ -316,6 +321,9 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
         catch (Exception ex)
         {
+            // Nothing is handed back to the caller on this path, so the response (and its pooled
+            // connection) would otherwise stay alive until finalization.
+            response?.Dispose();
             logger?.LogError(ex, "Query (QueryId: {QueryId}) failed.", uriBuilder.GetEffectiveQueryId());
             activity?.SetException(ex);
             throw;
@@ -453,7 +461,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             ExceptionDispatchInfo serializationError = null;
             try
             {
-                await PostStreamAsync(
+                using var response = await PostStreamAsync(
                     null,
                     (stream, ct) =>
                     {
@@ -715,7 +723,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             ExceptionDispatchInfo serializationError = null;
             try
             {
-                await PostStreamAsync(
+                using var response = await PostStreamAsync(
                     null,
                     (stream, ct) =>
                     {
@@ -839,6 +847,8 @@ public sealed class ClickHouseClient : IClickHouseClient
         var columnList = columns != null ? $"({string.Join(", ", columns)})" : string.Empty;
         var query = $"INSERT INTO {table} {columnList} FORMAT {format}";
 
+        // The request message that carries this content disposes it - and, through StreamContent,
+        // the supplied stream - once the request completes, on success and on failure alike.
         HttpContent content = new StreamContent(stream);
         if (useCompression)
         {
@@ -847,15 +857,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         // Pass contentEncoding=null since CompressedContent already adds the Content-Encoding header
-        try
-        {
-            return await PostStreamAsync(query, content, contentEncoding: null, options, cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            content.Dispose();
-            throw;
-        }
+        return await PostStreamAsync(query, content, contentEncoding: null, options, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -894,15 +896,18 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Sending streamed request to {Endpoint} (Content-Encoding: {ContentEncoding}).", serverUri, string.IsNullOrEmpty(contentEncoding) ? "none" : contentEncoding);
 
+        HttpResponseMessage response = null;
         try
         {
-            var response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
+            response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
             GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Streamed request to {Endpoint} received response {StatusCode}.", serverUri, response.StatusCode);
 
             return await HandleError(response, sql, activity).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
+            // Ownership never reaches the caller on this path, so release the response here.
+            response?.Dispose();
             GetLogger(ClickHouseLogCategories.Transport)?.LogError(ex, "Streamed request to {Endpoint} failed.", serverUri);
             throw;
         }

@@ -297,6 +297,24 @@ public class Time64TypeTests
     }
 
     [Test]
+    public void CoerceToTimeSpan_TimeOnly_ConvertsCorrectly()
+    {
+        var type = new Time64Type { Scale = 3 };
+        var timeOnly = new TimeOnly(14, 30, 0, 500);
+
+        using var stream = new MemoryStream();
+        using var writer = new ExtendedBinaryWriter(stream);
+
+        type.Write(writer, timeOnly);
+
+        stream.Position = 0;
+        using var reader = new ExtendedBinaryReader(stream);
+        var result = (TimeSpan)type.Read(reader);
+
+        Assert.That(result, Is.EqualTo(timeOnly.ToTimeSpan()).Within(TimeSpan.FromMilliseconds(1)));
+    }
+
+    [Test]
     public void Write_ValueBeyondMaxRange_ClampedToMax()
     {
         var type = new Time64Type { Scale = 3 };
