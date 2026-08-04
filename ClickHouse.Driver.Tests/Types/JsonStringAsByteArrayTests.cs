@@ -11,24 +11,15 @@ using NUnit.Framework.Legacy;
 namespace ClickHouse.Driver.Tests.Types;
 
 /// <summary>
-/// Covers <c>ReadStringsAsByteArrays</c> combined with a <c>JSON</c> column.
+/// Covers <c>ReadStringsAsByteArrays</c> combined with a <c>JSON</c> column. String leaves used to
+/// fall through to <c>JsonSerializer.SerializeToElement</c>, which renders a <c>byte[]</c> as base64,
+/// so <c>GetValue&lt;string&gt;()</c> silently returned <c>"aW5mbw=="</c> instead of <c>"info"</c>.
 /// </summary>
-/// <remarks>
-/// The flag exists because a ClickHouse <c>String</c> column is arbitrary bytes that need not be
-/// valid UTF-8. A string *inside a JSON document* is different: JSON defines its strings as text
-/// (RFC 8259), so the decoder always produces a <see cref="JsonValue"/> backed by
-/// <see cref="string"/> regardless of the flag — same call the driver already makes for
-/// <c>FixedString</c> paths. Before that was true, every string leaf fell through to
-/// <c>JsonSerializer.SerializeToElement</c>, which renders a <c>byte[]</c> as base64, so
-/// <c>GetValue&lt;string&gt;()</c> silently returned <c>"aW5mbw=="</c> instead of <c>"info"</c>.
-/// </remarks>
 [TestFixture]
 public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
 {
-    // Strings in every position a JSON document can hold one: top level, inside a sub-object, and
-    // inside an array. Deliberately includes punctuation that has to survive escaping, non-ASCII text
-    // (which only round-trips if the bytes are decoded as UTF-8 rather than reinterpreted), and a
-    // base64-shaped value that must pass through verbatim rather than being decoded.
+    // Strings at top level, in a sub-object and in an array, including punctuation that must survive
+    // escaping, non-ASCII text, and a base64-shaped value that must pass through verbatim.
     private const string SampleJson =
         "{\"event\":\"info\",\"props\":{\"region\":\"NYIp\",\"note\":\"|auN8}W2\"}," +
         "\"tags\":[\"p+q/r==\",\"li6Wu)\"],\"unicode\":\"héllo 世界\"," +
@@ -69,8 +60,7 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
                 result["tags"].AsArray().Select(node => node.GetValue<string>()),
                 Is.EqualTo(new[] { "p+q/r==", "li6Wu)" }));
 
-            // Non-string leaves were never affected by the flag; assert them so a future change to the
-            // type switch cannot quietly reroute them through the JsonSerializer fallback either.
+            // Non-string leaves were never affected; pinned so they cannot be rerouted either.
             Assert.That(result["count"].GetValue<long>(), Is.EqualTo(42));
             Assert.That(result["ratio"].GetValue<double>(), Is.EqualTo(0.5));
             Assert.That(result["ok"].GetValue<bool>(), Is.True);
@@ -78,9 +68,8 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// The inner CLR type is the exact discriminator between the two code paths: a string leaf decoded
-    /// properly is backed by <see cref="string"/>, whereas one that fell through to the
-    /// <c>JsonSerializer</c> fallback is backed by a <c>JsonElement</c>.
+    /// The backing CLR type discriminates the two paths exactly: a properly decoded leaf is backed by
+    /// <see cref="string"/>, one that fell through to <c>JsonSerializer</c> by a <c>JsonElement</c>.
     /// </summary>
     [Test]
     [RequiredFeature(Feature.Json)]
@@ -124,9 +113,8 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// Map keys are read separately from map values, so they need their own case. Before the fix this
-    /// threw <c>InvalidCastException</c> on the key rather than corrupting it — the key read casts the
-    /// decoded value straight to <see cref="string"/>.
+    /// Map keys are read separately from values and were cast straight to <see cref="string"/>, so
+    /// before the fix they threw <c>InvalidCastException</c> rather than corrupting.
     /// </summary>
     [Test]
     [RequiredFeature(Feature.Json)]
@@ -144,9 +132,8 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// Both read modes that decode JSON structurally are affected, not just the default. <c>None</c>
-    /// differs from <c>Binary</c> only in not sending the server-side format setting (for read-only
-    /// connections that may not set one), so it decodes through the same path and carried the same bug.
+    /// <c>None</c> differs from <c>Binary</c> only in not sending the server-side format setting, so it
+    /// decodes through the same path and carried the same bug.
     /// </summary>
     [Test]
     [RequiredFeature(Feature.Json)]
@@ -167,18 +154,10 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// <see cref="JsonReadMode.String"/> never had this bug, and this pins that it stays that way: the
-    /// server sends the whole document as one string, which <c>JsonType.Read</c> returns via
-    /// <c>ExtendedBinaryReader.ReadString()</c> before any per-path type dispatch happens — so
-    /// <c>ReadStringsAsByteArrays</c> cannot reach it.
+    /// <see cref="JsonReadMode.String"/> returns the whole document via <c>ReadString()</c> before any
+    /// per-path type dispatch, so the setting cannot reach it — it has always returned text. Pinned
+    /// because it is the precedent for this change, not just a footnote.
     /// </summary>
-    /// <remarks>
-    /// Worth stating because it is the precedent for this whole change rather than a footnote: one of
-    /// the driver's three JSON read modes already returned real text regardless of the flag. Treating
-    /// JSON strings as text is therefore not a new convention introduced here — <c>Binary</c> and
-    /// <c>None</c> were simply the inconsistent ones. The lenient decoding matches too, since
-    /// <c>ExtendedBinaryReader</c> is built with a replacement-fallback UTF-8 decoder.
-    /// </remarks>
     [Test]
     [RequiredFeature(Feature.Json)]
     public async Task ReadJson_InStringReadMode_IsUnaffectedByReadStringsAsByteArrays()
@@ -194,20 +173,11 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// A <c>byte[]</c> value does not on its own mean "string": <c>Array(UInt8)</c> materializes as one
-    /// too, with or without the flag. So decoding must key off the originating ClickHouse type, and
-    /// these cases pin that.
+    /// <c>Array(UInt8)</c> also materializes as a <c>byte[]</c>, so decoding must key off the ClickHouse
+    /// type. Asserted against literal values rather than flag-on-vs-flag-off: these paths read
+    /// identically under both settings, so the equality test below cannot catch a regression here. The
+    /// expected base64 is the pre-existing output for a byte array reached through a wrapper.
     /// </summary>
-    /// <remarks>
-    /// Asserted against fixed expected values rather than by comparing the flag on and off. That
-    /// distinction matters — <c>Array(UInt8)</c> reads identically under both flag settings, so the
-    /// flag-on-equals-flag-off invariant below is structurally incapable of catching a regression here.
-    /// Only pinning the literal output can. The expected base64 is the pre-existing representation for
-    /// a byte array reached through a wrapper (<c>Variant</c>/<c>SimpleAggregateFunction</c> are not
-    /// intercepted by <c>ReadJsonNode</c>, so they land in the value decoder): it is not ideal, but it
-    /// is lossless and reversible, whereas UTF-8-decoding it would destroy every byte that is not
-    /// valid UTF-8 on its own.
-    /// </remarks>
     [Test]
     [RequiredFeature(Feature.Json | Feature.Variant)]
     [TestCase("{\"v\":[1,2]}", "v Variant(Array(UInt8), String)", "AQI=", TestName = "VariantOfByteArrayAndString")]
@@ -230,19 +200,12 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// Every JSON shape that can carry a string, in both hinted and dynamic form. An empty type
-    /// definition means dynamic (unhinted) paths, where the path type arrives as a binary type code
-    /// (<c>BinaryTypeDecoder</c>) instead of being parsed from the column definition
-    /// (<c>TypeConverter</c>) — two separate construction sites, each honouring the flag
-    /// independently, so both need covering.
+    /// Every shape that can carry a string, hinted and dynamic. An empty type definition means dynamic
+    /// paths, whose types come from <c>BinaryTypeDecoder</c> rather than <c>TypeConverter</c> — two
+    /// construction sites, each honouring the setting independently. Seven of the ten fail without the
+    /// fix; <c>FixedString</c> (already correct), <c>NullString</c> (null arm) and <c>EmptyString</c>
+    /// (base64 of zero bytes is also empty) are regression guards that cannot discriminate.
     /// </summary>
-    /// <remarks>
-    /// Seven of these ten cases fail without the fix. The other three are regression guards rather
-    /// than demonstrations of the bug, and it is worth knowing which is which: <c>FixedString</c> was
-    /// already handled correctly, <c>NullString</c> short-circuits on the null arm, and
-    /// <c>EmptyString</c> cannot discriminate at all because the base64 of zero bytes is also the
-    /// empty string.
-    /// </remarks>
     public static IEnumerable<TestCaseData> StringBearingJsonShapes()
     {
         yield return new TestCaseData(SampleJson, "").SetName("DynamicPaths");
@@ -258,9 +221,8 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// The broadest assertion available, and the one that generalizes past the shapes anyone thought
-    /// to enumerate: reading the same row with the flag on and off must produce byte-identical JSON,
-    /// because the flag is not supposed to reshape a JSON document at all.
+    /// The broadest assertion, and the one that generalizes past the enumerated shapes: the setting is
+    /// not supposed to reshape a JSON document, so flag-on and flag-off output must be identical.
     /// </summary>
     [Test]
     [RequiredFeature(Feature.Json)]
@@ -277,8 +239,8 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// Read-then-write is where the read-path defect became persisted damage: base64 entered through
-    /// the read, then a caller writing the same document back stored the base64 text server-side.
+    /// Read-then-write is where the read defect became persisted damage: base64 entered on the read,
+    /// then a caller writing the document back stored it server-side.
     /// </summary>
     [Test]
     [RequiredFeature(Feature.Json)]

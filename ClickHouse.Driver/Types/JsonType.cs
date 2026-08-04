@@ -351,38 +351,19 @@ internal class JsonType : ParameterizedType
     }
 
     /// <summary>
-    /// Decodes a value produced by a String or FixedString path into text.
+    /// Decodes a String or FixedString value into text. Under <c>ReadStringsAsByteArrays</c> those
+    /// types read as a <see cref="byte"/> array, but JSON strings are text and <see cref="JsonValue"/>
+    /// has no byte-array form, so they are decoded either way. Lenient: invalid bytes become U+FFFD.
     /// </summary>
-    /// <remarks>
-    /// A ClickHouse String column holds arbitrary bytes that need not be valid UTF-8, which is what
-    /// <c>ReadStringsAsByteArrays</c> exists for and why the type readers can hand back a
-    /// <see cref="byte"/> array here. That distinction does not carry into a JSON document: RFC 8259
-    /// defines JSON strings as text and <see cref="JsonValue"/> has no byte-array representation, so a
-    /// JSON string is always decoded as UTF-8 regardless of the setting. Decoding is lenient, matching
-    /// the rest of the driver: an invalid sequence in one leaf yields U+FFFD rather than failing the
-    /// whole row.
-    /// </remarks>
     private static string DecodeString(object value)
         => value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : (string)value;
 
     /// <summary>
-    /// Whether a value decoded from this type is text rather than raw bytes.
+    /// Whether values of this type are text rather than raw bytes. Decided from the ClickHouse type,
+    /// not the CLR type: <c>Array(UInt8)</c> also reads as a <see cref="byte"/> array, so decoding on
+    /// <c>byte[]</c> alone would corrupt it. <c>Variant</c>/<c>Dynamic</c> are false because their
+    /// subtype is only known per value.
     /// </summary>
-    /// <remarks>
-    /// A <see cref="byte"/> array is not by itself evidence of a string: <c>Array(UInt8)</c> also
-    /// materializes as one, because <c>ArrayType.Read</c> allocates by
-    /// <c>UnderlyingType.FrameworkType</c> — and it does so whether or not
-    /// <c>ReadStringsAsByteArrays</c> is set. The decision therefore has to come from the originating
-    /// type, not from the CLR type of the value. Deciding on the CLR type would reinterpret an
-    /// <c>Array(UInt8)</c> that reached here through a wrapper <see cref="ReadJsonNode"/> does not
-    /// intercept, and would do so lossily: <c>[255, 254]</c> is not valid UTF-8, so it would collapse
-    /// to two U+FFFD instead of surviving as recoverable bytes.
-    /// <para>
-    /// <c>Variant</c> and <c>Dynamic</c> deliberately answer <c>false</c>. Their subtype is chosen per
-    /// value at read time and is not knowable from the static type here, so they keep their existing
-    /// behaviour rather than risk that same misinterpretation.
-    /// </para>
-    /// </remarks>
     private static bool IsTextBacked(ClickHouseType type) => type switch
     {
         StringType or FixedStringType => true,
@@ -409,11 +390,8 @@ internal class JsonType : ParameterizedType
             JsonObject jo => jo,
             string s => JsonValue.Create(s),
 
-            // Under ReadStringsAsByteArrays a String path reads as a byte array; see DecodeString for
-            // why it still becomes text here, and IsTextBacked for why the arm is gated on the
-            // originating type rather than on the value being a byte array. Without this arm a string
-            // reaches the JsonSerializer fallback below, which renders a byte array as base64 with no
-            // error and no visible type change.
+            // Without this arm a byte[] from a string path falls through to the JsonSerializer
+            // default below, which renders it as base64.
             byte[] bytes when IsTextBacked(type) => JsonValue.Create(DecodeString(bytes)),
             bool b => JsonValue.Create(b),
             byte by => JsonValue.Create(by),
