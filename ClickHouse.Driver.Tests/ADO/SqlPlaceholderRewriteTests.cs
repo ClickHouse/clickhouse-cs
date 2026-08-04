@@ -54,12 +54,27 @@ public class SqlPlaceholderRewriteTests
         // A lone $ is not a heredoc and must not swallow the rest of the query
         new TestCaseData("SELECT $1 = @id", "SELECT $1 = {id:Int32}").SetName("dollar sign is not a heredoc"),
         new TestCaseData("SELECT $tag @id", "SELECT $tag {id:Int32}").SetName("unclosed heredoc tag is not a heredoc"),
-        // Unterminated regions swallow the rest of the query, so nothing in them is rewritten
+        // An opening tag that is never closed does not start a heredoc either: the server lexes it as
+        // an ordinary token and keeps substituting parameters after it, so
+        // WITH 1 AS `$tag$` SELECT $tag$ AS a, {id:Int32} AS v returns a row
+        new TestCaseData("SELECT $$@id", "SELECT $${id:Int32}").SetName("tag never closed is not a heredoc"),
+        new TestCaseData("SELECT $tag$@id", "SELECT $tag${id:Int32}").SetName("tagged tag never closed is not a heredoc"),
+        new TestCaseData("SELECT $tag$@id$other$", "SELECT $tag${id:Int32}$other$").SetName("tag closed by a different tag is not a heredoc"),
+        new TestCaseData("SELECT $tag$ AS a, @id", "SELECT $tag$ AS a, {id:Int32}").SetName("code after a tag that is never closed"),
+        new TestCaseData("SELECT $tag$a@id$tag$@id", "SELECT $tag$a@id$tag${id:Int32}").SetName("code directly after a closed heredoc"),
+        // The server lexes the whole $-and-word-character run of an unclosed tag as one token, so a
+        // later occurrence of a tag spelled inside that run does not close anything either:
+        // SELECT $a$x$ , {id:Int32} , $x$ , 1 substitutes the parameter
+        new TestCaseData("SELECT $a$x$ @id $x$", "SELECT $a$x$ {id:Int32} $x$").SetName("tag spelled inside an unclosed token is not a heredoc"),
+        new TestCaseData("SELECT $a$$x$ @id $x$", "SELECT $a$$x$ {id:Int32} $x$").SetName("doubled dollar inside an unclosed token is not a heredoc"),
+        new TestCaseData("SELECT $a$ @id $b$ @id $b$", "SELECT $a$ {id:Int32} $b$ @id $b$").SetName("unclosed tag followed by a real heredoc"),
+        new TestCaseData("SELECT $$@id$$@id", "SELECT $$@id$${id:Int32}").SetName("code directly after a closed untagged heredoc"),
+        new TestCaseData("SELECT @id $", "SELECT {id:Int32} $").SetName("trailing dollar sign"),
+        new TestCaseData("SELECT @id $tag$", "SELECT {id:Int32} $tag$").SetName("trailing unclosed tag"),
+        // Unterminated quoted regions and block comments do swallow the rest of the query, so
+        // nothing in them is rewritten
         new TestCaseData("SELECT '@id", "SELECT '@id").SetName("unterminated literal"),
         new TestCaseData("SELECT \"@id", "SELECT \"@id").SetName("unterminated double-quoted identifier"),
-        new TestCaseData("SELECT $$@id", "SELECT $$@id").SetName("unterminated heredoc"),
-        new TestCaseData("SELECT $tag$@id", "SELECT $tag$@id").SetName("unterminated tagged heredoc"),
-        new TestCaseData("SELECT $tag$@id$other$", "SELECT $tag$@id$other$").SetName("heredoc closed by a different tag"),
         new TestCaseData("SELECT /* @id", "SELECT /* @id").SetName("unterminated block comment"),
     ];
 

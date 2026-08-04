@@ -50,8 +50,12 @@ internal static class SqlTextScanner
     /// <summary>
     /// Skips a heredoc (<c>$$...$$</c> or <c>$tag$...$tag$</c>) starting at
     /// <paramref name="startIndex"/>, which must hold the leading <c>$</c>.
-    /// Returns the index of the first character after the closing tag, sql.Length if the opening
-    /// tag is never closed, or -1 if there is no heredoc at this position.
+    /// Returns the index of the first character after the closing tag, or -1 if there is no heredoc
+    /// at this position.
+    /// An opening tag that is never closed does not start a heredoc: the server falls back to lexing
+    /// the whole run of word characters and dollar signs as one ordinary token and keeps parsing the
+    /// rest of the query, so the returned index is the one just past that token. Skipping only the
+    /// opening tag instead would let its trailing $ be mistaken for the start of a later heredoc.
     /// </summary>
     public static int TrySkipHeredoc(string sql, int startIndex)
     {
@@ -64,7 +68,15 @@ internal static class SqlTextScanner
 
         var tag = sql.Substring(startIndex, i - startIndex + 1);
         var endIndex = sql.IndexOf(tag, i + 1, StringComparison.Ordinal);
-        return endIndex < 0 ? sql.Length : endIndex + tag.Length;
+        if (endIndex >= 0)
+            return endIndex + tag.Length;
+
+        // Unterminated: skip the ordinary token the server lexes instead
+        i++;
+        while (i < sql.Length && (IsTagChar(sql[i]) || sql[i] == '$'))
+            i++;
+
+        return i;
     }
 
     /// <summary>

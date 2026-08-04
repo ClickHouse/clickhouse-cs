@@ -428,6 +428,23 @@ public class SqlParameterizedSelectTests : IDisposable
         });
     }
 
+    [Test]
+    public async Task AddParameter_PlaceholderAfterDollarTagThatIsNeverClosed_IsStillBound()
+    {
+        // A $tag$ with no closing tag is not a heredoc: the server lexes it as an ordinary identifier
+        // and keeps substituting parameters after it, so the placeholder must still be rewritten.
+        using var command = connection.CreateCommand();
+        command.CommandText = "WITH 1 AS `$tag$` SELECT $tag$ AS a, @id AS v";
+        command.AddParameter("id", 42);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result[0], Is.EqualTo(1));
+            Assert.That(result[1], Is.EqualTo(42));
+        });
+    }
+
     /// <summary>
     /// Drops every name handed out by <see cref="CreateTableName"/>. Best-effort: a table that
     /// cannot be dropped must not fail an otherwise passing fixture.

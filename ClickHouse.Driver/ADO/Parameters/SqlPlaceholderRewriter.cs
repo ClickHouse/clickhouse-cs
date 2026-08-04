@@ -58,7 +58,9 @@ internal static class SqlPlaceholderRewriter
             }
             else if (c == '$')
             {
-                // Heredoc: $$ ... $$ or $tag$ ... $tag$ (-1 when this $ does not open one)
+                // Heredoc: $$ ... $$ or $tag$ ... $tag$ (-1 when this $ does not open one). A tag that
+                // is never closed is not a heredoc either: the server lexes it as an ordinary token,
+                // so only that token is skipped and the text after it stays code
                 var afterHeredoc = SqlTextScanner.TrySkipHeredoc(sql, i);
                 i = afterHeredoc < 0 ? i + 1 : afterHeredoc;
             }
