@@ -37,19 +37,17 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly PocoTypeRegistry pocoRegistry;
     private readonly Dictionary<Type, object> bindingPlanCache = new();
 
-    // Per-column typed storage for the current row; replaces the old shared object[] buffer. Built on the
-    // first Read() and mutated in place by every one after it.
+    // Per-column typed storage for the current row; replaces the old shared object[] buffer. Built on the first
+    // Read() and mutated in place by every one after it.
     //
-    // Deliberately not built in the constructor. QueryAsync<T>'s box-free POCO path materializes straight
-    // from the stream through TryMaterializeNextRow and never touches a slot, so constructing them eagerly
-    // would allocate one permanently dead object per column on the driver's primary read API. Empty result
-    // sets and readers opened only for their metadata likewise never pay for storage they do not use.
+    // Not built in the constructor: QueryAsync<T>'s box-free POCO path materializes straight from the stream and
+    // never touches a slot, so eager construction would allocate one permanently dead object per column on the
+    // primary read API. Empty result sets and metadata-only readers likewise pay nothing.
     //
-    // Built once and never nulled again, so `hasCurrentRow` implies non-null. That is the whole safety
-    // argument, and every value accessor establishes it by going through Slot(). GetValues is the one
-    // exception — it indexes this array directly and carries its own copy of the guard, so if that guard is
-    // ever "simplified" away it produces a NullReferenceException rather than the intended
-    // InvalidOperationException.
+    // Built once and never nulled again, so `hasCurrentRow` implies non-null — the whole safety argument, which
+    // every value accessor establishes by going through Slot(). GetValues is the one exception: it indexes this
+    // array directly and carries its own copy of the guard, so "simplifying" that guard away yields a
+    // NullReferenceException instead of the intended InvalidOperationException.
     private ColumnSlot[] slots;
     private bool hasCurrentRow;
 
@@ -171,26 +169,24 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     /// <summary>
     /// Shared body for the strict typed accessors — every one of which was <c>(T)GetValue(ordinal)</c> before
-    /// column slots, and keeps exactly that meaning here. This is the path compiled ORM mappers drive
-    /// (linq2db registers <c>GetInt64</c>/<c>GetDouble</c>/<c>GetDateTime</c>/… and inlines them per column
-    /// per row), so it is where the boxing elimination is worth the most.
+    /// column slots and keeps exactly that meaning here. This is the path compiled ORM mappers drive (linq2db
+    /// inlines <c>GetInt64</c>/<c>GetDouble</c>/<c>GetDateTime</c>/… per column per row), so it is where the
+    /// boxing elimination is worth the most.
     /// </summary>
     /// <remarks>
     /// With an <see cref="IReadValueConverter"/> configured the accessor keeps routing through
-    /// <see cref="GetValue"/>, so it still calls <c>ConvertValue(object, …)</c> exactly as it did before.
-    /// De-boxing here would mean calling <c>ConvertValue&lt;T&gt;</c> instead, which is observable to a
-    /// converter whose two overloads disagree — the generic one matching on <c>typeof(T)</c>, the object one
-    /// on the value's runtime type. Not worth a silent semantic change for the rare converter case;
-    /// everyone else gets the fast path. <see cref="GetFieldValue{T}"/> keeps its own routing and stays on
-    /// <c>ConvertValue&lt;T&gt;</c>, which is the overload it already called — so between the two paths every
-    /// converter overload is still reached, exactly as before.
+    /// <see cref="GetValue"/>, so it still calls <c>ConvertValue(object, …)</c> as before. De-boxing here would
+    /// switch it to <c>ConvertValue&lt;T&gt;</c>, which is observable to a converter whose two overloads disagree
+    /// (the generic one matching on <c>typeof(T)</c>, the object one on the value's runtime type) — not worth a
+    /// silent semantic change for the rare converter case. <see cref="GetFieldValue{T}"/> stays on
+    /// <c>ConvertValue&lt;T&gt;</c>, the overload it already called, so both overloads are still reached.
     /// </remarks>
     private T GetTypedValue<T>(int ordinal)
         => readValueConverter == null ? GetSlotValue<T>(ordinal) : (T)GetValue(ordinal);
 
-    // Unlike its neighbours this one coerces rather than casts, so only an exact Bool column can take the
-    // fast path; anything else keeps Convert.ToBoolean's widening (and its exception messages). A NULL cell
-    // falls through as well, so Convert.ToBoolean(DBNull.Value) still throws exactly as it did.
+    // Unlike its neighbours this one coerces rather than casts, so only an exact Bool column takes the fast path;
+    // anything else keeps Convert.ToBoolean's widening and its exception messages. A NULL cell falls through too,
+    // so Convert.ToBoolean(DBNull.Value) still throws exactly as it did.
     public override bool GetBoolean(int ordinal)
     {
         if (readValueConverter == null)
@@ -226,9 +222,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     {
         if (readValueConverter == null)
         {
-            // Which of these two representations a Decimal column resolves to is the UseBigDecimal setting's
-            // doing; both reach the same decimal without a box, nullable or not. A NULL cell falls through to
-            // the boxed path below, where casting DBNull.Value throws exactly as it did.
+            // Which of the two representations a Decimal column resolves to is the UseBigDecimal setting's doing;
+            // both reach the same decimal without a box, nullable or not. A NULL cell falls through to the boxed
+            // path below, where casting DBNull.Value throws exactly as it did.
             var slot = Slot(ordinal);
             if (slot is ValueSlot<decimal> decimalSlot)
                 return decimalSlot.Value;
@@ -275,23 +271,23 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         return index;
     }
 
-    // Deliberately narrower than the other accessors: only a non-nullable String column short-circuits. Every
-    // other shape keeps ToString()'s coercion, including the quirk that a NULL cell yields "" rather than
-    // null, because DBNull.Value.ToString() is the empty string.
+    // Deliberately narrower than the other accessors: only a non-nullable String column short-circuits. Every other
+    // shape keeps ToString()'s coercion, including the quirk that a NULL cell yields "" rather than null, because
+    // DBNull.Value.ToString() is the empty string.
     public override string GetString(int ordinal)
         => readValueConverter == null && Slot(ordinal) is ValueSlot<string> stringSlot
             ? stringSlot.Value
             : GetValue(ordinal)?.ToString();
 
     /// <summary>
-    /// The one boxing entry point on the read path. Boxes lazily, per call, so a query that projects ten
-    /// columns and reads two pays for two — where the old <c>object[]</c> buffer boxed all ten during
-    /// <see cref="Read"/> regardless.
+    /// The one boxing entry point on the read path. Boxes lazily, per call, so a query that projects ten columns
+    /// and reads two pays for two — where the old <c>object[]</c> buffer boxed all ten during <see cref="Read"/>
+    /// regardless.
     /// </summary>
     /// <remarks>
-    /// Consequence of boxing per call rather than once per row: two <c>GetValue(i)</c> calls on the same
-    /// value-type cell now return two distinct boxes. They compare equal by <see cref="object.Equals(object)"/>
-    /// (the ADO.NET-relevant comparison) but no longer by <see cref="object.ReferenceEquals"/>.
+    /// Consequence of boxing per call rather than once per row: two <c>GetValue(i)</c> calls on the same value-type
+    /// cell return two distinct boxes. They still compare equal by <see cref="object.Equals(object)"/> — the
+    /// ADO.NET-relevant comparison — but no longer by <see cref="object.ReferenceEquals"/>.
     /// </remarks>
     public override object GetValue(int ordinal)
     {
@@ -323,9 +319,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 
     public override bool IsDBNull(int ordinal)
-        // Asks the slot directly rather than going through GetValue, for two reasons: a configured
-        // IReadValueConverter must not run during a null check (it could throw, do expensive work, or
-        // change the nullness of the result), and a null check has no business materializing a box.
+        // Asks the slot directly rather than going through GetValue: a configured IReadValueConverter must not run
+        // during a null check (it could throw, do expensive work, or change the result's nullness), and a null
+        // check has no business materializing a box.
         => Slot(ordinal).IsNull;
 
     /// <summary>
@@ -334,11 +330,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// without a current row and is deliberately not gated.
     /// </summary>
     /// <remarks>
-    /// Slots hold typed storage, so before the first <see cref="Read"/> a non-nullable value column would
-    /// otherwise read back as a perfectly plausible <c>0</c> / <c>false</c> / <c>Guid.Empty</c> rather than
-    /// as nothing. Answering a question the reader cannot yet answer, with a value indistinguishable from
-    /// real data, is the one failure mode worth spending a branch to prevent — so this reports the mistake
-    /// instead, matching what <c>SqlClient</c> and the rest of ADO.NET do.
+    /// Slots hold typed storage, so without this a non-nullable value column would read back before the first
+    /// <see cref="Read"/> as a perfectly plausible <c>0</c>/<c>false</c>/<c>Guid.Empty</c> — a value
+    /// indistinguishable from real data. Worth a branch to report the mistake instead, as <c>SqlClient</c> and the
+    /// rest of ADO.NET do.
     /// </remarks>
     private ColumnSlot Slot(int ordinal)
     {
@@ -414,17 +409,15 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// already holds exactly that type.
     /// </summary>
     /// <remarks>
-    /// <para>The two sealed-class checks are ordered by cost. For a value-typed <typeparamref name="T"/> the
-    /// runtime JITs a dedicated instantiation, so each is a plain <c>isinst</c> against a known method table —
-    /// measured at 1.5–2.4x the cost of the unbox it replaces, against roughly 10 ns per column of decode.
-    /// A generic <c>IValueGetter&lt;T&gt;</c> interface implemented twice would let one slot serve both
-    /// <c>long</c> and <c>long?</c>, but it goes through the shared-generics dictionary and measured
-    /// 3.5–5.5x instead — so <c>T = U?</c> is deliberately left to the boxed fallback.</para>
+    /// <para>Both checks are sealed-class type tests, so for a value-typed <typeparamref name="T"/> each is a plain
+    /// <c>isinst</c> against a known method table. A generic <c>IValueGetter&lt;T&gt;</c> implemented twice would let
+    /// one slot serve both <c>long</c> and <c>long?</c>, but it goes through the shared-generics dictionary and
+    /// measured several times slower — so <c>T = U?</c> is deliberately left to the boxed fallback.</para>
     ///
-    /// <para>The fallback is the pre-slot expression verbatim, which is what preserves the exact-type
-    /// strictness callers depend on: <c>GetFieldValue&lt;long&gt;</c> over an <c>Int32</c> column throws, it
-    /// does not widen, and reading a NULL as a non-nullable <typeparamref name="T"/> throws the runtime's
-    /// own "cannot cast DBNull" <see cref="InvalidCastException"/> exactly as before.</para>
+    /// <para>That fallback is the pre-slot expression verbatim, which preserves the exact-type strictness callers
+    /// depend on: <c>GetFieldValue&lt;long&gt;</c> over an <c>Int32</c> column throws rather than widening, and
+    /// reading a NULL as a non-nullable <typeparamref name="T"/> throws the runtime's own "cannot cast DBNull"
+    /// <see cref="InvalidCastException"/> as before.</para>
     /// </remarks>
     private T GetSlotValue<T>(int ordinal)
     {
