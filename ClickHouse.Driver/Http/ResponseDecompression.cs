@@ -8,34 +8,57 @@ using ClickHouse.Driver.Compression;
 namespace ClickHouse.Driver.Http;
 
 /// <summary>
-/// The single place that decides how (and whether) an HTTP <b>response</b> body must be decompressed.
+/// Decides how (and whether) an HTTP <b>response</b> body must be decompressed.
 /// <para>
-/// The decision is driven exclusively by the response's <c>Content-Encoding</c> header, never by what the
-/// client asked for: ClickHouse picks the response codec by its own fixed preference order
-/// (zstd &gt; br &gt; lz4 &gt; gzip) and ignores both client order and q-values, so the request's
-/// <c>Accept-Encoding</c> is not a reliable predictor. The header is also a <i>total</i> signal, because
-/// .NET strips <c>Content-Encoding</c> once <c>AutomaticDecompression</c> has already decoded the body —
-/// so a header that is still present means the bytes are still compressed.
+/// The decision is driven by the response's <c>Content-Encoding</c>, never by what was requested:
+/// ClickHouse picks the codec by its own fixed preference order and ignores our ordering and q-values,
+/// so <c>Accept-Encoding</c> is not a reliable predictor. The header is also a <i>total</i> signal,
+/// because .NET strips <c>Content-Encoding</c> once <c>AutomaticDecompression</c> has decoded a body —
+/// a header still present means the bytes are still compressed.
 /// </para>
 /// <para>
-/// Resolution table:
-/// <list type="bullet">
-/// <item>absent or <c>identity</c> — the source stream is returned untouched (same instance);</item>
-/// <item>the configured response compressor's <see cref="IClickHouseCompressor.ContentEncoding"/> —
-/// decoded by that compressor;</item>
-/// <item><c>gzip</c> / <c>deflate</c> / <c>br</c> / <c>brotli</c> — decoded by the BCL stream;</item>
-/// <item>anything else — unsupported (an actionable error naming the codec).</item>
-/// </list>
-/// Token comparison is case-insensitive, culture-invariant (ordinal) and tolerates surrounding whitespace.
+/// Absent or <c>identity</c> passes the source stream through untouched; a codec in
+/// <see cref="Decoders"/> is decoded; anything else (<c>zstd</c>, <c>snappy</c>, …) is unsupported.
+/// Token comparison is ordinal-case-insensitive and tolerates surrounding whitespace.
 /// </para>
 /// </summary>
 internal static class ResponseDecompression
 {
     /// <summary>
+    /// Codecs the driver can decode, keyed by <c>Content-Encoding</c> token. <c>br</c> is decodable but
+    /// deliberately not part of <see cref="DefaultAcceptEncoding"/> — see the remarks there. HTTP's
+    /// <c>deflate</c> is the zlib format (RFC 1950), which is what ClickHouse emits and what a bare
+    /// <see cref="DeflateStream"/> cannot parse, so it gets a stream that handles both forms.
+    /// </summary>
+    private static readonly Dictionary<string, Func<Stream, bool, Stream>> Decoders =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["lz4"] = static (source, leaveOpen) => Lz4Compressor.Default.Decompress(source, leaveOpen),
+            ["gzip"] = static (source, leaveOpen) => GZipCompressor.Default.Decompress(source, leaveOpen),
+            ["deflate"] = static (source, leaveOpen) => new ZLibOrDeflateStream(source, leaveOpen),
+            ["br"] = static (source, leaveOpen) => BrotliCompressor.Default.Decompress(source, leaveOpen),
+            ["brotli"] = static (source, leaveOpen) => BrotliCompressor.Default.Decompress(source, leaveOpen),
+        };
+
+    /// <summary>
+    /// The <c>Accept-Encoding</c> the driver advertises when the caller has not chosen one.
+    /// </summary>
+    /// <remarks>
+    /// ClickHouse resolves <c>Accept-Encoding</c> by scanning for tokens in a fixed preference order
+    /// (<c>zstd</c> &gt; <c>br</c> &gt; <c>lz4</c> &gt; <c>snappy</c> &gt; <c>gzip</c> &gt;
+    /// <c>deflate</c>), ignoring both our ordering and q-values — so the only way to influence its
+    /// choice is which tokens we omit. <c>br</c> is omitted on purpose: advertising it would make every
+    /// response brotli, whose server-side cost scales with <c>http_zlib_compression_level</c> far more
+    /// steeply than lz4's. Listing <c>lz4</c> yields the cheapest codec to produce and to decode; a
+    /// caller who prefers brotli's ratio can ask for it, and it is still decoded whenever it arrives.
+    /// </remarks>
+    public const string DefaultAcceptEncoding = "lz4, gzip, deflate";
+
+    /// <summary>
     /// Returns the single effective <c>Content-Encoding</c> token of <paramref name="response"/>, or
-    /// <see langword="null"/> when the body is not transport-compressed. Empty and <c>identity</c> tokens
-    /// are treated as "not compressed". When a server stacks several codecs the tokens are joined so the
-    /// caller can surface them in an error — that combination is not supported.
+    /// <see langword="null"/> when the body is not transport-compressed. Empty and <c>identity</c>
+    /// tokens count as "not compressed". Stacked codecs are joined so the caller can name them in an
+    /// error — that combination is not supported.
     /// </summary>
     public static string GetContentEncoding(HttpResponseMessage response)
     {
@@ -59,31 +82,30 @@ internal static class ResponseDecompression
     }
 
     /// <summary>
-    /// Applies the resolution table to <paramref name="source"/>. Returns <paramref name="source"/> itself
-    /// (reference-equal) when the body needs no decoding; otherwise a new decompressing read stream that
-    /// the caller owns and must dispose.
+    /// Wraps <paramref name="source"/> in a decoder when the response is transport-compressed. Returns
+    /// <paramref name="source"/> itself (reference-equal) when the body needs no decoding; otherwise a
+    /// new stream the caller owns and must dispose.
     /// </summary>
-    /// <exception cref="NotSupportedException">The response is encoded with a codec this client cannot decode.</exception>
-    public static Stream Wrap(Stream source, HttpResponseMessage response, IClickHouseCompressor responseCompressor, bool leaveOpen)
-        => Wrap(source, GetContentEncoding(response), responseCompressor, leaveOpen);
+    /// <exception cref="NotSupportedException">The response uses a codec this client cannot decode.</exception>
+    public static Stream Wrap(Stream source, HttpResponseMessage response, bool leaveOpen)
+        => Wrap(source, GetContentEncoding(response), leaveOpen);
 
-    /// <inheritdoc cref="Wrap(Stream, HttpResponseMessage, IClickHouseCompressor, bool)"/>
-    public static Stream Wrap(Stream source, string contentEncoding, IClickHouseCompressor responseCompressor, bool leaveOpen)
+    /// <inheritdoc cref="Wrap(Stream, HttpResponseMessage, bool)"/>
+    public static Stream Wrap(Stream source, string contentEncoding, bool leaveOpen)
     {
-        if (TryWrap(source, contentEncoding, responseCompressor, leaveOpen, out var decompressed))
+        if (TryWrap(source, contentEncoding, leaveOpen, out var decompressed))
             return decompressed;
 
-        throw new NotSupportedException(DescribeUnsupported(contentEncoding, responseCompressor));
+        throw new NotSupportedException(DescribeUnsupported(contentEncoding));
     }
 
     /// <summary>
-    /// Non-throwing form of <see cref="Wrap(Stream, string, IClickHouseCompressor, bool)"/> — and the one
-    /// place the resolution table lives. Returns <see langword="false"/> (leaving
-    /// <paramref name="decompressed"/> <see langword="null"/>) for a codec this client cannot decode, so
-    /// callers that must not fail — reading a server <i>error</i> body, above all — can degrade gracefully
-    /// instead of masking the server's message with a decompression crash.
+    /// Non-throwing form of <see cref="Wrap(Stream, string, bool)"/>. Returns <see langword="false"/>
+    /// (leaving <paramref name="decompressed"/> <see langword="null"/>) for a codec this client cannot
+    /// decode, so callers that must not fail — reading a server <i>error</i> body above all — can
+    /// degrade gracefully instead of masking the server's message with a decompression crash.
     /// </summary>
-    public static bool TryWrap(Stream source, string contentEncoding, IClickHouseCompressor responseCompressor, bool leaveOpen, out Stream decompressed)
+    public static bool TryWrap(Stream source, string contentEncoding, bool leaveOpen, out Stream decompressed)
     {
         if (source is null)
             throw new ArgumentNullException(nameof(source));
@@ -98,33 +120,9 @@ internal static class ResponseDecompression
             return true;
         }
 
-        // The configured response compressor wins whenever the server actually used its codec. Both sides
-        // of the comparison are trimmed: the response token above, and the compressor's own token here —
-        // a custom IClickHouseCompressor declaring "  lz4 " must still match the server's clean "lz4",
-        // exactly as the Accept-Encoding contribution trims it before advertising it.
-        if (responseCompressor != null && IsToken(token, responseCompressor.ContentEncoding?.Trim()))
+        if (Decoders.TryGetValue(token, out var decoder))
         {
-            decompressed = responseCompressor.Decompress(source, leaveOpen);
-            return true;
-        }
-
-        if (IsToken(token, "gzip"))
-        {
-            decompressed = new GZipStream(source, CompressionMode.Decompress, leaveOpen);
-            return true;
-        }
-
-        if (IsToken(token, "deflate"))
-        {
-            // NOT a bare DeflateStream: HTTP's "deflate" is the zlib format (RFC 1950) and that is what
-            // ClickHouse emits, which raw DEFLATE cannot parse. This sniffs and handles both forms.
-            decompressed = new ZLibOrDeflateStream(source, leaveOpen);
-            return true;
-        }
-
-        if (IsToken(token, "br") || IsToken(token, "brotli"))
-        {
-            decompressed = new BrotliStream(source, CompressionMode.Decompress, leaveOpen);
+            decompressed = decoder(source, leaveOpen);
             return true;
         }
 
@@ -133,22 +131,12 @@ internal static class ResponseDecompression
     }
 
     /// <summary>
-    /// Builds the actionable message used when the response carries a codec this client cannot decode.
-    /// Names the codec and tells the caller how to fix it.
+    /// Builds the actionable message used when a response carries a codec this client cannot decode.
     /// </summary>
-    public static string DescribeUnsupported(string contentEncoding, IClickHouseCompressor responseCompressor)
-    {
-        var configured = responseCompressor is null
-            ? "no response compressor is configured"
-            : $"the configured response compressor decodes '{responseCompressor.ContentEncoding?.Trim()}'";
-
-        return
-            $"ClickHouse returned a response compressed with Content-Encoding: '{contentEncoding?.Trim()}', which this client cannot decode ({configured}). " +
-            "Set ClickHouseClientSettings.ResponseCompressor (or QueryOptions.ResponseCompressor, or 'ResponseCompression=lz4|gzip|br' in the connection string) " +
-            "to a compressor whose ContentEncoding matches — lz4 is only decodable once such a compressor is configured — " +
-            "or drop the codec from Accept-Encoding so the server falls back to one that needs no configuration (gzip, deflate or br), " +
-            "or use ExecuteRawResultAsync and decode the body yourself.";
-    }
+    public static string DescribeUnsupported(string contentEncoding) =>
+        $"ClickHouse returned a response compressed with Content-Encoding: '{contentEncoding?.Trim()}', which this client cannot decode. " +
+        $"Only {string.Join(", ", Decoders.Keys)} are supported. Remove the codec from AcceptEncoding — on QueryOptions or " +
+        "ClickHouseClientSettings — so the server falls back to one of those, or use ExecuteRawResultAsync and decode the body yourself.";
 
     private static bool IsToken(string value, string expected)
         => string.Equals(value, expected, StringComparison.OrdinalIgnoreCase);

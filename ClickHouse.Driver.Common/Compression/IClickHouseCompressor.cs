@@ -7,11 +7,11 @@ namespace ClickHouse.Driver.Compression;
 /// Compresses ClickHouse payloads. Two independent paths are exposed:
 /// <list type="bullet">
 /// <item>
-/// the <b>HTTP body path</b> (<see cref="ContentEncoding"/> + <see cref="Compress"/> for the request
-/// body, <see cref="Decompress"/> for the response body) used by the HTTP driver for binary inserts and
-/// for transport-compressed query responses, where the presence of a compressor is itself the on/off
-/// switch — pass <see langword="null"/> where a compressor is accepted to send/receive the body
-/// uncompressed;
+/// the <b>HTTP body path</b> (<see cref="ContentEncoding"/> + <see cref="Compress"/>) used by the HTTP
+/// driver for binary inserts, where the presence of a compressor is itself the on/off switch — pass
+/// <see langword="null"/> where a compressor is accepted to send the body uncompressed. Its
+/// <see cref="Decompress"/> counterpart decodes a transport-compressed <i>response</i>, and the driver
+/// picks the codec for that from the response's own <c>Content-Encoding</c>;
 /// </item>
 /// <item>
 /// the <b>native-TCP block path</b> (<see cref="MethodByte"/>, <see cref="MaxEncodedLength"/>,
@@ -49,23 +49,12 @@ public interface IClickHouseCompressor
     Stream Compress(Stream destination, bool leaveOpen);
 
     /// <summary>
-    /// The HTTP <b>response-body</b> counterpart to <see cref="Compress"/>. Wraps
-    /// <paramref name="source"/> in a decompressing read stream: bytes read from the returned stream are
-    /// the plaintext produced by decoding <paramref name="source"/>, which must carry a payload this codec's
-    /// <see cref="ContentEncoding"/> describes. When <paramref name="leaveOpen"/> is
-    /// <see langword="true"/>, <paramref name="source"/> is left open after the returned stream is
-    /// disposed — the caller (e.g. the HTTP response that owns the transport stream) keeps ownership.
-    /// <para>
-    /// The returned stream must tolerate being disposed more than once: the driver disposes decoders it
-    /// inserted, and a caller handed one (e.g. by <c>ClickHouseRawResult.ReadDecompressedStreamAsync</c>)
-    /// may dispose it too. If the implementation holds pooled buffers, guard their release so a second
-    /// disposal cannot return the same array to the pool twice — as the built-in codecs' streams do.
-    /// </para>
-    /// <para>
-    /// Only meaningful for codecs that support the HTTP path with a frame/stream format; the default
-    /// throws <see cref="NotSupportedException"/>. This is <b>not</b> the native block path — see
-    /// <see cref="Decode"/> for that.
-    /// </para>
+    /// The HTTP <b>response-body</b> counterpart to <see cref="Compress"/>: wraps
+    /// <paramref name="source"/> in a read stream that yields the plaintext of a payload encoded as this
+    /// codec's <see cref="ContentEncoding"/>. With <paramref name="leaveOpen"/>, the caller keeps
+    /// ownership of <paramref name="source"/>. The returned stream must tolerate repeated disposal, so
+    /// any pooled buffer must not be returned to the pool twice. Not the native block path — see
+    /// <see cref="Decode"/> for that. The default throws <see cref="NotSupportedException"/>.
     /// </summary>
     Stream Decompress(Stream source, bool leaveOpen)
         => throw new NotSupportedException($"{GetType().Name} does not support decompression.");

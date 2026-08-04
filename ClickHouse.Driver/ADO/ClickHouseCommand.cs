@@ -8,7 +8,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
-using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Http;
 
@@ -135,7 +134,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         var rawStream = await response.Content.ReadAsStreamAsync(lcts.Token).ConfigureAwait(false);
 
         // leaveOpen: the HTTP response owns the transport stream; we only own the decoder we add.
-        var plaintext = ResponseDecompression.Wrap(rawStream, response, ResponseCompressor, leaveOpen: true);
+        var plaintext = ResponseDecompression.Wrap(rawStream, response, leaveOpen: true);
         var decompressor = ReferenceEquals(plaintext, rawStream) ? null : plaintext;
         try
         {
@@ -160,8 +159,8 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             throw new InvalidOperationException("Connection is not set");
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
-        var response = await PostSqlQueryAsync(CommandText, lcts.Token).ConfigureAwait(false);
-        return new ClickHouseRawResult(response, ResponseCompressor);
+        var response = await PostSqlQueryAsync(CommandText, lcts.Token, rawBody: true).ConfigureAwait(false);
+        return new ClickHouseRawResult(response);
     }
 
     /// <inheritdoc/>
@@ -221,19 +220,13 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         }
 
         var result = await PostSqlQueryAsync(sqlBuilder.ToString(), lcts.Token).ConfigureAwait(false);
-        return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.ClickHouseClient.TypeSettings, connection.ClickHouseClient.PocoRegistry, connection.ClickHouseClient.Settings.ReadBufferSize, connection.ClickHouseClient.Settings.ReadValueConverter, ResponseCompressor).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.ClickHouseClient.TypeSettings, connection.ClickHouseClient.PocoRegistry, connection.ClickHouseClient.Settings.ReadBufferSize, connection.ClickHouseClient.Settings.ReadValueConverter).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// The codec used to decode this command's transport-compressed responses, taken from the owning
-    /// client (per-query overrides are not exposed on the ADO.NET command surface).
-    /// </summary>
-    private IClickHouseCompressor ResponseCompressor => connection?.ClickHouseClient?.Settings?.ResponseCompressor;
-
-    private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token)
+    private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token, bool rawBody = false)
     {
         var options = BuildQueryOptions();
-        QueryResult result = await connection.ClickHouseClient.PostSqlQueryAsync(sqlQuery, commandParameters, options, token).ConfigureAwait(false);
+        QueryResult result = await connection.ClickHouseClient.PostSqlQueryAsync(sqlQuery, commandParameters, options, rawBody, token).ConfigureAwait(false);
         QueryId = result.QueryId;
         QueryStats = result.QueryStats;
         ServerTimezone = result.ServerTimezone;

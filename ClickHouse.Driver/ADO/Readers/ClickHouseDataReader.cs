@@ -12,7 +12,6 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Http;
 using ClickHouse.Driver.Numerics;
@@ -62,7 +61,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
         => FromHttpResponseAsync(httpResponse, settings, pocoRegistry: null);
 
-    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, PocoTypeRegistry pocoRegistry, int readBufferSize = DefaultBufferSize, IReadValueConverter readValueConverter = null, IClickHouseCompressor responseCompressor = null)
+    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, PocoTypeRegistry pocoRegistry, int readBufferSize = DefaultBufferSize, IReadValueConverter readValueConverter = null)
     {
         if (httpResponse is null) throw new ArgumentNullException(nameof(httpResponse));
         if (readBufferSize < 1) throw new ArgumentOutOfRangeException(nameof(readBufferSize), readBufferSize, "Read buffer size must be greater than zero");
@@ -84,7 +83,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             // above it — the mid-stream exception scanner and the pooled read buffer alike — sees
             // PLAINTEXT. Driven by the response's Content-Encoding, never by what we asked for.
             // leaveOpen: true because httpResponse owns rawStream and disposes it.
-            var plaintext = ResponseDecompression.Wrap(rawStream, httpResponse, responseCompressor, leaveOpen: true);
+            var plaintext = ResponseDecompression.Wrap(rawStream, httpResponse, leaveOpen: true);
 
             // Reference-equal means the body needed no decoding, so there is no extra stream to own.
             decompressingStream = ReferenceEquals(plaintext, rawStream) ? null : plaintext;

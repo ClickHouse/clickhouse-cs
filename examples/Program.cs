@@ -162,8 +162,8 @@ class Program
         await PocoSelect.Run();
         WaitForUser(isInteractive);
 
-        Console.WriteLine($"\n\nRunning: {nameof(Lz4ResponseRead)}");
-        await Lz4ResponseRead.Run();
+        Console.WriteLine($"\n\nRunning: {nameof(ResponseCompression)}");
+        await ResponseCompression.Run();
         WaitForUser(isInteractive);
 
         // Data Types

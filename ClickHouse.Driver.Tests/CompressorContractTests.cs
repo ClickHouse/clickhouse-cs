@@ -149,39 +149,12 @@ public class CompressorContractTests
     }
 
     /// <summary>
-    /// Cross-compatibility: decode payloads produced by an <b>independent</b> encoder rather than by this
-    /// same codec, so the test cannot pass by being merely self-consistent. gzip/brotli come from the BCL
-    /// encoders; the LZ4 case is a real ClickHouse server response (see <see cref="ServerProducedLz4Frame"/>).
-    /// </summary>
-    [Test]
-    public void Decompress_WithGZipStreamEncodedPayload_DecodesToOriginalBytes()
-    {
-        using var encoded = new MemoryStream();
-        using (var encoder = new GZipStream(encoded, CompressionLevel.Optimal, leaveOpen: true))
-        {
-            encoder.Write(Sample, 0, Sample.Length);
-        }
-
-        AssertDecodes(GZipCompressor.Default, encoded.ToArray(), Sample);
-    }
-
-    [Test]
-    public void Decompress_WithBrotliStreamEncodedPayload_DecodesToOriginalBytes()
-    {
-        using var encoded = new MemoryStream();
-        using (var encoder = new BrotliStream(encoded, CompressionLevel.Optimal, leaveOpen: true))
-        {
-            encoder.Write(Sample, 0, Sample.Length);
-        }
-
-        AssertDecodes(BrotliCompressor.Default, encoded.ToArray(), Sample);
-    }
-
-    /// <summary>
     /// A verbatim <c>Content-Encoding: lz4</c> response body captured from a ClickHouse server
     /// (<c>SELECT 'the quick brown fox jumps over the lazy dog' FORMAT TSVRaw</c>). It starts with the LZ4
     /// frame magic <c>04 22 4D 18</c>. Pinning real server bytes is what makes this a genuine
-    /// cross-implementation check: the encoder is ClickHouse itself, not our vendored codec.
+    /// cross-implementation check: the encoder is ClickHouse itself, not our vendored codec. There is no
+    /// equivalent for gzip/br — those decoders are the BCL's own, so encoding with
+    /// <see cref="GZipStream"/>/<see cref="BrotliStream"/> would only test the BCL against itself.
     /// </summary>
     private const string ServerProducedLz4Frame =
         "BCJNGEBQdywAAIB0aGUgcXVpY2sgYnJvd24gZm94IGp1bXBzIG92ZXIgdGhlIGxhenkgZG9nCgAAAAA=";

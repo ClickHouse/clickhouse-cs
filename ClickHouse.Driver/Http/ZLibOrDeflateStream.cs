@@ -7,20 +7,13 @@ using System.Threading.Tasks;
 namespace ClickHouse.Driver.Http;
 
 /// <summary>
-/// Decodes an HTTP <c>Content-Encoding: deflate</c> body, tolerating both of the two encodings that
-/// name is used for in the wild.
-/// <para>
-/// RFC 9110 defines <c>deflate</c> as the <b>zlib</b> format (RFC 1950) — a 2-byte header wrapping a
-/// raw DEFLATE stream — and that is what ClickHouse emits (verified: its bodies start <c>78 5E</c>).
-/// A bare <see cref="DeflateStream"/> expects <i>raw</i> DEFLATE (RFC 1951) and throws
-/// <see cref="InvalidDataException"/> on those bytes. Some non-conforming servers and proxies do send
-/// raw DEFLATE, however, so — like .NET's own <c>DecompressionHandler</c> — this sniffs the first two
-/// bytes and picks the matching decoder rather than committing to one.
-/// </para>
-/// <para>
-/// Sniffing is deferred to the first read so that construction stays non-blocking: the header bytes
-/// are consumed then, and replayed into whichever decoder is chosen, so no input is lost.
-/// </para>
+/// Decodes an HTTP <c>Content-Encoding: deflate</c> body, tolerating both encodings that name is used
+/// for in the wild. RFC 9110 defines it as the <b>zlib</b> format (RFC 1950), which is what ClickHouse
+/// emits (verified: its bodies start <c>78 5E</c>) and what a bare <see cref="DeflateStream"/> — which
+/// expects raw DEFLATE (RFC 1951) — rejects with <see cref="InvalidDataException"/>. Some servers and
+/// proxies do send raw DEFLATE, so, like .NET's own <c>DecompressionHandler</c>, this sniffs the first
+/// two bytes and picks the matching decoder. Sniffing is deferred to the first read to keep
+/// construction non-blocking; the sniffed bytes are replayed into the chosen decoder, so none are lost.
 /// </summary>
 internal sealed class ZLibOrDeflateStream : Stream
 {
@@ -59,11 +52,17 @@ internal sealed class ZLibOrDeflateStream : Stream
         return decoder.Read(buffer, offset, count);
     }
 
-    public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    // Overridden, not inherited: Stream's base implementation of the span overload rents an array from
+    // ArrayPool, copies through the byte[] overload and returns it — a rent plus a copy on every
+    // synchronous read, and the buffering stream above this one reads spans.
+    public override int Read(Span<byte> buffer)
     {
-        await EnsureDecoderAsync(cancellationToken).ConfigureAwait(false);
-        return await decoder.ReadAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+        EnsureDecoder();
+        return decoder.Read(buffer);
     }
+
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
 
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -204,6 +203,17 @@ internal sealed class ZLibOrDeflateStream : Stream
 
             var fromPrefix = CopyFromPrefix(buffer.AsSpan(offset, count));
             return fromPrefix > 0 ? fromPrefix : inner.Read(buffer, offset, count);
+        }
+
+        // See the note on the outer class: the base span overload would rent and copy on every read, and
+        // both decoders (ZLibStream / DeflateStream) read spans from this stream.
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.Length == 0)
+                return 0;
+
+            var fromPrefix = CopyFromPrefix(buffer);
+            return fromPrefix > 0 ? fromPrefix : inner.Read(buffer);
         }
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)

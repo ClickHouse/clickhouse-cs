@@ -4,8 +4,6 @@ using System.Linq;
 using System.Net.Http;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
-using ClickHouse.Driver.Compression;
-using ClickHouse.Driver.Http;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 
@@ -102,8 +100,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         // Copy read value converter
         ReadValueConverter = other.ReadValueConverter;
 
-        // Copy response compressor
-        ResponseCompressor = other.ResponseCompressor;
+        // Copy accept encoding
+        AcceptEncoding = other.AcceptEncoding;
     }
 
     /// <summary>
@@ -158,7 +156,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public string BearerToken { get; init; }
 
     /// <summary>
-    /// Gets or sets whether to use compression for data transfer.
+    /// Gets or sets whether to use compression for data transfer. This is the master switch: when false
+    /// the driver advertises no <c>Accept-Encoding</c> at all, unless <see cref="AcceptEncoding"/> names
+    /// one explicitly.
     /// Default: true
     /// </summary>
     public bool UseCompression { get; init; } = ClickHouseDefaults.Compression;
@@ -363,26 +363,23 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public IReadValueConverter ReadValueConverter { get; init; }
 
     /// <summary>
-    /// Gets or sets the codec used to decode transport-compressed query <b>responses</b>, enabling
-    /// response compression the driver's own HTTP handler cannot do for itself (notably
-    /// <see cref="Lz4Compressor"/>, and Brotli, which is not part of the handler's
-    /// <c>AutomaticDecompression</c> mask).
-    /// <para>
-    /// When set, the codec's <see cref="IClickHouseCompressor.ContentEncoding"/> is added to the request's
-    /// <c>Accept-Encoding</c> header and <c>enable_http_compression=1</c> is forced on the URL. Whether a
-    /// response is actually decoded is decided by the <b>response's</b> <c>Content-Encoding</c> header, not
-    /// by this setting: ClickHouse picks the codec by its own preference order and may answer with a
-    /// different one (which the driver still decodes when it is gzip, deflate or br).
-    /// </para>
-    /// <para>
-    /// This is opt-in and does not change the default <c>Accept-Encoding</c> (<c>gzip, deflate</c>).
-    /// It is independent of <see cref="InsertOptions.Compressor"/>, which compresses the insert
-    /// <i>request</i> body. Equivalent connection-string keyword:
-    /// <c>ResponseCompression=lz4|gzip|br|none</c>.
-    /// </para>
-    /// Default: null (no client-side response decompression beyond the HTTP handler's own gzip/deflate)
+    /// Gets or sets the <c>Accept-Encoding</c> sent with every request, overriding the codecs the driver
+    /// advertises by default (<c>lz4, gzip, deflate</c> — see remarks). Whichever codec the server then
+    /// answers with is decoded transparently; <c>zstd</c> and <c>snappy</c> cannot be decoded and will
+    /// fail with an actionable error. Can be overridden per query by
+    /// <see cref="QueryOptions.AcceptEncoding"/>.
+    /// Default: null (advertise the codecs the driver can decode)
     /// </summary>
-    public IClickHouseCompressor ResponseCompressor { get; init; }
+    /// <remarks>
+    /// ClickHouse resolves this header by scanning for tokens in its own fixed preference order
+    /// (<c>zstd</c> &gt; <c>br</c> &gt; <c>lz4</c> &gt; <c>snappy</c> &gt; <c>gzip</c> &gt;
+    /// <c>deflate</c>) and ignores q-values, so the only way to steer its choice is which tokens are
+    /// listed. Setting this also forces <c>enable_http_compression=1</c>, which the server requires
+    /// before it honours the header at all, and — unlike the default — applies to
+    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/> as well, whose body is otherwise left
+    /// uncompressed so the driver never reshapes bytes it hands over verbatim.
+    /// </remarks>
+    public string AcceptEncoding { get; init; }
 
     /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
@@ -434,7 +431,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Roles = builder.Roles,
             JsonReadMode = builder.JsonReadMode,
             JsonWriteMode = builder.JsonWriteMode,
-            ResponseCompressor = ResponseCompressionSetting.Parse(builder.ResponseCompression),
+            AcceptEncoding = builder.AcceptEncoding,
         };
 
         // Extract custom settings from connection string builder
@@ -486,7 +483,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
                ReadValueConverter == other.ReadValueConverter &&
-               ResponseCompressor == other.ResponseCompressor &&
+               AcceptEncoding == other.AcceptEncoding &&
                Roles.SequenceEqual(other.Roles) &&
                CustomHeaders.EntriesEqual(other.CustomHeaders) &&
                ApplicationInfo.EntriesEqual(other.ApplicationInfo);
@@ -529,7 +526,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(ParameterTypeResolver);
         hash.Add(ParameterFormatter);
         hash.Add(ReadValueConverter);
-        hash.Add(ResponseCompressor);
+        hash.Add(AcceptEncoding);
         foreach (var kvp in CustomSettings)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
@@ -580,14 +577,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode};" +
                $"UseFormDataParameters={UseFormDataParameters}";
 
-        // Only the built-in codecs have a connection-string spelling. Emitting a custom compressor's
-        // ContentEncoding here would produce a string this type's own parser rejects (e.g.
-        // "ResponseCompression=zstd" throws), so a custom codec — which can only be set in code
-        // anyway — is omitted rather than round-tripped into an unparseable value.
-        var responseCompression = ResponseCompressionSetting.Format(ResponseCompressor);
-        if (responseCompression != null)
+        if (!string.IsNullOrEmpty(AcceptEncoding))
         {
-            result += $";ResponseCompression={responseCompression}";
+            result += $";AcceptEncoding={AcceptEncoding}";
         }
 
         if (Roles.Count > 0)
@@ -631,8 +623,5 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         if (EnableDebugMode && LoggerFactory == null)
             throw new InvalidOperationException("LoggerFactory must be provided when EnableDebugMode is true.");
-
-        if (ResponseCompressor != null && string.IsNullOrWhiteSpace(ResponseCompressor.ContentEncoding))
-            throw new InvalidOperationException("ResponseCompressor.ContentEncoding cannot be null or whitespace; it is matched against the response's Content-Encoding header.");
     }
 }

@@ -237,7 +237,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+        var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // The row count is fully consumed here, so this method owns the response: release it (and with it
         // the pooled connection) before returning. ExtendedBinaryReader does not propagate Dispose to the
@@ -246,7 +246,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         var rawStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
 
         // leaveOpen: the HTTP response owns the transport stream; we only own the decoder we add.
-        var plaintext = ResponseDecompression.Wrap(rawStream, response, GetResponseCompressor(options), leaveOpen: true);
+        var plaintext = ResponseDecompression.Wrap(rawStream, response, leaveOpen: true);
         var decompressor = ReferenceEquals(plaintext, rawStream) ? null : plaintext;
         try
         {
@@ -278,15 +278,21 @@ public sealed class ClickHouseClient : IClickHouseClient
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
+        var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken: cancellationToken).ConfigureAwait(false);
         var converter = options?.ReadValueConverter ?? Settings.ReadValueConverter;
-        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings, pocoTypeRegistry, Settings.ReadBufferSize, converter, GetResponseCompressor(options)).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings, pocoTypeRegistry, Settings.ReadBufferSize, converter).ConfigureAwait(false);
     }
 
+    /// <param name="rawBody">
+    /// Marks a request whose response body is handed to the caller verbatim rather than parsed by the
+    /// driver, which suppresses the default <c>Accept-Encoding</c>. See
+    /// <see cref="AddDefaultHttpHeaders(HttpRequestHeaders, QueryOptions, bool)"/>.
+    /// </param>
     internal async Task<QueryResult> PostSqlQueryAsync(
         string sql,
         ClickHouseParameterCollection parameters = null,
         QueryOptions options = null,
+        bool rawBody = false,
         CancellationToken cancellationToken = default)
     {
         using var activity = this.StartActivity("PostSqlQueryAsync");
@@ -307,12 +313,14 @@ public sealed class ClickHouseClient : IClickHouseClient
                 sql,
                 parameters,
                 uriBuilder,
-                options)
+                options,
+                rawBody)
             : BuildHttpRequestMessageWithQueryParams(
                 sql,
                 parameters,
                 uriBuilder,
-                options);
+                options,
+                rawBody);
 
         activity.SetQuery(sql);
 
@@ -322,7 +330,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             response = await SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 
-            var handled = await HandleError(response, sql, activity, GetResponseCompressor(options)).ConfigureAwait(false);
+            var handled = await HandleError(response, sql, activity).ConfigureAwait(false);
             var result = new QueryResult(handled);
 
             if (isDebugLoggingEnabled)
@@ -345,7 +353,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
     }
 
-    private HttpRequestMessage BuildHttpRequestMessageWithQueryParams(string sqlQuery, ClickHouseParameterCollection parameters, ClickHouseUriBuilder uriBuilder, QueryOptions queryOptions)
+    private HttpRequestMessage BuildHttpRequestMessageWithQueryParams(string sqlQuery, ClickHouseParameterCollection parameters, ClickHouseUriBuilder uriBuilder, QueryOptions queryOptions, bool rawBody)
     {
         if (parameters != null)
         {
@@ -365,7 +373,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         var postMessage = new HttpRequestMessage(HttpMethod.Post, uri);
 
-        AddDefaultHttpHeaders(postMessage.Headers, queryOptions);
+        AddDefaultHttpHeaders(postMessage.Headers, queryOptions, rawBody);
         HttpContent content = new StringContent(sqlQuery);
         content.Headers.ContentType = new MediaTypeHeaderValue("text/sql");
         if (Settings.UseCompression)
@@ -378,7 +386,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         return postMessage;
     }
 
-    private HttpRequestMessage BuildHttpRequestMessageWithFormData(string sqlQuery, ClickHouseParameterCollection parameters, ClickHouseUriBuilder uriBuilder, QueryOptions queryOptions)
+    private HttpRequestMessage BuildHttpRequestMessageWithFormData(string sqlQuery, ClickHouseParameterCollection parameters, ClickHouseUriBuilder uriBuilder, QueryOptions queryOptions, bool rawBody)
     {
         var content = new MultipartFormDataContent();
 
@@ -405,7 +413,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         var postMessage = new HttpRequestMessage(HttpMethod.Post, uri);
 
-        AddDefaultHttpHeaders(postMessage.Headers, queryOptions);
+        AddDefaultHttpHeaders(postMessage.Headers, queryOptions, rawBody);
 
         postMessage.Content = content;
 
@@ -453,8 +461,8 @@ public sealed class ClickHouseClient : IClickHouseClient
         QueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
-        var response = await PostSqlQueryAsync(sql, null, options, cancellationToken).ConfigureAwait(false);
-        return new ClickHouseRawResult(response.HttpResponseMessage, GetResponseCompressor(options));
+        var response = await PostSqlQueryAsync(sql, null, options, rawBody: true, cancellationToken).ConfigureAwait(false);
+        return new ClickHouseRawResult(response.HttpResponseMessage);
     }
 
     private async Task<int> SendBatchAsync(string destinationTable, Batch batch, BatchSerializer serializer, InsertOptions insertOptions, Action<long> onBatchSent, CancellationToken token)
@@ -917,7 +925,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
             GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Streamed request to {Endpoint} received response {StatusCode}.", serverUri, response.StatusCode);
 
-            return await HandleError(response, sql, activity, GetResponseCompressor(queryOptions)).ConfigureAwait(false);
+            return await HandleError(response, sql, activity).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -976,12 +984,9 @@ public sealed class ClickHouseClient : IClickHouseClient
             sessionId = queryOverride.UseSession.Value ? queryOverride.SessionId : null;
         }
 
-        // A per-query Accept-Encoding override — or a configured response compressor — is meaningless
-        // unless the server is also told to honour it via enable_http_compression. Force it on when the
-        // caller asks for compression.
-        var useCompression = Settings.UseCompression
-            || !string.IsNullOrEmpty(queryOverride?.AcceptEncoding)
-            || GetResponseCompressor(queryOverride) != null;
+        // An Accept-Encoding chosen by the caller is meaningless unless the server is also told to honour
+        // it via enable_http_compression. Force it on when the caller asks for compression.
+        var useCompression = Settings.UseCompression || !string.IsNullOrEmpty(ExplicitAcceptEncoding(queryOverride));
 
         return new ClickHouseUriBuilder(serverUri)
         {
@@ -1001,9 +1006,12 @@ public sealed class ClickHouseClient : IClickHouseClient
     }
 
     /// <summary>
-    /// Adds default HTTP headers to a request.
+    /// Adds default HTTP headers to a request. <paramref name="rawBody"/> marks a request whose body is
+    /// handed to the caller verbatim (<see cref="ExecuteRawResultAsync"/>), which does not advertise the
+    /// default codecs: the driver must not silently change the shape of bytes it does not itself consume.
+    /// An <c>AcceptEncoding</c> the caller configured explicitly still applies.
     /// </summary>
-    internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, QueryOptions queryOverride = null)
+    internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, QueryOptions queryOverride = null, bool rawBody = false)
     {
         // Priority: override > connection-level bearer token > basic auth
         var bearerToken = queryOverride?.BearerToken ?? Settings.BearerToken;
@@ -1024,27 +1032,14 @@ public sealed class ClickHouseClient : IClickHouseClient
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/csv"));
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
 
-        if (Settings.UseCompression)
+        // Codecs the driver can decode, advertised only when the caller has not named their own and only
+        // for a body the driver itself consumes. ClickHouse resolves this header by its own fixed
+        // preference order and ignores q-values, so it is a capability announcement, not a demand.
+        if (Settings.UseCompression && string.IsNullOrEmpty(ExplicitAcceptEncoding(queryOverride)) && !rawBody)
         {
-            headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
-            headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("deflate"));
-        }
-
-        // A configured response compressor advertises its own codec in addition to (never instead of) the
-        // defaults, so the default Accept-Encoding is unchanged when no compressor is set. Note that
-        // ClickHouse picks the response codec by its own preference order and ignores q-values, so this
-        // is a capability announcement, not a demand.
-        var responseCompressor = GetResponseCompressor(queryOverride);
-        if (responseCompressor != null)
-        {
-            // Trim once, then use the trimmed token for BOTH the duplicate check and the header value —
-            // comparing the raw token while adding the trimmed one would let "  gzip " slip past the
-            // dedup and be advertised twice.
-            var token = responseCompressor.ContentEncoding?.Trim();
-            if (!string.IsNullOrEmpty(token) &&
-                !headers.AcceptEncoding.Any(e => string.Equals(e.Value, token, StringComparison.OrdinalIgnoreCase)))
+            foreach (var token in ResponseDecompression.DefaultAcceptEncoding.Split(','))
             {
-                headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(token));
+                headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(token.Trim()));
             }
         }
 
@@ -1054,18 +1049,23 @@ public sealed class ClickHouseClient : IClickHouseClient
         // Override
         ApplyCustomHeaders(headers, queryOverride?.CustomHeaders);
 
-        // Per-query Accept-Encoding override replaces whatever was attached above
-        // (settings defaults and any value injected via CustomHeaders).
-        ApplyAcceptEncodingOverride(headers, queryOverride?.AcceptEncoding);
+        // An explicit Accept-Encoding replaces whatever was attached above (the default codecs and any
+        // value injected via CustomHeaders), and applies to the raw path too — there the caller has asked
+        // for the encoding themselves, so honouring it is not a silent change.
+        ApplyAcceptEncodingOverride(headers, ExplicitAcceptEncoding(queryOverride));
     }
 
     /// <summary>
-    /// Resolves the codec used to decode a response body: the per-query override first, then the
+    /// The <c>Accept-Encoding</c> the caller chose, if any: the per-query value first, then the
     /// client-level setting — the same precedence the other per-query hooks (ReadValueConverter,
-    /// ParameterFormatter, ParameterTypeResolver) use.
+    /// ParameterFormatter, ParameterTypeResolver) use. <see langword="null"/> means "not chosen", which
+    /// is what lets the driver fall back to <see cref="ResponseDecompression.DefaultAcceptEncoding"/>.
     /// </summary>
-    internal IClickHouseCompressor GetResponseCompressor(QueryOptions queryOverride)
-        => queryOverride?.ResponseCompressor ?? Settings.ResponseCompressor;
+    private string ExplicitAcceptEncoding(QueryOptions queryOverride)
+    {
+        var perQuery = queryOverride?.AcceptEncoding;
+        return string.IsNullOrEmpty(perQuery) ? Settings.AcceptEncoding : perQuery;
+    }
 
     private static void ApplyAcceptEncodingOverride(HttpRequestHeaders headers, string acceptEncoding)
     {
@@ -1099,7 +1099,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <summary>
     /// Handles HTTP response errors.
     /// </summary>
-    private static async Task<HttpResponseMessage> HandleError(HttpResponseMessage response, string query, Activity activity, IClickHouseCompressor responseCompressor)
+    private static async Task<HttpResponseMessage> HandleError(HttpResponseMessage response, string query, Activity activity)
     {
         if (response.IsSuccessStatusCode)
         {
@@ -1107,7 +1107,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             return response;
         }
 
-        var error = await ReadErrorBodyAsync(response, responseCompressor).ConfigureAwait(false);
+        var error = await ReadErrorBodyAsync(response).ConfigureAwait(false);
         var ex = string.IsNullOrWhiteSpace(error)
             ? CreateEmptyBodyException(response, query)
             : ClickHouseServerException.FromServerResponse(error, query);
@@ -1174,7 +1174,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// binary bytes as a string. An error body must never turn a server error into an obscure
     /// decompression crash, so this uses the non-throwing form of the resolver.
     /// </summary>
-    private static async Task<string> ReadErrorBodyAsync(HttpResponseMessage response, IClickHouseCompressor responseCompressor)
+    private static async Task<string> ReadErrorBodyAsync(HttpResponseMessage response)
     {
         var encoding = ResponseDecompression.GetContentEncoding(response);
         if (string.IsNullOrEmpty(encoding))
@@ -1184,7 +1184,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         var rawStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
 
-        if (!ResponseDecompression.TryWrap(rawStream, encoding, responseCompressor, leaveOpen: false, out var decompressed))
+        if (!ResponseDecompression.TryWrap(rawStream, encoding, leaveOpen: false, out var decompressed))
         {
             // Unknown codec — surfacing the raw compressed bytes as a string is worse than
             // a placeholder. Best-effort drain the body first so HttpClient can reuse the

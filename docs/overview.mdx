@@ -99,7 +99,7 @@ Below is a full list of all the settings, their default values, and their effect
 | Property | Type | Default | Connection String Key | Description |
 |----------|------|---------|----------------------|-------------|
 | UseCompression | `bool` | `true` | `Compression` | Enable gzip compression for data transfer |
-| ResponseCompressor | `IClickHouseCompressor` | `null` | `ResponseCompression` | Codec used to decode transport-compressed *responses*: `lz4`, `gzip`, `br` or `none`. Opt-in; enables codecs the HTTP handler cannot decompress on its own. See [Response decompression](#response-decompression) |
+| AcceptEncoding | `string` | `null` | `AcceptEncoding` | `Accept-Encoding` sent with every request, replacing the codecs the driver advertises by default (`lz4, gzip, deflate`). Whatever the server answers with is decoded transparently. See [Response decompression](#response-decompression) |
 | UseCustomDecimals | `bool` | `true` | `UseCustomDecimals` | Use `ClickHouseDecimal` for arbitrary precision; if false, uses .NET `decimal` (128-bit limit) |
 | ReadStringsAsByteArrays | `bool` | `false` | `ReadStringsAsByteArrays` | Read `String` and `FixedString` columns as `byte[]` instead of `string`; useful for binary data |
 | UseFormDataParameters | `bool` | `false` | `UseFormDataParameters` | Send parameters as form data instead of URL query string |
@@ -194,8 +194,7 @@ Host=localhost;set_max_threads=4;set_readonly=1;set_max_memory_usage=10000000000
 | ParameterFormatter | `IParameterFormatter` | Override client-level formatter for `@`-style parameter value serialization; see [Custom parameter value formatting](#parameter-value-formatting) |
 | ReadValueConverter | `IReadValueConverter` | Override client-level transform applied to values returned by the data reader; see [Custom read value conversion](#read-value-conversion) |
 | MaxExecutionTime | `TimeSpan?` | Server-side query timeout (passed as `max_execution_time` setting); server cancels query if exceeded |
-| AcceptEncoding | `string` | Per-query `Accept-Encoding` header override (e.g., `"zstd"`, `"zstd, gzip;q=0.5"`); also forces `enable_http_compression=1` on the URL. See [Per-query transport compression](#per-query-accept-encoding). |
-| ResponseCompressor | `IClickHouseCompressor` | Override the client-level codec used to decode this query's transport-compressed response; see [Response decompression](#response-decompression) |
+| AcceptEncoding | `string` | Per-query `Accept-Encoding` override (e.g. `"br"`, `"identity"`), taking precedence over `ClickHouseClientSettings.AcceptEncoding`; also forces `enable_http_compression=1` on the URL. See [Per-query transport compression](#per-query-accept-encoding). |
 
 **Example:**
 
@@ -889,84 +888,68 @@ The default `HttpClient` the driver builds has `AutomaticDecompression = GZip | 
 
 In that case, pass an `HttpClient` or `HttpClientFactory` to the ClickHouseClient with `AutomaticDecompression = DecompressionMethods.None`
 
-Note that **`br` (Brotli) is not part of that mask**, even though .NET can decode Brotli: the driver's handler sets `GZip | Deflate` only, never `DecompressionMethods.All`. A `br` response therefore arrives at the driver still compressed. The same is true of `lz4` and `zstd`, which .NET cannot decode at all. To read any of these on the parsing paths, let the driver decode the body instead — see [Response decompression](#response-decompression) (`lz4`, `gzip` and `br`; `zstd` is not supported).
+Note that **`br` (Brotli) is not part of that mask**, even though .NET can decode Brotli: the driver's handler sets `GZip | Deflate` only. That no longer matters for the parsing paths — the driver decodes `br` (and `lz4`) itself, see [Response decompression](#response-decompression) — but it does mean a `br` or `lz4` body reaches `ExecuteRawResultAsync` still compressed.
 
 <Warning>
-If `AcceptEncoding` requests a codec that neither the configured `HttpClient` nor the driver can decode, only `ExecuteRawResultAsync` is safe. Calling `ExecuteReaderAsync`, `ExecuteScalarAsync`, or `ExecuteNonQueryAsync` on that same query path will fail with an error naming the codec (previously it parsed the compressed bytes as the regular result format and produced garbage).
+If `AcceptEncoding` requests a codec the driver cannot decode (`zstd`, `snappy`), only `ExecuteRawResultAsync` is safe. `ExecuteReaderAsync`, `ExecuteScalarAsync` and `ExecuteNonQueryAsync` fail with a `NotSupportedException` naming the codec (previously they parsed the compressed bytes as the result format and produced garbage).
 </Warning>
 
 #### Error bodies {#per-query-accept-encoding-errors}
 
-When the server responds with a 4xx/5xx and `enable_http_compression=1` was set, it compresses the error body with the same codec it would have used for a successful response. The driver decompresses these for codecs the BCL ships with (`gzip`, `deflate`, `br`/`brotli`), plus whatever the configured [response compressor](#response-decompression) decodes (e.g. `lz4`), so the message surfaced on `ClickHouseServerException` is readable. For codecs it cannot decode (`zstd`, …), the driver returns a placeholder message that names the codec and points at `system.query_log` for the original error text.
+When the server responds with a 4xx/5xx and `enable_http_compression=1` was set, it compresses the error body with the same codec it would have used for a successful response. The driver decodes those for every codec it supports (`lz4`, `gzip`, `deflate`, `br`/`brotli`) so the message on `ClickHouseServerException` is readable. For anything else (`zstd`, …) it returns a placeholder naming the codec and pointing at `system.query_log` for the original error text.
 
 ---
 
 ### Response decompression {#response-decompression}
 
-`Accept-Encoding` only asks the server to compress the response — something still has to decode it, and the HTTP handler only covers `gzip` and `deflate`. Set a **response compressor** and the driver decodes the body itself, so all the normal read APIs (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, Dapper, EF Core, linq2db) keep working.
+`Accept-Encoding` only asks the server to compress the response — something still has to decode it. The driver does that itself, from the response's `Content-Encoding`, so all the normal read APIs (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, Dapper, EF Core, linq2db) work over a compressed response with nothing to configure. It decodes `lz4`, `gzip`, `deflate` and `br`; `zstd` and `snappy` are not supported.
 
-This is what makes `lz4` usable end-to-end — the codec that costs the ClickHouse server the least CPU to produce, and one `AutomaticDecompression` cannot decode at all — and it closes the same gap for `br`.
+By default the driver advertises **`lz4, gzip, deflate`**, and ClickHouse answers with `lz4`. To choose differently, set `Accept-Encoding` yourself — client-wide:
 
 ```csharp
-using ClickHouse.Driver.ADO;
-using ClickHouse.Driver.Compression;
-
 using var client = new ClickHouseClient(new ClickHouseClientSettings("Host=localhost")
 {
-    ResponseCompressor = Lz4Compressor.Default,
+    AcceptEncoding = "br",      // better ratio than lz4, more server CPU
 });
-
-// Nothing else changes: rows are read exactly as usual, over an LZ4-compressed response.
-using var reader = await client.ExecuteReaderAsync("SELECT * FROM events LIMIT 100");
 ```
 
-The same thing through a connection string, for ORM users who never touch `ClickHouseClientSettings`:
-
-```text
-Host=localhost;ResponseCompression=lz4
-```
-
-`ResponseCompression` accepts `lz4`, `gzip`, `br` (or `brotli`), and `none` (`identity`/`off`/`false` are also accepted and mean the same); any other value throws. A custom `IClickHouseCompressor` can only be set in code.
-
-Or per query, which takes precedence over the client-level setting:
+per query, which takes precedence:
 
 ```csharp
 using var reader = await client.ExecuteReaderAsync(
     "SELECT * FROM events",
-    options: new QueryOptions { ResponseCompressor = Lz4Compressor.Default });
+    options: new QueryOptions { AcceptEncoding = "identity" });   // opt this query out
 ```
 
-**Opt-in and additive.** With no compressor configured the default `Accept-Encoding` is unchanged (`gzip, deflate`) and nothing about existing behavior changes — LZ4 is never negotiated unless you ask for it. Setting a compressor *adds* its token to `Accept-Encoding` (it never replaces the defaults) and forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header. An explicit `QueryOptions.AcceptEncoding` still wins for the request header; the compressor then only decodes if the response's `Content-Encoding` matches its token.
+or in the connection string, for ORM users who never touch `ClickHouseClientSettings`:
 
-**What actually gets decoded is decided by the response**, never by what was requested: ClickHouse picks the response codec by its own fixed preference order (`zstd` > `br` > `lz4` > `gzip`) and ignores client ordering and q-values, so `Accept-Encoding` is a capability announcement rather than a demand. The driver reads the response's `Content-Encoding` and:
+```text
+Host=localhost;AcceptEncoding=br, gzip
+```
 
-- absent or `identity` — the body is passed through untouched;
-- the configured compressor's token (e.g. `lz4`) — decoded by that compressor;
-- `gzip`, `deflate`, `br`/`brotli` — decoded with the BCL codec, whichever compressor is configured;
-- anything else (e.g. `zstd`) — an error that names the codec and how to configure it.
+Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends no `Accept-Encoding` at all.
 
-There is no risk of double-decoding: when the handler's `AutomaticDecompression` has already decoded a body it also strips `Content-Encoding`, so the driver sees plaintext and leaves it alone.
+**The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. That is why `br` is *decodable but not advertised by default*: including it would make every response brotli, whose server-side cost climbs steeply with `http_zlib_compression_level`, while `lz4` is the cheapest to produce and to decode.
 
-**Raw results.** `ClickHouseRawResult.ReadDecompressedStreamAsync()` applies these same rules to a raw export. The existing members (`ReadAsStreamAsync`, `ReadAsByteArrayAsync`, `ReadAsStringAsync`, `CopyToAsync`) are unchanged and still hand back the bytes exactly as they arrived, which is what you want when writing a compressed file straight to disk.
+Because the decision is made from the response, a body is decoded whenever its `Content-Encoding` says so, whatever was requested: absent or `identity` passes through untouched, a supported codec is decoded, and anything else raises an error naming it. There is no risk of double-decoding — when the handler's `AutomaticDecompression` has already decoded a body it also strips `Content-Encoding`, so the driver sees plaintext and leaves it alone.
+
+**Raw results are exempt.** `ExecuteRawResultAsync` hands its body to you verbatim, so the driver does not advertise the default codecs for it — it must not silently change bytes it does not consume itself, or an export would start writing compressed files. An explicit `AcceptEncoding` (at either level) still applies, and `ClickHouseRawResult.ReadDecompressedStreamAsync()` decodes the result when you want that; `ReadAsStreamAsync`, `ReadAsByteArrayAsync`, `ReadAsStringAsync` and `CopyToAsync` always return the bytes exactly as they arrived.
 
 ```csharp
 using var result = await client.ExecuteRawResultAsync(
-    "SELECT * FROM events FORMAT JSONEachRow");
+    "SELECT * FROM events FORMAT JSONEachRow",
+    options: new QueryOptions { AcceptEncoding = "lz4" });
 
-Console.WriteLine(result.ContentEncoding); // e.g. "lz4"
+Console.WriteLine(result.ContentEncoding); // "lz4"
 
 await using var body = await result.ReadDecompressedStreamAsync();
 using var bodyReader = new StreamReader(body);
 var json = await bodyReader.ReadToEndAsync();
 ```
 
-Read the returned stream to completion before it goes out of scope, as above. When the response *is* compressed you get a decoder created with `leaveOpen`, so disposing it leaves the response intact; when it is **not** compressed you get the HTTP content stream itself, so disposing it ends the body. Either way the `ClickHouseRawResult` owns the response — don't call its other read members after the stream has been disposed. Disposing the `ClickHouseRawResult` is always required and is on its own sufficient — it releases both the response and any decoder this method inserted (decoders hold pooled buffers). The `await using` on the stream above is therefore optional, and safe to keep: a decoder tolerates being disposed by both you and the raw result. Repeated (sequential) calls hand back the same stream; the type is not safe to use concurrently from several threads.
+Read the returned stream to completion before it goes out of scope, as above. When the response *is* compressed you get a decoder created with `leaveOpen`, so disposing it leaves the response intact; when it is **not** compressed you get the HTTP content stream itself, so disposing it ends the body. Either way the `ClickHouseRawResult` owns the response — don't call its other read members after the stream has been disposed. Disposing the `ClickHouseRawResult` is always required and on its own sufficient: it releases both the response and any decoder inserted here (decoders hold pooled buffers). The `await using` above is therefore optional, and safe to keep. Repeated sequential calls hand back the same stream; the type is not safe to use concurrently.
 
-<Note>
-Any codec can be plugged in by implementing `IClickHouseCompressor.Decompress(Stream source, bool leaveOpen)` and returning the matching `ContentEncoding` token; the built-in `Lz4Compressor`, `GZipCompressor` and `BrotliCompressor` implement it. The same interface compresses insert bodies via `InsertOptions.Compressor`, but the two directions are independent: `ResponseCompressor` never affects what is sent.
-</Note>
-
-See [Select_007_Lz4ResponseRead.cs](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Select/Select_007_Lz4ResponseRead.cs) for a runnable example.
+See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Select/Select_007_ResponseCompression.cs) for a runnable example.
 
 ---
 

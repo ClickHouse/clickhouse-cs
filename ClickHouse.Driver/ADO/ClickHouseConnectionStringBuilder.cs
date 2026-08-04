@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Data.Common;
 using System.Globalization;
 using System.Linq;
-using ClickHouse.Driver.Http;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -168,16 +167,15 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
     }
 
     /// <summary>
-    /// Gets or sets the codec used to decode transport-compressed query responses:
-    /// <c>lz4</c>, <c>gzip</c>, <c>br</c> or <c>none</c>. Maps onto
-    /// <see cref="ClickHouseClientSettings.ResponseCompressor"/>; setting it also adds the codec to
-    /// <c>Accept-Encoding</c> and forces <c>enable_http_compression=1</c>.
-    /// Default: null (none)
+    /// Gets or sets the <c>Accept-Encoding</c> sent with every request, e.g. <c>lz4</c> or
+    /// <c>br, gzip</c>. Maps onto <see cref="ClickHouseClientSettings.AcceptEncoding"/>: it replaces the
+    /// codecs the driver advertises by default and forces <c>enable_http_compression=1</c>.
+    /// Default: null (advertise the codecs the driver can decode)
     /// </summary>
-    public string ResponseCompression
+    public string AcceptEncoding
     {
-        get => GetStringOrDefault("ResponseCompression", null);
-        set => this["ResponseCompression"] = value;
+        get => GetStringOrDefault("AcceptEncoding", null);
+        set => this["AcceptEncoding"] = value;
     }
 
     private bool GetBooleanOrDefault(string name, bool @default)
@@ -251,7 +249,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Roles = settings.Roles,
             JsonReadMode = settings.JsonReadMode,
             JsonWriteMode = settings.JsonWriteMode,
-            ResponseCompression = ResponseCompressionSetting.Format(settings.ResponseCompressor),
+            AcceptEncoding = settings.AcceptEncoding,
         };
 
         // Add custom settings with the set_ prefix

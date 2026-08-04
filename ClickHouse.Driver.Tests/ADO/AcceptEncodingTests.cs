@@ -25,7 +25,8 @@ public class AcceptEncodingTests
         };
     }
 
-    private static (ClickHouseClient client, TrackingHandler handler) CreateClient(bool useCompression = false)
+    private static (ClickHouseClient client, TrackingHandler handler) CreateClient(
+        bool useCompression = false, string acceptEncoding = null)
     {
         var trackingHandler = new TrackingHandler(CreateFakeSuccessResponse());
         var httpClient = new HttpClient(trackingHandler);
@@ -33,9 +34,13 @@ public class AcceptEncodingTests
         {
             HttpClient = httpClient,
             UseCompression = useCompression,
+            AcceptEncoding = acceptEncoding,
         };
         return (new ClickHouseClient(settings), trackingHandler);
     }
+
+    private static string[] AcceptEncodingOf(TrackingHandler handler)
+        => handler.Requests.Single().Headers.AcceptEncoding.Select(e => e.Value).ToArray();
 
     [Test]
     public async Task QueryOptionsAcceptEncoding_WhenSet_ReplacesDefaultAcceptEncodingHeader()
@@ -67,9 +72,87 @@ public class AcceptEncodingTests
 
         await client.ExecuteNonQueryAsync("SELECT 1", options: new QueryOptions { AcceptEncoding = null });
 
+        Assert.That(
+            AcceptEncodingOf(handler),
+            Is.EqualTo(new[] { "lz4", "gzip", "deflate" }),
+            "the default advertises every codec the driver can decode, except br — see ResponseDecompression.DefaultAcceptEncoding");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Client-level Accept-Encoding, and which requests get the default.
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    public async Task SettingsAcceptEncoding_WhenSet_ReplacesTheDefaultCodecList()
+    {
+        var (client, handler) = CreateClient(useCompression: true, acceptEncoding: "br, gzip");
+
+        await client.ExecuteNonQueryAsync("SELECT 1");
+
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "br", "gzip" }));
+    }
+
+    [Test]
+    public async Task SettingsAcceptEncoding_WhenSet_ForcesEnableHttpCompressionEvenWithoutClientCompression()
+    {
+        var (client, handler) = CreateClient(useCompression: false, acceptEncoding: "lz4");
+
+        await client.ExecuteNonQueryAsync("SELECT 1");
+
         var request = handler.Requests.Single();
-        var encodings = request.Headers.AcceptEncoding.Select(e => e.Value).ToArray();
-        Assert.That(encodings, Is.EquivalentTo(new[] { "gzip", "deflate" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "lz4" }), "an explicit codec beats UseCompression=false");
+            Assert.That(request.RequestUri.Query, Does.Contain("enable_http_compression=true"));
+        });
+    }
+
+    [Test]
+    public async Task QueryOptionsAcceptEncoding_WhenSet_OverridesTheClientLevelSetting()
+    {
+        var (client, handler) = CreateClient(useCompression: true, acceptEncoding: "gzip");
+
+        await client.ExecuteNonQueryAsync("SELECT 1", options: new QueryOptions { AcceptEncoding = "br" });
+
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "br" }));
+    }
+
+    [Test]
+    public async Task AcceptEncoding_WithCompressionDisabledAndNothingExplicit_IsNotSentAtAll()
+    {
+        var (client, handler) = CreateClient(useCompression: false);
+
+        await client.ExecuteNonQueryAsync("SELECT 1");
+
+        Assert.That(AcceptEncodingOf(handler), Is.Empty);
+    }
+
+    /// <summary>
+    /// A raw result hands its body to the caller untouched, so the driver must not negotiate a codec
+    /// behind their back and silently change the bytes they receive — an export would start writing
+    /// compressed files. The parsing paths have no such problem: they consume the body themselves.
+    /// </summary>
+    [Test]
+    public async Task ExecuteRawResultAsync_WithNoExplicitAcceptEncoding_DoesNotAdvertiseTheDefaultCodecs()
+    {
+        var (client, handler) = CreateClient(useCompression: true);
+
+        using var result = await client.ExecuteRawResultAsync("SELECT 1 FORMAT TSV");
+
+        Assert.That(AcceptEncodingOf(handler), Is.Empty);
+    }
+
+    [Test]
+    public async Task ExecuteRawResultAsync_WithExplicitAcceptEncoding_StillSendsIt()
+    {
+        var (client, handler) = CreateClient(useCompression: true, acceptEncoding: "lz4");
+
+        using var result = await client.ExecuteRawResultAsync("SELECT 1 FORMAT TSV");
+
+        Assert.That(
+            AcceptEncodingOf(handler),
+            Is.EqualTo(new[] { "lz4" }),
+            "the caller asked for it themselves, so honouring it is not a silent change");
     }
 
     [Test]
