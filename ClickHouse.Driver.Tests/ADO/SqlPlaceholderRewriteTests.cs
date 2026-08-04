@@ -33,11 +33,24 @@ public class SqlPlaceholderRewriteTests
         new TestCaseData("SELECT @id -- see @id", "SELECT {id:Int32} -- see @id").SetName("line comment"),
         new TestCaseData("SELECT @id # see @id", "SELECT {id:Int32} # see @id").SetName("hash comment"),
         new TestCaseData("SELECT /* @id */ @id", "SELECT /* @id */ {id:Int32}").SetName("block comment"),
-        new TestCaseData("SELECT /* /* @id */ @id", "SELECT /* /* @id */ {id:Int32}").SetName("block comments do not nest"),
+        new TestCaseData("SELECT /* /* @id */ @id */ @id", "SELECT /* /* @id */ @id */ {id:Int32}").SetName("nested block comment"),
+        new TestCaseData("SELECT /* /* @id */ @id", "SELECT /* /* @id */ @id").SetName("unterminated nested block comment"),
         new TestCaseData("SELECT @id #! see @id", "SELECT {id:Int32} #! see @id").SetName("shebang comment"),
+        new TestCaseData("SELECT /**/@id", "SELECT /**/{id:Int32}").SetName("empty block comment"),
+        new TestCaseData("SELECT @id // see @id", "SELECT {id:Int32} // see @id").SetName("double-slash line comment"),
+        new TestCaseData("SELECT @id //@id", "SELECT {id:Int32} //@id").SetName("double-slash line comment without newline"),
+        new TestCaseData("SELECT // @id\n@id", "SELECT // @id\n{id:Int32}").SetName("code after double-slash line comment"),
         new TestCaseData("SELECT ''@id", "SELECT ''{id:Int32}").SetName("empty literal followed by code position"),
         new TestCaseData("SELECT 1 AS \"a\\\"@id\", @id", "SELECT 1 AS \"a\\\"@id\", {id:Int32}").SetName("double-quoted identifier with escaped quote"),
         new TestCaseData("SELECT -- @id\n@id", "SELECT -- @id\n{id:Int32}").SetName("code after line comment"),
+        // Only "# " and "#!" start a comment; the server rejects a bare "#x" as an unrecognized
+        // token, so the text after it is code and its placeholders must still be rewritten
+        new TestCaseData("SELECT @id, #x @id", "SELECT {id:Int32}, #x {id:Int32}").SetName("bare hash is not a comment"),
+        new TestCaseData("SELECT @id, #\t@id", "SELECT {id:Int32}, #\t{id:Int32}").SetName("hash followed by tab is not a comment"),
+        new TestCaseData("SELECT @id #", "SELECT {id:Int32} #").SetName("trailing hash"),
+        // A single / is not a comment either
+        new TestCaseData("SELECT 1 / @id", "SELECT 1 / {id:Int32}").SetName("single slash is not a comment"),
+        new TestCaseData("SELECT @id /", "SELECT {id:Int32} /").SetName("trailing slash"),
         // A lone $ is not a heredoc and must not swallow the rest of the query
         new TestCaseData("SELECT $1 = @id", "SELECT $1 = {id:Int32}").SetName("dollar sign is not a heredoc"),
         new TestCaseData("SELECT $tag @id", "SELECT $tag {id:Int32}").SetName("unclosed heredoc tag is not a heredoc"),

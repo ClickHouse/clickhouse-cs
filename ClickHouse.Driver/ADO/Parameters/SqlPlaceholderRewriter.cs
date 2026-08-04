@@ -41,10 +41,15 @@ internal static class SqlPlaceholderRewriter
                 // SQL-style line comment: -- (skip to end of line)
                 i = SqlTextScanner.SkipToEndOfLine(sql, i + 2);
             }
-            else if (c == '#')
+            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '/')
             {
-                // SQL-style line comment: # or #! (skip to end of line)
-                i = SqlTextScanner.SkipToEndOfLine(sql, i + 1);
+                // C++-style line comment: // (skip to end of line)
+                i = SqlTextScanner.SkipToEndOfLine(sql, i + 2);
+            }
+            else if (c == '#' && i + 1 < sql.Length && (sql[i + 1] == ' ' || sql[i + 1] == '!'))
+            {
+                // MySQL-style line comment: only "# " and "#!" start one, a bare "#x" does not
+                i = SqlTextScanner.SkipToEndOfLine(sql, i + 2);
             }
             else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
             {

@@ -78,13 +78,35 @@ internal static class SqlTextScanner
     }
 
     /// <summary>
-    /// Skips a C-style block comment (after /*).
-    /// Returns the index of the first character after */, or sql.Length if not found.
+    /// Skips a nestable C-style block comment (after the opening /*), matching the server lexer:
+    /// an inner /* opens a new level, so the comment ends only at the */ that closes the outermost one.
+    /// Returns the index of the first character after the matching */, or sql.Length if not found.
     /// </summary>
     public static int SkipBlockComment(string sql, int startIndex)
     {
-        var endIndex = sql.IndexOf("*/", startIndex, StringComparison.Ordinal);
-        return endIndex < 0 ? sql.Length : endIndex + 2;
+        var depth = 1;
+        var i = startIndex;
+
+        while (i + 1 < sql.Length)
+        {
+            if (sql[i] == '/' && sql[i + 1] == '*')
+            {
+                depth++;
+                i += 2;
+            }
+            else if (sql[i] == '*' && sql[i + 1] == '/')
+            {
+                i += 2;
+                if (--depth == 0)
+                    return i;
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        return sql.Length;
     }
 
     private static bool IsTagChar(char c) => c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_';
