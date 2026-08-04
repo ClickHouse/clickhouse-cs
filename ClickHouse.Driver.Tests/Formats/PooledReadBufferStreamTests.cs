@@ -84,6 +84,92 @@ public class PooledReadBufferStreamTests
         Assert.That(buffered.ReadByte(), Is.EqualTo(-1));
     }
 
+    // ----- Read(Span<byte>) — must behave exactly like the byte[] overload -----
+
+    [Test]
+    public void ReadSpan_PreservesBytes_AcrossBufferBoundaries([ValueSource(nameof(PayloadSizes))] int length)
+    {
+        var payload = MakePayload(length);
+        using var source = new MemoryStream(payload);
+        using var buffered = new PooledReadBufferStream(source, bufferSize: 64, leaveOpen: true);
+
+        CollectionAssert.AreEqual(payload, ReadAllSpan(buffered, chunk: 7));
+    }
+
+    [Test]
+    public void ReadSpan_MatchesArrayOverloadByteForByte([ValueSource(nameof(PayloadSizes))] int length)
+    {
+        var payload = MakePayload(length);
+
+        using var spanSource = new MemoryStream(payload);
+        using var spanBuffered = new PooledReadBufferStream(spanSource, bufferSize: 64, leaveOpen: true);
+        using var arraySource = new MemoryStream(payload);
+        using var arrayBuffered = new PooledReadBufferStream(arraySource, bufferSize: 64, leaveOpen: true);
+
+        CollectionAssert.AreEqual(ReadAll(arrayBuffered, chunk: 7), ReadAllSpan(spanBuffered, chunk: 7));
+    }
+
+    [Test]
+    public void ReadSpan_RequestLargerThanBuffer_ReadsThrough()
+    {
+        // A span at least as large as the buffer must read straight into the caller's span.
+        var payload = MakePayload(10_000);
+        using var source = new MemoryStream(payload);
+        using var buffered = new PooledReadBufferStream(source, bufferSize: 256, leaveOpen: true);
+
+        CollectionAssert.AreEqual(payload, ReadAllSpan(buffered, chunk: 10_000));
+    }
+
+    [Test]
+    public void ReadSpan_MixedWithReadByteAndArrayRead_PreservesBytes()
+    {
+        var payload = MakePayload(200);
+        using var source = new MemoryStream(payload);
+        using var buffered = new PooledReadBufferStream(source, bufferSize: 64, leaveOpen: true);
+
+        var result = new List<byte>();
+        result.Add((byte)buffered.ReadByte()); // leaves the buffer mid-block
+
+        var viaArray = new byte[30];
+        result.AddRange(viaArray.AsSpan(0, buffered.Read(viaArray, 0, viaArray.Length)).ToArray());
+
+        Span<byte> viaSpan = new byte[30];
+        result.AddRange(viaSpan.Slice(0, buffered.Read(viaSpan)).ToArray());
+
+        result.AddRange(ReadAllSpan(buffered, chunk: 7));
+
+        CollectionAssert.AreEqual(payload, result);
+    }
+
+    [Test]
+    public void ReadSpan_AtEndOfStream_ReturnsZero()
+    {
+        using var source = new MemoryStream(Array.Empty<byte>());
+        using var buffered = new PooledReadBufferStream(source, bufferSize: 64, leaveOpen: true);
+
+        Assert.That(buffered.Read(new byte[4].AsSpan()), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void ReadSpan_EmptyDestination_ReturnsZeroWithoutConsuming()
+    {
+        var payload = MakePayload(8);
+        using var source = new MemoryStream(payload);
+        using var buffered = new PooledReadBufferStream(source, bufferSize: 64, leaveOpen: true);
+
+        Assert.That(buffered.Read(Span<byte>.Empty), Is.EqualTo(0));
+        Assert.That(buffered.ReadByte(), Is.EqualTo(payload[0]), "an empty read must not consume a byte");
+    }
+
+    [Test]
+    public void ReadSpan_AfterDispose_Throws()
+    {
+        var buffered = new PooledReadBufferStream(new MemoryStream(MakePayload(8)), bufferSize: 64, leaveOpen: true);
+        buffered.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => buffered.Read(new byte[4].AsSpan()));
+    }
+
     [Test]
     public void Capabilities_AreReadOnly()
     {
@@ -182,6 +268,17 @@ public class PooledReadBufferStreamTests
         var buffer = new byte[chunk];
         int n;
         while ((n = stream.Read(buffer, 0, buffer.Length)) > 0)
+            output.Write(buffer, 0, n);
+        return output.ToArray();
+    }
+
+    // Same as ReadAll but drives the Read(Span{byte}) overload.
+    private static byte[] ReadAllSpan(Stream stream, int chunk)
+    {
+        using var output = new MemoryStream();
+        var buffer = new byte[chunk];
+        int n;
+        while ((n = stream.Read(buffer.AsSpan())) > 0)
             output.Write(buffer, 0, n);
         return output.ToArray();
     }

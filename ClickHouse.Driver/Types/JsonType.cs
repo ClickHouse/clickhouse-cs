@@ -20,13 +20,6 @@ namespace ClickHouse.Driver.Types;
 
 internal class JsonType : ParameterizedType
 {
-    private static readonly string[] JsonSettingNames =
-    [
-        "max_dynamic_paths",
-        "max_dynamic_types",
-        "skip "
-    ];
-
     /// <summary>
     /// Shared DynamicType instance for writing unhinted values.
     /// </summary>
@@ -110,7 +103,7 @@ internal class JsonType : ParameterizedType
         TypeSettings settings)
     {
         var hintedTypes = node.ChildNodes
-            .Where(childNode => !JsonSettingNames.Any(jsonSettingName => childNode.Value.StartsWith(jsonSettingName, StringComparison.OrdinalIgnoreCase)))
+            .Where(childNode => !IsJsonSetting(childNode.Value))
             .Select(childNode =>
             {
                 var hintParts = childNode.Value.Split(' ');
@@ -141,6 +134,20 @@ internal class JsonType : ParameterizedType
         {
             TypeSettings = settings,
         };
+    }
+
+    private static bool IsJsonSetting(string value) =>
+        IsAssignment(value, "max_dynamic_paths")
+        || IsAssignment(value, "max_dynamic_types")
+        || value.StartsWith("skip ", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAssignment(string value, string settingName)
+    {
+        if (!value.StartsWith(settingName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var remainder = value.AsSpan(settingName.Length).TrimStart();
+        return !remainder.IsEmpty && remainder[0] == '=';
     }
 
     public override string ToString() => Name;
