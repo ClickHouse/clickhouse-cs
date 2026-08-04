@@ -97,8 +97,35 @@ internal static class SqlParameterTypeExtractor
         if (sql[startIndex] != '{')
             return (null, null, 0);
 
-        // Find the colon that separates name from type
-        var colonIndex = sql.IndexOf(':', startIndex + 1);
+        // Find the colon that separates name from type, searching only within this parameter's own
+        // name: it must be a single run of parameter name characters, optionally surrounded by
+        // whitespace. Otherwise a brace that is not a type hint, such as one inside a backtick-quoted
+        // alias, would consume the colon of a later parameter and silently drop its hint.
+        var colonIndex = -1;
+        var nameLength = 0;
+        var afterName = false;
+
+        for (var j = startIndex + 1; j < sql.Length; j++)
+        {
+            var nameChar = sql[j];
+            if (nameChar == ':')
+            {
+                colonIndex = j;
+                break;
+            }
+
+            if (char.IsWhiteSpace(nameChar))
+            {
+                afterName = nameLength > 0;
+                continue;
+            }
+
+            if (afterName || !IsParameterNameChar(nameChar))
+                return (null, null, 0);
+
+            nameLength++;
+        }
+
         if (colonIndex < 0)
             return (null, null, 0);
 
@@ -120,6 +147,12 @@ internal static class SqlParameterTypeExtractor
                 // Quoted token within the type, e.g. an Enum value or a named tuple element
                 i = SkipQuotedToken(sql, i);
             }
+            else if (c == '{')
+            {
+                // A type definition never contains an opening brace, so this parameter is
+                // unterminated and the brace starts a new one
+                return (null, null, 0);
+            }
             else if (c == '}')
             {
                 // End of parameter
@@ -139,6 +172,14 @@ internal static class SqlParameterTypeExtractor
         // Unterminated parameter
         return (null, null, 0);
     }
+
+    /// <summary>
+    /// Determines whether the character can appear in a ClickHouse query parameter name. The server
+    /// parses the name as a bare word, which is narrower than an identifier: a quoted identifier such
+    /// as {`a`:Int32} or {"a":Int32} is rejected as a syntax error. Only ASCII word characters and $.
+    /// </summary>
+    private static bool IsParameterNameChar(char c) =>
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
 
     /// <summary>
     /// Skips to the end of a line

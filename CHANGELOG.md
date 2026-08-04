@@ -28,6 +28,7 @@ Unreleased
 
 **Bug Fixes:**
 * Fixed `{name:Type}` parameter type hints being mis-detected in queries containing `//` comments, nested block comments, backtick/double-quoted identifiers, backslash escapes or `$tag$` heredocs. A bare `#` no longer starts a comment (only `# ` and `#!` do) (issue #508).
+* Fixed `{name:Type}` parameter type hints being dropped, or a hint being invented for a parameter that does not exist, when the query contains another `{` that is not a type hint — for example a `SETTINGS` map value such as `additional_table_filters = {'t': 'a > 0'}`. A dropped hint fell back to CLR-type inference, losing precision (issue #510).
 * Fixed JSON typed paths whose names start with `max_dynamic_paths` or `max_dynamic_types` being mistaken for JSON settings and decoded as dynamic values.
 * Fixed enum type names rendering as invalid ClickHouse syntax. Enum labels are now quoted and escaped, and the declaration includes its closing parenthesis.
 * Fixed `InsertOptions.WithColumnTypes()` and `InsertOptions.WithQueryId()` silently dropping some caller-set options (such as `AcceptEncoding`) when copying.
