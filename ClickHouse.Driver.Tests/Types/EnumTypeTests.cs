@@ -91,4 +91,32 @@ public class EnumTypeTests
         Assert.That(type.Lookup("a=b"), Is.EqualTo(1));
         Assert.That(type.Lookup(1), Is.EqualTo("a=b"));
     }
+
+    [Test]
+    public void ToString_WithEscapedEnumLabels_ReturnsParseableTypeDeclaration()
+    {
+        var type = (EnumType)TypeConverter.ParseClickHouseType(
+            "Enum8('DateTime(\\'UTC\\')' = -1, 'a=b' = 1)",
+            TypeSettings.Default);
+
+        var rendered = type.ToString();
+        var reparsed = (EnumType)TypeConverter.ParseClickHouseType(rendered, TypeSettings.Default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rendered, Is.EqualTo("Enum8('DateTime(\\'UTC\\')' = -1, 'a=b' = 1)"));
+            Assert.That(reparsed.Lookup("DateTime('UTC')"), Is.EqualTo(-1));
+            Assert.That(reparsed.Lookup("a=b"), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void ToString_WithEnum16Type_ReturnsCompleteTypeDeclaration()
+    {
+        var type = (EnumType)TypeConverter.ParseClickHouseType(
+            "Enum16('Low' = -32768, 'High' = 32767)",
+            TypeSettings.Default);
+
+        Assert.That(type.ToString(), Is.EqualTo("Enum16('Low' = -32768, 'High' = 32767)"));
+    }
 }

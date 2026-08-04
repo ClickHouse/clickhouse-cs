@@ -12,6 +12,8 @@ namespace ClickHouse.Driver.Utility;
 
 internal static class SchemaDescriber
 {
+    private static readonly string[] ColumnsRestrictionNames = ["database", "table"];
+
     public static DataTable DescribeSchema(this ClickHouseDataReader reader)
     {
         var table = new DataTable();
@@ -76,12 +78,22 @@ internal static class SchemaDescriber
 
     public static DataTable DescribeSchema(this ClickHouseConnection connection, string type, string[] restrictions) => type switch
     {
-        "Columns" => DescribeColumns(connection, restrictions),
+        "Columns" => DescribeColumns(connection, type, restrictions),
         _ => throw new NotSupportedException(),
     };
 
-    private static DataTable DescribeColumns(ClickHouseConnection connection, string[] restrictions)
+    private static DataTable DescribeColumns(ClickHouseConnection connection, string collectionName, string[] restrictions)
     {
+        // Restrictions past the supported ones cannot be applied to the query, so reject them
+        // instead of silently returning metadata which is wider than the caller asked for.
+        // Positions left null are unspecified, which is how the supported positions read null too.
+        if (restrictions != null && restrictions.Skip(ColumnsRestrictionNames.Length).Any(restriction => restriction != null))
+        {
+            throw new ArgumentException(
+                $"More restrictions were provided than the requested schema ('{collectionName}') supports. " +
+                $"Supported restrictions are: {string.Join(", ", ColumnsRestrictionNames)}.");
+        }
+
         using var command = connection.CreateCommand();
         var query = new StringBuilder("SELECT database as Database, table as Table, name as Name, type as ProviderType, type as DataType FROM system.columns");
         var database = restrictions != null && restrictions.Length > 0 ? restrictions[0] : null;
