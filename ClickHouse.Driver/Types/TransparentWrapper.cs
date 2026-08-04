@@ -1,13 +1,10 @@
 namespace ClickHouse.Driver.Types;
 
 /// <summary>
-/// Column types that are pass-through on the RowBinary wire: their
-/// <see cref="ClickHouseType.Read(Formats.ExtendedBinaryReader)"/> and
-/// <see cref="ClickHouseType.Write(Formats.ExtendedBinaryWriter, object)"/> delegate straight to the
-/// wrapped type, and they report the wrapped type's <see cref="ClickHouseType.FrameworkType"/>.
-///
-/// Any fast path that dispatches on the concrete column type has to look through these, or a wrapped
-/// column silently falls back to the boxed path even though it decodes identically to a bare one.
+/// Column types that are pass-through on the RowBinary wire: their <c>Read</c>/<c>Write</c> delegate straight
+/// to the wrapped type and they report its <see cref="ClickHouseType.FrameworkType"/>. Any fast path
+/// dispatching on the concrete column type has to look through these, or a wrapped column silently falls back
+/// to the boxed path despite decoding identically to a bare one.
 /// </summary>
 internal static class TransparentWrapper
 {
