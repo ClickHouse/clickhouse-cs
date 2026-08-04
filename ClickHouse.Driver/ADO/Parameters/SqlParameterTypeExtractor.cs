@@ -24,49 +24,39 @@ internal static class SqlParameterTypeExtractor
             return result;
 
         var i = 0;
-        var inSqlString = false;
 
         while (i < sql.Length)
         {
             var c = sql[i];
 
-            if (inSqlString)
+            if (c == '\'' || c == '`' || c == '"')
             {
-                // Check for escaped quote ('')
-                if (c == '\'' && i + 1 < sql.Length && sql[i + 1] == '\'')
-                {
-                    i += 2;
-                    continue;
-                }
-
-                if (c == '\'')
-                {
-                    inSqlString = false;
-                }
-
-                i++;
-                continue;
+                // String literal or quoted identifier
+                i = SkipQuotedToken(sql, i);
             }
-
-            // Not in a SQL string
-            if (c == '\'')
+            else if (c == '$' && TrySkipHeredoc(sql, i, out var afterHeredoc))
             {
-                inSqlString = true;
-                i++;
+                // Heredoc: $tag$ ... $tag$
+                i = afterHeredoc;
             }
             else if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
             {
                 // SQL-style line comment: -- (skip to end of line)
                 i = SkipToEndOfLine(sql, i + 2);
             }
-            else if (c == '#')
+            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '/')
             {
-                // SQL-style line comment: # or #! (skip to end of line)
-                i = SkipToEndOfLine(sql, i + 1);
+                // C++-style line comment: // (skip to end of line)
+                i = SkipToEndOfLine(sql, i + 2);
+            }
+            else if (c == '#' && i + 1 < sql.Length && (sql[i + 1] == ' ' || sql[i + 1] == '!'))
+            {
+                // MySQL-style line comment: only "# " and "#!" start one, a bare "#x" does not
+                i = SkipToEndOfLine(sql, i + 2);
             }
             else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
             {
-                // C-style block comment: /* ... */ (skip to closing */)
+                // C-style block comment: /* ... */, nestable (skip to the matching */)
                 i = SkipBlockComment(sql, i + 2);
             }
             else if (c == '{')
@@ -120,35 +110,15 @@ internal static class SqlParameterTypeExtractor
 
         // Extract type definition
         var typeStart = i;
-        var inQuote = false;
 
         while (i < sql.Length)
         {
             var c = sql[i];
 
-            if (inQuote)
+            if (c == '\'' || c == '`' || c == '"')
             {
-                // Check for escaped quote ('')
-                if (c == '\'' && i + 1 < sql.Length && sql[i + 1] == '\'')
-                {
-                    i += 2;
-                    continue;
-                }
-
-                if (c == '\'')
-                {
-                    inQuote = false;
-                }
-
-                i++;
-                continue;
-            }
-
-            // Not in a quoted string within the type
-            if (c == '\'')
-            {
-                inQuote = true;
-                i++;
+                // Quoted token within the type, e.g. an Enum value or a named tuple element
+                i = SkipQuotedToken(sql, i);
             }
             else if (c == '}')
             {
@@ -181,12 +151,98 @@ internal static class SqlParameterTypeExtractor
     }
 
     /// <summary>
-    /// Skips a C-style block comment (after /*).
-    /// Returns the index of the first character after */, or sql.Length if not found.
+    /// Skips a nestable C-style block comment (after the opening /*).
+    /// Returns the index of the first character after the matching */, or sql.Length if not found.
     /// </summary>
     private static int SkipBlockComment(string sql, int startIndex)
     {
-        var endIndex = sql.IndexOf("*/", startIndex, StringComparison.Ordinal);
-        return endIndex < 0 ? sql.Length : endIndex + 2;
+        var depth = 1;
+        var i = startIndex;
+
+        while (i + 1 < sql.Length)
+        {
+            if (sql[i] == '/' && sql[i + 1] == '*')
+            {
+                depth++;
+                i += 2;
+            }
+            else if (sql[i] == '*' && sql[i + 1] == '/')
+            {
+                i += 2;
+                if (--depth == 0)
+                    return i;
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        return sql.Length;
     }
+
+    /// <summary>
+    /// Skips a single-quoted string literal or a backtick/double-quote quoted identifier,
+    /// starting at the opening quote. Both doubling ('') and backslash (\') escapes are honored.
+    /// Returns the index of the first character after the closing quote, or sql.Length if unterminated.
+    /// </summary>
+    private static int SkipQuotedToken(string sql, int startIndex)
+    {
+        var quote = sql[startIndex];
+        var i = startIndex + 1;
+
+        while (i < sql.Length)
+        {
+            var c = sql[i];
+
+            if (c == '\\')
+            {
+                i += 2;
+            }
+            else if (c == quote)
+            {
+                if (i + 1 < sql.Length && sql[i + 1] == quote)
+                {
+                    i += 2;
+                    continue;
+                }
+
+                return i + 1;
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        return sql.Length;
+    }
+
+    /// <summary>
+    /// Tries to skip a heredoc starting at a $ sign: $tag$ ... $tag$, where the tag is empty or
+    /// consists of ASCII word characters. Returns false if this $ does not open a terminated heredoc,
+    /// in which case it is an ordinary character.
+    /// </summary>
+    private static bool TrySkipHeredoc(string sql, int startIndex, out int endIndex)
+    {
+        endIndex = 0;
+
+        var i = startIndex + 1;
+        while (i < sql.Length && IsHeredocTagChar(sql[i]))
+            i++;
+
+        if (i >= sql.Length || sql[i] != '$')
+            return false;
+
+        var tag = sql.Substring(startIndex, i - startIndex + 1);
+        var closeIndex = sql.IndexOf(tag, i + 1, StringComparison.Ordinal);
+        if (closeIndex < 0)
+            return false;
+
+        endIndex = closeIndex + tag.Length;
+        return true;
+    }
+
+    private static bool IsHeredocTagChar(char c) =>
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
