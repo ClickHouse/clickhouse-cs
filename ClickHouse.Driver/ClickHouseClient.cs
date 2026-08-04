@@ -989,7 +989,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         // An Accept-Encoding chosen by the caller is meaningless unless the server is also told to honour
         // it via enable_http_compression. Force it on when the caller asks for compression.
-        var useCompression = Settings.UseCompression || !string.IsNullOrEmpty(ExplicitAcceptEncoding(queryOverride));
+        var useCompression = Settings.UseCompression || CarriesACodec(ExplicitAcceptEncoding(queryOverride));
 
         return new ClickHouseUriBuilder(serverUri)
         {
@@ -1041,11 +1041,11 @@ public sealed class ClickHouseClient : IClickHouseClient
         // per-query property outranks a custom header, which is the precedence that applied before
         // client-level configuration existed. ClickHouse resolves this header by its own fixed preference
         // order and ignores q-values, so it is a capability announcement, not a demand.
-        if (!string.IsNullOrEmpty(Settings.AcceptEncoding))
+        if (CarriesACodec(Settings.AcceptEncoding))
         {
             ApplyAcceptEncodingOverride(headers, Settings.AcceptEncoding);
         }
-        else if (Settings.UseCompression && string.IsNullOrEmpty(queryOverride?.AcceptEncoding))
+        else if (Settings.UseCompression && !CarriesACodec(queryOverride?.AcceptEncoding))
         {
             // The codecs the driver can decode — except for a body it hands over verbatim, which keeps the
             // historical pair so that what the caller receives does not change.
@@ -1083,12 +1083,34 @@ public sealed class ClickHouseClient : IClickHouseClient
     private string ExplicitAcceptEncoding(QueryOptions queryOverride)
     {
         var perQuery = queryOverride?.AcceptEncoding;
-        return string.IsNullOrEmpty(perQuery) ? Settings.AcceptEncoding : perQuery;
+        return CarriesACodec(perQuery) ? perQuery : Settings.AcceptEncoding;
+    }
+
+    /// <summary>
+    /// Whether an <c>Accept-Encoding</c> value names at least one codec. A value that is null, empty,
+    /// whitespace or only separators counts as "not set", so it falls back to the driver's default rather
+    /// than silently turning compression off — which is what clearing the header on such a value would do,
+    /// since the server sends <c>identity</c> when no codec is offered.
+    /// </summary>
+    private static bool CarriesACodec(string acceptEncoding)
+    {
+        if (string.IsNullOrWhiteSpace(acceptEncoding))
+            return false;
+
+        foreach (var entry in acceptEncoding.Split(','))
+        {
+            if (entry.Trim().Length > 0)
+                return true;
+        }
+
+        return false;
     }
 
     private static void ApplyAcceptEncodingOverride(HttpRequestHeaders headers, string acceptEncoding)
     {
-        if (string.IsNullOrEmpty(acceptEncoding))
+        // Guarded on tokens rather than emptiness: a value of "  " or "," would otherwise clear the header
+        // and put nothing back, which reads as "no compression" instead of "nothing configured".
+        if (!CarriesACodec(acceptEncoding))
             return;
 
         headers.AcceptEncoding.Clear();

@@ -196,6 +196,45 @@ public class AcceptEncodingTests
     }
 
     /// <summary>
+    /// A value that names no codec counts as "not set" at either level, so the default still applies. The
+    /// alternative — clearing the header and putting nothing back — reads as "no compression", since the
+    /// server sends identity when nothing is offered, which is not what an accidentally-blank config means.
+    /// </summary>
+    [TestCase("", TestName = "{m}(empty)")]
+    [TestCase("   ", TestName = "{m}(whitespace)")]
+    [TestCase(",", TestName = "{m}(separator only)")]
+    [TestCase(" , ", TestName = "{m}(separators and whitespace)")]
+    public async Task AcceptEncoding_WithAValueThatNamesNoCodec_FallsBackToTheDefault(string acceptEncoding)
+    {
+        var (client, handler) = CreateClient(useCompression: true, acceptEncoding: acceptEncoding);
+
+        await client.ExecuteNonQueryAsync("SELECT 1");
+
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "lz4", "gzip", "deflate" }));
+    }
+
+    [TestCase("   ", TestName = "{m}(whitespace)")]
+    [TestCase(",", TestName = "{m}(separator only)")]
+    public async Task QueryOptionsAcceptEncoding_WithAValueThatNamesNoCodec_FallsBackToTheDefault(string acceptEncoding)
+    {
+        var (client, handler) = CreateClient(useCompression: true);
+
+        await client.ExecuteNonQueryAsync("SELECT 1", options: new QueryOptions { AcceptEncoding = acceptEncoding });
+
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "lz4", "gzip", "deflate" }));
+    }
+
+    [Test]
+    public async Task AcceptEncoding_WithAValueThatNamesNoCodec_DoesNotForceHttpCompression()
+    {
+        var (client, handler) = CreateClient(useCompression: false, acceptEncoding: "  ");
+
+        await client.ExecuteNonQueryAsync("SELECT 1");
+
+        Assert.That(handler.Requests.Single().RequestUri.Query, Does.Contain("enable_http_compression=false"));
+    }
+
+    /// <summary>
     /// The distinction that matters: a parsing request advertises what the driver can decode, a verbatim
     /// one advertises only what the caller's own framework can. Asserted together so neither can silently
     /// drift into the other.
