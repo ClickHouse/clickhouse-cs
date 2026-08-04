@@ -1,3 +1,4 @@
+using System.Net;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
@@ -8,9 +9,11 @@ namespace ClickHouse.Driver.Examples;
 ///
 /// A raw result hands you the bytes as they arrived, so the driver only ever negotiates `gzip, deflate`
 /// for it — the two codecs an <c>HttpClient</c> can decode for itself. To get compressed bytes on disk,
-/// name a codec with <see cref="QueryOptions.AcceptEncoding"/>. Here that is `lz4`, which ClickHouse
-/// compresses cheaply and which no <c>HttpClient</c> decodes behind your back, so it reaches the file
-/// untouched.
+/// name a codec with <see cref="QueryOptions.AcceptEncoding"/>; here that is `lz4`, which ClickHouse
+/// compresses cheaply.
+///
+/// Two things are needed to be sure of what lands on disk: naming the codec, and an <c>HttpClient</c> with
+/// <c>AutomaticDecompression</c> off, so the framework neither widens the offer nor decodes the answer.
 ///
 /// Note the contrast with <see cref="ResponseCompression"/>: the reading APIs decode transparently, and
 /// only these raw members are verbatim.
@@ -22,9 +25,20 @@ public static class CompressedRawExport
         var connectionString = "Host=localhost";
         var tableName = "example_compressed_export";
 
-        // A default client is enough. The CREATE/INSERT/DROP calls below negotiate compression as usual
-        // and the driver decodes their responses; only the export asks for a codec explicitly.
-        using var client = new ClickHouseClient(connectionString);
+        // A raw export wants the bytes exactly as they arrived, so turn off the framework's own
+        // decoding: .NET otherwise adds the codecs its mask covers to Accept-Encoding, and a server
+        // that did not offer lz4 would fall back to gzip and have it silently decoded — plaintext in
+        // a .lz4 file. With the mask off, this request advertises lz4 and nothing else.
+        using var handler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
+        using var httpClient = new HttpClient(handler);
+
+        // Note what is NOT needed here: the CREATE/INSERT/DROP calls below still negotiate compression
+        // as usual, because the driver decodes their responses itself rather than relying on the
+        // HttpClient. Only the verbatim raw members hand you the bytes undecoded.
+        using var client = new ClickHouseClient(new ClickHouseClientSettings(connectionString)
+        {
+            HttpClient = httpClient,
+        });
 
         // Create and populate a test table
         await client.ExecuteNonQueryAsync($@"
@@ -72,8 +86,8 @@ public static class CompressedRawExport
             Console.WriteLine($"Exported LZ4-compressed Parquet to: {outputFile}");
             Console.WriteLine($"File size: {fileInfo.Length} bytes");
 
-            // For gzip or deflate you would also need an HttpClient built with
-            // AutomaticDecompression = DecompressionMethods.None: .NET decodes those two itself and
+            // Because the mask is off, "gzip" or "deflate" would work here just as well and land
+            // compressed. On a default HttpClient they would not: .NET decodes those two itself and
             // strips Content-Encoding, so the bytes would arrive already decompressed.
         }
         finally

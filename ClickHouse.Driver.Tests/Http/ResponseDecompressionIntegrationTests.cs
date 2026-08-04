@@ -218,6 +218,40 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
         });
     }
 
+    /// <summary>
+    /// Naming a codec .NET cannot strip is enough to get verbatim compressed bytes even over the driver's
+    /// default handler, whose <c>AutomaticDecompression</c> mask widens the offer. Two independent things
+    /// have to hold, and this asserts both rather than only their conjunction. First, .NET adds the codecs
+    /// its mask covers to <c>Accept-Encoding</c>, so the wire header here is <c>lz4, gzip, deflate</c> —
+    /// but the server resolves by its own fixed preference, which ranks lz4 above both, so it still answers
+    /// lz4. Second, no <c>HttpClient</c> decodes lz4, so <c>Content-Encoding</c> survives and the body
+    /// arrives as an LZ4 frame.
+    /// <para>
+    /// Note what this does NOT license: relying on the widened offer losing. A server that did not offer
+    /// lz4 would fall back to gzip and have it silently decoded, yielding plaintext. That is why the
+    /// <c>CompressedRawExport</c> example turns the mask off rather than depending on this precedence —
+    /// see <c>ExecuteRawResultAsync_WithAnHttpClientThatDecodesNothing_StillReceivesGzip</c> for that path.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task ExecuteRawResultAsync_AskingForLz4_OverTheDefaultHandler_ReceivesAnLz4Frame()
+    {
+        // A default client: the driver's own handler, AutomaticDecompression = GZip | Deflate.
+        using var result = await client.ExecuteRawResultAsync(
+            "SELECT number FROM numbers(2000) FORMAT TSV",
+            options: new QueryOptions { AcceptEncoding = "lz4" });
+
+        var body = await result.ReadAsByteArrayAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ContentEncoding, Is.EqualTo("lz4"),
+                "the server must prefer lz4 over the gzip/deflate .NET appends, and .NET must leave it encoded");
+            Assert.That(body[..4], Is.EqualTo(new byte[] { 0x04, 0x22, 0x4D, 0x18 }),
+                "expected an LZ4 frame magic number, i.e. genuinely compressed bytes");
+        });
+    }
+
     [Test]
     public async Task ExecuteScalarAsync_OverTheDefaultCompressedPath_ReturnsTheServerValue()
     {
