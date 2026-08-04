@@ -262,11 +262,16 @@ internal static class SqlParameterTypeExtractor
     /// <summary>
     /// Tries to skip a heredoc starting at a $ sign: $tag$ ... $tag$, where the tag is empty or
     /// consists of ASCII word characters. Returns false if this $ does not open a terminated heredoc,
-    /// in which case it is an ordinary character.
+    /// in which case it is an ordinary character. A heredoc can only begin at a token boundary, see
+    /// <see cref="IsTokenChar"/>.
     /// </summary>
     private static bool TrySkipHeredoc(string sql, int startIndex, out int endIndex)
     {
         endIndex = 0;
+
+        // A $ that continues a token cannot open a heredoc: the server lexes b$c$ as one identifier
+        if (startIndex > 0 && IsTokenChar(sql[startIndex - 1]))
+            return false;
 
         var i = startIndex + 1;
         while (i < sql.Length && IsHeredocTagChar(sql[i]))
@@ -286,4 +291,15 @@ internal static class SqlParameterTypeExtractor
 
     private static bool IsHeredocTagChar(char c) =>
         (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+
+    /// <summary>
+    /// Determines whether the character can continue an ordinary token, so that a $ following it is
+    /// part of that token rather than the start of a heredoc. The server lexes a word token as a run
+    /// of ASCII word characters and dollar signs, so b$c$ is one identifier and not a heredoc opener.
+    /// Looking only at the preceding character misses the case where it ends a literal instead of a
+    /// word, as in 1$tag$...$tag$ or $$a$$$tag$...$tag$, where the server does open a heredoc. Both
+    /// shapes place two literals next to each other, which the server rejects as a syntax error, so
+    /// no query it accepts is affected.
+    /// </summary>
+    private static bool IsTokenChar(char c) => IsHeredocTagChar(c) || c == '$';
 }

@@ -69,6 +69,19 @@ public class SqlPlaceholderRewriteTests
         new TestCaseData("SELECT $a$$x$ @id $x$", "SELECT $a$$x$ {id:Int32} $x$").SetName("doubled dollar inside an unclosed token is not a heredoc"),
         new TestCaseData("SELECT $a$ @id $b$ @id $b$", "SELECT $a$ {id:Int32} $b$ @id $b$").SetName("unclosed tag followed by a real heredoc"),
         new TestCaseData("SELECT $$@id$$@id", "SELECT $$@id$${id:Int32}").SetName("code directly after a closed untagged heredoc"),
+        // A $ that continues a token belongs to it and cannot open a heredoc: the server lexes b$c$
+        // as a single identifier, so WITH 1 AS b$c$ SELECT {id:Int32}, b$c$ substitutes the parameter
+        new TestCaseData("SELECT b$c$, @id, b$c$", "SELECT b$c$, {id:Int32}, b$c$").SetName("dollar inside an identifier is not a heredoc"),
+        new TestCaseData("SELECT a1$c$, @id, a1$c$", "SELECT a1$c$, {id:Int32}, a1$c$").SetName("dollar after a digit is not a heredoc"),
+        new TestCaseData("SELECT a_$c$, @id, a_$c$", "SELECT a_$c$, {id:Int32}, a_$c$").SetName("dollar after an underscore is not a heredoc"),
+        new TestCaseData("SELECT a$$c$ @id $c$", "SELECT a$$c$ {id:Int32} $c$").SetName("dollar after a dollar is not a heredoc"),
+        new TestCaseData("WITH 1 AS b$c$ SELECT b$c$, @id, $t$a@id$t$", "WITH 1 AS b$c$ SELECT b$c$, {id:Int32}, $t$a@id$t$").SetName("identifier with a dollar followed by a real heredoc"),
+        // A heredoc still opens where a token starts, including at the very beginning of the query
+        // and directly after a quoted token
+        new TestCaseData("$$a@id$$ @id", "$$a@id$$ {id:Int32}").SetName("heredoc at the start of the query"),
+        new TestCaseData("SELECT 1,$t$a@id$t$, @id", "SELECT 1,$t$a@id$t$, {id:Int32}").SetName("heredoc after a comma"),
+        new TestCaseData("SELECT\n$t$a@id$t$, @id", "SELECT\n$t$a@id$t$, {id:Int32}").SetName("heredoc after a newline"),
+        new TestCaseData("SELECT 1 AS `x`$t$a@id$t$, @id", "SELECT 1 AS `x`$t$a@id$t$, {id:Int32}").SetName("heredoc after a quoted identifier"),
         new TestCaseData("SELECT @id $", "SELECT {id:Int32} $").SetName("trailing dollar sign"),
         new TestCaseData("SELECT @id $tag$", "SELECT {id:Int32} $tag$").SetName("trailing unclosed tag"),
         // Unterminated quoted regions and block comments do swallow the rest of the query, so

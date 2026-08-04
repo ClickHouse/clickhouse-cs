@@ -56,9 +56,14 @@ internal static class SqlTextScanner
     /// the whole run of word characters and dollar signs as one ordinary token and keeps parsing the
     /// rest of the query, so the returned index is the one just past that token. Skipping only the
     /// opening tag instead would let its trailing $ be mistaken for the start of a later heredoc.
+    /// A heredoc can only begin at a token boundary, see <see cref="IsTokenChar"/>.
     /// </summary>
     public static int TrySkipHeredoc(string sql, int startIndex)
     {
+        // A $ that continues a token cannot open a heredoc: the server lexes b$c$ as one identifier
+        if (startIndex > 0 && IsTokenChar(sql[startIndex - 1]))
+            return -1;
+
         var i = startIndex + 1;
         while (i < sql.Length && IsTagChar(sql[i]))
             i++;
@@ -122,4 +127,15 @@ internal static class SqlTextScanner
     }
 
     private static bool IsTagChar(char c) => c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_';
+
+    /// <summary>
+    /// Determines whether the character can continue an ordinary token, so that a $ following it is
+    /// part of that token rather than the start of a heredoc. The server lexes a word token as a run
+    /// of ASCII word characters and dollar signs, so b$c$ is one identifier and not a heredoc opener.
+    /// Looking only at the preceding character misses the case where it ends a literal instead of a
+    /// word, as in 1$tag$...$tag$ or $$a$$$tag$...$tag$, where the server does open a heredoc. Both
+    /// shapes place two literals next to each other, which the server rejects as a syntax error, so
+    /// no query it accepts is affected.
+    /// </summary>
+    private static bool IsTokenChar(char c) => IsTagChar(c) || c == '$';
 }

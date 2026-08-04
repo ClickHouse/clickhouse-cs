@@ -445,6 +445,39 @@ public class SqlParameterizedSelectTests : IDisposable
         });
     }
 
+    [Test]
+    public async Task AddParameter_HintBetweenIdentifiersContainingDollar_IsStillTyped()
+    {
+        // A $ inside an identifier does not open a heredoc, so the type hint between the two
+        // occurrences of b$c$ must still be found and the value formatted as a Date rather than
+        // as an inferred DateTime, which the server rejects.
+        using var command = connection.CreateCommand();
+        command.CommandText = "WITH 1 AS b$c$ SELECT {d:Date} AS v, b$c$ AS x";
+        command.AddParameter("d", new DateTime(2020, 1, 2));
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result[0], Is.EqualTo(new DateTime(2020, 1, 2)));
+            Assert.That(result[1], Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task AddParameter_PlaceholderBetweenIdentifiersContainingDollar_IsStillBound()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "WITH 1 AS b$c$ SELECT @id AS v, b$c$ AS x";
+        command.AddParameter("id", 42);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result[0], Is.EqualTo(42));
+            Assert.That(result[1], Is.EqualTo(1));
+        });
+    }
+
     /// <summary>
     /// Drops every name handed out by <see cref="CreateTableName"/>. Best-effort: a table that
     /// cannot be dropped must not fail an otherwise passing fixture.

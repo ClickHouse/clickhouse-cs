@@ -42,6 +42,7 @@ Unreleased
 * Fixed `DbConnection.GetSchema("Columns", ...)` not disposing the command it creates internally, which delayed the release of that command's cancellation-token source until garbage collection.
 * Fixed HTTP query parameters mangling a `byte[]`/`ReadOnlyMemory<byte>` bound to `String`/`FixedString` (a `byte[]` was sent as the literal text `System.Byte[]`) and rejecting a `TimeOnly` bound to `Time`/`Time64`. Byte payloads are now escaped byte-for-byte, so data that is not valid UTF-8 round-trips losslessly; `TimeOnly` binds on both the HTTP and binary write paths, and infers as `Time64(7)` when no type hint is given (issue #483).
 * Fixed ADO-style `@name` parameter placeholders being rewritten inside string literals, quoted identifiers, heredocs and comments, which corrupted values such as `'user@id'` into `'user{id:Int32}'`. Placeholders are now only replaced in code positions (issue #512).
+* Fixed a `$` inside an unquoted identifier being mistaken for the start of a `$tag$` heredoc. Everything up to the next occurrence of the same `$...$` text was skipped as heredoc body, silently dropping any `{name:Type}` type hint (and any ADO-style `@name` placeholder) in between — for example in `WITH 1 AS b$c$ SELECT {d:Date} AS v, b$c$ AS x`. A heredoc is now only recognized where a token starts, matching the server lexer (issue #514).
 
 v1.3.0
 ---
