@@ -17,6 +17,7 @@ using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
+using NodaTime;
 
 namespace ClickHouse.Driver.ADO.Readers;
 
@@ -34,6 +35,14 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly string[] columnTypeNames; // Raw server-sent type strings; null when no converter
     private readonly PocoTypeRegistry pocoRegistry;
     private readonly Dictionary<Type, object> bindingPlanCache = new();
+
+    // Per-ordinal type used to capture the instant a value decoded from, non-null only for date/time
+    // columns (see BuildDateTimeColumns); null when the result set has none of them.
+    private readonly ClickHouseType[] dateTimeColumns;
+
+    // Instants captured for the current row, indexed by ordinal; null when dateTimeColumns is null.
+    private readonly Instant?[] rowInstants;
+
     private bool hasCurrentRow;
 
     private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, PooledReadBufferStream pooledReadBuffer, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
@@ -51,8 +60,35 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
 
+        dateTimeColumns = BuildDateTimeColumns(types);
+        if (dateTimeColumns != null)
+            rowInstants = new Instant?[types.Length];
+
         if (readValueConverter != null)
             columnTypeNames = rawTypeNames;
+    }
+
+    /// <summary>
+    /// Returns, per ordinal, the type to decode date/time columns through so the instant they were stored
+    /// as is captured alongside the value, or <see langword="null"/> when the result set contains no
+    /// date/time column. These are exactly the columns <see cref="GetDateTimeOffset"/> accepts: a
+    /// <see cref="AbstractDateTimeType"/>, optionally wrapped in <see cref="NullableType"/>.
+    /// </summary>
+    private static ClickHouseType[] BuildDateTimeColumns(ClickHouseType[] types)
+    {
+        ClickHouseType[] result = null;
+        for (var i = 0; i < types.Length; i++)
+        {
+            var type = types[i];
+            var effectiveType = type is NullableType nt ? nt.UnderlyingType : type;
+            if (effectiveType is AbstractDateTimeType)
+            {
+                result ??= new ClickHouseType[types.Length];
+                result[i] = type;
+            }
+        }
+
+        return result;
     }
 
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
@@ -154,8 +190,31 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override DateTime GetDateTime(int ordinal) => (DateTime)GetValue(ordinal);
 
-    public virtual DateTimeOffset GetDateTimeOffset(int ordinal) => GetEffectiveClickHouseType(ordinal) is AbstractDateTimeType adt ?
-        adt.CoerceToDateTimeOffset(GetDateTime(ordinal)) : throw new InvalidCastException();
+    public virtual DateTimeOffset GetDateTimeOffset(int ordinal)
+    {
+        if (GetEffectiveClickHouseType(ordinal) is not AbstractDateTimeType adt)
+            throw new InvalidCastException();
+
+        // Prefer the instant captured while the row was decoded. Coercing the wall-clock DateTime back
+        // into the column timezone cannot recover it: during a DST fall-back hour the same wall clock
+        // occurs at two offsets, and the lenient resolution used for a wall clock always picks the
+        // earlier one, returning a different instant for the second occurrence.
+        if (rowInstants?[ordinal] is Instant instant)
+        {
+            // Without a converter the decoded value is the value the caller sees, so the captured
+            // instant describes it. A converter may replace the value, so it is only trusted while the
+            // value the caller sees still matches the one the instant was captured for.
+            if (readValueConverter == null)
+                return adt.ToDateTimeOffset(instant);
+
+            var convertedDateTime = GetDateTime(ordinal);
+            return adt.ToDateTime(instant) == convertedDateTime
+                ? adt.ToDateTimeOffset(instant)
+                : adt.CoerceToDateTimeOffset(convertedDateTime);
+        }
+
+        return adt.CoerceToDateTimeOffset(GetDateTime(ordinal));
+    }
 
     public override decimal GetDecimal(int ordinal)
     {
@@ -461,11 +520,29 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             if (reader.PeekChar() == -1)
                 return false; // End of stream reached
 
-            for (var i = 0; i < count; i++)
+            var instants = rowInstants;
+            if (instants == null)
             {
-                var rawType = RawTypes[i];
-                data[i] = rawType.Read(reader);
+                for (var i = 0; i < count; i++)
+                {
+                    var rawType = RawTypes[i];
+                    data[i] = rawType.Read(reader);
+                }
             }
+            else
+            {
+                // Date/time columns decode through ReadWithInstant so the instant they were stored as is
+                // captured for GetDateTimeOffset; every other column reads exactly as before.
+                for (var i = 0; i < count; i++)
+                {
+                    var dateTimeType = dateTimeColumns[i];
+                    if (dateTimeType == null)
+                        data[i] = RawTypes[i].Read(reader);
+                    else
+                        data[i] = dateTimeType.ReadWithInstant(reader, out instants[i]);
+                }
+            }
+
             hasCurrentRow = true;
             return true;
         }

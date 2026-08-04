@@ -1349,3 +1349,174 @@ public class ResolveTimezoneParseTests
         Assert.That(type.TimeZone.MaxOffset, Is.EqualTo(Offset.FromSeconds(expectedOffsetSeconds)));
     }
 }
+
+/// <summary>
+/// Regression tests for GitHub issue #515: GetDateTimeOffset returned the wrong instant for
+/// timestamps falling in the later half of a DST fall-back hour, because it re-interpreted the
+/// wall-clock DateTime in the column timezone instead of using the offset of the stored instant.
+/// </summary>
+[TestFixture]
+public class ReadDateTimeOffsetAmbiguousDstTests : AbstractConnectionTestFixture
+{
+    // Both instants render as local 01:30:00 in America/New_York on the 2025 fall-back day:
+    //   1762061400 = 2025-11-02 05:30:00Z, the first occurrence  (EDT, -04:00)
+    //   1762065000 = 2025-11-02 06:30:00Z, the second occurrence (EST, -05:00)
+    private const long FirstOccurrence = 1762061400;
+    private const long SecondOccurrence = 1762065000;
+
+    private static readonly DateTime AmbiguousWallClock = new(2025, 11, 2, 1, 30, 0);
+
+    // (sql, expected UTC instant, expected offset)
+    private static IEnumerable<TestCaseData> AmbiguousDstCases()
+    {
+        // The second occurrence is the reported bug: the lenient resolver picked -04:00,
+        // shifting the returned instant an hour earlier than the stored one.
+        yield return new TestCaseData(
+            $"SELECT toTimeZone(toDateTime({SecondOccurrence}, 'UTC'), 'America/New_York')",
+            SecondOccurrence, TimeSpan.FromHours(-5))
+            .SetName("ReadDateTimeOffset_DateTime_SecondOccurrence");
+        yield return new TestCaseData(
+            $"SELECT toTimeZone(toDateTime64({SecondOccurrence}, 3, 'UTC'), 'America/New_York')",
+            SecondOccurrence, TimeSpan.FromHours(-5))
+            .SetName("ReadDateTimeOffset_DateTime64_SecondOccurrence");
+        yield return new TestCaseData(
+            $"SELECT CAST(toTimeZone(toDateTime({SecondOccurrence}, 'UTC'), 'America/New_York') AS Nullable(DateTime('America/New_York')))",
+            SecondOccurrence, TimeSpan.FromHours(-5))
+            .SetName("ReadDateTimeOffset_NullableDateTime_SecondOccurrence");
+
+        // Contrast cases: the first occurrence of the same wall clock already agreed with the
+        // stored instant and must keep its -04:00 offset.
+        yield return new TestCaseData(
+            $"SELECT toTimeZone(toDateTime({FirstOccurrence}, 'UTC'), 'America/New_York')",
+            FirstOccurrence, TimeSpan.FromHours(-4))
+            .SetName("ReadDateTimeOffset_DateTime_FirstOccurrence");
+        yield return new TestCaseData(
+            $"SELECT toTimeZone(toDateTime64({FirstOccurrence}, 3, 'UTC'), 'America/New_York')",
+            FirstOccurrence, TimeSpan.FromHours(-4))
+            .SetName("ReadDateTimeOffset_DateTime64_FirstOccurrence");
+    }
+
+    /// <summary>
+    /// GetDateTimeOffset must return the instant the server stored, with the offset that instant
+    /// actually had in the column timezone — including for the ambiguous second occurrence of a
+    /// fall-back hour, where the wall clock alone cannot distinguish the two offsets.
+    /// </summary>
+    [TestCaseSource(nameof(AmbiguousDstCases))]
+    public async Task ReadDateTimeOffset_FromAmbiguousDstInstant_PreservesInstantAndOffset(
+        string sql, long expectedUnixSeconds, TimeSpan expectedOffset)
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(sql);
+        Assert.That(reader.Read(), Is.True);
+
+        var dto = reader.GetDateTimeOffset(0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dto.ToUnixTimeSeconds(), Is.EqualTo(expectedUnixSeconds), "stored instant");
+            Assert.That(dto.Offset, Is.EqualTo(expectedOffset), "offset of the stored instant");
+            Assert.That(dto.DateTime, Is.EqualTo(AmbiguousWallClock), "wall-clock value");
+        });
+    }
+
+    /// <summary>
+    /// Contrast case: a non-ambiguous instant in the same DST-observing zone keeps the offset and
+    /// wall clock it had before the fix, proving the change is limited to instant preservation.
+    /// </summary>
+    [Test]
+    public async Task ReadDateTimeOffset_FromUnambiguousInstant_IsUnchanged()
+    {
+        // 2025-07-15 16:30:00Z is 12:30 EDT (-04:00), well clear of any transition.
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
+            "SELECT toTimeZone(toDateTime('2025-07-15 16:30:00', 'UTC'), 'America/New_York')");
+        Assert.That(reader.Read(), Is.True);
+
+        var dto = reader.GetDateTimeOffset(0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dto.Offset, Is.EqualTo(TimeSpan.FromHours(-4)), "EDT offset");
+            Assert.That(dto.DateTime, Is.EqualTo(new DateTime(2025, 7, 15, 12, 30, 0)), "wall-clock value");
+            Assert.That(dto.UtcDateTime, Is.EqualTo(new DateTime(2025, 7, 15, 16, 30, 0, DateTimeKind.Utc)), "stored instant");
+        });
+    }
+
+    /// <summary>
+    /// A row mixing date/time columns with other types must stay byte-aligned while the instants are
+    /// captured, and every column must keep decoding to the same value it did before.
+    /// </summary>
+    [Test]
+    public async Task ReadDateTimeOffset_FromMixedColumnRow_KeepsAllColumnsAligned()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync($@"
+            SELECT 'before' AS s1,
+                   toTimeZone(toDateTime({SecondOccurrence}, 'UTC'), 'America/New_York') AS dt,
+                   CAST(NULL AS Nullable(DateTime('America/New_York'))) AS dt_null,
+                   toDate('2025-11-02') AS d,
+                   toTimeZone(toDateTime64({SecondOccurrence}, 3, 'UTC'), 'America/New_York') AS dt64,
+                   toInt32(42) AS n,
+                   'after' AS s2");
+        Assert.That(reader.Read(), Is.True);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.GetString(0), Is.EqualTo("before"));
+            Assert.That(reader.GetDateTimeOffset(1).ToUnixTimeSeconds(), Is.EqualTo(SecondOccurrence));
+            Assert.That(reader.IsDBNull(2), Is.True, "NULL date/time column stays null");
+            Assert.That(reader.GetDateTime(3), Is.EqualTo(new DateTime(2025, 11, 2)));
+            Assert.That(reader.GetDateTimeOffset(3).Offset, Is.EqualTo(TimeSpan.Zero), "Date has no instant");
+            Assert.That(reader.GetDateTimeOffset(4).ToUnixTimeSeconds(), Is.EqualTo(SecondOccurrence));
+            Assert.That(reader.GetInt32(5), Is.EqualTo(42));
+            Assert.That(reader.GetString(6), Is.EqualTo("after"));
+        });
+    }
+
+    /// <summary>
+    /// The captured instant must belong to the current row: reading a second row has to replace the
+    /// offset of the first, never leave it visible.
+    /// </summary>
+    [Test]
+    public async Task ReadDateTimeOffset_AcrossRows_UsesCurrentRowInstant()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync($@"
+            SELECT toTimeZone(toDateTime(ts, 'UTC'), 'America/New_York') AS dt
+            FROM values('ts UInt32', ({SecondOccurrence}), ({FirstOccurrence}), (1752597000))
+            ORDER BY ts DESC");
+
+        var offsets = new List<DateTimeOffset>();
+        while (reader.Read())
+            offsets.Add(reader.GetDateTimeOffset(0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(offsets[0].ToUnixTimeSeconds(), Is.EqualTo(SecondOccurrence));
+            Assert.That(offsets[0].Offset, Is.EqualTo(TimeSpan.FromHours(-5)));
+            Assert.That(offsets[1].ToUnixTimeSeconds(), Is.EqualTo(FirstOccurrence));
+            Assert.That(offsets[1].Offset, Is.EqualTo(TimeSpan.FromHours(-4)));
+            Assert.That(offsets[2].ToUnixTimeSeconds(), Is.EqualTo(1752597000));
+            Assert.That(offsets[2].Offset, Is.EqualTo(TimeSpan.FromHours(-4)));
+        });
+    }
+
+    /// <summary>
+    /// Contrast case: a zone whose offset is zero at the read instant keeps returning a Kind=Utc
+    /// wall clock with a zero offset (the London fall-back hour ends in GMT, not BST).
+    /// </summary>
+    [Test]
+    public async Task ReadDateTimeOffset_FromZoneWithZeroOffsetAtInstant_IsUnchanged()
+    {
+        // 2025-10-26 01:30:00Z is the second occurrence of local 01:30 in Europe/London, at +00:00.
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
+            "SELECT toTimeZone(toDateTime('2025-10-26 01:30:00', 'UTC'), 'Europe/London')");
+        Assert.That(reader.Read(), Is.True);
+
+        var dateTime = reader.GetDateTime(0);
+        var dto = reader.GetDateTimeOffset(0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dateTime.Kind, Is.EqualTo(DateTimeKind.Utc), "zero offset yields Kind=Utc");
+            Assert.That(dto.Offset, Is.EqualTo(TimeSpan.Zero), "GMT offset");
+            Assert.That(dto.UtcDateTime, Is.EqualTo(new DateTime(2025, 10, 26, 1, 30, 0, DateTimeKind.Utc)));
+        });
+    }
+}

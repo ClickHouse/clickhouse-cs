@@ -123,7 +123,7 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
 
     public override string ToString() => TimeZone == null ? $"{Name}" : $"{Name}('{TimeZone.Id}')";
 
-    private DateTimeOffset ToDateTimeOffset(Instant instant) => instant.InZone(TimeZoneOrUtc).ToDateTimeOffset();
+    internal DateTimeOffset ToDateTimeOffset(Instant instant) => instant.InZone(TimeZoneOrUtc).ToDateTimeOffset();
 
     public DateTime ToDateTime(Instant instant)
     {

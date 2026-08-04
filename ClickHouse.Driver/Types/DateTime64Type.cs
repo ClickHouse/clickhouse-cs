@@ -15,11 +15,13 @@ internal class DateTime64Type : AbstractDateTimeType
 
     public override string ToString() => TimeZone == null ? $"DateTime64({Scale})" : $"DateTime64({Scale}, '{TimeZone.Id}')";
 
-    public DateTime FromClickHouseTicks(long clickHouseTicks)
+    public DateTime FromClickHouseTicks(long clickHouseTicks) => ToDateTime(ToInstant(clickHouseTicks));
+
+    public Instant ToInstant(long clickHouseTicks)
     {
         // Convert ClickHouse variable precision ticks into "standard" .NET 100ns ones
         var ticks = MathUtils.ShiftDecimalPlaces(clickHouseTicks, 7 - Scale);
-        return ToDateTime(Instant.FromUnixTimeTicks(ticks));
+        return Instant.FromUnixTimeTicks(ticks);
     }
 
     public long ToClickHouseTicks(Instant instant) => MathUtils.ShiftDecimalPlaces(instant.ToUnixTimeTicks(), Scale - 7);
@@ -43,6 +45,13 @@ internal class DateTime64Type : AbstractDateTimeType
     }
 
     public override object Read(ExtendedBinaryReader reader) => FromClickHouseTicks(reader.ReadInt64());
+
+    internal override object ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
+    {
+        var decoded = ToInstant(reader.ReadInt64());
+        instant = decoded;
+        return ToDateTime(decoded);
+    }
 
     // No range check: any coerced instant is representable, so 'original' is unused.
     protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T original)

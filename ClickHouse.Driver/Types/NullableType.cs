@@ -1,6 +1,7 @@
 ﻿using System;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
+using NodaTime;
 
 namespace ClickHouse.Driver.Types;
 
@@ -28,6 +29,17 @@ internal class NullableType : ParameterizedType
     }
 
     public override object Read(ExtendedBinaryReader reader) => reader.ReadByte() > 0 ? DBNull.Value : UnderlyingType.Read(reader);
+
+    internal override object ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
+    {
+        if (reader.ReadByte() > 0)
+        {
+            instant = null;
+            return DBNull.Value;
+        }
+
+        return UnderlyingType.ReadWithInstant(reader, out instant);
+    }
 
     public override string ToString() => $"{Name}({UnderlyingType})";
 

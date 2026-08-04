@@ -21,7 +21,16 @@ internal class DateTimeType : AbstractDateTimeType
         return new DateTimeType { TimeZone = timeZone };
     }
 
-    public override object Read(ExtendedBinaryReader reader) => ToDateTime(Instant.FromUnixTimeSeconds(reader.ReadUInt32()));
+    public override object Read(ExtendedBinaryReader reader) => ToDateTime(ReadInstant(reader));
+
+    internal override object ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
+    {
+        var decoded = ReadInstant(reader);
+        instant = decoded;
+        return ToDateTime(decoded);
+    }
+
+    private static Instant ReadInstant(ExtendedBinaryReader reader) => Instant.FromUnixTimeSeconds(reader.ReadUInt32());
 
     protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T value)
     {
