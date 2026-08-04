@@ -81,7 +81,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             var rawStream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
 
             // Decompression sits INNERMOST, directly on the transport stream, so that everything layered
-            // above it — the pooled read buffer and the mid-stream exception scanner alike — sees
+            // above it — the mid-stream exception scanner and the pooled read buffer alike — sees
             // PLAINTEXT. Driven by the response's Content-Encoding, never by what we asked for.
             // leaveOpen: true because httpResponse owns rawStream and disposes it.
             var plaintext = ResponseDecompression.Wrap(rawStream, httpResponse, responseCompressor, leaveOpen: true);
@@ -89,24 +89,34 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             // Reference-equal means the body needed no decoding, so there is no extra stream to own.
             decompressingStream = ReferenceEquals(plaintext, rawStream) ? null : plaintext;
 
-            // Buffer reads through a pooled buffer (rented from ArrayPool) rather than BufferedStream's
-            // fresh per-query array. leaveOpen: true because the stream below is owned by either
-            // httpResponse or this reader; the reader disposes this wrapper explicitly to return the
-            // buffer (the BinaryReader -> PeekableStreamWrapper chain does not propagate Dispose to inner
-            // streams).
-            // Its Read may return fewer bytes than requested; the ExtendedBinaryReader below loops to
-            // satisfy exact-count reads.
-            buffered = new PooledReadBufferStream(plaintext, readBufferSize, leaveOpen: true);
-
-            // Conditionally wrap with exception-aware stream
-            Stream streamForReader = buffered;
+            // Conditionally record recent bytes for mid-stream exception detection. This sits *below*
+            // the buffering stream on purpose: there it observes one read per buffer refill instead of
+            // one per scalar the reader decodes, which is the difference between recording a few bytes
+            // millions of times and recording a 64 KiB block a few times. The ring buffer then holds the
+            // last bytes received rather than the last bytes consumed — equivalent for this purpose,
+            // because TryExtractMidStreamException is only consulted once a read has failed with an
+            // IOException, by which point the transport is drained and the server's trailing marker has
+            // been recorded.
+            // It must stay *above* the decompressor, though: the server writes its exception marker into
+            // the response body, so the marker only exists in the decoded plaintext.
+            // leaveOpen: true because the stream below is owned by either httpResponse (uncompressed) or
+            // this reader via decompressingStream (compressed).
+            Stream bufferedInner = plaintext;
             if (!string.IsNullOrEmpty(exceptionTag))
             {
-                exceptionStream = new ExceptionTagAwareStream(buffered, exceptionTag);
-                streamForReader = exceptionStream;
+                exceptionStream = new ExceptionTagAwareStream(plaintext, exceptionTag, leaveOpen: true);
+                bufferedInner = exceptionStream;
             }
 
-            reader = new ExtendedBinaryReader(streamForReader);
+            // Buffer reads through a pooled buffer (rented from ArrayPool) rather than BufferedStream's
+            // fresh per-query array. leaveOpen: true because the streams below are owned elsewhere;
+            // the reader disposes this wrapper explicitly to return the buffer (the BinaryReader ->
+            // PeekableStreamWrapper chain does not propagate Dispose to inner streams).
+            // Its Read may return fewer bytes than requested; the ExtendedBinaryReader below loops to
+            // satisfy exact-count reads.
+            buffered = new PooledReadBufferStream(bufferedInner, readBufferSize, leaveOpen: true);
+
+            reader = new ExtendedBinaryReader(buffered);
             var (names, types, rawTypeNames) = ReadHeaders(reader, settings, readValueConverter != null);
             return new ClickHouseDataReader(httpResponse, reader, buffered, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter, decompressingStream);
         }

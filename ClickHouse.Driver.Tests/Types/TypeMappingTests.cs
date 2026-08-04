@@ -101,9 +101,8 @@ public class TypeMappingTests
     [TestCase(typeof(Dictionary<Tuple<int,int>,int>), ExpectedResult = "Map(Tuple(Int32,Int32), Int32)")]
     [TestCase(typeof(List<string>), ExpectedResult = "Array(String)")]
     [TestCase(typeof(List<List<string>>), ExpectedResult = "Array(Array(String))")]
-#if NET6_0_OR_GREATER
     [TestCase(typeof(DateOnly), ExpectedResult = "Date")]
-#endif
+    [TestCase(typeof(TimeOnly), ExpectedResult = "Time64(7)")]
     [TestCase(typeof(Tuple<int, byte, float?, string[]>), ExpectedResult = "Tuple(Int32,UInt8,Nullable(Float32),Array(String))")]
     // System.Tuple with >7 elements (TRest nesting, same as ValueTuple)
     [TestCase(typeof(Tuple<int, int, int, int, int, int, int, Tuple<string>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
