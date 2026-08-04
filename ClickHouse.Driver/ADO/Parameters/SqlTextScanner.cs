@@ -50,8 +50,8 @@ internal static class SqlTextScanner
     /// <summary>
     /// Skips a heredoc (<c>$$...$$</c> or <c>$tag$...$tag$</c>) starting at
     /// <paramref name="startIndex"/>, which must hold the leading <c>$</c>.
-    /// Returns the index of the first character after the closing tag, or -1 if there is no
-    /// heredoc at this position.
+    /// Returns the index of the first character after the closing tag, sql.Length if the opening
+    /// tag is never closed, or -1 if there is no heredoc at this position.
     /// </summary>
     public static int TrySkipHeredoc(string sql, int startIndex)
     {
@@ -64,7 +64,7 @@ internal static class SqlTextScanner
 
         var tag = sql.Substring(startIndex, i - startIndex + 1);
         var endIndex = sql.IndexOf(tag, i + 1, StringComparison.Ordinal);
-        return endIndex < 0 ? -1 : endIndex + tag.Length;
+        return endIndex < 0 ? sql.Length : endIndex + tag.Length;
     }
 
     /// <summary>

@@ -53,6 +53,7 @@ internal static class SqlPlaceholderRewriter
             }
             else if (c == '$')
             {
+                // Heredoc: $$ ... $$ or $tag$ ... $tag$ (-1 when this $ does not open one)
                 var afterHeredoc = SqlTextScanner.TrySkipHeredoc(sql, i);
                 i = afterHeredoc < 0 ? i + 1 : afterHeredoc;
             }

@@ -40,7 +40,14 @@ public class SqlPlaceholderRewriteTests
         new TestCaseData("SELECT -- @id\n@id", "SELECT -- @id\n{id:Int32}").SetName("code after line comment"),
         // A lone $ is not a heredoc and must not swallow the rest of the query
         new TestCaseData("SELECT $1 = @id", "SELECT $1 = {id:Int32}").SetName("dollar sign is not a heredoc"),
+        new TestCaseData("SELECT $tag @id", "SELECT $tag {id:Int32}").SetName("unclosed heredoc tag is not a heredoc"),
+        // Unterminated regions swallow the rest of the query, so nothing in them is rewritten
         new TestCaseData("SELECT '@id", "SELECT '@id").SetName("unterminated literal"),
+        new TestCaseData("SELECT \"@id", "SELECT \"@id").SetName("unterminated double-quoted identifier"),
+        new TestCaseData("SELECT $$@id", "SELECT $$@id").SetName("unterminated heredoc"),
+        new TestCaseData("SELECT $tag$@id", "SELECT $tag$@id").SetName("unterminated tagged heredoc"),
+        new TestCaseData("SELECT $tag$@id$other$", "SELECT $tag$@id$other$").SetName("heredoc closed by a different tag"),
+        new TestCaseData("SELECT /* @id", "SELECT /* @id").SetName("unterminated block comment"),
     ];
 
     [Test]
