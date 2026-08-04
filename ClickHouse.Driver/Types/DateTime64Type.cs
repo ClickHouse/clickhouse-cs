@@ -53,6 +53,8 @@ internal class DateTime64Type : AbstractDateTimeType
         return ToDateTime(decoded);
     }
 
+    internal override bool ReportsInstant => true;
+
     // No range check: any coerced instant is representable, so 'original' is unused.
     protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T original)
         => writer.Write(ToClickHouseTicks(Instant.FromDateTimeOffset(dto)));

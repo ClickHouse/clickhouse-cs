@@ -36,11 +36,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly PocoTypeRegistry pocoRegistry;
     private readonly Dictionary<Type, object> bindingPlanCache = new();
 
-    // Per-ordinal type used to capture the instant a value decoded from, non-null only for date/time
-    // columns (see BuildDateTimeColumns); null when the result set has none of them.
-    private readonly ClickHouseType[] dateTimeColumns;
+    // Per-ordinal type used to capture the instant a value decoded from, non-null only for columns that
+    // report one (see BuildInstantColumns); null when the result set has none of them.
+    private readonly ClickHouseType[] instantColumns;
 
-    // Instants captured for the current row, indexed by ordinal; null when dateTimeColumns is null.
+    // Instants captured for the current row, indexed by ordinal; null when instantColumns is null.
     private readonly Instant?[] rowInstants;
 
     private bool hasCurrentRow;
@@ -60,8 +60,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
 
-        dateTimeColumns = BuildDateTimeColumns(types);
-        if (dateTimeColumns != null)
+        instantColumns = BuildInstantColumns(types);
+        if (instantColumns != null)
             rowInstants = new Instant?[types.Length];
 
         if (readValueConverter != null)
@@ -69,22 +69,20 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 
     /// <summary>
-    /// Returns, per ordinal, the type to decode date/time columns through so the instant they were stored
-    /// as is captured alongside the value, or <see langword="null"/> when the result set contains no
-    /// date/time column. These are exactly the columns <see cref="GetDateTimeOffset"/> accepts: a
-    /// <see cref="AbstractDateTimeType"/>, optionally wrapped in <see cref="NullableType"/>.
+    /// Returns, per ordinal, the type to decode through so the instant a value was stored as is captured
+    /// alongside it, or <see langword="null"/> when no column in the result set reports an instant. Only
+    /// types whose <see cref="ClickHouseType.ReportsInstant"/> is true are included — <c>Date</c> and
+    /// <c>Date32</c> encode no instant, so a result set of those keeps the plain decode path.
     /// </summary>
-    private static ClickHouseType[] BuildDateTimeColumns(ClickHouseType[] types)
+    private static ClickHouseType[] BuildInstantColumns(ClickHouseType[] types)
     {
         ClickHouseType[] result = null;
         for (var i = 0; i < types.Length; i++)
         {
-            var type = types[i];
-            var effectiveType = type is NullableType nt ? nt.UnderlyingType : type;
-            if (effectiveType is AbstractDateTimeType)
+            if (types[i].ReportsInstant)
             {
                 result ??= new ClickHouseType[types.Length];
-                result[i] = type;
+                result[i] = types[i];
             }
         }
 
@@ -531,15 +529,15 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             }
             else
             {
-                // Date/time columns decode through ReadWithInstant so the instant they were stored as is
-                // captured for GetDateTimeOffset; every other column reads exactly as before.
+                // Columns carrying an instant decode through ReadWithInstant so the instant they were stored
+                // as is captured for GetDateTimeOffset; every other column reads exactly as before.
                 for (var i = 0; i < count; i++)
                 {
-                    var dateTimeType = dateTimeColumns[i];
-                    if (dateTimeType == null)
+                    var instantType = instantColumns[i];
+                    if (instantType == null)
                         data[i] = RawTypes[i].Read(reader);
                     else
-                        data[i] = dateTimeType.ReadWithInstant(reader, out instants[i]);
+                        data[i] = instantType.ReadWithInstant(reader, out instants[i]);
                 }
             }
 

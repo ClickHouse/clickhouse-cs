@@ -22,6 +22,13 @@ internal abstract class ClickHouseType
         return Read(reader);
     }
 
+    /// <summary>
+    /// Whether <see cref="ReadWithInstant"/> can report an instant for this type. Types that decode an
+    /// absolute instant override this; for every other type it stays <see langword="false"/> so callers
+    /// can skip the instant-capturing decode path instead of taking it only to be reported nothing.
+    /// </summary>
+    internal virtual bool ReportsInstant => false;
+
     public abstract void Write(ExtendedBinaryWriter writer, object value);
 
     public abstract override string ToString();

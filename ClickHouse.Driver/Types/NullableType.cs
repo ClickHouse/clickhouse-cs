@@ -41,6 +41,8 @@ internal class NullableType : ParameterizedType
         return UnderlyingType.ReadWithInstant(reader, out instant);
     }
 
+    internal override bool ReportsInstant => UnderlyingType.ReportsInstant;
+
     public override string ToString() => $"{Name}({UnderlyingType})";
 
     public override void Write(ExtendedBinaryWriter writer, object value)

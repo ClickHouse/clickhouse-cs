@@ -30,6 +30,8 @@ internal class DateTimeType : AbstractDateTimeType
         return ToDateTime(decoded);
     }
 
+    internal override bool ReportsInstant => true;
+
     private static Instant ReadInstant(ExtendedBinaryReader reader) => Instant.FromUnixTimeSeconds(reader.ReadUInt32());
 
     protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T value)
