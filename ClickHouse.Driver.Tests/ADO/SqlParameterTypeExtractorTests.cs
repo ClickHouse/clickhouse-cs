@@ -506,4 +506,39 @@ public class SqlParameterTypeExtractorTests
         Assert.That(hints, Has.Count.EqualTo(1));
         Assert.That(hints["val"], Is.EqualTo("Int32"));
     }
+
+    private static IEnumerable<TestCaseData> QuotedTokenInsideTypeHint()
+    {
+        yield return new TestCaseData(@"SELECT {p:Enum8('a\'b' = 1)}", @"Enum8('a\'b' = 1)");
+        yield return new TestCaseData("SELECT tupleElement({p:Tuple(`a}b` UInt8)}, 'a}b')", "Tuple(`a}b` UInt8)");
+        yield return new TestCaseData("SELECT {p:Tuple(\"a}b\" UInt8)}", "Tuple(\"a}b\" UInt8)");
+        yield return new TestCaseData(
+            "SELECT tupleElement({p:Tuple(`a``}b` UInt8)}, 'a`}b')",
+            "Tuple(`a``}b` UInt8)");
+    }
+
+    [TestCaseSource(nameof(QuotedTokenInsideTypeHint))]
+    public void ExtractTypeHints_QuotedTokenInsideTypeHint_ReturnsFullType(string sql, string expectedType)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["p"], Is.EqualTo(expectedType));
+    }
+
+    private static IEnumerable<string> UnterminatedQuotedToken()
+    {
+        // Unterminated quoted identifier before the hint
+        yield return "SELECT 1 AS \"a, {val:Int32}";
+        // Unterminated quoted identifier inside the type of the hint
+        yield return "SELECT {val:Tuple(`a UInt8)}";
+    }
+
+    [TestCaseSource(nameof(UnterminatedQuotedToken))]
+    public void ExtractTypeHints_UnterminatedQuotedToken_ReturnsEmptyDictionary(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Is.Empty);
+    }
 }

@@ -192,6 +192,19 @@ public class SqlParameterizedSelectTests : IDisposable
     }
 
     [Test]
+    public async Task AddParameter_EscapedQuoteInsideEnumTypeHint_UsesTypeHint()
+    {
+        // A `\'` escape inside the Enum label left the old scanner believing it was still inside the
+        // string literal, so the hint ended at the `}` in the label and the type came out truncated
+        using var command = connection.CreateCommand();
+        command.CommandText = @"SELECT {val:Enum8('a\'}b' = 1)} AS res";
+        command.AddParameter("val", "a'}b");
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo("a'}b"));
+    }
+
+    [Test]
     [TestCase("String")]
     [TestCase("Int32")]
     [TestCase("Int64")]
