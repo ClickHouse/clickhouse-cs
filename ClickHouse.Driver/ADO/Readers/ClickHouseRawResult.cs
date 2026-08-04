@@ -74,17 +74,11 @@ public class ClickHouseRawResult : IDisposable
     /// The response uses a codec this client cannot decode (e.g. <c>zstd</c>); the message names it.
     /// </exception>
     /// <remarks>
-    /// <para>
-    /// Disposing this <see cref="ClickHouseRawResult"/> is always sufficient — it releases both the
-    /// response and any decoder inserted here. Disposing the returned stream directly is also safe, but
-    /// note that when nothing needed decoding it <i>is</i> the HTTP content stream (reference-equal to
-    /// <see cref="ReadAsStreamAsync"/>'s result), so disposing it ends the response body; when a decoder
-    /// was added, it is created with <c>leaveOpen</c> and the content stream survives.
-    /// </para>
-    /// <para>
-    /// Repeated sequential calls return the same stream rather than stacking a second decoder over a
-    /// partly-consumed body. Like the rest of this type, not safe for concurrent use.
-    /// </para>
+    /// Disposing this <see cref="ClickHouseRawResult"/> is always sufficient — it releases the response and
+    /// any decoder inserted here. Disposing the returned stream is safe too, but note that with nothing to
+    /// decode it <i>is</i> the content stream, so that ends the response body. Repeated sequential calls
+    /// return the same stream rather than stacking a decoder over a partly-consumed body; not safe for
+    /// concurrent use.
     /// </remarks>
     public async Task<Stream> ReadDecompressedStreamAsync()
     {

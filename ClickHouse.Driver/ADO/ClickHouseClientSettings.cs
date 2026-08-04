@@ -371,13 +371,12 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Default: null (advertise the codecs the driver can decode)
     /// </summary>
     /// <remarks>
-    /// ClickHouse resolves this header by scanning for tokens in its own fixed preference order
-    /// (<c>zstd</c> &gt; <c>br</c> &gt; <c>lz4</c> &gt; <c>snappy</c> &gt; <c>gzip</c> &gt;
-    /// <c>deflate</c>) and ignores q-values, so the only way to steer its choice is which tokens are
-    /// listed. Setting this also forces <c>enable_http_compression=1</c>, which the server requires
-    /// before it honours the header at all, and — unlike the default — applies to
-    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/> as well, whose body is otherwise left
-    /// uncompressed so the driver never reshapes bytes it hands over verbatim.
+    /// ClickHouse scans this header in its own fixed preference order (<c>zstd</c> &gt; <c>br</c> &gt;
+    /// <c>lz4</c> &gt; <c>snappy</c> &gt; <c>gzip</c> &gt; <c>deflate</c>) and ignores q-values, so the
+    /// only way to steer its choice is which tokens are listed. Setting this forces
+    /// <c>enable_http_compression=1</c> and — unlike the default — also applies to
+    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/>, whose body is otherwise left uncompressed so
+    /// the driver never reshapes bytes it hands over verbatim.
     /// </remarks>
     public string AcceptEncoding { get; init; }
 
