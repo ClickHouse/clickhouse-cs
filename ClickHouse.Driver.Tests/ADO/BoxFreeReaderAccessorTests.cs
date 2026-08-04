@@ -435,10 +435,11 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
 
     // ---- Converter routing ----
 
-    // The typed accessors were `(T)GetValue(ordinal)`, so they saw ConvertValue(object, ...). De-boxing them
-    // would have switched them to ConvertValue<T>, which is observable to a converter whose two overloads
-    // disagree — so with a converter configured they stay on the boxed route. GetFieldValue<T> is unaffected:
-    // it already called ConvertValue<T>. This pins both halves of that decision.
+    // Two paths, two overloads, both unchanged by column slots: the typed accessors were
+    // `(T)GetValue(ordinal)` and so saw ConvertValue(object, ...), while GetFieldValue<T> called
+    // ConvertValue<T>. De-boxing the accessors would have switched them onto ConvertValue<T>, which is
+    // observable to a converter whose two overloads disagree, so with a converter configured they stay on the
+    // boxed route. This pins both halves of that decision.
     [Test]
     public async Task WithConverter_TypedAccessorUsesObjectOverloadWhileGetFieldValueUsesGeneric()
     {
