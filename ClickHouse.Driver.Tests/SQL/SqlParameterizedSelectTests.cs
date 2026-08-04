@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
@@ -92,6 +93,49 @@ public class SqlParameterizedSelectTests : IDisposable
         TestUtilities.AssertEqual(result, value);
     }
 
+    // Issue #483: byte[] and TimeOnly parameter binding over the HTTP parameter path.
+
+    [Test]
+    public async Task ShouldExecuteParameterizedSelectWithByteArrayForString()
+    {
+        // A byte[] used to be formatted as the literal text "System.Byte[]".
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {var:String} as res";
+        command.AddParameter("var", new byte[] { 0x41, 0x42, 0x43 }); // "ABC"
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo("ABC"));
+    }
+
+    [Test]
+    public async Task ShouldRoundTripNonUtf8ByteArrayThroughStringParameter()
+    {
+        // Payload mixes a null byte, printable ASCII, the escape-sensitive ' and \ bytes, a control
+        // byte and invalid-UTF-8 bytes; hex() asserts on the exact bytes the server received.
+        var payload = new byte[] { 0x00, 0x41, 0xFF, 0xFE, 0x27, 0x5C, 0x0A, 0x80, 0xC3, 0x28 };
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT hex({var:String}) as res";
+        command.AddParameter("var", payload);
+
+        var result = (string)(await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(Convert.ToHexString(payload)));
+    }
+
+    // TimeOnly used to throw InvalidCastException (Time) or hit the default throw (Time64).
+    [RequiredFeature(Feature.Time)]
+    [TestCase("Time", 14, 30, 0, 0)]
+    [TestCase("Time64(3)", 14, 30, 0, 500)]
+    public async Task ShouldExecuteParameterizedSelectWithTimeOnly(string clickHouseType, int hour, int minute, int second, int millisecond)
+    {
+        var value = new TimeOnly(hour, minute, second, millisecond);
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {{var:{clickHouseType}}} as res";
+        command.AddParameter("var", value);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(value.ToTimeSpan()).Within(TimeSpan.FromMilliseconds(1)));
+    }
+
     [Test]
     [TestCaseSource(typeof(SqlParameterizedSelectTests), nameof(TypedQueryParameters))]
     public async Task ShouldExecuteParameterizedCompareWithExplicitType(string exampleExpression, string clickHouseType, object value)
@@ -160,6 +204,48 @@ public class SqlParameterizedSelectTests : IDisposable
         var ex = Assert.ThrowsAsync<ArgumentException>(async () =>
             await command.ExecuteReaderAsync());
         Assert.That(ex.Message, Does.Contain($"Unknown type: {invalidType}"));
+    }
+
+    [Test]
+    [TestCase("SELECT {val:Int32} AS res // {val:String}")]
+    [TestCase("SELECT {val:Int32} AS res /* a /* b */ {val:String} */")]
+    [TestCase("SELECT {val:Int32} AS res, $$ {val:String} $$ AS heredoc")]
+    public async Task AddParameter_ConflictingTypeHintInsideCommentOrHeredoc_UsesRealHint(string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.AddParameter("val", 42);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result[0], Is.EqualTo(42));
+    }
+
+    [Test]
+    [TestCase("SELECT 1 AS `a--b`, toString({val:DateTime64(3, 'UTC')}) AS res")]
+    [TestCase("SELECT 1 AS \"a'b\", toString({val:DateTime64(3, 'UTC')}) AS res")]
+    [TestCase("SELECT $$--$$ AS heredoc, toString({val:DateTime64(3, 'UTC')}) AS res")]
+    public async Task AddParameter_TypeHintAfterQuotedIdentifierOrHeredoc_UsesTypeHint(string sql)
+    {
+        // Without the hint the value would be formatted as DateTime (no sub-second part)
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.AddParameter("val", new DateTime(2020, 1, 2, 3, 4, 5, 123, DateTimeKind.Utc));
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result[1], Is.EqualTo("2020-01-02 03:04:05.123"));
+    }
+
+    [Test]
+    public async Task AddParameter_EscapedQuoteInsideEnumTypeHint_UsesTypeHint()
+    {
+        // A `\'` escape inside the Enum label left the old scanner believing it was still inside the
+        // string literal, so the hint ended at the `}` in the label and the type came out truncated
+        using var command = connection.CreateCommand();
+        command.CommandText = @"SELECT {val:Enum8('a\'}b' = 1)} AS res";
+        command.AddParameter("val", "a'}b");
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo("a'}b"));
     }
 
     [Test]
