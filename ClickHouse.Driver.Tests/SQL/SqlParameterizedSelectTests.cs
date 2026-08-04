@@ -478,6 +478,54 @@ public class SqlParameterizedSelectTests : IDisposable
         });
     }
 
+    [Test]
+    public async Task AddParameter_NameContainingDollar_IsBound()
+    {
+        // The server accepts a $ in a query parameter name, so @id$x must bind the parameter named
+        // id$x and must not be read as @id followed by $x, which the shorter name would shadow.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT @id$x AS v, @$x AS w, @id$ AS y, @id AS z";
+        command.AddParameter("id$x", 42);
+        command.AddParameter("$x", 43);
+        command.AddParameter("id$", 44);
+        command.AddParameter("id", 45);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result, Is.EqualTo(new object[] { 42, 43, 44, 45 }));
+    }
+
+    [Test]
+    public async Task AddParameter_TypeHintForNameContainingDollar_IsApplied()
+    {
+        // The hint extractor and the placeholder rewriter must agree on where a name containing a $
+        // ends: the hint types the @-style placeholder, so the value goes out as a Date rather than
+        // as an inferred DateTime, which the server rejects for a Date column.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {d$x:Date} AS a, @d$x AS b";
+        command.AddParameter("d$x", new DateTime(2020, 1, 2));
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result, Is.EqualTo(new object[] { new DateTime(2020, 1, 2), new DateTime(2020, 1, 2) }));
+    }
+
+    // A $ continues a name just like a digit or an underscore does, so all three placeholders name a
+    // parameter that is not defined here
+    [TestCase("@id$x")]
+    [TestCase("@id2")]
+    [TestCase("@id_x")]
+    public void AddParameter_NameIsPrefixOfALongerName_IsNotSubstituted(string placeholder)
+    {
+        // An unknown placeholder must be left alone for the server to reject. Substituting @id inside
+        // @id$x turned the query into a different, still valid one instead (SELECT 45 AS `$x`), so the
+        // server error has to quote the placeholder back verbatim.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT " + placeholder;
+        command.AddParameter("id", 45);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () => await command.ExecuteReaderAsync());
+        Assert.That(ex.Message, Does.Contain(placeholder));
+    }
+
     /// <summary>
     /// Drops every name handed out by <see cref="CreateTableName"/>. Best-effort: a table that
     /// cannot be dropped must not fail an otherwise passing fixture.

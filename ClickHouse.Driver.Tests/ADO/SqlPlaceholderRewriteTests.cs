@@ -59,7 +59,10 @@ public class SqlPlaceholderRewriteTests
         // WITH 1 AS `$tag$` SELECT $tag$ AS a, {id:Int32} AS v returns a row
         new TestCaseData("SELECT $$@id", "SELECT $${id:Int32}").SetName("tag never closed is not a heredoc"),
         new TestCaseData("SELECT $tag$@id", "SELECT $tag${id:Int32}").SetName("tagged tag never closed is not a heredoc"),
-        new TestCaseData("SELECT $tag$@id$other$", "SELECT $tag${id:Int32}$other$").SetName("tag closed by a different tag is not a heredoc"),
+        new TestCaseData("SELECT $tag$ @id $other$", "SELECT $tag$ {id:Int32} $other$").SetName("tag closed by a different tag is not a heredoc"),
+        // ... but @id$other$ names the single parameter id$other$, which is not defined here, so the
+        // whole run stays as it is: the server lexes $tag$42$other$ as one unknown identifier
+        new TestCaseData("SELECT $tag$@id$other$", "SELECT $tag$@id$other$").SetName("unknown dollar name after a tag closed by a different tag"),
         new TestCaseData("SELECT $tag$ AS a, @id", "SELECT $tag$ AS a, {id:Int32}").SetName("code after a tag that is never closed"),
         new TestCaseData("SELECT $tag$a@id$tag$@id", "SELECT $tag$a@id$tag${id:Int32}").SetName("code directly after a closed heredoc"),
         // The server lexes the whole $-and-word-character run of an unclosed tag as one token, so a
@@ -84,6 +87,16 @@ public class SqlPlaceholderRewriteTests
         new TestCaseData("SELECT 1 AS `x`$t$a@id$t$, @id", "SELECT 1 AS `x`$t$a@id$t$, {id:Int32}").SetName("heredoc after a quoted identifier"),
         new TestCaseData("SELECT @id $", "SELECT {id:Int32} $").SetName("trailing dollar sign"),
         new TestCaseData("SELECT @id $tag$", "SELECT {id:Int32} $tag$").SetName("trailing unclosed tag"),
+        // A $ continues a placeholder name, matching the server's word lexer and the $ it accepts in
+        // a query parameter name, so a placeholder is not recognized inside a longer dollar name
+        new TestCaseData("SELECT @id$x", "SELECT @id$x").SetName("name continued by a dollar sign"),
+        new TestCaseData("SELECT @id$", "SELECT @id$").SetName("name continued by a trailing dollar sign"),
+        new TestCaseData("SELECT @id$x, @id", "SELECT @id$x, {id:Int32}").SetName("unknown dollar name and code position"),
+        new TestCaseData("SELECT @id_2$x", "SELECT @id_2$x").SetName("longer name continued by a dollar sign"),
+        new TestCaseData("SELECT @id$$x$$", "SELECT @id$$x$$").SetName("name continued by doubled dollar signs"),
+        // Contrast: the other characters that continue a name keep behaving as they did
+        new TestCaseData("SELECT @id_x", "SELECT @id_x").SetName("name continued by an underscore"),
+        new TestCaseData("SELECT @id2", "SELECT @id2").SetName("name continued by a digit"),
         // Unterminated quoted regions and block comments do swallow the rest of the query, so
         // nothing in them is rewritten
         new TestCaseData("SELECT '@id", "SELECT '@id").SetName("unterminated literal"),
@@ -102,5 +115,59 @@ public class SqlPlaceholderRewriteTests
         };
 
         Assert.That(collection.ReplacePlaceholders(sql, ResolvedTypes), Is.EqualTo(expected));
+    }
+
+    private static readonly IReadOnlyDictionary<string, string> DollarResolvedTypes =
+        new Dictionary<string, string>
+        {
+            ["id"] = "Int32",
+            ["id$x"] = "Int64",
+            ["$x"] = "String",
+            ["id$"] = "UInt8",
+            ["id$$y"] = "Int16",
+            ["$1"] = "Date",
+        };
+
+    public static IEnumerable<TestCaseData> DollarNamedPlaceholders =>
+    [
+        // A parameter name may contain a $ anywhere, just like the native {id$x:Int64} syntax
+        new TestCaseData("SELECT @id$x", "SELECT {id$x:Int64}").SetName("dollar inside the name"),
+        new TestCaseData("SELECT @$x", "SELECT {$x:String}").SetName("name starting with a dollar"),
+        new TestCaseData("SELECT @id$", "SELECT {id$:UInt8}").SetName("name ending with a dollar"),
+        new TestCaseData("SELECT @id$$y", "SELECT {id$$y:Int16}").SetName("doubled dollar inside the name"),
+        new TestCaseData("SELECT @$1", "SELECT {$1:Date}").SetName("name of a dollar and a digit"),
+        new TestCaseData("SELECT @id$x AS a, @id AS b", "SELECT {id$x:Int64} AS a, {id:Int32} AS b").SetName("dollar name does not shadow the shorter one"),
+        new TestCaseData("SELECT @id, @id$, @$x, @id$x", "SELECT {id:Int32}, {id$:UInt8}, {$x:String}, {id$x:Int64}").SetName("all dollar names"),
+        // Still not recognized inside a longer name, whichever character continues it
+        new TestCaseData("SELECT @id$x$y", "SELECT @id$x$y").SetName("dollar name continued by a dollar sign"),
+        new TestCaseData("SELECT @id$xy", "SELECT @id$xy").SetName("dollar name continued by a letter"),
+        new TestCaseData("SELECT @$xy", "SELECT @$xy").SetName("name starting with a dollar continued by a letter"),
+        // A dollar name is still only rewritten in a code position
+        new TestCaseData("SELECT 'a@id$x', @id$x", "SELECT 'a@id$x', {id$x:Int64}").SetName("dollar name in a string literal"),
+        new TestCaseData("SELECT 1 AS `a@$x`, @$x", "SELECT 1 AS `a@$x`, {$x:String}").SetName("dollar name in a quoted identifier"),
+        new TestCaseData("SELECT $t$a@id$x$t$, @id$x", "SELECT $t$a@id$x$t$, {id$x:Int64}").SetName("dollar name in a heredoc"),
+        new TestCaseData("SELECT @id$ -- @id$x", "SELECT {id$:UInt8} -- @id$x").SetName("dollar name in a line comment"),
+        // A name ending with a $ is matched before that $ can be taken for a heredoc opener, and a
+        // real heredoc still opens right after it
+        new TestCaseData("SELECT @id$ $t$a@id$x$t$, @$x", "SELECT {id$:UInt8} $t$a@id$x$t$, {$x:String}").SetName("dollar name before a heredoc"),
+        // The text between a tag and a different tag is code, so a dollar name in it is rewritten
+        new TestCaseData("SELECT $tag$@id$ AS a, $other$", "SELECT $tag${id$:UInt8} AS a, $other$").SetName("dollar name after a tag closed by a different tag"),
+    ];
+
+    [Test]
+    [TestCaseSource(nameof(DollarNamedPlaceholders))]
+    public void ReplacePlaceholders_DollarInParameterName_MatchesTheWholeName(string sql, string expected)
+    {
+        var collection = new ClickHouseParameterCollection
+        {
+            new ClickHouseDbParameter { ParameterName = "id", ClickHouseType = "Int32", Value = 42 },
+            new ClickHouseDbParameter { ParameterName = "id$x", ClickHouseType = "Int64", Value = 43L },
+            new ClickHouseDbParameter { ParameterName = "$x", ClickHouseType = "String", Value = "x" },
+            new ClickHouseDbParameter { ParameterName = "id$", ClickHouseType = "UInt8", Value = (byte)1 },
+            new ClickHouseDbParameter { ParameterName = "id$$y", ClickHouseType = "Int16", Value = (short)2 },
+            new ClickHouseDbParameter { ParameterName = "$1", ClickHouseType = "Date", Value = new System.DateTime(2020, 1, 2) },
+        };
+
+        Assert.That(collection.ReplacePlaceholders(sql, DollarResolvedTypes), Is.EqualTo(expected));
     }
 }

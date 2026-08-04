@@ -104,7 +104,14 @@ internal static class SqlPlaceholderRewriter
         return null;
     }
 
-    // Matches the word characters of the regex this rewriter replaced, so that a placeholder is
-    // still not recognized inside a longer identifier.
-    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+    /// <summary>
+    /// Determines whether the character continues a placeholder name, so that a placeholder is not
+    /// recognized inside a longer name. A $ is part of the name: the server lexes a word as a run of
+    /// word characters and dollar signs and accepts $ in a query parameter name, so @id$x names the
+    /// single parameter id$x rather than @id followed by $x.
+    /// Non-ASCII letters and digits stay part of the name even though the server's lexer is
+    /// ASCII-only: such a name cannot be sent as param_&lt;name&gt; at all, so leaving the placeholder
+    /// untouched lets the server reject the query instead of silently rewriting it into another one.
+    /// </summary>
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_' || c == '$';
 }
