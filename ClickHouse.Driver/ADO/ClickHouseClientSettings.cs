@@ -374,9 +374,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// ClickHouse scans this header in its own fixed preference order (<c>zstd</c> &gt; <c>br</c> &gt;
     /// <c>lz4</c> &gt; <c>snappy</c> &gt; <c>gzip</c> &gt; <c>deflate</c>) and ignores q-values, so the
     /// only way to steer its choice is which tokens are listed. Setting this forces
-    /// <c>enable_http_compression=1</c> and — unlike the default — also applies to
-    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/>, whose body is otherwise left uncompressed so
-    /// the driver never reshapes bytes it hands over verbatim.
+    /// <c>enable_http_compression=1</c> and applies to
+    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/> too, which otherwise keeps the driver's
+    /// historical <c>gzip, deflate</c> so that bytes handed over verbatim stay as they were.
     /// </remarks>
     public string AcceptEncoding { get; init; }
 

@@ -107,11 +107,11 @@ public static class ResponseCompression
                 options: new QueryOptions { AcceptEncoding = "identity" });
             Console.WriteLine($"   Rows read uncompressed: {uncompressed}\n");
 
-            // Example 5: raw exports. These are handed to you verbatim, so the driver does not
-            // negotiate a codec behind your back — the body below is plaintext JSON. Ask for a codec
-            // explicitly and ReadDecompressedStreamAsync will decode it for you, while
-            // ReadAsStreamAsync still yields the bytes as they arrived.
-            Console.WriteLine("5. Raw exports are uncompressed unless you ask:");
+            // Example 5: raw exports. These are handed to you verbatim, so the driver sticks to
+            // `gzip, deflate` for them — the codecs HttpClient decodes for itself — and the body below
+            // arrives as plaintext JSON. Ask for something else and you get those bytes untouched;
+            // ReadDecompressedStreamAsync will decode them for you, ReadAsStreamAsync will not.
+            Console.WriteLine("5. Raw exports stay readable unless you ask for a codec:");
             using (var result = await client.ExecuteRawResultAsync(
                 $"SELECT * FROM {tableName} ORDER BY id FORMAT JSONEachRow"))
             {
@@ -134,7 +134,7 @@ public static class ResponseCompression
             Console.WriteLine("   - By default the driver advertises `lz4, gzip, deflate` and decodes whatever comes back");
             Console.WriteLine("   - The server chooses from that list by its own preference order, ignoring q-values");
             Console.WriteLine("   - Override with AcceptEncoding on the settings, the connection string, or one query");
-            Console.WriteLine("   - Raw exports stay verbatim: they advertise nothing unless you set AcceptEncoding");
+            Console.WriteLine("   - Raw exports stay verbatim: they keep gzip/deflate unless you set AcceptEncoding");
             Console.WriteLine("   - An undecodable codec (zstd, snappy) raises an error naming it, never garbage rows");
         }
         finally

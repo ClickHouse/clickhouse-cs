@@ -55,6 +55,19 @@ internal static class ResponseDecompression
     public const string DefaultAcceptEncoding = "lz4, gzip, deflate";
 
     /// <summary>
+    /// The <c>Accept-Encoding</c> advertised for a request whose response body is handed to the caller
+    /// verbatim rather than decoded here.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately the driver's historical default rather than
+    /// <see cref="DefaultAcceptEncoding"/>: these are exactly the two codecs .NET's own
+    /// <c>AutomaticDecompression</c> covers, so a caller's <c>HttpClient</c> — whatever its mask — receives
+    /// the same bytes it always did. Advertising <c>lz4</c> or <c>br</c> here would hand back a body the
+    /// framework cannot strip and the driver will not decode, silently changing what an export writes.
+    /// </remarks>
+    public const string RawBodyAcceptEncoding = "gzip, deflate";
+
+    /// <summary>
     /// Returns the single effective <c>Content-Encoding</c> token of <paramref name="response"/>, or
     /// <see langword="null"/> when the body is not transport-compressed. Empty and <c>identity</c>
     /// tokens count as "not compressed". Stacked codecs are joined so the caller can name them in an

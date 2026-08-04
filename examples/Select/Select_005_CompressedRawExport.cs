@@ -6,10 +6,11 @@ namespace ClickHouse.Driver.Examples;
 /// <summary>
 /// Demonstrates streaming a compressed raw export straight to a file.
 ///
-/// A raw result hands you the bytes as they arrived, so the driver never negotiates a codec for it on
-/// its own — <see cref="QueryOptions.AcceptEncoding"/> is how you ask for one. Here that is `lz4`, which
-/// ClickHouse compresses cheaply and which no <c>HttpClient</c> will transparently decode behind your
-/// back, so the compressed bytes reach the file untouched.
+/// A raw result hands you the bytes as they arrived, so the driver only ever negotiates `gzip, deflate`
+/// for it — the two codecs an <c>HttpClient</c> can decode for itself. To get compressed bytes on disk,
+/// name a codec with <see cref="QueryOptions.AcceptEncoding"/>. Here that is `lz4`, which ClickHouse
+/// compresses cheaply and which no <c>HttpClient</c> decodes behind your back, so it reaches the file
+/// untouched.
 ///
 /// Note the contrast with <see cref="ResponseCompression"/>: the reading APIs decode transparently, and
 /// only these raw members are verbatim.

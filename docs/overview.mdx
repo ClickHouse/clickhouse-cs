@@ -933,7 +933,9 @@ Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse 
 
 Because the decision is made from the response, a body is decoded whenever its `Content-Encoding` says so, whatever was requested: absent or `identity` passes through untouched, a supported codec is decoded, and anything else raises an error naming it. There is no risk of double-decoding — when the handler's `AutomaticDecompression` has already decoded a body it also strips `Content-Encoding`, so the driver sees plaintext and leaves it alone.
 
-**Raw results are exempt.** `ExecuteRawResultAsync` hands its body to you verbatim, so the driver does not advertise the default codecs for it — it must not silently change bytes it does not consume itself, or an export would start writing compressed files. An explicit `AcceptEncoding` (at either level) still applies, and `ClickHouseRawResult.ReadDecompressedStreamAsync()` decodes the result when you want that; `ReadAsStreamAsync`, `ReadAsByteArrayAsync`, `ReadAsStringAsync` and `CopyToAsync` always return the bytes exactly as they arrived.
+**Raw results keep the historical default.** `ExecuteRawResultAsync` (and the public `PostStreamAsync` / `InsertRawStreamAsync`) hand their body to you verbatim, so instead of the list above they advertise just `gzip, deflate` — exactly the codecs .NET's own `AutomaticDecompression` covers. Whatever your `HttpClient` is configured with, a raw export therefore yields the same bytes it did before this feature existed. Advertising `lz4` there would hand back a body neither the framework nor the driver decodes for you, silently turning an export into a compressed file.
+
+An explicit `AcceptEncoding` (at either level) still applies to raw requests, and `ClickHouseRawResult.ReadDecompressedStreamAsync()` decodes the result when you want that; `ReadAsStreamAsync`, `ReadAsByteArrayAsync`, `ReadAsStringAsync` and `CopyToAsync` always return the bytes exactly as they arrived.
 
 ```csharp
 using var result = await client.ExecuteRawResultAsync(

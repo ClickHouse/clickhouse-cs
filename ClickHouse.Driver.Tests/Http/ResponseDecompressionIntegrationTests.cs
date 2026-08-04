@@ -173,13 +173,12 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
     }
 
     /// <summary>
-    /// A raw request does not advertise the default codecs — the driver must not silently reshape bytes it
-    /// hands over verbatim — so an export is plaintext unless the caller asks otherwise. (.NET's own
-    /// <c>AutomaticDecompression</c> may still negotiate gzip underneath and decode it again; what is
-    /// pinned here is the observable result, which is the same either way.)
+    /// A raw request keeps the driver's historical <c>gzip, deflate</c> rather than the default list, so
+    /// what a caller receives is unchanged. With the driver's own handler, whose mask covers exactly those
+    /// two, the framework decodes and strips them: plaintext body, no <c>Content-Encoding</c>.
     /// </summary>
     [Test]
-    public async Task ExecuteRawResultAsync_WithDefaultSettings_ReturnsAnUncompressedBody()
+    public async Task ExecuteRawResultAsync_WithDefaultSettings_ReturnsAPlaintextBody()
     {
         using var result = await client.ExecuteRawResultAsync("SELECT number FROM numbers(2000) FORMAT TSV");
 
@@ -189,6 +188,33 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
         {
             Assert.That(result.ContentEncoding, Is.Null);
             Assert.That(body[..2], Is.EqualTo(new byte[] { (byte)'0', (byte)'\n' }), "expected plaintext TSV");
+        });
+    }
+
+    /// <summary>
+    /// The configuration this exemption exists to protect: a caller-supplied <see cref="HttpClient"/> with
+    /// no <c>AutomaticDecompression</c>, taking a raw export with nothing configured. It used to receive
+    /// gzip bytes because the driver advertised <c>gzip, deflate</c> for every request, and it must still
+    /// receive gzip bytes — advertising the driver's own default here would hand it lz4 that neither the
+    /// framework nor the driver would decode for it.
+    /// </summary>
+    [Test]
+    public async Task ExecuteRawResultAsync_WithAnHttpClientThatDecodesNothing_StillReceivesGzip()
+    {
+        using var raw = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
+        using var httpClient = new HttpClient(raw);
+        using var exporter = new ClickHouseClient(new ClickHouseClientSettings(TestUtilities.GetTestClickHouseClientSettings())
+        {
+            HttpClient = httpClient,
+        });
+
+        using var result = await exporter.ExecuteRawResultAsync("SELECT number FROM numbers(2000) FORMAT TSV");
+        var body = await result.ReadAsByteArrayAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ContentEncoding, Is.EqualTo("gzip"));
+            Assert.That(body[..2], Is.EqualTo(new byte[] { 0x1F, 0x8B }), "expected a gzip magic number");
         });
     }
 

@@ -129,18 +129,20 @@ public class AcceptEncodingTests
     }
 
     /// <summary>
-    /// A raw result hands its body to the caller untouched, so the driver must not negotiate a codec
-    /// behind their back and silently change the bytes they receive — an export would start writing
-    /// compressed files. The parsing paths have no such problem: they consume the body themselves.
+    /// A raw result hands its body to the caller untouched, so it keeps the driver's historical
+    /// <c>gzip, deflate</c> instead of the default list: those are the two codecs .NET's own
+    /// <c>AutomaticDecompression</c> covers, so whatever the caller's <c>HttpClient</c> is configured with,
+    /// it receives the bytes it always did. Advertising lz4 here would hand back a body neither the
+    /// framework nor the driver decodes for them, silently changing what an export writes to disk.
     /// </summary>
     [Test]
-    public async Task ExecuteRawResultAsync_WithNoExplicitAcceptEncoding_DoesNotAdvertiseTheDefaultCodecs()
+    public async Task ExecuteRawResultAsync_WithNoExplicitAcceptEncoding_KeepsTheHistoricalCodecs()
     {
         var (client, handler) = CreateClient(useCompression: true);
 
         using var result = await client.ExecuteRawResultAsync("SELECT 1 FORMAT TSV");
 
-        Assert.That(AcceptEncodingOf(handler), Is.Empty);
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "gzip", "deflate" }));
     }
 
     /// <summary>
@@ -180,17 +182,38 @@ public class AcceptEncodingTests
 
     /// <summary>
     /// PostStreamAsync and InsertRawStreamAsync are public and return the HttpResponseMessage itself, so
-    /// their bodies belong to the caller — the driver must not negotiate a codec it will not decode.
+    /// their bodies belong to the caller and get the same treatment as a raw result.
     /// </summary>
     [Test]
-    public async Task PostStreamAsync_WithNoExplicitAcceptEncoding_DoesNotAdvertiseTheDefaultCodecs()
+    public async Task PostStreamAsync_WithNoExplicitAcceptEncoding_KeepsTheHistoricalCodecs()
     {
         var (client, handler) = CreateClient(useCompression: true);
 
         using var response = await client.PostStreamAsync(
             "INSERT INTO t FORMAT RowBinary", new MemoryStream([1]), isCompressed: false, CancellationToken.None);
 
-        Assert.That(AcceptEncodingOf(handler), Is.Empty);
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "gzip", "deflate" }));
+    }
+
+    /// <summary>
+    /// The distinction that matters: a parsing request advertises what the driver can decode, a verbatim
+    /// one advertises only what the caller's own framework can. Asserted together so neither can silently
+    /// drift into the other.
+    /// </summary>
+    [Test]
+    public async Task AcceptEncoding_DiffersBetweenParsedAndVerbatimBodies()
+    {
+        var (parsing, parsingHandler) = CreateClient(useCompression: true);
+        await parsing.ExecuteNonQueryAsync("SELECT 1");
+
+        var (raw, rawHandler) = CreateClient(useCompression: true);
+        using var result = await raw.ExecuteRawResultAsync("SELECT 1 FORMAT TSV");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AcceptEncodingOf(parsingHandler), Does.Contain("lz4"));
+            Assert.That(AcceptEncodingOf(rawHandler), Does.Not.Contain("lz4"));
+        });
     }
 
     [Test]
