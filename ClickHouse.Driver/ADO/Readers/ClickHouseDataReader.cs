@@ -179,8 +179,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// De-boxing here would mean calling <c>ConvertValue&lt;T&gt;</c> instead, which is observable to a
     /// converter whose two overloads disagree — the generic one matching on <c>typeof(T)</c>, the object one
     /// on the value's runtime type. Not worth a silent semantic change for the rare converter case;
-    /// everyone else gets the fast path. <see cref="GetFieldValue{T}"/> is unaffected either way, because it
-    /// already called <c>ConvertValue&lt;T&gt;</c>.
+    /// everyone else gets the fast path. <see cref="GetFieldValue{T}"/> keeps its own routing and stays on
+    /// <c>ConvertValue&lt;T&gt;</c>, which is the overload it already called — so between the two paths every
+    /// converter overload is still reached, exactly as before.
     /// </remarks>
     private T GetTypedValue<T>(int ordinal)
         => readValueConverter == null ? GetSlotValue<T>(ordinal) : (T)GetValue(ordinal);
