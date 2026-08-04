@@ -54,6 +54,21 @@ public class ClickHouseRawResultDecompressionTests
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
     }
 
+    /// <summary>
+    /// A response whose content is a live stream rather than a buffered array, which is what
+    /// <see cref="HttpCompletionOption.ResponseHeadersRead"/> actually produces. It matters:
+    /// <see cref="ByteArrayContent"/> hands out a rewindable stream, so a body read twice through it
+    /// succeeds and hides anything that depends on the body being single-pass.
+    /// </summary>
+    private static HttpResponseMessage CreateStreamedResponse(byte[] body, string contentEncoding)
+    {
+        var content = new StreamContent(new MemoryStream(body));
+        if (contentEncoding != null)
+            content.Headers.ContentEncoding.Add(contentEncoding);
+
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+    }
+
     [Test]
     public async Task ReadDecompressedStreamAsync_WithLz4Response_ReturnsThePlaintext()
     {
@@ -126,6 +141,19 @@ public class ClickHouseRawResultDecompressionTests
         Assert.That(buffer.ToArray(), Is.EqualTo(compressed), "the undecodable body must still be there");
     }
 
+    [Test]
+    public async Task ReadDecompressedStreamAsync_WithUnsupportedCodec_LeavesTheBodyReadableThroughEveryMember()
+    {
+        var compressed = Lz4Encoded();
+        using var response = CreateStreamedResponse(compressed, "zstd");
+        using var raw = new ClickHouseRawResult(response);
+
+        Assert.ThrowsAsync<NotSupportedException>(() => raw.ReadDecompressedStreamAsync());
+
+        // Nothing was read before the throw, so the buffering members see the whole body too.
+        Assert.That(await raw.ReadAsByteArrayAsync(), Is.EqualTo(compressed));
+    }
+
     /// <summary>
     /// Contrast case: the four original members are verbatim pass-throughs and must stay that way —
     /// <c>examples/Select/Select_005_CompressedRawExport.cs</c> writes the compressed bytes to a file.
@@ -174,6 +202,67 @@ public class ClickHouseRawResultDecompressionTests
             Assert.That(asString, Is.EqualTo(Encoding.UTF8.GetString(compressed)), "ReadAsStringAsync must not decode");
             Assert.That(asString, Does.Contain("\uFFFD"), "sanity: raw lz4 bytes are not valid UTF-8");
         }
+    }
+
+    /// <summary>
+    /// An unbuffered body is single-pass, so a verbatim member and the decoding one draw on the same
+    /// unrewindable stream and whichever runs second continues where the first stopped. Pinned as the
+    /// documented contract of this type rather than as a defect of the decoding member: the four original
+    /// members already do this to each other, and it is inherent to
+    /// <see cref="HttpCompletionOption.ResponseHeadersRead"/>. Truncation is silent, which is exactly why
+    /// the class remarks tell callers to pick one member and stick to it.
+    /// </summary>
+    /// <summary>
+    /// The plausible way to get this wrong: read part of the body verbatim, then ask for it decoded. The
+    /// decoder starts mid-frame and fails — loudly, which is the good case. Pinned so the class remarks
+    /// stay true, and to record that it is not silent.
+    /// </summary>
+    [Test]
+    public async Task ReadDecompressedStreamAsync_AfterAPartialVerbatimRead_FailsLoudly()
+    {
+        using var response = CreateStreamedResponse(Lz4Encoded(), "lz4");
+        using var raw = new ClickHouseRawResult(response);
+
+        (await raw.ReadAsStreamAsync()).ReadByte();
+
+        var decoder = await raw.ReadDecompressedStreamAsync();
+        Assert.Throws<InvalidDataException>(() => decoder.CopyTo(Stream.Null));
+    }
+
+    /// <summary>
+    /// The buffering members are the exception: they pull the whole body into memory, so a read after one
+    /// of them still sees all of it. Recorded because the rule is per-member, not blanket.
+    /// </summary>
+    [Test]
+    public async Task ReadDecompressedStreamAsync_AfterABufferingMember_StillSeesTheWholeBody()
+    {
+        using var response = CreateStreamedResponse(Lz4Encoded(), "lz4");
+        using var raw = new ClickHouseRawResult(response);
+
+        Assert.That(await raw.ReadAsByteArrayAsync(), Is.Not.Empty);
+
+        using var decompressed = await raw.ReadDecompressedStreamAsync();
+        using var buffer = new MemoryStream();
+        await decompressed.CopyToAsync(buffer);
+
+        Assert.That(buffer.ToArray(), Is.EqualTo(Plaintext));
+    }
+
+    /// <summary>
+    /// The counterpart: used on its own against the same unbuffered content, the decoding member works.
+    /// Without this, the test above would also pass if decoding were broken outright.
+    /// </summary>
+    [Test]
+    public async Task ReadDecompressedStreamAsync_OverAnUnbufferedBody_ReturnsThePlaintext()
+    {
+        using var response = CreateStreamedResponse(Lz4Encoded(), "lz4");
+        using var raw = new ClickHouseRawResult(response);
+
+        using var decompressed = await raw.ReadDecompressedStreamAsync();
+        using var buffer = new MemoryStream();
+        await decompressed.CopyToAsync(buffer);
+
+        Assert.That(buffer.ToArray(), Is.EqualTo(Plaintext));
     }
 
     /// <summary>

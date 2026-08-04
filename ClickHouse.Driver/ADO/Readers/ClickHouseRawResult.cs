@@ -11,8 +11,20 @@ namespace ClickHouse.Driver.ADO;
 /// Represents the raw HTTP response from a ClickHouse query executed with a custom FORMAT clause.
 /// </summary>
 /// <remarks>
+/// <para>
 /// This class provides direct access to the response content without any parsing,
 /// allowing you to handle custom output formats (e.g., FORMAT JSON, FORMAT CSV) yourself.
+/// </para>
+/// <para>
+/// <b>Consume the body through one member.</b> A raw result is fetched with
+/// <see cref="HttpCompletionOption.ResponseHeadersRead"/>, so the content is not buffered up front and the
+/// stream members — <see cref="ReadAsStreamAsync"/>, <see cref="CopyToAsync"/> and
+/// <see cref="ReadDecompressedStreamAsync"/> — read it where the last reader left off. Mixing them after a
+/// partial read gives a wrong answer: a decode over a part-consumed body usually throws, while raw bytes
+/// taken after a partial decode are silently short, since the decoder reads ahead.
+/// <see cref="ReadAsByteArrayAsync"/> and <see cref="ReadAsStringAsync"/> buffer the whole body, so they
+/// can safely be followed by another read. Not safe for concurrent use.
+/// </para>
 /// </remarks>
 public class ClickHouseRawResult : IDisposable
 {
@@ -87,12 +99,9 @@ public class ClickHouseRawResult : IDisposable
 
         var rawStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
 
-        // Throws for a codec we cannot decode. Nothing leaks: rawStream is owned by `response` and
-        // released by Dispose(), and leaving it open is what lets a caller recover by reading the
-        // still-compressed body themselves. That recovery has to go through ReadAsStreamAsync() — which
-        // hands back this very same stream — because a raw result is fetched with
-        // HttpCompletionOption.ResponseHeadersRead, so ReadAsByteArrayAsync()/ReadAsStringAsync() cannot
-        // re-read a body that has been consumed.
+        // Throws for a codec we cannot decode, before anything has been read — so the body is left intact
+        // for a caller who wants to decode it themselves, through any read member. Nothing leaks either:
+        // rawStream is owned by `response` and released by Dispose().
         var wrapped = ResponseDecompression.Wrap(rawStream, response, leaveOpen: true);
 
         // Only a decoder we inserted is ours to dispose; the content stream belongs to the response.
