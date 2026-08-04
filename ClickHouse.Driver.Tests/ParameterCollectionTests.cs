@@ -54,9 +54,9 @@ public class ParameterCollectionTests
     }
 
     [Test]
-    [TestCase("SELECT {a}, {dt:DateTime64(3, 'UTC')}")]
     [TestCase("SELECT 1 AS `x{y`, {dt:DateTime64(3, 'UTC')}")]
-    public void ResolveTypeNames_HintPrecededByBraceWithoutType_UsesHint(string sql)
+    [TestCase("SELECT $$x{y$$, {dt:DateTime64(3, 'UTC')}")]
+    public void ResolveTypeNames_QueryContainsBraceThatIsNotATypeHint_UsesHint(string sql)
     {
         var collection = new ClickHouseParameterCollection
         {

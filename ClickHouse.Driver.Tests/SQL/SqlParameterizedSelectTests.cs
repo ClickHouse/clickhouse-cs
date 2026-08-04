@@ -309,6 +309,25 @@ public class SqlParameterizedSelectTests : IDisposable
         Assert.That(result, Is.EqualTo(0UL)); // value of the `number` column, not the literal "number"
     }
 
+    [Test]
+    [TestCase("SELECT 1 AS `x{y`, {dt:DateTime64(3, 'UTC')} AS res")]
+    [TestCase("SELECT 1 AS \"x{y\", {dt:DateTime64(3, 'UTC')} AS res")]
+    [TestCase("SELECT $$x{y$$ AS q, {dt:DateTime64(3, 'UTC')} AS res")]
+    [TestCase("SELECT 1 // x{y\n, {dt:DateTime64(3, 'UTC')} AS res")]
+    [TestCase("SELECT 1 AS `x{a:b{c`, {dt:DateTime64(3, 'UTC')} AS res")]
+    public async Task AddParameter_HintPrecededByBraceThatIsNotAHint_KeepsSubSecondPrecision(string sql)
+    {
+        // The server accepts every query here. When the leading { consumed the hint, the parameter
+        // fell back to CLR-type inference (DateTime) and lost its sub-second component.
+        var value = new DateTime(2020, 1, 2, 3, 4, 5, 123, DateTimeKind.Utc);
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.AddParameter("dt", value);
+
+        var row = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(row.Last(), Is.EqualTo(value));
+    }
+
     /// <summary>
     /// Drops every name handed out by <see cref="CreateTableName"/>. Best-effort: a table that
     /// cannot be dropped must not fail an otherwise passing fixture.

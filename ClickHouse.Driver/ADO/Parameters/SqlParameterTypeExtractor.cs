@@ -109,8 +109,8 @@ internal static class SqlParameterTypeExtractor
 
         // Find the colon that separates name from type, searching only within this parameter's own
         // name: it must be a single run of parameter name characters, optionally surrounded by
-        // whitespace. Otherwise a brace that is not a type hint, such as {name}, would consume the
-        // colon of a later parameter and silently drop its hint.
+        // whitespace. Otherwise a brace that is not a type hint, such as one inside a backtick-quoted
+        // alias, would consume the colon of a later parameter and silently drop its hint.
         var colonIndex = -1;
         var nameLength = 0;
         var afterName = false;
@@ -204,8 +204,9 @@ internal static class SqlParameterTypeExtractor
     }
 
     /// <summary>
-    /// Determines whether the character can appear in a ClickHouse query parameter name,
-    /// which is an identifier: ASCII word characters plus $.
+    /// Determines whether the character can appear in a ClickHouse query parameter name. The server
+    /// parses the name as a bare word, which is narrower than an identifier: a quoted identifier such
+    /// as {`a`:Int32} or {"a":Int32} is rejected as a syntax error. Only ASCII word characters and $.
     /// </summary>
     private static bool IsParameterNameChar(char c) =>
         (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
