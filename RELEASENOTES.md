@@ -37,6 +37,7 @@ Unreleased
 * Fixed `ClickHouseConnection.GetSchema("Columns", ...)` silently ignoring restriction values beyond the supported `database` and `table` positions. A call such as `GetSchema("Columns", ["system", "functions", "name"])` used to run and return **all** columns of the table, quietly dropping the extra filter; it now throws `ArgumentException`, matching how ADO.NET providers report more restrictions than a metadata collection supports. Trailing positions left `null` are still treated as unspecified and ignored, so `["system", "functions", null, null]` keeps working.
 * Fixed `ClickHouseConnection.GetSchema("Columns", ...)` building invalid SQL when the table restriction is supplied without the database restriction (for example `[null, "functions"]`). The `WHERE` clause is now composed from the restrictions that are actually set, so filtering by table alone no longer fails with a server syntax error.
 * Fixed `DbConnection.GetSchema("Columns", ...)` not disposing the command it creates internally, which delayed the release of that command's cancellation-token source until garbage collection.
+* Fixed HTTP query parameters mangling a `byte[]`/`ReadOnlyMemory<byte>` bound to `String`/`FixedString` (a `byte[]` was sent as the literal text `System.Byte[]`) and rejecting a `TimeOnly` bound to `Time`/`Time64`. Byte payloads are now escaped byte-for-byte, so data that is not valid UTF-8 round-trips losslessly; `TimeOnly` binds on both the HTTP and binary write paths, and infers as `Time64(7)` when no type hint is given (issue #483).
 
 v1.3.0
 ---
