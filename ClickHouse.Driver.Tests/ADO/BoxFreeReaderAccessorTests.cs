@@ -11,11 +11,11 @@ namespace ClickHouse.Driver.Tests.ADO;
 /// <summary>
 /// Pins the accessor semantics of the typed-column-slot reader against a live server.
 ///
-/// <para><see cref="ColumnSlotTests"/> proves a slot decodes the same bytes to the same value as the boxed
-/// reader. What it cannot see is the layer above: which slot each accessor reaches for, and — more
-/// importantly — that the cases the fast path deliberately declines still fail in exactly the way they used
-/// to. Widening, reading a NULL as a non-nullable target, and <c>T = U?</c> all fall through to the boxed
-/// cast, and their <see cref="InvalidCastException"/>s are part of the ADO.NET contract callers rely on.</para>
+/// <para><see cref="ColumnSlotTests"/> proves a slot decodes the same bytes to the same value as the boxed reader.
+/// What it cannot see is the layer above: which slot each accessor reaches for, and — more importantly — that the
+/// cases the fast path deliberately declines still fail exactly as they used to. Widening, reading a NULL as a
+/// non-nullable target, and <c>T = U?</c> all fall through to the boxed cast, and their
+/// <see cref="InvalidCastException"/>s are part of the ADO.NET contract callers rely on.</para>
 /// </summary>
 [TestFixture]
 public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture

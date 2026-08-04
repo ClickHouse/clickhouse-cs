@@ -17,16 +17,14 @@ namespace ClickHouse.Driver.Tests.ADO;
 /// Server-free tests for the typed column slots that replaced <c>ClickHouseDataReader</c>'s shared
 /// <c>object[]</c> row buffer.
 ///
-/// <para>The whole design rests on one invariant: a slot must be <i>observationally identical</i> to the
-/// boxed path it replaced. <see cref="ColumnSlot.Read"/> must consume exactly the bytes
-/// <see cref="ClickHouseType.Read(ExtendedBinaryReader)"/> would have, and <see cref="ColumnSlot.GetBoxed"/>
-/// must return exactly the value it would have returned — same CLR type, and <see cref="DBNull.Value"/> for a
-/// NULL. <see cref="Parity_SlotMatchesBoxedRead_InValueAndByteCount"/> asserts precisely that, differentially,
-/// against the real boxed reader rather than against hand-written expectations.</para>
-///
-/// <para>The rest pins the things parity alone cannot see: <i>which</i> slot kind a column resolves to (a
-/// silent demotion to <see cref="BoxedSlot"/> is invisible — values stay correct, only the allocation
-/// disappears), and <see cref="ColumnSlot.IsNull"/>, which has no boxed counterpart to compare against.</para>
+/// <para>The design rests on one invariant: a slot must be <i>observationally identical</i> to the boxed path it
+/// replaced — <see cref="ColumnSlot.Read"/> consuming exactly the bytes
+/// <see cref="ClickHouseType.Read(ExtendedBinaryReader)"/> would, and <see cref="ColumnSlot.GetBoxed"/> returning
+/// exactly the value it would (same CLR type, <see cref="DBNull.Value"/> for a NULL).
+/// <see cref="Parity_SlotMatchesBoxedRead_InValueAndByteCount"/> asserts that differentially against the real
+/// boxed reader. The rest pins what parity cannot see: <i>which</i> slot kind a column resolves to (a silent
+/// demotion to <see cref="BoxedSlot"/> keeps values correct and only loses the allocation win), and
+/// <see cref="ColumnSlot.IsNull"/>, which has no boxed counterpart to compare against.</para>
 /// </summary>
 [TestFixture]
 public class ColumnSlotTests
