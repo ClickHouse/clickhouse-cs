@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.Generic;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
 
@@ -7,6 +8,11 @@ namespace ClickHouse.Driver.Types;
 
 internal class ArrayType : ParameterizedType
 {
+    // Typed readers for common leaf element types (keyed by element CLR type) fill a strongly-typed
+    // T[] via the indexer instead of the reflective Array.CreateInstance/SetValue fallback below.
+    // Unregistered types (nested/composite, big integers, ClickHouseDecimal, IP) use the fallback.
+    private static readonly Dictionary<Type, Func<ClickHouseType, ExtendedBinaryReader, int, Array>> TypedReaders = BuildTypedReaders();
+
     public ClickHouseType UnderlyingType { get; set; }
 
     public override Type FrameworkType => UnderlyingType.FrameworkType.MakeArrayType();
@@ -26,12 +32,63 @@ internal class ArrayType : ParameterizedType
     public override object Read(ExtendedBinaryReader reader)
     {
         var length = reader.Read7BitEncodedInt();
-        var data = Array.CreateInstance(UnderlyingType.FrameworkType, length);
+
+        // Resolve the element FrameworkType once (wrapper types rebuild it reflectively per access).
+        var elementType = UnderlyingType.FrameworkType;
+
+        if (TypedReaders.TryGetValue(elementType, out var typedReader))
+            return typedReader(UnderlyingType, reader, length);
+
+        // Fallback: reflection-based read for element types without a typed reader.
+        var data = Array.CreateInstance(elementType, length);
         for (var i = 0; i < length; i++)
         {
             data.SetValue(ClearDBNull(UnderlyingType.Read(reader)), i);
         }
         return data;
+    }
+
+    private static Array ReadTyped<T>(ClickHouseType elementType, ExtendedBinaryReader reader, int length)
+    {
+        var data = new T[length];
+        for (var i = 0; i < length; i++)
+        {
+            data[i] = (T)ClearDBNull(elementType.Read(reader));
+        }
+        return data;
+    }
+
+    private static Dictionary<Type, Func<ClickHouseType, ExtendedBinaryReader, int, Array>> BuildTypedReaders()
+    {
+        var readers = new Dictionary<Type, Func<ClickHouseType, ExtendedBinaryReader, int, Array>>();
+
+        // Register a value type and its Nullable<T> form (ClearDBNull restores the null sentinel).
+        void AddValue<T>()
+            where T : struct
+        {
+            readers[typeof(T)] = ReadTyped<T>;
+            readers[typeof(T?)] = ReadTyped<T?>;
+        }
+
+        AddValue<sbyte>();
+        AddValue<byte>();
+        AddValue<short>();
+        AddValue<ushort>();
+        AddValue<int>();
+        AddValue<uint>();
+        AddValue<long>();
+        AddValue<ulong>();
+        AddValue<float>();
+        AddValue<double>();
+        AddValue<decimal>();
+        AddValue<bool>();
+        AddValue<DateTime>();
+        AddValue<Guid>();
+
+        // String and Nullable(String) share the same framework type (string).
+        readers[typeof(string)] = ReadTyped<string>;
+
+        return readers;
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)

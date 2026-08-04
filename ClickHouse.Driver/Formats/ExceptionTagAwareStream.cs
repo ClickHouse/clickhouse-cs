@@ -19,6 +19,7 @@ internal sealed class ExceptionTagAwareStream : Stream
     private const int BufferCapacity = 4096; // 4KB ring buffer
 
     private readonly Stream innerStream;
+    private readonly bool leaveOpen;
     private readonly byte[] exceptionPrefixBytes; // "__exception__"
     private readonly byte[] tagBytes;             // exception tag/token
     private readonly bool throwAtEndOfStream;
@@ -28,8 +29,9 @@ internal sealed class ExceptionTagAwareStream : Stream
     private int writePosition;
     private int bytesRecorded;
 
-    /// <param name="innerStream">The stream to observe.</param>
-    /// <param name="exceptionTag">The per-query token from the <see cref="HeaderName"/> response header.</param>
+    /// <param name="innerStream">The stream reads are pulled from and recorded off.</param>
+    /// <param name="exceptionTag">The per-query token the server brackets a mid-stream exception with.</param>
+    /// <param name="leaveOpen">When <c>true</c> the inner stream is not disposed with this wrapper.</param>
     /// <param name="throwAtEndOfStream">
     /// When <see langword="true"/>, the wrapper proactively throws a <see cref="ClickHouseServerException"/>
     /// as soon as the inner stream ends (or fails with an <see cref="IOException"/>) and an in-band exception
@@ -38,9 +40,10 @@ internal sealed class ExceptionTagAwareStream : Stream
     /// into a server error. When <see langword="false"/> (the default) the wrapper is a passive observer and
     /// the caller surfaces the error itself by calling <see cref="TryExtractMidStreamException"/> after a read failure.
     /// </param>
-    public ExceptionTagAwareStream(Stream innerStream, string exceptionTag, bool throwAtEndOfStream = false)
+    public ExceptionTagAwareStream(Stream innerStream, string exceptionTag, bool leaveOpen = false, bool throwAtEndOfStream = false)
     {
         this.innerStream = innerStream ?? throw new ArgumentNullException(nameof(innerStream));
+        this.leaveOpen = leaveOpen;
 
         if (string.IsNullOrEmpty(exceptionTag))
             throw new ArgumentException("Exception tag cannot be null or empty", nameof(exceptionTag));
@@ -79,7 +82,36 @@ internal sealed class ExceptionTagAwareStream : Stream
 
         if (bytesRead > 0)
         {
-            RecordBytes(buffer.AsSpan(offset, bytesRead));
+            RecordBytes(buffer, offset, bytesRead);
+            return bytesRead;
+        }
+
+        if (throwAtEndOfStream)
+            ThrowIfMidStreamException();
+        return bytesRead;
+    }
+
+    /// <summary>
+    /// Span counterpart of <see cref="Read(byte[], int, int)"/>. Without it the base
+    /// <see cref="Stream.Read(Span{byte})"/> fallback rents and copies through a pooled array on every
+    /// call, which would defeat both the span reads issued per scalar and the bulk array reads.
+    /// </summary>
+    public override int Read(Span<byte> buffer)
+    {
+        int bytesRead;
+        try
+        {
+            bytesRead = innerStream.Read(buffer);
+        }
+        catch (IOException) when (throwAtEndOfStream)
+        {
+            ThrowIfMidStreamException();
+            throw;
+        }
+
+        if (bytesRead > 0)
+        {
+            RecordBytes(buffer.Slice(0, bytesRead));
             return bytesRead;
         }
 
@@ -103,7 +135,7 @@ internal sealed class ExceptionTagAwareStream : Stream
 
         if (bytesRead > 0)
         {
-            RecordBytes(buffer.AsSpan(offset, bytesRead));
+            RecordBytes(buffer, offset, bytesRead);
             return bytesRead;
         }
 
@@ -170,30 +202,29 @@ internal sealed class ExceptionTagAwareStream : Stream
             throw serverException;
     }
 
-    private void RecordBytes(ReadOnlySpan<byte> data)
-    {
-        int count = data.Length;
-        if (count == 0)
-            return;
+    private void RecordBytes(byte[] buffer, int offset, int count)
+        => RecordBytes(buffer.AsSpan(offset, count));
 
+    private void RecordBytes(ReadOnlySpan<byte> source)
+    {
         // If count >= buffer capacity, only keep last BufferCapacity bytes
-        if (count >= BufferCapacity)
+        if (source.Length >= BufferCapacity)
         {
-            data.Slice(count - BufferCapacity).CopyTo(recentBytes);
+            source.Slice(source.Length - BufferCapacity).CopyTo(recentBytes);
             writePosition = 0;
             bytesRecorded = BufferCapacity;
             return;
         }
 
         // Copy into circular buffer, wrapping as needed
-        int firstPart = Math.Min(count, BufferCapacity - writePosition);
-        data.Slice(0, firstPart).CopyTo(recentBytes.AsSpan(writePosition));
+        int firstPart = Math.Min(source.Length, BufferCapacity - writePosition);
+        source.Slice(0, firstPart).CopyTo(recentBytes.AsSpan(writePosition));
 
-        if (firstPart < count)
-            data.Slice(firstPart).CopyTo(recentBytes.AsSpan(0));
+        if (firstPart < source.Length)
+            source.Slice(firstPart).CopyTo(recentBytes);
 
-        writePosition = (writePosition + count) % BufferCapacity;
-        bytesRecorded = Math.Min(bytesRecorded + count, BufferCapacity);
+        writePosition = (writePosition + source.Length) % BufferCapacity;
+        bytesRecorded = Math.Min(bytesRecorded + source.Length, BufferCapacity);
     }
 
     /// <summary>
@@ -357,7 +388,7 @@ internal sealed class ExceptionTagAwareStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !leaveOpen)
             innerStream.Dispose();
 
         base.Dispose(disposing);
