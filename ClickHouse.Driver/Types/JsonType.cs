@@ -106,15 +106,16 @@ internal class JsonType : ParameterizedType
             .Where(childNode => !IsJsonSetting(childNode.Value))
             .Select(childNode =>
             {
-                var hintParts = childNode.Value.Split(' ');
-                if (hintParts.Length != 2)
+                var separator = childNode.Value.IndexOfNameTypeSeparator();
+                var hintedTypeName = separator > 0 ? childNode.Value.Substring(separator + 1).Trim() : string.Empty;
+                if (separator <= 0 || hintedTypeName.Length == 0)
                 {
                     throw new SerializationException($"Unsupported path in JSON hint: {childNode.Value}");
                 }
 
                 var hintTypeSyntaxTreeNode = new SyntaxTreeNode
                 {
-                    Value = hintParts[1],
+                    Value = hintedTypeName,
                 };
 
                 foreach (var childNodeChildNode in childNode.ChildNodes)
@@ -123,7 +124,7 @@ internal class JsonType : ParameterizedType
                 }
 
                 return (
-                    path: hintParts[0].Trim('`'),
+                    path: childNode.Value.Substring(0, separator).DiscloseColumnName(),
                     type: parseClickHouseType(hintTypeSyntaxTreeNode));
             })
             .ToDictionary(
@@ -343,19 +344,38 @@ internal class JsonType : ParameterizedType
         var obj = new JsonObject();
         for (int i = 0; i < count; i++)
         {
-            var key = (string)mapType.KeyType.Read(reader);
+            var key = DecodeString(mapType.KeyType.Read(reader));
             var value = ReadJsonNode(reader, mapType.ValueType);
             obj[key] = value;
         }
         return obj;
     }
 
-    private static JsonValue ReadJsonFixedString(ExtendedBinaryReader reader, ClickHouseType type)
+    /// <summary>
+    /// Decodes a String or FixedString value into text. Under <c>ReadStringsAsByteArrays</c> those
+    /// types read as a <see cref="byte"/> array, but JSON strings are text and <see cref="JsonValue"/>
+    /// has no byte-array form, so they are decoded either way. Lenient: invalid bytes become U+FFFD.
+    /// </summary>
+    private static string DecodeString(object value)
+        => value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : (string)value;
+
+    /// <summary>
+    /// Whether values of this type are text rather than raw bytes. Decided from the ClickHouse type,
+    /// not the CLR type: <c>Array(UInt8)</c> also reads as a <see cref="byte"/> array, so decoding on
+    /// <c>byte[]</c> alone would corrupt it. <c>Variant</c>/<c>Dynamic</c> are false because their
+    /// subtype is only known per value.
+    /// </summary>
+    private static bool IsTextBacked(ClickHouseType type) => type switch
     {
-        var value = type.Read(reader);
-        var str = value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : (string)value;
-        return JsonValue.Create(str);
-    }
+        StringType or FixedStringType => true,
+        LowCardinalityType lc => IsTextBacked(lc.UnderlyingType),
+        NullableType nt => IsTextBacked(nt.UnderlyingType),
+        SimpleAggregateFunctionType sa => IsTextBacked(sa.UnderlyingType),
+        _ => false,
+    };
+
+    private static JsonValue ReadJsonFixedString(ExtendedBinaryReader reader, ClickHouseType type)
+        => JsonValue.Create(DecodeString(type.Read(reader)));
 
     private static JsonNode ReadJsonValue(ExtendedBinaryReader reader, ClickHouseType type)
     {
@@ -370,6 +390,10 @@ internal class JsonType : ParameterizedType
             null => null,
             JsonObject jo => jo,
             string s => JsonValue.Create(s),
+
+            // Without this arm a byte[] from a string path falls through to the JsonSerializer
+            // default below, which renders it as base64.
+            byte[] bytes when IsTextBacked(type) => JsonValue.Create(DecodeString(bytes)),
             bool b => JsonValue.Create(b),
             byte by => JsonValue.Create(by),
             sbyte sb => JsonValue.Create(sb),

@@ -718,8 +718,8 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         Assert.That(reader.GetValue(1), Is.EqualTo("explicit"));
 
         // Verify no schema probe query was sent
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-        var probeCount = await client.ExecuteScalarAsync(
+        var probeCount = await QueryLog.CountAsync(
+            client,
             $"SELECT count() FROM system.query_log " +
             $"WHERE query_id LIKE '{queryId}%' " +
             $"AND query LIKE '%WHERE 1=0%' " +
