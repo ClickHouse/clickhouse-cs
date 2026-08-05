@@ -1,0 +1,1 @@
+* Fixed `ClickHouseClient.InsertRawStreamAsync` disposing the supplied `Stream` twice when the request failed: the request message already disposes the content it carries, so the extra `Dispose()` in the failure path was redundant. The stream-taking write paths now document that the supplied stream is disposed once the request completes.

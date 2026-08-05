@@ -4,3 +4,9 @@
 # Custom for Visual Studio
 *.cs     diff=csharp
 *.sln    merge=union
+
+# CHANGELOG.md / RELEASENOTES.md deliberately have no merge driver. GitHub ignores .gitattributes
+# when merging pull requests (github/community#9288), so merge=union could not prevent conflicts
+# there anyway -- and it resolves by interleaving both sides' lines, which lands entries under the
+# wrong heading. Concurrent entries are kept apart by changelog.d/ fragments instead; see
+# changelog.d/README.md.

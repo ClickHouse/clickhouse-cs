@@ -1,0 +1,1 @@
+* Fixed `{name:Type}` parameter type hints being dropped, or a hint being invented for a parameter that does not exist, when the query contains another `{` that is not a type hint — for example a `SETTINGS` map value such as `additional_table_filters = {'t': 'a > 0'}`. A dropped hint fell back to CLR-type inference, losing precision (issue #510).
