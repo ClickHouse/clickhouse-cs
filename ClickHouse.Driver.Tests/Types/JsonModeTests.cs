@@ -617,43 +617,20 @@ public class JsonModeTests
     /// identified by <paramref name="queryId"/>, according to system.query_log.
     /// </summary>
     /// <remarks>
-    /// Two details make the naive lookup unreliable, and both are handled here.
-    /// <para>
-    /// First, the row has to exist before it can be judged. SYSTEM FLUSH LOGS only flushes what the
-    /// server has already queued, and a query's QueryFinish record is queued independently of the
-    /// HTTP response reaching the client, so a flush issued right after the query can miss it. The
-    /// lookup then matches no rows at all, which is not the same answer as "the setting was absent".
-    /// Retry the flush-and-read until the row materialises, and fail loudly if it never does.
-    /// </para>
-    /// <para>
-    /// Second, ask the map directly with mapContains instead of reading Settings[name] and comparing
-    /// against "". A missing key yields an empty string, so the emptiness of that value cannot
-    /// distinguish "setting absent" from "no query_log row yet" — which is exactly how a missing row
-    /// used to surface as a spurious "None mode should not send the setting" failure.
-    /// </para>
+    /// Ask the map directly with mapContains instead of reading Settings[name] and comparing against
+    /// "". A missing key yields an empty string, so the emptiness of that value cannot distinguish
+    /// "setting absent" from "no query_log row yet" — which is exactly how a query_log row that had
+    /// not been flushed yet used to surface as a spurious "None mode should not send the setting"
+    /// failure. <see cref="QueryLog.ScalarAsync"/> then covers the flush race itself.
     /// </remarks>
     private static async Task<bool> WasSettingSentAsync(ClickHouseClient client, string queryId, string settingName)
     {
-        const int maxAttempts = 20;
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        var present = await QueryLog.ScalarAsync(
+            client,
+            $"SELECT mapContains(Settings, '{settingName}') FROM system.query_log " +
+            $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
 
-            var present = await client.ExecuteScalarAsync(
-                $"SELECT mapContains(Settings, '{settingName}') FROM system.query_log " +
-                $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
-
-            // null means the lookup matched no rows, i.e. the record is not visible yet.
-            if (present != null && present != DBNull.Value)
-                return Convert.ToBoolean(present, CultureInfo.InvariantCulture);
-
-            await Task.Delay(100);
-        }
-
-        Assert.Fail(
-            $"No QueryFinish row for query_id '{queryId}' appeared in system.query_log after " +
-            $"{maxAttempts} flush attempts, so whether '{settingName}' was sent could not be determined.");
-        return false; // unreachable: Assert.Fail throws.
+        return Convert.ToBoolean(present, CultureInfo.InvariantCulture);
     }
 
     #region JSON Roundtrip Tests
