@@ -207,6 +207,48 @@ public class SqlParameterizedSelectTests : IDisposable
     }
 
     [Test]
+    [TestCase("SELECT {val:Int32} AS res // {val:String}")]
+    [TestCase("SELECT {val:Int32} AS res /* a /* b */ {val:String} */")]
+    [TestCase("SELECT {val:Int32} AS res, $$ {val:String} $$ AS heredoc")]
+    public async Task AddParameter_ConflictingTypeHintInsideCommentOrHeredoc_UsesRealHint(string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.AddParameter("val", 42);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result[0], Is.EqualTo(42));
+    }
+
+    [Test]
+    [TestCase("SELECT 1 AS `a--b`, toString({val:DateTime64(3, 'UTC')}) AS res")]
+    [TestCase("SELECT 1 AS \"a'b\", toString({val:DateTime64(3, 'UTC')}) AS res")]
+    [TestCase("SELECT $$--$$ AS heredoc, toString({val:DateTime64(3, 'UTC')}) AS res")]
+    public async Task AddParameter_TypeHintAfterQuotedIdentifierOrHeredoc_UsesTypeHint(string sql)
+    {
+        // Without the hint the value would be formatted as DateTime (no sub-second part)
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.AddParameter("val", new DateTime(2020, 1, 2, 3, 4, 5, 123, DateTimeKind.Utc));
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result[1], Is.EqualTo("2020-01-02 03:04:05.123"));
+    }
+
+    [Test]
+    public async Task AddParameter_EscapedQuoteInsideEnumTypeHint_UsesTypeHint()
+    {
+        // A `\'` escape inside the Enum label left the old scanner believing it was still inside the
+        // string literal, so the hint ended at the `}` in the label and the type came out truncated
+        using var command = connection.CreateCommand();
+        command.CommandText = @"SELECT {val:Enum8('a\'}b' = 1)} AS res";
+        command.AddParameter("val", "a'}b");
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo("a'}b"));
+    }
+
+    [Test]
     [TestCase("String")]
     [TestCase("Int32")]
     [TestCase("Int64")]
@@ -351,6 +393,137 @@ public class SqlParameterizedSelectTests : IDisposable
 
         var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
         Assert.That(result, Is.EqualTo(0UL)); // value of the `number` column, not the literal "number"
+    }
+
+    [TestCase("SELECT 1 AS `x{y`, {dt:DateTime64(3, 'UTC')} AS res")]
+    [TestCase("SELECT 1 AS \"x{y\", {dt:DateTime64(3, 'UTC')} AS res")]
+    [TestCase("SELECT $$x{y$$ AS q, {dt:DateTime64(3, 'UTC')} AS res")]
+    [TestCase("SELECT 1 // x{y\n, {dt:DateTime64(3, 'UTC')} AS res")]
+    [TestCase("SELECT 1 AS `x{a:b{c`, {dt:DateTime64(3, 'UTC')} AS res")]
+    public async Task AddParameter_HintPrecededByBraceThatIsNotAHint_KeepsSubSecondPrecision(string sql)
+    {
+        // The server accepts every query here. When the leading { consumed the hint, the parameter
+        // fell back to CLR-type inference (DateTime) and lost its sub-second component.
+        var value = new DateTime(2020, 1, 2, 3, 4, 5, 123, DateTimeKind.Utc);
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.AddParameter("dt", value);
+
+        var row = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(row.Last(), Is.EqualTo(value));
+    }
+
+    [Test]
+    public async Task AddParameter_AdoPlaceholderInsideStringLiteral_LeavesLiteralIntact()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 'user@id' AS s, @id AS v";
+        command.AddParameter("id", 42);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result[0], Is.EqualTo("user@id"));
+            Assert.That(result[1], Is.EqualTo(42));
+        });
+    }
+
+    [Test]
+    public async Task AddParameter_PlaceholderAfterDollarTagThatIsNeverClosed_IsStillBound()
+    {
+        // A $tag$ with no closing tag is not a heredoc: the server lexes it as an ordinary identifier
+        // and keeps substituting parameters after it, so the placeholder must still be rewritten.
+        using var command = connection.CreateCommand();
+        command.CommandText = "WITH 1 AS `$tag$` SELECT $tag$ AS a, @id AS v";
+        command.AddParameter("id", 42);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result[0], Is.EqualTo(1));
+            Assert.That(result[1], Is.EqualTo(42));
+        });
+    }
+
+    [Test]
+    public async Task AddParameter_HintBetweenIdentifiersContainingDollar_IsStillTyped()
+    {
+        // A $ inside an identifier does not open a heredoc, so the type hint between the two
+        // occurrences of b$c$ must still be found and the value formatted as a Date rather than
+        // as an inferred DateTime, which the server rejects.
+        using var command = connection.CreateCommand();
+        command.CommandText = "WITH 1 AS b$c$ SELECT {d:Date} AS v, b$c$ AS x";
+        command.AddParameter("d", new DateTime(2020, 1, 2));
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result[0], Is.EqualTo(new DateTime(2020, 1, 2)));
+            Assert.That(result[1], Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task AddParameter_PlaceholderBetweenIdentifiersContainingDollar_IsStillBound()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "WITH 1 AS b$c$ SELECT @id AS v, b$c$ AS x";
+        command.AddParameter("id", 42);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result[0], Is.EqualTo(42));
+            Assert.That(result[1], Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task AddParameter_NameContainingDollar_IsBound()
+    {
+        // The server accepts a $ in a query parameter name, so @id$x must bind the parameter named
+        // id$x and must not be read as @id followed by $x, which the shorter name would shadow.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT @id$x AS v, @$x AS w, @id$ AS y, @id AS z";
+        command.AddParameter("id$x", 42);
+        command.AddParameter("$x", 43);
+        command.AddParameter("id$", 44);
+        command.AddParameter("id", 45);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result, Is.EqualTo(new object[] { 42, 43, 44, 45 }));
+    }
+
+    [Test]
+    public async Task AddParameter_TypeHintForNameContainingDollar_IsApplied()
+    {
+        // The hint extractor and the placeholder rewriter must agree on where a name containing a $
+        // ends: the hint types the @-style placeholder, so the value goes out as a Date rather than
+        // as an inferred DateTime, which the server rejects for a Date column.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT {d$x:Date} AS a, @d$x AS b";
+        command.AddParameter("d$x", new DateTime(2020, 1, 2));
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow();
+        Assert.That(result, Is.EqualTo(new object[] { new DateTime(2020, 1, 2), new DateTime(2020, 1, 2) }));
+    }
+
+    // A $ continues a name just like a digit or an underscore does, so all three placeholders name a
+    // parameter that is not defined here
+    [TestCase("@id$x")]
+    [TestCase("@id2")]
+    [TestCase("@id_x")]
+    public void AddParameter_NameIsPrefixOfALongerName_IsNotSubstituted(string placeholder)
+    {
+        // An unknown placeholder must be left alone for the server to reject. Substituting @id inside
+        // @id$x turned the query into a different, still valid one instead (SELECT 45 AS `$x`), so the
+        // server error has to quote the placeholder back verbatim.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT " + placeholder;
+        command.AddParameter("id", 45);
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () => await command.ExecuteReaderAsync());
+        Assert.That(ex.Message, Does.Contain(placeholder));
     }
 
     /// <summary>
