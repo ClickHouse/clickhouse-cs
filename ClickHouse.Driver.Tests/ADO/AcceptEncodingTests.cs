@@ -27,7 +27,7 @@ public class AcceptEncodingTests
     }
 
     private static (ClickHouseClient client, TrackingHandler handler) CreateClient(
-        bool useCompression = false, string acceptEncoding = null)
+        bool useCompression = false, string acceptEncoding = null, string customHeaderAcceptEncoding = null)
     {
         var trackingHandler = new TrackingHandler(CreateFakeSuccessResponse());
         var httpClient = new HttpClient(trackingHandler);
@@ -36,8 +36,28 @@ public class AcceptEncodingTests
             HttpClient = httpClient,
             UseCompression = useCompression,
             AcceptEncoding = acceptEncoding,
+            CustomHeaders = customHeaderAcceptEncoding is null
+                ? new Dictionary<string, string>()
+                : new Dictionary<string, string> { ["Accept-Encoding"] = customHeaderAcceptEncoding },
         };
         return (new ClickHouseClient(settings), trackingHandler);
+    }
+
+    /// <summary>
+    /// The header and <c>enable_http_compression</c> together. They are produced by different code —
+    /// <c>AddDefaultHttpHeaders</c> and <c>CreateUriBuilder</c> — each carrying its own copy of the
+    /// per-query-then-client-level precedence, so a cell that asserts only one of them cannot catch the
+    /// two drifting apart. Drift is silent in the worst direction: advertising a codec the server was
+    /// never told to honour just yields uncompressed responses.
+    /// </summary>
+    private static (string[] Header, string Flag) NegotiationOf(TrackingHandler handler)
+    {
+        var request = handler.Requests.Single();
+        var query = request.RequestUri.Query;
+        var flag = query.Contains("enable_http_compression=true") ? "true"
+            : query.Contains("enable_http_compression=false") ? "false"
+            : "<absent>";
+        return (request.Headers.AcceptEncoding.Select(e => e.Value).ToArray(), flag);
     }
 
     private static string[] AcceptEncodingOf(TrackingHandler handler)
@@ -233,6 +253,143 @@ public class AcceptEncodingTests
         await client.ExecuteNonQueryAsync("SELECT 1");
 
         Assert.That(handler.Requests.Single().RequestUri.Query, Does.Contain("enable_http_compression=false"));
+    }
+
+    /// <summary>
+    /// The cell that actually pins the precedence: a per-query value naming no codec falls through
+    /// <b>one level</b>, to the client-level value. The two neighbouring tests cover a blank at each level
+    /// while the other is unset, which leaves this distinguishable only here — falling back to the driver
+    /// default, or clearing the header outright, would both pass those and neither is intended.
+    /// <para>
+    /// <c>UseCompression</c> is deliberately <b>off</b>. It is the only way the flag assertion carries
+    /// weight: with compression on, <c>Settings.UseCompression</c> forces
+    /// <c>enable_http_compression</c> by itself, so the flag would read <c>true</c> however the
+    /// precedence in <c>CreateUriBuilder</c> resolved and the assertion would be vacuous. With it off,
+    /// the flag can only be on because the blank per-query value fell through to the client-level codec —
+    /// which is exactly the drift this cell exists to catch. (Verified by mutation: rewriting
+    /// <c>ExplicitAcceptEncoding</c> to <c>perQuery ?? Settings.AcceptEncoding</c> is caught here and
+    /// nowhere else in the suite.)
+    /// </para>
+    /// </summary>
+    [TestCase("", TestName = "{m}(empty)")]
+    [TestCase("   ", TestName = "{m}(whitespace)")]
+    [TestCase(",", TestName = "{m}(separator only)")]
+    public async Task QueryOptionsAcceptEncoding_WithAValueThatNamesNoCodec_FallsBackToTheClientLevelSetting(string perQuery)
+    {
+        var (client, handler) = CreateClient(useCompression: false, acceptEncoding: "lz4");
+
+        await client.ExecuteNonQueryAsync("SELECT 1", options: new QueryOptions { AcceptEncoding = perQuery });
+
+        var negotiation = NegotiationOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(negotiation.Header, Is.EqualTo(new[] { "lz4" }), "a blank per-query value means 'not set', not 'use the default' and not 'send nothing'");
+            Assert.That(negotiation.Flag, Is.EqualTo("true"), "the client-level codec it fell back to still has to force enable_http_compression");
+        });
+    }
+
+    /// <summary>
+    /// Both levels set, asserting the header <i>and</i> the URI flag together — the header alone is
+    /// covered by <see cref="QueryOptionsAcceptEncoding_WhenSet_OverridesTheClientLevelSetting"/>.
+    /// </summary>
+    [Test]
+    public async Task QueryOptionsAcceptEncoding_OverridingTheClientLevel_AlsoForcesHttpCompression()
+    {
+        var (client, handler) = CreateClient(useCompression: false, acceptEncoding: "gzip");
+
+        await client.ExecuteNonQueryAsync("SELECT 1", options: new QueryOptions { AcceptEncoding = "br" });
+
+        var negotiation = NegotiationOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(negotiation.Header, Is.EqualTo(new[] { "br" }));
+            Assert.That(negotiation.Flag, Is.EqualTo("true"), "the winning codec is what has to be honoured, so the flag must follow it");
+        });
+    }
+
+    /// <summary>
+    /// A blank per-query value with nothing at the client level and compression off stays off — the
+    /// mirror of <see cref="AcceptEncoding_WithAValueThatNamesNoCodec_DoesNotForceHttpCompression"/>,
+    /// which covers the client-level side.
+    /// </summary>
+    [Test]
+    public async Task QueryOptionsAcceptEncoding_WithAValueThatNamesNoCodec_DoesNotForceHttpCompression()
+    {
+        var (client, handler) = CreateClient(useCompression: false);
+
+        await client.ExecuteNonQueryAsync("SELECT 1", options: new QueryOptions { AcceptEncoding = "  " });
+
+        var negotiation = NegotiationOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(negotiation.Header, Is.Empty);
+            Assert.That(negotiation.Flag, Is.EqualTo("false"));
+        });
+    }
+
+    /// <summary>
+    /// An <c>Accept-Encoding</c> injected through <b>client-level</b> CustomHeaders outranks the
+    /// client-level property, the same way a per-query custom header does in
+    /// <see cref="CustomHeaderAcceptEncoding_OutranksTheClientLevelSetting"/>: both are attached after
+    /// the property. The URI flag still follows the property, since a custom header is opaque to the
+    /// driver — asserted so that asymmetry is a decision on record rather than a surprise.
+    /// </summary>
+    [Test]
+    public async Task ClientLevelCustomHeaderAcceptEncoding_OutranksTheClientLevelSetting()
+    {
+        var (client, handler) = CreateClient(useCompression: true, acceptEncoding: "lz4", customHeaderAcceptEncoding: "gzip");
+
+        await client.ExecuteNonQueryAsync("SELECT 1");
+
+        var negotiation = NegotiationOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(negotiation.Header, Is.EqualTo(new[] { "gzip" }));
+            Assert.That(negotiation.Flag, Is.EqualTo("true"));
+        });
+    }
+
+    /// <summary>
+    /// Compression off but a codec named explicitly, on the verbatim path: the likeliest shape of
+    /// "I don't want compressed reads, but I do want a compressed export". The explicit codec beats both
+    /// <c>UseCompression=false</c> and the suppression that
+    /// <see cref="ExecuteRawResultAsync_WithNoExplicitAcceptEncoding_OffersNoCodec"/> pins, and still
+    /// forces <c>enable_http_compression</c> so the server actually honours it.
+    /// </summary>
+    [Test]
+    public async Task ExecuteRawResultAsync_WithExplicitAcceptEncodingAndCompressionDisabled_StillSendsItAndForcesHttpCompression()
+    {
+        var (client, handler) = CreateClient(useCompression: false, acceptEncoding: "gzip");
+
+        using var result = await client.ExecuteRawResultAsync("SELECT 1 FORMAT TSV");
+
+        var negotiation = NegotiationOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(negotiation.Header, Is.EqualTo(new[] { "gzip" }));
+            Assert.That(negotiation.Flag, Is.EqualTo("true"));
+        });
+    }
+
+    /// <summary>
+    /// The same on the verbatim path from the per-query level, which reaches the header through a
+    /// different call site than the client-level property.
+    /// </summary>
+    [Test]
+    public async Task ExecuteRawResultAsync_WithPerQueryAcceptEncoding_SendsItAndForcesHttpCompression()
+    {
+        var (client, handler) = CreateClient(useCompression: false);
+
+        using var result = await client.ExecuteRawResultAsync(
+            "SELECT 1 FORMAT TSV",
+            options: new QueryOptions { AcceptEncoding = "lz4" });
+
+        var negotiation = NegotiationOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(negotiation.Header, Is.EqualTo(new[] { "lz4" }));
+            Assert.That(negotiation.Flag, Is.EqualTo("true"));
+        });
     }
 
     /// <summary>

@@ -47,6 +47,32 @@ public class AcceptEncodingWireTests
         => await WireAcceptEncodingAsync(acceptEncoding: acceptEncoding);
 
     /// <summary>
+    /// The same guarantee for the <i>per-query</i> property, which is a separate code path: the
+    /// client-level value is attached before custom headers, while this one replaces whatever is there
+    /// afterwards. Worth its own wire coverage rather than being assumed from the client-level cases —
+    /// a stub handler cannot see the widening this fixture exists to catch, since it replaces the socket
+    /// handler that performs it.
+    /// </summary>
+    [TestCase("identity", ExpectedResult = "identity")]
+    [TestCase("deflate", ExpectedResult = "deflate")]
+    [TestCase("lz4", ExpectedResult = "lz4")]
+    [TestCase("br, gzip", ExpectedResult = "br, gzip")]
+    public async Task<string> PerQueryAcceptEncoding_ReachesTheServerExactly(string acceptEncoding)
+        => await WireAcceptEncodingAsync(perQueryAcceptEncoding: acceptEncoding);
+
+    /// <summary>
+    /// Per-query beats client-level on the wire too, and the loser leaves nothing behind: the winning
+    /// codec arrives alone rather than appended to what the client-level value had already attached.
+    /// </summary>
+    [Test]
+    public async Task PerQueryAcceptEncoding_OverridesTheClientLevelValue_OnTheWire()
+    {
+        var wire = await WireAcceptEncodingAsync(acceptEncoding: "gzip", perQueryAcceptEncoding: "lz4");
+
+        Assert.That(wire, Is.EqualTo("lz4"));
+    }
+
+    /// <summary>
     /// The default advertisement, wire-verified: the codecs the driver can decode, and nothing else.
     /// </summary>
     [Test]
@@ -105,7 +131,8 @@ public class AcceptEncodingWireTests
     private static async Task<string> WireAcceptEncodingAsync(
         string acceptEncoding = null,
         bool useCompression = true,
-        Func<ClickHouseClient, Task> send = null)
+        Func<ClickHouseClient, Task> send = null,
+        string perQueryAcceptEncoding = null)
     {
         using var server = new CapturingServer();
         var captured = server.CaptureOneRequestAsync();
@@ -123,7 +150,10 @@ public class AcceptEncodingWireTests
         {
             if (send is null)
             {
-                await client.ExecuteNonQueryAsync("SELECT 1");
+                var options = perQueryAcceptEncoding is null
+                    ? null
+                    : new QueryOptions { AcceptEncoding = perQueryAcceptEncoding };
+                await client.ExecuteNonQueryAsync("SELECT 1", options: options);
             }
             else
             {
