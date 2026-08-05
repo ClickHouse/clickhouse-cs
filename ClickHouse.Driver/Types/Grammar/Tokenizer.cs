@@ -6,16 +6,23 @@ public static class Tokenizer
 {
     private static readonly char[] Breaks = [',', '(', ')'];
 
+    /// <summary>
+    /// Quote characters ClickHouse uses when formatting a type name: single quotes for string
+    /// literals (enum values, timezones) and backticks for identifiers which need quoting
+    /// (such as a JSON typed path containing a space or a comma).
+    /// </summary>
+    private static readonly char[] Quotes = ['\'', '`'];
+
     public static IEnumerable<string> GetTokens(string input)
     {
         var start = 0;
-        var inQuotes = false;
+        var quote = '\0';
         var escaped = false;
 
         for (var i = 0; i < input.Length; i++)
         {
             var c = input[i];
-            if (inQuotes)
+            if (quote != '\0')
             {
                 if (escaped)
                 {
@@ -29,17 +36,17 @@ public static class Tokenizer
                     continue;
                 }
 
-                if (c == '\'')
+                if (c == quote)
                 {
-                    inQuotes = false;
+                    quote = '\0';
                 }
 
                 continue;
             }
 
-            if (c == '\'')
+            if (System.Array.IndexOf(Quotes, c) >= 0)
             {
-                inQuotes = true;
+                quote = c;
                 continue;
             }
 
