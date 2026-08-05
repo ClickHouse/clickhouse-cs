@@ -454,6 +454,12 @@ public class SqlParameterTypeExtractorTests
         yield return "SELECT {val:Int32} AS \"x {val:String}\"";
         yield return "SELECT {val:Int32}, $$ {val:String} $$";
         yield return "SELECT {val:Int32}, $tag$ {val:String} $tag$";
+        // A heredoc still opens where a token starts, including at the very beginning of the query
+        // and directly after a quoted token
+        yield return "$$ {val:String} $$, {val:Int32}";
+        yield return "SELECT 1 AS `x`$t$ {val:String} $t$, {val:Int32}";
+        yield return "SELECT {val:Int32},$t$ {val:String} $t$";
+        yield return "SELECT {val:Int32},\n$t$ {val:String} $t$";
         yield return "SELECT {val:Int32}, 'a\\' {val:String} b'";
     }
 
@@ -487,6 +493,14 @@ public class SqlParameterTypeExtractorTests
         // Tags are empty or ASCII word characters only
         yield return "SELECT $a-b$, {val:Int32}, $a-b$";
         yield return "SELECT $a b$, {val:Int32}, $a b$";
+        // A $ that continues a token belongs to it and cannot open a heredoc: the server lexes
+        // b$c$ as a single identifier, so WITH 1 AS b$c$ SELECT {val:Int32}, b$c$ substitutes
+        yield return "SELECT b$c$, {val:Int32}, b$c$";
+        yield return "SELECT a1$c$, {val:Int32}, a1$c$";
+        yield return "SELECT a_$c$, {val:Int32}, a_$c$";
+        yield return "SELECT a$$c$ , {val:Int32} , $c$";
+        // The same query may also contain a real heredoc, whose own hint stays ignored
+        yield return "WITH 1 AS b$c$ SELECT b$c$, {val:Int32}, $t$ {val:String} $t$";
     }
 
     [TestCaseSource(nameof(DollarSignThatDoesNotOpenAHeredoc))]

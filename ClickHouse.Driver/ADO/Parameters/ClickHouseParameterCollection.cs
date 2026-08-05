@@ -94,7 +94,8 @@ public class ClickHouseParameterCollection : DbParameterCollection
 
     /// <summary>
     /// Replaces @-style parameter placeholders with {name:Type} ClickHouse native syntax
-    /// using pre-resolved type names.
+    /// using pre-resolved type names. Placeholders inside string literals, quoted identifiers,
+    /// heredocs and comments are left as they are.
     /// </summary>
     /// <param name="sqlQuery">The SQL query with @-style placeholders.</param>
     /// <param name="resolvedTypeNames">Pre-resolved type names per parameter (keyed by parameter name).</param>
@@ -111,6 +112,6 @@ public class ClickHouseParameterCollection : DbParameterCollection
             replacements.TryAdd("@" + p.ParameterName, $"{{{p.ParameterName}:{typeName}}}");
         }
 
-        return sqlQuery.ReplaceMultipleWords(replacements);
+        return SqlPlaceholderRewriter.ReplacePlaceholders(sqlQuery, replacements);
     }
 }
