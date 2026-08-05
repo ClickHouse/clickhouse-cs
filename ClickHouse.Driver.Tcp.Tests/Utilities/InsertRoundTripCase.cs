@@ -87,17 +87,10 @@ public sealed class InsertRoundTripCase
         yield return Strings("String", string.Empty, "hello", "héllo✓", "a\0b", new string('x', 500));
 
         // FixedString(N): N contiguous bytes per row, surfaced as a per-row byte[] of exactly N bytes. The bytes
-        // are byte-oriented, so embedded NULs and non-UTF-8 bytes ride along unchanged.
+        // are byte-oriented, so embedded NULs and non-UTF-8 bytes ride along unchanged. A wider N crosses the
+        // stride past a single row so a mis-strided blit could not pass unnoticed.
         yield return FixedStrings(4, new byte[] { 0, 0, 0, 0 }, new byte[] { 1, 2, 3, 4 }, new byte[] { 0xFF, 0x00, 0xFF, 0x00 });
-
-        // A value shorter than N is right-padded to N zero bytes by the server, so the read-back differs from the
-        // inserted bytes; the empty value becomes an all-zero row and a full-width value is unchanged.
-        yield return new InsertRoundTripCase(
-            "FixedString(6) [padding]",
-            "FixedString(6)",
-            name => new ArrayColumn<byte[]>(name, "FixedString(6)", new[] { Array.Empty<byte>(), new byte[] { 1, 2, 3 }, new byte[] { 1, 2, 3, 4, 5, 6 } }),
-            name => new ArrayColumn<byte[]>(name, "FixedString(6)", new[] { new byte[6], new byte[] { 1, 2, 3, 0, 0, 0 }, new byte[] { 1, 2, 3, 4, 5, 6 } }),
-            settings: null);
+        yield return FixedStrings(200, Enumerable.Range(0, 200).Select(i => (byte)i).ToArray(), new byte[200]);
 
         yield return Dates("Date", new DateOnly(1970, 1, 1), new DateOnly(2024, 1, 15), new DateOnly(2149, 6, 6));
         yield return Dates("Date32", new DateOnly(1900, 1, 1), new DateOnly(1970, 1, 1), new DateOnly(2024, 1, 15), new DateOnly(2299, 12, 31));
@@ -365,6 +358,18 @@ public sealed class InsertRoundTripCase
             "Tuple(Int32) [arity 1]",
             "Tuple(Int32)",
             name => new TupleColumn<int>(name, "Tuple(Int32)", new[] { new ValueTuple<int>(1), new ValueTuple<int>(int.MinValue), new ValueTuple<int>(int.MaxValue) }));
+
+        // FixedString(N) as a tuple element: the write path reaches the FixedString codec through a
+        // TupleFieldColumn projection rather than a dense blob, so it takes the strict per-value branch instead of
+        // the bulk blit — the one entrance the bare, Nullable and Array cases all miss.
+        yield return Same(
+            "Tuple(FixedString(4), String)",
+            "Tuple(FixedString(4), String)",
+            name => new TupleColumn<byte[], string>(name, "Tuple(FixedString(4), String)", new (byte[], string)[]
+            {
+                (new byte[] { 1, 2, 3, 4 }, "a"),
+                (new byte[] { 0xFF, 0x00, 0xFF, 0x00 }, string.Empty),
+            }));
 
         // Arity 3 was the one arity between 1 and 7 with no case at all.
         yield return Same(
@@ -693,8 +698,9 @@ public sealed class InsertRoundTripCase
     private static InsertRoundTripCase Strings(string clickHouseType, params string[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<string>(name, clickHouseType, values));
 
-    // FixedString(N) inserts and reads back a per-row byte[]; values must be exactly N bytes for the read-back to
-    // equal the inserted column (a shorter value is server-padded — see the dedicated padding case).
+    // FixedString(N) inserts and reads back a per-row byte[]. Every value must be exactly N bytes: the write path
+    // rejects any other width rather than padding or truncating, so a wrong-width case belongs in the codec's unit
+    // tests (it never reaches the server), not here.
     private static InsertRoundTripCase FixedStrings(int size, params byte[][] values)
     {
         string type = $"FixedString({size})";

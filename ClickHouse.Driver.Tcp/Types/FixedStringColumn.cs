@@ -9,15 +9,15 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// rows are kept back-to-back in one pooled blob at a fixed stride and a row's bytes are the slice
 /// <c>[row * N, (row + 1) * N)</c>. Like <c>String</c>, <c>FixedString</c> is byte-oriented (not necessarily
 /// UTF-8, and commonly holds fixed binary such as hashes), so the bytes are retained verbatim and a caller
-/// chooses how to read each row: the raw bytes (<see cref="GetBytes"/>, zero-copy), a string under an explicit
-/// encoding (<see cref="GetString(int, Encoding)"/>), or — the default <see cref="IColumn{T}"/> view — a
-/// per-row <see cref="byte"/> array. Values shorter than <c>N</c> are right-padded with zero bytes by the
-/// server, so a decoded row always has exactly <c>N</c> bytes, trailing zeros included.
+/// chooses how to read each row: the raw bytes (<see cref="GetBytes(int)"/>, zero-copy), a string under an
+/// explicit encoding (<see cref="GetString(int, Encoding)"/>), or — the default <see cref="IColumn{T}"/> view —
+/// a per-row <see cref="byte"/> array. A decoded row always has exactly <c>N</c> bytes, any trailing zeros a
+/// shorter stored value was padded with included.
 ///
 /// <para>
 /// The blob is rented from <see cref="ArrayPool{T}"/> and returned on <see cref="Dispose"/>; like every column,
-/// the bytes and any span returned by <see cref="GetBytes"/> are borrowed for the block's lifetime. Copy out
-/// (<see cref="GetString(int, Encoding)"/> or <c>GetBytes(row).ToArray()</c>) to retain.
+/// the bytes and any span returned by <see cref="GetBytes(int)"/> are borrowed for the block's lifetime. Copy
+/// out (<see cref="GetString(int, Encoding)"/> or <c>GetBytes(row).ToArray()</c>) to retain.
 /// </para>
 /// </summary>
 internal sealed class FixedStringColumn : IColumn<byte[]>
@@ -54,9 +54,12 @@ internal sealed class FixedStringColumn : IColumn<byte[]>
     /// <inheritdoc/>
     public int RowCount => rowCount;
 
+    /// <summary>The fixed per-row byte width <c>N</c> — the stride the rows sit at in the blob.</summary>
+    public int Size => size;
+
     /// <summary>
-    /// The rows as per-row <see cref="byte"/> arrays, materialized once and cached. Prefer <see cref="GetBytes"/>
-    /// to avoid allocating one array per row when the bytes can be read in place.
+    /// The rows as per-row <see cref="byte"/> arrays, materialized once and cached. Prefer
+    /// <see cref="GetBytes(int)"/> to avoid allocating one array per row when the bytes can be read in place.
     /// </summary>
     public ReadOnlySpan<byte[]> Values
     {
@@ -101,6 +104,32 @@ internal sealed class FixedStringColumn : IColumn<byte[]>
         }
 
         return blob.AsSpan(row * size, size);
+    }
+
+    /// <summary>
+    /// Returns the bytes of the row range <c>[start, start + length)</c> as one zero-copy slice of the blob
+    /// (borrowed), exactly <c>length * N</c> bytes. The rows sit back-to-back at the same stride the wire uses, so
+    /// a codec can blit a whole range in one copy rather than walking it row by row.
+    /// </summary>
+    /// <param name="start">The zero-based first row of the range.</param>
+    /// <param name="length">The number of rows in the range.</param>
+    /// <returns>The range's bytes.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The range lies outside the column's rows.</exception>
+    public ReadOnlySpan<byte> GetBytes(int start, int length)
+    {
+        // Bound the range against rowCount, not the blob: the blob is rented and may be longer, so slicing it
+        // directly would let an over-long range read a stale pooled region instead of failing fast. The products
+        // cannot overflow — the read path sized the blob with a checked rowCount * size, and this range fits in it.
+        if (start < 0 || length < 0 || start + (long)length > rowCount)
+        {
+            // Blame whichever argument is itself out of range; a pair that is only jointly too long is the range's
+            // fault, so anchor that on start.
+            throw new ArgumentOutOfRangeException(
+                length < 0 ? nameof(length) : nameof(start),
+                $"Rows [{start}, {start + (long)length}) lie outside the {rowCount} row(s) of column '{Name}'.");
+        }
+
+        return blob.AsSpan(start * size, length * size);
     }
 
     /// <summary>Decodes a row's bytes to a string under the given encoding.</summary>
