@@ -18,8 +18,8 @@ namespace ClickHouse.Driver.Examples;
 ///
 /// 2. **Responses (server → client)**:
 ///    - The driver sends enable_http_compression=true query parameter
-///    - ClickHouse compresses the response with GZip
-///    - HttpClient automatically decompresses it (via AutomaticDecompression)
+///    - ClickHouse compresses the response with the codec it picks from Accept-Encoding (LZ4 by default)
+///    - The driver decodes the body itself, from the response's Content-Encoding
 ///
 /// ## When to Disable Compression
 ///
@@ -30,16 +30,11 @@ namespace ClickHouse.Driver.Examples;
 ///
 /// ## Important: Custom HttpClient Configuration
 ///
-/// If you provide your own HttpClient, you MUST configure AutomaticDecompression
-/// when compression is enabled, otherwise you'll get an error when reading responses:
-///
-///     var handler = new HttpClientHandler
-///     {
-///         AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
-///     };
-///     var httpClient = new HttpClient(handler);
-///
-/// The driver's default HttpClient already has this configured.
+/// If you provide your own HttpClient, leave AutomaticDecompression off. The driver decodes
+/// compressed responses itself, so it is not needed — and it is not only a response-side setting:
+/// at send time the handler also ADDS every algorithm in its mask to the outgoing Accept-Encoding,
+/// so a mask widens what the driver advertised and ClickHouse may answer with a codec you did not
+/// ask for. The HttpClient the driver builds for itself leaves the mask at DecompressionMethods.None.
 ///
 /// ## InsertBinaryAsync
 ///
@@ -62,7 +57,7 @@ public static class Compression
             // - Request compressed responses via enable_http_compression=true
             var result = await client.ExecuteScalarAsync("SELECT 'Compressed request and response'");
             Console.WriteLine($"   Result: {result}");
-            Console.WriteLine("   Request was GZip compressed, response was GZip compressed\n");
+            Console.WriteLine("   Request was GZip compressed, response was LZ4 compressed\n");
         }
 
         // Compression disabled
@@ -95,6 +90,6 @@ public static class Compression
         Console.WriteLine("   - Default: UseCompression=true (recommended for most cases)");
         Console.WriteLine("   - Reduces bandwidth for both requests and responses");
         Console.WriteLine("   - Consider disabling for localhost or small, frequent queries");
-        Console.WriteLine("   - Custom HttpClient must have AutomaticDecompression configured");
+        Console.WriteLine("   - Custom HttpClient: leave AutomaticDecompression off; the driver decodes responses itself");
     }
 }

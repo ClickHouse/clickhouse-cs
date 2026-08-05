@@ -60,6 +60,14 @@ public sealed class Lz4Compressor : IClickHouseCompressor
         => new PooledWriteBufferStream(LZ4Stream.Encode(destination, this.level, extraMemory: 0, leaveOpen: leaveOpen), this.bufferSize);
 
     /// <inheritdoc />
+    public Stream Decompress(Stream source, bool leaveOpen)
+        // interactive: hand bytes back as soon as any are decoded instead of filling the caller's buffer
+        // first. The read path asks for a whole 64 KiB buffer at a time, so without this a query that
+        // trickles rows would not surface its first row until that much output existed. Short reads are
+        // expected by every caller here, and gzip/deflate/br behave the same way.
+        => LZ4Stream.Decode(source, leaveOpen: leaveOpen, interactive: true);
+
+    /// <inheritdoc />
     public int MaxEncodedLength(int sourceLength) => LZ4Codec.MaximumOutputSize(sourceLength);
 
     /// <inheritdoc />

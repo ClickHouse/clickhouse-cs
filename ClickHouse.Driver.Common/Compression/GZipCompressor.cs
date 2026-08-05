@@ -35,4 +35,8 @@ public sealed class GZipCompressor : IClickHouseCompressor
     /// <inheritdoc />
     public Stream Compress(Stream destination, bool leaveOpen)
         => new PooledWriteBufferStream(new GZipStream(destination, level, leaveOpen), bufferSize);
+
+    /// <inheritdoc />
+    public Stream Decompress(Stream source, bool leaveOpen)
+        => new GZipStream(source, CompressionMode.Decompress, leaveOpen);
 }

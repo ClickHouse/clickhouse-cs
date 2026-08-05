@@ -20,6 +20,33 @@ public class ConnectionStringBuilderTests
         });
     }
 
+    [TestCase("lz4")]
+    [TestCase("br, gzip")]
+    [TestCase("identity")]
+    public void ConnectionStringBuilder_AcceptEncoding_ShouldRoundTripThroughConnectionStringAndSettings(string acceptEncoding)
+    {
+        var builder = new ClickHouseConnectionStringBuilder { AcceptEncoding = acceptEncoding };
+
+        var reparsed = new ClickHouseConnectionStringBuilder(builder.ConnectionString);
+        var settings = ClickHouseClientSettings.FromConnectionString(builder.ConnectionString);
+        var backToBuilder = ClickHouseConnectionStringBuilder.FromSettings(settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reparsed.AcceptEncoding, Is.EqualTo(acceptEncoding));
+            Assert.That(settings.AcceptEncoding, Is.EqualTo(acceptEncoding));
+            Assert.That(backToBuilder.AcceptEncoding, Is.EqualTo(acceptEncoding));
+        });
+    }
+
+    [Test]
+    public void ConnectionStringBuilder_WithoutAcceptEncoding_LeavesTheSettingUnset()
+    {
+        var settings = ClickHouseClientSettings.FromConnectionString("Host=localhost");
+
+        Assert.That(settings.AcceptEncoding, Is.Null, "null is what selects the driver's default codec list");
+    }
+
     [Test]
     public void ConnectionStringBuilder_ReadBufferSize_ShouldRoundTripThroughConnectionString()
     {
