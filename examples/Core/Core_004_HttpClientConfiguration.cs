@@ -18,7 +18,8 @@ namespace ClickHouse.Driver.Examples;
 /// <para>
 /// <strong>IMPORTANT: When providing your own HttpClient, YOU are responsible for:</strong>
 /// <list type="bullet">
-/// <item>Enabling automatic decompression (required if compression is enabled)</item>
+/// <item>Leaving automatic decompression off — the driver decodes compressed responses itself, and a
+/// mask also widens the outgoing Accept-Encoding (see Advanced_011_Compression)</item>
 /// <item>Setting appropriate timeouts</item>
 /// <item>Certificate validation</item>
 /// <item>Disposal (if not using DI)</item>
@@ -62,8 +63,8 @@ public static class HttpClientConfiguration
         // Create a custom HttpClient with specific configuration
         var handler = new SocketsHttpHandler
         {
-            // REQUIRED: Enable automatic decompression for ClickHouse compression
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            // No AutomaticDecompression: the driver decodes compressed responses itself, and a mask here
+            // would also add its codecs to the outgoing Accept-Encoding, widening what the driver asked for.
 
             // Optional: Configure other handler settings
             MaxConnectionsPerServer = 10,
@@ -119,7 +120,7 @@ public static class HttpClientConfiguration
 
         var handler = new HttpClientHandler
         {
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            // No AutomaticDecompression: the driver decompresses responses itself (see Example 1).
             ServerCertificateCustomValidationCallback = (message, cert, chain, sslPolicyErrors) =>
             {
                 // Example: Accept specific certificate thumbprint
@@ -166,7 +167,7 @@ public static class HttpClientConfiguration
 
         var handler = new HttpClientHandler
         {
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            // No AutomaticDecompression: the driver decompresses responses itself (see Example 1).
 
             // Enable proxy
             UseProxy = true,
@@ -236,7 +237,7 @@ public static class HttpClientConfiguration
         {
             var handler = new SocketsHttpHandler
             {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                // No AutomaticDecompression: the driver decompresses responses itself (see Example 1).
                 MaxConnectionsPerServer = 10, // Controls connection pool size
                 PooledConnectionIdleTimeout = TimeSpan.FromSeconds(5), // Always set to a value lower than server-side idle timeout (10s for Cloud)
             };

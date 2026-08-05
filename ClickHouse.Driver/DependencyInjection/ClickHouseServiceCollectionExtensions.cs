@@ -45,11 +45,13 @@ public static class ClickHouseServiceCollectionExtensions
             {
                 if (httpClient == null)
                 {
-                    // Ensure that we are using the same HTTP client for all connections
+                    // Ensure that we are using the same HTTP client for all connections. AutomaticDecompression
+                    // stays off for the same reason as in HttpHandlerProvider.CreateHandler: it would widen
+                    // the driver's Accept-Encoding at send time. The driver decodes responses itself.
 #pragma warning disable CA5399
                     httpClient = new HttpClient(new HttpClientHandler
                     {
-                        AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                        AutomaticDecompression = DecompressionMethods.None,
                     });
 #pragma warning restore CA5399
                 }

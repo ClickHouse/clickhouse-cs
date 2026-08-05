@@ -166,6 +166,18 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["JsonWriteMode"] = value.ToString();
     }
 
+    /// <summary>
+    /// Gets or sets the <c>Accept-Encoding</c> sent with every request, e.g. <c>lz4</c> or
+    /// <c>br, gzip</c>. Maps onto <see cref="ClickHouseClientSettings.AcceptEncoding"/>: it replaces the
+    /// codecs the driver advertises by default and forces <c>enable_http_compression=1</c>.
+    /// Default: null (advertise the codecs the driver can decode)
+    /// </summary>
+    public string AcceptEncoding
+    {
+        get => GetStringOrDefault("AcceptEncoding", null);
+        set => this["AcceptEncoding"] = value;
+    }
+
     private bool GetBooleanOrDefault(string name, bool @default)
     {
         if (TryGetValue(name, out var value))
@@ -237,6 +249,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Roles = settings.Roles,
             JsonReadMode = settings.JsonReadMode,
             JsonWriteMode = settings.JsonWriteMode,
+            AcceptEncoding = settings.AcceptEncoding,
         };
 
         // Add custom settings with the set_ prefix
