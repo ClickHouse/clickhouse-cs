@@ -182,7 +182,9 @@ Example:
 ### 9) Extras
 - If the changes necessitate changes or additions to the examples, have those been made?
 - If an example has been added, does it have a corresponding entry in the examples README.md and Program.cs?
-- For changes in functionality, has there been a change in CHANGELOG.md and RELEASENOTES.md?
+- For changes in functionality, is there a new fragment under `changelog.d/`? Entries must not be
+  added to `CHANGELOG.md`'s `Unreleased` section directly, and `RELEASENOTES.md` is generated — a
+  diff touching either file by hand is a finding.
 
 **Final Verdict**
 - Status: **✅ Approve** / **⚠️ Request changes** / **❌ Block**

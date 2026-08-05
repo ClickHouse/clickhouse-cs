@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Formats;
+using ClickHouse.Driver.Http;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -98,7 +99,8 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
     /// <summary>
     /// Gets or sets the HTTP <c>Accept-Encoding</c> header value sent with this command's
-    /// request, overriding the connection-level default of <c>gzip, deflate</c>.
+    /// request, overriding both <see cref="ClickHouseClientSettings.AcceptEncoding"/> and the codecs the
+    /// driver advertises by default (<c>lz4, gzip, deflate</c>).
     /// </summary>
     /// <remarks>
     /// See <see cref="QueryOptions.AcceptEncoding"/> for full semantics. Setting this property
@@ -130,9 +132,21 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
         using var response = await PostSqlQueryAsync(CommandText, lcts.Token).ConfigureAwait(false);
-        using var reader = new ExtendedBinaryReader(await response.Content.ReadAsStreamAsync(lcts.Token).ConfigureAwait(false));
+        var rawStream = await response.Content.ReadAsStreamAsync(lcts.Token).ConfigureAwait(false);
 
-        return reader.PeekChar() != -1 ? reader.Read7BitEncodedInt() : 0;
+        // leaveOpen: the HTTP response owns the transport stream; we only own the decoder we add.
+        var plaintext = ResponseDecompression.Wrap(rawStream, response, leaveOpen: true);
+        var decompressor = ReferenceEquals(plaintext, rawStream) ? null : plaintext;
+        try
+        {
+            using var reader = new ExtendedBinaryReader(plaintext);
+
+            return reader.PeekChar() != -1 ? reader.Read7BitEncodedInt() : 0;
+        }
+        finally
+        {
+            decompressor?.Dispose();
+        }
     }
 
     /// <summary>
@@ -146,7 +160,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             throw new InvalidOperationException("Connection is not set");
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
-        var response = await PostSqlQueryAsync(CommandText, lcts.Token).ConfigureAwait(false);
+        var response = await PostSqlQueryAsync(CommandText, lcts.Token, rawBody: true).ConfigureAwait(false);
         return new ClickHouseRawResult(response);
     }
 
@@ -210,10 +224,10 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.ClickHouseClient.TypeSettings, connection.ClickHouseClient.PocoRegistry, connection.ClickHouseClient.Settings.ReadBufferSize, connection.ClickHouseClient.Settings.ReadValueConverter).ConfigureAwait(false);
     }
 
-    private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token)
+    private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token, bool rawBody = false)
     {
         var options = BuildQueryOptions();
-        QueryResult result = await connection.ClickHouseClient.PostSqlQueryAsync(sqlQuery, commandParameters, options, token).ConfigureAwait(false);
+        QueryResult result = await connection.ClickHouseClient.PostSqlQueryAsync(sqlQuery, commandParameters, options, rawBody, token).ConfigureAwait(false);
         QueryId = result.QueryId;
         QueryStats = result.QueryStats;
         ServerTimezone = result.ServerTimezone;

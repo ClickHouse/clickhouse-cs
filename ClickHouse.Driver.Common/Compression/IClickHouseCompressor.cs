@@ -7,9 +7,11 @@ namespace ClickHouse.Driver.Compression;
 /// Compresses ClickHouse payloads. Two independent paths are exposed:
 /// <list type="bullet">
 /// <item>
-/// the <b>HTTP request-body path</b> (<see cref="ContentEncoding"/> + <see cref="Compress"/>) used by
-/// the HTTP driver for binary inserts, where the presence of a compressor is itself the on/off switch —
-/// pass <see langword="null"/> where a compressor is accepted to send the body uncompressed;
+/// the <b>HTTP body path</b> (<see cref="ContentEncoding"/> + <see cref="Compress"/>) used by the HTTP
+/// driver for binary inserts, where the presence of a compressor is itself the on/off switch — pass
+/// <see langword="null"/> where a compressor is accepted to send the body uncompressed. Its
+/// <see cref="Decompress"/> counterpart decodes a transport-compressed <i>response</i>, and the driver
+/// picks the codec for that from the response's own <c>Content-Encoding</c>;
 /// </item>
 /// <item>
 /// the <b>native-TCP block path</b> (<see cref="MethodByte"/>, <see cref="MaxEncodedLength"/>,
@@ -45,6 +47,17 @@ public interface IClickHouseCompressor
     /// can continue using it (e.g. seek and read the compressed result).
     /// </summary>
     Stream Compress(Stream destination, bool leaveOpen);
+
+    /// <summary>
+    /// The HTTP <b>response-body</b> counterpart to <see cref="Compress"/>: wraps
+    /// <paramref name="source"/> in a read stream that yields the plaintext of a payload encoded as this
+    /// codec's <see cref="ContentEncoding"/>. With <paramref name="leaveOpen"/>, the caller keeps
+    /// ownership of <paramref name="source"/>. The returned stream must tolerate repeated disposal, so
+    /// any pooled buffer must not be returned to the pool twice. Not the native block path — see
+    /// <see cref="Decode"/> for that. The default throws <see cref="NotSupportedException"/>.
+    /// </summary>
+    Stream Decompress(Stream source, bool leaveOpen)
+        => throw new NotSupportedException($"{GetType().Name} does not support decompression.");
 
     /// <summary>
     /// The maximum number of bytes <see cref="Encode"/> may write for a source of

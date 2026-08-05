@@ -122,6 +122,18 @@ var users = connection.Query<User>("SELECT * FROM users");
   covered, and you'll be asked to drop it.
 - **Test utilities**: before writing tests, read TestUtilities.cs to understand existing config and
   utility patterns — including `CreateTableName`/`SanitizeTableName` (see the note above).
+- **Reading `system.query_log`: always go through `Utilities/QueryLog.cs`** (`QueryLog.ScalarAsync` /
+  `QueryLog.CountAsync`), never a bare `SYSTEM FLUSH LOGS` followed by a single read. A query's
+  QueryFinish record is queued independently of its HTTP response reaching the client, so a flush
+  issued right after the query can miss it and the lookup then matches fewer rows than expected —
+  a flake, and one that surfaces as a wrong-looking value rather than a missing row. The helpers
+  retry the flush-and-read (3 attempts, 50 ms apart); `ScalarAsync` fails with a distinct
+  "no row appeared" message, and `CountAsync` waits for `minimumCount` rows before reporting.
+  Select an expression that is never NULL for an existing row (e.g. `mapContains(Settings, 'x')`,
+  not `Settings['x']`, whose empty string for an absent key is indistinguishable from an
+  unflushed row), and identify the query under test by `query_id` where you can — a lookup keyed on
+  a marker in the query text (`query LIKE '%marker%'`) also matches the helper's own lookups, so it
+  needs `AND query NOT LIKE '%system.query_log%'`. Don't paper over the race with `Task.Delay`.
 - **Test matrix**: ADO provider, parameter binding, ORMs, multi-framework, multi-ClickHouse-version
 - **Negative tests**: Error handling, edge cases, concurrency scenarios
 - **Existing tests**: Only add new tests, never delete/weaken existing ones
@@ -290,7 +302,26 @@ After completing a unit of work and making sure code coverage is good, launch a 
 
 ## Changelog and release notes
 
-After completing a unit of work, if it should be included in the changelog (any behavioral change in the client should be), then update CHANGELOG.md and RELEASENOTES.md.
+After completing a unit of work, if it should be included in the changelog (any behavioral change in
+the client should be), add a **fragment** under `changelog.d/` — do not edit `CHANGELOG.md` or
+`RELEASENOTES.md`:
+
+```bash
+dotnet run scripts/changelog.cs -- --new fixes 512-variant-null
+```
+
+Then write the entry into the file it creates. Categories: `breaking`, `features`, `improvements`,
+`internal`, `deprecations`, `fixes`, `docs`. Full contract in `changelog.d/README.md`.
+
+Two rules the CI gate (`dotnet run scripts/changelog.cs -- --check`) enforces, so getting them wrong
+fails the build:
+
+- **Never edit the `Unreleased` section of `CHANGELOG.md`.** Concurrent pull requests editing one
+  shared section conflict every time, and GitHub ignores `.gitattributes` merge drivers when merging
+  pull requests, so `merge=union` cannot fix it. A fragment is a file only your branch adds, so
+  there is nothing to reconcile. Maintainers fold fragments in at release time with `--release`.
+- **Never edit `RELEASENOTES.md`.** It is generated from `CHANGELOG.md` (regenerate with
+  `--sync-notes`) and ships inside the NuGet package via `PackageReleaseNotes`.
 
 **Keep entries short** — one or two sentences on the user-visible change, plus the issue number. No
 root-cause analysis, no benchmark tables, no implementation detail, and don't claim more than the
