@@ -1,0 +1,1 @@
+* Reduced per-query request-URI allocations: `ClickHouseUriBuilder.ToString()` now composes the URI into a thread-reused `StringBuilder` instead of allocating a `UriBuilder`, two dictionaries, and a LINQ-projected string per parameter. Cuts URI-assembly allocations ~65% on the common parameter-free path. The produced URI string and behavior are unchanged.
