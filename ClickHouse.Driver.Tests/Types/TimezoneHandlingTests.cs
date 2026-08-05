@@ -1521,7 +1521,7 @@ public class ReadDateTimeOffsetAmbiguousDstTests : AbstractConnectionTestFixture
     }
 
     // (type string, whether the type decodes an absolute instant)
-    private static IEnumerable<TestCaseData> ReportsInstantCases()
+    private static IEnumerable<TestCaseData> InstantReportingTypes()
     {
         yield return new TestCaseData("DateTime('America/New_York')", true).SetName("ReportsInstant_DateTime");
         yield return new TestCaseData("DateTime64(3, 'America/New_York')", true).SetName("ReportsInstant_DateTime64");
@@ -1533,15 +1533,15 @@ public class ReadDateTimeOffsetAmbiguousDstTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// Only the types that decode an absolute instant report one, so a result set of Date/Date32
-    /// columns — which encode a day number, not an instant — keeps the plain decode path instead of
-    /// taking the instant-capturing one to be reported nothing.
+    /// Instants are captured only for the types that decode one, so a result set of Date/Date32 columns —
+    /// which encode a day number, not an instant — keeps the plain decode path instead of taking the
+    /// instant-capturing one to be reported nothing.
     /// </summary>
-    [TestCaseSource(nameof(ReportsInstantCases))]
-    public void ReportsInstant_ForType_IsTrueOnlyWhenAnInstantIsDecoded(string typeString, bool expected)
+    [TestCaseSource(nameof(InstantReportingTypes))]
+    public void Create_ForResultSetOfType_ReturnsReaderOnlyWhenAnInstantIsDecoded(string typeString, bool expected)
     {
         var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
 
-        Assert.That(type.ReportsInstant, Is.EqualTo(expected));
+        Assert.That(RowInstantReader.Create([type]), expected ? Is.Not.Null : Is.Null);
     }
 }

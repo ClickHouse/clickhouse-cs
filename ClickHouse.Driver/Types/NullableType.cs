@@ -5,7 +5,7 @@ using NodaTime;
 
 namespace ClickHouse.Driver.Types;
 
-internal class NullableType : ParameterizedType
+internal class NullableType : ParameterizedType, IInstantReader
 {
     public ClickHouseType UnderlyingType { get; set; }
 
@@ -30,7 +30,9 @@ internal class NullableType : ParameterizedType
 
     public override object Read(ExtendedBinaryReader reader) => reader.ReadByte() > 0 ? DBNull.Value : UnderlyingType.Read(reader);
 
-    internal override object ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
+    bool IInstantReader.ReportsInstant => UnderlyingType is IInstantReader { ReportsInstant: true };
+
+    object IInstantReader.ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
     {
         if (reader.ReadByte() > 0)
         {
@@ -38,10 +40,12 @@ internal class NullableType : ParameterizedType
             return DBNull.Value;
         }
 
-        return UnderlyingType.ReadWithInstant(reader, out instant);
-    }
+        if (UnderlyingType is IInstantReader underlying)
+            return underlying.ReadWithInstant(reader, out instant);
 
-    internal override bool ReportsInstant => UnderlyingType.ReportsInstant;
+        instant = null;
+        return UnderlyingType.Read(reader);
+    }
 
     public override string ToString() => $"{Name}({UnderlyingType})";
 

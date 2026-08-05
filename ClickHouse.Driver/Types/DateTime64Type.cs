@@ -7,7 +7,7 @@ using NodaTime;
 
 namespace ClickHouse.Driver.Types;
 
-internal class DateTime64Type : AbstractDateTimeType
+internal class DateTime64Type : AbstractDateTimeType, IInstantReader
 {
     public int Scale { get; set; }
 
@@ -46,14 +46,14 @@ internal class DateTime64Type : AbstractDateTimeType
 
     public override object Read(ExtendedBinaryReader reader) => FromClickHouseTicks(reader.ReadInt64());
 
-    internal override object ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
+    bool IInstantReader.ReportsInstant => true;
+
+    object IInstantReader.ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
     {
         var decoded = ToInstant(reader.ReadInt64());
         instant = decoded;
         return ToDateTime(decoded);
     }
-
-    internal override bool ReportsInstant => true;
 
     // No range check: any coerced instant is representable, so 'original' is unused.
     protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T original)
