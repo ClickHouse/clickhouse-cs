@@ -27,6 +27,15 @@ namespace ClickHouse.Driver.ADO;
 /// <see cref="ReadAsByteArrayAsync"/> and <see cref="ReadAsStringAsync"/> buffer the whole body, so they
 /// can safely be followed by another read. Not safe for concurrent use.
 /// </para>
+/// <para>
+/// <b>In-band exceptions and compression.</b> A query that fails after its <c>200 OK</c> has been committed
+/// reports the failure inside the body (the <c>http_write_exception_in_output_format</c> setting), and the
+/// members below raise the server's error as a <see cref="ClickHouseServerException"/> rather than leaking
+/// that block or a truncated body. The server writes it into the <i>encoded</i> body, though, so it can only
+/// be found in plaintext: on a transport-compressed response — which a raw request only gets when the caller
+/// asked for a codec — the four verbatim members hand the compressed bytes over undetected, as they must,
+/// and <see cref="ReadDecompressedStreamAsync"/> is the member that surfaces the error.
+/// </para>
 /// </remarks>
 public class ClickHouseRawResult : IDisposable
 {
@@ -36,12 +45,19 @@ public class ClickHouseRawResult : IDisposable
     private bool contentConsumed;
 
     /// <summary>
-    /// The decoder <see cref="ReadDecompressedStreamAsync"/> inserted over the content stream, if any.
-    /// Kept so repeated calls hand back the same decoder rather than stacking a second one over an
-    /// already-partly-consumed body, and so <see cref="Dispose"/> releases it — a decoder holds pooled
-    /// buffers and has no finalizer to fall back on.
+    /// The stream <see cref="ReadDecompressedStreamAsync"/> vended, if any: the decoder it inserted over
+    /// the content stream, under the exception-tag scanner when one is engaged. Kept so repeated calls hand
+    /// back that same stream rather than stacking a second decoder over an already-partly-consumed body (or
+    /// a fresh scanner whose ring buffer has observed nothing).
     /// </summary>
     private Stream decompressedStream;
+
+    /// <summary>
+    /// The decoder <see cref="ReadDecompressedStreamAsync"/> inserted, if any — the only stream in that
+    /// chain that is ours to release: a decoder holds pooled buffers and has no finalizer to fall back on,
+    /// while the content stream below it belongs to <see cref="response"/>.
+    /// </summary>
+    private Stream ownedDecoder;
 
     internal ClickHouseRawResult(HttpResponseMessage response)
     {
@@ -89,7 +105,9 @@ public class ClickHouseRawResult : IDisposable
     /// If the server reports an in-band mid-stream exception, reading the returned stream throws a
     /// <see cref="ClickHouseServerException"/> once the end of the body is reached. Bytes read before
     /// that point are returned as-is, so a caller that parses incrementally may already have consumed
-    /// a partial result — including the server's raw in-band exception block — before the throw.
+    /// a partial result — including the server's raw in-band exception block — before the throw. The
+    /// marker exists only in plaintext, so on a transport-compressed body this pass-through cannot find
+    /// it: use <see cref="ReadDecompressedStreamAsync"/>, or look for the block in what you decode.
     /// </remarks>
     public Task<Stream> ReadAsStreamAsync() =>
         string.IsNullOrEmpty(exceptionTag) ? response.Content.ReadAsStreamAsync() : WrapContentStreamAsync();
@@ -111,7 +129,8 @@ public class ClickHouseRawResult : IDisposable
 
     // A streaming accessor (ReadAsStreamAsync/CopyToAsync) already handed out — and thereby consumed — the
     // underlying content stream, which cannot be re-read from the start. An accessor that has to re-materialize
-    // the whole body (ReadAsByteArray/ReadAsString/CopyTo) must then fail with the same InvalidOperationException
+    // the whole body (ReadAsByteArray/ReadAsString/CopyTo) — or decode it from the start
+    // (ReadDecompressedStream) — must then fail with the same InvalidOperationException
     // the untagged HttpContent path raises once its stream is consumed, rather than caching/copying only the
     // bytes left after a partial drain — a truncated body the caller cannot tell apart from a complete one.
     // A buffering accessor that ran to completion first leaves bufferedContent set and is served from that.
@@ -129,13 +148,19 @@ public class ClickHouseRawResult : IDisposable
     /// <c>br</c> are decoded.
     /// </summary>
     /// <returns>A task that resolves to a plaintext stream over the response content.</returns>
+    /// <exception cref="ClickHouseServerException">
+    /// The server reported an in-band mid-stream exception, found once the end of the decoded body is
+    /// reached. Because this member yields plaintext it detects the block whether or not the body was
+    /// compressed — unlike the verbatim members, which can only see it in an uncompressed body.
+    /// </exception>
     /// <exception cref="NotSupportedException">
     /// The response uses a codec this client cannot decode (e.g. <c>zstd</c>); the message names it.
     /// </exception>
     /// <remarks>
     /// Disposing this <see cref="ClickHouseRawResult"/> is always sufficient — it releases the response and
     /// any decoder inserted here. Disposing the returned stream is safe too, but note that with nothing to
-    /// decode it <i>is</i> the content stream, so that ends the response body. Repeated sequential calls
+    /// decode and no exception scanner engaged it <i>is</i> the content stream, so that ends the response
+    /// body; the decoder and the scanner both leave what is below them open. Repeated sequential calls
     /// return the same stream rather than stacking a decoder over a partly-consumed body; not safe for
     /// concurrent use.
     /// </remarks>
@@ -144,18 +169,45 @@ public class ClickHouseRawResult : IDisposable
         if (decompressedStream != null)
             return decompressedStream;
 
-        var rawStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        Stream source;
+        if (bufferedContent != null)
+        {
+            // A buffering accessor already materialized the body — still encoded, since those accessors
+            // hand the wire bytes over verbatim — and drained the content stream doing so. Decode over that
+            // buffer, for the same reason WrapContentStreamAsync serves the streaming accessors from it.
+            source = new MemoryStream(bufferedContent, writable: false);
+        }
+        else
+        {
+            // Nothing buffered and the content stream already consumed: a decode would start from wherever
+            // the previous reader stopped and produce garbage or a truncated body, so fail exactly as the
+            // re-materializing accessors do.
+            ThrowIfContentAlreadyConsumed();
+            source = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        }
 
         // Throws for a codec we cannot decode, before anything has been read — so the body is left intact
         // for a caller who wants to decode it themselves, through any read member. Nothing leaks either:
-        // rawStream is owned by `response` and released by Dispose().
-        var wrapped = ResponseDecompression.Wrap(rawStream, response, leaveOpen: true);
+        // the content stream is owned by `response` and released by Dispose(). The consumed flag is set
+        // only once past this point, for the same reason: a call that threw here handed nothing out, so it
+        // must not lock the other members out of a body that is still whole.
+        var wrapped = ResponseDecompression.Wrap(source, response, leaveOpen: true);
+        contentConsumed = true;
 
         // Only a decoder we inserted is ours to dispose; the content stream belongs to the response.
-        if (!ReferenceEquals(wrapped, rawStream))
-            decompressedStream = wrapped;
+        if (!ReferenceEquals(wrapped, source))
+            ownedDecoder = wrapped;
 
-        return wrapped;
+        // The exception-tag scanner sits ABOVE the decoder, exactly as it does on the reader's read path:
+        // the server writes its in-band exception block into the response body, so the marker exists only
+        // in the decoded plaintext — a scan of the compressed bytes would never match it. This is the
+        // member that yields plaintext, so it is the one that can surface a mid-stream failure on a
+        // transport-compressed response; the verbatim accessors above can only do so when the body is not
+        // compressed. leaveOpen: true — the stream below belongs to the response or to ownedDecoder.
+        if (!string.IsNullOrEmpty(exceptionTag))
+            wrapped = new ExceptionTagAwareStream(wrapped, exceptionTag, leaveOpen: true, throwAtEndOfStream: true);
+
+        return decompressedStream = wrapped;
     }
 
     /// <summary>
@@ -164,7 +216,9 @@ public class ClickHouseRawResult : IDisposable
     /// <returns>A task that resolves to the response content as bytes.</returns>
     /// <remarks>
     /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream
-    /// exception; no truncated body is returned. The body is buffered, so repeat calls return the same bytes.
+    /// exception in a plaintext body; no truncated body is returned. A transport-compressed body hides the
+    /// marker from this verbatim read — see the remarks on the type. The body is buffered, so repeat calls
+    /// return the same bytes.
     /// </remarks>
     public Task<byte[]> ReadAsByteArrayAsync() =>
         string.IsNullOrEmpty(exceptionTag) ? response.Content.ReadAsByteArrayAsync() : ReadAllBytesAsync();
@@ -192,7 +246,9 @@ public class ClickHouseRawResult : IDisposable
     /// <returns>A task that resolves to the response content as a string.</returns>
     /// <remarks>
     /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream
-    /// exception; no truncated body is returned. The body is buffered, so repeat calls return the same string.
+    /// exception in a plaintext body; no truncated body is returned. A transport-compressed body hides the
+    /// marker from this verbatim read — see the remarks on the type. The body is buffered, so repeat calls
+    /// return the same string.
     /// </remarks>
     public Task<string> ReadAsStringAsync() =>
         string.IsNullOrEmpty(exceptionTag) ? response.Content.ReadAsStringAsync() : ReadAllStringAsync();
@@ -218,7 +274,8 @@ public class ClickHouseRawResult : IDisposable
     /// <returns>A task that completes when the copy operation is finished.</returns>
     /// <remarks>
     /// Throws a <see cref="ClickHouseServerException"/> if the server reports an in-band mid-stream
-    /// exception. The copy is streamed, so the destination may already hold the partial result — including
+    /// exception in a plaintext body (a transport-compressed body hides the marker from this verbatim copy —
+    /// see the remarks on the type). The copy is streamed, so the destination may already hold the partial result — including
     /// the server's raw in-band exception block — by the time the exception is raised; treat a destination
     /// written by a failed copy as incomplete.
     /// </remarks>
@@ -239,7 +296,8 @@ public class ClickHouseRawResult : IDisposable
     {
         // Decoder first (it reads from the content stream), then the response that owns that stream.
         // Nulled so a second Dispose() does not release a decoder's pooled buffers twice.
-        var decoder = decompressedStream;
+        var decoder = ownedDecoder;
+        ownedDecoder = null;
         decompressedStream = null;
         decoder?.Dispose();
 

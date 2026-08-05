@@ -460,6 +460,107 @@ public class ClickHouseRawResultMidStreamTests : AbstractConnectionTestFixture
         Assert.ThrowsAsync<InvalidOperationException>(() => DrainAsync(result, rematerializer));
     }
 
+    /// <summary>
+    /// A mid-stream failure that survives compression. The server buffers a compressed body, so it only
+    /// commits the 200 OK — and with it the in-band exception path — once enough output has accumulated to
+    /// flush; a smaller result fails pre-commit as a plain error instead, which is a different code path.
+    /// </summary>
+    private const string CompressibleMidStreamQuery = @"
+        SELECT toInt32(number) AS n,
+               throwIf(number = 1000000, 'boom mid stream') AS e
+        FROM system.numbers
+        LIMIT 2000000
+        FORMAT CSV";
+
+    /// <summary>Drains a plaintext stream, discarding the bytes.</summary>
+    private static async Task DrainToEndAsync(Stream stream)
+    {
+        var buffer = new byte[64 * 1024];
+        while (await stream.ReadAsync(buffer, 0, buffer.Length) > 0)
+        {
+            // The point is reaching the end of the body, where a mid-stream failure surfaces.
+        }
+    }
+
+    [TestCase("gzip")]
+    [TestCase("lz4")]
+    [TestCase(null)]
+    [FromVersion(25, 11)]
+    public async Task ExecuteRawResultAsync_MidStreamException_DecompressedStreamSurfacesServerException(string codec)
+    {
+        // The server writes its in-band exception block into the ENCODED body, so the marker only exists in
+        // the decoded plaintext: the scanner must therefore sit above the decoder. Asking for a codec is what
+        // makes a raw body compressed at all (a raw request advertises none by default), and the null case
+        // pins that the same member still detects the block when there is nothing to decode.
+        using var streamingClient = TestUtilities.GetTestClickHouseClient(compression: false);
+        using var streamingConnection = streamingClient.CreateConnection();
+        using var command = CreateStreamingCommand(streamingConnection);
+        command.AcceptEncoding = codec;
+
+        command.CommandText = CompressibleMidStreamQuery;
+
+        using var result = await command.ExecuteRawResultAsync(default);
+
+        Assert.That(result.ContentEncoding, Is.EqualTo(codec), "the body must be encoded as the test asked");
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+            await DrainToEndAsync(await result.ReadDecompressedStreamAsync()));
+
+        Assert.That(ex.Message, Does.Contain("boom mid stream"));
+        Assert.That(ex.ErrorCode, Is.EqualTo(395)); // FUNCTION_THROW_IF_VALUE_IS_NON_ZERO
+    }
+
+    [TestCase(Accessor.Stream)]
+    [TestCase(Accessor.Bytes)]
+    [TestCase(Accessor.String)]
+    [TestCase(Accessor.CopyTo)]
+    [FromVersion(25, 11)]
+    public async Task ExecuteRawResultAsync_MidStreamException_OnCompressedBody_VerbatimAccessorsCannotDetectIt(Accessor accessor)
+    {
+        // Contrast case, pinning the documented boundary of the fix rather than extending it: the four
+        // original members hand the bytes on the wire over verbatim, and a compressed body carries the
+        // exception block compressed too, so no scan of it can match. The caller still gets an error — the
+        // truncated transport — just not the server's own; they can find the block in what they decode, or
+        // use ReadDecompressedStreamAsync above.
+        using var streamingClient = TestUtilities.GetTestClickHouseClient(compression: false);
+        using var streamingConnection = streamingClient.CreateConnection();
+        using var command = CreateStreamingCommand(streamingConnection);
+        command.AcceptEncoding = "gzip";
+
+        command.CommandText = CompressibleMidStreamQuery;
+
+        using var result = await command.ExecuteRawResultAsync(default);
+
+        Assert.That(result.ContentEncoding, Is.EqualTo("gzip"));
+
+        var ex = Assert.CatchAsync(() => DrainAsync(result, accessor));
+
+        Assert.That(ex, Is.Not.InstanceOf<ClickHouseServerException>());
+        Assert.That(ex, Is.InstanceOf<IOException>(), "the truncated transport is what surfaces");
+    }
+
+    [TestCase("gzip")]
+    [TestCase("lz4")]
+    [FromVersion(25, 11)]
+    public async Task ExecuteRawResultAsync_SuccessfulCompressedQuery_DecompressedStreamReturnsCompleteBody(string codec)
+    {
+        // Contrast case. The tag header is sent on every response, so the scanner is engaged over the decoder
+        // for successful queries too; the decoded body must still come back complete and unmodified.
+        using var command = connection.CreateCommand();
+        command.CustomSettings["http_write_exception_in_output_format"] = 1;
+        command.AcceptEncoding = codec;
+        command.CommandText = "SELECT number, number * 2 FROM system.numbers LIMIT 3 FORMAT CSV";
+
+        using var result = await command.ExecuteRawResultAsync(default);
+
+        Assert.That(result.ContentEncoding, Is.EqualTo(codec));
+
+        using var sink = new MemoryStream();
+        await (await result.ReadDecompressedStreamAsync()).CopyToAsync(sink);
+
+        Assert.That(Encoding.UTF8.GetString(sink.ToArray()), Is.EqualTo("0,0\n1,2\n2,4\n"));
+    }
+
     [TestCase(Accessor.Stream)]
     [TestCase(Accessor.CopyTo)]
     [FromVersion(25, 11)]
