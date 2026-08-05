@@ -360,6 +360,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [TestCase(@"JSON(`a\`b` Int64)", "a`b")]
     [TestCase(@"JSON(`a\` b` Int64)", "a` b")]
     [TestCase(@"JSON(`a\'b` Int64)", "a'b")]
+    [TestCase("JSON(`a'b` Int64)", "a'b")]
     [TestCase("JSON(`a b` Map(String, Array(Int32)))", "a b")]
     [TestCase("JSON(max_dynamic_paths=8, `a b` Int64, SKIP `x,y`)", "a b")]
     [TestCase(@"JSON(`a\nb` Int64)", "a\nb")]
@@ -396,6 +397,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [RequiredFeature(Feature.Json)]
     public async Task ShouldSelectQuotedTypedPathWhenPathIsNested()
     {
         // The server quotes the whole path, not the component which needs quoting:
@@ -407,6 +409,151 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         var result = (JsonObject)reader.GetValue(0);
 
         Assert.That((long)result["a"]["b c"], Is.EqualTo(1L));
+    }
+
+    /// <remarks>
+    /// Every definition here is one the server accepts and reports back verbatim, verified with
+    /// <c>SELECT toTypeName(CAST('{}' AS JSON(definition)))</c> on 26.5. Expected values are the
+    /// JSON text of the node the driver returns, so a Decimal is a JSON string.
+    /// <para>
+    /// The Int64-hinted cases feed the value in as a JSON string so that the assertion is sensitive
+    /// to the hint being applied: the server coerces it to a number for a typed path, while a path
+    /// whose hint got lost stays a string.
+    /// </para>
+    /// </remarks>
+    public static IEnumerable<TestCaseData> QuotedJsonPathTestCases()
+    {
+        yield return new TestCaseData("`a b` Int64", "{\"a b\": \"1\"}", "a b", "1")
+            .SetName("PathWithSpace");
+
+        yield return new TestCaseData("`a,b` Int64", "{\"a,b\": \"1\"}", "a,b", "1")
+            .SetName("PathWithComma");
+
+        yield return new TestCaseData("`a)b` Int64", "{\"a)b\": \"1\"}", "a)b", "1")
+            .SetName("PathWithClosingParenthesis");
+
+        yield return new TestCaseData("`a(b` Int64", "{\"a(b\": \"1\"}", "a(b", "1")
+            .SetName("PathWithOpeningParenthesis");
+
+        yield return new TestCaseData("`a=b` Int64", "{\"a=b\": \"1\"}", "a=b", "1")
+            .SetName("PathWithEqualsSign");
+
+        yield return new TestCaseData("`a b` Decimal(10, 2)", "{\"a b\": 1.25}", "a b", "\"1.25\"")
+            .SetName("PathWithSpaceAndParameterizedType");
+
+        yield return new TestCaseData("`a b` Nullable(Int64)", "{\"a b\": \"1\"}", "a b", "1")
+            .SetName("PathWithSpaceAndNullableType");
+
+        yield return new TestCaseData("`a b` LowCardinality(String)", "{\"a b\": \"z\"}", "a b", "\"z\"")
+            .SetName("PathWithSpaceAndLowCardinalityType");
+
+        yield return new TestCaseData("`a b` Map(String, Array(Int32))", "{\"a b\": {\"k\": [1, 2]}}", "a b", "{\"k\":[1,2]}")
+            .SetName("PathWithSpaceAndContainerType");
+
+        // Both quote characters at once: a backtick-quoted path whose type carries a quoted argument
+        yield return new TestCaseData("`a b` Enum8('x y' = 1)", "{\"a b\": \"x y\"}", "a b", "\"x y\"")
+            .SetName("PathWithSpaceAndSingleQuotedTypeArgument");
+
+        // A comma inside a single-quoted type argument: the token must not break there either
+        yield return new TestCaseData("`a b` Enum8('x,y' = 1)", "{\"a b\": \"x,y\"}", "a b", "\"x,y\"")
+            .SetName("PathWithSpaceAndCommaInSingleQuotedTypeArgument");
+
+        yield return new TestCaseData(@"`a\`b` Int64", "{\"a`b\": \"1\"}", "a`b", "1")
+            .SetName("PathWithEscapedBacktick");
+
+        yield return new TestCaseData(@"`a\` b` Int64", "{\"a` b\": \"1\"}", "a` b", "1")
+            .SetName("PathWithEscapedBacktickFollowedBySpace");
+
+        yield return new TestCaseData("`a'b` Int64", "{\"a''b\": \"1\"}", "a'b", "1")
+            .SetName("PathWithSingleQuote");
+
+        yield return new TestCaseData("max_dynamic_paths=8, `a b` Int64, SKIP `x,y`", "{\"a b\": \"1\", \"x,y\": 2}", "a b", "1")
+            .SetName("PathWithSpaceAlongsideSettingsAndSkip");
+
+        yield return new TestCaseData("`a b` Int64, SKIP REGEXP 'p,q'", "{\"a b\": \"1\", \"p,q\": 2}", "a b", "1")
+            .SetName("PathWithSpaceAlongsideSkipRegexpContainingComma");
+
+        yield return new TestCaseData("a Int64, `b c` String", "{\"a\": 1, \"b c\": 2}", "b c", "\"2\"")
+            .SetName("QuotedPathAlongsideUnquotedPath");
+
+        yield return new TestCaseData("`a.b c` Int64", "{\"a\": {\"b c\": \"1\"}}", "a", "{\"b c\":1}")
+            .SetName("NestedPathWithSpace");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCaseSource(nameof(QuotedJsonPathTestCases))]
+    public async Task ShouldRoundTripQuotedTypedPathThroughTableColumn(string jsonDefinition, string jsonData, string pathName, string expectedJson)
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON({jsonDefinition})) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{jsonData}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That(result.ContainsKey(pathName), Is.True);
+        Assert.That(result[pathName]?.ToJsonString(), Is.EqualTo(expectedJson));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldNotReadQuotedPathExcludedBySkip()
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(`a b` Int64, SKIP `x,y`)) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a b\": 1, \"x,y\": 2}}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((long)result["a b"], Is.EqualTo(1L));
+        Assert.That(result.ContainsKey("x,y"), Is.False);
+    }
+
+    private class QuotedPathData
+    {
+        [ClickHouseJsonPath("a b")]
+        public long WithSpace { get; set; }
+
+        [ClickHouseJsonPath("a,b")]
+        public long WithComma { get; set; }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldWriteQuotedTypedPathInBinaryMode()
+    {
+        // ClickHouseJsonPath is only honoured in Binary mode, which describes the destination
+        // table and so parses the quoted paths out of the server's own type name.
+        using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryClient.RegisterJsonSerializationType<QuotedPathData>();
+
+        var targetTable = CreateTableName();
+        await binaryClient.ExecuteNonQueryAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(`a b` Int64, `a,b` Int64)) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(binaryClient.CreateConnection())
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.WriteToServerAsync([new object[] { new QuotedPathData { WithSpace = 1L, WithComma = 2L } }]);
+
+        using var reader = await binaryClient.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((long)result["a b"], Is.EqualTo(1L));
+        Assert.That((long)result["a,b"], Is.EqualTo(2L));
     }
 
     [Test]

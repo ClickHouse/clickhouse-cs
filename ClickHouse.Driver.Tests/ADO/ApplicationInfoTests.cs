@@ -270,13 +270,13 @@ public class ApplicationInfoTests : AbstractConnectionTestFixture
 
         await tagged.ExecuteScalarAsync($"SELECT 1 /* {marker} */");
 
-        // SYSTEM FLUSH LOGS is synchronous and forces the query_log buffer to disk,
-        // so the row is visible immediately afterwards — no polling/sleep needed.
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-
-        object scalar = await client.ExecuteScalarAsync(
+        // The marker also appears in this lookup's own text, so exclude lookups from the match:
+        // once flushed they are newer than the tagged query and would win the ORDER BY.
+        object scalar = await QueryLog.ScalarAsync(
+            client,
             $"SELECT http_user_agent FROM system.query_log " +
-            $"WHERE query LIKE '%{marker}%' AND type = 'QueryFinish' " +
+            $"WHERE query LIKE '%{marker}%' AND query NOT LIKE '%system.query_log%' " +
+            $"AND type = 'QueryFinish' " +
             $"ORDER BY event_time DESC LIMIT 1");
 
         Assert.That(scalar, Is.Not.Null, "Expected a query_log row for the marker but found none.");
