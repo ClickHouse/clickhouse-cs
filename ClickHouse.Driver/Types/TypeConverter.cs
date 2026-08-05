@@ -9,6 +9,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types.Grammar;
+using ClickHouse.Driver.Utility;
 
 [assembly: InternalsVisibleTo("ClickHouse.Driver.Tests, PublicKey=00240000048000009400000006020000002400005253413100040000010001000968a6468f9d0397a051f167a25dcee773c674cf7a67629f78e884d232df23ff773fbfaba602e03eede6056b39bd6a4cddcd7e5b3ca9484bd83401d14a5e9ac5c98cbe676a1e89149816f5304f617b658440b2bd775e5ece71b5a38ceeb88e844869a376ceea71cbb6393b2ac14e506b92267a3cbcd6e7dc93ff6c750d53a5c7")] // assembly-level tag to expose below classes to tests
 
@@ -101,8 +102,6 @@ internal static class TypeConverter
         .Concat(ParameterizedTypes.Values.Select(t => t.Name))
         .OrderBy(x => x)
         .ToArray();
-
-    internal static readonly string[] Separator = [" "];
 
     static TypeConverter()
     {
@@ -255,10 +254,13 @@ internal static class TypeConverter
 
         if (typeName.Contains(' '))
         {
-            var parts = typeName.Split(Separator, 2, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 2)
+            // Named element, e.g. "id Int32" in Tuple(id Int32) — strip the element name. A name
+            // which needs quoting is enclosed in backticks by the server and may itself contain
+            // spaces, so the separator is located past the quoted identifier.
+            var separator = typeName.IndexOfNameTypeSeparator();
+            if (separator > 0)
             {
-                typeName = parts[1].Trim();
+                typeName = typeName.Substring(separator + 1).Trim();
             }
             else
             {
