@@ -1,0 +1,1 @@
+* Fixed `ClickHouseDataReader.GetSchemaTable()` leaving `NumericScale` unset (`DBNull`) for `DateTime64(N)` and `Time64(N)` columns (including their `Nullable(...)` variants). The schema table now reports the fractional-seconds precision `N` in `NumericScale`, matching how `Decimal` columns are already reported (issue #438).

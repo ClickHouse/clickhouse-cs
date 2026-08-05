@@ -1,0 +1,1 @@
+* Fixed `{name:Type}` parameter type hints being mis-detected in queries containing `//` comments, nested block comments, backtick/double-quoted identifiers, backslash escapes or `$tag$` heredocs. A bare `#` no longer starts a comment (only `# ` and `#!` do) (issue #508).
