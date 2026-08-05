@@ -11,10 +11,37 @@ on:
 run-name: Release ${{ inputs.version }}
 
 jobs:
+  # Gate: refuse to publish a version whose changelog.d/ fragments were never folded in.
+  #
+  # Runs before anything is built, signed or pushed, because both outputs of this workflow are
+  # effectively permanent: a NuGet package cannot be unpublished (only delisted), and
+  # RELEASENOTES.md is baked into the package via PackageReleaseNotes. Releasing without running
+  # `--release` first would ship a package whose notes describe the previous version, silently.
+  verify_changelog:
+    name: Verify changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 10.x
+
+    # The version is passed through the environment rather than interpolated into the run script,
+    # so a workflow_dispatch input cannot inject shell.
+    - name: Verify the changelog was assembled for this version
+      env:
+        VERSION: ${{ inputs.version }}
+      run: dotnet run scripts/changelog.cs -- --verify-release "$VERSION"
+
   # Build job
   # Should only use official actions and tools
   build:
     name: Build
+    needs: [verify_changelog]
     runs-on: windows-latest
     steps:
     - name: Checkout

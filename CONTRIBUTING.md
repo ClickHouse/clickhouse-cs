@@ -134,6 +134,27 @@ dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework n
 
 If you're using your own ClickHouse instance via `CLICKHOUSE_CONNECTION`, `CLICKHOUSE_VERSION` is still honored for feature-flag detection — otherwise the server version is queried at startup.
 
+## Changelog entries
+
+Any user-visible change needs a changelog entry. Entries are **fragments**: one file per change
+under `changelog.d/`, which maintainers fold into `CHANGELOG.md` at release time.
+
+```bash
+dotnet run scripts/changelog.cs -- --new fixes 512-variant-null
+```
+
+Write the entry into the file it creates — one or two sentences on the user-visible change, plus
+the issue number. Preview how it will render with `--render`, and run `--check` to see what CI will
+say.
+
+Do **not** edit `CHANGELOG.md`'s `Unreleased` section, and do not edit `RELEASENOTES.md` at all.
+Two pull requests appending to one shared section conflict every time, and GitHub ignores
+`.gitattributes` merge drivers when merging pull requests, so a merge driver cannot fix it. A
+fragment is a file only your branch adds, so there is nothing to reconcile. `RELEASENOTES.md` is
+generated from `CHANGELOG.md`.
+
+See `changelog.d/README.md` for the categories and naming convention.
+
 ## CI/CD
 
 ### Expected CI behavior
@@ -156,6 +177,23 @@ Before release, update version in:
 - `ClickHouse.Driver/ClickHouse.Driver.csproj` - `<Version>` property
 - Ensure `PublicAPI.Shipped.txt` is updated with new APIs
 - Move entries from `PublicAPI.Unshipped.txt` to `PublicAPI.Shipped.txt`
+
+Then fold the pending changelog fragments into the changelog:
+
+```bash
+dotnet run scripts/changelog.cs -- --release v1.4.0
+```
+
+That retitles the `Unreleased` section to the new version and fills it from `changelog.d/`, opens a
+fresh empty `Unreleased`, regenerates `RELEASENOTES.md`, and deletes the consumed fragments. Do this
+on a release-prep branch and open it as a normal pull request — the release workflow builds from a
+commit and does not write to the repository.
+
+If you forget, the release workflow stops before building: its first job runs
+`--verify-release <version>` and fails unless the changelog was actually assembled for the version
+being released and no fragments are left pending. That gate exists because both outputs are
+permanent — a NuGet package can only be delisted, never unpublished, and `RELEASENOTES.md` is baked
+into it via `PackageReleaseNotes`.
 
 ### Release workflow
 

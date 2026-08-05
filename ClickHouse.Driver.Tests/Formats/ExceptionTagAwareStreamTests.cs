@@ -107,6 +107,31 @@ public class ExceptionTagAwareStreamTests
     }
 
     [Test]
+    public void TryExtractMidStreamException_DetectsMarker_WithServerCrlfFraming()
+    {
+        // Real ClickHouse (>= 25.11) frames the in-band block with a CRLF between the
+        // "__exception__" literal and the tag, which the contiguous fixtures do not cover:
+        // "\r\n__exception__\r\n<tag>\r\n<message>\n<len> <tag>\r\n__exception__\r\n".
+        var message = "Code: 395. DB::Exception: boom mid stream";
+        var messageLength = Encoding.UTF8.GetByteCount(message);
+        var exceptionData =
+            $"\r\n__exception__\r\n{TestToken}\r\n{message}\n{messageLength} {TestToken}\r\n__exception__\r\n";
+        var data = Encoding.UTF8.GetBytes("some rows before" + exceptionData);
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken);
+
+        var buffer = new byte[data.Length];
+        _ = stream.Read(buffer, 0, buffer.Length);
+
+        var result = stream.TryExtractMidStreamException();
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result.Message, Is.EqualTo(message));
+        Assert.That(result.ErrorCode, Is.EqualTo(395));
+    }
+
+    [Test]
     public void TryExtractMidStreamException_DetectsMarker_WithMultilineMessage()
     {
         var message = "Error on line 1\nMore details on line 2\nAnd line 3";
@@ -232,6 +257,104 @@ public class ExceptionTagAwareStreamTests
         Assert.That(result.Message, Is.EqualTo("Overflow test error"));
     }
 
+    // ----- Read(Span<byte>) — must record into the ring buffer exactly as the byte[] overload does,
+    // otherwise mid-stream exception detection silently stops working on span reads. -----
+
+    [Test]
+    public void ReadSpan_PassesThroughToInnerStream()
+    {
+        var data = new byte[] { 1, 2, 3, 4, 5 };
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken);
+
+        Span<byte> buffer = new byte[5];
+        int bytesRead = stream.Read(buffer);
+
+        Assert.That(bytesRead, Is.EqualTo(5));
+        Assert.That(buffer.ToArray(), Is.EqualTo(data));
+    }
+
+    [Test]
+    public void RingBuffer_RecordsBytes_FromSpanRead()
+    {
+        var prefix = new byte[100];
+        var message = "Span read error";
+        var exceptionData = $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__";
+        var data = new byte[prefix.Length + Encoding.UTF8.GetByteCount(exceptionData)];
+        Array.Copy(prefix, 0, data, 0, prefix.Length);
+        Encoding.UTF8.GetBytes(exceptionData, 0, exceptionData.Length, data, prefix.Length);
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken);
+
+        _ = stream.Read(new byte[data.Length].AsSpan());
+
+        var result = stream.TryExtractMidStreamException();
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result.Message, Is.EqualTo("Span read error"));
+    }
+
+    [Test]
+    public void RingBuffer_WrapsCorrectly_FromSpanRead()
+    {
+        // Exceeds the 4 KiB ring buffer, so the span path must handle the wrap branch too.
+        var prefix = new byte[5000];
+        var message = "Span overflow error";
+        var suffix = Encoding.UTF8.GetBytes(
+            $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__");
+
+        var data = new byte[prefix.Length + suffix.Length];
+        Array.Copy(prefix, 0, data, 0, prefix.Length);
+        Array.Copy(suffix, 0, data, prefix.Length, suffix.Length);
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken);
+
+        // Small spans so the ring buffer wraps repeatedly instead of taking the single-copy shortcut.
+        Span<byte> chunk = new byte[64];
+        while (stream.Read(chunk) > 0)
+        {
+        }
+
+        var result = stream.TryExtractMidStreamException();
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result.Message, Is.EqualTo("Span overflow error"));
+    }
+
+    [Test]
+    public void RingBuffer_SpanAndArrayReads_ExtractIdenticalException()
+    {
+        var message = "Interleaved error";
+        var data = Encoding.UTF8.GetBytes(
+            new string('x', 200) +
+            $"__exception__{TestToken}\n{message}\n{message.Length} {TestToken}__exception__");
+
+        // Same payload, one stream driven through spans and one through arrays: both must detect it.
+        using var spanInner = new MemoryStream(data);
+        using var spanStream = new ExceptionTagAwareStream(spanInner, TestToken);
+        Span<byte> spanChunk = new byte[7];
+        while (spanStream.Read(spanChunk) > 0)
+        {
+        }
+
+        using var arrayInner = new MemoryStream(data);
+        using var arrayStream = new ExceptionTagAwareStream(arrayInner, TestToken);
+        var arrayChunk = new byte[7];
+        while (arrayStream.Read(arrayChunk, 0, arrayChunk.Length) > 0)
+        {
+        }
+
+        var viaSpan = spanStream.TryExtractMidStreamException();
+        var viaArray = arrayStream.TryExtractMidStreamException();
+
+        Assert.That(viaSpan, Is.Not.Null);
+        Assert.That(viaArray, Is.Not.Null);
+        Assert.That(viaSpan.Message, Is.EqualTo(viaArray.Message));
+        Assert.That(viaSpan.Message, Is.EqualTo("Interleaved error"));
+    }
+
     [Test]
     public void StreamProperties_DelegateToInnerStream()
     {
@@ -262,6 +385,28 @@ public class ExceptionTagAwareStreamTests
         var wrongToken = "WRONGTOKEN";
         var message = "Wrong token error";
         var exceptionData = $"__exception__{wrongToken}\n{message}\n{message.Length} {wrongToken}__exception__";
+        var data = Encoding.UTF8.GetBytes(exceptionData);
+
+        using var ms = new MemoryStream(data);
+        using var stream = new ExceptionTagAwareStream(ms, TestToken); // Looking for TestToken
+
+        var buffer = new byte[data.Length];
+        _ = stream.Read(buffer, 0, buffer.Length);
+
+        var result = stream.TryExtractMidStreamException();
+
+        Assert.That(result, Is.Null); // Should not match wrong token
+    }
+
+    [Test]
+    public void TryExtractMidStreamException_IgnoresWrongToken_WithServerCrlfFraming()
+    {
+        // The CRLF-tolerant matcher must not loosen tag matching: a real-framed block whose tag
+        // differs from the configured one must still be ignored.
+        var wrongToken = "WRONGTOKEN";
+        var message = "Wrong token error";
+        var exceptionData =
+            $"\r\n__exception__\r\n{wrongToken}\r\n{message}\n{message.Length} {wrongToken}\r\n__exception__\r\n";
         var data = Encoding.UTF8.GetBytes(exceptionData);
 
         using var ms = new MemoryStream(data);

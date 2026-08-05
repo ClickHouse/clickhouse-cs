@@ -1,5 +1,6 @@
 using System;
 using System.Data;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -29,14 +30,51 @@ public class ConnectionTests : AbstractConnectionTestFixture
         Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
     }
 
-    [Test]
-    public async Task ShouldThrowExceptionOnInvalidHttpClient()
+    /// <summary>
+    /// The driver decodes gzip, deflate and br itself, from the response's <c>Content-Encoding</c>, so a
+    /// caller-supplied <see cref="HttpClient"/> with no <c>AutomaticDecompression</c> is fine — which also
+    /// means these three are decoded by the driver here rather than by .NET, since a plain handler neither
+    /// advertises nor strips them. Against a real server, so the payload is whatever ClickHouse actually
+    /// emits: notably its <c>deflate</c> is zlib-wrapped (RFC 1950), which a bare <c>DeflateStream</c>
+    /// cannot read.
+    /// </summary>
+    [TestCase("gzip")]
+    [TestCase("deflate")]
+    [TestCase("br")]
+    public async Task ExecuteReaderAsync_WithAnHttpClientThatCannotDecodeTheCodec_DecodesItInTheDriver(string acceptEncoding)
     {
         using var httpClient = new HttpClient(); // No decompression handler
         using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString(), httpClient);
         await conn.OpenAsync();
-        // Exception is thrown when executing a query, not on OpenAsync (which no longer makes requests)
-        Assert.ThrowsAsync<InvalidOperationException>(async () => await conn.ExecuteScalarAsync("SELECT 1"));
+
+        using var command = conn.CreateCommand();
+        command.CommandText = "SELECT count() FROM numbers(100)";
+        command.AcceptEncoding = acceptEncoding;
+
+        var count = await command.ExecuteScalarAsync(CancellationToken.None);
+
+        Assert.That(Convert.ToInt64(count, CultureInfo.InvariantCulture), Is.EqualTo(100));
+    }
+
+    /// <summary>
+    /// A codec the driver cannot decode must fail loudly, naming it, rather than parsing compressed bytes
+    /// as the result format. The <see cref="HttpClient"/> is incidental here — nothing decodes <c>zstd</c>
+    /// either way. Thrown when executing, not on <c>OpenAsync</c>, which no longer makes requests.
+    /// </summary>
+    [Test]
+    public async Task ExecuteReaderAsync_WithACodecTheDriverCannotDecode_ThrowsNamingTheCodec()
+    {
+        using var httpClient = new HttpClient();
+        using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString(), httpClient);
+        await conn.OpenAsync();
+
+        using var command = conn.CreateCommand();
+        command.CommandText = "SELECT number FROM numbers(100)";
+        command.AcceptEncoding = "zstd";
+
+        var ex = Assert.ThrowsAsync<NotSupportedException>(() => command.ExecuteScalarAsync(CancellationToken.None));
+
+        Assert.That(ex.Message, Does.Contain("zstd"));
     }
 
     [Test]
@@ -322,6 +360,69 @@ public class ConnectionTests : AbstractConnectionTestFixture
         var schema = connection.GetSchema("Columns", ["system", "functions"]);
         ClassicAssert.NotNull(schema);
         Assert.That(new[] { "Database", "Table", "DataType", "ProviderType" }, Is.SubsetOf(GetColumnNames(schema)));
+    }
+
+    private static readonly TestCaseData[] UnsupportedColumnRestrictions =
+    [
+        new TestCaseData((object)new[] { "system", "functions", "name" }),
+        new TestCaseData((object)new[] { "system", "functions", string.Empty }),
+        new TestCaseData((object)new[] { null, null, "name" }),
+        new TestCaseData((object)new[] { "system", "functions", null, "name" }),
+    ];
+
+    [Test]
+    [TestCaseSource(nameof(UnsupportedColumnRestrictions))]
+    public void GetSchema_ColumnsWithRestrictionBeyondDatabaseAndTable_ThrowsArgumentException(string[] restrictions)
+    {
+        var exception = Assert.Throws<ArgumentException>(() => connection.GetSchema("Columns", restrictions));
+        Assert.That(exception.Message, Does.Contain("Columns").And.Contain("database, table"));
+    }
+
+    [Test]
+    public void GetSchema_ColumnsWithEmptySupportedRestriction_FiltersOnTheEmptyValue()
+    {
+        var schema = connection.GetSchema("Columns", ["system", string.Empty]);
+        Assert.That(schema.Rows, Is.Empty);
+    }
+
+    [Test]
+    public void GetSchema_ColumnsWithUnspecifiedRestrictionsBeyondTable_AppliesSupportedRestrictions()
+    {
+        var schema = connection.GetSchema("Columns", ["system", "functions", null, null]);
+        var rows = schema.Rows.Cast<DataRow>().ToList();
+        Assert.That(rows, Is.Not.Empty);
+        Assert.That(rows.Select(r => (string)r["Database"]), Is.All.EqualTo("system"));
+        Assert.That(rows.Select(r => (string)r["Table"]), Is.All.EqualTo("functions"));
+    }
+
+    [Test]
+    public void GetSchema_ColumnsWithTableRestrictionOnly_FiltersByTableAcrossAllDatabases()
+    {
+        // "columns" exists in system, information_schema and INFORMATION_SCHEMA, so an
+        // unrestricted database matches several of them.
+        var schema = connection.GetSchema("Columns", [null, "columns"]);
+        var rows = schema.Rows.Cast<DataRow>().ToList();
+        Assert.That(rows, Is.Not.Empty);
+        Assert.That(rows.Select(r => (string)r["Table"]), Is.All.EqualTo("columns"));
+        Assert.That(rows.Select(r => (string)r["Database"]).Distinct().Count(), Is.GreaterThan(1));
+    }
+
+    private static readonly TestCaseData[] EmptyColumnRestrictions =
+    [
+        new TestCaseData((object)null),
+        new TestCaseData((object)new string[] { }),
+        new TestCaseData((object)new string[] { null }),
+        new TestCaseData((object)new string[] { null, null }),
+    ];
+
+    [Test]
+    [TestCaseSource(nameof(EmptyColumnRestrictions))]
+    public void GetSchema_ColumnsWithoutRestrictions_ReturnsColumnsFromMultipleTables(string[] restrictions)
+    {
+        var schema = connection.GetSchema("Columns", restrictions);
+        var rows = schema.Rows.Cast<DataRow>().ToList();
+        Assert.That(rows, Is.Not.Empty);
+        Assert.That(rows.Select(r => (string)r["Table"]).Distinct().Count(), Is.GreaterThan(1));
     }
 
     [Test]

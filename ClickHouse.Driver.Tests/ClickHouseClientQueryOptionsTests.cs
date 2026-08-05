@@ -7,6 +7,9 @@ using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Web;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.ADO.Readers;
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Tests.Utilities;
 
@@ -69,11 +72,8 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
 
         await client.ExecuteScalarAsync("SELECT 1", options: options);
 
-        // Wait for query_log flush
-        await Task.Delay(500);
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-
-        var count = await client.ExecuteScalarAsync(
+        var count = await QueryLog.CountAsync(
+            client,
             $"SELECT count() FROM system.query_log WHERE query_id = '{customQueryId}'");
         Assert.That(count, Is.GreaterThan(0UL));
     }
@@ -85,14 +85,15 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
         var marker = $"auto_guid_test_{Guid.NewGuid():N}";
         await client.ExecuteScalarAsync($"SELECT 42 /* {marker} */");
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        // Find the query in system.query_log - should have a valid GUID as query_id.
+        // The marker also appears in this lookup's own text, so exclude lookups from the match:
+        // once flushed they are newer than the marked query and would win the ORDER BY.
+        var queryId = (string)await QueryLog.ScalarAsync(
+            client,
+            $"SELECT query_id FROM system.query_log WHERE query LIKE '%{marker}%' " +
+            $"AND query NOT LIKE '%system.query_log%' AND type = 'QueryFinish' " +
+            $"ORDER BY event_time DESC LIMIT 1");
 
-        // Find the query in system.query_log - should have a valid GUID as query_id
-        using var reader = await client.ExecuteReaderAsync(
-            $"SELECT query_id FROM system.query_log WHERE query LIKE '%{marker}%' AND type = 'QueryFinish' ORDER BY event_time DESC LIMIT 1");
-
-        Assert.That(reader.Read(), Is.True, "Query should appear in query_log");
-        var queryId = reader.GetString(0);
         Assert.That(Guid.TryParse(queryId, out _), Is.True, "Query ID should be a valid GUID");
     }
 
@@ -105,9 +106,8 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
         using var reader = await client.ExecuteReaderAsync("SELECT 1", options: options);
         while (reader.Read()) { } // Consume results
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-
-        var count = await client.ExecuteScalarAsync(
+        var count = await QueryLog.CountAsync(
+            client,
             $"SELECT count() FROM system.query_log WHERE query_id = '{customQueryId}'");
         Assert.That(count, Is.GreaterThan(0UL), "Custom query ID should appear in query_log");
     }
@@ -855,9 +855,8 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
 
         await client.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-
-        var count = await client.ExecuteScalarAsync(
+        var count = await QueryLog.CountAsync(
+            client,
             $"SELECT count() FROM system.query_log WHERE query_id LIKE '{customQueryId}%'");
         Assert.That(count, Is.GreaterThan(0UL), "Custom query ID should appear in query_log");
     }
@@ -899,66 +898,102 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
     [Test]
     public void WithQueryId_CopiesAllPropertiesExceptQueryId()
     {
-        var source = new QueryOptions
-        {
-            QueryId = "original-id",
-            Database = "my_db",
-            Roles = new[] { "role1", "role2" },
-            CustomSettings = new Dictionary<string, object> { { "max_threads", 4 } },
-            CustomHeaders = new Dictionary<string, string> { { "X-Custom", "value" } },
-            UseSession = true,
-            SessionId = "session-123",
-            BearerToken = "token-abc",
-            MaxExecutionTime = TimeSpan.FromSeconds(30),
-        };
+        var source = FullyPopulatedQueryOptions();
 
         var derived = source.WithQueryId("derived-id");
 
-        Assert.That(derived.QueryId, Is.EqualTo("derived-id"));
-
-        // Use reflection to verify all other properties are copied.
-        // This will catch any new properties added to QueryOptions in the future.
-        var properties = typeof(QueryOptions).GetProperties()
-            .Where(p => p.Name != nameof(QueryOptions.QueryId));
-        foreach (var prop in properties)
-        {
-            Assert.That(prop.GetValue(derived), Is.EqualTo(prop.GetValue(source)),
-                $"Property '{prop.Name}' was not copied by WithQueryId");
-        }
+        AssertCopyPreservesEveryPropertyExcept(source, derived, nameof(QueryOptions.QueryId), "derived-id");
     }
 
     [Test]
     public void InsertOptions_WithQueryId_CopiesAllPropertiesExceptQueryId()
     {
-        var source = new InsertOptions
-        {
-            QueryId = "original-id",
-            Database = "my_db",
-            Roles = new[] { "role1", "role2" },
-            CustomSettings = new Dictionary<string, object> { { "max_threads", 4 } },
-            CustomHeaders = new Dictionary<string, string> { { "X-Custom", "value" } },
-            UseSession = true,
-            SessionId = "session-123",
-            BearerToken = "token-abc",
-            MaxExecutionTime = TimeSpan.FromSeconds(30),
-            BatchSize = 500,
-            MaxDegreeOfParallelism = 4,
-            Format = RowBinaryFormat.RowBinaryWithDefaults,
-        };
+        var source = FullyPopulatedInsertOptions();
 
         var derived = source.WithQueryId("derived-id");
 
-        Assert.That(derived, Is.InstanceOf<InsertOptions>());
-        Assert.That(derived.QueryId, Is.EqualTo("derived-id"));
+        AssertCopyPreservesEveryPropertyExcept(source, derived, nameof(QueryOptions.QueryId), "derived-id");
+    }
 
-        // Use reflection to verify all other properties are copied.
-        // This will catch any new properties added to InsertOptions in the future.
-        var properties = typeof(InsertOptions).GetProperties()
-            .Where(p => p.Name != nameof(QueryOptions.QueryId));
-        foreach (var prop in properties)
+    [Test]
+    public void InsertOptions_WithColumnTypes_CopiesAllPropertiesExceptColumnTypes()
+    {
+        var source = FullyPopulatedInsertOptions();
+        var newColumnTypes = new Dictionary<string, string> { ["a"] = "Int32" };
+
+        var derived = source.WithColumnTypes(newColumnTypes);
+
+        AssertCopyPreservesEveryPropertyExcept(source, derived, nameof(InsertOptions.ColumnTypes), newColumnTypes);
+    }
+
+    // A source whose every property is set to a value distinct from a freshly-constructed default.
+    // The "copy every property, override one" methods share a hand-maintained object initializer that
+    // has historically drifted from the property list; populating every property means a dropped
+    // assignment is caught instead of passing vacuously (null == null), which is how AcceptEncoding
+    // was silently dropped.
+    private static QueryOptions FullyPopulatedQueryOptions() => new()
+    {
+        QueryId = "original-id",
+        Database = "my_db",
+        Roles = new[] { "role1", "role2" },
+        CustomSettings = new Dictionary<string, object> { { "max_threads", 4 } },
+        CustomHeaders = new Dictionary<string, string> { { "X-Custom", "value" } },
+        UseSession = true,
+        SessionId = "session-123",
+        BearerToken = "token-abc",
+        ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string> { [typeof(int)] = "Int64" }),
+        ParameterFormatter = new DictionaryParameterFormatter(new Dictionary<Type, Func<object, string>> { [typeof(int)] = v => v.ToString() }),
+        ReadValueConverter = new DictionaryReadValueConverter().For<int>(v => v),
+        MaxExecutionTime = TimeSpan.FromSeconds(30),
+        AcceptEncoding = "zstd",
+    };
+
+    private static InsertOptions FullyPopulatedInsertOptions() => new()
+    {
+        QueryId = "original-id",
+        Database = "my_db",
+        Roles = new[] { "role1", "role2" },
+        CustomSettings = new Dictionary<string, object> { { "max_threads", 4 } },
+        CustomHeaders = new Dictionary<string, string> { { "X-Custom", "value" } },
+        UseSession = true,
+        SessionId = "session-123",
+        BearerToken = "token-abc",
+        ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string> { [typeof(int)] = "Int64" }),
+        ParameterFormatter = new DictionaryParameterFormatter(new Dictionary<Type, Func<object, string>> { [typeof(int)] = v => v.ToString() }),
+        ReadValueConverter = new DictionaryReadValueConverter().For<int>(v => v),
+        MaxExecutionTime = TimeSpan.FromSeconds(30),
+        AcceptEncoding = "zstd",
+        BatchSize = 500,
+        MaxDegreeOfParallelism = 4,
+        Format = RowBinaryFormat.RowBinaryWithDefaults,
+        Compressor = BrotliCompressor.Default,
+        ColumnTypes = new Dictionary<string, string> { ["existing"] = "String" },
+        UseSchemaCache = true,
+    };
+
+    // Verifies a "copy with a single override" method (WithQueryId / WithColumnTypes) carried every
+    // property across and changed only the one it is meant to override. Reflection covers any property
+    // added in the future automatically; requiring each source property to differ from a fresh default
+    // guarantees a dropped copy assignment cannot slip through by comparing default-to-default.
+    private static void AssertCopyPreservesEveryPropertyExcept(
+        QueryOptions source, QueryOptions derived, string overriddenProperty, object expectedOverrideValue)
+    {
+        Assert.That(derived, Is.InstanceOf(source.GetType()), "Copy must return the same runtime type as the source");
+
+        var type = source.GetType();
+        var defaults = (QueryOptions)Activator.CreateInstance(type);
+        var properties = type.GetProperties();
+
+        var overridden = properties.Single(p => p.Name == overriddenProperty);
+        Assert.That(overridden.GetValue(derived), Is.EqualTo(expectedOverrideValue),
+            $"Property '{overriddenProperty}' should have been overridden");
+
+        foreach (var prop in properties.Where(p => p.Name != overriddenProperty))
         {
+            Assert.That(prop.GetValue(source), Is.Not.EqualTo(prop.GetValue(defaults)),
+                $"Test setup: source.{prop.Name} must differ from a fresh {type.Name} so the copy check is not vacuous");
             Assert.That(prop.GetValue(derived), Is.EqualTo(prop.GetValue(source)),
-                $"Property '{prop.Name}' was not copied by WithQueryId");
+                $"Property '{prop.Name}' was not copied");
         }
     }
 

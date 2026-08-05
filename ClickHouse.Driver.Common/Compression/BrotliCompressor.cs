@@ -37,5 +37,9 @@ public sealed class BrotliCompressor : IClickHouseCompressor
 
     /// <inheritdoc />
     public Stream Compress(Stream destination, bool leaveOpen)
-        => new BufferedStream(new BrotliStream(destination, level, leaveOpen), bufferSize);
+        => new PooledWriteBufferStream(new BrotliStream(destination, level, leaveOpen), bufferSize);
+
+    /// <inheritdoc />
+    public Stream Decompress(Stream source, bool leaveOpen)
+        => new BrotliStream(source, CompressionMode.Decompress, leaveOpen);
 }

@@ -1,0 +1,1 @@
+* `ClickHouseClient.MemoryStreamManager` is now `[Obsolete]`. Since binary inserts stream directly into the request body (see above), this property is no longer used and has no effect; it will be removed in a future version.

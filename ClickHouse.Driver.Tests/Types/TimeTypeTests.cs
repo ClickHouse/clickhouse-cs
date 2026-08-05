@@ -58,6 +58,26 @@ public class TimeTypeTests
         Assert.That(actualSeconds, Is.EqualTo(expectedSeconds));
     }
 
+    [Test]
+    [TestCase(14, 30, 0, 52200)]  // 14:30:00
+    [TestCase(0, 0, 0, 0)]        // midnight
+    [TestCase(23, 59, 59, 86399)] // end of day
+    public void Write_TimeOnly_WritesCorrectSeconds(int hours, int minutes, int seconds, int expectedSeconds)
+    {
+        var type = new TimeType();
+        var timeOnly = new TimeOnly(hours, minutes, seconds);
+
+        using var stream = new MemoryStream();
+        using var writer = new ExtendedBinaryWriter(stream);
+
+        type.Write(writer, timeOnly);
+
+        stream.Position = 0;
+        using var reader = new BinaryReader(stream);
+        var actualSeconds = reader.ReadInt32();
+
+        Assert.That(actualSeconds, Is.EqualTo(expectedSeconds));
+    }
 
     [Test]
     public void Write_IntValue_WritesCorrectly()

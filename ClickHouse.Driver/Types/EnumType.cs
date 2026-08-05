@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
+using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Types;
 
@@ -59,7 +60,8 @@ internal class EnumType : ParameterizedType
 
     public string Lookup(int value) => reverseValues.TryGetValue(value, out var key) ? key : throw new KeyNotFoundException($"Enum value {value} not found");
 
-    public override string ToString() => $"{Name}({string.Join(",", Values.Select(kvp => kvp.Key + "=" + kvp.Value))}";
+    public override string ToString() =>
+        $"{Name}({string.Join(", ", Values.Select(kvp => $"{kvp.Key.Escape().QuoteSingle()} = {kvp.Value.ToString(CultureInfo.InvariantCulture)}"))})";
 
     public override object Read(ExtendedBinaryReader reader) => throw new NotImplementedException();
 
