@@ -16,7 +16,7 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseDataSource"/> class using provided HttpClient.
-    /// Note that HttpClient must have AutomaticDecompression enabled if compression is not disabled in connection string
+    /// Note that the driver decodes compressed responses itself, so AutomaticDecompression is optional.
     /// </summary>
     /// <param name="connectionString">Connection string</param>
     /// <param name="httpClient">instance of HttpClient</param>
@@ -44,17 +44,12 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     /// <remarks>
     /// <list type="bullet">
     /// <item>
-    /// If compression is not disabled in the <paramref name="connectionString"/>, the <paramref name="httpClientFactory"/>
-    /// must be configured to enable <see cref="HttpClientHandler.AutomaticDecompression"/> for its generated clients.
-    /// <example>
-    /// For example, you can do this while registering the HTTP client:
-    /// <code>
-    /// services.AddHttpClient("ClickHouseClient").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-    /// {
-    ///     AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
-    /// });
-    /// </code>
-    /// </example>
+    /// Compression needs no configuration here: the driver decompresses responses itself, whatever the
+    /// <paramref name="httpClientFactory"/> produces. Leave
+    /// <see cref="HttpClientHandler.AutomaticDecompression"/> at its default of
+    /// <see cref="System.Net.DecompressionMethods.None"/> — setting a mask makes .NET add those codecs to
+    /// the outgoing <c>Accept-Encoding</c>, which can override the codec you asked for via
+    /// <see cref="ClickHouseClientSettings.AcceptEncoding"/>.
     /// </item>
     /// <item>
     /// The <paramref name="httpClientFactory"/> must set the timeout for its clients if needed.
@@ -88,8 +83,12 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
     /// <remarks>
     /// <list type="bullet">
     /// <item>
-    /// If compression is not disabled in the <paramref name="settings"/>, and an HttpClient or HttpClientFactory is provided,
-    /// they must be configured to enable <see cref="HttpClientHandler.AutomaticDecompression"/> for its generated clients with GZip and Deflate methods.
+    /// Compression needs no configuration: the driver decompresses responses itself, so an HttpClient or
+    /// HttpClientFactory provided in <paramref name="settings"/> should leave
+    /// <see cref="HttpClientHandler.AutomaticDecompression"/> at its default of
+    /// <see cref="System.Net.DecompressionMethods.None"/>. Setting a mask makes .NET add those codecs to the
+    /// outgoing <c>Accept-Encoding</c>, which can override
+    /// <see cref="ClickHouseClientSettings.AcceptEncoding"/>.
     /// </item>
     /// </list>
     /// </remarks>

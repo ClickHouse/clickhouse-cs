@@ -49,8 +49,9 @@ If something is missing, or you found a mistake in one of these examples, please
 - [Select_002_SelectMetadata.cs](Select/Select_002_SelectMetadata.cs) - Column metadata overview
 - [Select_003_SelectWithParameterBinding.cs](Select/Select_003_SelectWithParameterBinding.cs) - Parameterized queries for safe and dynamic SQL construction
 - [Select_004_ExportToFile.cs](Select/Select_004_ExportToFile.cs) - Exporting query results to files (JSONEachRow, Parquet, etc.)
-- [Select_005_CompressedRawExport.cs](Select/Select_005_CompressedRawExport.cs) - Per-query `AcceptEncoding` override for raw exports (e.g. gzipped Parquet) using `ExecuteRawResultAsync`
+- [Select_005_CompressedRawExport.cs](Select/Select_005_CompressedRawExport.cs) - Per-query `AcceptEncoding` override to stream a compressed raw export (e.g. LZ4-compressed Parquet) straight to a file with `ExecuteRawResultAsync`
 - [Select_006_PocoSelect.cs](Select/Select_006_PocoSelect.cs) - Reading query results into strongly-typed POCO objects with `QueryAsync<T>` (streaming) and `reader.MapTo<T>` (per-row), including `[ClickHouseColumn(Name)]` aliases and `[ClickHouseNotMapped]` exclusion
+- [Select_007_ResponseCompression.cs](Select/Select_007_ResponseCompression.cs) - Transport compression of responses: the codec the driver negotiates by default, how to override it with `AcceptEncoding`, and why raw exports are exempt
 
 ### Data Types
 

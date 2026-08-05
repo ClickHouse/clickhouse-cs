@@ -7,7 +7,9 @@ internal class DefaultHttpClientHandler : HttpClientHandler
 {
     public DefaultHttpClientHandler(bool skipServerCertificateValidation)
     {
-        AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+        // Deliberately off: see HttpHandlerProvider.CreateHandler for why the driver decodes responses
+        // itself rather than letting the framework do it.
+        AutomaticDecompression = DecompressionMethods.None;
 
         if (skipServerCertificateValidation)
         {

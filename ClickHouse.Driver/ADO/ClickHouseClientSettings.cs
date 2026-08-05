@@ -99,6 +99,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Copy read value converter
         ReadValueConverter = other.ReadValueConverter;
+
+        // Copy accept encoding
+        AcceptEncoding = other.AcceptEncoding;
     }
 
     /// <summary>
@@ -153,7 +156,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public string BearerToken { get; init; }
 
     /// <summary>
-    /// Gets or sets whether to use compression for data transfer.
+    /// Gets or sets whether to use compression for data transfer. This is the master switch: when false
+    /// the driver advertises no <c>Accept-Encoding</c> at all, unless <see cref="AcceptEncoding"/> names
+    /// one explicitly.
     /// Default: true
     /// </summary>
     public bool UseCompression { get; init; } = ClickHouseDefaults.Compression;
@@ -235,9 +240,17 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets a custom HttpClient to use for connections.
-    /// Note: HttpClient must have AutomaticDecompression enabled if compression is not disabled.
+    /// Note: the driver decodes compressed responses itself, so AutomaticDecompression is optional.
     /// Default: null (driver will create its own)
     /// </summary>
+    /// <remarks>
+    /// <c>AutomaticDecompression</c> is not only a response-side setting: at send time the handler also
+    /// <i>adds</i> every algorithm in its mask that is missing from <c>Accept-Encoding</c>. A handler
+    /// supplied here with a mask therefore widens whatever the driver advertises — including an exact
+    /// <see cref="AcceptEncoding"/> — and ClickHouse may then answer with a codec you did not ask for.
+    /// Leave the mask at <see cref="System.Net.DecompressionMethods.None"/> (as the driver's own handler
+    /// does) to keep an explicit codec choice intact.
+    /// </remarks>
     public HttpClient HttpClient { get; init; }
 
     /// <summary>
@@ -358,6 +371,25 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public IReadValueConverter ReadValueConverter { get; init; }
 
     /// <summary>
+    /// Gets or sets the <c>Accept-Encoding</c> sent with every request, overriding the codecs the driver
+    /// advertises by default (<c>lz4, gzip, deflate</c> — see remarks). Whichever codec the server then
+    /// answers with is decoded transparently; <c>zstd</c> and <c>snappy</c> cannot be decoded and will
+    /// fail with an actionable error. Can be overridden per query by
+    /// <see cref="QueryOptions.AcceptEncoding"/>.
+    /// Default: null (advertise the codecs the driver can decode)
+    /// </summary>
+    /// <remarks>
+    /// ClickHouse scans this header in its own fixed preference order (<c>zstd</c> &gt; <c>br</c> &gt;
+    /// <c>lz4</c> &gt; <c>snappy</c> &gt; <c>gzip</c> &gt; <c>deflate</c>) and ignores q-values, so the
+    /// only way to steer its choice is which tokens are listed. Setting this forces
+    /// <c>enable_http_compression=1</c> and applies to
+    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/> too, which otherwise advertises no codec at
+    /// all, so that a body handed over verbatim arrives exactly as the server sent it — naming a codec
+    /// here is how a caller asks for a compressed export on purpose.
+    /// </remarks>
+    public string AcceptEncoding { get; init; }
+
+    /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
     /// Values not specified in the connection string will use default values.
     /// </summary>
@@ -407,6 +439,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Roles = builder.Roles,
             JsonReadMode = builder.JsonReadMode,
             JsonWriteMode = builder.JsonWriteMode,
+            AcceptEncoding = builder.AcceptEncoding,
         };
 
         // Extract custom settings from connection string builder
@@ -458,6 +491,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
                ReadValueConverter == other.ReadValueConverter &&
+               AcceptEncoding == other.AcceptEncoding &&
                Roles.SequenceEqual(other.Roles) &&
                CustomHeaders.EntriesEqual(other.CustomHeaders) &&
                ApplicationInfo.EntriesEqual(other.ApplicationInfo);
@@ -500,6 +534,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(ParameterTypeResolver);
         hash.Add(ParameterFormatter);
         hash.Add(ReadValueConverter);
+        hash.Add(AcceptEncoding);
         foreach (var kvp in CustomSettings)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
@@ -549,6 +584,11 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"ReadBufferSize={ReadBufferSize};" +
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode};" +
                $"UseFormDataParameters={UseFormDataParameters}";
+
+        if (!string.IsNullOrEmpty(AcceptEncoding))
+        {
+            result += $";AcceptEncoding={AcceptEncoding}";
+        }
 
         if (Roles.Count > 0)
         {
