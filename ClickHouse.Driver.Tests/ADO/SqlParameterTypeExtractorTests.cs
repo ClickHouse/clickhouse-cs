@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ClickHouse.Driver.ADO.Parameters;
 using NUnit.Framework;
 
@@ -288,13 +289,15 @@ public class SqlParameterTypeExtractorTests
     }
 
     [Test]
-    public void ExtractTypeHints_ParameterInHashCommentNoSpace_IgnoresComment()
+    public void ExtractTypeHints_BareHash_NotTreatedAsComment()
     {
-        var sql = "SELECT {val:Int32} #{val:String}";
+        // Only "# " and "#!" start a comment; a bare "#" is not a comment marker for the server either
+        var sql = "SELECT {val:Int32} #{other:String}";
         var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
 
-        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints, Has.Count.EqualTo(2));
         Assert.That(hints["val"], Is.EqualTo("Int32"));
+        Assert.That(hints["other"], Is.EqualTo("String"));
     }
 
     [Test]
@@ -441,5 +444,178 @@ public class SqlParameterTypeExtractorTests
 
         Assert.That(hints, Has.Count.EqualTo(1));
         Assert.That(hints["val"], Is.EqualTo("String"));
+    }
+
+    private static IEnumerable<string> HintInsideCommentOrQuotedToken()
+    {
+        yield return "SELECT {val:Int32} // {val:String}";
+        yield return "SELECT {val:Int32} /* a /* b */ {val:String} */";
+        yield return "SELECT {val:Int32} AS `x {val:String}`";
+        yield return "SELECT {val:Int32} AS \"x {val:String}\"";
+        yield return "SELECT {val:Int32}, $$ {val:String} $$";
+        yield return "SELECT {val:Int32}, $tag$ {val:String} $tag$";
+        // A heredoc still opens where a token starts, including at the very beginning of the query
+        // and directly after a quoted token
+        yield return "$$ {val:String} $$, {val:Int32}";
+        yield return "SELECT 1 AS `x`$t$ {val:String} $t$, {val:Int32}";
+        yield return "SELECT {val:Int32},$t$ {val:String} $t$";
+        yield return "SELECT {val:Int32},\n$t$ {val:String} $t$";
+        yield return "SELECT {val:Int32}, 'a\\' {val:String} b'";
+    }
+
+    [TestCaseSource(nameof(HintInsideCommentOrQuotedToken))]
+    public void ExtractTypeHints_HintInsideCommentOrQuotedToken_HintIgnored(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    private static IEnumerable<string> CommentOrQuotedTokenPrecedingHint()
+    {
+        yield return "SELECT 1 // comment\n, {val:Int32}";
+        yield return "SELECT 1 AS `a--b`, {val:Int32}";
+        yield return "SELECT 1 AS `a\\`--b`, {val:Int32}";
+        yield return "SELECT 1 AS `a`` --b`, {val:Int32}";
+        yield return "SELECT 1 AS \"a'b\", {val:Int32}";
+        yield return "SELECT 1 AS \"a\"\" --b\", {val:Int32}";
+        yield return "SELECT $$--$$, {val:Int32}";
+        yield return "SELECT $tag$ # $tag$, {val:Int32}";
+        yield return "SELECT 'a\\'b', {val:Int32}";
+        yield return "SELECT 'a\\\\', {val:Int32}";
+    }
+
+    private static IEnumerable<string> DollarSignThatDoesNotOpenAHeredoc()
+    {
+        // No closing tag
+        yield return "SELECT $tag$, {val:Int32}";
+        // Tags are empty or ASCII word characters only
+        yield return "SELECT $a-b$, {val:Int32}, $a-b$";
+        yield return "SELECT $a b$, {val:Int32}, $a b$";
+        // A $ that continues a token belongs to it and cannot open a heredoc: the server lexes
+        // b$c$ as a single identifier, so WITH 1 AS b$c$ SELECT {val:Int32}, b$c$ substitutes
+        yield return "SELECT b$c$, {val:Int32}, b$c$";
+        yield return "SELECT a1$c$, {val:Int32}, a1$c$";
+        yield return "SELECT a_$c$, {val:Int32}, a_$c$";
+        yield return "SELECT a$$c$ , {val:Int32} , $c$";
+        // The same query may also contain a real heredoc, whose own hint stays ignored
+        yield return "WITH 1 AS b$c$ SELECT b$c$, {val:Int32}, $t$ {val:String} $t$";
+    }
+
+    [TestCaseSource(nameof(DollarSignThatDoesNotOpenAHeredoc))]
+    public void ExtractTypeHints_DollarSignNotOpeningHeredoc_HintStillExtracted(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [TestCaseSource(nameof(CommentOrQuotedTokenPrecedingHint))]
+    public void ExtractTypeHints_CommentOrQuotedTokenPrecedingHint_HintStillExtracted(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    private static IEnumerable<TestCaseData> QuotedTokenInsideTypeHint()
+    {
+        yield return new TestCaseData(@"SELECT {p:Enum8('a\'b' = 1)}", @"Enum8('a\'b' = 1)");
+        yield return new TestCaseData("SELECT tupleElement({p:Tuple(`a}b` UInt8)}, 'a}b')", "Tuple(`a}b` UInt8)");
+        yield return new TestCaseData("SELECT {p:Tuple(\"a}b\" UInt8)}", "Tuple(\"a}b\" UInt8)");
+        yield return new TestCaseData(
+            "SELECT tupleElement({p:Tuple(`a``}b` UInt8)}, 'a`}b')",
+            "Tuple(`a``}b` UInt8)");
+    }
+
+    [TestCaseSource(nameof(QuotedTokenInsideTypeHint))]
+    public void ExtractTypeHints_QuotedTokenInsideTypeHint_ReturnsFullType(string sql, string expectedType)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["p"], Is.EqualTo(expectedType));
+    }
+
+    private static IEnumerable<string> UnterminatedQuotedToken()
+    {
+        // Unterminated quoted identifier before the hint
+        yield return "SELECT 1 AS \"a, {val:Int32}";
+        // Unterminated quoted identifier inside the type of the hint
+        yield return "SELECT {val:Tuple(`a UInt8)}";
+    }
+
+    [TestCaseSource(nameof(UnterminatedQuotedToken))]
+    public void ExtractTypeHints_UnterminatedQuotedToken_ReturnsEmptyDictionary(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Is.Empty);
+    }
+    [Test]
+    [TestCase("SELECT 1 AS `x{y`, {val:Int32}")]
+    [TestCase("SELECT 1 AS \"x{y\", {val:Int32}")]
+    [TestCase("SELECT $$x{y$$, {val:Int32}")]
+    [TestCase("SELECT 1 // x{y\n, {val:Int32}")]
+    [TestCase("SELECT 1 AS `x{a:b{c`, {val:Int32}")]
+    [TestCase("SELECT {val:Int32}, 1 AS `y{a b:Int32}`")]
+    [TestCase("SELECT {val:Int32} SETTINGS additional_table_filters = {'t': 'a > 0'}")]
+    public void ExtractTypeHints_BraceThatIsNotATypeHint_HintStillExtracted(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    [TestCase("SELECT {a}, {val:Int32}")]
+    [TestCase("SELECT {a:Int32, {val:Int32}")]
+    public void ExtractTypeHints_MalformedBracePrecedingHint_HintStillExtracted(string sql)
+    {
+        // The server rejects both of these queries; the cases pin that a malformed brace cannot
+        // corrupt hint extraction for the rest of the query.
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints["val"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    [TestCase("SELECT {a}")]
+    [TestCase("SELECT {a}, {b}")]
+    public void ExtractTypeHints_ParameterWithoutType_NotIncluded(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Is.Empty);
+    }
+
+    [Test]
+    [TestCase("SELECT {`a`:Int32}")]
+    [TestCase("SELECT {\"a\":Int32}")]
+    [TestCase("SELECT {a.b:Int32}")]
+    public void ExtractTypeHints_NameThatIsNotABareWord_NotIncluded(string sql)
+    {
+        // A parameter name is a bare word, so a quoted identifier is not a valid name: the server
+        // rejects all three of these queries.
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Is.Empty);
+    }
+
+    [Test]
+    [TestCase("SELECT {$p_1:Int32}", "$p_1")]
+    [TestCase("SELECT {1a:Int32}", "1a")]
+    [TestCase("SELECT {a\n:Int32}", "a")]
+    public void ExtractTypeHints_UnusualButValidParameterName_ReturnsType(string sql, string expectedName)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints, Has.Count.EqualTo(1));
+        Assert.That(hints[expectedName], Is.EqualTo("Int32"));
     }
 }
