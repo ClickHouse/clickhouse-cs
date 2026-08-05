@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
@@ -569,13 +570,9 @@ public class JsonModeTests
         var options = new QueryOptions { QueryId = queryId };
         await client.ExecuteScalarAsync("SELECT 1", options: options);
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        var wasSent = await WasSettingSentAsync(client, queryId, "input_format_binary_read_json_as_string");
 
-        var result = await client.ExecuteScalarAsync(
-            $"SELECT Settings['input_format_binary_read_json_as_string'] FROM system.query_log " +
-            $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
-
-        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
+        Assert.That(wasSent, Is.False, "None mode should not send the setting to the server");
     }
 
     [Test]
@@ -610,14 +607,53 @@ public class JsonModeTests
         var options = new QueryOptions { QueryId = queryId };
         await client.ExecuteScalarAsync("SELECT 1", options: options);
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        var wasSent = await WasSettingSentAsync(client, queryId, "output_format_binary_write_json_as_string");
 
-        // The query_log Settings map should NOT contain output_format_binary_write_json_as_string
-        var result = await client.ExecuteScalarAsync(
-            $"SELECT Settings['output_format_binary_write_json_as_string'] FROM system.query_log " +
-            $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
+        Assert.That(wasSent, Is.False, "None mode should not send the setting to the server");
+    }
 
-        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
+    /// <summary>
+    /// Reports whether <paramref name="settingName"/> was sent to the server for the query
+    /// identified by <paramref name="queryId"/>, according to system.query_log.
+    /// </summary>
+    /// <remarks>
+    /// Two details make the naive lookup unreliable, and both are handled here.
+    /// <para>
+    /// First, the row has to exist before it can be judged. SYSTEM FLUSH LOGS only flushes what the
+    /// server has already queued, and a query's QueryFinish record is queued independently of the
+    /// HTTP response reaching the client, so a flush issued right after the query can miss it. The
+    /// lookup then matches no rows at all, which is not the same answer as "the setting was absent".
+    /// Retry the flush-and-read until the row materialises, and fail loudly if it never does.
+    /// </para>
+    /// <para>
+    /// Second, ask the map directly with mapContains instead of reading Settings[name] and comparing
+    /// against "". A missing key yields an empty string, so the emptiness of that value cannot
+    /// distinguish "setting absent" from "no query_log row yet" — which is exactly how a missing row
+    /// used to surface as a spurious "None mode should not send the setting" failure.
+    /// </para>
+    /// </remarks>
+    private static async Task<bool> WasSettingSentAsync(ClickHouseClient client, string queryId, string settingName)
+    {
+        const int maxAttempts = 20;
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+
+            var present = await client.ExecuteScalarAsync(
+                $"SELECT mapContains(Settings, '{settingName}') FROM system.query_log " +
+                $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
+
+            // null means the lookup matched no rows, i.e. the record is not visible yet.
+            if (present != null && present != DBNull.Value)
+                return Convert.ToBoolean(present, CultureInfo.InvariantCulture);
+
+            await Task.Delay(100);
+        }
+
+        Assert.Fail(
+            $"No QueryFinish row for query_id '{queryId}' appeared in system.query_log after " +
+            $"{maxAttempts} flush attempts, so whether '{settingName}' was sent could not be determined.");
+        return false; // unreachable: Assert.Fail throws.
     }
 
     #region JSON Roundtrip Tests
