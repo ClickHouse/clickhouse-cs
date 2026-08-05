@@ -97,8 +97,35 @@ internal static class SqlParameterTypeExtractor
         if (sql[startIndex] != '{')
             return (null, null, 0);
 
-        // Find the colon that separates name from type
-        var colonIndex = sql.IndexOf(':', startIndex + 1);
+        // Find the colon that separates name from type, searching only within this parameter's own
+        // name: it must be a single run of parameter name characters, optionally surrounded by
+        // whitespace. Otherwise a brace that is not a type hint, such as one inside a backtick-quoted
+        // alias, would consume the colon of a later parameter and silently drop its hint.
+        var colonIndex = -1;
+        var nameLength = 0;
+        var afterName = false;
+
+        for (var j = startIndex + 1; j < sql.Length; j++)
+        {
+            var nameChar = sql[j];
+            if (nameChar == ':')
+            {
+                colonIndex = j;
+                break;
+            }
+
+            if (char.IsWhiteSpace(nameChar))
+            {
+                afterName = nameLength > 0;
+                continue;
+            }
+
+            if (afterName || !IsParameterNameChar(nameChar))
+                return (null, null, 0);
+
+            nameLength++;
+        }
+
         if (colonIndex < 0)
             return (null, null, 0);
 
@@ -120,6 +147,12 @@ internal static class SqlParameterTypeExtractor
                 // Quoted token within the type, e.g. an Enum value or a named tuple element
                 i = SkipQuotedToken(sql, i);
             }
+            else if (c == '{')
+            {
+                // A type definition never contains an opening brace, so this parameter is
+                // unterminated and the brace starts a new one
+                return (null, null, 0);
+            }
             else if (c == '}')
             {
                 // End of parameter
@@ -139,6 +172,14 @@ internal static class SqlParameterTypeExtractor
         // Unterminated parameter
         return (null, null, 0);
     }
+
+    /// <summary>
+    /// Determines whether the character can appear in a ClickHouse query parameter name. The server
+    /// parses the name as a bare word, which is narrower than an identifier: a quoted identifier such
+    /// as {`a`:Int32} or {"a":Int32} is rejected as a syntax error. Only ASCII word characters and $.
+    /// </summary>
+    private static bool IsParameterNameChar(char c) =>
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
 
     /// <summary>
     /// Skips to the end of a line
@@ -221,11 +262,16 @@ internal static class SqlParameterTypeExtractor
     /// <summary>
     /// Tries to skip a heredoc starting at a $ sign: $tag$ ... $tag$, where the tag is empty or
     /// consists of ASCII word characters. Returns false if this $ does not open a terminated heredoc,
-    /// in which case it is an ordinary character.
+    /// in which case it is an ordinary character. A heredoc can only begin at a token boundary, see
+    /// <see cref="IsTokenChar"/>.
     /// </summary>
     private static bool TrySkipHeredoc(string sql, int startIndex, out int endIndex)
     {
         endIndex = 0;
+
+        // A $ that continues a token cannot open a heredoc: the server lexes b$c$ as one identifier
+        if (startIndex > 0 && IsTokenChar(sql[startIndex - 1]))
+            return false;
 
         var i = startIndex + 1;
         while (i < sql.Length && IsHeredocTagChar(sql[i]))
@@ -245,4 +291,15 @@ internal static class SqlParameterTypeExtractor
 
     private static bool IsHeredocTagChar(char c) =>
         (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+
+    /// <summary>
+    /// Determines whether the character can continue an ordinary token, so that a $ following it is
+    /// part of that token rather than the start of a heredoc. The server lexes a word token as a run
+    /// of ASCII word characters and dollar signs, so b$c$ is one identifier and not a heredoc opener.
+    /// Looking only at the preceding character misses the case where it ends a literal instead of a
+    /// word, as in 1$tag$...$tag$ or $$a$$$tag$...$tag$, where the server does open a heredoc. Both
+    /// shapes place two literals next to each other, which the server rejects as a syntax error, so
+    /// no query it accepts is affected.
+    /// </summary>
+    private static bool IsTokenChar(char c) => IsHeredocTagChar(c) || c == '$';
 }
