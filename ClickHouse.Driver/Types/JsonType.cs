@@ -106,15 +106,16 @@ internal class JsonType : ParameterizedType
             .Where(childNode => !IsJsonSetting(childNode.Value))
             .Select(childNode =>
             {
-                var hintParts = childNode.Value.Split(' ');
-                if (hintParts.Length != 2)
+                var separator = childNode.Value.IndexOfNameTypeSeparator();
+                var hintedTypeName = separator > 0 ? childNode.Value.Substring(separator + 1).Trim() : string.Empty;
+                if (separator <= 0 || hintedTypeName.Length == 0)
                 {
                     throw new SerializationException($"Unsupported path in JSON hint: {childNode.Value}");
                 }
 
                 var hintTypeSyntaxTreeNode = new SyntaxTreeNode
                 {
-                    Value = hintParts[1],
+                    Value = hintedTypeName,
                 };
 
                 foreach (var childNodeChildNode in childNode.ChildNodes)
@@ -123,7 +124,7 @@ internal class JsonType : ParameterizedType
                 }
 
                 return (
-                    path: hintParts[0].Trim('`'),
+                    path: childNode.Value.Substring(0, separator).DiscloseColumnName(),
                     type: parseClickHouseType(hintTypeSyntaxTreeNode));
             })
             .ToDictionary(
