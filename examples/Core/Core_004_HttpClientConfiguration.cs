@@ -120,7 +120,7 @@ public static class HttpClientConfiguration
 
         var handler = new HttpClientHandler
         {
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            // No AutomaticDecompression: the driver decompresses responses itself (see Example 1).
             ServerCertificateCustomValidationCallback = (message, cert, chain, sslPolicyErrors) =>
             {
                 // Example: Accept specific certificate thumbprint
@@ -167,7 +167,7 @@ public static class HttpClientConfiguration
 
         var handler = new HttpClientHandler
         {
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            // No AutomaticDecompression: the driver decompresses responses itself (see Example 1).
 
             // Enable proxy
             UseProxy = true,
@@ -237,7 +237,7 @@ public static class HttpClientConfiguration
         {
             var handler = new SocketsHttpHandler
             {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                // No AutomaticDecompression: the driver decompresses responses itself (see Example 1).
                 MaxConnectionsPerServer = 10, // Controls connection pool size
                 PooledConnectionIdleTimeout = TimeSpan.FromSeconds(5), // Always set to a value lower than server-side idle timeout (10s for Cloud)
             };

@@ -78,18 +78,12 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <remarks>
     /// <list type="bullet">
     /// <item>
-    /// If compression is not disabled in the <paramref name="connectionString"/>, the <paramref name="httpClientFactory"/>
-    /// may enable <see cref="HttpClientHandler.AutomaticDecompression"/> for its generated clients, though the
-    /// driver no longer needs it — it decodes compressed responses itself.
-    /// <example>
-    /// For example you can do this while registering the HTTP client:
-    /// <code>
-    /// services.AddHttpClient("ClickHouseClient").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-    /// {
-    ///     AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
-    /// });
-    /// </code>
-    /// </example>
+    /// Compression needs no configuration here: the driver decompresses responses itself, whatever the
+    /// <paramref name="httpClientFactory"/> produces. Leave
+    /// <see cref="HttpClientHandler.AutomaticDecompression"/> at its default of
+    /// <see cref="System.Net.DecompressionMethods.None"/> — setting a mask makes .NET add those codecs to
+    /// the outgoing <c>Accept-Encoding</c>, which can override the codec you asked for via
+    /// <see cref="ClickHouseClientSettings.AcceptEncoding"/>.
     /// </item>
     /// <item>
     /// The <paramref name="httpClientFactory"/> must set the timeout for its clients if needed.
