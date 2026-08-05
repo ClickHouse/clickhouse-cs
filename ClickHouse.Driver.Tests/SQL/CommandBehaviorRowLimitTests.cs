@@ -13,6 +13,12 @@ public class CommandBehaviorRowLimitTests : AbstractConnectionTestFixture
     [TestCase("SELECT 13 AS a /* trailing comment */", TestName = "block_comment")]
     [TestCase("SELECT 13 AS a;", TestName = "semicolon")]
     [TestCase("SELECT 13 AS a; -- trailing comment", TestName = "semicolon_comment")]
+    [TestCase("SELECT 13 AS a // trailing comment", TestName = "slash_comment")]
+    [TestCase("SELECT 13 AS a; // trailing comment", TestName = "semicolon_slash_comment")]
+    [TestCase("SELECT 13 AS a; /* outer /* inner */ */", TestName = "semicolon_nested_block_comment")]
+    [TestCase("SELECT 'a\\'' AS a;", TestName = "semicolon_after_backslash_escaped_quote")]
+    [TestCase("SELECT 13 AS \"a#b\";", TestName = "semicolon_after_quoted_identifier_with_hash")]
+    [TestCase("SELECT $$it's$$ AS a;", TestName = "semicolon_after_heredoc")]
     public async Task ExecuteReaderAsync_SchemaOnlyWithTrailingCommentOrSemicolon_ReturnsNoRows(string sql)
     {
         using var command = connection.CreateCommand();
@@ -31,6 +37,9 @@ public class CommandBehaviorRowLimitTests : AbstractConnectionTestFixture
     [TestCase("SELECT * FROM numbers(10) # trailing comment", TestName = "hash_comment")]
     [TestCase("SELECT * FROM numbers(10);", TestName = "semicolon")]
     [TestCase("SELECT * FROM numbers(10); -- trailing comment", TestName = "semicolon_comment")]
+    [TestCase("SELECT * FROM numbers(10) // trailing comment", TestName = "slash_comment")]
+    [TestCase("SELECT * FROM numbers(10); // trailing comment", TestName = "semicolon_slash_comment")]
+    [TestCase("SELECT * FROM numbers(10); /* outer /* inner */ */", TestName = "semicolon_nested_block_comment")]
     public async Task ExecuteReaderAsync_SingleRowWithTrailingCommentOrSemicolon_ReturnsOneRow(string sql)
     {
         using var command = connection.CreateCommand();

@@ -1,4 +1,4 @@
-using System;
+using ClickHouse.Driver.ADO.Parameters;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -8,8 +8,8 @@ namespace ClickHouse.Driver.ADO;
 /// A naive verbatim append breaks two ways: a trailing single-line comment (<c>--</c> / <c>#</c>)
 /// swallows the appended clause, and a trailing statement terminator (<c>;</c>) turns the query into
 /// a rejected multi-statement. This helper strips a trailing terminator and puts the clause on its own
-/// line, scanning the text in a string/comment-aware manner (mirroring <see cref="Parameters.SqlParameterTypeExtractor"/>)
-/// so that semicolons and comment markers inside string literals or comments are left untouched.
+/// line, scanning the text with <see cref="SqlTextScanner"/> so that semicolons and comment markers
+/// inside quoted strings and identifiers, heredocs or comments are left untouched.
 /// </summary>
 internal static class RowLimitAppender
 {
@@ -30,8 +30,11 @@ internal static class RowLimitAppender
 
     /// <summary>
     /// Returns the index of a top-level <c>;</c> that is followed only by whitespace and/or comments
-    /// (a trailing statement terminator), or <c>-1</c> if there is none. Semicolons inside string
-    /// literals or comments, and semicolons followed by further SQL code, are not reported.
+    /// (a trailing statement terminator), or <c>-1</c> if there is none. Semicolons inside quoted
+    /// strings and identifiers, heredocs or comments, and semicolons followed by further SQL code,
+    /// are not reported. The token rules are the server's, shared with
+    /// <see cref="SqlPlaceholderRewriter"/> through <see cref="SqlTextScanner"/>: diverging from
+    /// them would make this scanner disagree with the server about where a statement ends.
     /// </summary>
     private static int FindTrailingSemicolon(string sql)
     {
@@ -42,23 +45,39 @@ internal static class RowLimitAppender
         {
             var c = sql[i];
 
-            if (c == '\'')
+            if (c == '\'' || c == '"' || c == '`')
             {
-                // String literal is code: it cancels any pending trailing terminator.
+                // String literal or quoted identifier is code: it cancels a pending terminator.
                 trailingSemicolon = -1;
-                i = SkipString(sql, i + 1);
+                i = SqlTextScanner.SkipQuoted(sql, i);
             }
             else if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
             {
-                i = SkipToEndOfLine(sql, i + 2);
+                // SQL-style line comment: -- (skip to end of line)
+                i = SqlTextScanner.SkipToEndOfLine(sql, i + 2);
             }
-            else if (c == '#')
+            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '/')
             {
-                i = SkipToEndOfLine(sql, i + 1);
+                // C++-style line comment: // (skip to end of line)
+                i = SqlTextScanner.SkipToEndOfLine(sql, i + 2);
+            }
+            else if (c == '#' && i + 1 < sql.Length && (sql[i + 1] == ' ' || sql[i + 1] == '!'))
+            {
+                // MySQL-style line comment: only "# " and "#!" start one, a bare "#x" does not
+                i = SqlTextScanner.SkipToEndOfLine(sql, i + 2);
             }
             else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
             {
-                i = SkipBlockComment(sql, i + 2);
+                // C-style block comment: /* ... */, nestable (skip to the matching */)
+                i = SqlTextScanner.SkipBlockComment(sql, i + 2);
+            }
+            else if (c == '$')
+            {
+                // Heredoc: $$ ... $$ or $tag$ ... $tag$ (-1 when this $ does not open one). Either
+                // way what is skipped is code, so a pending terminator is cancelled.
+                var afterHeredoc = SqlTextScanner.TrySkipHeredoc(sql, i);
+                trailingSemicolon = -1;
+                i = afterHeredoc < 0 ? i + 1 : afterHeredoc;
             }
             else if (c == ';')
             {
@@ -79,52 +98,5 @@ internal static class RowLimitAppender
         }
 
         return trailingSemicolon;
-    }
-
-    /// <summary>
-    /// Skips a single-quoted string literal. <paramref name="i"/> is the index of the first character
-    /// after the opening quote. A doubled quote (<c>''</c>) is an escaped quote, matching how
-    /// <see cref="Parameters.SqlParameterTypeExtractor"/> scans string literals. Returns the index of the
-    /// first character after the closing quote, or <c>sql.Length</c> if the string is unterminated.
-    /// </summary>
-    private static int SkipString(string sql, int i)
-    {
-        while (i < sql.Length)
-        {
-            if (sql[i] == '\'')
-            {
-                // Doubled quote ('') is an escaped quote, not a terminator.
-                if (i + 1 < sql.Length && sql[i + 1] == '\'')
-                {
-                    i += 2;
-                    continue;
-                }
-
-                return i + 1;
-            }
-
-            i++;
-        }
-
-        return i;
-    }
-
-    /// <summary>
-    /// Skips to the first character after the next newline, or <c>sql.Length</c> if none.
-    /// </summary>
-    private static int SkipToEndOfLine(string sql, int startIndex)
-    {
-        var newlineIndex = sql.IndexOf('\n', startIndex);
-        return newlineIndex < 0 ? sql.Length : newlineIndex + 1;
-    }
-
-    /// <summary>
-    /// Skips a C-style block comment (after <c>/*</c>). Returns the index after <c>*/</c>, or
-    /// <c>sql.Length</c> if unterminated.
-    /// </summary>
-    private static int SkipBlockComment(string sql, int startIndex)
-    {
-        var endIndex = sql.IndexOf("*/", startIndex, StringComparison.Ordinal);
-        return endIndex < 0 ? sql.Length : endIndex + 2;
     }
 }
