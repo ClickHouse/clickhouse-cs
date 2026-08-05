@@ -199,95 +199,42 @@ public class TupleTypeTests : AbstractConnectionTestFixture
         });
     }
 
-    [Test]
-    [TestCase("Tuple(`a b` Int64, c String)", "Int64", "String")]
-    [TestCase("Tuple(`a b` Decimal(10, 2), c String)", "Decimal64(2)", "String")]
-    [TestCase("Tuple(`a b` Map(String, Array(Int32)), c String)", "Map(String, Array(Int32))", "String")]
-    [TestCase("Tuple(`a,b` Int64, c String)", "Int64", "String")]
-    [TestCase("Tuple(`a(b)` Int64, c String)", "Int64", "String")]
-    [TestCase(@"Tuple(`a\`b` Int64, c String)", "Int64", "String")]
-    [TestCase(@"Tuple(`a\'b` Int64, c String)", "Int64", "String")]
-    [TestCase("Tuple(`a.b c` Int64, `d e` String)", "Int64", "String")]
-    [TestCase(@"Tuple(`a\nb c` Int64, d String)", "Int64", "String")]
-    [TestCase(@"Tuple(`a\\` Int64, d String)", "Int64", "String")]
-    [TestCase("Tuple(`a``b c` Int64, d String)", "Int64", "String")]
-    [TestCase("Nested(`a b` Int64, c String)", "Int64", "String")]
-    [TestCase("Nested(`a b` Decimal(10, 2), c String)", "Decimal64(2)", "String")]
-    [TestCase("Nested(`a,b` Nullable(String), c String)", "Nullable(String)", "String")]
-    public void ParseClickHouseType_ElementNameIsBacktickQuoted_ResolvesElementTypes(string typeString, string firstElementType, string secondElementType)
-    {
-        var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
-
-        var tupleType = (TupleType)type;
-        Assert.That(
-            tupleType.UnderlyingTypes.Select(t => t.ToString()),
-            Is.EqualTo(new[] { firstElementType, secondElementType }).AsCollection);
-    }
+    /// <summary>
+    /// Element names which the server requires to be backtick-quoted, in the spelling it both
+    /// accepts in DDL and reports back in the column type. The escape forms are the server's own:
+    /// <c>\`</c> for a backtick, <c>\'</c> for a single quote, <c>\n</c>/<c>\t</c>/<c>\r</c> for
+    /// whitespace and <c>\\</c> for a backslash.
+    /// </summary>
+    private static readonly string[] QuotedElementNames =
+    [
+        "`a b`",
+        "`a b c`",
+        "`a,b`",
+        "`a(b)`",
+        "`a.b c`",
+        @"`a\'b`",
+        @"`a\`b c`",
+        @"`a\nb c`",
+        @"`a\tb c`",
+        @"`a\rb c`",
+        @"`a\\`",
+    ];
 
     [Test]
-    [TestCase("Tuple(String, Int32)", "String", "Int32")]
-    [TestCase("Tuple(name String, age Int32)", "String", "Int32")]
-    [TestCase("Tuple(id Int32, value Decimal(10, 2))", "Int32", "Decimal64(2)")]
-    [TestCase("Nested(Id Nullable(String), Comment Nullable(String))", "Nullable(String)", "Nullable(String)")]
-    [TestCase("Nested(Id Int64, Text String)", "Int64", "String")]
-    public void ParseClickHouseType_ElementNameIsNotQuoted_ResolvesElementTypes(string typeString, string firstElementType, string secondElementType)
+    [TestCaseSource(nameof(QuotedElementNames))]
+    public async Task ShouldRoundTripTupleColumn_WithBacktickQuotedElementName_ReturnsElements(string elementName)
     {
-        var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+        var targetTable = CreateTableName($"quoted_element_{elementName}");
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {targetTable} (t Tuple({elementName} Int64, r String)) ENGINE Memory");
+        await client.ExecuteNonQueryAsync($"INSERT INTO {targetTable} VALUES ((1, 'a'))");
 
-        var tupleType = (TupleType)type;
-        Assert.That(
-            tupleType.UnderlyingTypes.Select(t => t.ToString()),
-            Is.EqualTo(new[] { firstElementType, secondElementType }).AsCollection);
-    }
-
-    [Test]
-    [TestCase("Array(Tuple(`a b` Int64, c String))", "Array(Tuple(Int64,String))")]
-    [TestCase("Map(String, Tuple(`a b` Int64, c String))", "Map(String, Tuple(Int64,String))")]
-    [TestCase("Tuple(`a b` Tuple(`c d` Int64, e String))", "Tuple(Tuple(Int64,String))")]
-    [TestCase("Tuple(`a b` Int64)", "Tuple(Int64)")]
-    public void ParseClickHouseType_QuotedElementNameIsWrappedInAnotherType_ResolvesWholeType(string typeString, string expectedType)
-    {
-        var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
-
-        Assert.That(type.ToString(), Is.EqualTo(expectedType));
-    }
-
-    [Test]
-    public void ParseClickHouseType_QuotedElementNameWithSingleQuotedElementType_ResolvesElementTypes()
-    {
-        // A backtick-quoted element name next to an element type carrying single-quoted arguments:
-        // both quote kinds have to be honoured by the same declaration.
-        var type = (TupleType)TypeConverter.ParseClickHouseType(
-            "Tuple(`a b` Enum8('x y' = 1, 'z' = 2), c DateTime64(3, 'Europe/Amsterdam'))", TypeSettings.Default);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(type.UnderlyingTypes[0], Is.InstanceOf<Enum8Type>());
-            Assert.That(type.UnderlyingTypes[1], Is.InstanceOf<DateTime64Type>());
-        });
-    }
-
-    [Test]
-    [TestCase("Tuple(`a b Int64, c String)")]
-    [TestCase("Tuple(`a b`, c String)")]
-    [TestCase("Nested(`a b Int64, c String)")]
-    [TestCase("Nested(`a b`, c String)")]
-    public void ParseClickHouseType_ElementQuotingIsMalformed_ThrowsArgumentException(string typeString)
-    {
-        Assert.Throws<ArgumentException>(
-            () => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default));
-    }
-
-    [Test]
-    public async Task ShouldReadTuple_WithBacktickQuotedElementName_ReturnsElements()
-    {
-        var result = await connection.ExecuteScalarAsync(
-            "select cast(tuple(toInt64(1), 'a') as Tuple(`p q` Int64, r String))");
+        var result = await client.ExecuteScalarAsync($"SELECT t FROM {targetTable}");
 
         var tuple = result as ITuple;
+        Assert.That(tuple, Is.Not.Null);
         Assert.Multiple(() =>
         {
-            Assert.That(tuple, Is.Not.Null);
             Assert.That(tuple.Length, Is.EqualTo(2));
             Assert.That(tuple[0], Is.EqualTo(1L));
             Assert.That(tuple[1], Is.EqualTo("a"));
@@ -295,31 +242,92 @@ public class TupleTypeTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task ShouldReadNested_WithBacktickQuotedElementName_ReturnsElements()
+    [TestCaseSource(nameof(QuotedElementNames))]
+    public async Task ShouldRoundTripNested_WithBacktickQuotedElementName_ReturnsElements(string elementName)
     {
-        var result = await connection.ExecuteScalarAsync(
-            "select cast([tuple(toDecimal64(1.25, 2), 'x')] as Nested(`a b` Decimal(10, 2), c String))");
+        // The element type is parameterized on purpose: a Nested element whose type is a bare name
+        // is resolved by NestedType itself, so only a parameterized one reaches the type parser.
+        var result = await client.ExecuteScalarAsync(
+            $"SELECT CAST([tuple(toDecimal64(1.25, 2), 'a')] AS Nested({elementName} Decimal(10, 2), r String))");
 
         var rows = (IList)result;
         Assert.That(rows, Has.Count.EqualTo(1));
         var tuple = rows[0] as ITuple;
+        Assert.That(tuple, Is.Not.Null);
         Assert.Multiple(() =>
         {
-            Assert.That(tuple, Is.Not.Null);
             Assert.That(tuple.Length, Is.EqualTo(2));
             Assert.That(tuple[0], Is.EqualTo(new ClickHouseDecimal(1.25m)));
-            Assert.That(tuple[1], Is.EqualTo("x"));
+            Assert.That(tuple[1], Is.EqualTo("a"));
         });
     }
 
     [Test]
-    public async Task ShouldInsertBinary_IntoTupleColumnWithBacktickQuotedElementName_RoundTripsElements()
+    public async Task ShouldRoundTripTupleColumn_WithQuotedElementNamesAndParameterizedElementTypes_ReturnsElements()
+    {
+        // A quoted element name next to element types which carry their own arguments, including
+        // single-quoted ones containing a space: both quote kinds occur in the same declaration.
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {targetTable} (t Tuple(`a b` Decimal(10, 2), `c d` Map(String, Array(Int32)), `e f` Enum8('x y' = 1, 'z' = 2))) ENGINE Memory");
+        await client.ExecuteNonQueryAsync($"INSERT INTO {targetTable} VALUES ((1.25, map('k', [1, 2]), 'x y'))");
+
+        var result = await client.ExecuteScalarAsync($"SELECT t FROM {targetTable}");
+
+        var tuple = result as ITuple;
+        Assert.That(tuple, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(tuple.Length, Is.EqualTo(3));
+            Assert.That(tuple[0], Is.EqualTo(new ClickHouseDecimal(1.25m)));
+            Assert.That(((IDictionary)tuple[1])["k"], Is.EqualTo(new[] { 1, 2 }).AsCollection);
+            Assert.That(tuple[2], Is.EqualTo("x y"));
+        });
+    }
+
+    [Test]
+    public async Task ShouldRoundTripColumns_WithQuotedTupleElementNameWrappedInAnotherType_ReturnsElements()
+    {
+        // The quoted element name also has to be resolved when the named tuple is not the outermost
+        // type: inside an Array, as a Map value, and as an element of an enclosing named tuple.
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync(
+            $@"CREATE TABLE {targetTable} (
+                    a Array(Tuple(`a b` Int64, c String)),
+                    m Map(String, Tuple(`d e` Int64, f String)),
+                    n Tuple(`g h` Tuple(`i j` Int64, k String)),
+                    s Tuple(`l m` Int64)) ENGINE Memory");
+        await client.ExecuteNonQueryAsync(
+            $"INSERT INTO {targetTable} VALUES ([(1, 'x')], map('k', (2, 'y')), ((3, 'z')), tuple(4))");
+
+        using var reader = await client.ExecuteReaderAsync($"SELECT a, m, n, s FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+
+        var array = (IList)reader.GetValue(0);
+        var map = (IDictionary)reader.GetValue(1);
+        var nested = (ITuple)reader.GetValue(2);
+        var single = (ITuple)reader.GetValue(3);
+        Assert.Multiple(() =>
+        {
+            Assert.That(((ITuple)array[0])[0], Is.EqualTo(1L));
+            Assert.That(((ITuple)array[0])[1], Is.EqualTo("x"));
+            Assert.That(((ITuple)map["k"])[0], Is.EqualTo(2L));
+            Assert.That(((ITuple)map["k"])[1], Is.EqualTo("y"));
+            Assert.That(((ITuple)nested[0])[0], Is.EqualTo(3L));
+            Assert.That(((ITuple)nested[0])[1], Is.EqualTo("z"));
+            Assert.That(single[0], Is.EqualTo(4L));
+        });
+    }
+
+    [Test]
+    [TestCaseSource(nameof(QuotedElementNames))]
+    public async Task ShouldInsertBinary_IntoTupleColumnWithBacktickQuotedElementName_RoundTripsElements(string elementName)
     {
         // The insert path resolves the destination column types from the server too, so it parses
         // the same quoted element name as the read path.
-        var targetTable = CreateTableName();
+        var targetTable = CreateTableName($"insert_quoted_element_{elementName}");
         await client.ExecuteNonQueryAsync(
-            $"CREATE TABLE {targetTable} (id Int32, t Tuple(`p q` Int64, r String)) ENGINE Memory");
+            $"CREATE TABLE {targetTable} (id Int32, t Tuple({elementName} Int64, r String)) ENGINE Memory");
 
         await client.InsertBinaryAsync(
             targetTable,
@@ -329,12 +337,60 @@ public class TupleTypeTests : AbstractConnectionTestFixture
         var result = await client.ExecuteScalarAsync($"SELECT t FROM {targetTable}");
 
         var tuple = result as ITuple;
+        Assert.That(tuple, Is.Not.Null);
         Assert.Multiple(() =>
         {
-            Assert.That(tuple, Is.Not.Null);
             Assert.That(tuple.Length, Is.EqualTo(2));
             Assert.That(tuple[0], Is.EqualTo(2L));
             Assert.That(tuple[1], Is.EqualTo("a"));
         });
+    }
+
+    [Test]
+    public async Task ShouldRoundTripDynamicWrappedTuple_WithBacktickQuotedElementName_ReturnsElements()
+    {
+        // A value in a Dynamic column carries its own type header — the server sends the quoted name
+        // there too. That header is decoded structurally rather than through ExtractTypeName, so this
+        // is a contrast case: it resolved before this change and has to keep resolving after it.
+        var result = await client.ExecuteScalarAsync(
+            "SELECT CAST(tuple(toInt64(1), 'a') AS Tuple(`p q` Int64, r String))::Dynamic");
+
+        var tuple = result as ITuple;
+        Assert.That(tuple, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(tuple.Length, Is.EqualTo(2));
+            Assert.That(tuple[0], Is.EqualTo(1L));
+            Assert.That(tuple[1], Is.EqualTo("a"));
+        });
+    }
+
+    [Test]
+    [TestCase("`p q`")]
+    [TestCase(@"`p\`q r`")]
+    [TestCase("`p``q r`")]
+    public async Task ShouldRoundTripTupleParameter_WithBacktickQuotedElementNameInTypeHint_ReturnsElement(string elementName)
+    {
+        // A parameter type hint is written by hand rather than reported by the server, so it reaches
+        // the parser through the parameter formatter instead of a result-set header — and may double
+        // the backtick the way SQL does rather than escaping it the way the server does.
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT tupleElement({{var:Tuple({elementName} Int64, r String)}}, 2)";
+        command.AddParameter("var", Tuple.Create(1L, "a"));
+
+        var result = await command.ExecuteScalarAsync();
+
+        Assert.That(result, Is.EqualTo("a"));
+    }
+
+    [Test]
+    [TestCase("Tuple(`a b Int64, c String)")]
+    [TestCase("Nested(`a b`, c String)")]
+    public void ParseClickHouseType_ElementQuotingIsMalformed_ThrowsArgumentException(string typeString)
+    {
+        // Not a shape the server ever sends, so it has no round-trip form: an unterminated or
+        // type-less element declaration must still be rejected rather than silently mis-parsed.
+        Assert.Throws<ArgumentException>(
+            () => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default));
     }
 }
