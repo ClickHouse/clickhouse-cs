@@ -178,8 +178,11 @@ int VerifyRelease(string rawVersion)
 
     var problems = new List<string>();
 
-    // Fragment *validity* is the pull request gate's job; here only their presence matters.
-    var pending = LoadFragments([]);
+    // Fragment validity is checked here as well as in the pull request gate, because an *invalid*
+    // fragment is the dangerous case: LoadFragments skips it, so discarding its problem would leave
+    // a file whose entry never reaches CHANGELOG.md sitting in changelog.d/ while this gate happily
+    // reports nothing pending.
+    var pending = LoadFragments(problems);
     if (pending.Count > 0)
     {
         problems.Add(
@@ -189,6 +192,18 @@ int VerifyRelease(string rawVersion)
 
     var changelog = ReadLines(changelogPath);
     var sections = FindSections(changelog);
+
+    // Repeated from --check on purpose. If a hand-edited Unreleased section reaches this point it
+    // ships: TrimToFloor only drops that section while it is empty, so RELEASENOTES.md -- and with
+    // it PackageReleaseNotes -- would carry draft prose under an "Unreleased" heading.
+    if (sections.Count > 0 && sections[0].Title == "Unreleased" && !IsBodyEmpty(changelog, sections, 0))
+    {
+        problems.Add(
+            "CHANGELOG.md has content under 'Unreleased', which would ship inside the package as "
+            + "unreleased prose. Move each entry into a changelog.d/ fragment, then re-run "
+            + $"--release {version}.");
+    }
+
     var newest = sections.FirstOrDefault(s => s.Title != "Unreleased");
     var newestVersion = newest is null ? null : ParseVersion(newest.Title);
 

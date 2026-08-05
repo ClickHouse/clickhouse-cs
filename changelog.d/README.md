@@ -41,9 +41,10 @@ issue number where there is one.
 changelog.d/<pr-or-issue-number>-<slug>.<category>.md
 ```
 
-The number prefix is what guarantees two branches never pick the same filename; it also sets the
-order entries appear in within their section. Use your branch name if you do not have a number
-yet.
+Prefix with the pull request or issue number: it is the identifier least likely to collide with
+another branch's, and it sets the order entries appear in within their section. Use your branch
+name if you do not have a number yet — anything unique to your branch works, since two branches
+adding the same filename is the one way to reintroduce the conflict this scheme avoids.
 
 | Category        | Renders as                            |
 | --------------- | ------------------------------------- |
