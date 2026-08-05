@@ -1,8 +1,6 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace ClickHouse.Driver.Utility;
 
@@ -128,13 +126,5 @@ internal static class StringExtensions
         }
 
         return result.ToString();
-    }
-
-    public static string ReplaceMultipleWords(this string input, Dictionary<string, string> replacements)
-    {
-        if (replacements == null || replacements.Count == 0)
-            return input;
-        var regex = "(" + string.Join("\\b|", replacements.Keys) + "\\b)";
-        return Regex.Replace(input, regex, (Match m) => { return replacements[m.Value]; });
     }
 }
