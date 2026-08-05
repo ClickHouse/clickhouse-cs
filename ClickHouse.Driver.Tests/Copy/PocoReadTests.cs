@@ -339,15 +339,15 @@ public class PocoReadTests : AbstractConnectionTestFixture
         Assert.That(results, Has.Count.EqualTo(1));
 
         // Verify the QueryId reached the server by looking it up in system.query_log.
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-        var found = await client.ExecuteScalarAsync(
+        var found = await QueryLog.CountAsync(
+            client,
             "SELECT count() FROM system.query_log WHERE query_id = {qid:String}",
             new ClickHouseParameterCollection
             {
                 new ClickHouseDbParameter { ParameterName = "qid", Value = queryId, ClickHouseType = "String" },
             });
 
-        Assert.That(Convert.ToInt64(found), Is.GreaterThanOrEqualTo(1));
+        Assert.That(found, Is.GreaterThanOrEqualTo(1UL));
     }
 
     [Test]
