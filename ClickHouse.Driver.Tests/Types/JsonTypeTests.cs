@@ -289,6 +289,27 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             "a'b",
             1L
         ).SetName("QuotedPathWithSingleQuote");
+
+        yield return new TestCaseData(
+            "max_dynamic_paths_used UInt64",
+            "{\"max_dynamic_paths_used\": 18446744073709551615}",
+            "max_dynamic_paths_used",
+            ulong.MaxValue
+        ).SetName("PathStartingWithMaxDynamicPaths");
+
+        yield return new TestCaseData(
+            "max_dynamic_paths UInt64",
+            "{\"max_dynamic_paths\": 18446744073709551615}",
+            "max_dynamic_paths",
+            ulong.MaxValue
+        ).SetName("PathNamedMaxDynamicPaths");
+
+        yield return new TestCaseData(
+            "max_dynamic_types_seen String",
+            "{\"max_dynamic_types_seen\": \"String value\"}",
+            "max_dynamic_types_seen",
+            "String value"
+        ).SetName("PathStartingWithMaxDynamicTypes");
     }
     
     [Test]
@@ -297,6 +318,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [TestCase("level1_int Int64, nested.level2_string String, skip path.to.ignore")]
     [TestCase("level1_int Int64, nested.level2_string String, SKIP path.to.skip, SKIP REGEXP 'regex.path.*'")]
     [TestCase("max_dynamic_paths=10, level1_int Int64, nested.level2_string String")]
+    [TestCase("max_dynamic_paths = 10, level1_int Int64, nested.level2_string String")]
     [TestCase("max_dynamic_paths=10, level1_int Int64, nested.level2_string String, SKIP path.to.skip")]
     [TestCase("max_dynamic_types=3, level1_int Int64, nested.level2_string String")]
     [TestCase("max_dynamic_paths=0")]
@@ -336,6 +358,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [TestCase("JSON(`a)b` Int64)", "a)b")]
     [TestCase("JSON(`a b` Decimal(10, 2))", "a b")]
     [TestCase(@"JSON(`a\`b` Int64)", "a`b")]
+    [TestCase(@"JSON(`a\` b` Int64)", "a` b")]
     [TestCase(@"JSON(`a\'b` Int64)", "a'b")]
     [TestCase("JSON(`a b` Map(String, Array(Int32)))", "a b")]
     [TestCase("JSON(max_dynamic_paths=8, `a b` Int64, SKIP `x,y`)", "a b")]
@@ -393,6 +416,17 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     {
         Assert.Throws<SerializationException>(
             () => TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default));
+    }
+
+    [Test]
+    [TestCase("JSON(max_dynamic_paths = 10, a String)")]
+    [TestCase("JSON(max_dynamic_paths  =  10, a String)")]
+    [TestCase("JSON(max_dynamic_types =3, a String)")]
+    public void ShouldExcludeSettingsFromHintedPathsWhenParsingSpacedAssignments(string typeString)
+    {
+        var type = (JsonType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.That(type.HintedTypes.Keys, Is.EquivalentTo(new[] { "a" }));
     }
 
     [Test]

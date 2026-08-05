@@ -196,6 +196,13 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override DataTable GetSchema(string collectionName) => GetSchema(collectionName, null);
 
+    /// <summary>
+    /// Returns metadata for the requested schema collection. The only supported collection is
+    /// <c>Columns</c>, which accepts up to two restriction values: database and table. A restriction
+    /// left <see langword="null"/> is treated as unspecified.
+    /// </summary>
+    /// <exception cref="ArgumentException">More restriction values were supplied than the requested collection supports.</exception>
+    /// <exception cref="NotSupportedException">The requested collection is not supported.</exception>
     public override DataTable GetSchema(string collectionName, string[] restrictionValues) =>
         SchemaDescriber.DescribeSchema(this, collectionName, restrictionValues);
 
@@ -222,7 +229,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// May change in future versions
     /// </summary>
     /// <param name="sql">SQL query to add to URL, may be empty</param>
-    /// <param name="data">Raw stream to be sent. May contain SQL query at the beginning. May be gzip-compressed</param>
+    /// <param name="data">Raw stream to be sent. May contain SQL query at the beginning. May be gzip-compressed. Ownership transfers to the driver: the stream is disposed once the request completes, on success and on failure alike</param>
     /// <param name="isCompressed">indicates whether "Content-Encoding: gzip" header should be added</param>
     /// <param name="token">Cancellation token</param>
     /// <param name="queryId">Query id</param>

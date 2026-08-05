@@ -95,7 +95,7 @@ public interface IClickHouseClient : IDisposable
     /// Inserts data from a stream into a table using the specified format.
     /// </summary>
     /// <param name="table">The destination table name.</param>
-    /// <param name="stream">The stream containing the data to insert.</param>
+    /// <param name="stream">The stream containing the data to insert. Ownership transfers to the driver: the stream is disposed once the request completes, on success and on failure alike.</param>
     /// <param name="format">The ClickHouse format of the data (e.g., "CSV", "JSONEachRow", "Parquet").</param>
     /// <param name="columns">Optional column names. If null, all columns are assumed in table order.</param>
     /// <param name="useCompression">Whether to compress the stream before sending (default: true)</param>
@@ -115,7 +115,7 @@ public interface IClickHouseClient : IDisposable
     /// Post a raw stream to the server.
     /// </summary>
     /// <param name="sql">SQL query to add to URL, may be empty</param>
-    /// <param name="data">Raw stream to be sent. May contain SQL query at the beginning. May be gzip-compressed</param>
+    /// <param name="data">Raw stream to be sent. May contain SQL query at the beginning. May be gzip-compressed. Ownership transfers to the driver: the stream is disposed once the request completes, on success and on failure alike</param>
     /// <param name="isCompressed">Indicates whether "Content-Encoding: gzip" header should be added</param>
     /// <param name="token">Cancellation token</param>
     /// <param name="queryOptions">Query options that override connection-level options</param>
