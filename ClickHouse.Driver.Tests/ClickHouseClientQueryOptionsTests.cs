@@ -72,11 +72,8 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
 
         await client.ExecuteScalarAsync("SELECT 1", options: options);
 
-        // Wait for query_log flush
-        await Task.Delay(500);
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-
-        var count = await client.ExecuteScalarAsync(
+        var count = await QueryLog.CountAsync(
+            client,
             $"SELECT count() FROM system.query_log WHERE query_id = '{customQueryId}'");
         Assert.That(count, Is.GreaterThan(0UL));
     }
@@ -88,14 +85,15 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
         var marker = $"auto_guid_test_{Guid.NewGuid():N}";
         await client.ExecuteScalarAsync($"SELECT 42 /* {marker} */");
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        // Find the query in system.query_log - should have a valid GUID as query_id.
+        // The marker also appears in this lookup's own text, so exclude lookups from the match:
+        // once flushed they are newer than the marked query and would win the ORDER BY.
+        var queryId = (string)await QueryLog.ScalarAsync(
+            client,
+            $"SELECT query_id FROM system.query_log WHERE query LIKE '%{marker}%' " +
+            $"AND query NOT LIKE '%system.query_log%' AND type = 'QueryFinish' " +
+            $"ORDER BY event_time DESC LIMIT 1");
 
-        // Find the query in system.query_log - should have a valid GUID as query_id
-        using var reader = await client.ExecuteReaderAsync(
-            $"SELECT query_id FROM system.query_log WHERE query LIKE '%{marker}%' AND type = 'QueryFinish' ORDER BY event_time DESC LIMIT 1");
-
-        Assert.That(reader.Read(), Is.True, "Query should appear in query_log");
-        var queryId = reader.GetString(0);
         Assert.That(Guid.TryParse(queryId, out _), Is.True, "Query ID should be a valid GUID");
     }
 
@@ -108,9 +106,8 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
         using var reader = await client.ExecuteReaderAsync("SELECT 1", options: options);
         while (reader.Read()) { } // Consume results
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-
-        var count = await client.ExecuteScalarAsync(
+        var count = await QueryLog.CountAsync(
+            client,
             $"SELECT count() FROM system.query_log WHERE query_id = '{customQueryId}'");
         Assert.That(count, Is.GreaterThan(0UL), "Custom query ID should appear in query_log");
     }
@@ -858,9 +855,8 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
 
         await client.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-
-        var count = await client.ExecuteScalarAsync(
+        var count = await QueryLog.CountAsync(
+            client,
             $"SELECT count() FROM system.query_log WHERE query_id LIKE '{customQueryId}%'");
         Assert.That(count, Is.GreaterThan(0UL), "Custom query ID should appear in query_log");
     }
