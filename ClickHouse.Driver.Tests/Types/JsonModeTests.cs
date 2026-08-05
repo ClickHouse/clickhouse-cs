@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
@@ -569,13 +570,9 @@ public class JsonModeTests
         var options = new QueryOptions { QueryId = queryId };
         await client.ExecuteScalarAsync("SELECT 1", options: options);
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        var wasSent = await WasSettingSentAsync(client, queryId, "input_format_binary_read_json_as_string");
 
-        var result = await client.ExecuteScalarAsync(
-            $"SELECT Settings['input_format_binary_read_json_as_string'] FROM system.query_log " +
-            $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
-
-        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
+        Assert.That(wasSent, Is.False, "None mode should not send the setting to the server");
     }
 
     [Test]
@@ -610,14 +607,30 @@ public class JsonModeTests
         var options = new QueryOptions { QueryId = queryId };
         await client.ExecuteScalarAsync("SELECT 1", options: options);
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        var wasSent = await WasSettingSentAsync(client, queryId, "output_format_binary_write_json_as_string");
 
-        // The query_log Settings map should NOT contain output_format_binary_write_json_as_string
-        var result = await client.ExecuteScalarAsync(
-            $"SELECT Settings['output_format_binary_write_json_as_string'] FROM system.query_log " +
+        Assert.That(wasSent, Is.False, "None mode should not send the setting to the server");
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="settingName"/> was sent to the server for the query
+    /// identified by <paramref name="queryId"/>, according to system.query_log.
+    /// </summary>
+    /// <remarks>
+    /// Ask the map directly with mapContains instead of reading Settings[name] and comparing against
+    /// "". A missing key yields an empty string, so the emptiness of that value cannot distinguish
+    /// "setting absent" from "no query_log row yet" — which is exactly how a query_log row that had
+    /// not been flushed yet used to surface as a spurious "None mode should not send the setting"
+    /// failure. <see cref="QueryLog.ScalarAsync"/> then covers the flush race itself.
+    /// </remarks>
+    private static async Task<bool> WasSettingSentAsync(ClickHouseClient client, string queryId, string settingName)
+    {
+        var present = await QueryLog.ScalarAsync(
+            client,
+            $"SELECT mapContains(Settings, '{settingName}') FROM system.query_log " +
             $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
 
-        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
+        return Convert.ToBoolean(present, CultureInfo.InvariantCulture);
     }
 
     #region JSON Roundtrip Tests

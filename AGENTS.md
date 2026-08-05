@@ -122,6 +122,18 @@ var users = connection.Query<User>("SELECT * FROM users");
   covered, and you'll be asked to drop it.
 - **Test utilities**: before writing tests, read TestUtilities.cs to understand existing config and
   utility patterns — including `CreateTableName`/`SanitizeTableName` (see the note above).
+- **Reading `system.query_log`: always go through `Utilities/QueryLog.cs`** (`QueryLog.ScalarAsync` /
+  `QueryLog.CountAsync`), never a bare `SYSTEM FLUSH LOGS` followed by a single read. A query's
+  QueryFinish record is queued independently of its HTTP response reaching the client, so a flush
+  issued right after the query can miss it and the lookup then matches fewer rows than expected —
+  a flake, and one that surfaces as a wrong-looking value rather than a missing row. The helpers
+  retry the flush-and-read (3 attempts, 50 ms apart); `ScalarAsync` fails with a distinct
+  "no row appeared" message, and `CountAsync` waits for `minimumCount` rows before reporting.
+  Select an expression that is never NULL for an existing row (e.g. `mapContains(Settings, 'x')`,
+  not `Settings['x']`, whose empty string for an absent key is indistinguishable from an
+  unflushed row), and identify the query under test by `query_id` where you can — a lookup keyed on
+  a marker in the query text (`query LIKE '%marker%'`) also matches the helper's own lookups, so it
+  needs `AND query NOT LIKE '%system.query_log%'`. Don't paper over the race with `Task.Delay`.
 - **Test matrix**: ADO provider, parameter binding, ORMs, multi-framework, multi-ClickHouse-version
 - **Negative tests**: Error handling, edge cases, concurrency scenarios
 - **Existing tests**: Only add new tests, never delete/weaken existing ones

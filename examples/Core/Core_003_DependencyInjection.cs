@@ -142,7 +142,9 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromMinutes(5);
         }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
         {
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            // No AutomaticDecompression: the driver decompresses responses itself. Leaving it at its
+            // default (None) also keeps an explicit AcceptEncoding intact, since a mask here would make
+            // .NET add those codecs to the outgoing Accept-Encoding.
             MaxConnectionsPerServer = 100,
             PooledConnectionIdleTimeout = TimeSpan.FromSeconds(5), // Keep lower than server idle timeout (10s for Cloud)
         });

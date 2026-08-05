@@ -52,7 +52,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ClickHouseConnection"/> class using provided HttpClient.
-    /// Note that HttpClient must have AutomaticDecompression enabled if compression is not disabled in connection string
+    /// Note that the driver decodes compressed responses itself, so AutomaticDecompression is optional.
     /// </summary>
     /// <param name="connectionString">Connection string</param>
     /// <param name="httpClient">instance of HttpClient</param>
@@ -78,17 +78,12 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <remarks>
     /// <list type="bullet">
     /// <item>
-    /// If compression is not disabled in the <paramref name="connectionString"/>, the <paramref name="httpClientFactory"/>
-    /// must be configured to enable <see cref="HttpClientHandler.AutomaticDecompression"/> for its generated clients.
-    /// <example>
-    /// For example you can do this while registering the HTTP client:
-    /// <code>
-    /// services.AddHttpClient("ClickHouseClient").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-    /// {
-    ///     AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
-    /// });
-    /// </code>
-    /// </example>
+    /// Compression needs no configuration here: the driver decompresses responses itself, whatever the
+    /// <paramref name="httpClientFactory"/> produces. Leave
+    /// <see cref="HttpClientHandler.AutomaticDecompression"/> at its default of
+    /// <see cref="System.Net.DecompressionMethods.None"/> — setting a mask makes .NET add those codecs to
+    /// the outgoing <c>Accept-Encoding</c>, which can override the codec you asked for via
+    /// <see cref="ClickHouseClientSettings.AcceptEncoding"/>.
     /// </item>
     /// <item>
     /// The <paramref name="httpClientFactory"/> must set the timeout for its clients if needed.
@@ -196,6 +191,13 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public override DataTable GetSchema(string collectionName) => GetSchema(collectionName, null);
 
+    /// <summary>
+    /// Returns metadata for the requested schema collection. The only supported collection is
+    /// <c>Columns</c>, which accepts up to two restriction values: database and table. A restriction
+    /// left <see langword="null"/> is treated as unspecified.
+    /// </summary>
+    /// <exception cref="ArgumentException">More restriction values were supplied than the requested collection supports.</exception>
+    /// <exception cref="NotSupportedException">The requested collection is not supported.</exception>
     public override DataTable GetSchema(string collectionName, string[] restrictionValues) =>
         SchemaDescriber.DescribeSchema(this, collectionName, restrictionValues);
 
@@ -222,7 +224,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// May change in future versions
     /// </summary>
     /// <param name="sql">SQL query to add to URL, may be empty</param>
-    /// <param name="data">Raw stream to be sent. May contain SQL query at the beginning. May be gzip-compressed</param>
+    /// <param name="data">Raw stream to be sent. May contain SQL query at the beginning. May be gzip-compressed. Ownership transfers to the driver: the stream is disposed once the request completes, on success and on failure alike</param>
     /// <param name="isCompressed">indicates whether "Content-Encoding: gzip" header should be added</param>
     /// <param name="token">Cancellation token</param>
     /// <param name="queryId">Query id</param>

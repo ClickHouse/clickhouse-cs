@@ -35,16 +35,23 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             yield return new object[] { startId + i, $"Value_{startId + i}" };
     }
 
-    private async Task<ulong> CountSchemaProbeQueriesAsync(string queryIdPrefix)
-    {
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-        var count = await client.ExecuteScalarAsync(
+    /// <summary>
+    /// Counts the schema-probe queries (<c>WHERE 1=0</c>) logged under <paramref name="queryIdPrefix"/>.
+    /// </summary>
+    /// <param name="queryIdPrefix">Query-id prefix the insert under test was given.</param>
+    /// <param name="expectedCount">
+    /// How many probe queries the caller expects, so the lookup keeps waiting until they are all
+    /// visible. A caller expecting none still gets the full wait before the count is reported.
+    /// </param>
+    /// <returns>The number of probe queries visible in <c>system.query_log</c>.</returns>
+    private Task<ulong> CountSchemaProbeQueriesAsync(string queryIdPrefix, ulong expectedCount = 1) =>
+        QueryLog.CountAsync(
+            client,
             $"SELECT count() FROM system.query_log " +
             $"WHERE query_id LIKE '{queryIdPrefix}%' " +
             $"AND query LIKE '%WHERE 1=0%' " +
-            $"AND type = 'QueryFinish'");
-        return (ulong)count;
-    }
+            $"AND type = 'QueryFinish'",
+            minimumCount: expectedCount);
 
     [Test]
     public async Task InsertBinaryAsync_WithColumnTypes_ShouldSkipSchemaQuery()
@@ -200,7 +207,7 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             GenerateTestRows(3, startId: 100).ToList(),
             options);
 
-        var probeCount = await CountSchemaProbeQueriesAsync(queryId);
+        var probeCount = await CountSchemaProbeQueriesAsync(queryId, expectedCount: 1);
         Assert.That(probeCount, Is.EqualTo(1UL),
             "Only one schema probe query should be sent when UseSchemaCache is true");
     }
@@ -237,7 +244,7 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             new List<object[]> { new object[] { 2UL, "b" } },
             options);
 
-        var probeCount = await CountSchemaProbeQueriesAsync(queryId);
+        var probeCount = await CountSchemaProbeQueriesAsync(queryId, expectedCount: 1);
         Assert.That(probeCount, Is.EqualTo(1UL),
             "Cache is per-table — different column subsets should share the same cached schema");
     }
@@ -480,7 +487,7 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             GenerateTestRows(3, startId: 100).ToList(),
             new InsertOptions { Database = "test", QueryId = queryId });
 
-        var probeCount = await CountSchemaProbeQueriesAsync(queryId);
+        var probeCount = await CountSchemaProbeQueriesAsync(queryId, expectedCount: 2);
         Assert.That(probeCount, Is.EqualTo(2UL),
             "Default behavior should query schema on every insert");
     }

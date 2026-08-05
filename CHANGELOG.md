@@ -65,7 +65,7 @@ v1.1.0
 
 **Bug Fixes:**
 * Fixed `IndexOutOfRangeException` when reading NULL values from `Variant` columns. The Variant `None` discriminator (used for NULLs) was not handled, causing an out-of-bounds array access instead of returning `DBNull.Value`.
-* Fixed writing NULL values to `Variant` columns. Writing null/DBNull now correctly emits the `None` discriminator (`0xFF`) for binary writes, and null marker `\N` when using HTTP parameters. Note: null Variant HTTP parameter parsing is broken in server versions prior to 26.3.
+* Fixed writing NULL values to `Variant` columns. Writing null/DBNull now correctly emits the `None` discriminator (`0xFF`) for binary writes, and null marker `\N` when using HTTP parameters.  Note: null Variant HTTP parameter parsing is broken in server versions prior to 26.3.
 
 v1.0.2
 ---

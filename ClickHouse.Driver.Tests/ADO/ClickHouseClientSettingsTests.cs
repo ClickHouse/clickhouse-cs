@@ -405,6 +405,28 @@ public class ClickHouseClientSettingsTests
     }
 
     [Test]
+    public void Equals_WithDifferentAcceptEncoding_ShouldReturnFalse()
+    {
+        var settings1 = new ClickHouseClientSettings { Host = "localhost", AcceptEncoding = "lz4" };
+        var settings2 = new ClickHouseClientSettings { Host = "localhost", AcceptEncoding = "br" };
+
+        Assert.That(settings1.Equals(settings2), Is.False);
+    }
+
+    [Test]
+    public void ToString_ShouldIncludeAcceptEncodingOnlyWhenSet()
+    {
+        var withDefault = new ClickHouseClientSettings { Host = "localhost" };
+        var withExplicit = new ClickHouseClientSettings { Host = "localhost", AcceptEncoding = "lz4, gzip" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(withDefault.ToString(), Does.Not.Contain("AcceptEncoding"));
+            Assert.That(withExplicit.ToString(), Does.Contain("AcceptEncoding=lz4, gzip"));
+        });
+    }
+
+    [Test]
     public void ToString_ShouldRedactPassword()
     {
         var settings = new ClickHouseClientSettings
@@ -605,7 +627,8 @@ public class ClickHouseClientSettingsTests
             HttpClient = httpClient,
             HttpClientFactory = factory,
             HttpClientName = "test-client",
-            LoggerFactory = logger
+            LoggerFactory = logger,
+            AcceptEncoding = "lz4, gzip",
         };
 
         var copy = new ClickHouseClientSettings(original);
