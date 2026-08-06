@@ -98,7 +98,7 @@ Below is a full list of all the settings, their default values, and their effect
 
 | Property | Type | Default | Connection String Key | Description |
 |----------|------|---------|----------------------|-------------|
-| UseCompression | `bool` | `true` | `Compression` | Enable gzip compression for data transfer |
+| UseCompression | `bool` | `true` | `Compression` | Ask the server to compress query responses (`enable_http_compression`); see `AcceptEncoding` for the codec. Does not affect request bodies — see [Insert compression](#insert-compression) |
 | AcceptEncoding | `string` | `null` | `AcceptEncoding` | `Accept-Encoding` sent with every request, replacing the codecs the driver advertises by default (`zstd, lz4, gzip, deflate`). Whatever the server answers with is decoded transparently. See [Response decompression](#response-decompression) |
 | UseCustomDecimals | `bool` | `true` | `UseCustomDecimals` | Use `ClickHouseDecimal` for arbitrary precision; if false, uses .NET `decimal` (128-bit limit) |
 | ReadStringsAsByteArrays | `bool` | `false` | `ReadStringsAsByteArrays` | Read `String` and `FixedString` columns as `byte[]` instead of `string`; useful for binary data |
@@ -229,6 +229,7 @@ var reader = await client.ExecuteReaderAsync(
 | BatchSize | `int` | 100,000 | Number of rows per batch |
 | MaxDegreeOfParallelism | `int` | 1 | Number of parallel batch uploads |
 | Format | `RowBinaryFormat` | `RowBinary` | Binary format: `RowBinary` or `RowBinaryWithDefaults` |
+| Compressor | `IClickHouseCompressor` | `ZstdCompressor.Default` | Codec applied to the insert body (`Content-Encoding`). `null` sends it uncompressed. See [Insert compression](#insert-compression) |
 | ColumnTypes | `IReadOnlyDictionary<string, string>` | `null` | Column name → ClickHouse type string. Skips the schema probe query when set. |
 | UseSchemaCache | `bool` | `false` | Cache full table schema per (database, table) for the client's lifetime. |
 
@@ -944,15 +945,6 @@ using var reader = await client.ExecuteReaderAsync(
     options: new QueryOptions { AcceptEncoding = "lz4" });   // cheaper to decode than the zstd default
 ```
 
-zstd is also available for the **request** side of a binary insert, through `InsertOptions.Compressor`, alongside `Lz4Compressor`, `GZipCompressor` and `BrotliCompressor`. Inserts are *not* zstd by default — they still use `gzip:Fastest` — so this one is opt-in. `ZstdCompressor.Default` uses zstd's own default level (3); the constructor takes any level between `ZstdCompressor.MinLevel` and `ZstdCompressor.MaxLevel` — zstd's levels are a signed range, and negative ones trade ratio for speed.
-
-```csharp
-var options = new InsertOptions { Compressor = ZstdCompressor.Default };  // Content-Encoding: zstd
-await client.InsertBinaryAsync("events", columns, rows, options);
-```
-
-Both codecs are built in: `ClickHouse.Driver` bundles vendored, pure-managed copies of the LZ4 and zstd codecs, so neither adds a runtime dependency.
-
 Because the decision is made from the response, a body is decoded whenever its `Content-Encoding` says so, whatever was requested: absent or `identity` passes through untouched, a supported codec is decoded, and anything else raises an error naming it. There is no risk of double-decoding — if a caller-supplied handler's `AutomaticDecompression` has already decoded a body it also strips `Content-Encoding`, so the driver sees plaintext and leaves it alone.
 
 **Raw results advertise no codec.** `ExecuteRawResultAsync` (and the public `PostStreamAsync` / `InsertRawStreamAsync`) hand their body to you verbatim, so unless you name a codec yourself they ask for none at all — nothing in the driver decodes such a body, so offering a codec there would silently turn an export into a compressed file. The rule is therefore simple and independent of how any `HttpClient` is configured: **a verbatim body arrives exactly as the server sent it, and the server sends plaintext unless you asked for a codec.** Asking for one (client-wide or per query) is how you export compressed bytes on purpose.
@@ -974,6 +966,19 @@ var json = await bodyReader.ReadToEndAsync();
 Read the returned stream to completion before it goes out of scope, as above. When the response *is* compressed you get a decoder created with `leaveOpen`, so disposing it leaves the response intact; when it is **not** compressed you get the HTTP content stream itself, so disposing it ends the body. Either way the `ClickHouseRawResult` owns the response — don't call its other read members after the stream has been disposed. Disposing the `ClickHouseRawResult` is always required and on its own sufficient: it releases both the response and any decoder inserted here (decoders hold pooled buffers). The `await using` above is therefore optional, and safe to keep. Repeated sequential calls hand back the same stream; the type is not safe to use concurrently.
 
 See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Select/Select_007_ResponseCompression.cs) for a runnable example.
+
+#### Insert (request) compression {#insert-compression}
+
+zstd is also the default on the **request** side of a binary insert, through `InsertOptions.Compressor` (alongside `Lz4Compressor`, `GZipCompressor` and `BrotliCompressor`). It replaced `gzip:Fastest` there because `zstd:3` beats it on both axes that are deterministic client-side: ~32% smaller request bodies for ~64% less client CPU. `ZstdCompressor.Default` uses zstd's own default level (3); the constructor takes any level between `ZstdCompressor.MinLevel` and `ZstdCompressor.MaxLevel` — zstd's levels are a signed range, and negative ones trade ratio for speed.
+
+One caveat is specific to the request side. `Accept-Encoding` is an *offer* the server may decline, but a request body's `Content-Encoding` is a **declaration**: an intermediary that re-encodes request bodies and does not understand zstd fails the insert outright rather than merely slowing it down. ClickHouse itself accepts zstd request bodies on every supported version (verified back to 25.8 LTS); if your inserts traverse a proxy tier you are unsure of, name the codec explicitly.
+
+```csharp
+var options = new InsertOptions { Compressor = GZipCompressor.Default };  // Content-Encoding: gzip
+await client.InsertBinaryAsync("events", columns, rows, options);
+```
+
+Every codec named here is built in: `ClickHouse.Driver` bundles vendored, pure-managed copies of the LZ4 and zstd codecs (gzip, deflate and brotli come from the BCL), so none of them adds a runtime dependency.
 
 ---
 
@@ -2332,7 +2337,7 @@ With the opt-out enabled, LEFT JOIN returns ClickHouse column defaults and EF's 
 
 #### Inserting data {#ef-core-insert}
 
-`SaveChanges` uses the driver's native `InsertBinaryAsync` API — RowBinary encoding with GZip compression, far more efficient than parameterized SQL:
+`SaveChanges` uses the driver's native `InsertBinaryAsync` API — RowBinary encoding with a compressed request body, far more efficient than parameterized SQL:
 
 ```csharp
 await using var ctx = new AnalyticsContext();
@@ -2358,7 +2363,7 @@ optionsBuilder.UseClickHouse("Host=localhost", o => o.MaxBatchSize(5000));
 
 #### Bulk insert {#ef-core-bulk-insert}
 
-For high-throughput loads, use `BulkInsertAsync` instead of `SaveChanges`. This is an extension method on `DbContext` that bypasses EF Core's change tracker, identity resolution, and state management entirely — it calls the driver's `InsertBinaryAsync` directly with RowBinary encoding and GZip compression.
+For high-throughput loads, use `BulkInsertAsync` instead of `SaveChanges`. This is an extension method on `DbContext` that bypasses EF Core's change tracker, identity resolution, and state management entirely — it calls the driver's `InsertBinaryAsync` directly with RowBinary encoding and a compressed request body.
 
 This makes it suitable for loading large datasets where you don't need entity tracking after insert:
 

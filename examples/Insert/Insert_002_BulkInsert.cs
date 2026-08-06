@@ -80,10 +80,12 @@ public static class BulkInsert
 
         // Example 4: Bulk insert with Brotli compression
         Console.WriteLine("4. Bulk inserting with Brotli compression:");
-        // The insert body can be compressed before being sent. The default is GZip (with compression level =fastest), 
-        // but over a remote/cloud connection Brotli is faster in our testing. 
+        // The insert body is compressed before being sent. The default is ZSTD at level 3, which sends
+        // ~32% fewer bytes than the previous GZip:Fastest default for ~64% less client CPU.
         // Set the Compressor property to switch codecs; the built-in GZipCompressor and
-        // BrotliCompressor also expose a CompressionLevel. 
+        // BrotliCompressor also expose a CompressionLevel. Behind a proxy tier that re-encodes request
+        // bodies, GZip is the safest choice: a request's Content-Encoding is a declaration rather than
+        // an offer, so an intermediary that does not understand the codec fails the insert outright.
         // 
         // Over a fast/local link, set Compressor = null to skip compression entirely;
         // there the compression cost outweighs the bandwidth saved.

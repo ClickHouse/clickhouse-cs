@@ -10,16 +10,19 @@ namespace ClickHouse.Driver.Examples;
 ///
 /// ## How It Works
 ///
-/// When UseCompression=true (the default):
+/// UseCompression governs the **response** direction:
 ///
-/// 1. **Requests (client → server)**:
-///    - The driver compresses the request body using GZip
-///    - Adds Content-Encoding: gzip header
-///
-/// 2. **Responses (server → client)**:
+/// 1. **Responses (server → client)**, when UseCompression=true (the default):
 ///    - The driver sends enable_http_compression=true query parameter
-///    - ClickHouse compresses the response with the codec it picks from Accept-Encoding (LZ4 by default)
+///    - ClickHouse compresses the response with the codec it picks from Accept-Encoding — zstd by
+///      default, since the driver advertises "zstd, lz4, gzip, deflate" and the server resolves that
+///      by its own fixed preference order
 ///    - The driver decodes the body itself, from the response's Content-Encoding
+///
+/// 2. **Requests (client → server)** are not governed by this setting:
+///    - A binary insert compresses its body with InsertOptions.Compressor — ZSTD level 3 by default —
+///      and declares it with Content-Encoding; set that to null to send the body uncompressed
+///    - An ordinary query sends its SQL uncompressed either way
 ///
 /// ## When to Disable Compression
 ///
@@ -38,9 +41,10 @@ namespace ClickHouse.Driver.Examples;
 ///
 /// ## InsertBinaryAsync
 ///
-/// Note: InsertBinaryAsync always uses GZip compression for uploads regardless
-/// of the UseCompression setting. This is because bulk inserts benefit significantly
-/// from compression due to the large data volumes involved.
+/// Note: InsertBinaryAsync compresses its uploads regardless of the UseCompression setting, because
+/// bulk inserts benefit significantly from compression given the data volumes involved. The codec is
+/// InsertOptions.Compressor — ZSTD level 3 by default, with GZip, Brotli and LZ4 also built in.
+/// See Insert_002_BulkInsert for switching it.
 /// </summary>
 public static class Compression
 {
@@ -53,11 +57,11 @@ public static class Compression
         using (var client = new ClickHouseClient("Host=localhost"))
         {
             // The driver will:
-            // - Compress request bodies with GZip
             // - Request compressed responses via enable_http_compression=true
-            var result = await client.ExecuteScalarAsync("SELECT 'Compressed request and response'");
+            // - Advertise "zstd, lz4, gzip, deflate" and decode whatever comes back
+            var result = await client.ExecuteScalarAsync("SELECT 'Compressed response'");
             Console.WriteLine($"   Result: {result}");
-            Console.WriteLine("   Request was GZip compressed, response was LZ4 compressed\n");
+            Console.WriteLine("   Response was zstd compressed and decoded by the driver\n");
         }
 
         // Compression disabled
@@ -65,11 +69,10 @@ public static class Compression
         using (var client = new ClickHouseClient("Host=localhost;Compression=false"))
         {
             // The driver will:
-            // - Send uncompressed request bodies
-            // - Set enable_http_compression=false (uncompressed responses)
-            var result = await client.ExecuteScalarAsync("SELECT 'Uncompressed request and response'");
+            // - Set enable_http_compression=false and advertise no codec (uncompressed responses)
+            var result = await client.ExecuteScalarAsync("SELECT 'Uncompressed response'");
             Console.WriteLine($"   Result: {result}");
-            Console.WriteLine("   Request was uncompressed, response was uncompressed\n");
+            Console.WriteLine("   Response was uncompressed\n");
         }
 
         // Using ClickHouseClientSettings
@@ -88,7 +91,7 @@ public static class Compression
 
         Console.WriteLine("Summary:");
         Console.WriteLine("   - Default: UseCompression=true (recommended for most cases)");
-        Console.WriteLine("   - Reduces bandwidth for both requests and responses");
+        Console.WriteLine("   - Reduces response bandwidth; request bodies are InsertOptions.Compressor's job");
         Console.WriteLine("   - Consider disabling for localhost or small, frequent queries");
         Console.WriteLine("   - Custom HttpClient: leave AutomaticDecompression off; the driver decodes responses itself");
     }
