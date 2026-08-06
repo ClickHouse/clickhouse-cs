@@ -257,40 +257,6 @@ public class ResponseDecompressionTests
         });
     }
 
-    /// <summary>
-    /// <c>br</c> is decodable but deliberately absent from the default advertisement: ClickHouse's
-    /// fixed preference scan puts brotli ahead of every token the default names, so naming it would
-    /// make it the codec for every default query — and it is the dearest codec on both sides. Pinning
-    /// both halves — decodable, and not advertised — is what keeps the decision from being flipped by
-    /// accident.
-    /// </summary>
-    [Test]
-    public void DefaultAcceptEncoding_DoesNotAdvertiseBrotli_ThoughTheResolverDecodesIt()
-    {
-        using var source = new MemoryStream(Encode("br", Encoding.UTF8.GetBytes("decodable")));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(ResponseDecompression.DefaultAcceptEncoding, Does.Not.Contain("br"));
-            Assert.That(
-                ResponseDecompression.TryWrap(source, "br", leaveOpen: true, out _),
-                Is.True,
-                "br must be decodable even though it is not advertised");
-        });
-    }
-
-    /// <summary>
-    /// The other half of the same decision, pinned deliberately rather than left to the exact-array
-    /// assertion above: <c>zstd</c> <i>is</i> advertised, so ClickHouse's preference scan resolves a
-    /// default request to zstd. That is a behaviour change users can observe, and it should take a
-    /// conscious edit to undo.
-    /// </summary>
-    [Test]
-    public void DefaultAcceptEncoding_AdvertisesZstd_SoTheServerPreferenceScanSelectsIt()
-    {
-        Assert.That(ResponseDecompression.DefaultAcceptEncoding, Does.Contain("zstd"));
-    }
-
     // ---------------------------------------------------------------------------------------------
     // Decoder ownership. This is the layer where it is observable: the driver picks decoders from a
     // fixed table, so there is no user-supplied codec to instrument higher up.

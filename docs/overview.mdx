@@ -98,7 +98,7 @@ Below is a full list of all the settings, their default values, and their effect
 
 | Property | Type | Default | Connection String Key | Description |
 |----------|------|---------|----------------------|-------------|
-| UseCompression | `bool` | `true` | `Compression` | Ask the server to compress query responses (`enable_http_compression`); see `AcceptEncoding` for the codec. Does not affect request bodies — see [Insert compression](#insert-compression) |
+| UseCompression | `bool` | `true` | `Compression` | Governs transport compression in both directions for an ordinary query: it asks the server to compress the response (`enable_http_compression`; see `AcceptEncoding` for the codec, which an explicit value can request even with this off) **and** gzip-compresses the request body — except with `UseFormDataParameters`, whose multipart body is always sent uncompressed. Binary inserts never consult it; they use `InsertOptions.Compressor` — see [Insert compression](#insert-compression) |
 | AcceptEncoding | `string` | `null` | `AcceptEncoding` | `Accept-Encoding` sent with every request, replacing the codecs the driver advertises by default (`zstd, lz4, gzip, deflate`). Whatever the server answers with is decoded transparently. See [Response decompression](#response-decompression) |
 | UseCustomDecimals | `bool` | `true` | `UseCustomDecimals` | Use `ClickHouseDecimal` for arbitrary precision; if false, uses .NET `decimal` (128-bit limit) |
 | ReadStringsAsByteArrays | `bool` | `false` | `ReadStringsAsByteArrays` | Read `String` and `FixedString` columns as `byte[]` instead of `string`; useful for binary data |
@@ -908,7 +908,7 @@ By default the driver advertises **`zstd, lz4, gzip, deflate`**, and ClickHouse 
 ```csharp
 using var client = new ClickHouseClient(new ClickHouseClientSettings("Host=localhost")
 {
-    AcceptEncoding = "br",      // better ratio than lz4, more server CPU
+    AcceptEncoding = "br",      // better ratio than the zstd default, more server CPU
 });
 ```
 
@@ -979,6 +979,12 @@ await client.InsertBinaryAsync("events", columns, rows, options);
 ```
 
 Every codec named here is built in: `ClickHouse.Driver` bundles vendored, pure-managed copies of the LZ4 and zstd codecs (gzip, deflate and brotli come from the BCL), so none of them adds a runtime dependency.
+
+`InsertOptions.Compressor` governs a binary insert only. The driver's other request bodies are compressed by different rules, and none of them goes through it:
+
+- **Every SQL-text request** (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, `ExecuteRawResultAsync`, the ADO.NET layer) sends its statement with `Content-Encoding: gzip` whenever `UseCompression` is `true` — i.e. by default. The codec is not configurable: `AcceptEncoding` steers the response only, so gzip or nothing is the choice. `Compression=false` sends the statement in the clear. Statements are small, so this is rarely worth thinking about — but it is worth knowing when you are watching requests in a proxy or a packet capture.
+- **A multipart body** — a query whose parameters are sent as form data (`UseFormDataParameters=true`) — is always sent uncompressed, whatever `UseCompression` says.
+- **A raw upload** (`InsertRawStreamAsync`, `PostStreamAsync`) takes its own per-call flag and consults neither `UseCompression` nor `InsertOptions.Compressor`: gzip when the flag is set, uncompressed otherwise. Note that `InsertRawStreamAsync`'s `useCompression` parameter defaults to `true`, so a raw upload is gzipped unless you pass `false` — even with `Compression=false` on the client.
 
 ---
 

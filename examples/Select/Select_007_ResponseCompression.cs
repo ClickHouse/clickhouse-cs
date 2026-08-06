@@ -45,7 +45,7 @@ public static class ResponseCompression
 
         try
         {
-            // Example 1: reading rows. The response is LZ4-compressed on the wire and decoded on the
+            // Example 1: reading rows. The response is zstd-compressed on the wire and decoded on the
             // way in; nothing about the reading code is different.
             Console.WriteLine("1. Reading rows over a compressed response (nothing configured):");
             using (var reader = await client.ExecuteReaderAsync(
@@ -80,8 +80,8 @@ public static class ResponseCompression
             Console.WriteLine("    the driver's HttpClient leaves AutomaticDecompression off and decodes itself.)");
             Console.WriteLine();
 
-            // Example 3: overriding the codec client-wide. Brotli compresses far better than LZ4 at a
-            // higher server-side cost, which is worth it on a slow link and not on a fast one.
+            // Example 3: overriding the codec client-wide. Brotli compresses better than the zstd default
+            // at a higher server-side cost, which is worth it on a slow link and not on a fast one.
             Console.WriteLine("3. Choosing brotli client-wide:");
             using (var brotliClient = new ClickHouseClient(new ClickHouseClientSettings("Host=localhost")
             {

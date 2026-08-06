@@ -74,7 +74,12 @@ public class AcceptEncodingWireTests
     }
 
     /// <summary>
-    /// The default advertisement, wire-verified: the codecs the driver can decode, and nothing else.
+    /// The default advertisement, wire-verified: the codecs the driver can decode, and nothing else. The
+    /// exact equality carries a second decision — <c>br</c> is absent although the driver decodes it,
+    /// because ClickHouse's fixed preference scan puts brotli ahead of everything the default names, so
+    /// the token's mere presence would make it the codec for every default query. Asserted on the wire
+    /// because that is where the omission has to survive: a handler mask is what silently added tokens
+    /// back before #490.
     /// </summary>
     [Test]
     public async Task DefaultAcceptEncoding_ReachesTheServerExactly()
@@ -82,21 +87,6 @@ public class AcceptEncodingWireTests
         var wire = await WireAcceptEncodingAsync();
 
         Assert.That(wire, Is.EqualTo("zstd, lz4, gzip, deflate"));
-    }
-
-    /// <summary>
-    /// The default deliberately omits <c>br</c> even though the driver decodes it: ClickHouse's fixed
-    /// preference scan puts brotli ahead of everything the default names, so the token's mere presence
-    /// would make it the codec for every default query — and brotli is the dearest codec on both sides.
-    /// Asserted on the wire because that is where the omission has to survive: a handler mask is what
-    /// silently added tokens back before #490.
-    /// </summary>
-    [Test]
-    public async Task DefaultAcceptEncoding_DoesNotOfferBrotli()
-    {
-        var wire = await WireAcceptEncodingAsync();
-
-        Assert.That(wire, Does.Not.Contain("br"));
     }
 
     /// <summary>

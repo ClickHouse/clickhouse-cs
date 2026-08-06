@@ -10,7 +10,7 @@ namespace ClickHouse.Driver.Examples;
 ///
 /// ## How It Works
 ///
-/// UseCompression governs the **response** direction:
+/// UseCompression governs both directions of an ordinary query:
 ///
 /// 1. **Responses (server → client)**, when UseCompression=true (the default):
 ///    - The driver sends enable_http_compression=true query parameter
@@ -19,10 +19,17 @@ namespace ClickHouse.Driver.Examples;
 ///      by its own fixed preference order
 ///    - The driver decodes the body itself, from the response's Content-Encoding
 ///
-/// 2. **Requests (client → server)** are not governed by this setting:
+/// 2. **Requests (client → server)** for an ordinary query, on the same setting:
+///    - The SQL body is gzip-compressed and declared with Content-Encoding: gzip. Gzip is the only
+///      codec available there — AcceptEncoding steers the response only — and UseCompression=false
+///      sends the statement in the clear. Statements are small, so this rarely matters — but it is
+///      what a proxy or a packet capture will show
+///    - Exception: with UseFormDataParameters=true the multipart body is always sent uncompressed
+///
+/// 3. **Requests that do not consult this setting at all:**
 ///    - A binary insert compresses its body with InsertOptions.Compressor — ZSTD level 3 by default —
 ///      and declares it with Content-Encoding; set that to null to send the body uncompressed
-///    - An ordinary query sends its SQL uncompressed either way
+///    - A raw upload (InsertRawStreamAsync, PostStreamAsync) takes its own per-call flag
 ///
 /// ## When to Disable Compression
 ///
@@ -59,9 +66,10 @@ public static class Compression
             // The driver will:
             // - Request compressed responses via enable_http_compression=true
             // - Advertise "zstd, lz4, gzip, deflate" and decode whatever comes back
+            // - Send the SQL body itself gzip-compressed (Content-Encoding: gzip)
             var result = await client.ExecuteScalarAsync("SELECT 'Compressed response'");
             Console.WriteLine($"   Result: {result}");
-            Console.WriteLine("   Response was zstd compressed and decoded by the driver\n");
+            Console.WriteLine("   Request was gzip compressed; response was zstd compressed and decoded by the driver\n");
         }
 
         // Compression disabled
@@ -70,9 +78,10 @@ public static class Compression
         {
             // The driver will:
             // - Set enable_http_compression=false and advertise no codec (uncompressed responses)
+            // - Send the SQL body in the clear, with no Content-Encoding
             var result = await client.ExecuteScalarAsync("SELECT 'Uncompressed response'");
             Console.WriteLine($"   Result: {result}");
-            Console.WriteLine("   Response was uncompressed\n");
+            Console.WriteLine("   Request and response were both uncompressed\n");
         }
 
         // Using ClickHouseClientSettings
@@ -91,7 +100,8 @@ public static class Compression
 
         Console.WriteLine("Summary:");
         Console.WriteLine("   - Default: UseCompression=true (recommended for most cases)");
-        Console.WriteLine("   - Reduces response bandwidth; request bodies are InsertOptions.Compressor's job");
+        Console.WriteLine("   - Reduces response bandwidth, and gzips an ordinary query's SQL body");
+        Console.WriteLine("   - Binary insert bodies are InsertOptions.Compressor's job, not this setting's");
         Console.WriteLine("   - Consider disabling for localhost or small, frequent queries");
         Console.WriteLine("   - Custom HttpClient: leave AutomaticDecompression off; the driver decodes responses itself");
     }

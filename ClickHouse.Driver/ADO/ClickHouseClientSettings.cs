@@ -161,6 +161,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// one explicitly.
     /// Default: true
     /// </summary>
+    /// <remarks>
+    /// <c>UseCompression</c> governs both directions. Besides the response negotiation, it gzip-compresses
+    /// the request body of every SQL-text request — the statement itself — so turning it off puts that body
+    /// in the clear as well; gzip is the only codec available there, since <see cref="AcceptEncoding"/>
+    /// steers the response only. The exception is <see cref="UseFormDataParameters"/>, whose multipart body
+    /// is always sent uncompressed. A binary insert does not consult this setting and uses
+    /// <see cref="InsertOptions.Compressor"/>; a raw upload (<c>InsertRawStreamAsync</c>,
+    /// <c>PostStreamAsync</c>) takes its own per-call flag.
+    /// </remarks>
     public bool UseCompression { get; init; } = ClickHouseDefaults.Compression;
 
     /// <summary>
