@@ -1,0 +1,1 @@
+* `Map(K, V)` columns can now be read into and written from a `List<KeyValuePair<K, V>>` or `KeyValuePair<K, V>[]` POCO property, in addition to `Dictionary<K, V>`. The list form preserves the on-wire entry order and any duplicate keys, which a `Dictionary` collapses. `Dictionary<K, V>` continues to work unchanged on both paths.
