@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Security;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -69,11 +72,12 @@ public class InsertCompressionBreakdownBenchmark
     /// <c>ZLIB_INFLATE_FAILED</c>. Posting the pre-built buffer directly lets every arm declare its own
     /// codec, and keeps the measured region identical across arms (one POST, no compression work) instead
     /// of measuring gzip through the driver and zstd through something else.
+    ///
+    /// Only the <i>request construction</i> is hand-rolled; the <b>transport</b> is the same one the driver
+    /// would use for these settings (see <see cref="WirePoster"/>), so this arm reaches the endpoint under
+    /// the same connection conditions the driver's own arms do.
     /// </summary>
-    private HttpClient wireClient;
-
-    /// <summary>The INSERT endpoint <see cref="wireClient"/> posts to, built from the client's settings.</summary>
-    private Uri wireUri;
+    private WirePoster poster;
 
     private byte[] rawBytes;
     private Dictionary<Payload, PreparedPayload> payloads;
@@ -108,7 +112,7 @@ public class InsertCompressionBreakdownBenchmark
         foreach (var kind in Enum.GetValues<Payload>())
             payloads[kind] = PreparedPayload.For(rawBytes, CompressorFor(kind));
 
-        (wireUri, wireClient) = CreateWirePoster(client.Settings);
+        poster = WirePoster.For(client.Settings);
 
         var sizes = new List<string>();
         foreach (var pair in payloads)
@@ -129,7 +133,7 @@ public class InsertCompressionBreakdownBenchmark
     [GlobalCleanup]
     public void Cleanup()
     {
-        wireClient?.Dispose();
+        poster?.Dispose();
         client?.Dispose();
     }
 
@@ -161,8 +165,14 @@ public class InsertCompressionBreakdownBenchmark
         if (payload.ContentEncoding != null)
             content.Headers.ContentEncoding.Add(payload.ContentEncoding);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, wireUri) { Content = content };
-        using var response = await wireClient.SendAsync(
+        using var request = new HttpRequestMessage(HttpMethod.Post, poster.Uri) { Content = content };
+
+        // Per-request, never on the client's DefaultRequestHeaders: the client may be one the settings
+        // supplied, and a benchmark must not mutate a caller's client. Same precedence the driver applies
+        // (bearer token when configured, Basic otherwise).
+        request.Headers.Authorization = poster.Authorization;
+
+        using var response = await poster.Client().SendAsync(
             request, HttpCompletionOption.ResponseContentRead, CancellationToken.None);
 
         response.EnsureSuccessStatusCode();
@@ -190,35 +200,128 @@ public class InsertCompressionBreakdownBenchmark
     };
 
     /// <summary>
-    /// The endpoint and HTTP client <see cref="Wire"/> posts through: the same base URI the driver builds
-    /// from these settings, the INSERT as the <c>query</c> parameter, the <c>database</c> only when one is
-    /// set (as <c>ClickHouseUriBuilder</c> does), and the same auth precedence the driver applies — bearer
-    /// token when configured, Basic otherwise.
+    /// Where and how <see cref="Wire"/> posts: the endpoint, the <c>Authorization</c> header, and the
+    /// <see cref="HttpClient"/> to send through.
     ///
-    /// It deliberately carries nothing else: no custom settings, roles, session or custom headers. This arm
-    /// measures transport for a payload size, not the driver's request construction, so those settings are
-    /// out of its scope — the end-to-end arms in <see cref="BinaryInsertCompressionBenchmark"/> are where
-    /// the driver's own request path is measured.
+    /// The <b>request</b> is hand-rolled (the driver's public stream API cannot declare a non-gzip
+    /// <c>Content-Encoding</c>) but the <b>transport must not be</b>: if this arm connected differently from
+    /// the arms it is compared against, it would measure a different connection — and against an HTTPS
+    /// endpoint with <see cref="ClickHouseClientSettings.SkipServerCertificateValidation"/> set it would not
+    /// reach the server at all while every driver arm did. So the client is obtained the way
+    /// <c>ClickHouseClient</c> obtains its own (see <c>ClickHouseClient.HttpClient</c> and its factory
+    /// selection):
+    /// <list type="bullet">
+    ///   <item>a settings-supplied <see cref="ClickHouseClientSettings.HttpClient"/> is reused as-is — its
+    ///   handler is by definition the transport the caller configured — and is never disposed or mutated
+    ///   here, which is why auth goes on the request rather than on <c>DefaultRequestHeaders</c>;</item>
+    ///   <item>a settings-supplied <see cref="ClickHouseClientSettings.HttpClientFactory"/> is asked for a
+    ///   client <i>per request</i>, as the driver does, so handler rotation applies to this arm too instead
+    ///   of pinning one handler for the whole run;</item>
+    ///   <item>otherwise the handler is built to match the driver's default
+    ///   (<c>HttpHandlerProvider.CreateHandler</c>): <c>AutomaticDecompression</c> off — the driver decodes
+    ///   responses itself, and a mask would also widen <c>Accept-Encoding</c> at send time — the same
+    ///   pooled-connection idle timeout, <see cref="ClickHouseClientSettings.Timeout"/>, and certificate
+    ///   validation bypassed only when the settings ask for it.</item>
+    /// </list>
+    ///
+    /// The <b>URI</b> is the driver's base URI plus this INSERT as <c>query</c> and the <c>database</c> only
+    /// when one is set. It deliberately carries nothing else — none of the base parameters
+    /// <c>ClickHouseUriBuilder</c> always appends (<c>default_format</c>, <c>query_id</c>,
+    /// <c>enable_http_compression</c>, …), no custom settings, roles, session or custom headers. This arm
+    /// measures transport for a payload size, not the driver's request construction, so those are out of its
+    /// scope — the end-to-end arms in <see cref="BinaryInsertCompressionBenchmark"/> are where the driver's
+    /// own request path is measured.
     /// </summary>
-    private static (Uri Uri, HttpClient Client) CreateWirePoster(ClickHouseClientSettings settings)
+    private sealed class WirePoster : IDisposable
     {
-        var query = $"query={Uri.EscapeDataString(InsertSql)}";
-        if (!string.IsNullOrEmpty(settings.Database))
-            query += $"&database={Uri.EscapeDataString(settings.Database)}";
+        private readonly HttpClient client;
+        private readonly bool ownsClient;
+        private readonly IHttpClientFactory factory;
+        private readonly string factoryClientName;
 
-        var builder = new UriBuilder(settings.Protocol, settings.Host, settings.Port, settings.Path ?? string.Empty)
+        private WirePoster(
+            Uri uri,
+            AuthenticationHeaderValue authorization,
+            HttpClient client,
+            bool ownsClient,
+            IHttpClientFactory factory,
+            string factoryClientName)
         {
-            Query = query,
-        };
+            Uri = uri;
+            Authorization = authorization;
+            this.client = client;
+            this.ownsClient = ownsClient;
+            this.factory = factory;
+            this.factoryClientName = factoryClientName;
+        }
 
-        var http = new HttpClient { Timeout = settings.Timeout };
-        http.DefaultRequestHeaders.Authorization = string.IsNullOrEmpty(settings.BearerToken)
-            ? new AuthenticationHeaderValue(
-                "Basic",
-                Convert.ToBase64String(Encoding.UTF8.GetBytes($"{settings.Username}:{settings.Password}")))
-            : new AuthenticationHeaderValue("Bearer", settings.BearerToken);
+        /// <summary>The INSERT endpoint to post to.</summary>
+        public Uri Uri { get; }
 
-        return (builder.Uri, http);
+        /// <summary>
+        /// The <c>Authorization</c> header the driver would send for these settings: bearer token when one is
+        /// configured, Basic otherwise (the driver's own precedence, minus the per-query override this arm
+        /// has no equivalent of).
+        /// </summary>
+        public AuthenticationHeaderValue Authorization { get; }
+
+        [SuppressMessage(
+            "Security",
+            "CA5359:Do Not Disable Certificate Validation",
+            Justification = "Mirrors the driver's own SkipServerCertificateValidation handling, opt-in via settings.")]
+        public static WirePoster For(ClickHouseClientSettings settings)
+        {
+            var query = $"query={Uri.EscapeDataString(InsertSql)}";
+            if (!string.IsNullOrEmpty(settings.Database))
+                query += $"&database={Uri.EscapeDataString(settings.Database)}";
+
+            var uri = new UriBuilder(settings.Protocol, settings.Host, settings.Port, settings.Path ?? string.Empty)
+            {
+                Query = query,
+            }.Uri;
+
+            var authorization = string.IsNullOrEmpty(settings.BearerToken)
+                ? new AuthenticationHeaderValue(
+                    "Basic",
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes($"{settings.Username}:{settings.Password}")))
+                : new AuthenticationHeaderValue("Bearer", settings.BearerToken);
+
+            if (settings.HttpClient != null)
+                return new WirePoster(uri, authorization, settings.HttpClient, false, null, null);
+
+            if (settings.HttpClientFactory != null)
+            {
+                return new WirePoster(
+                    uri, authorization, null, false, settings.HttpClientFactory, settings.HttpClientName ?? string.Empty);
+            }
+
+            var handler = new SocketsHttpHandler
+            {
+                AutomaticDecompression = DecompressionMethods.None,
+                PooledConnectionIdleTimeout = TimeSpan.FromSeconds(5),
+            };
+
+            if (settings.SkipServerCertificateValidation)
+            {
+                handler.SslOptions = new SslClientAuthenticationOptions
+                {
+                    RemoteCertificateValidationCallback = (_, _, _, _) => true,
+                };
+            }
+
+            var owned = new HttpClient(handler, disposeHandler: true) { Timeout = settings.Timeout };
+            return new WirePoster(uri, authorization, owned, true, null, null);
+        }
+
+        /// <summary>The client to send through — from the settings' factory when there is one, as the driver does.</summary>
+        public HttpClient Client() => factory == null ? client : factory.CreateClient(factoryClientName);
+
+        /// <summary>Disposes only a client this poster created; a caller's client and its factory are left alone.</summary>
+        public void Dispose()
+        {
+            if (ownsClient)
+                client.Dispose();
+        }
     }
 
     /// <summary>
