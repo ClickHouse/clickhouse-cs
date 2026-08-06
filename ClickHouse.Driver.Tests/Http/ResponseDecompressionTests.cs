@@ -71,6 +71,7 @@ public class ResponseDecompressionTests
         "deflate" => new DeflateStream(destination, CompressionLevel.Fastest, leaveOpen: true),
         "br" or "brotli" => new BrotliStream(destination, CompressionLevel.Fastest, leaveOpen: true),
         "lz4" => Lz4Compressor.Default.Compress(destination, leaveOpen: true),
+        "zstd" => ZstdCompressor.Default.Compress(destination, leaveOpen: true),
         _ => throw new ArgumentOutOfRangeException(nameof(contentEncoding), contentEncoding, null),
     };
 
@@ -93,6 +94,7 @@ public class ResponseDecompressionTests
     private static IEnumerable<TestCaseData> DecodableCodecs()
     {
         yield return new TestCaseData("lz4").SetName("{m}(lz4)");
+        yield return new TestCaseData("zstd").SetName("{m}(zstd)");
         yield return new TestCaseData("gzip").SetName("{m}(gzip)");
         yield return new TestCaseData("deflate").SetName("{m}(deflate)");
         yield return new TestCaseData("br").SetName("{m}(br)");
@@ -192,7 +194,9 @@ public class ResponseDecompressionTests
         Assert.That(ex.Message, Does.Contain("gzip, br"));
     }
 
-    [TestCase("zstd")]
+    // zstd used to be listed here; it is decodable since the vendored ZstdSharp codec landed, so it
+    // moved to DecodableCodecs and `compress` (RFC 9110, which ClickHouse never emits) took its slot.
+    [TestCase("compress")]
     [TestCase("snappy")]
     [TestCase("xz")]
     public void Wrap_WithUnsupportedCodec_ThrowsNamingTheCodecAndTheFix(string contentEncoding)
@@ -216,7 +220,7 @@ public class ResponseDecompressionTests
     {
         using var source = new MemoryStream(new byte[] { 1, 2, 3 });
 
-        var wrapped = ResponseDecompression.TryWrap(source, "zstd", leaveOpen: true, out var decompressed);
+        var wrapped = ResponseDecompression.TryWrap(source, "snappy", leaveOpen: true, out var decompressed);
 
         Assert.Multiple(() =>
         {
@@ -241,7 +245,7 @@ public class ResponseDecompressionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(advertised, Is.EqualTo(new[] { "lz4", "gzip", "deflate" }));
+            Assert.That(advertised, Is.EqualTo(new[] { "zstd", "lz4", "gzip", "deflate" }));
             foreach (var token in advertised)
             {
                 using var source = new MemoryStream(Encode(token, Encoding.UTF8.GetBytes("x")));
@@ -251,6 +255,40 @@ public class ResponseDecompressionTests
                     $"advertised '{token}' but cannot decode it");
             }
         });
+    }
+
+    /// <summary>
+    /// <c>br</c> is decodable but deliberately absent from the default advertisement: ClickHouse's
+    /// fixed preference scan puts brotli ahead of every token the default names, so naming it would
+    /// make it the codec for every default query — and it is the dearest codec on both sides. Pinning
+    /// both halves — decodable, and not advertised — is what keeps the decision from being flipped by
+    /// accident.
+    /// </summary>
+    [Test]
+    public void DefaultAcceptEncoding_DoesNotAdvertiseBrotli_ThoughTheResolverDecodesIt()
+    {
+        using var source = new MemoryStream(Encode("br", Encoding.UTF8.GetBytes("decodable")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ResponseDecompression.DefaultAcceptEncoding, Does.Not.Contain("br"));
+            Assert.That(
+                ResponseDecompression.TryWrap(source, "br", leaveOpen: true, out _),
+                Is.True,
+                "br must be decodable even though it is not advertised");
+        });
+    }
+
+    /// <summary>
+    /// The other half of the same decision, pinned deliberately rather than left to the exact-array
+    /// assertion above: <c>zstd</c> <i>is</i> advertised, so ClickHouse's preference scan resolves a
+    /// default request to zstd. That is a behaviour change users can observe, and it should take a
+    /// conscious edit to undo.
+    /// </summary>
+    [Test]
+    public void DefaultAcceptEncoding_AdvertisesZstd_SoTheServerPreferenceScanSelectsIt()
+    {
+        Assert.That(ResponseDecompression.DefaultAcceptEncoding, Does.Contain("zstd"));
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -312,6 +350,7 @@ public class ResponseDecompressionTests
     [TestCase(null, TestName = "{m}(no Content-Encoding)")]
     [TestCase("identity", TestName = "{m}(identity)")]
     [TestCase("lz4", TestName = "{m}(lz4)")]
+    [TestCase("zstd", TestName = "{m}(zstd)")]
     [TestCase("gzip", TestName = "{m}(gzip)")]
     [TestCase("deflate", TestName = "{m}(deflate)")]
     [TestCase("br", TestName = "{m}(br)")]
@@ -328,11 +367,11 @@ public class ResponseDecompressionTests
     [Test]
     public void ExecuteReaderAsync_WithUnsupportedResponseCodec_ThrowsActionableErrorNamingTheCodec()
     {
-        using var client = CreateClient(CreateResponse(new byte[] { 0x28, 0xB5, 0x2F, 0xFD }, "zstd"));
+        using var client = CreateClient(CreateResponse([0xFF, 0x06, 0x00, 0x00], "snappy"));
 
         var ex = Assert.ThrowsAsync<NotSupportedException>(() => ReadAllAsync(client));
 
-        Assert.That(ex.Message, Does.Contain("zstd"));
+        Assert.That(ex.Message, Does.Contain("snappy"));
     }
 
     [Test]

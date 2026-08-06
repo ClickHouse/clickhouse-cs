@@ -58,8 +58,13 @@ public class ConnectionTests : AbstractConnectionTestFixture
 
     /// <summary>
     /// A codec the driver cannot decode must fail loudly, naming it, rather than parsing compressed bytes
-    /// as the result format. The <see cref="HttpClient"/> is incidental here — nothing decodes <c>zstd</c>
-    /// either way. Thrown when executing, not on <c>OpenAsync</c>, which no longer makes requests.
+    /// as the result format. The <see cref="HttpClient"/> is incidental here — nothing decodes
+    /// <c>snappy</c> either way. Thrown when executing, not on <c>OpenAsync</c>, which no longer makes
+    /// requests.
+    /// <para>
+    /// This asserted <c>zstd</c> until the driver gained a zstd decoder; <c>snappy</c> is the codec
+    /// ClickHouse names in its preference scan that the driver still cannot read.
+    /// </para>
     /// </summary>
     [Test]
     public async Task ExecuteReaderAsync_WithACodecTheDriverCannotDecode_ThrowsNamingTheCodec()
@@ -70,11 +75,40 @@ public class ConnectionTests : AbstractConnectionTestFixture
 
         using var command = conn.CreateCommand();
         command.CommandText = "SELECT number FROM numbers(100)";
+        command.AcceptEncoding = "snappy";
+
+        // Two loud failures are possible and which one happens is the server's choice, not the
+        // driver's: the driver refusing to decode the body (NotSupportedException naming the codec), or
+        // the server refusing to produce it — 26.5.1.882 answers 501 Not Implemented for snappy, since
+        // it recognizes the token in its preference scan but has no snappy writer. Accept either rather
+        // than pinning one server build. What must not happen is a silent success, which is what this
+        // guarded before: the compressed bytes being parsed as the result format.
+        var ex = Assert.CatchAsync(() => command.ExecuteScalarAsync(CancellationToken.None));
+
+        Assert.That(ex, Is.InstanceOf<NotSupportedException>().Or.InstanceOf<ClickHouseServerException>());
+        if (ex is NotSupportedException)
+            Assert.That(ex.Message, Does.Contain("snappy"), "the driver's own error must name the codec");
+    }
+
+    /// <summary>
+    /// The other half of the same story, now that zstd is decodable: the codec the framework cannot
+    /// decode at all still reads correctly through a plain <see cref="HttpClient"/>, because the driver
+    /// decodes it itself.
+    /// </summary>
+    [Test]
+    public async Task ExecuteScalarAsync_WithZstdOverAPlainHttpClient_DecodesItInTheDriver()
+    {
+        using var httpClient = new HttpClient();
+        using var conn = new ClickHouseConnection(TestUtilities.GetConnectionStringBuilder().ToString(), httpClient);
+        await conn.OpenAsync();
+
+        using var command = conn.CreateCommand();
+        command.CommandText = "SELECT count() FROM numbers(100)";
         command.AcceptEncoding = "zstd";
 
-        var ex = Assert.ThrowsAsync<NotSupportedException>(() => command.ExecuteScalarAsync(CancellationToken.None));
+        var count = await command.ExecuteScalarAsync(CancellationToken.None);
 
-        Assert.That(ex.Message, Does.Contain("zstd"));
+        Assert.That(Convert.ToInt64(count, CultureInfo.InvariantCulture), Is.EqualTo(100));
     }
 
     [Test]

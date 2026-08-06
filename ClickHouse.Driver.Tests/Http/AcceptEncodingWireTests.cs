@@ -41,6 +41,7 @@ public class AcceptEncodingWireTests
     [TestCase("deflate", ExpectedResult = "deflate")]
     [TestCase("gzip", ExpectedResult = "gzip")]
     [TestCase("lz4", ExpectedResult = "lz4")]
+    [TestCase("zstd", ExpectedResult = "zstd")]
     [TestCase("br", ExpectedResult = "br")]
     [TestCase("lz4, gzip", ExpectedResult = "lz4, gzip")]
     public async Task<string> ExplicitAcceptEncoding_ReachesTheServerExactly(string acceptEncoding)
@@ -80,7 +81,22 @@ public class AcceptEncodingWireTests
     {
         var wire = await WireAcceptEncodingAsync();
 
-        Assert.That(wire, Is.EqualTo("lz4, gzip, deflate"));
+        Assert.That(wire, Is.EqualTo("zstd, lz4, gzip, deflate"));
+    }
+
+    /// <summary>
+    /// The default deliberately omits <c>br</c> even though the driver decodes it: ClickHouse's fixed
+    /// preference scan puts brotli ahead of everything the default names, so the token's mere presence
+    /// would make it the codec for every default query — and brotli is the dearest codec on both sides.
+    /// Asserted on the wire because that is where the omission has to survive: a handler mask is what
+    /// silently added tokens back before #490.
+    /// </summary>
+    [Test]
+    public async Task DefaultAcceptEncoding_DoesNotOfferBrotli()
+    {
+        var wire = await WireAcceptEncodingAsync();
+
+        Assert.That(wire, Does.Not.Contain("br"));
     }
 
     /// <summary>

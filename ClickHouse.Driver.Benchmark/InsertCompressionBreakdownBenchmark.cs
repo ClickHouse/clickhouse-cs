@@ -36,6 +36,9 @@ public class InsertCompressionBreakdownBenchmark
         Raw,
         GzipFastest,
         GzipOptimal,
+#if ZSTD_AVAILABLE
+        ZstdDefault,
+#endif
     }
 
     private const string Table = "default.benchmark_compression_breakdown";
@@ -47,12 +50,23 @@ public class InsertCompressionBreakdownBenchmark
     private byte[] rawBytes;
     private byte[] gzipFastestBytes;
     private byte[] gzipOptimalBytes;
+#if ZSTD_AVAILABLE
+    private byte[] zstdBytes;
+#endif
 
     [Params(500_000)]
     public int Count { get; set; }
 
     // For Wire: which pre-built payload to upload. For Compress: which level to run (Raw is ignored).
-    [Params(Payload.Raw, Payload.GzipFastest, Payload.GzipOptimal)]
+    [Params(
+        Payload.Raw,
+        Payload.GzipFastest,
+        Payload.GzipOptimal
+#if ZSTD_AVAILABLE
+        ,
+        Payload.ZstdDefault
+#endif
+        )]
     public Payload Kind { get; set; }
 
     [GlobalSetup]
@@ -68,13 +82,21 @@ public class InsertCompressionBreakdownBenchmark
         rawBytes = BuildRowBinary(Count);
         gzipFastestBytes = GzipTo(rawBytes, CompressionLevel.Fastest);
         gzipOptimalBytes = GzipTo(rawBytes, CompressionLevel.Optimal);
+#if ZSTD_AVAILABLE
+        zstdBytes = CompressWith(ZstdCompressor.Default, rawBytes);
+#endif
 
         Console.WriteLine(
             $"[breakdown] payload sizes: raw={rawBytes.Length / 1024.0 / 1024:F1} MiB, " +
             $"gzipFastest={gzipFastestBytes.Length / 1024.0 / 1024:F1} MiB " +
             $"({100.0 * gzipFastestBytes.Length / rawBytes.Length:F1}%), " +
             $"gzipOptimal={gzipOptimalBytes.Length / 1024.0 / 1024:F1} MiB " +
-            $"({100.0 * gzipOptimalBytes.Length / rawBytes.Length:F1}%)");
+            $"({100.0 * gzipOptimalBytes.Length / rawBytes.Length:F1}%)"
+#if ZSTD_AVAILABLE
+            + $", zstd={zstdBytes.Length / 1024.0 / 1024:F1} MiB " +
+              $"({100.0 * zstdBytes.Length / rawBytes.Length:F1}%)"
+#endif
+            );
     }
 
     [GlobalCleanup]
@@ -84,8 +106,19 @@ public class InsertCompressionBreakdownBenchmark
     [Benchmark]
     public void Compress()
     {
-        var level = Kind == Payload.GzipOptimal ? CompressionLevel.Optimal : CompressionLevel.Fastest;
-        var compressor = new GZipCompressor(level);
+        IClickHouseCompressor compressor;
+#if ZSTD_AVAILABLE
+        if (Kind == Payload.ZstdDefault)
+        {
+            compressor = ZstdCompressor.Default;
+        }
+        else
+#endif
+        {
+            var level = Kind == Payload.GzipOptimal ? CompressionLevel.Optimal : CompressionLevel.Fastest;
+            compressor = new GZipCompressor(level);
+        }
+
         using var sink = compressor.Compress(Stream.Null, leaveOpen: true);
         sink.Write(rawBytes, 0, rawBytes.Length);
     }
@@ -99,6 +132,9 @@ public class InsertCompressionBreakdownBenchmark
             Payload.Raw => (rawBytes, false),
             Payload.GzipFastest => (gzipFastestBytes, true),
             Payload.GzipOptimal => (gzipOptimalBytes, true),
+#if ZSTD_AVAILABLE
+            Payload.ZstdDefault => (zstdBytes, true),
+#endif
             _ => throw new ArgumentOutOfRangeException(),
         };
 
@@ -138,6 +174,16 @@ public class InsertCompressionBreakdownBenchmark
             gz.Write(data, 0, data.Length);
         return ms.ToArray();
     }
+
+#if ZSTD_AVAILABLE
+    private static byte[] CompressWith(IClickHouseCompressor compressor, byte[] data)
+    {
+        using var ms = new MemoryStream();
+        using (var sink = compressor.Compress(ms, leaveOpen: true))
+            sink.Write(data, 0, data.Length);
+        return ms.ToArray();
+    }
+#endif
 
     private static string MakeName(int i)
     {
