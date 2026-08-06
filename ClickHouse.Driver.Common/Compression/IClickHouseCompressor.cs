@@ -18,8 +18,9 @@ namespace ClickHouse.Driver.Compression;
 /// <see cref="Encode"/>, <see cref="Decode"/>) used by the native protocol's compression frame. This
 /// path is optional: codecs that only support the HTTP path (e.g. the built-in
 /// <see cref="GZipCompressor"/> and <see cref="BrotliCompressor"/>) inherit default implementations that
-/// throw <see cref="NotSupportedException"/>. Block codecs such as LZ4/ZSTD (shipped as opt-in packages)
-/// override them.
+/// throw <see cref="NotSupportedException"/>. Block codecs — the built-in
+/// <see cref="Lz4Compressor"/> and <see cref="ZstdCompressor"/>, both backed by vendored copies rather
+/// than runtime dependencies — override them.
 /// </item>
 /// </list>
 /// </summary>
