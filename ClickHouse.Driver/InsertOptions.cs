@@ -28,11 +28,10 @@ public sealed class InsertOptions : QueryOptions
 
     /// <summary>
     /// Gets or sets the compressor applied to the binary insert body. Defaults to
-    /// <see cref="ZstdCompressor.Default"/> (ZSTD at level <see cref="ZstdCompressor.DefaultLevel"/>),
-    /// which sends about a third fewer bytes than the previous <see cref="GZipCompressor.Default"/>
-    /// default for a fraction of the client CPU. Set to <see langword="null"/> to send the
-    /// RowBinary payload uncompressed — useful over a fast/local link where the compression CPU
-    /// outweighs the bandwidth savings, or when a proxy already compresses on the client's behalf.
+    /// <see cref="ZstdCompressor.Default"/> (ZSTD at level <see cref="ZstdCompressor.DefaultLevel"/>).
+    /// Set to <see langword="null"/> to send the RowBinary payload uncompressed — useful over a
+    /// fast/local link where the compression CPU outweighs the bandwidth savings, or when a proxy
+    /// already compresses on the client's behalf.
     /// Provide a configured <see cref="ZstdCompressor"/> (or another <see cref="IClickHouseCompressor"/>,
     /// e.g. <see cref="GZipCompressor"/>) to change the level, buffer size, or codec — note that
     /// unlike the <c>Accept-Encoding</c> the driver sends for responses, which the server is free to

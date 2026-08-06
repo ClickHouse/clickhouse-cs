@@ -6,10 +6,10 @@ namespace ClickHouse.Driver.Compression;
 
 /// <summary>
 /// GZip request-body compressor. Exposes the level and write buffer size as knobs so callers can
-/// trade CPU for payload size. Binary inserts default to <see cref="ZstdCompressor"/>, which is both
-/// smaller and cheaper client-side; gzip stays the safer choice behind a proxy tier that re-encodes
-/// request bodies, since a body's <c>Content-Encoding</c> is a declaration such a tier has to
-/// understand rather than an offer it may decline.
+/// trade CPU for payload size. Binary inserts default to <see cref="ZstdCompressor"/>; gzip stays
+/// the safer choice behind a proxy tier that re-encodes request bodies, since a body's
+/// <c>Content-Encoding</c> is a declaration such a tier has to understand rather than an offer it
+/// may decline.
 /// </summary>
 public sealed class GZipCompressor : IClickHouseCompressor
 {

@@ -54,19 +54,15 @@ internal static class ResponseDecompression
     /// do zstd.
     /// </para>
     /// <para>
-    /// zstd is advertised because at the shipped <c>http_zlib_compression_level</c> (3) it beats lz4
-    /// on bytes, server CPU and wall clock simultaneously — measured on real data over a real network
-    /// against both a 4-vCPU server and a 16-vCPU Cloud service: 22–26% fewer bytes, 40–51% less
-    /// server CPU, 19–59% less fetch time. Two caveats come with that. At
-    /// <c>http_zlib_compression_level=1</c> the sweep does not hold — there zstd costs 10–18%
-    /// <i>more</i> server CPU than lz4, because lz4 only becomes expensive from level 3, where it
-    /// engages LZ4-HC. And zstd is the slower codec to <i>decode</i> client-side (roughly
-    /// 0.7–1.4 GB/s against lz4's 1.1–2.3 GB/s), which the driver does on the caller's thread, so a
-    /// CPU-bound client on a fast link is the case for asking for <c>lz4</c> explicitly.
+    /// How the codecs compare on payload size, server CPU and client CPU depends on the data, the
+    /// link and the server's <c>http_zlib_compression_level</c>; the driver also decodes the body on
+    /// the caller's thread. A caller who wants a different balance names a codec explicitly —
+    /// <c>lz4</c>, for instance, on a CPU-bound client over a fast link.
     /// </para>
     /// <para>
-    /// <c>br</c> stays omitted: it comes earlier still in the scan and is far dearer on both sides.
-    /// It is decoded whenever it arrives, and a caller who wants it can ask.
+    /// <c>br</c> stays omitted: it outranks every fallback token listed here, so advertising it
+    /// would make it the codec whenever the server cannot do zstd. It is decoded whenever it
+    /// arrives, and a caller who wants it can ask.
     /// </para>
     /// </remarks>
     public const string DefaultAcceptEncoding = "zstd, lz4, gzip, deflate";

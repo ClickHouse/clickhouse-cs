@@ -908,7 +908,7 @@ By default the driver advertises **`zstd, lz4, gzip, deflate`**, and ClickHouse 
 ```csharp
 using var client = new ClickHouseClient(new ClickHouseClientSettings("Host=localhost")
 {
-    AcceptEncoding = "br",      // better ratio than the zstd default, more server CPU
+    AcceptEncoding = "br",      // decodable, but not advertised by default
 });
 ```
 
@@ -928,21 +928,19 @@ Host=localhost;AcceptEncoding=br, gzip
 
 Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends no `Accept-Encoding` at all.
 
-**The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. The default names `zstd` first in that scan, so a default query is answered with zstd; the remaining tokens are the fallback for a server or intermediary that cannot. `br` is *decodable but not advertised*: it comes earlier still in the scan and is by far the dearest codec on both sides, so naming it would make it the codec for **every** query.
+**The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. The default names `zstd` first in that scan, so a default query is answered with zstd; the remaining tokens are the fallback for a server or intermediary that cannot. `br` is *decodable but not advertised*: it outranks every fallback token in the default list, so naming it would make it the codec for every query the server cannot answer with zstd.
 
-`zstd` is the default because at the shipped `http_zlib_compression_level` (3) it wins on all three axes at once against `lz4` — measured on real data (a 15-column ClickBench `hits` subset) over a real network, against both a 4-vCPU server and a 16-vCPU ClickHouse Cloud service: 22–26% fewer bytes, 40–51% less server CPU, and 19–59% less wall-clock fetch time.
+How the codecs compare on payload size, server CPU and client CPU depends on your data, your link and the server's `http_zlib_compression_level` (shipped default: 3), so two cases are worth knowing about — in both of them asking for `lz4` explicitly may serve you better:
 
-Two cases are worth knowing about, because in both of them `lz4` is the better choice and you should ask for it explicitly:
-
-- **`http_zlib_compression_level=1`.** That setting applies to every HTTP codec, not just zlib, and `lz4` is unusually sensitive to it — it only engages LZ4-HC (and gets expensive) from level 3. At level 1, `zstd` costs **10–18% more server CPU** than `lz4`. The clean sweep above is a property of the default level, not of the codecs.
-- **A CPU-bound client on a fast link.** `zstd` is the slower codec to *decode* — roughly 0.7–1.4 GB/s against `lz4`'s 1.1–2.3 GB/s (`gzip`: 0.2–0.3) — and the driver decodes on the calling thread. When the network is not the bottleneck, `lz4` finishes sooner.
+- **`http_zlib_compression_level=1`.** That setting applies to every HTTP codec, not just zlib, and it changes the picture: `lz4` only engages LZ4-HC from level 3, so its server-side cost at level 1 is not what the default level would suggest. If your server runs level 1, measure before relying on the default.
+- **A CPU-bound client on a fast link.** The driver decodes the response body on the calling thread, so when the network is not the bottleneck it is the client-side decode cost that decides.
 
 Ask for a different codec per query, or client-wide, whenever either applies:
 
 ```csharp
 using var reader = await client.ExecuteReaderAsync(
     "SELECT * FROM events",
-    options: new QueryOptions { AcceptEncoding = "lz4" });   // cheaper to decode than the zstd default
+    options: new QueryOptions { AcceptEncoding = "lz4" });   // decode this one with lz4 instead
 ```
 
 Because the decision is made from the response, a body is decoded whenever its `Content-Encoding` says so, whatever was requested: absent or `identity` passes through untouched, a supported codec is decoded, and anything else raises an error naming it. There is no risk of double-decoding — if a caller-supplied handler's `AutomaticDecompression` has already decoded a body it also strips `Content-Encoding`, so the driver sees plaintext and leaves it alone.
@@ -969,9 +967,9 @@ See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse
 
 #### Insert (request) compression {#insert-compression}
 
-zstd is also the default on the **request** side of a binary insert, through `InsertOptions.Compressor` (alongside `Lz4Compressor`, `GZipCompressor` and `BrotliCompressor`). It replaced `gzip:Fastest` there because `zstd:3` beats it on both axes that are deterministic client-side: ~32% smaller request bodies for ~64% less client CPU. `ZstdCompressor.Default` uses zstd's own default level (3); the constructor takes any level between `ZstdCompressor.MinLevel` and `ZstdCompressor.MaxLevel` — zstd's levels are a signed range, and negative ones trade ratio for speed.
+zstd is also the default on the **request** side of a binary insert, through `InsertOptions.Compressor` (alongside `Lz4Compressor`, `GZipCompressor` and `BrotliCompressor`); it replaced `gzip:Fastest` there. `ZstdCompressor.Default` uses zstd's own default level (3); the constructor takes any level between `ZstdCompressor.MinLevel` and `ZstdCompressor.MaxLevel` — zstd's levels are a signed range, and negative ones trade ratio for speed.
 
-One caveat is specific to the request side. `Accept-Encoding` is an *offer* the server may decline, but a request body's `Content-Encoding` is a **declaration**: an intermediary that re-encodes request bodies and does not understand zstd fails the insert outright rather than merely slowing it down. ClickHouse itself accepts zstd request bodies on every supported version (verified back to 25.8 LTS); if your inserts traverse a proxy tier you are unsure of, name the codec explicitly.
+One caveat is specific to the request side. `Accept-Encoding` is an *offer* the server may decline, but a request body's `Content-Encoding` is a **declaration**: an intermediary that re-encodes request bodies and does not understand zstd fails the insert outright. ClickHouse itself accepts zstd request bodies on every supported version (verified back to 25.8 LTS); if your inserts traverse a proxy tier you are unsure of, name the codec explicitly.
 
 ```csharp
 var options = new InsertOptions { Compressor = GZipCompressor.Default };  // Content-Encoding: gzip

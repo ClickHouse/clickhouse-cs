@@ -80,8 +80,8 @@ public static class ResponseCompression
             Console.WriteLine("    the driver's HttpClient leaves AutomaticDecompression off and decodes itself.)");
             Console.WriteLine();
 
-            // Example 3: overriding the codec client-wide. Brotli compresses better than the zstd default
-            // at a higher server-side cost, which is worth it on a slow link and not on a fast one.
+            // Example 3: overriding the codec client-wide. Brotli is decoded whenever it arrives but is
+            // not advertised by default, so it is only used when a caller names it.
             Console.WriteLine("3. Choosing brotli client-wide:");
             using (var brotliClient = new ClickHouseClient(new ClickHouseClientSettings("Host=localhost")
             {
