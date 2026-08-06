@@ -441,22 +441,28 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     internal bool TryMaterializeNextRow<T>(Action<ExtendedBinaryReader, T>[] materializers, Func<T> constructor, out T value)
         where T : class
     {
-        if (reader.PeekChar() == -1)
-        {
-            hasCurrentRow = false;
-            value = null;
-            return false;
-        }
+        value = null;
 
         try
         {
+            // PeekChar is inside the try: a mid-stream failure truncates the body at a row
+            // boundary too, so the end-of-stream probe can itself hit the truncation.
+            if (reader.PeekChar() == -1)
+            {
+                hasCurrentRow = false;
+                return false;
+            }
+
             var instance = constructor();
             for (var i = 0; i < materializers.Length; i++)
                 materializers[i](reader, instance);
             value = instance;
             return true;
         }
-        catch (EndOfStreamException) when (exceptionTagStream != null)
+        // A mid-stream server failure truncates the HTTP body; reading past the truncation surfaces
+        // as an IOException — EndOfStreamException for a buffered body, but HttpIOException
+        // ("response ended prematurely") for a live streamed response. Both derive from IOException.
+        catch (IOException) when (exceptionTagStream != null)
         {
             var serverEx = exceptionTagStream.TryExtractMidStreamException();
             if (serverEx != null)
