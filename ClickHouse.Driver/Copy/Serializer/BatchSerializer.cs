@@ -26,19 +26,19 @@ internal class BatchSerializer : IBatchSerializer
 
     public void Serialize(Batch batch, Stream stream, IClickHouseCompressor compressor)
     {
-        // With a compressor, write through it (it leaves the base stream open); disposing the writer
-        // flushes the compressed bytes into it. With no compressor, write straight to the base stream
-        // and leave it open so the caller can seek/read it afterwards.
-        var compressing = compressor != null;
-        var target = compressing ? compressor.Compress(stream, leaveOpen: true) : stream;
-
-        PooledStreamWriter.WriteLine(target, batch.Query);
-
-        using var writer = new ExtendedBinaryWriter(target, leaveOpen: !compressing);
+        // The batch is written through a buffering (and optionally compressing) stream that leaves the
+        // base stream open, so disposing the writer flushes the pending bytes into it while the caller
+        // can still seek/read it afterwards. See BatchWriteTarget for why the buffer is not optional.
+        var target = BatchWriteTarget.Create(stream, compressor);
+        var writer = new ExtendedBinaryWriter(target, leaveOpen: false);
 
         object[] row = null;
+        var serializingRows = false;
         try
         {
+            PooledStreamWriter.WriteLine(target, batch.Query);
+            serializingRows = true;
+
             var rows = batch.Rows.AsSpan()[..batch.Size];
             var types = batch.Types;
             for (int i = 0; i < rows.Length; i++)
@@ -49,7 +49,15 @@ internal class BatchSerializer : IBatchSerializer
         }
         catch (Exception e)
         {
+            BatchWriteTarget.DisposeSuppressingErrors(writer);
+
+            // A failure writing the query line is not a serialization fault, so it propagates as it is.
+            if (!serializingRows)
+                throw;
+
             throw new ClickHouseBulkCopySerializationException(row, e);
         }
+
+        writer.Dispose();
     }
 }
