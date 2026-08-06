@@ -20,10 +20,15 @@ test-only differential oracle described below.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE), copied verbatim. Copyright (c) 2021 Oleg Stepanischev. All
-copyright headers are preserved. The algorithm being ported is Meta's zstd, itself
-BSD/GPLv2-dual-licensed; this directory contains only Oleg Stepanischev's MIT-licensed C# port of
-it, no zstd source.
+MIT — see [`LICENSE`](LICENSE), copied verbatim. Copyright (c) 2021 Oleg Stepanischev. Upstream
+carries no per-file copyright headers in this tree, so there are none to preserve; the vendoring
+adds none either.
+
+This directory contains only Oleg Stepanischev's MIT-licensed C# port, no zstd source. The port
+derives from Meta's zstd v1.5.7 (dual BSD-3-Clause / GPL-2.0), including the copy of xxHash that
+library bundles. Upstream's transpilation carries the zstd code comments across but not its
+copyright headers, and upstream records no attribution to Meta, so the driver reproduces zstd's
+BSD-3-Clause notice itself, in the root `THIRD-PARTY-NOTICES.txt` that ships in the NuGet package.
 
 ## Modifications from upstream
 
