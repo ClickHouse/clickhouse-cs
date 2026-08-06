@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Compression;
 using NUnit.Framework;
 using ZstdSharp;
+using VendoredZstdException = ClickHouse.Driver.Vendor.ZstdSharp.ZstdException;
 
 namespace ClickHouse.Driver.Tests;
 
@@ -319,6 +321,116 @@ public class ZstdCompressorTests
     }
 
     /// <summary>
+    /// The stream path owes callers the same boundary the block path already has
+    /// (see <c>ZstdCompressor_Decode_CorruptSource_ThrowsInvalidOperationException</c>): a corrupt body
+    /// must surface as a public type the caller can name, never the vendored <c>ZstdException</c>, which
+    /// is internal to the driver and so can only be caught as bare <see cref="Exception"/>.
+    /// <see cref="InvalidDataException"/> is what every sibling read-path codec throws for this exact
+    /// condition — gzip/deflate/brotli through the BCL and LZ4 through its vendored frame reader — so a
+    /// caller's <c>catch</c> behaves the same whichever codec the server answered with.
+    /// </summary>
+    /// <remarks>
+    /// Parametrized over every way a caller can pull bytes out, because the translation lives on each
+    /// stream member: an overload left unwrapped would leak the vendored type through that one entry
+    /// point only — and the read path uses the asynchronous ones.
+    /// </remarks>
+    [TestCaseSource(nameof(CorruptFrameReaders))]
+    public void ZstdCompressor_Decompress_CorruptFrame_ThrowsInvalidDataException(Action<Stream> read)
+    {
+        using var source = new MemoryStream(CorruptFrame());
+        using var decompressing = ZstdCompressor.Default.Decompress(source, leaveOpen: true);
+
+        var ex = Assert.Throws<InvalidDataException>(() => read(decompressing));
+
+        // The codec's own diagnosis must survive translation rather than being swallowed.
+        Assert.That(ex.InnerException, Is.InstanceOf<VendoredZstdException>());
+    }
+
+    /// <summary>
+    /// The write half of the same boundary. A vendored failure while compressing is not reachable through
+    /// the public API with any input (every byte sequence compresses), so drive the wrapper directly: the
+    /// point is that no code path can hand a caller a <c>ZstdException</c>. Translated to
+    /// <see cref="InvalidOperationException"/> to match <see cref="ZstdCompressor.Encode"/>, the mirror
+    /// operation — data given to us to compress is never "invalid".
+    /// </summary>
+    [Test]
+    public void ZstdBoundaryStream_WritingOverAFailingCodec_ThrowsInvalidOperationException()
+    {
+        using var writing = ZstdBoundaryStream.Create(() => new ThrowingZstdStream(), reading: false);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => writing.Write(Sample, 0, Sample.Length));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.InnerException, Is.InstanceOf<VendoredZstdException>());
+            Assert.That(
+                Assert.ThrowsAsync<InvalidOperationException>(async () => await writing.WriteAsync(Sample, 0, Sample.Length)),
+                Is.Not.Null);
+            Assert.Throws<InvalidOperationException>(writing.Flush);
+        });
+    }
+
+    /// <summary>
+    /// Disposal is where a compress-side failure actually shows up in practice: it is the dispose of the
+    /// vendored stream that writes the frame's trailing footer.
+    /// </summary>
+    [Test]
+    public void ZstdBoundaryStream_DisposingOverAFailingCodec_ThrowsInvalidOperationException()
+    {
+        var writing = ZstdBoundaryStream.Create(() => new ThrowingZstdStream(throwOnDispose: true), reading: false);
+
+        var ex = Assert.Throws<InvalidOperationException>(writing.Dispose);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.InnerException, Is.InstanceOf<VendoredZstdException>());
+
+            // Still idempotent: the failed attempt consumed the one disposal of the inner stream, so a
+            // caller's outer `using` running after an explicit Dispose must not re-enter it.
+            Assert.DoesNotThrow(writing.Dispose);
+        });
+    }
+
+    /// <summary>
+    /// Constructing a vendored stream already runs codec calls that can fail, so the boundary has to cover
+    /// construction too — a stream built outside it would leak the vendored type before it ever existed.
+    /// </summary>
+    [Test]
+    public void ZstdBoundaryStream_ConstructionFailure_IsTranslated()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<InvalidDataException>(
+                () => ZstdBoundaryStream.Create(() => throw ThrowingZstdStream.Failure(), reading: true));
+            Assert.Throws<InvalidOperationException>(
+                () => ZstdBoundaryStream.Create(() => throw ThrowingZstdStream.Failure(), reading: false));
+        });
+    }
+
+    /// <summary>Each way a caller can read the returned stream; all must translate identically.</summary>
+    private static IEnumerable<TestCaseData> CorruptFrameReaders()
+    {
+        yield return new TestCaseData((Action<Stream>)(s => s.CopyTo(Stream.Null))).SetName("{m}(CopyTo)");
+        yield return new TestCaseData((Action<Stream>)(s => s.Read(new byte[64].AsSpan()))).SetName("{m}(Read_Span)");
+        yield return new TestCaseData((Action<Stream>)(s => s.ReadByte())).SetName("{m}(ReadByte)");
+        yield return new TestCaseData((Action<Stream>)(s => s.CopyToAsync(Stream.Null).GetAwaiter().GetResult()))
+            .SetName("{m}(CopyToAsync)");
+        yield return new TestCaseData((Action<Stream>)(s => s.ReadAsync(new byte[64], 0, 64).GetAwaiter().GetResult()))
+            .SetName("{m}(ReadAsync_ByteArray)");
+    }
+
+    /// <summary>A well-formed frame magic followed by nonsense: recognised as ZSTD, then found corrupt.</summary>
+    private static byte[] CorruptFrame()
+    {
+        var frame = new byte[64];
+        ZstdFrameMagic.CopyTo(frame, 0);
+        for (var i = ZstdFrameMagic.Length; i < frame.Length; i++)
+            frame[i] = 0xA5;
+
+        return frame;
+    }
+
+    /// <summary>
     /// The interface documents that a returned decompression stream tolerates repeated disposal, which
     /// matters here because the vendored stream rents its input buffer from <c>ArrayPool</c> — returning
     /// it twice would hand the same array to two owners.
@@ -460,6 +572,53 @@ public class ZstdCompressorTests
         });
 
         Assert.That(failures, Is.Empty);
+    }
+
+    /// <summary>
+    /// Stands in for a vendored stream whose codec has failed: every write reports the internal
+    /// <c>ZstdException</c>, which is the type that must not reach a caller.
+    /// </summary>
+    private sealed class ThrowingZstdStream : Stream
+    {
+        private readonly bool throwOnDispose;
+
+        public ThrowingZstdStream(bool throwOnDispose = false) => this.throwOnDispose = throwOnDispose;
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) => throw Failure();
+
+        public override void Flush() => throw Failure();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            // Off by default: the write/flush test disposes this stream through the wrapper's `using`,
+            // and a throw there would mask the assertion it is checking.
+            base.Dispose(disposing);
+            if (disposing && throwOnDispose)
+                throw Failure();
+        }
+
+        public static VendoredZstdException Failure() => new(
+            ClickHouse.Driver.Vendor.ZstdSharp.Unsafe.ZSTD_ErrorCode.ZSTD_error_GENERIC, "vendored codec failure");
     }
 
     /// <summary>

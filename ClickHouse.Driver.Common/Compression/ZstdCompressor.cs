@@ -99,8 +99,13 @@ public sealed class ZstdCompressor : IClickHouseCompressor
 
     /// <inheritdoc />
     public Stream Compress(Stream destination, bool leaveOpen)
+        // ZstdBoundaryStream sits directly on the vendored stream so the internal ZstdException the
+        // codec reports failures with never reaches the caller, exactly as Encode/Decode translate it
+        // on the block path — see ZstdBoundaryStream.
         => new PooledWriteBufferStream(
-            new CompressionStream(destination, this.level, bufferSize: 0, leaveOpen: leaveOpen),
+            ZstdBoundaryStream.Create(
+                () => new CompressionStream(destination, this.level, bufferSize: 0, leaveOpen: leaveOpen),
+                reading: false),
             this.bufferSize);
 
     /// <inheritdoc />
@@ -110,8 +115,12 @@ public sealed class ZstdCompressor : IClickHouseCompressor
         // for a whole 64 KiB buffer at a time, so a query that trickles rows must still surface its
         // first row before that much output exists. (LZ4 needs an explicit `interactive` flag for
         // the same behavior; zstd's is unconditional.) checkEndOfStream surfaces a body truncated
-        // mid-frame instead of silently returning short data.
-        => new DecompressionStream(source, bufferSize: 0, checkEndOfStream: true, leaveOpen: leaveOpen);
+        // mid-frame instead of silently returning short data. The boundary wrapper turns the codec's
+        // internal ZstdException into InvalidDataException, the same type gzip/deflate/brotli/LZ4
+        // already throw for a corrupt body — see ZstdBoundaryStream.
+        => ZstdBoundaryStream.Create(
+            () => new DecompressionStream(source, bufferSize: 0, checkEndOfStream: true, leaveOpen: leaveOpen),
+            reading: true);
 
     /// <inheritdoc />
     public int MaxEncodedLength(int sourceLength) => Compressor.GetCompressBound(sourceLength);
