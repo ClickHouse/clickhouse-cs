@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Compression;
 using NUnit.Framework;
@@ -353,26 +354,70 @@ public class ZstdCompressorTests
     /// <see cref="InvalidOperationException"/> to match <see cref="ZstdCompressor.Encode"/>, the mirror
     /// operation — data given to us to compress is never "invalid".
     /// </summary>
-    [Test]
-    public void ZstdBoundaryStream_WritingOverAFailingCodec_ThrowsInvalidOperationException()
+    /// <remarks>
+    /// Parametrized over every way a caller can push bytes in, for the same reason the read half is: the
+    /// translation lives on each stream member, so an overload left unwrapped would leak the vendored type
+    /// through that one entry point only.
+    /// </remarks>
+    [TestCaseSource(nameof(FailingCodecWriters))]
+    public void ZstdBoundaryStream_WritingOverAFailingCodec_ThrowsInvalidOperationException(Action<Stream> write)
     {
         using var writing = ZstdBoundaryStream.Create(() => new ThrowingZstdStream(), reading: false);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => writing.Write(Sample, 0, Sample.Length));
+        var ex = Assert.Throws<InvalidOperationException>(() => write(writing));
+
+        // The codec's own diagnosis must survive translation rather than being swallowed.
+        Assert.That(ex.InnerException, Is.InstanceOf<VendoredZstdException>());
+    }
+
+    /// <summary>
+    /// The <see cref="ValueTask"/> overloads hand a synchronously-completed call straight back and only
+    /// wrap the pending one, so a codec that reports failure through the returned task rather than by
+    /// throwing runs through a different catch than the cases above. Both directions must still translate.
+    /// </summary>
+    [Test]
+    public void ZstdBoundaryStream_CodecFailingThroughTheReturnedTask_IsTranslated()
+    {
+        using var writing = ZstdBoundaryStream.Create(() => new ThrowingZstdStream(asynchronously: true), reading: false);
+        using var reading = ZstdBoundaryStream.Create(() => new ThrowingZstdStream(asynchronously: true), reading: true);
+
+        var writeFailure = Assert.ThrowsAsync<InvalidOperationException>(async () => await writing.WriteAsync(Sample.AsMemory()));
+        var readFailure = Assert.ThrowsAsync<InvalidDataException>(async () =>
+        {
+            var read = await reading.ReadAsync(new byte[64].AsMemory());
+            Assert.Fail($"expected the codec failure to be translated, but the read returned {read} bytes");
+        });
 
         Assert.Multiple(() =>
         {
-            Assert.That(ex.InnerException, Is.InstanceOf<VendoredZstdException>());
-            Assert.That(
-                Assert.ThrowsAsync<InvalidOperationException>(async () => await writing.WriteAsync(Sample, 0, Sample.Length)),
-                Is.Not.Null);
-            Assert.Throws<InvalidOperationException>(writing.Flush);
+            Assert.That(writeFailure?.InnerException, Is.InstanceOf<VendoredZstdException>());
+            Assert.That(readFailure?.InnerException, Is.InstanceOf<VendoredZstdException>());
         });
     }
 
     /// <summary>
+    /// The other way a codec reports failure from the <see cref="ValueTask"/> read overload: throwing out
+    /// of the call itself, which the wrapper catches before it ever has a task to await. (The write twin is
+    /// already covered by the <c>WriteAsync_Memory</c> case above, whose stub throws synchronously.)
+    /// </summary>
+    [Test]
+    public void ZstdBoundaryStream_CodecThrowingSynchronouslyFromReadAsync_IsTranslated()
+    {
+        using var reading = ZstdBoundaryStream.Create(() => new ThrowingZstdStream(), reading: true);
+
+        var ex = Assert.ThrowsAsync<InvalidDataException>(async () =>
+        {
+            var read = await reading.ReadAsync(new byte[64].AsMemory());
+            Assert.Fail($"expected the codec failure to be translated, but the read returned {read} bytes");
+        });
+
+        Assert.That(ex?.InnerException, Is.InstanceOf<VendoredZstdException>());
+    }
+
+    /// <summary>
     /// Disposal is where a compress-side failure actually shows up in practice: it is the dispose of the
-    /// vendored stream that writes the frame's trailing footer.
+    /// vendored stream that writes the frame's trailing footer. Both disposal entry points translate, and
+    /// both stay idempotent afterwards.
     /// </summary>
     [Test]
     public void ZstdBoundaryStream_DisposingOverAFailingCodec_ThrowsInvalidOperationException()
@@ -388,6 +433,162 @@ public class ZstdCompressorTests
             // Still idempotent: the failed attempt consumed the one disposal of the inner stream, so a
             // caller's outer `using` running after an explicit Dispose must not re-enter it.
             Assert.DoesNotThrow(writing.Dispose);
+        });
+    }
+
+    /// <summary>
+    /// The asynchronous disposal path — what an <c>await using</c> reaches — owes the same translation and
+    /// the same idempotence as <see cref="IDisposable.Dispose"/>.
+    /// </summary>
+    [Test]
+    public void ZstdBoundaryStream_DisposingAsynchronouslyOverAFailingCodec_ThrowsInvalidOperationException()
+    {
+        var writing = ZstdBoundaryStream.Create(() => new ThrowingZstdStream(throwOnDispose: true), reading: false);
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () => await writing.DisposeAsync());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.InnerException, Is.InstanceOf<VendoredZstdException>());
+            Assert.DoesNotThrowAsync(async () => await writing.DisposeAsync());
+        });
+    }
+
+    /// <summary>
+    /// Translating failures is only half the contract: on the ordinary path every overload must hand the
+    /// bytes to the inner stream unchanged, in order, and <em>through the matching member</em>. The last
+    /// part is why the inner stream records which overload it was reached through instead of only its
+    /// bytes: <see cref="Stream"/>'s default implementations funnel the span, byte and asynchronous
+    /// members onto the array ones, so a wrapper member that were simply missing would still move exactly
+    /// the same bytes. This is also what pins the wrapper's stated reason for overriding the asynchronous
+    /// members — that inheriting the defaults would reroute the read path through synchronous I/O.
+    /// </summary>
+    [Test]
+    public void ZstdBoundaryStream_ForwardsEveryWriteOverloadToTheInnerStream()
+    {
+        var inner = new OverloadRecordingStream();
+
+        using (var boundary = ZstdBoundaryStream.Create(() => inner, reading: false))
+        {
+            boundary.Write(Sample, 0, 10);
+            boundary.Write(Sample.AsSpan(10, 10));
+            boundary.WriteByte(Sample[20]);
+            boundary.WriteAsync(Sample, 21, 10).GetAwaiter().GetResult();
+            boundary.WriteAsync(Sample.AsMemory(31, 10)).GetAwaiter().GetResult();
+            boundary.Flush();
+            boundary.FlushAsync().GetAwaiter().GetResult();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inner.Written, Is.EqualTo(Sample[..41]), "the bytes must arrive unchanged and in order");
+            Assert.That(inner.Calls, Is.EqualTo(new[]
+            {
+                "Write(byte[])", "Write(Span)", "WriteByte",
+
+                // Both asynchronous writes land on the inner memory overload: the wrapper's array overload
+                // forwards through AsMemory rather than degrading to the synchronous path.
+                "WriteAsync(Memory)", "WriteAsync(Memory)",
+                "Flush", "FlushAsync",
+
+                // Closing the wrapper closes what it owns.
+                "Dispose",
+            }));
+        });
+    }
+
+    /// <summary>The read half of the same forwarding contract.</summary>
+    [Test]
+    public void ZstdBoundaryStream_ForwardsEveryReadOverloadToTheInnerStream()
+    {
+        var inner = new OverloadRecordingStream(Sample);
+        var buffer = new byte[41];
+
+        using (var boundary = ZstdBoundaryStream.Create(() => inner, reading: true))
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(boundary.Read(buffer, 0, 10), Is.EqualTo(10));
+                Assert.That(boundary.Read(buffer.AsSpan(10, 10)), Is.EqualTo(10));
+                Assert.That(boundary.ReadByte(), Is.EqualTo(Sample[20]));
+                Assert.That(boundary.ReadAsync(buffer, 21, 10).GetAwaiter().GetResult(), Is.EqualTo(10));
+                Assert.That(boundary.ReadAsync(buffer.AsMemory(31, 10)).GetAwaiter().GetResult(), Is.EqualTo(10));
+            });
+        }
+
+        // ReadByte returns its byte rather than filling the buffer, so place it before comparing.
+        buffer[20] = Sample[20];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(buffer, Is.EqualTo(Sample[..41]));
+            Assert.That(inner.Calls, Is.EqualTo(new[]
+            {
+                "Read(byte[])", "Read(Span)", "ReadByte", "ReadAsync(Memory)", "ReadAsync(Memory)", "Dispose",
+            }));
+        });
+    }
+
+    /// <summary>
+    /// The wrapper exists only to translate exceptions, so everything else it exposes must be the inner
+    /// stream's own state rather than a copy of it — a seek or a length change has to reach the codec.
+    /// </summary>
+    [Test]
+    public void ZstdBoundaryStream_DelegatesItsRemainingSurfaceToTheInnerStream()
+    {
+        var inner = new MemoryStream();
+        inner.Write(new byte[16], 0, 16);
+        using var boundary = ZstdBoundaryStream.Create(() => inner, reading: true);
+
+        boundary.Position = 4;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(boundary.Length, Is.EqualTo(16));
+            Assert.That(boundary.Position, Is.EqualTo(4));
+            Assert.That(inner.Position, Is.EqualTo(4), "the setter must move the inner stream, not shadow it");
+            Assert.That(boundary.Seek(2, SeekOrigin.Begin), Is.EqualTo(2));
+            Assert.That(inner.Position, Is.EqualTo(2));
+        });
+
+        boundary.SetLength(8);
+        Assert.That(inner.Length, Is.EqualTo(8));
+    }
+
+    /// <summary>
+    /// The ordinary <c>await using</c> path: the wrapper disposes what it owns, and does so exactly once
+    /// however many times it is disposed — the same idempotence the synchronous path is held to, and it
+    /// matters for the same reason (the vendored stream returns a pooled buffer as it goes).
+    /// </summary>
+    [Test]
+    public async Task ZstdBoundaryStream_DisposedAsynchronously_DisposesTheInnerStreamExactlyOnce()
+    {
+        var inner = new OverloadRecordingStream();
+        var boundary = ZstdBoundaryStream.Create(() => inner, reading: false);
+
+        await boundary.DisposeAsync();
+        await boundary.DisposeAsync();
+        boundary.Dispose();
+
+        Assert.That(inner.Calls, Is.EqualTo(new[] { "Dispose" }));
+    }
+
+    /// <summary>
+    /// The capability flags need an inner stream whose three answers differ, or a wrapper that crossed two
+    /// of them would still look correct. Two complementary cases so that no single pair can be swapped.
+    /// </summary>
+    [TestCase(true, false, false)]
+    [TestCase(false, true, true)]
+    public void ZstdBoundaryStream_ReportsTheInnerStreamsOwnCapabilities(bool canRead, bool canWrite, bool canSeek)
+    {
+        using var boundary = ZstdBoundaryStream.Create(
+            () => new CapabilityStream(canRead, canWrite, canSeek), reading: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(boundary.CanRead, Is.EqualTo(canRead));
+            Assert.That(boundary.CanWrite, Is.EqualTo(canWrite));
+            Assert.That(boundary.CanSeek, Is.EqualTo(canSeek));
         });
     }
 
@@ -417,6 +618,20 @@ public class ZstdCompressorTests
             .SetName("{m}(CopyToAsync)");
         yield return new TestCaseData((Action<Stream>)(s => s.ReadAsync(new byte[64], 0, 64).GetAwaiter().GetResult()))
             .SetName("{m}(ReadAsync_ByteArray)");
+    }
+
+    /// <summary>Each way a caller can write to the returned stream; all must translate identically.</summary>
+    private static IEnumerable<TestCaseData> FailingCodecWriters()
+    {
+        yield return new TestCaseData((Action<Stream>)(s => s.Write(Sample, 0, Sample.Length))).SetName("{m}(Write_ByteArray)");
+        yield return new TestCaseData((Action<Stream>)(s => s.Write(Sample.AsSpan()))).SetName("{m}(Write_Span)");
+        yield return new TestCaseData((Action<Stream>)(s => s.WriteByte(0x2A))).SetName("{m}(WriteByte)");
+        yield return new TestCaseData((Action<Stream>)(s => s.WriteAsync(Sample, 0, Sample.Length).GetAwaiter().GetResult()))
+            .SetName("{m}(WriteAsync_ByteArray)");
+        yield return new TestCaseData((Action<Stream>)(s => s.WriteAsync(Sample.AsMemory()).GetAwaiter().GetResult()))
+            .SetName("{m}(WriteAsync_Memory)");
+        yield return new TestCaseData((Action<Stream>)(s => s.Flush())).SetName("{m}(Flush)");
+        yield return new TestCaseData((Action<Stream>)(s => s.FlushAsync().GetAwaiter().GetResult())).SetName("{m}(FlushAsync)");
     }
 
     /// <summary>A well-formed frame magic followed by nonsense: recognised as ZSTD, then found corrupt.</summary>
@@ -575,16 +790,29 @@ public class ZstdCompressorTests
     }
 
     /// <summary>
-    /// Stands in for a vendored stream whose codec has failed: every write reports the internal
-    /// <c>ZstdException</c>, which is the type that must not reach a caller.
+    /// Stands in for a vendored stream whose codec has failed: every transfer member reports the internal
+    /// <c>ZstdException</c>, which is the type that must not reach a caller. The real vendored streams
+    /// override the span and memory overloads themselves, so this one does too — inheriting
+    /// <see cref="Stream"/>'s defaults would quietly funnel several entry points into one, and a wrapper
+    /// member left unwrapped would then still look exercised.
     /// </summary>
     private sealed class ThrowingZstdStream : Stream
     {
         private readonly bool throwOnDispose;
+        private readonly bool asynchronously;
 
-        public ThrowingZstdStream(bool throwOnDispose = false) => this.throwOnDispose = throwOnDispose;
+        /// <param name="throwOnDispose">Fail when disposed, as a compression stream writing its footer can.</param>
+        /// <param name="asynchronously">
+        /// Report failure through the returned task instead of throwing synchronously, which is how a codec
+        /// that fails mid-operation surfaces it — and the only way to reach the wrapper's awaited path.
+        /// </param>
+        public ThrowingZstdStream(bool throwOnDispose = false, bool asynchronously = false)
+        {
+            this.throwOnDispose = throwOnDispose;
+            this.asynchronously = asynchronously;
+        }
 
-        public override bool CanRead => false;
+        public override bool CanRead => true;
 
         public override bool CanSeek => false;
 
@@ -600,9 +828,23 @@ public class ZstdCompressorTests
 
         public override void Write(byte[] buffer, int offset, int count) => throw Failure();
 
+        public override void Write(ReadOnlySpan<byte> buffer) => throw Failure();
+
+        public override void WriteByte(byte value) => throw Failure();
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+            => asynchronously ? new ValueTask(Task.FromException(Failure())) : throw Failure();
+
         public override void Flush() => throw Failure();
 
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.FromException(Failure());
+
+        public override int Read(byte[] buffer, int offset, int count) => throw Failure();
+
+        public override int Read(Span<byte> buffer) => throw Failure();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => asynchronously ? new ValueTask<int>(Task.FromException<int>(Failure())) : throw Failure();
 
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
@@ -610,8 +852,8 @@ public class ZstdCompressorTests
 
         protected override void Dispose(bool disposing)
         {
-            // Off by default: the write/flush test disposes this stream through the wrapper's `using`,
-            // and a throw there would mask the assertion it is checking.
+            // Off by default: the write/flush tests dispose this stream through the wrapper's `using`,
+            // and a throw there would mask the assertion they are checking.
             base.Dispose(disposing);
             if (disposing && throwOnDispose)
                 throw Failure();
@@ -619,6 +861,145 @@ public class ZstdCompressorTests
 
         public static VendoredZstdException Failure() => new(
             ClickHouse.Driver.Vendor.ZstdSharp.Unsafe.ZSTD_ErrorCode.ZSTD_error_GENERIC, "vendored codec failure");
+    }
+
+    /// <summary>
+    /// Moves bytes like a <see cref="MemoryStream"/> while recording which overload it was reached
+    /// through, so a forwarding test can tell "the same bytes arrived" from "the same member was used".
+    /// </summary>
+    private sealed class OverloadRecordingStream : Stream
+    {
+        private readonly MemoryStream buffer;
+
+        public OverloadRecordingStream(byte[] payload = null)
+            => buffer = payload is null ? new MemoryStream() : new MemoryStream(payload);
+
+        public List<string> Calls { get; } = [];
+
+        public byte[] Written => buffer.ToArray();
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] target, int offset, int count)
+        {
+            Calls.Add("Read(byte[])");
+            return buffer.Read(target, offset, count);
+        }
+
+        public override int Read(Span<byte> target)
+        {
+            Calls.Add("Read(Span)");
+            return buffer.Read(target);
+        }
+
+        public override int ReadByte()
+        {
+            Calls.Add("ReadByte");
+            return buffer.ReadByte();
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> target, CancellationToken cancellationToken = default)
+        {
+            Calls.Add("ReadAsync(Memory)");
+            return buffer.ReadAsync(target, cancellationToken);
+        }
+
+        public override void Write(byte[] source, int offset, int count)
+        {
+            Calls.Add("Write(byte[])");
+            buffer.Write(source, offset, count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> source)
+        {
+            Calls.Add("Write(Span)");
+            buffer.Write(source);
+        }
+
+        public override void WriteByte(byte value)
+        {
+            Calls.Add("WriteByte");
+            buffer.WriteByte(value);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> source, CancellationToken cancellationToken = default)
+        {
+            Calls.Add("WriteAsync(Memory)");
+            return buffer.WriteAsync(source, cancellationToken);
+        }
+
+        public override void Flush()
+        {
+            Calls.Add("Flush");
+            buffer.Flush();
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            Calls.Add("FlushAsync");
+            return buffer.FlushAsync(cancellationToken);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                Calls.Add("Dispose");
+
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>Reports a fixed set of capabilities and nothing else; only the three flags are read.</summary>
+    private sealed class CapabilityStream : Stream
+    {
+        public CapabilityStream(bool canRead, bool canWrite, bool canSeek)
+        {
+            CanRead = canRead;
+            CanWrite = canWrite;
+            CanSeek = canSeek;
+        }
+
+        public override bool CanRead { get; }
+
+        public override bool CanWrite { get; }
+
+        public override bool CanSeek { get; }
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>
