@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -182,8 +183,17 @@ public class InsertBinaryRequestBufferingTests : AbstractConnectionTestFixture
     {
         using var expected = new MemoryStream();
         expected.Write(Encoding.UTF8.GetBytes($"INSERT INTO {FakeEndpointTable} (`Id`) FORMAT RowBinary\n"));
+
+        // RowBinary encodes UInt64 little-endian on every platform, so the expectation is spelled out
+        // explicitly rather than inherited from the host's byte order. The scratch buffer is reused
+        // because the larger-than-the-buffer case writes ~98k values.
+        var scratch = new byte[sizeof(ulong)];
         for (ulong i = 0; i < (ulong)rows; i++)
-            expected.Write(BitConverter.GetBytes(i));
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(scratch, i);
+            expected.Write(scratch);
+        }
+
         return expected.ToArray();
     }
 
