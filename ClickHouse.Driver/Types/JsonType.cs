@@ -71,27 +71,43 @@ internal class JsonType : ParameterizedType
             var name = reader.ReadString();
 
             HintedTypes.TryGetValue(name, out var hintedType);
-            if (ReadJsonNode(reader, hintedType) is not { } jsonNode)
+            var jsonNode = ReadJsonNode(reader, hintedType);
+            if (jsonNode is null && hintedType is null)
             {
+                // A dynamic path only exists in the rows that have a value for it, and the server
+                // omits it from its own JSON rendering when the value is null. A typed path, in
+                // contrast, is declared by the column type and is rendered with an explicit null,
+                // so it must be materialized to keep "absent" distinguishable from "null".
                 continue;
             }
 
             var pathParts = name.Split('.');
             foreach (var part in pathParts.SkipLast1(1))
             {
-                if (current.ContainsKey(part))
+                if (current[part] is { } existing)
                 {
-                    current = (JsonObject)current[part];
+                    current = (JsonObject)existing;
                 }
                 else
                 {
+                    // Either the parent is not there yet, or it holds the null of an overlapping
+                    // typed leaf path (ClickHouse allows both `a` and `a.b` to be typed); the
+                    // subtree replaces that null so the deeper path stays readable.
                     var newCurrent = new JsonObject();
-                    current.Add(part, newCurrent);
+                    current[part] = newCurrent;
                     current = newCurrent;
                 }
             }
 
-            current[pathParts.Last()] = jsonNode;
+            var leaf = pathParts.Last();
+            if (jsonNode is null && current[leaf] is JsonObject)
+            {
+                // Mirror of the walk above for the opposite path order: a typed leaf path's null
+                // must not erase the subtree an overlapping deeper typed path already filled in.
+                continue;
+            }
+
+            current[leaf] = jsonNode;
         }
 
         return root;
