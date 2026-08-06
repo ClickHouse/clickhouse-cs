@@ -99,7 +99,7 @@ Below is a full list of all the settings, their default values, and their effect
 | Property | Type | Default | Connection String Key | Description |
 |----------|------|---------|----------------------|-------------|
 | UseCompression | `bool` | `true` | `Compression` | Enable gzip compression for data transfer |
-| AcceptEncoding | `string` | `null` | `AcceptEncoding` | `Accept-Encoding` sent with every request, replacing the codecs the driver advertises by default (`lz4, gzip, deflate`). Whatever the server answers with is decoded transparently. See [Response decompression](#response-decompression) |
+| AcceptEncoding | `string` | `null` | `AcceptEncoding` | `Accept-Encoding` sent with every request, replacing the codecs the driver advertises by default (`zstd, lz4, gzip, deflate`). Whatever the server answers with is decoded transparently. See [Response decompression](#response-decompression) |
 | UseCustomDecimals | `bool` | `true` | `UseCustomDecimals` | Use `ClickHouseDecimal` for arbitrary precision; if false, uses .NET `decimal` (128-bit limit) |
 | ReadStringsAsByteArrays | `bool` | `false` | `ReadStringsAsByteArrays` | Read `String` and `FixedString` columns as `byte[]` instead of `string`; useful for binary data |
 | UseFormDataParameters | `bool` | `false` | `UseFormDataParameters` | Send parameters as form data instead of URL query string |
@@ -867,7 +867,7 @@ Common formats: `JSONEachRow`, `CSV`, `TSV`, `Parquet`, `Native`. See the [forma
 
 ### Per-query transport compression {#per-query-accept-encoding}
 
-By default, the client negotiates `lz4, gzip, deflate` when `Compression=true` (the connection-string default) and decodes the stream itself, transparently.
+By default, the client negotiates `zstd, lz4, gzip, deflate` when `Compression=true` (the connection-string default) and decodes the stream itself, transparently.
 
 For raw exports (e.g. Parquet, Arrow, Native) you may want to negotiate a different codec (e.g. `zstd` or `lz4`) to trade CPU for bandwidth without changing the connection-wide setting. `QueryOptions.AcceptEncoding` and `ClickHouseCommand.AcceptEncoding` set the HTTP `Accept-Encoding` header for a single request, replacing whatever default was attached, and force `enable_http_compression=1` on the URL (which ClickHouse requires before it will honor `Accept-Encoding`).
 
@@ -889,20 +889,20 @@ If you supply your own `HttpClient`, leave `AutomaticDecompression` off too. It 
 </Warning>
 
 <Warning>
-If `AcceptEncoding` requests a codec the driver cannot decode (`zstd`, `snappy`), only `ExecuteRawResultAsync` is safe. `ExecuteReaderAsync`, `ExecuteScalarAsync` and `ExecuteNonQueryAsync` fail with a `NotSupportedException` naming the codec (previously they parsed the compressed bytes as the result format and produced garbage).
+If `AcceptEncoding` requests a codec the driver cannot decode (`snappy`), only `ExecuteRawResultAsync` is safe. `ExecuteReaderAsync`, `ExecuteScalarAsync` and `ExecuteNonQueryAsync` fail with a `NotSupportedException` naming the codec (previously they parsed the compressed bytes as the result format and produced garbage).
 </Warning>
 
 #### Error bodies {#per-query-accept-encoding-errors}
 
-When the server responds with a 4xx/5xx and `enable_http_compression=1` was set, it compresses the error body with the same codec it would have used for a successful response. The driver decodes those for every codec it supports (`lz4`, `gzip`, `deflate`, `br`/`brotli`) so the message on `ClickHouseServerException` is readable. For anything else (`zstd`, …) it returns a placeholder naming the codec and pointing at `system.query_log` for the original error text.
+When the server responds with a 4xx/5xx and `enable_http_compression=1` was set, it compresses the error body with the same codec it would have used for a successful response. The driver decodes those for every codec it supports (`lz4`, `zstd`, `gzip`, `deflate`, `br`/`brotli`) so the message on `ClickHouseServerException` is readable. For anything else (`snappy`, …) it returns a placeholder naming the codec and pointing at `system.query_log` for the original error text.
 
 ---
 
 ### Response decompression {#response-decompression}
 
-`Accept-Encoding` only asks the server to compress the response — something still has to decode it. The driver does that itself, from the response's `Content-Encoding`, so all the normal read APIs (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, Dapper, EF Core, linq2db) work over a compressed response with nothing to configure. It decodes `lz4`, `gzip`, `deflate` and `br`; `zstd` and `snappy` are not supported.
+`Accept-Encoding` only asks the server to compress the response — something still has to decode it. The driver does that itself, from the response's `Content-Encoding`, so all the normal read APIs (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, Dapper, EF Core, linq2db) work over a compressed response with nothing to configure. It decodes `lz4`, `zstd`, `gzip`, `deflate` and `br`; `snappy` is not supported.
 
-By default the driver advertises **`lz4, gzip, deflate`**, and ClickHouse answers with `lz4`. To choose differently, set `Accept-Encoding` yourself — client-wide:
+By default the driver advertises **`zstd, lz4, gzip, deflate`**, and ClickHouse answers with `zstd`. To choose differently, set `Accept-Encoding` yourself — client-wide:
 
 ```csharp
 using var client = new ClickHouseClient(new ClickHouseClientSettings("Host=localhost")
@@ -927,7 +927,31 @@ Host=localhost;AcceptEncoding=br, gzip
 
 Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends no `Accept-Encoding` at all.
 
-**The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. That is why `br` is *decodable but not advertised by default*: including it would make every response brotli, whose server-side cost climbs steeply with `http_zlib_compression_level`, while `lz4` is the cheapest to produce and to decode.
+**The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. The default names `zstd` first in that scan, so a default query is answered with zstd; the remaining tokens are the fallback for a server or intermediary that cannot. `br` is *decodable but not advertised*: it comes earlier still in the scan and is by far the dearest codec on both sides, so naming it would make it the codec for **every** query.
+
+`zstd` is the default because at the shipped `http_zlib_compression_level` (3) it wins on all three axes at once against `lz4` — measured on real data (a 15-column ClickBench `hits` subset) over a real network, against both a 4-vCPU server and a 16-vCPU ClickHouse Cloud service: 22–26% fewer bytes, 40–51% less server CPU, and 19–59% less wall-clock fetch time.
+
+Two cases are worth knowing about, because in both of them `lz4` is the better choice and you should ask for it explicitly:
+
+- **`http_zlib_compression_level=1`.** That setting applies to every HTTP codec, not just zlib, and `lz4` is unusually sensitive to it — it only engages LZ4-HC (and gets expensive) from level 3. At level 1, `zstd` costs **10–18% more server CPU** than `lz4`. The clean sweep above is a property of the default level, not of the codecs.
+- **A CPU-bound client on a fast link.** `zstd` is the slower codec to *decode* — roughly 0.7–1.4 GB/s against `lz4`'s 1.1–2.3 GB/s (`gzip`: 0.2–0.3) — and the driver decodes on the calling thread. When the network is not the bottleneck, `lz4` finishes sooner.
+
+Ask for a different codec per query, or client-wide, whenever either applies:
+
+```csharp
+using var reader = await client.ExecuteReaderAsync(
+    "SELECT * FROM events",
+    options: new QueryOptions { AcceptEncoding = "lz4" });   // cheaper to decode than the zstd default
+```
+
+zstd is also available for the **request** side of a binary insert, through `InsertOptions.Compressor`, alongside `Lz4Compressor`, `GZipCompressor` and `BrotliCompressor`. Inserts are *not* zstd by default — they still use `gzip:Fastest` — so this one is opt-in. `ZstdCompressor.Default` uses zstd's own default level (3); the constructor takes any level between `ZstdCompressor.MinLevel` and `ZstdCompressor.MaxLevel` — zstd's levels are a signed range, and negative ones trade ratio for speed.
+
+```csharp
+var options = new InsertOptions { Compressor = ZstdCompressor.Default };  // Content-Encoding: zstd
+await client.InsertBinaryAsync("events", columns, rows, options);
+```
+
+Both codecs are built in: `ClickHouse.Driver` bundles vendored, pure-managed copies of the LZ4 and zstd codecs, so neither adds a runtime dependency.
 
 Because the decision is made from the response, a body is decoded whenever its `Content-Encoding` says so, whatever was requested: absent or `identity` passes through untouched, a supported codec is decoded, and anything else raises an error naming it. There is no risk of double-decoding — if a caller-supplied handler's `AutomaticDecompression` has already decoded a body it also strips `Content-Encoding`, so the driver sees plaintext and leaves it alone.
 

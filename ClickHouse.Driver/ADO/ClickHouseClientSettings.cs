@@ -372,8 +372,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets the <c>Accept-Encoding</c> sent with every request, overriding the codecs the driver
-    /// advertises by default (<c>lz4, gzip, deflate</c> — see remarks). Whichever codec the server then
-    /// answers with is decoded transparently; <c>zstd</c> and <c>snappy</c> cannot be decoded and will
+    /// advertises by default (<c>zstd, lz4, gzip, deflate</c> — see remarks). Whichever codec the server then
+    /// answers with is decoded transparently, including <c>zstd</c> and <c>br</c>, which are decodable
+    /// but not advertised by default; <c>snappy</c> cannot be decoded and will
     /// fail with an actionable error. Can be overridden per query by
     /// <see cref="QueryOptions.AcceptEncoding"/>.
     /// Default: null (advertise the codecs the driver can decode)

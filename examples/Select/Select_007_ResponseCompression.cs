@@ -6,7 +6,7 @@ namespace ClickHouse.Driver.Examples;
 /// Demonstrates transport compression of query responses.
 ///
 /// There is nothing to configure for the common case: the driver advertises the codecs it can decode
-/// (`lz4, gzip, deflate`), ClickHouse answers with LZ4, and the driver decodes the body — so every read
+/// (`zstd, lz4, gzip, deflate`), ClickHouse answers with zstd, and the driver decodes the body — so every read
 /// API works normally over a compressed response. This example shows how to observe and override that.
 ///
 /// The server picks the codec, not the client: ClickHouse scans `Accept-Encoding` for tokens in its own
@@ -66,7 +66,7 @@ public static class ResponseCompression
             // Example 2: which codec the server actually chose. ExecuteRawResultAsync is the only path
             // that exposes it, and it advertises no codec of its own, so ask for one explicitly here.
             Console.WriteLine("2. Observing the negotiated codec:");
-            foreach (var acceptEncoding in new[] { "lz4, gzip, deflate", "br", "gzip", "identity" })
+            foreach (var acceptEncoding in new[] { "zstd, lz4, gzip, deflate", "lz4", "br", "gzip", "identity" })
             {
                 using var probe = await client.ExecuteRawResultAsync(
                     $"SELECT * FROM {tableName} FORMAT JSONEachRow",
@@ -132,11 +132,12 @@ public static class ResponseCompression
             }
 
             Console.WriteLine("Summary:");
-            Console.WriteLine("   - By default the driver advertises `lz4, gzip, deflate` and decodes whatever comes back");
+            Console.WriteLine("   - By default the driver advertises `zstd, lz4, gzip, deflate` and decodes whatever comes back");
             Console.WriteLine("   - The server chooses from that list by its own preference order, ignoring q-values");
             Console.WriteLine("   - Override with AcceptEncoding on the settings, the connection string, or one query");
             Console.WriteLine("   - Raw exports stay verbatim: no codec is asked for unless you set AcceptEncoding");
-            Console.WriteLine("   - An undecodable codec (zstd, snappy) raises an error naming it, never garbage rows");
+            Console.WriteLine("   - br is decoded too, it is just not advertised by default");
+            Console.WriteLine("   - An undecodable codec (snappy) raises an error naming it, never garbage rows");
         }
         finally
         {

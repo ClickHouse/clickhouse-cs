@@ -99,12 +99,13 @@ public class QueryOptions
     /// <summary>
     /// Gets or sets the HTTP <c>Accept-Encoding</c> header value sent with this query's request,
     /// overriding both <see cref="ADO.ClickHouseClientSettings.AcceptEncoding"/> and the codecs the
-    /// driver advertises by default (<c>lz4, gzip, deflate</c>).
+    /// driver advertises by default (<c>zstd, lz4, gzip, deflate</c>).
     /// </summary>
     /// <remarks>
     /// Whichever codec the server answers with is decoded transparently, so this only needs setting to
-    /// steer that choice — <c>"br"</c> for a better ratio, say, or <c>"identity"</c> to opt one query out.
-    /// <c>zstd</c> and <c>snappy</c> cannot be decoded and fail with an actionable error; to consume those,
+    /// steer that choice — <c>"zstd"</c> for a much better ratio, say, or <c>"identity"</c> to opt one
+    /// query out.
+    /// <c>snappy</c> cannot be decoded and fails with an actionable error; to consume it,
     /// use <see cref="IClickHouseClient.ExecuteRawResultAsync"/> and decode the body yourself. ClickHouse
     /// scans the header in its own fixed preference order and ignores q-values, so only a token's presence
     /// matters, not its position. Setting this also forces <c>enable_http_compression=1</c>.
