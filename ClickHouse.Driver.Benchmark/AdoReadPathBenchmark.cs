@@ -23,7 +23,8 @@ namespace ClickHouse.Driver.Benchmark;
 ///   <c>GetInt64</c>/<c>GetDouble</c>/<c>GetString</c>/<c>GetDateTime</c>/<c>GetGuid</c> per column per row.</item>
 /// <item><see cref="GenericAccessor"/> — hand-written <c>GetFieldValue&lt;T&gt;</c> code.</item>
 /// <item><see cref="UntypedAccessor"/> — the Dapper path. Its emitted IL calls the <c>this[int]</c> indexer,
-///   i.e. <c>GetValue</c>, so it still boxes; this variant is the "must not regress" control.</item>
+///   i.e. <c>GetValue</c>, so it still boxes and pays one fixed slot allocation per returned column; this
+///   variant is the "must not regress" control.</item>
 /// <item><see cref="TypedAccessorsProjected"/> — reads 2 of 10 columns, the case the old eager boxing
 ///   punished hardest.</item>
 /// </list>
@@ -35,7 +36,8 @@ public class AdoReadPathBenchmark
     private readonly Consumer consumer = new();
     private ClickHouseConnection connection;
 
-    [Params(200000)]
+    // The short cases expose the fixed per-reader slot cost that a 200k-row allocation total rounds away.
+    [Params(1, 10, 200000)]
     public int Count { get; set; }
 
     // Ten columns, eight of them value types — the shape that used to box eight times per row.
