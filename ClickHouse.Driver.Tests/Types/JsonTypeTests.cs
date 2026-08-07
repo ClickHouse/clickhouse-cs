@@ -1180,9 +1180,16 @@ public class JsonTypeTests : AbstractConnectionTestFixture
                 "{\"a\":{\"b\":null}}")
             .SetName("TypedLeafPathOverlappingTypedSubtreeWithNullValues");
 
+        // The value is inserted under the flattened key `a.b` rather than as the nested document
+        // `{"a": {"b": 7}}`: both store the same value (the server renders either as
+        // `{"a":null,"a":{"b":7}}`), but 25.8 rejects the nested form, because it parses the object
+        // `{"b":7}` against the overlapping typed leaf `a Nullable(Int64)` and fails with
+        // INCORRECT_DATA instead of descending into `a.b`. Descending was introduced after 25.8
+        // (26.3+ accept it), and this case is about the read path, so it uses the form every
+        // supported server writes identically.
         yield return new TestCaseData(
                 "a Nullable(Int64), a.b Nullable(Int64)",
-                "{\"a\": {\"b\": 7}}",
+                "{\"a.b\": 7}",
                 "{\"a\":{\"b\":7}}")
             .SetName("TypedLeafPathOverlappingTypedSubtreeWithValue");
     }
