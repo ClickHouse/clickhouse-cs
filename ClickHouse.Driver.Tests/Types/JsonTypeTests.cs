@@ -1180,9 +1180,21 @@ public class JsonTypeTests : AbstractConnectionTestFixture
                 "{\"a\":{\"b\":null}}")
             .SetName("TypedLeafPathOverlappingTypedSubtreeWithNullValues");
 
+        // Both `a` and `a.b` are typed and the value belongs to the subtree. Descending into an
+        // object at a path that overlaps a typed leaf was added after 25.8: 26.3 and later route
+        // the value to `a.b`, while 25.8 parses `{"b":7}` against `a Nullable(Int64)` and rejects
+        // the insert with INCORRECT_DATA. (The exact boundary is somewhere in between; 26.3 is the
+        // oldest server in the test matrix, so the gate uses it.) The flattened key is the stand-in
+        // where the nested document is not accepted — the two are indistinguishable once stored,
+        // both giving `{"a":null,"a":{"b":7}}`, so the read path under test and the expectation
+        // below are the same either way.
+        var overlappingSubtreeDocument = TestUtilities.ServerVersion >= Version.Parse("26.3")
+            ? "{\"a\": {\"b\": 7}}"
+            : "{\"a.b\": 7}";
+
         yield return new TestCaseData(
                 "a Nullable(Int64), a.b Nullable(Int64)",
-                "{\"a\": {\"b\": 7}}",
+                overlappingSubtreeDocument,
                 "{\"a\":{\"b\":7}}")
             .SetName("TypedLeafPathOverlappingTypedSubtreeWithValue");
     }
