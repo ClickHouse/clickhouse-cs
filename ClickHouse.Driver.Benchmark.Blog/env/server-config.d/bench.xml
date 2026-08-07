@@ -1,0 +1,20 @@
+<clickhouse>
+    <!-- query_log is what the codec matrix reads server CPU out of; without it every
+         ServerMetrics lookup finds zero rows and MeasureAsync throws rather than lying. -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <flush_interval_milliseconds>1000</flush_interval_milliseconds>
+    </query_log>
+
+    <!-- Trace/metric logs that cost CPU during a run and are not read by anything here. -->
+    <trace_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <metric_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <part_log remove="1"/>
+
+    <logger>
+        <level>warning</level>
+    </logger>
+</clickhouse>

@@ -53,6 +53,9 @@ dlldata.c
 
 # Benchmark Results
 BenchmarkDotNet.Artifacts/
+# BenchmarkDotNet's default --artifacts directory, and where
+# ClickHouse.Driver.Benchmark.Blog/scripts/run-suite.sh writes each timestamped results dir.
+results/
 
 # .NET Core
 project.lock.json

@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClickHouse.Driver.Integrati
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClickHouse.Driver.Common", "ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj", "{03F1DE45-4329-490E-9C48-7AD81ED1FF1B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClickHouse.Driver.Benchmark.Blog", "ClickHouse.Driver.Benchmark.Blog\ClickHouse.Driver.Benchmark.Blog.csproj", "{014483E4-D570-4D91-A1AD-ACACC48701B3}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -83,6 +85,18 @@ Global
 		{03F1DE45-4329-490E-9C48-7AD81ED1FF1B}.Release|x64.Build.0 = Release|Any CPU
 		{03F1DE45-4329-490E-9C48-7AD81ED1FF1B}.Release|x86.ActiveCfg = Release|Any CPU
 		{03F1DE45-4329-490E-9C48-7AD81ED1FF1B}.Release|x86.Build.0 = Release|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Debug|x64.Build.0 = Debug|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Debug|x86.Build.0 = Debug|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Release|x64.ActiveCfg = Release|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Release|x64.Build.0 = Release|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Release|x86.ActiveCfg = Release|Any CPU
+		{014483E4-D570-4D91-A1AD-ACACC48701B3}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

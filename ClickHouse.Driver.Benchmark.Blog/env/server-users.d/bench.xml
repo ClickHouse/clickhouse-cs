@@ -1,0 +1,12 @@
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- Pinned because it is a published confounder: this is the level the server uses when
+                 it compresses a response, i.e. the read direction of the codec matrix. ClickHouse's
+                 own default is 3; the matrix sweeps 1/3/9 by overriding it per query. -->
+            <http_zlib_compression_level>3</http_zlib_compression_level>
+            <log_queries>1</log_queries>
+            <log_query_threads>0</log_query_threads>
+        </default>
+    </profiles>
+</clickhouse>
