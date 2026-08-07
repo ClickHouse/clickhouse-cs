@@ -7,16 +7,13 @@ namespace ClickHouse.Driver.Compression;
 
 /// <summary>
 /// ZSTD compressor backed by a vendored, dependency-free copy of the <c>ZstdSharp</c> library
-/// (a pure-managed port of zstd, bundled into the driver — see <c>Vendor/ZstdSharp/README.md</c>),
-/// so ZSTD is available without pulling in any third-party or native runtime dependency.
+/// (a pure-managed port of zstd, bundled into the driver.
 /// <para>
-/// ZSTD compresses far harder than LZ4 at a comparable — often lower — server-side cost, so it is
-/// the best choice when bandwidth is the constraint. Decoding costs more CPU than LZ4 on the client,
-/// which is what makes LZ4 the default for responses.
+/// ZSTD is the default codec for query responses and inserts. Decoding happens on the calling thread.
 /// </para>
 /// <para>
 /// <b>Recommendation:</b> use <see cref="Default"/> (level <see cref="DefaultLevel"/>, zstd's own
-/// default) unless you have measured a higher level to be worth its CPU on your data.
+/// default) unless you have measured a higher level to be worth its CPU on your data/connection.
 /// </para>
 /// </summary>
 public sealed class ZstdCompressor : IClickHouseCompressor

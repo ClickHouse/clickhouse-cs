@@ -33,6 +33,17 @@ public class ClickHouseRawResultDecompressionTests
         return buffer.ToArray();
     }
 
+    private static byte[] ZstdEncoded()
+    {
+        using var buffer = new MemoryStream();
+        using (var encoder = ZstdCompressor.Default.Compress(buffer, leaveOpen: true))
+        {
+            encoder.Write(Plaintext, 0, Plaintext.Length);
+        }
+
+        return buffer.ToArray();
+    }
+
     /// <summary>The zlib form of <c>deflate</c>, which is what ClickHouse emits.</summary>
     private static byte[] ZLibEncoded()
     {
@@ -109,12 +120,40 @@ public class ClickHouseRawResultDecompressionTests
     [Test]
     public void ReadDecompressedStreamAsync_WithUnsupportedCodec_ThrowsNamingTheCodec()
     {
-        using var response = CreateResponse(new byte[] { 0x28, 0xB5, 0x2F, 0xFD }, "zstd");
+        // snappy, not zstd: zstd became decodable when the vendored ZstdSharp codec landed.
+        using var response = CreateResponse(new byte[] { 0xFF, 0x06, 0x00, 0x00 }, "snappy");
         using var raw = new ClickHouseRawResult(response);
 
         var ex = Assert.ThrowsAsync<NotSupportedException>(() => raw.ReadDecompressedStreamAsync());
 
-        Assert.That(ex.Message, Does.Contain("zstd"));
+        Assert.That(ex.Message, Does.Contain("snappy"));
+    }
+
+    [Test]
+    public async Task ReadDecompressedStreamAsync_WithZstdResponse_ReturnsThePlaintext()
+    {
+        using var response = CreateResponse(ZstdEncoded(), "zstd");
+        using var raw = new ClickHouseRawResult(response);
+
+        using var decompressed = await raw.ReadDecompressedStreamAsync();
+        using var buffer = new MemoryStream();
+        await decompressed.CopyToAsync(buffer);
+
+        Assert.That(buffer.ToArray(), Is.EqualTo(Plaintext));
+    }
+
+    /// <summary>
+    /// The verbatim contract holds for zstd too: the four original members hand back the frame on the
+    /// wire, which is what makes a compressed export usable as a file.
+    /// </summary>
+    [Test]
+    public async Task ReadAsByteArrayAsync_WithZstdResponse_ReturnsTheCompressedBytesVerbatim()
+    {
+        var compressed = ZstdEncoded();
+        using var response = CreateResponse(compressed, "zstd");
+        using var raw = new ClickHouseRawResult(response);
+
+        Assert.That(await raw.ReadAsByteArrayAsync(), Is.EqualTo(compressed));
     }
 
     /// <summary>
@@ -127,7 +166,7 @@ public class ClickHouseRawResultDecompressionTests
     public async Task ReadDecompressedStreamAsync_WithUnsupportedCodec_LeavesTheBodyReadableForManualDecoding()
     {
         var compressed = Lz4Encoded();
-        using var response = CreateResponse(compressed, "zstd");
+        using var response = CreateResponse(compressed, "snappy");
         using var raw = new ClickHouseRawResult(response);
 
         Assert.ThrowsAsync<NotSupportedException>(() => raw.ReadDecompressedStreamAsync());
@@ -145,7 +184,7 @@ public class ClickHouseRawResultDecompressionTests
     public async Task ReadDecompressedStreamAsync_WithUnsupportedCodec_LeavesTheBodyReadableThroughEveryMember()
     {
         var compressed = Lz4Encoded();
-        using var response = CreateStreamedResponse(compressed, "zstd");
+        using var response = CreateStreamedResponse(compressed, "snappy");
         using var raw = new ClickHouseRawResult(response);
 
         Assert.ThrowsAsync<NotSupportedException>(() => raw.ReadDecompressedStreamAsync());

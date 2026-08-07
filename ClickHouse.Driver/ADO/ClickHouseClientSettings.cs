@@ -161,6 +161,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// one explicitly.
     /// Default: true
     /// </summary>
+    /// <remarks>
+    /// <c>UseCompression</c> governs both directions. Besides the response negotiation, it gzip-compresses
+    /// the request body of every SQL-text request — the statement itself — so turning it off puts that body
+    /// in the clear as well; gzip is the only codec available there, since <see cref="AcceptEncoding"/>
+    /// steers the response only. The exception is <see cref="UseFormDataParameters"/>, whose multipart body
+    /// is always sent uncompressed. A binary insert does not consult this setting and uses
+    /// <see cref="InsertOptions.Compressor"/>; a raw upload (<c>InsertRawStreamAsync</c>,
+    /// <c>PostStreamAsync</c>) takes its own per-call flag.
+    /// </remarks>
     public bool UseCompression { get; init; } = ClickHouseDefaults.Compression;
 
     /// <summary>
@@ -372,8 +381,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets the <c>Accept-Encoding</c> sent with every request, overriding the codecs the driver
-    /// advertises by default (<c>lz4, gzip, deflate</c> — see remarks). Whichever codec the server then
-    /// answers with is decoded transparently; <c>zstd</c> and <c>snappy</c> cannot be decoded and will
+    /// advertises by default (<c>zstd, lz4, gzip, deflate</c> — see remarks). Whichever codec the server then
+    /// answers with is decoded transparently, including <c>br</c>, which is decodable but — unlike
+    /// <c>zstd</c> — not advertised by default; <c>snappy</c> cannot be decoded and will
     /// fail with an actionable error. Can be overridden per query by
     /// <see cref="QueryOptions.AcceptEncoding"/>.
     /// Default: null (advertise the codecs the driver can decode)

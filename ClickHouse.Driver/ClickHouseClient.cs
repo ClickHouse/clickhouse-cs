@@ -1209,7 +1209,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// transport-compressed (because the caller asked for <c>Accept-Encoding</c>), the server
     /// compresses error bodies the same way it would compress data — so we route the body through the
     /// shared <see cref="ResponseDecompression"/> resolver, and fall back to a placeholder for codecs we
-    /// can't decode (zstd, snappy, …) rather than handing back garbled binary bytes as a string. An error body must never turn a server error into an obscure
+    /// can't decode (snappy, …) rather than handing back garbled binary bytes as a string. An error body must never turn a server error into an obscure
     /// decompression crash, so this uses the non-throwing form of the resolver.
     /// </summary>
     private static async Task<string> ReadErrorBodyAsync(HttpResponseMessage response)
@@ -1230,7 +1230,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             await DrainAndDisposeAsync(rawStream).ConfigureAwait(false);
             return
                 $"<server returned HTTP {(int)response.StatusCode} {response.ReasonPhrase} with unsupported Content-Encoding: {encoding}. " +
-                "The error body is compressed with a codec this client cannot decode (zstd, xz, snappy, …); " +
+                "The error body is compressed with a codec this client cannot decode (xz, snappy, …); " +
                 "please re-run the request without compression or inspect 'system.query_log' on the ClickHouse server to read the original error message.>";
         }
 
