@@ -928,12 +928,12 @@ Host=localhost;AcceptEncoding=br, gzip
 
 Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends no `Accept-Encoding` at all.
 
-**The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. The default names `zstd` first in that scan, so a default query is answered with zstd; the remaining tokens are the fallback for a server or intermediary that cannot. `br` is *decodable but not advertised*: it outranks every fallback token in the default list, so naming it would make it the codec for every query the server cannot answer with zstd.
+**The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. The default includes `zstd`, so a default query is answered with zstd; the remaining tokens act as a fallback. `br` is decodable but not advertised by default.
 
-How the codecs compare on payload size, server CPU and client CPU depends on your data, your link and the server's `http_zlib_compression_level` (shipped default: 3), so two cases are worth knowing about — in both of them asking for `lz4` explicitly may serve you better:
+How the codecs compare on payload size, server CPU and client CPU depends on your data, your link and the server's `http_zlib_compression_level` (shipped default: 3) — see [Tuning compression](#tuning-compression).
 
-- **`http_zlib_compression_level=1`.** That setting applies to every HTTP codec, not just zlib, and it changes the picture: `lz4` only engages LZ4-HC from level 3, so its server-side cost at level 1 is not what the default level would suggest. If your server runs level 1, measure before relying on the default.
-- **A CPU-bound client on a fast link.** The driver decodes the response body on the calling thread, so when the network is not the bottleneck it is the client-side decode cost that decides.
+- **`http_zlib_compression_level`.** That setting applies to every HTTP codec, and the default value is 3. This value should be tuned based on your data, link speed, and CPU use.
+- **A CPU-bound client on a fast link.** The driver decodes the response body on the calling thread, so when the network is not the bottleneck, client-side decode speed could act as the limiting factor.
 
 Ask for a different codec per query, or client-wide, whenever either applies:
 
@@ -967,22 +967,124 @@ See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse
 
 #### Insert (request) compression {#insert-compression}
 
-zstd is also the default on the **request** side of a binary insert, through `InsertOptions.Compressor` (alongside `Lz4Compressor`, `GZipCompressor` and `BrotliCompressor`); it replaced `gzip:Fastest` there. `ZstdCompressor.Default` uses zstd's own default level (3); the constructor takes any level between `ZstdCompressor.MinLevel` and `ZstdCompressor.MaxLevel` — zstd's levels are a signed range, and negative ones trade ratio for speed.
+Zstd is the default codec for inserts. The library includes a number of classes that allow you to control the codec and compression level:
 
-One caveat is specific to the request side. `Accept-Encoding` is an *offer* the server may decline, but a request body's `Content-Encoding` is a **declaration**: an intermediary that re-encodes request bodies and does not understand zstd fails the insert outright. ClickHouse itself accepts zstd request bodies on every supported version (verified back to 25.8 LTS); if your inserts traverse a proxy tier you are unsure of, name the codec explicitly.
+- `ZstdCompressor`
+- `Lz4Compressor`
+- `GZipCompressor`
+- `BrotliCompressor`
+
+Set the compressor of your choice in `InsertOptions`:
 
 ```csharp
 var options = new InsertOptions { Compressor = GZipCompressor.Default };  // Content-Encoding: gzip
 await client.InsertBinaryAsync("events", columns, rows, options);
 ```
 
-Every codec named here is built in: `ClickHouse.Driver` bundles vendored, pure-managed copies of the LZ4 and zstd codecs (gzip, deflate and brotli come from the BCL), so none of them adds a runtime dependency.
-
 `InsertOptions.Compressor` governs a binary insert only. The driver's other request bodies are compressed by different rules, and none of them goes through it:
 
 - **Every SQL-text request** (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, `ExecuteRawResultAsync`, the ADO.NET layer) sends its statement with `Content-Encoding: gzip` whenever `UseCompression` is `true` — i.e. by default. The codec is not configurable: `AcceptEncoding` steers the response only, so gzip or nothing is the choice. `Compression=false` sends the statement in the clear. Statements are small, so this is rarely worth thinking about — but it is worth knowing when you are watching requests in a proxy or a packet capture.
 - **A multipart body** — a query whose parameters are sent as form data (`UseFormDataParameters=true`) — is always sent uncompressed, whatever `UseCompression` says.
 - **A raw upload** (`InsertRawStreamAsync`, `PostStreamAsync`) takes its own per-call flag and consults neither `UseCompression` nor `InsertOptions.Compressor`: gzip when the flag is set, uncompressed otherwise. Note that `InsertRawStreamAsync`'s `useCompression` parameter defaults to `true`, so a raw upload is gzipped unless you pass `false` — even with `Compression=false` on the client.
+
+---
+
+### Tuning compression {#tuning-compression}
+
+Compression trades CPU for bytes. Whether that is a win depends almost entirely on how fast your
+link is relative to how fast the codec runs, and the answer flips completely between a
+same-datacenter deployment and one crossing the internet. There is no setting that is right for
+everyone.
+
+#### The one number that decides it
+
+Compressing is worth it as long as the codec is *faster than the network*.
+
+That threshold is lower than most people expect on the read path, because ClickHouse compresses
+HTTP responses single-threaded in the output buffer. Measured on a 16-vCPU ClickHouse Cloud
+service (`hits`, RowBinary, level 3), the server produces compressed output at roughly 100-200MB/s.
+
+So for a large result, and assuming a single query being processed at a time, compression stops paying somewhere around 100 MB/s. A single HTTPS stream
+inside one cloud region commonly exceeds that, while anything crossing the public internet, a VPN or a region boundary is usually below it.
+
+The insert path tolerates compression to higher link speeds, because your client compresses on a core of its own and is typically faster than the server's response compression.
+
+#### Rough guide by deployment
+
+| Where your client runs | Typical bandwidth | Reads | Inserts |
+|---|---|---|---|
+| Same host / loopback | > 500 MB/s | `identity` | `lz4` fastest, or none |
+| Same region, same cloud | ~100–500 MB/s | `identity` or `lz4` | `zstd:1` |
+| Cross-region, same cloud | ~10–100 MB/s | `zstd` | `zstd:3` |
+| Internet / VPN / different cloud | < 25 MB/s | `zstd` | `zstd:3` |
+| Metered or very constrained | < 5 MB/s | `zstd` | `zstd:5`+ or `br` |
+
+Three things this table does not capture:
+
+- **Egress cost:** if you are billed for data transfer, bytes have a price beyond latency, and that
+pushes toward higher compression regardless of link speed.
+- **Small results:** all of the above concerns large payloads. For small responses the codec barely
+matters and per-request overhead dominates.
+- **Parallel inserts move the insert thresholds up.** Every throughput figure above is for a *single* thread. `InsertOptions.MaxDegreeOfParallelism` defaults to `1`, but raising it compresses batches concurrently, so the client's aggregate encode rate scales roughly with the cores you give it. So on a fast link a parallel insert can stay worth
+compressing well past the speed at which a single-threaded one stops being worth it. Treat the insert rows in the table as a *floor*, and if you already batch in parallel, retest before concluding that your link is too fast for compression.
+
+The read path only parallelizes across multiple queries.
+
+#### Choosing a codec
+
+| Codec | Ratio | Use it when | Watch out for |
+|---|---|---|---|
+| `lz4` | lowest | Fast links; CPU is scarcer than bandwidth. Cheapest to decode by a wide margin, and the quickest on small results — which makes it the codec to name when you want out of the zstd default. | It has **no entropy coder**, so on data that is skewed but not repetitive (long runs of numeric text, for example) its ratio falls well behind everything else. It is also the codec most punished by raising `http_zlib_compression_level`: level 1 → 3 costs it ~2.7× the CPU for ~29% fewer bytes. |
+| `zstd` | high | The general-purpose choice whenever a real network is involved. Best ratio-per-CPU in the range that matters, and at level 3 it beats `lz4` on bytes *and* server CPU *and* wall clock. | more expensive than `lz4` to **decode** — 1.6× at level 3 in our measurements, though at level 1 the two are comparable — and the driver decodes on your calling thread. At `http_zlib_compression_level=1` specifically it costs slightly *more* server CPU than `lz4`. |
+| `gzip` | medium | Interoperability — universally understood by proxies and gateways. | Dominated on every axis by both `lz4` and `zstd` in our measurements: larger than `zstd` while costing several times more CPU to encode and 5–9× more to decode. Choose it for compatibility, not performance. |
+| `br` | highest at low levels | Bandwidth is genuinely the binding constraint and you can spend CPU for it. | Cliffs badly at higher levels — at `http_zlib_compression_level=6` we measured it at 3–4× `zstd`'s server CPU. Not advertised by default, because it outranks every fallback token in the default list. |
+
+#### Levels
+
+Response compression is governed by a single server setting, `http_zlib_compression_level`, which applies to *every* HTTP codec, not just zlib. It defaults to 3.
+
+Leave it alone unless you have measured a reason. Above the default it buys very little size for a lot of CPU (for `zstd`, 3 → 6 roughly doubles server CPU for ~14% fewer bytes), and `br` becomes pathological. Below it, at level 1, the picture genuinely changes: `lz4` gets much cheaper and `zstd` loses its CPU advantage over it. Set it per query if you need to:
+
+```csharp
+using var reader = await client.ExecuteReaderAsync(
+    "SELECT * FROM events",
+    options: new QueryOptions
+    {
+        AcceptEncoding = "zstd",
+        CustomSettings = new Dictionary<string, object> { ["http_zlib_compression_level"] = 1 },
+    });
+```
+
+#### Measuring your own crossover
+
+The quickest way to optimize your choice of codec and compression level is to time the same query at a few codecs and compare.
+
+```csharp
+foreach (var codec in new[] { "identity", "lz4", "zstd" })
+{
+    var sw = Stopwatch.StartNew();
+    using var reader = await client.ExecuteReaderAsync(
+        "SELECT ... FROM big_table",
+        options: new QueryOptions { AcceptEncoding = codec });
+    while (await reader.ReadAsync()) { }
+    Console.WriteLine($"{codec,-9} {sw.ElapsedMilliseconds} ms");
+}
+```
+
+For the server's side of the same picture, read `ProfileEvents` back out of `system.query_log` — set
+`QueryOptions.QueryId` so you can find the row:
+
+```sql
+SELECT ProfileEvents['UserTimeMicroseconds'] + ProfileEvents['SystemTimeMicroseconds'] AS cpu_us,
+       ProfileEvents['NetworkSendBytes'] AS sent_bytes,
+       query_duration_ms
+FROM system.query_log
+WHERE query_id = 'your-query-id' AND type = 'QueryFinish';
+```
+
+One trap if you benchmark this yourself: a bare `LIMIT n` without `ORDER BY` returns *different rows
+on every run*, so each repetition compresses different data and the ratios become noise. Compare
+against a fixed result set.
 
 ---
 

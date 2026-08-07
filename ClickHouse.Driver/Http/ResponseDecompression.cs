@@ -56,13 +56,13 @@ internal static class ResponseDecompression
     /// <para>
     /// How the codecs compare on payload size, server CPU and client CPU depends on the data, the
     /// link and the server's <c>http_zlib_compression_level</c>; the driver also decodes the body on
-    /// the caller's thread. A caller who wants a different balance names a codec explicitly —
-    /// <c>lz4</c>, for instance, on a CPU-bound client over a fast link.
+    /// the caller's thread. A caller who wants a different balance can set their desired codec explicitly,
+    /// e.g. <c>lz4</c>, on a CPU-bound client over a fast link.
     /// </para>
     /// <para>
     /// <c>br</c> stays omitted: it outranks every fallback token listed here, so advertising it
     /// would make it the codec whenever the server cannot do zstd. It is decoded whenever it
-    /// arrives, and a caller who wants it can ask.
+    /// arrives, and a caller who wants it can ask explicitly.
     /// </para>
     /// </remarks>
     public const string DefaultAcceptEncoding = "zstd, lz4, gzip, deflate";
