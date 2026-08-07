@@ -80,7 +80,14 @@ public class ResponseDecompressionBenchmark
     private string url;
     private byte[] plaintext;
 
-    [Params(PayloadCodec.Gzip, PayloadCodec.Deflate)]
+    [Params(
+        PayloadCodec.Gzip,
+        PayloadCodec.Deflate
+#if ZSTD_AVAILABLE
+        ,
+        PayloadCodec.Zstd
+#endif
+        )]
     public PayloadCodec Codec { get; set; }
 
     /// <summary>
@@ -102,21 +109,45 @@ public class ResponseDecompressionBenchmark
         /// not the bare RFC 1951 stream.
         /// </summary>
         Deflate,
+#if ZSTD_AVAILABLE
+
+        /// <summary>
+        /// <c>zstd</c>, which <see cref="DecompressionMethods"/> cannot decode at all: for this codec
+        /// there is no framework arm to compare against, so both arms run the driver's own decoder (see
+        /// <see cref="FrameworkCanDecode"/>) and the rows are worth reading along the <i>codec</i> axis —
+        /// what zstd's decode costs next to gzip's — rather than the arm axis.
+        /// </summary>
+        Zstd,
+#endif
     }
+
+    /// <summary>
+    /// Whether <c>AutomaticDecompression</c> can decode this codec. When it cannot, the framework arm is
+    /// not a real alternative and is configured to behave exactly like the driver arm rather than
+    /// pretending to decode.
+    /// </summary>
+    private bool FrameworkCanDecode =>
+#if ZSTD_AVAILABLE
+        Codec != PayloadCodec.Zstd;
+#else
+        true;
+#endif
 
     [GlobalSetup]
     public async Task Setup()
     {
         plaintext = MakeTabularPayload(PayloadBytes);
         var body = Compress(plaintext, Codec);
-        var token = Codec == PayloadCodec.Gzip ? "gzip" : "deflate";
+        var token = Token(Codec);
 
         server = new LoopbackServer(BuildResponse(body, token));
         url = $"http://127.0.0.1:{server.Port}/";
 
         frameworkClient = new HttpClient(new SocketsHttpHandler
         {
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            AutomaticDecompression = FrameworkCanDecode
+                ? DecompressionMethods.GZip | DecompressionMethods.Deflate
+                : DecompressionMethods.None,
             MaxConnectionsPerServer = Concurrency * 2,
         });
         driverClient = new HttpClient(new SocketsHttpHandler
@@ -134,8 +165,10 @@ public class ResponseDecompressionBenchmark
                 throw new InvalidOperationException($"{arm} arm produced {bytes.Length} bytes, expected {plaintext.Length} identical bytes.");
 
             var stripped = string.IsNullOrEmpty(encodingHeader);
-            if (arm == Arm.Framework && !stripped)
+            if (arm == Arm.Framework && FrameworkCanDecode && !stripped)
                 throw new InvalidOperationException("Framework arm still reports Content-Encoding; AutomaticDecompression did not decode.");
+            if (arm == Arm.Framework && !FrameworkCanDecode && stripped)
+                throw new InvalidOperationException($"Framework arm decoded {Codec}, which AutomaticDecompression cannot do.");
             if (arm == Arm.Driver && stripped)
                 throw new InvalidOperationException("Driver arm saw no Content-Encoding; the handler decoded the body instead of ResponseDecompression.");
         }
@@ -183,7 +216,7 @@ public class ResponseDecompressionBenchmark
         response.EnsureSuccessStatusCode();
 
         var raw = await response.Content.ReadAsStreamAsync();
-        var body = arm == Arm.Framework
+        var body = arm == Arm.Framework && FrameworkCanDecode
             ? raw
             : DriverWrap(raw, string.Join(", ", response.Content.Headers.ContentEncoding), true);
 
@@ -217,7 +250,7 @@ public class ResponseDecompressionBenchmark
         var encoding = string.Join(", ", response.Content.Headers.ContentEncoding);
 
         var raw = await response.Content.ReadAsStreamAsync();
-        var body = arm == Arm.Framework ? raw : DriverWrap(raw, encoding, true);
+        var body = arm == Arm.Framework && FrameworkCanDecode ? raw : DriverWrap(raw, encoding, true);
         try
         {
             using var decoded = new MemoryStream();
@@ -263,18 +296,35 @@ public class ResponseDecompressionBenchmark
         return Encoding.UTF8.GetBytes(builder.ToString(0, targetBytes));
     }
 
+    private static string Token(PayloadCodec codec) => codec switch
+    {
+        PayloadCodec.Gzip => "gzip",
+#if ZSTD_AVAILABLE
+        PayloadCodec.Zstd => "zstd",
+#endif
+        _ => "deflate",
+    };
+
     private static byte[] Compress(byte[] source, PayloadCodec codec)
     {
         using var buffer = new MemoryStream();
-        using (Stream encoder = codec == PayloadCodec.Gzip
-            ? new GZipStream(buffer, CompressionLevel.Fastest, leaveOpen: true)
-            : new ZLibStream(buffer, CompressionLevel.Fastest, leaveOpen: true))
+        using (var encoder = CreateEncoder(buffer, codec))
         {
             encoder.Write(source, 0, source.Length);
         }
 
         return buffer.ToArray();
     }
+
+    private static Stream CreateEncoder(Stream destination, PayloadCodec codec) => codec switch
+    {
+        PayloadCodec.Gzip => new GZipStream(destination, CompressionLevel.Fastest, leaveOpen: true),
+#if ZSTD_AVAILABLE
+        // The driver's own codec, so the body is exactly what the server's zstd writer produces.
+        PayloadCodec.Zstd => ClickHouse.Driver.Compression.ZstdCompressor.Default.Compress(destination, leaveOpen: true),
+#endif
+        _ => new ZLibStream(destination, CompressionLevel.Fastest, leaveOpen: true),
+    };
 
     private static byte[] BuildResponse(byte[] body, string contentEncoding)
     {

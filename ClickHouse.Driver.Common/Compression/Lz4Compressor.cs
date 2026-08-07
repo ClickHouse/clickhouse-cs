@@ -8,8 +8,7 @@ namespace ClickHouse.Driver.Compression;
 
 /// <summary>
 /// LZ4 compressor backed by a vendored, dependency-free copy of the <c>K4os.Compression.LZ4</c>
-/// library (bundled into the driver — see <c>Vendor/K4os/README.md</c>), so LZ4 is available without
-/// pulling in any third-party runtime dependency.
+/// library.
 /// <para>
 /// LZ4 is faster than GZip/Brotli at a lower compression ratio, which makes it a good fit for
 /// throughput-bound inserts where CPU (not bandwidth) is the constraint. It also imposes the lowest

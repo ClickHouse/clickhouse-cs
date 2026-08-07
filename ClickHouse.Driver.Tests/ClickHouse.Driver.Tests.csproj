@@ -65,4 +65,11 @@
     <PackageReference Include="K4os.Compression.LZ4.Streams" />
   </ItemGroup>
 
+  <!-- Likewise for ZSTD: the real ZstdSharp.Port package is a test-only differential oracle for the
+       driver's vendored copy (Common/Vendor/ZstdSharp) and must stay pinned to the same version as
+       that copy. It is NOT a runtime dependency of the driver. See Common/Vendor/ZstdSharp/README.md. -->
+  <ItemGroup>
+    <PackageReference Include="ZstdSharp.Port" />
+  </ItemGroup>
+
 </Project>
