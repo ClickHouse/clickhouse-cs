@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
 
@@ -9,9 +11,14 @@ namespace ClickHouse.Driver.Types;
 
 internal class MapType : ParameterizedType
 {
+    // Process-wide so each map shape is compiled once, even though the Dynamic read path
+    // creates a fresh MapType per value.
+    private static readonly ConcurrentDictionary<Type, Func<int, IDictionary>> DictionaryFactoryCache = new();
+
     private Type frameworkType;
     private ClickHouseType keyType;
     private ClickHouseType valueType;
+    private Func<int, IDictionary> dictionaryFactory;
 
     public Tuple<ClickHouseType, ClickHouseType> UnderlyingTypes
     {
@@ -24,7 +31,20 @@ internal class MapType : ParameterizedType
 
             var genericType = typeof(Dictionary<,>);
             frameworkType = genericType.MakeGenericType([keyType.FrameworkType, valueType.FrameworkType]);
+            dictionaryFactory = DictionaryFactoryCache.GetOrAdd(frameworkType, static type => BuildDictionaryFactory(type));
         }
+    }
+
+    // Avoids Activator.CreateInstance(Type, params object[]), which resolves the constructor
+    // and boxes the capacity on every call.
+    private static Func<int, IDictionary> BuildDictionaryFactory(Type dictionaryType)
+    {
+        var constructor = dictionaryType.GetConstructor([typeof(int)])
+            ?? throw new InvalidOperationException($"{dictionaryType} has no constructor taking a capacity");
+
+        var capacity = Expression.Parameter(typeof(int), "capacity");
+        var body = Expression.Convert(Expression.New(constructor, capacity), typeof(IDictionary));
+        return Expression.Lambda<Func<int, IDictionary>>(body, capacity).Compile();
     }
 
     public ClickHouseType KeyType => keyType;
@@ -49,7 +69,7 @@ internal class MapType : ParameterizedType
         // The number of key-value pairs is known up front, so size the dictionary
         // to it and avoid repeated rehashing/resizing as entries are inserted
         // (mirrors ArrayType.Read pre-allocating the result array with its length).
-        var dict = (IDictionary)Activator.CreateInstance(FrameworkType, length);
+        var dict = dictionaryFactory(length);
 
         for (var i = 0; i < length; i++)
         {
