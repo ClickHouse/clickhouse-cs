@@ -11,11 +11,8 @@ namespace ClickHouse.Driver.Types;
 
 internal class MapType : ParameterizedType
 {
-    // Compiled "new Dictionary<TKey, TValue>(capacity)" factories, keyed by the concrete dictionary
-    // CLR type. Keying on frameworkType (a process-cached constructed generic type) means each
-    // distinct map shape is compiled exactly once for the whole process. This matters on the Dynamic
-    // read path, where BinaryTypeDecoder instantiates a fresh MapType per value: a per-instance
-    // cache would recompile the factory on every row, whereas this shared cache compiles once.
+    // Process-wide so each map shape is compiled once, even though the Dynamic read path
+    // creates a fresh MapType per value.
     private static readonly ConcurrentDictionary<Type, Func<int, IDictionary>> DictionaryFactoryCache = new();
 
     private Type frameworkType;
@@ -38,9 +35,8 @@ internal class MapType : ParameterizedType
         }
     }
 
-    // Builds a Func<int, IDictionary> constructing the dictionary with a known capacity. Replaces
-    // Activator.CreateInstance(Type, params object[]), whose binder-based constructor resolution
-    // runs on every call and allocates an object[1] plus a box for the capacity.
+    // Avoids Activator.CreateInstance(Type, params object[]), which resolves the constructor
+    // and boxes the capacity on every call.
     private static Func<int, IDictionary> BuildDictionaryFactory(Type dictionaryType)
     {
         var constructor = dictionaryType.GetConstructor([typeof(int)])
