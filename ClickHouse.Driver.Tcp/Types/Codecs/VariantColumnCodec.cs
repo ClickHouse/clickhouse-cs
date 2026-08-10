@@ -28,8 +28,27 @@ internal static class VariantWire
 /// so the declared order already is the discriminator order — this codec does not reorder it.
 ///
 /// <para>
-/// Only the BASIC discriminators mode (every row's discriminator written literally) is supported; the server
-/// uses it by default over the native protocol. A COMPACT (run-length) prefix is rejected.
+/// The column data for <c>Variant(String, UInt64)</c> holding <c>[42, 'hi', NULL, 7, 'yo']</c>. <c>String</c> sorts
+/// before <c>UInt64</c>, so discriminator <c>0</c> is the string alternative. Each run holds only its own rows, in
+/// row order, and no run states its own length — a length is recoverable only by counting the discriminators.
+/// <code>
+/// 00 00 00 00 00 00 00 00  discriminators mode = 0 (BASIC)
+///                          then one state prefix per alternative (both empty here)
+/// 01 00 FF 01 00           one discriminator per row: UInt64, String, NULL, UInt64, String
+/// 02 68 69                 String run, rows 1 and 4: len 2, "hi"
+/// 02 79 6F                                           len 2, "yo"
+/// 2A 00 00 00 00 00 00 00  UInt64 run, rows 0 and 3: 42
+/// 07 00 00 00 00 00 00 00                            7
+/// </code>
+/// Reading row 4 therefore takes two steps: its discriminator says the string alternative, and the number of
+/// earlier rows that also chose it says which value in that run — index 1, <c>"yo"</c>.
+/// </para>
+///
+/// <para>
+/// Only the BASIC discriminators mode (every row's discriminator written literally) is supported. COMPACT exists
+/// for MergeTree part serialization, chosen by the table-level
+/// <c>use_compact_variant_discriminators_serialization</c> setting; the native protocol's writer leaves that
+/// setting at its default, so a server never sends COMPACT over the wire. A COMPACT prefix is rejected.
 /// </para>
 ///
 /// <para>
