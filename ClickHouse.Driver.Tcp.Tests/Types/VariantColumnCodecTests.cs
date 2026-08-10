@@ -13,21 +13,24 @@ public class VariantColumnCodecTests
 
     private static IColumnCodec Resolve(string type) => ColumnCodecRegistry.Default.Resolve(type, default);
 
-    // The canonical example from the native-format notes: Variant(String, UInt64) with [42, 'hi', NULL]. String
-    // sorts before UInt64, so discriminator 0 = String, 1 = UInt64.
+    // The example documented on VariantColumnCodec: Variant(String, UInt64) with [42, 'hi', NULL, 7, 'yo']. String
+    // sorts before UInt64, so discriminator 0 = String, 1 = UInt64. Each run holds its own rows in row order, so a
+    // multi-value run also pins that ordering. Verified against a ClickHouse 26.6 SELECT ... FORMAT Native.
     private static readonly byte[] DocumentedBytes =
     {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // state prefix: discriminators mode = 0 (BASIC)
-        0x01, 0x00, 0xFF,                               // discriminators: 1 (UInt64), 0 (String), 255 (NULL)
-        0x02, 0x68, 0x69,                               // String run (1 value): len = 2, "hi"
-        0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run (1 value): 42
+        0x01, 0x00, 0xFF, 0x01, 0x00,                   // discriminators: UInt64, String, NULL, UInt64, String
+        0x02, 0x68, 0x69,                               // String run, rows 1 and 4: len = 2, "hi"
+        0x02, 0x79, 0x6F,                               //                          len = 2, "yo"
+        0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run, rows 0 and 3: 42
+        0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //                           7
     };
 
     [Test]
     public async Task WriteStatePrefixAndColumn_DocumentedExample_ProducesTheDocumentedBytes()
     {
         IColumnCodec codec = Resolve(StringUInt64);
-        var column = new ArrayColumn<object>("v", StringUInt64, new object[] { 42UL, "hi", null });
+        var column = new ArrayColumn<object>("v", StringUInt64, new object[] { 42UL, "hi", null, 7UL, "yo" });
 
         byte[] bytes = await CodecTestHarness.WriteAsync(w =>
         {
@@ -45,12 +48,16 @@ public class VariantColumnCodecTests
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
         await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
-        using IColumn column = await codec.ReadColumnAsync(reader, "v", StringUInt64, 3, CodecTestHarness.None);
+        using IColumn column = await codec.ReadColumnAsync(reader, "v", StringUInt64, 5, CodecTestHarness.None);
 
-        Assert.That(column.RowCount, Is.EqualTo(3));
+        Assert.That(column.RowCount, Is.EqualTo(5));
         Assert.That(column.GetValue(0), Is.EqualTo(42UL));
         Assert.That(column.GetValue(1), Is.EqualTo("hi"));
         Assert.That(column.GetValue(2), Is.Null);
+
+        // Rows past the NULL: each addresses the second value of its run, so these also pin the per-row local index.
+        Assert.That(column.GetValue(3), Is.EqualTo(7UL));
+        Assert.That(column.GetValue(4), Is.EqualTo("yo"));
     }
 
     [Test]
@@ -60,7 +67,7 @@ public class VariantColumnCodecTests
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
         await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
-        using IColumn dense = await codec.ReadColumnAsync(reader, "v", StringUInt64, 3, CodecTestHarness.None);
+        using IColumn dense = await codec.ReadColumnAsync(reader, "v", StringUInt64, 5, CodecTestHarness.None);
 
         // The read-back VariantColumn is the zero-copy write source: writing it must reproduce the exact bytes.
         byte[] bytes = await CodecTestHarness.WriteAsync(w =>
@@ -124,13 +131,36 @@ public class VariantColumnCodecTests
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
         await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
-        using IColumn dense = await codec.ReadColumnAsync(reader, "v", StringUInt64, 3, CodecTestHarness.None);
+        using IColumn dense = await codec.ReadColumnAsync(reader, "v", StringUInt64, 5, CodecTestHarness.None);
 
-        // Slice rows [1, 3): "hi" (String) and NULL. The discriminators are 00 FF; only the String run carries a
-        // value ("hi"), and the UInt64 run is empty because row 0 (the only UInt64) is before the slice.
+        // Slice rows [1, 3): "hi" (String) and NULL. The discriminators are 00 FF; the String run is cut to just
+        // the in-slice value ("hi", leaving out "yo" at row 4), and the UInt64 run is empty because both its rows
+        // (0 and 3) fall outside the slice.
         byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, dense, 1, 2));
 
         byte[] expected = { 0x00, 0xFF, 0x02, 0x68, 0x69 };
+        CollectionAssert.AreEqual(expected, bytes);
+    }
+
+    [Test]
+    public async Task WriteColumn_DenseColumnSliceAfterEarlierValues_StartsEachRunAtItsSliceOffset()
+    {
+        IColumnCodec codec = Resolve(StringUInt64);
+
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
+        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
+        using IColumn dense = await codec.ReadColumnAsync(reader, "v", StringUInt64, 5, CodecTestHarness.None);
+
+        // Slice rows [3, 5): 7 (UInt64) and "yo" (String). Both rows are the *second* value of their run, so each
+        // run must be written from offset 1 — the case a slice starting at row 0 cannot catch.
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, dense, 3, 2));
+
+        byte[] expected =
+        {
+            0x01, 0x00,                                     // discriminators: UInt64, String
+            0x02, 0x79, 0x6F,                               // String run from offset 1: "yo"
+            0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run from offset 1: 7
+        };
         CollectionAssert.AreEqual(expected, bytes);
     }
 
