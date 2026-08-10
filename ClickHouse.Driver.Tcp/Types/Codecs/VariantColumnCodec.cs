@@ -161,74 +161,33 @@ internal sealed class VariantColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
+        // A zero-row block puts neither discriminators nor values on the wire, so there is nothing to count and
+        // every run is empty.
         if (rowCount == 0)
         {
-            // A zero-row block carries no discriminators and no per-type values; still read each child at zero
-            // rows so a codec that expects the call sees it, and surface an empty column.
-            var emptyChildren = new IColumn[children.Length];
-            int built = 0;
-            try
-            {
-                for (int i = 0; i < children.Length; i++)
-                {
-                    emptyChildren[i] = await children[i].ReadColumnAsync(reader, columnName, children[i].TypeName, 0, cancellationToken).ConfigureAwait(false);
-                    built = i + 1;
-                }
-            }
-            catch
-            {
-                for (int i = 0; i < built; i++)
-                {
-                    emptyChildren[i].Dispose();
-                }
-
-                throw;
-            }
-
-            return new VariantColumn(columnName, columnType, Array.Empty<byte>(), emptyChildren, 0, pooledDiscriminators: false, ownsColumns: true);
+            IColumn[] emptyRuns = await ReadTypeColumnsAsync(reader, columnName, new int[children.Length], cancellationToken).ConfigureAwait(false);
+            return new VariantColumn(columnName, columnType, Array.Empty<byte>(), emptyRuns, 0, pooledDiscriminators: false, ownsColumns: true);
         }
 
         byte[] discriminators = ArrayPool<byte>.Shared.Rent(rowCount);
-        var typeColumns = new IColumn[children.Length];
-        int read = 0;
+        IColumn[] typeColumns = null;
         try
         {
             await reader.ReadBytesAsync(discriminators.AsMemory(0, rowCount), cancellationToken).ConfigureAwait(false);
 
-            var counts = new int[children.Length];
-            for (int row = 0; row < rowCount; row++)
-            {
-                byte d = discriminators[row];
-                if (d == IVariantColumn.NullDiscriminator)
-                {
-                    continue;
-                }
-
-                if (d >= children.Length)
-                {
-                    throw new FormatException(
-                        $"Variant column '{columnName}' ({columnType}) has discriminator {d} at row {row}, but the type declares only {children.Length} alternative(s).");
-                }
-
-                counts[d]++;
-            }
-
-            for (int i = 0; i < children.Length; i++)
-            {
-                typeColumns[i] = await children[i].ReadColumnAsync(reader, columnName, children[i].TypeName, counts[i], cancellationToken).ConfigureAwait(false);
-                read = i + 1;
-            }
+            // No run states its own length on the wire, so the whole discriminator stream has to be counted before
+            // a single run can be read.
+            int[] rowsPerType = CountRowsPerType(discriminators, rowCount, columnName, columnType);
+            typeColumns = await ReadTypeColumnsAsync(reader, columnName, rowsPerType, cancellationToken).ConfigureAwait(false);
 
             return new VariantColumn(columnName, columnType, discriminators, typeColumns, rowCount, pooledDiscriminators: true, ownsColumns: true);
         }
         catch
         {
+            // The column that would have taken over the rented buffer and the runs was never constructed.
+            // typeColumns stays null when ReadTypeColumnsAsync fails, having already disposed its own partial read.
             ArrayPool<byte>.Shared.Return(discriminators);
-            for (int i = 0; i < read; i++)
-            {
-                typeColumns[i].Dispose();
-            }
-
+            DisposeColumns(typeColumns, typeColumns?.Length ?? 0);
             throw;
         }
     }
@@ -295,6 +254,59 @@ internal sealed class VariantColumnCodec : IColumnCodec
         }
 
         WriteBodyCore(writer, state.Expect<VariantWriteState>(TypeName));
+    }
+
+    // How many rows chose each alternative — the length of every run that follows the discriminators.
+    private int[] CountRowsPerType(ReadOnlySpan<byte> discriminators, int rowCount, string columnName, string columnType)
+    {
+        var rowsPerType = new int[children.Length];
+        for (int row = 0; row < rowCount; row++)
+        {
+            byte d = discriminators[row];
+
+            // A NULL row takes a slot in no run.
+            if (d == IVariantColumn.NullDiscriminator)
+            {
+                continue;
+            }
+
+            // Rejected here, and not left to VariantColumn: its constructor indexes per-type counters by
+            // discriminator, so an out-of-range one would surface there as an IndexOutOfRangeException naming
+            // neither the column nor the row.
+            if (d >= children.Length)
+            {
+                throw new FormatException(
+                    $"Variant column '{columnName}' ({columnType}) has discriminator {d} at row {row}, but the type declares only {children.Length} alternative(s).");
+            }
+
+            rowsPerType[d]++;
+        }
+
+        return rowsPerType;
+    }
+
+    // One dense run per alternative, in declared order. A run of zero rows is still read, so an alternative no row
+    // selected still gets the call its codec may expect.
+    private async ValueTask<IColumn[]> ReadTypeColumnsAsync(ClickHouseBinaryReader reader, string columnName, int[] rowsPerType, CancellationToken cancellationToken)
+    {
+        var typeColumns = new IColumn[children.Length];
+        int read = 0;
+        try
+        {
+            for (int i = 0; i < children.Length; i++)
+            {
+                typeColumns[i] = await children[i].ReadColumnAsync(reader, columnName, children[i].TypeName, rowsPerType[i], cancellationToken).ConfigureAwait(false);
+                read = i + 1;
+            }
+        }
+        catch
+        {
+            // No variant column owns these yet.
+            DisposeColumns(typeColumns, read);
+            throw;
+        }
+
+        return typeColumns;
     }
 
     // A fixed mode word, then every alternative's own prefix over its projected column — including the alternatives
@@ -515,6 +527,15 @@ internal sealed class VariantColumnCodec : IColumnCodec
                 ArrayPool<byte>.Shared.Return(Discriminators);
                 Discriminators = null;
             }
+        }
+    }
+
+    // Disposes the first count entries of a partially read run array.
+    private static void DisposeColumns(IColumn[] columns, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            columns[i]?.Dispose();
         }
     }
 
