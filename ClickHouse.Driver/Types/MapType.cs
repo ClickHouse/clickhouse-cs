@@ -17,10 +17,11 @@ internal class MapType : ParameterizedType
     private static readonly ConcurrentDictionary<Type, Func<int, IList>> ListFactoryCache = new();
     private static readonly ConcurrentDictionary<Type, Func<object, object, object>> PairFactoryCache = new();
     private static readonly ConcurrentDictionary<Type, (Func<object, object> Key, Func<object, object> Value)> PairAccessorCache = new();
-    private static readonly ConcurrentDictionary<Type, bool> EntrySequenceCache = new();
+    private static readonly ConcurrentDictionary<Type, (Type Key, Type Value)[]> EntryTypesCache = new();
 
     private readonly MapReadMode readMode;
     private Type frameworkType;
+    private (Type Key, Type Value) entryTypes;
     private ClickHouseType keyType;
     private ClickHouseType valueType;
     private Func<int, IDictionary> dictionaryFactory;
@@ -43,9 +44,13 @@ internal class MapType : ParameterizedType
             keyType = value.Item1;
             valueType = value.Item2;
 
+            // Wrapper types (Array, Nullable) rebuild their FrameworkType reflectively per access,
+            // and CanWrite is called per value written, so resolve the pair once
+            entryTypes = (keyType.FrameworkType, valueType.FrameworkType);
+
             if (readMode == MapReadMode.KeyValuePairs)
             {
-                var pairType = typeof(KeyValuePair<,>).MakeGenericType([keyType.FrameworkType, valueType.FrameworkType]);
+                var pairType = typeof(KeyValuePair<,>).MakeGenericType([entryTypes.Key, entryTypes.Value]);
                 frameworkType = typeof(List<>).MakeGenericType(pairType);
                 listFactory = ListFactoryCache.GetOrAdd(frameworkType, static type => BuildListFactory(type));
                 pairFactory = PairFactoryCache.GetOrAdd(pairType, static type => BuildPairFactory(type));
@@ -53,7 +58,7 @@ internal class MapType : ParameterizedType
             else
             {
                 var genericType = typeof(Dictionary<,>);
-                frameworkType = genericType.MakeGenericType([keyType.FrameworkType, valueType.FrameworkType]);
+                frameworkType = genericType.MakeGenericType([entryTypes.Key, entryTypes.Value]);
                 dictionaryFactory = DictionaryFactoryCache.GetOrAdd(frameworkType, static type => BuildDictionaryFactory(type));
             }
         }
@@ -187,14 +192,34 @@ internal class MapType : ParameterizedType
     /// returned by <see cref="MapReadMode.KeyValuePairs"/>.
     /// </summary>
     internal static bool IsMapValue(object value) =>
-        value is IDictionary || (value is not null && EntrySequenceCache.GetOrAdd(value.GetType(), static type => IsEntrySequence(type)));
+        value is IDictionary || (value is not null && GetEntryTypes(value.GetType()).Length > 0);
 
-    private static bool IsEntrySequence(Type type) => type
-        .GetInterfaces()
-        .Concat([type])
-        .Any(candidate => candidate.IsGenericType
-            && candidate.GetGenericTypeDefinition() == typeof(IEnumerable<>)
-            && IsKeyValuePair(candidate.GetGenericArguments()[0]));
+    /// <summary>
+    /// A Variant member is selected by <see cref="CanWrite"/>, so it must accept every
+    /// representation <see cref="Write"/> accepts, in either <see cref="MapReadMode"/>. A
+    /// dictionary and a key-value-pair sequence both enumerate as
+    /// <see cref="KeyValuePair{TKey, TValue}"/>, so the entry types are what identify the map.
+    /// </summary>
+    public override bool CanWrite(object value) =>
+        value is not null
+        && entryTypes.Key is not null
+        && Array.IndexOf(GetEntryTypes(value.GetType()), entryTypes) >= 0;
+
+    /// <summary>
+    /// The key and value types of every <see cref="KeyValuePair{TKey, TValue}"/> sequence the type
+    /// enumerates as. Empty when the type is not a map representation.
+    /// </summary>
+    private static (Type Key, Type Value)[] GetEntryTypes(Type type) =>
+        EntryTypesCache.GetOrAdd(type, static candidate => candidate
+            .GetInterfaces()
+            .Concat([candidate])
+            .Where(iface => iface.IsGenericType
+                && iface.GetGenericTypeDefinition() == typeof(IEnumerable<>)
+                && IsKeyValuePair(iface.GetGenericArguments()[0]))
+            .Select(iface => iface.GetGenericArguments()[0].GetGenericArguments())
+            .Select(arguments => (arguments[0], arguments[1]))
+            .Distinct()
+            .ToArray());
 
     private static bool IsKeyValuePair(Type type) =>
         type.IsGenericType && type.GetGenericTypeDefinition() == typeof(KeyValuePair<,>);

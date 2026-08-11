@@ -144,6 +144,80 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_VariantMapInKeyValuePairsMode_AcceptsDictionary()
+    {
+        // A Variant member is picked by CanWrite, so it must accept every representation
+        // Write accepts - a dictionary stays writable in KeyValuePairs mode
+        using var pairClient = CreateKeyValuePairClient();
+        var table = CreateTableName();
+        await pairClient.ExecuteNonQueryAsync($"CREATE TABLE {table} (v Variant(String, Map(String, String))) ENGINE Memory");
+
+        await pairClient.InsertBinaryAsync(table, ["v"], [new object[] { new Dictionary<string, string> { ["key"] = "X" } }]);
+
+        using var reader = await pairClient.ExecuteReaderAsync($"SELECT v FROM {table}");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(AsPairs(reader.GetValue(0)), Is.EqualTo(new List<KeyValuePair<string, string>> { new("key", "X") }));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_VariantMapInDictionaryMode_AcceptsKeyValuePairs()
+    {
+        // The mirror case - a key-value-pair sequence is writable in the default mode
+        var table = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (v Variant(String, Map(String, String))) ENGINE Memory");
+
+        await client.InsertBinaryAsync(table, ["v"], [new object[] { DuplicateKeyPairs }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT v FROM {table}");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetValue(0), Is.EqualTo(new Dictionary<string, string> { ["key"] = "Y" }));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_VariantWithTwoMapMembers_PicksTheMemberMatchingTheEntryTypes()
+    {
+        // Accepting both representations must not make every map match every map member.
+        // Three members also exercise the type-keyed lookup, not only the linear scan
+        using var pairClient = CreateKeyValuePairClient();
+        var table = CreateTableName();
+        await pairClient.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (id UInt32, v Variant(String, Map(String, String), Map(String, Int64))) ENGINE Memory");
+
+        await pairClient.InsertBinaryAsync(table, ["id", "v"], [
+            new object[] { 1u, new Dictionary<string, long> { ["key"] = 1L } },
+            new object[] { 2u, new List<KeyValuePair<string, long>> { new("key", 2L) } },
+            new object[] { 3u, new Dictionary<string, string> { ["key"] = "X" } },
+        ]);
+
+        using var reader = await pairClient.ExecuteReaderAsync($"SELECT variantType(v) FROM {table} ORDER BY id");
+        var members = new List<object>();
+        while (reader.Read())
+            members.Add(reader.GetValue(0));
+
+        Assert.That(members, Is.EqualTo(new[] { "Map(String, Int64)", "Map(String, Int64)", "Map(String, String)" }));
+    }
+
+    [TestCase(MapReadMode.Dictionary)]
+    [TestCase(MapReadMode.KeyValuePairs)]
+    public void CanWrite_MapMemberOfVariant_AcceptsBothRepresentationsOfItsOwnEntryTypes(MapReadMode mode)
+    {
+        var settings = TypeSettings.Default with { mapReadMode = mode };
+        var mapType = (MapType)TypeConverter.ParseClickHouseType("Map(String, String)", settings);
+
+        Assert.That(mapType.CanWrite(new Dictionary<string, string>()), Is.True);
+        Assert.That(mapType.CanWrite(DuplicateKeyPairs), Is.True);
+
+        // A map with other entry types is still not this member, and neither is a non-map
+        Assert.That(mapType.CanWrite(new Dictionary<string, long>()), Is.False);
+        Assert.That(mapType.CanWrite(new List<KeyValuePair<string, long>>()), Is.False);
+        Assert.That(mapType.CanWrite("string"), Is.False);
+        Assert.That(mapType.CanWrite(null), Is.False);
+    }
+
+    [Test]
     public async Task ExecuteReaderAsync_KeyValuePairsParameterWithDuplicateKeys_SendsEveryPair()
     {
         using var pairClient = CreateKeyValuePairClient();
