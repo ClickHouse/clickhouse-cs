@@ -68,6 +68,11 @@ public static class ClickHouseDefaults
     public const bool ReadStringsAsByteArrays = false;
 
     /// <summary>
+    /// Default representation for Map columns when reading (Dictionary)
+    /// </summary>
+    public const MapReadMode MapReadMode = ClickHouse.Driver.MapReadMode.Dictionary;
+
+    /// <summary>
     /// Default setting for server certificate validation (false = validate certificates)
     /// </summary>
     public const bool SkipServerCertificateValidation = false;

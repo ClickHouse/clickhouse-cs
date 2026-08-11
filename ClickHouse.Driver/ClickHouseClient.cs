@@ -171,7 +171,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <summary>
     /// Gets the type settings for serialization.
     /// </summary>
-    internal TypeSettings TypeSettings => new(Settings.UseCustomDecimals, Settings.ReadStringsAsByteArrays, jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode);
+    internal TypeSettings TypeSettings => new(Settings.UseCustomDecimals, Settings.ReadStringsAsByteArrays, jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode, Settings.MapReadMode);
 
     /// <summary>
     /// Gets the per-client POCO type registry shared by binary insert and read materialization.
