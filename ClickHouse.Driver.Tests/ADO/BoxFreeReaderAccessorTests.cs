@@ -435,13 +435,12 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
 
     // ---- Converter routing ----
 
-    // Two paths, two overloads, both unchanged by column slots: the typed accessors were
-    // `(T)GetValue(ordinal)` and so saw ConvertValue(object, ...), while GetFieldValue<T> called
-    // ConvertValue<T>. De-boxing the accessors would have switched them onto ConvertValue<T>, which is
-    // observable to a converter whose two overloads disagree, so with a converter configured they stay on the
-    // boxed route. This pins both halves of that decision.
+    // Which overload a read takes follows how it read, not whether a converter is configured: a value pulled
+    // unboxed out of its slot converts through ConvertValue<T>, and only a genuinely boxed read uses
+    // ConvertValue(object, ...). This pins all three cases against a converter that doubles in the object
+    // overload alone, so the choice is directly observable.
     [Test]
-    public async Task WithConverter_TypedAccessorUsesObjectOverloadWhileGetFieldValueUsesGeneric()
+    public async Task WithConverter_TypedReadsUseTheGenericOverloadAndBoxedReadsUseTheObjectOverload()
     {
         var settings = TestUtilities.GetTestClickHouseClientSettings();
         settings = new ClickHouseClientSettings(settings) { ReadValueConverter = new ObjectOnlyDoublingConverter() };
@@ -452,24 +451,31 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
 
         Assert.Multiple(() =>
         {
-            Assert.That(reader.GetInt64(0), Is.EqualTo(42L), "GetInt64 must still route through ConvertValue(object, ...)");
-            Assert.That(reader.GetValue(0), Is.EqualTo(42L));
-            Assert.That(reader.GetFieldValue<long>(0), Is.EqualTo(21L), "GetFieldValue<T> routes through ConvertValue<T>, which this converter leaves alone");
+            Assert.That(reader.GetInt64(0), Is.EqualTo(21L), "GetInt64 reads its slot unboxed, so it converts through ConvertValue<T>");
+            Assert.That(reader.GetFieldValue<long>(0), Is.EqualTo(21L), "GetFieldValue<T> converts through ConvertValue<T>");
+            Assert.That(reader.GetValue(0), Is.EqualTo(42L), "GetValue is a boxed read, so it stays on ConvertValue(object, ...)");
         });
     }
 
-    // GetDecimal's fast path is skipped when a converter is configured, so this exercises its boxed
-    // fallback — including the ClickHouseDecimal branch, which is what a Decimal column boxes as by default.
+    // A converter does not take GetDecimal off its slot path: a ClickHouseDecimal column is narrowed to decimal
+    // first, so the converter sees the decimal the accessor returns rather than the column's own
+    // representation. A NULL cell falls through to the boxed path and throws there.
     [Test]
-    public async Task GetDecimal_WithConverter_FallsBackToTheBoxedPath()
+    public async Task GetDecimal_WithConverter_ReadsTheSlotAndConvertsOnTheGenericOverload()
     {
         var settings = TestUtilities.GetTestClickHouseClientSettings();
-        settings = new ClickHouseClientSettings(settings) { ReadValueConverter = new ObjectOnlyDoublingConverter() };
+        settings = new ClickHouseClientSettings(settings) { ReadValueConverter = new GenericOnlyDecimalDoublingConverter() };
         using var client = new ClickHouseClient(settings);
 
-        using var reader = await client.ExecuteReaderAsync("SELECT toDecimal64(12.34, 2) AS c");
+        using var reader = await client.ExecuteReaderAsync(
+            "SELECT toDecimal64(12.34, 2) AS c, CAST(NULL AS Nullable(Decimal64(2))) AS z");
         Assert.That(reader.Read(), Is.True);
-        Assert.That(reader.GetDecimal(0), Is.EqualTo(12.34m));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.GetDecimal(0), Is.EqualTo(24.68m));
+            Assert.Throws<InvalidCastException>(() => reader.GetDecimal(1));
+        });
     }
 
     // Doubles longs in the object overload only, so which overload an accessor picks is directly observable.
@@ -479,6 +485,15 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
             => value is long l ? l * 2 : value;
 
         public T ConvertValue<T>(T value, string columnName, string clickHouseType) => value;
+    }
+
+    // The mirror image, for the accessors whose slot value is a decimal.
+    private sealed class GenericOnlyDecimalDoublingConverter : IReadValueConverter
+    {
+        public object ConvertValue(object value, string columnName, string clickHouseType) => value;
+
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
+            => value is decimal d ? (T)(object)(d * 2) : value;
     }
 
     // Reflection is the only way to parametrize over T. Unwraps TargetInvocationException so the assertions
