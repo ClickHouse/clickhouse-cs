@@ -49,7 +49,7 @@ internal class StringType : ClickHouseType
             {
                 var length = checked((int)(stream.Length - stream.Position));
                 writer.Write7BitEncodedInt(length);
-                stream.CopyTo(writer.BaseStream);
+                stream.CopyTo(writer.RawStream);
             }
             else
             {
@@ -59,7 +59,7 @@ internal class StringType : ClickHouseType
                 var length = (int)memoryStream.Length;
                 writer.Write7BitEncodedInt(length);
                 memoryStream.Position = 0;
-                memoryStream.CopyTo(writer.BaseStream);
+                memoryStream.CopyTo(writer.RawStream);
             }
         }
         else

@@ -1,5 +1,6 @@
 ClickHouse.Driver.ADO.ClickHouseClientSettings
 ClickHouse.Driver.Formats.ExtendedBinaryWriter.ExtendedBinaryWriter(System.IO.Stream stream, bool leaveOpen) -> void
+ClickHouse.Driver.Formats.ExtendedBinaryWriter.RawStream.get -> System.IO.Stream
 ClickHouse.Driver.InsertOptions.Compressor.get -> ClickHouse.Driver.Compression.IClickHouseCompressor?
 ClickHouse.Driver.InsertOptions.Compressor.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.BearerToken.get -> string

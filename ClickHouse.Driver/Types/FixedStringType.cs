@@ -120,7 +120,7 @@ internal class FixedStringType : ParameterizedType
             {
                 throw new ArgumentException($"Stream length {streamLength} does not match FixedString({Length}). Stream must be exactly {Length} bytes.");
             }
-            stream.CopyTo(writer.BaseStream);
+            stream.CopyTo(writer.RawStream);
         }
         else
         {
