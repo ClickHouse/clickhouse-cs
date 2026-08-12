@@ -21,7 +21,7 @@ public class ExtendedBinaryWriter : BinaryWriter
     /// to the stream directly cannot reorder or lose anything. Flushing instead costs a compression
     /// block per value, which makes an insert scale with the value count rather than the byte count.
     /// </remarks>
-    public Stream RawStream => OutStream;
+    internal Stream RawStream => OutStream;
 
     public new void Write7BitEncodedInt(int i) => base.Write7BitEncodedInt(i);
 }
