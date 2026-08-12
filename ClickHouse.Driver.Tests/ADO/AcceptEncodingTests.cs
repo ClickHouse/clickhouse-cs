@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Tests.Utilities;
 using NUnit.Framework;
 
@@ -95,7 +96,7 @@ public class AcceptEncodingTests
 
         Assert.That(
             AcceptEncodingOf(handler),
-            Is.EqualTo(new[] { "lz4", "gzip", "deflate" }),
+            Is.EqualTo(new[] { "zstd", "lz4", "gzip", "deflate" }),
             "the default advertises every codec the driver can decode, except br — see ResponseDecompression.DefaultAcceptEncoding");
     }
 
@@ -231,7 +232,7 @@ public class AcceptEncodingTests
 
         await client.ExecuteNonQueryAsync("SELECT 1");
 
-        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "lz4", "gzip", "deflate" }));
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "zstd", "lz4", "gzip", "deflate" }));
     }
 
     [TestCase("   ", TestName = "{m}(whitespace)")]
@@ -242,7 +243,7 @@ public class AcceptEncodingTests
 
         await client.ExecuteNonQueryAsync("SELECT 1", options: new QueryOptions { AcceptEncoding = acceptEncoding });
 
-        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "lz4", "gzip", "deflate" }));
+        Assert.That(AcceptEncodingOf(handler), Is.EqualTo(new[] { "zstd", "lz4", "gzip", "deflate" }));
     }
 
     [Test]
@@ -408,7 +409,7 @@ public class AcceptEncodingTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(AcceptEncodingOf(parsingHandler), Is.EqualTo(new[] { "lz4", "gzip", "deflate" }));
+            Assert.That(AcceptEncodingOf(parsingHandler), Is.EqualTo(new[] { "zstd", "lz4", "gzip", "deflate" }));
             Assert.That(AcceptEncodingOf(rawHandler), Is.Empty);
         });
     }
@@ -538,8 +539,8 @@ public class AcceptEncodingTests
     {
         var fakeHandler = new TrackingHandler(_ =>
         {
-            var content = new ByteArrayContent(new byte[] { 0x28, 0xB5, 0x2F, 0xFD }); // arbitrary zstd-looking bytes
-            content.Headers.ContentEncoding.Add("zstd");
+            var content = new ByteArrayContent(new byte[] { 0xFF, 0x06, 0x00, 0x00 }); // arbitrary snappy-looking bytes
+            content.Headers.ContentEncoding.Add("snappy");
             return new HttpResponseMessage(HttpStatusCode.InternalServerError)
             {
                 ReasonPhrase = "Internal Server Error",
@@ -555,11 +556,11 @@ public class AcceptEncodingTests
 
         var ex = Assert.ThrowsAsync<ClickHouseServerException>(
             () => client.ExecuteNonQueryAsync("SELECT 1",
-                options: new QueryOptions { AcceptEncoding = "zstd" }));
+                options: new QueryOptions { AcceptEncoding = "snappy" }));
 
         Assert.Multiple(() =>
         {
-            Assert.That(ex.Message, Does.Contain("unsupported Content-Encoding: zstd"));
+            Assert.That(ex.Message, Does.Contain("unsupported Content-Encoding: snappy"));
             Assert.That(ex.Message, Does.Contain("system.query_log"));
         });
     }
@@ -567,12 +568,12 @@ public class AcceptEncodingTests
     [Test]
     public void HandleError_WithUnsupportedContentEncoding_DrainsBodyBeforeReturningPlaceholderMessage()
     {
-        var body = new byte[] { 0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x01 };
+        var body = new byte[] { 0xFF, 0x06, 0x00, 0x00, 0x00, 0x01 };
         var trackingStream = new TrackingReadStream(body);
         var fakeHandler = new TrackingHandler(_ =>
         {
             var content = new StreamContent(trackingStream);
-            content.Headers.ContentEncoding.Add("zstd");
+            content.Headers.ContentEncoding.Add("snappy");
             return new HttpResponseMessage(HttpStatusCode.InternalServerError)
             {
                 ReasonPhrase = "Internal Server Error",
@@ -588,11 +589,11 @@ public class AcceptEncodingTests
 
         var ex = Assert.ThrowsAsync<ClickHouseServerException>(
             () => client.ExecuteNonQueryAsync("SELECT 1",
-                options: new QueryOptions { AcceptEncoding = "zstd" }));
+                options: new QueryOptions { AcceptEncoding = "snappy" }));
 
         Assert.Multiple(() =>
         {
-            Assert.That(ex.Message, Does.Contain("unsupported Content-Encoding: zstd"));
+            Assert.That(ex.Message, Does.Contain("unsupported Content-Encoding: snappy"));
             Assert.That(trackingStream.BytesRead, Is.EqualTo(body.Length));
             Assert.That(trackingStream.IsDisposed, Is.True);
         });
@@ -819,8 +820,14 @@ public class AcceptEncodingTests
         Assert.That(body, Is.EqualTo("0\n1\n2\n3\n4\n"));
     }
 
+    /// <summary>
+    /// The server compresses error bodies with the same codec it would have used for a result, so a
+    /// zstd-compressed error must arrive readable rather than as the placeholder this case asserted
+    /// before the driver could decode zstd. Uses a handler that decodes nothing, so the text can only
+    /// be there because the driver decoded it.
+    /// </summary>
     [Test]
-    public void AcceptEncodingZstd_AgainstRealServer_ErrorBodyYieldsUnsupportedCodecPlaceholder()
+    public void AcceptEncodingZstd_AgainstRealServer_ErrorBodyIsDecodedAndReadable()
     {
         using var rawHandler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
         using var rawHttpClient = new HttpClient(rawHandler);
@@ -835,7 +842,43 @@ public class AcceptEncodingTests
                 "SELECT * FROM no_such_table_for_acceptencoding_test",
                 options: new QueryOptions { AcceptEncoding = "zstd" }));
 
-        Assert.That(ex.Message, Does.Contain("unsupported Content-Encoding: zstd"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Does.Contain("no_such_table_for_acceptencoding_test"));
+            Assert.That(ex.Message, Does.Not.Contain("unsupported Content-Encoding"));
+        });
+    }
+
+    /// <summary>
+    /// The write-side counterpart of <see cref="AcceptEncodingGzip_AgainstRealServer_ResponseIsActuallyGzipCompressed"/>
+    /// for zstd: the body on the wire is a real zstd frame, decoded here by the vendored codec rather
+    /// than by anything in the framework (which cannot decode zstd at all).
+    /// </summary>
+    [Test]
+    public async Task AcceptEncodingZstd_AgainstRealServer_ResponseIsActuallyZstdCompressed()
+    {
+        using var rawHandler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
+        using var rawHttpClient = new HttpClient(rawHandler);
+        var settings = new ClickHouseClientSettings(TestUtilities.GetTestClickHouseClientSettings())
+        {
+            HttpClient = rawHttpClient,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        using var result = await client.ExecuteRawResultAsync(
+            "SELECT number FROM numbers(5) FORMAT TSV",
+            options: new QueryOptions { AcceptEncoding = "zstd" });
+
+        Assert.That(result.ContentEncoding, Is.EqualTo("zstd"));
+
+        var compressed = await result.ReadAsByteArrayAsync();
+        Assert.That(compressed[..4], Is.EqualTo(new byte[] { 0x28, 0xB5, 0x2F, 0xFD }), "expected a zstd frame magic");
+
+        using var source = new MemoryStream(compressed);
+        await using var plaintext = ZstdCompressor.Default.Decompress(source, leaveOpen: true);
+        using var reader = new StreamReader(plaintext, Encoding.UTF8);
+
+        Assert.That(await reader.ReadToEndAsync(), Is.EqualTo("0\n1\n2\n3\n4\n"));
     }
 
     private static ByteArrayContent BuildCompressedContent(

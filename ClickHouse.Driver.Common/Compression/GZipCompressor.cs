@@ -5,8 +5,8 @@ using System.IO.Compression;
 namespace ClickHouse.Driver.Compression;
 
 /// <summary>
-/// GZip request-body compressor — the default codec for binary inserts. Exposes the level and write
-/// buffer size as knobs so callers can trade CPU for payload size.
+/// GZip request-body compressor. Exposes the level and write buffer size as knobs so callers can
+/// trade CPU for payload size.
 /// </summary>
 public sealed class GZipCompressor : IClickHouseCompressor
 {

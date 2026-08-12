@@ -91,6 +91,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         JsonReadMode = other.JsonReadMode;
         JsonWriteMode = other.JsonWriteMode;
 
+        MapReadMode = other.MapReadMode;
+
         // Copy parameter type resolver
         ParameterTypeResolver = other.ParameterTypeResolver;
 
@@ -161,6 +163,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// one explicitly.
     /// Default: true
     /// </summary>
+    /// <remarks>
+    /// <c>UseCompression</c> governs both directions. Besides the response negotiation, it gzip-compresses
+    /// the request body of every SQL-text request — the statement itself — so turning it off puts that body
+    /// in the clear as well; gzip is the only codec available there, since <see cref="AcceptEncoding"/>
+    /// steers the response only. The exception is <see cref="UseFormDataParameters"/>, whose multipart body
+    /// is always sent uncompressed. A binary insert does not consult this setting and uses
+    /// <see cref="InsertOptions.Compressor"/>; a raw upload (<c>InsertRawStreamAsync</c>,
+    /// <c>PostStreamAsync</c>) takes its own per-call flag.
+    /// </remarks>
     public bool UseCompression { get; init; } = ClickHouseDefaults.Compression;
 
     /// <summary>
@@ -346,6 +357,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public JsonWriteMode JsonWriteMode { get; init; } = JsonWriteMode.String;
 
     /// <summary>
+    /// Gets or sets how Map columns are returned when reading data.
+    /// Dictionary (default): Returns Dictionary&lt;TKey, TValue&gt;; a repeated key keeps only its last value
+    /// KeyValuePairs: Returns List&lt;KeyValuePair&lt;TKey, TValue&gt;&gt;, preserving every pair the server sent
+    /// The mode selects the framework type of a Map column, so it also applies to
+    /// GetFieldValue&lt;T&gt;, reported schema types, and POCO property mapping.
+    /// </summary>
+    public MapReadMode MapReadMode { get; init; } = ClickHouseDefaults.MapReadMode;
+
+    /// <summary>
     /// Gets or sets a custom resolver for mapping .NET types to ClickHouse types
     /// during @-style parameter substitution. When set, this resolver is consulted
     /// after explicit ClickHouseType/SQL type hints but before default type inference.
@@ -372,8 +392,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets the <c>Accept-Encoding</c> sent with every request, overriding the codecs the driver
-    /// advertises by default (<c>lz4, gzip, deflate</c> — see remarks). Whichever codec the server then
-    /// answers with is decoded transparently; <c>zstd</c> and <c>snappy</c> cannot be decoded and will
+    /// advertises by default (<c>zstd, lz4, gzip, deflate</c> — see remarks). Whichever codec the server then
+    /// answers with is decoded transparently, including <c>br</c>, which is decodable but — unlike
+    /// <c>zstd</c> — not advertised by default; <c>snappy</c> cannot be decoded and will
     /// fail with an actionable error. Can be overridden per query by
     /// <see cref="QueryOptions.AcceptEncoding"/>.
     /// Default: null (advertise the codecs the driver can decode)
@@ -439,6 +460,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Roles = builder.Roles,
             JsonReadMode = builder.JsonReadMode,
             JsonWriteMode = builder.JsonWriteMode,
+            MapReadMode = builder.MapReadMode,
             AcceptEncoding = builder.AcceptEncoding,
         };
 
@@ -488,6 +510,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                EnableDebugMode == other.EnableDebugMode &&
                JsonReadMode == other.JsonReadMode &&
                JsonWriteMode == other.JsonWriteMode &&
+               MapReadMode == other.MapReadMode &&
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
                ReadValueConverter == other.ReadValueConverter &&
@@ -531,6 +554,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(EnableDebugMode);
         hash.Add(JsonReadMode);
         hash.Add(JsonWriteMode);
+        hash.Add(MapReadMode);
         hash.Add(ParameterTypeResolver);
         hash.Add(ParameterFormatter);
         hash.Add(ReadValueConverter);
@@ -583,6 +607,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s;" +
                $"ReadBufferSize={ReadBufferSize};" +
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode};" +
+               $"MapReadMode={MapReadMode};" +
                $"UseFormDataParameters={UseFormDataParameters}";
 
         if (!string.IsNullOrEmpty(AcceptEncoding))

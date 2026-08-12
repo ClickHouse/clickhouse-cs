@@ -5,7 +5,8 @@
     <CheckEolTargetFramework>false</CheckEolTargetFramework>
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
     <LangVersion>latest</LangVersion>
-    <!-- Required by the vendored K4os LZ4/xxHash codec (pointer-based hot paths). See Vendor/K4os/README.md. -->
+    <!-- Required by the vendored K4os LZ4/xxHash and ZstdSharp codecs (pointer-based hot paths).
+         See Vendor/K4os/README.md and Vendor/ZstdSharp/README.md. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisMode>Recommended</AnalysisMode>
@@ -13,6 +14,17 @@
     <AnalysisLevel>latest</AnalysisLevel>
     <!-- Bundled into the ClickHouse.Driver package (see that project's pack target); never shipped on its own. -->
     <IsPackable>false</IsPackable>
+    <!-- This assembly is strong-named (AssemblyInfo.cs carries [AssemblyKeyFile], as the sibling
+         projects do). The Fody weaver rewrites the compiled assembly, and it only re-signs what it
+         rewrites when told which key to use — without these properties the weaved output loses its
+         strong name while the reference assembly csc emits keeps it, and every consumer then fails
+         to load ClickHouse.Driver.Common at runtime. Same key, so the assembly identity is
+         unchanged. -->
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)../sgKey.snk</AssemblyOriginatorKeyFile>
+    <!-- CS1616: the KeyFile option above supersedes AssemblyInfo.cs's [AssemblyKeyFile]; both name
+         the same key, so the resulting identity is identical. -->
+    <NoWarn>$(NoWarn);CS1616</NoWarn>
   </PropertyGroup>
 
   <!-- Global usings required by the vendored K4os source (which was written against these implicit
@@ -31,6 +43,17 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+  </ItemGroup>
+
+  <!-- Build-time only (PrivateAssets=all): the Fody IL weaver applies the [InlineMethod.Inline]
+       attributes the vendored ZstdSharp source relies on for its hot paths. Nothing from these
+       packages reaches the shipped assembly's dependency set — see Vendor/ZstdSharp/README.md. -->
+  <ItemGroup>
+    <PackageReference Include="Fody">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="InlineMethod.Fody" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>
