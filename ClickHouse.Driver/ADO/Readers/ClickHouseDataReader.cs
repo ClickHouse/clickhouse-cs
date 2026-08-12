@@ -33,7 +33,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly Stream decompressor; // Can be null: only set when the response body was transport-compressed
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
     private readonly IReadValueConverter readValueConverter; // Can be null
-    private readonly string[] columnTypeNames; // Raw server-sent type strings; null when no converter
+    private readonly string[] columnTypeNames; // Raw server-sent type strings, exactly as declared
     private readonly PocoTypeRegistry pocoRegistry;
     private readonly Dictionary<Type, object> bindingPlanCache = new();
     private bool hasCurrentRow;
@@ -53,9 +53,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         RawTypes = types;
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
-
-        if (readValueConverter != null)
-            columnTypeNames = rawTypeNames;
+        columnTypeNames = rawTypeNames;
     }
 
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
@@ -116,7 +114,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             buffered = new PooledReadBufferStream(bufferedInner, readBufferSize, leaveOpen: true);
 
             reader = new ExtendedBinaryReader(buffered);
-            var (names, types, rawTypeNames) = ReadHeaders(reader, settings, readValueConverter != null);
+            var (names, types, rawTypeNames) = ReadHeaders(reader, settings);
             return new ClickHouseDataReader(httpResponse, reader, buffered, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter, decompressingStream);
         }
         catch (Exception)
@@ -428,7 +426,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         if (mapping == null)
             return false;
 
-        var built = pocoRegistry.GetOrBuildRowReaders<T>(FieldNames, RawTypes, mapping, readValueConverter != null);
+        var built = pocoRegistry.GetOrBuildRowReaders<T>(FieldNames, RawTypes, columnTypeNames, mapping, readValueConverter != null);
         if (built == null)
             return false;
 
@@ -570,7 +568,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 #pragma warning restore CA2215 // Dispose methods should call base class dispose
 
-    private static (string[], ClickHouseType[], string[]) ReadHeaders(ExtendedBinaryReader reader, TypeSettings settings, bool captureRawTypeNames)
+    // The raw declarations are always kept. Besides feeding IReadValueConverter, they are the row-reader
+    // cache key: a resolved type's ToString() can drop state its Read depends on — JsonType renders as
+    // "Json" whatever its typed-path hints — so keying on it would let one shape reuse another's delegates.
+    private static (string[], ClickHouseType[], string[]) ReadHeaders(ExtendedBinaryReader reader, TypeSettings settings)
     {
         if (reader.PeekChar() == -1)
         {
@@ -585,7 +586,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
         var names = new string[count];
         var types = new ClickHouseType[count];
-        var rawTypeNames = captureRawTypeNames ? new string[count] : null;
+        var rawTypeNames = new string[count];
 
         for (var i = 0; i < count; i++)
         {
@@ -595,8 +596,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         for (var i = 0; i < count; i++)
         {
             var chType = reader.ReadString();
-            if (captureRawTypeNames)
-                rawTypeNames[i] = chType;
+            rawTypeNames[i] = chType;
             types[i] = TypeConverter.ParseClickHouseType(chType, settings);
         }
         return (names, types, rawTypeNames);

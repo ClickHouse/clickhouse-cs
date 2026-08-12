@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Numerics;
+using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 
@@ -743,6 +745,38 @@ public class PocoReadTests : AbstractConnectionTestFixture
 
         // The composite column has no typed read, so it stays on the boxed overload MapTo<T> uses.
         Assert.That(converter.Boxed, Is.EqualTo(new[] { "Composite|Array(Int32)" }));
+    }
+
+    public class JsonDocPoco
+    {
+        public JsonObject Doc { get; set; }
+    }
+
+    // A JSON column's typed-path hints live on the JsonType instance and drive its Read, but they are absent
+    // from ToString(). Two shapes differing only in those hints must not share a cached row reader, or the
+    // second query decodes with the first's hints.
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task QueryAsync_JsonColumnsDifferingOnlyInTypedPaths_DoNotShareARowReader()
+    {
+        client.RegisterPocoType<JsonDocPoco>();
+
+        var asLong = new List<JsonDocPoco>();
+        await foreach (var row in client.QueryAsync<JsonDocPoco>(
+            "SELECT '{\"a\": 1}'::JSON(a Int64) AS Doc").ConfigureAwait(false))
+        {
+            asLong.Add(row);
+        }
+
+        var asString = new List<JsonDocPoco>();
+        await foreach (var row in client.QueryAsync<JsonDocPoco>(
+            "SELECT '{\"a\": \"x\"}'::JSON(a String) AS Doc").ConfigureAwait(false))
+        {
+            asString.Add(row);
+        }
+
+        Assert.That((long)asLong[0].Doc["a"], Is.EqualTo(1L));
+        Assert.That((string)asString[0].Doc["a"], Is.EqualTo("x"));
     }
 
     [Test]

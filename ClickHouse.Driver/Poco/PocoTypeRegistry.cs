@@ -160,6 +160,7 @@ internal sealed class PocoTypeRegistry
     /// </summary>
     /// <param name="fieldNames">Wire column names, in order.</param>
     /// <param name="types">Resolved ClickHouse column types, in wire order (parallel to <paramref name="fieldNames"/>).</param>
+    /// <param name="rawTypeNames">The server's own type declarations, in wire order. These form the cache key.</param>
     /// <param name="mapping">The read mapping for <typeparamref name="T"/> (bindings + constructor).</param>
     /// <param name="withConverter">
     /// Whether the delegates should route values through the reader's <see cref="IReadValueConverter"/>.
@@ -167,24 +168,27 @@ internal sealed class PocoTypeRegistry
     /// parameters at all.
     /// </param>
     internal RowColumnReader<T>[] GetOrBuildRowReaders<T>(
-        string[] fieldNames, ClickHouseType[] types, PocoReadMapping<T> mapping, bool withConverter)
+        string[] fieldNames, ClickHouseType[] types, string[] rawTypeNames, PocoReadMapping<T> mapping, bool withConverter)
         where T : class
     {
         var byType = rowReaderCache.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<string, object>(StringComparer.Ordinal));
-        var key = BuildRowReaderKey(fieldNames, types, withConverter);
+        var key = BuildRowReaderKey(fieldNames, rawTypeNames, withConverter);
         return (RowColumnReader<T>[])byType.GetOrAdd(key, _ => BuildRowReaders(fieldNames, types, mapping, withConverter));
     }
 
-    // Signature over the wire shape: field name + resolved type per column, in order. '\t' and '\n' are the
-    // separators because no ClickHouse type name contains either. Only a backtick-quoted alias holding a
-    // literal tab or newline could collide, and the shape comes from the caller's own SQL. The converter flag
-    // leads, because it changes the shape of every delegate in the array.
-    private static string BuildRowReaderKey(string[] fieldNames, ClickHouseType[] types, bool withConverter)
+    // Signature over the wire shape: field name + the server's own type declaration per column, in order.
+    // The declaration rather than the resolved type's ToString(), because ToString() can drop state the type's
+    // Read depends on — a JsonType renders as "Json" whatever its typed-path hints, and a delegate closed over
+    // one instance would then decode another shape's payload. '\t' and '\n' are the separators because no
+    // ClickHouse type name contains either. Only a backtick-quoted alias holding a literal tab or newline
+    // could collide, and the shape comes from the caller's own SQL. The converter flag leads, because it
+    // changes the shape of every delegate in the array.
+    private static string BuildRowReaderKey(string[] fieldNames, string[] rawTypeNames, bool withConverter)
     {
-        var parts = new string[types.Length + 1];
+        var parts = new string[rawTypeNames.Length + 1];
         parts[0] = withConverter ? "conv" : string.Empty;
-        for (var i = 0; i < types.Length; i++)
-            parts[i + 1] = fieldNames[i] + "\t" + types[i].ToString();
+        for (var i = 0; i < rawTypeNames.Length; i++)
+            parts[i + 1] = fieldNames[i] + "\t" + rawTypeNames[i];
         return string.Join("\n", parts);
     }
 
