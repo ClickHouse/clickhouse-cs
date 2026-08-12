@@ -103,6 +103,7 @@ SEVERITY MODEL – WHAT DESERVES A COMMENT
 - New races, deadlocks, or serious concurrency issues.
 - Significant performance regression in a hot path.
 - Security issues
+- Significant changes or additions to the public API or its behavior are not reflected in the documentation at docs/
 
 **Majors** – serious but not catastrophic
 - Under-tested important edge cases or error paths.
@@ -162,6 +163,7 @@ Example:
 | Error messages clear and actionable? | ☐ Yes ☐ No ☐ N/A | |
 | Docs updated for user-facing changes? | ☐ Yes ☐ No ☐ N/A | |
 | Thread safety reviewed? | ☐ Yes ☐ No ☐ N/A | |
+| Documentation updated? | ☐ Yes ☐ No ☐ N/A | |
 
 ### 6) Performance & Safety Notes
 - Hot-path implications; memory peaks; streaming behavior
