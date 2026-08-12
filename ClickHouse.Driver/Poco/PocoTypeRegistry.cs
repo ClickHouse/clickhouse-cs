@@ -4,8 +4,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types;
+using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.Poco;
@@ -88,16 +90,18 @@ internal sealed class PocoTypeRegistry
             key, _ => BuildWriters(properties, getters, types));
     }
 
-    // Joins the resolved column types with a newline — a character no ClickHouse type name contains — so the
-    // key is injective even for composite types whose signature embeds commas (e.g. Tuple, Map, Decimal).
+    // Length-prefixes each resolved column type, so the key stays injective whatever the signatures contain:
+    // a JSON path hint is an arbitrary identifier which the server escapes and the client unescapes, so a
+    // signature can hold any character, separators included.
     // Keys on ClickHouseType.CacheSignature, not ToString(): a type whose Write consults state its
     // ToString() omits (JSON path hints) must not share a cache entry with another instance of that type.
     private static string BuildTypeSequenceKey(ClickHouseType[] types)
     {
-        var parts = new string[types.Length];
-        for (var i = 0; i < types.Length; i++)
-            parts[i] = types[i].CacheSignature;
-        return string.Join("\n", parts);
+        var builder = new StringBuilder();
+        foreach (var type in types)
+            builder.AppendLengthPrefixed(type.CacheSignature);
+
+        return builder.ToString();
     }
 
     private static Action<T, ExtendedBinaryWriter>[] BuildWriters<T>(

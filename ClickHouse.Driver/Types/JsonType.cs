@@ -172,9 +172,21 @@ internal class JsonType : ParameterizedType
     // Write picks WriteHintedValue vs WriteUnhintedValue per path from HintedTypes, which ToString() does
     // not render — so the hints, ordered for stability, have to be part of the signature. Without them two
     // differently hinted JSON columns share one cache entry and values go out against the wrong hints.
-    internal override string CacheSignature => HintedTypes.Count == 0
-        ? Name
-        : $"{Name}({string.Join(", ", HintedTypes.OrderBy(hint => hint.Key, StringComparer.Ordinal).Select(hint => $"{hint.Key} {hint.Value.CacheSignature}"))})";
+    // A path is an arbitrary identifier — the server escapes it, the client discloses it back — so it can
+    // hold whatever character a separator uses, and is length-prefixed to keep the signature injective.
+    internal override string CacheSignature
+    {
+        get
+        {
+            if (HintedTypes.Count == 0)
+                return Name;
+
+            var builder = new StringBuilder(Name).Append('(');
+            foreach (var hint in HintedTypes.OrderBy(hint => hint.Key, StringComparer.Ordinal))
+                builder.AppendLengthPrefixed(hint.Key).AppendLengthPrefixed(hint.Value.CacheSignature);
+            return builder.Append(')').ToString();
+        }
+    }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {

@@ -46,7 +46,8 @@ internal class QBitType : ParameterizedType
 
     public override string ToString() => $"{Name}({ElementType}, {Dimension})";
 
-    internal override string CacheSignature => $"{Name}({ElementType.CacheSignature}, {Dimension})";
+    internal override string CacheSignature =>
+        ComposeCacheSignature(children => $"{Name}({children[0]}, {Dimension})", ElementType);
 
     public override object Read(ExtendedBinaryReader reader)
     {
