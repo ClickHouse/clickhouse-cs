@@ -14,11 +14,9 @@ internal class Enum8Type : EnumType, ITypedReader<string>, ITypedReader<int>
 
     public override string Name => "Enum8";
 
-    // The boxed read returns the canonical label. The typed read fast path can additionally produce the raw
-    // numeric value from the same wire byte (explicit impls because they differ only by return type), so both
-    // are byte-identical to the boxed path by construction. The numeric read deliberately skips the label
-    // lookup — it is the stored value itself, so unlike the label read it cannot fail on a value that is
-    // absent from the column's enum definition.
+    // The typed read offers the raw numeric value as well as the label. It skips the label lookup by design:
+    // the stored value stands on its own, so unlike the label read it cannot fail on a value the column's
+    // enum definition omits.
     public override object Read(ExtendedBinaryReader reader) => ReadLabel(reader);
 
     string ITypedReader<string>.ReadValue(ExtendedBinaryReader reader) => ReadLabel(reader);

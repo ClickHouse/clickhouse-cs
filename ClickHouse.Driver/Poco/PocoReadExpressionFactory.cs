@@ -8,22 +8,18 @@ using ClickHouse.Driver.Types;
 namespace ClickHouse.Driver.Poco;
 
 /// <summary>
-/// Builds box-free read expressions for the POCO read (materialization) fast path (#509).
+/// Builds box-free read expressions for the POCO read (materialization) fast path.
 ///
-/// The default read path decodes each column via <see cref="ClickHouseType.Read(ExtendedBinaryReader)"/>
-/// — which returns <see cref="object"/> and so boxes every value-type column, once per value, per row —
-/// stores it into the reader's shared <c>object[]</c> row buffer, and then unboxes it inside a compiled
-/// <c>Action&lt;T,object&gt;</c> setter (<c>MapTo&lt;T&gt;</c>). For columns a type can decode straight into the
-/// target CLR type, we instead compile a fused delegate that reads the strongly-typed value from the stream
-/// and assigns it to the property, eliminating both the box and the unbox and bypassing the row buffer.
+/// The default path boxes every value-type column through
+/// <see cref="ClickHouseType.Read(ExtendedBinaryReader)"/> into the reader's shared <c>object[]</c> row
+/// buffer, then unboxes it in a compiled <c>Action&lt;T,object&gt;</c> setter (<c>MapTo&lt;T&gt;</c>). Where a
+/// type can decode straight into the target CLR type, this compiles a fused read-and-assign delegate
+/// instead, dropping both the box and the unbox.
 ///
-/// Dispatch is driven by <see cref="ITypedReader{T}"/>: a column type produces the fast path for a given
-/// property CLR type iff it implements <c>ITypedReader&lt;thatType&gt;</c>. This also unlocks multiple read
-/// representations of one column (e.g. a DateTime column as <see cref="DateTime"/>/<see cref="DateTimeOffset"/>/
-/// <see cref="DateOnly"/>, a String column as <see cref="string"/>/<c>byte[]</c>), each an exact-typed read.
-/// <see cref="NullableType"/> and <see cref="LowCardinalityType"/> are handled transparently. Anything with
-/// no typed reader (composites, Variant/Dynamic/JSON, or an unsupported target type) returns <c>null</c> and
-/// the caller falls back to the boxed path for that column.
+/// Dispatch is driven by <see cref="ITypedReader{T}"/>: a column type takes the fast path for a property CLR
+/// type iff it implements <c>ITypedReader&lt;thatType&gt;</c>, which also lets one column offer several
+/// representations. <see cref="NullableType"/> and <see cref="LowCardinalityType"/> are transparent. Anything
+/// with no typed reader returns <c>null</c>, and the caller falls back to the boxed path for that column.
 /// </summary>
 internal static class PocoReadExpressionFactory
 {
@@ -55,8 +51,8 @@ internal static class PocoReadExpressionFactory
             return TryBuildNullableRead(nullableType, reader, targetClrType);
 
         // Map column bound to a List<KeyValuePair<K,V>> or KeyValuePair<K,V>[] property: materialize the
-        // entries in wire order (preserving duplicate keys) instead of the boxed Dictionary. A Dictionary
-        // property has no typed reader here and falls through to the boxed path below, unchanged.
+        // entries in wire order, preserving duplicate keys. A Dictionary property falls through to the
+        // boxed path below.
         if (type is MapType mapType)
             return TryBuildMapRead(mapType, reader, targetClrType);
 
@@ -72,10 +68,9 @@ internal static class PocoReadExpressionFactory
         return TryBuildTypedRead(type, reader, targetClrType);
     }
 
-    // Nullable(T) column: read the 1-byte null marker (byte-identical to NullableType.Read, which treats
-    // marker > 0 as null), then either the default (null) or the underlying value. Only fires when the target
-    // can represent null (a reference type or Nullable<U>); a non-nullable value-type property on a nullable
-    // column falls back to the boxed path, which correctly throws on an actual null.
+    // Nullable(T) column: read the 1-byte null marker, then either null or the underlying value. Only fires
+    // when the target can represent null; a non-nullable value-type property on a nullable column falls back
+    // to the boxed path, which correctly throws on an actual null.
     private static Expression TryBuildNullableRead(NullableType nullableType, Expression reader, Type targetClrType)
     {
         var targetUnderlying = Nullable.GetUnderlyingType(targetClrType);
@@ -91,8 +86,8 @@ internal static class PocoReadExpressionFactory
         var hasValue = inner.Type == targetClrType ? inner : Expression.Convert(inner, targetClrType);
 
         var marker = Expression.Variable(typeof(byte), "marker");
-        // marker > 0 => null; else the value. The value branch reads the underlying; the null branch does not
-        // (the underlying wrote nothing), matching NullableType.Read's short-circuit.
+        // Only the value branch reads the underlying — the null branch wrote nothing on the wire — matching
+        // NullableType.Read's short-circuit.
         return Expression.Block(
             new[] { marker },
             Expression.Assign(marker, Expression.Call(reader, ReadByteMethod)),

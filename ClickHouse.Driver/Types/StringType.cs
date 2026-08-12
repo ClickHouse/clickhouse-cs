@@ -16,8 +16,7 @@ internal class StringType : ClickHouseType, ITypedReader<string>, ITypedReader<b
     public override object Read(ExtendedBinaryReader reader)
         => ReadAsByteArray ? ReadByteArray(reader) : ReadStringValue(reader);
 
-    // Both representations are always available to the typed read fast path; the boxed Read picks per the
-    // client's ReadAsByteArray setting. Explicit interface impls because they differ only by return type.
+    // Both representations stay available to the typed read; only the boxed Read follows ReadAsByteArray.
     string ITypedReader<string>.ReadValue(ExtendedBinaryReader reader) => ReadStringValue(reader);
 
     byte[] ITypedReader<byte[]>.ReadValue(ExtendedBinaryReader reader) => ReadByteArray(reader);

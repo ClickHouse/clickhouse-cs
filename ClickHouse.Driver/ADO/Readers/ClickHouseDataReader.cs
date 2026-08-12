@@ -404,11 +404,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 
     /// <summary>
-    /// If <typeparamref name="T"/> is registered for read and the current result shape has a full box-free
-    /// fast path, returns the per-wire-column materializer delegates and the constructor; otherwise returns
-    /// false and the caller should use the <see cref="Read"/> + <see cref="MapTo{T}"/> loop. Disabled when a
-    /// read value converter is present, since the boxed path routes every value through it (see
-    /// <see cref="MapTo{T}"/>), and that conversion must not be bypassed.
+    /// If <typeparamref name="T"/> is registered for read, returns the per-wire-column materializer delegates
+    /// and the constructor; otherwise returns false and the caller uses the <see cref="Read"/> +
+    /// <see cref="MapTo{T}"/> loop. Disabled when a read value converter is present, because the boxed path
+    /// routes every value through it and that conversion must not be bypassed.
     /// </summary>
     internal bool TryGetRowMaterializer<T>(out Action<ExtendedBinaryReader, T>[] materializers, out Func<T> constructor)
         where T : class
@@ -433,10 +432,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 
     /// <summary>
-    /// Reads and materializes the next row straight from the stream via the fast-path delegates, bypassing
-    /// the shared <c>object[]</c> row buffer (and its per-value boxing). Returns false at end of stream.
-    /// Mirrors <see cref="Read"/>'s mid-stream server-exception handling. The delegates consume every wire
-    /// column in order, so the stream stays aligned even for columns the POCO does not map.
+    /// Reads the next row straight from the stream via the fast-path delegates, bypassing the shared
+    /// <c>object[]</c> row buffer and its per-value boxing. Returns false at end of stream, and mirrors
+    /// <see cref="Read"/>'s mid-stream server-exception handling. The delegates consume every wire column in
+    /// order, so the stream stays aligned even for columns the POCO does not map.
     /// </summary>
     internal bool TryMaterializeNextRow<T>(Action<ExtendedBinaryReader, T>[] materializers, Func<T> constructor, out T value)
         where T : class

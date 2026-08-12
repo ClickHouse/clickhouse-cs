@@ -62,12 +62,11 @@ internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWri
     }
 
     public override object Read(ExtendedBinaryReader reader)
-        // Cast to object so the ternary does not unify decimal into ClickHouseDecimal via its implicit
-        // conversion (which would make the UseBigDecimal=false branch return the wrong type).
+        // The cast to object stops the ternary unifying decimal into ClickHouseDecimal through its implicit
+        // conversion, which would give the UseBigDecimal=false branch the wrong type.
         => UseBigDecimal ? ReadClickHouseDecimal(reader) : (object)ReadDecimal(reader);
 
-    // Both representations are always available to the typed read fast path; the boxed Read picks per the
-    // UseBigDecimal setting. Explicit interface impls because they differ only by return type.
+    // Both representations stay available to the typed read; only the boxed Read follows UseBigDecimal.
     decimal ITypedReader<decimal>.ReadValue(ExtendedBinaryReader reader) => ReadDecimal(reader);
 
     ClickHouseDecimal ITypedReader<ClickHouseDecimal>.ReadValue(ExtendedBinaryReader reader) => ReadClickHouseDecimal(reader);

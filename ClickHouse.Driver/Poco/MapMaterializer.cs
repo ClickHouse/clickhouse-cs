@@ -7,13 +7,14 @@ namespace ClickHouse.Driver.Poco;
 
 /// <summary>
 /// Reads a ClickHouse <c>Map(K,V)</c> column into an ordered sequence of <see cref="KeyValuePair{TKey,TValue}"/>
-/// for the POCO read fast path, as an alternative to the <see cref="System.Collections.Generic.Dictionary{TKey,TValue}"/>
-/// the boxed <see cref="MapType.Read"/> produces. Unlike the dictionary, this preserves the on-wire order and
-/// any duplicate keys (a ClickHouse Map is physically an array of key/value tuples).
+/// for the POCO read fast path, preserving the on-wire order and any duplicate keys that the boxed
+/// <see cref="MapType.Read"/>'s dictionary collapses. The property type selects this over a dictionary, so it
+/// works per-property and independently of the client-level <see cref="MapReadMode"/>.
 ///
-/// Element values are decoded through the key/value types' own (boxed) <see cref="ClickHouseType.Read"/> — a Map
-/// is a composite column, not a box-free scalar — so <typeparamref name="TKey"/>/<typeparamref name="TValue"/>
-/// must exactly match the map's key/value framework types; the caller (<c>PocoReadExpressionFactory</c>) enforces this.
+/// A Map is a composite column, so keys and values still go through the boxed
+/// <see cref="ClickHouseType.Read"/>; only the pair itself is built unboxed. <typeparamref name="TKey"/> and
+/// <typeparamref name="TValue"/> must therefore match the map's framework types exactly, which
+/// <c>PocoReadExpressionFactory</c> enforces.
 /// </summary>
 internal static class MapMaterializer
 {

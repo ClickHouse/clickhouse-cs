@@ -15,9 +15,9 @@ internal class Int128Type : AbstractBigIntegerType
     public override string ToString() => "Int128";
 
 #if NET8_0_OR_GREATER
-    // Native box-free read: the wire form is 16-byte little-endian two's-complement, identical to the layout
-    // BigInteger uses, so this yields the same value as the BigInteger path without its internal heap array.
-    // Explicit impl so it does not hide the base ITypedReader<BigInteger>.ReadValue (same name/params).
+    // The wire form is 16-byte little-endian two's-complement, the same layout BigInteger uses, so this gives
+    // the same value without its internal heap array. Explicit impl so it does not hide the base
+    // ITypedReader<BigInteger>.ReadValue.
     System.Int128 ITypedReader<System.Int128>.ReadValue(ExtendedBinaryReader reader)
         => BinaryPrimitives.ReadInt128LittleEndian(reader.ReadBytes(Size));
 #endif

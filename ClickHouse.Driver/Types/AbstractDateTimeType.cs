@@ -118,9 +118,8 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
 
     public override Type FrameworkType => typeof(DateTime);
 
-    // The boxed read returns the canonical DateTime, historically the only representation. The typed read
-    // fast path can additionally produce DateTimeOffset / DateOnly from the same wire value (explicit impls
-    // because they differ only by return type). Each is byte-identical to the boxed path by construction.
+    // The boxed read keeps returning DateTime, historically the only representation. The typed read can also
+    // produce DateTimeOffset or DateOnly from the same wire value.
     public override object Read(ExtendedBinaryReader reader) => ReadDateTime(reader);
 
     DateTime ITypedReader<DateTime>.ReadValue(ExtendedBinaryReader reader) => ReadDateTime(reader);
@@ -129,12 +128,11 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
 
     DateOnly ITypedReader<DateOnly>.ReadValue(ExtendedBinaryReader reader) => ReadDateOnly(reader);
 
-    // Decodes the wire form into a DateTime — the historical Read result. Subclasses implement per their
-    // on-wire encoding (seconds / ticks / days).
+    // Subclasses decode per their on-wire encoding: seconds, ticks or days.
     protected abstract DateTime ReadDateTime(ExtendedBinaryReader reader);
 
-    // Default derives an offset-0 value from the decoded DateTime; correct for the date-only subtypes, whose
-    // DateTime is UTC-kind. Timezone-aware subtypes override to derive the offset from the source instant.
+    // Offset 0 is correct for the date-only subtypes, whose DateTime is UTC-kind. Timezone-aware subtypes
+    // override to derive the offset from the source instant.
     protected virtual DateTimeOffset ReadDateTimeOffset(ExtendedBinaryReader reader) => new(ReadDateTime(reader), TimeSpan.Zero);
 
     protected virtual DateOnly ReadDateOnly(ExtendedBinaryReader reader) => DateOnly.FromDateTime(ReadDateTime(reader));
