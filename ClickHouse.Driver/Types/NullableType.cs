@@ -31,6 +31,8 @@ internal class NullableType : ParameterizedType
 
     public override string ToString() => $"{Name}({UnderlyingType})";
 
+    internal override string CacheSignature => $"{Name}({UnderlyingType.CacheSignature})";
+
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
         if (value == null || value is DBNull)

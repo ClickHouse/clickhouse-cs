@@ -1,0 +1,1 @@
+* Fixed POCO binary inserts writing `JSON` columns against the wrong typed-path hints when the same POCO type is inserted into two tables whose `JSON` columns declare different hints. The second insert reused the first table's cached write delegates, so values were written silently mis-typed (issue #542).

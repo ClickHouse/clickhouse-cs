@@ -46,6 +46,8 @@ internal class QBitType : ParameterizedType
 
     public override string ToString() => $"{Name}({ElementType}, {Dimension})";
 
+    internal override string CacheSignature => $"{Name}({ElementType.CacheSignature}, {Dimension})";
+
     public override object Read(ExtendedBinaryReader reader)
     {
         // QBit wire format is Array(UnderlyingType)

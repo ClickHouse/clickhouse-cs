@@ -162,6 +162,8 @@ internal class MapType : ParameterizedType
 
     public override string ToString() => $"{Name}({keyType}, {valueType})";
 
+    internal override string CacheSignature => $"{Name}({keyType.CacheSignature}, {valueType.CacheSignature})";
+
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
         if (value is IDictionary dict)

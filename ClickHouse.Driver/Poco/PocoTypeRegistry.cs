@@ -89,12 +89,14 @@ internal sealed class PocoTypeRegistry
     }
 
     // Joins the resolved column types with a newline — a character no ClickHouse type name contains — so the
-    // key is injective even for composite types whose ToString() embeds commas (e.g. Tuple, Map, Decimal).
+    // key is injective even for composite types whose signature embeds commas (e.g. Tuple, Map, Decimal).
+    // Keys on ClickHouseType.CacheSignature, not ToString(): a type whose Write consults state its
+    // ToString() omits (JSON path hints) must not share a cache entry with another instance of that type.
     private static string BuildTypeSequenceKey(ClickHouseType[] types)
     {
         var parts = new string[types.Length];
         for (var i = 0; i < types.Length; i++)
-            parts[i] = types[i].ToString();
+            parts[i] = types[i].CacheSignature;
         return string.Join("\n", parts);
     }
 

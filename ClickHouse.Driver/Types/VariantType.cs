@@ -42,6 +42,8 @@ internal class VariantType : ParameterizedType
 
     public override string ToString() => $"{Name}({string.Join(",", UnderlyingTypes.Select(t => t.ToString()))})";
 
+    internal override string CacheSignature => $"{Name}({string.Join(",", UnderlyingTypes.Select(t => t.CacheSignature))})";
+
     public override object Read(ExtendedBinaryReader reader)
     {
         var typeIndex = reader.ReadByte();

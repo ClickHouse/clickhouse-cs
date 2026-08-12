@@ -169,6 +169,13 @@ internal class JsonType : ParameterizedType
 
     public override string ToString() => Name;
 
+    // Write picks WriteHintedValue vs WriteUnhintedValue per path from HintedTypes, which ToString() does
+    // not render — so the hints, ordered for stability, have to be part of the signature. Without them two
+    // differently hinted JSON columns share one cache entry and values go out against the wrong hints.
+    internal override string CacheSignature => HintedTypes.Count == 0
+        ? Name
+        : $"{Name}({string.Join(", ", HintedTypes.OrderBy(hint => hint.Key, StringComparer.Ordinal).Select(hint => $"{hint.Key} {hint.Value.CacheSignature}"))})";
+
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
         // String mode: serialize everything to JSON string, let server parse
