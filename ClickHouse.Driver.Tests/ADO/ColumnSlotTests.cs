@@ -243,7 +243,7 @@ public class ColumnSlotTests
 
     // The factory dispatches through a hand-written table of ValueSlot<T>/NullableSlot<T> constructors rather
     // than MakeGenericMethod, so that NativeAOT and trimming can see every instantiation the reader needs.
-    // The cost of giving up runtime generic construction is that the table no longer maintains itself: adding
+    // The cost of giving up runtime generic construction is that the table does not maintain itself: adding
     // an ITypedReader<T> for a new T and forgetting the entry would silently demote that column to the boxed
     // path — values still correct, allocation quietly back. Nothing else would catch it, so this does.
     [Test]

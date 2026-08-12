@@ -166,35 +166,38 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private protected ClickHouseType[] RawTypes { get; set; }
 
     /// <summary>
-    /// Shared body for the strict typed accessors — every one of which was <c>(T)GetValue(ordinal)</c> before
-    /// column slots and keeps exactly that meaning here. This is the path compiled ORM mappers drive (linq2db
-    /// inlines <c>GetInt64</c>/<c>GetDouble</c>/<c>GetDateTime</c>/… per column per row), so it is where the
-    /// boxing elimination is worth the most.
+    /// Shared body for the strict typed accessors, which cast rather than coerce: the value must already be
+    /// the requested <typeparamref name="T"/>. This is the path compiled ORM mappers drive (linq2db inlines
+    /// <c>GetInt64</c>/<c>GetDouble</c>/<c>GetDateTime</c>/… per column per row), so it is where the boxing
+    /// elimination is worth the most.
     /// </summary>
     /// <remarks>
-    /// With an <see cref="IReadValueConverter"/> configured the accessor keeps routing through
-    /// <see cref="GetValue"/>, so it still calls <c>ConvertValue(object, …)</c> as before. De-boxing here would
-    /// switch it to <c>ConvertValue&lt;T&gt;</c>, which is observable to a converter whose two overloads disagree
-    /// (the generic one matching on <c>typeof(T)</c>, the object one on the value's runtime type) — not worth a
-    /// silent semantic change for the rare converter case. <see cref="GetFieldValue{T}"/> stays on
-    /// <c>ConvertValue&lt;T&gt;</c>, the overload it already called, so both overloads are still reached.
+    /// An <see cref="IReadValueConverter"/> does not force the accessor onto the boxed path. The value comes
+    /// out of the slot unboxed and converts through <c>ConvertValue&lt;T&gt;</c>, the overload
+    /// <see cref="GetFieldValue{T}"/> uses for a typed read. Only genuinely boxed reads —
+    /// <see cref="GetValue"/>, <see cref="GetValues"/>, and the coercing fall-throughs below — use
+    /// <c>ConvertValue(object, …)</c>.
     /// </remarks>
     private T GetTypedValue<T>(int ordinal)
-        => readValueConverter == null ? GetSlotValue<T>(ordinal) : (T)GetValue(ordinal);
+    {
+        var value = GetSlotValue<T>(ordinal);
+        return readValueConverter == null ? value : ConvertTyped(ordinal, value);
+    }
+
+    // Applies the converter on the typed overload to a value already read out of its slot.
+    private T ConvertTyped<T>(int ordinal, T value)
+        => readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
 
     // Unlike its neighbours this one coerces rather than casts, so only an exact Bool column takes the fast path;
     // anything else keeps Convert.ToBoolean's widening and its exception messages. A NULL cell falls through too,
     // so Convert.ToBoolean(DBNull.Value) still throws exactly as it did.
     public override bool GetBoolean(int ordinal)
     {
-        if (readValueConverter == null)
-        {
-            var slot = Slot(ordinal);
-            if (slot is ValueSlot<bool> boolSlot)
-                return boolSlot.Value;
-            if (slot is NullableSlot<bool> nullableSlot && nullableSlot.HasValue)
-                return nullableSlot.Value;
-        }
+        var slot = Slot(ordinal);
+        if (slot is ValueSlot<bool> boolSlot)
+            return readValueConverter == null ? boolSlot.Value : ConvertTyped(ordinal, boolSlot.Value);
+        if (slot is NullableSlot<bool> nullableSlot && nullableSlot.HasValue)
+            return readValueConverter == null ? nullableSlot.Value : ConvertTyped(ordinal, nullableSlot.Value);
 
         return Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
     }
@@ -218,21 +221,23 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override decimal GetDecimal(int ordinal)
     {
-        if (readValueConverter == null)
+        // Which of the two representations a Decimal column resolves to is the UseBigDecimal setting's doing;
+        // both reach the same decimal without a box, nullable or not. A NULL cell falls through to the boxed
+        // path below, where casting DBNull.Value throws exactly as it did.
+        var slot = Slot(ordinal);
+        decimal? unboxed = slot switch
         {
-            // Which of the two representations a Decimal column resolves to is the UseBigDecimal setting's doing;
-            // both reach the same decimal without a box, nullable or not. A NULL cell falls through to the boxed
-            // path below, where casting DBNull.Value throws exactly as it did.
-            var slot = Slot(ordinal);
-            if (slot is ValueSlot<decimal> decimalSlot)
-                return decimalSlot.Value;
-            if (slot is NullableSlot<decimal> nullableDecimalSlot && nullableDecimalSlot.HasValue)
-                return nullableDecimalSlot.Value;
-            if (slot is ValueSlot<ClickHouseDecimal> bigDecimalSlot)
-                return bigDecimalSlot.Value.ToDecimal(CultureInfo.InvariantCulture);
-            if (slot is NullableSlot<ClickHouseDecimal> nullableBigDecimalSlot && nullableBigDecimalSlot.HasValue)
-                return nullableBigDecimalSlot.Value.ToDecimal(CultureInfo.InvariantCulture);
-        }
+            ValueSlot<decimal> decimalSlot => decimalSlot.Value,
+            NullableSlot<decimal> n when n.HasValue => n.Value,
+            ValueSlot<ClickHouseDecimal> bigDecimalSlot => bigDecimalSlot.Value.ToDecimal(CultureInfo.InvariantCulture),
+            NullableSlot<ClickHouseDecimal> nb when nb.HasValue => nb.Value.ToDecimal(CultureInfo.InvariantCulture),
+            _ => null,
+        };
+
+        // A ClickHouseDecimal column is narrowed first, so the converter sees the decimal this accessor
+        // returns rather than the column's own representation.
+        if (unboxed.HasValue)
+            return readValueConverter == null ? unboxed.Value : ConvertTyped(ordinal, unboxed.Value);
 
         var value = GetValue(ordinal);
         return value is ClickHouseDecimal clickHouseDecimal ? clickHouseDecimal.ToDecimal(CultureInfo.InvariantCulture) : (decimal)value;
@@ -273,8 +278,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     // shape keeps ToString()'s coercion, including the quirk that a NULL cell yields "" rather than null, because
     // DBNull.Value.ToString() is the empty string.
     public override string GetString(int ordinal)
-        => readValueConverter == null && Slot(ordinal) is ValueSlot<string> stringSlot
-            ? stringSlot.Value
+        => Slot(ordinal) is ValueSlot<string> stringSlot
+            ? (readValueConverter == null ? stringSlot.Value : ConvertTyped(ordinal, stringSlot.Value))
             : GetValue(ordinal)?.ToString();
 
     /// <summary>
