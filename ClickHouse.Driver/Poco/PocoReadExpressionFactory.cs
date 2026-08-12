@@ -27,10 +27,10 @@ internal static class PocoReadExpressionFactory
         typeof(System.IO.BinaryReader).GetMethod(nameof(System.IO.BinaryReader.ReadByte), Type.EmptyTypes);
 
     private static readonly MethodInfo MapReadListMethod =
-        typeof(MapMaterializer).GetMethod(nameof(MapMaterializer.ReadList));
+        typeof(MapType).GetMethod(nameof(MapType.ReadList));
 
     private static readonly MethodInfo MapReadArrayMethod =
-        typeof(MapMaterializer).GetMethod(nameof(MapMaterializer.ReadArray));
+        typeof(MapType).GetMethod(nameof(MapType.ReadArray));
 
     /// <summary>
     /// Returns an expression that reads the column value of exact CLR type <paramref name="targetClrType"/>
@@ -127,7 +127,7 @@ internal static class PocoReadExpressionFactory
             return null;
 
         var method = (isArray ? MapReadArrayMethod : MapReadListMethod).MakeGenericMethod(kvpArgs[0], kvpArgs[1]);
-        return Expression.Call(method, Expression.Constant(map), reader);
+        return Expression.Call(Expression.Constant(map), method, reader);
     }
 
     // ((ITypedReader<clrType>)type).ReadValue(reader) — result typed exactly clrType, no box. Invariance in T

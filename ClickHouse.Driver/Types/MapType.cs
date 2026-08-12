@@ -160,6 +160,45 @@ internal class MapType : ParameterizedType
         return dict;
     }
 
+    /// <summary>
+    /// Reads the map into an ordered sequence of <see cref="KeyValuePair{TKey,TValue}"/> for the POCO read
+    /// fast path, preserving the on-wire order and any duplicate keys that the <see cref="Read"/> dictionary
+    /// collapses. The POCO property type selects this, so it applies per-property and independently of
+    /// <see cref="MapReadMode"/>.
+    ///
+    /// A map is a composite column, so keys and values still go through the boxed
+    /// <see cref="ClickHouseType.Read"/>; only the pair itself is built unboxed. <typeparamref name="TKey"/>
+    /// and <typeparamref name="TValue"/> must therefore match the key/value framework types exactly, which
+    /// <c>PocoReadExpressionFactory</c> enforces.
+    /// </summary>
+    public List<KeyValuePair<TKey, TValue>> ReadList<TKey, TValue>(ExtendedBinaryReader reader)
+    {
+        var length = reader.Read7BitEncodedInt();
+        var list = new List<KeyValuePair<TKey, TValue>>(length);
+        for (var i = 0; i < length; i++)
+            list.Add(ReadPair<TKey, TValue>(reader));
+        return list;
+    }
+
+    /// <inheritdoc cref="ReadList{TKey,TValue}"/>
+    public KeyValuePair<TKey, TValue>[] ReadArray<TKey, TValue>(ExtendedBinaryReader reader)
+    {
+        var length = reader.Read7BitEncodedInt();
+        var array = new KeyValuePair<TKey, TValue>[length];
+        for (var i = 0; i < length; i++)
+            array[i] = ReadPair<TKey, TValue>(reader);
+        return array;
+    }
+
+    // Keys are never null in a ClickHouse map. A null value (Map(K, Nullable(V))) becomes default(TValue),
+    // matching Read's ClearDBNull, since TValue is the nullable or reference framework type.
+    private KeyValuePair<TKey, TValue> ReadPair<TKey, TValue>(ExtendedBinaryReader reader)
+    {
+        var key = (TKey)KeyType.Read(reader);
+        var value = ClearDBNull(ValueType.Read(reader));
+        return new KeyValuePair<TKey, TValue>(key, value is null ? default : (TValue)value);
+    }
+
     public override string ToString() => $"{Name}({keyType}, {valueType})";
 
     internal override string CacheSignature =>
