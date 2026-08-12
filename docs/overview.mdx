@@ -109,6 +109,7 @@ Below is a full list of all the settings, their default values, and their effect
 | ReadValueConverter | `IReadValueConverter` | `null` | — | Custom transform applied to values returned by the data reader; see [Custom read value conversion](#read-value-conversion) |
 | JsonReadMode | `JsonReadMode` | `Binary` | `JsonReadMode` | How JSON data is returned: `Binary` (returns `JsonObject`) or `String` (returns raw JSON string) |
 | JsonWriteMode | `JsonWriteMode` | `String` | `JsonWriteMode` | How JSON data is sent: `String` (serializes via `JsonSerializer`, accepts all inputs) or `Binary` (registered POCOs only with type hints) |
+| MapReadMode | `MapReadMode` | `Dictionary` | `MapReadMode` | How `Map(K, V)` data is returned: `Dictionary` (returns `Dictionary<K, V>`; a repeated key keeps only its last value) or `KeyValuePairs` (returns `List<KeyValuePair<K, V>>`, keeping every pair). See [Map type](#type-map-reading-map) |
 
 ### Session management {#session-management}
 
@@ -1506,6 +1507,36 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 
 ---
 
+#### Map type {#type-map-reading-map}
+
+| ClickHouse Type | .NET Type | Notes |
+|-----------------|-----------|-------|
+| Map(K, V) | `Dictionary<K, V>` | Default (`MapReadMode=Dictionary`) |
+| Map(K, V) | `List<KeyValuePair<K, V>>` | When `MapReadMode=KeyValuePairs` |
+
+A ClickHouse `Map(K, V)` is physically an `Array(Tuple(K, V))` and can hold several entries with the same key. A `Dictionary` cannot, so in the default mode a repeated key keeps only its last value and the earlier pairs are dropped. The `MapReadMode` setting selects the representation:
+
+- **`Dictionary` (default)**: Returns `Dictionary<K, V>`.
+
+- **`KeyValuePairs`**: Returns `List<KeyValuePair<K, V>>` in the order the server sent the pairs, so every pair is preserved, including entries which repeat a key.
+
+```csharp
+// Configure key-value-pair mode via settings
+var settings = new ClickHouseClientSettings("Host=localhost")
+{
+    MapReadMode = MapReadMode.KeyValuePairs
+};
+
+// Or via connection string
+// "Host=localhost;MapReadMode=KeyValuePairs"
+```
+
+The mode selects the framework type of a `Map` column, so it also applies to `GetFieldValue<T>`, the schema types the driver reports, and POCO property mapping. It applies wherever a map appears in a column's type tree — `Array(Map(...))`, `Map(K, Map(...))`, `Tuple(..., Map(...))` and `Dynamic` included.
+
+Both representations are accepted on the write path in either mode — see [writing maps](#type-map-writing-other).
+
+---
+
 #### Other types {#type-map-reading-other}
 
 | ClickHouse Type | .NET Type |
@@ -1517,7 +1548,7 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 | Dynamic | See note |
 | Array(T) | `T[]` (nested `Array(Array(T))` reads as jagged `T[][]`; use `reader.GetFieldValue<T[,]>(ordinal)` to materialize rectangular data as a multidimensional CLR array) |
 | Tuple(T1, T2, ...) | `Tuple<T1, T2, ...>` / `LargeTuple` |
-| Map(K, V) | `Dictionary<K, V>` |
+| Map(K, V) | `Dictionary<K, V>`, or `List<KeyValuePair<K, V>>` when `MapReadMode=KeyValuePairs` — see [Map type](#type-map-reading-map) |
 | Nullable(T) | `T?` |
 | Enum8 | `string` |
 | Enum16 | `string` |
@@ -1799,7 +1830,7 @@ Property name matching with column type hints is case-sensitive. A property `Use
 | Dynamic | — | **Not supported** (throws `NotImplementedException`) |
 | Array(T) | `IList`, `null` | Null writes empty array. For nested types (`Array(Array(T))` and deeper) both jagged shapes (`T[][]`, `List<List<T>>`) and rectangular multidimensional CLR arrays (`T[,]`, `T[,,]`, …) are accepted; the CLR rank must match the ClickHouse nesting depth. |
 | Tuple(T1, T2, ...) | `ITuple`, `IList` | Element count must match tuple arity. See [ValueTuple caveat](#valuetuple-caveat) for >7 elements. |
-| Map(K, V) | `IDictionary` | |
+| Map(K, V) | `IDictionary`, `IEnumerable<KeyValuePair<K, V>>` | A pair sequence (for example the `List<KeyValuePair<K, V>>` produced by `MapReadMode=KeyValuePairs`) is accepted in either read mode, and can repeat a key. Applies to binary inserts and to query parameters |
 | Nullable(T) | `null`, `DBNull`, or types accepted by T | Writes null flag byte before value |
 | Enum8 | `string`, `sbyte`, numeric types | String looked up in enum dictionary |
 | Enum16 | `string`, `short`, numeric types | String looked up in enum dictionary |
