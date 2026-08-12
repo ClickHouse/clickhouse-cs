@@ -329,7 +329,15 @@ internal static class TypeConverter
 
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
         {
-            return new ArrayType() { UnderlyingType = ToClickHouseType(type.GetGenericArguments()[0]) };
+            // A list of key-value pairs is the MapReadMode.KeyValuePairs representation of a map
+            var elementType = type.GetGenericArguments()[0];
+            if (IsKeyValuePairType(elementType))
+            {
+                var pairTypes = elementType.GetGenericArguments().Select(ToClickHouseType).ToArray();
+                return new MapType { UnderlyingTypes = Tuple.Create(pairTypes[0], pairTypes[1]) };
+            }
+
+            return new ArrayType() { UnderlyingType = ToClickHouseType(elementType) };
         }
 
         var underlyingType = Nullable.GetUnderlyingType(type);
@@ -425,6 +433,19 @@ internal static class TypeConverter
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
         {
             var list = (System.Collections.IList)value;
+
+            // A list of key-value pairs is the MapReadMode.KeyValuePairs representation of a map;
+            // peek at the first pair so value-based inference propagates into keys and values
+            var listElementType = type.GetGenericArguments()[0];
+            if (IsKeyValuePairType(listElementType))
+            {
+                var pairTypes = listElementType.GetGenericArguments();
+                var firstPair = list.Count > 0 ? MapType.EnumerateEntries(list).First() : default;
+                var mapKeyType = firstPair.Key is { } pairKey ? ToClickHouseType(pairKey) : ToClickHouseType(pairTypes[0]);
+                var mapValueType = firstPair.Value is { } pairValue ? ToClickHouseType(pairValue) : ToClickHouseType(pairTypes[1]);
+                return new MapType { UnderlyingTypes = Tuple.Create(mapKeyType, mapValueType) };
+            }
+
             if (list.Count > 0 && list[0] is { } firstElement)
                 return new ArrayType { UnderlyingType = ToClickHouseType(firstElement) };
             return new ArrayType { UnderlyingType = ToClickHouseType(type.GetGenericArguments()[0]) };
@@ -476,6 +497,9 @@ internal static class TypeConverter
         // 3. No ambiguity for this type; delegate to type-based inference
         return ToClickHouseType(type);
     }
+
+    private static bool IsKeyValuePairType(Type type) =>
+        type.IsGenericType && type.GetGenericTypeDefinition() == typeof(KeyValuePair<,>);
 
     private static bool IsTupleType(Type type) =>
         type.IsGenericType && (

@@ -157,6 +157,16 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
     }
 
     /// <summary>
+    /// Gets or sets how Map columns are returned when reading data.
+    /// Default: Dictionary
+    /// </summary>
+    public MapReadMode MapReadMode
+    {
+        get => GetEnumOrDefault("MapReadMode", ClickHouseDefaults.MapReadMode);
+        set => this["MapReadMode"] = value.ToString();
+    }
+
+    /// <summary>
     /// Gets or sets how JSON data is sent when writing.
     /// Default: String
     /// </summary>
@@ -249,6 +259,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Roles = settings.Roles,
             JsonReadMode = settings.JsonReadMode,
             JsonWriteMode = settings.JsonWriteMode,
+            MapReadMode = settings.MapReadMode,
             AcceptEncoding = settings.AcceptEncoding,
         };
 

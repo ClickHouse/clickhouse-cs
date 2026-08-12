@@ -91,6 +91,8 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         JsonReadMode = other.JsonReadMode;
         JsonWriteMode = other.JsonWriteMode;
 
+        MapReadMode = other.MapReadMode;
+
         // Copy parameter type resolver
         ParameterTypeResolver = other.ParameterTypeResolver;
 
@@ -355,6 +357,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public JsonWriteMode JsonWriteMode { get; init; } = JsonWriteMode.String;
 
     /// <summary>
+    /// Gets or sets how Map columns are returned when reading data.
+    /// Dictionary (default): Returns Dictionary&lt;TKey, TValue&gt;; a repeated key keeps only its last value
+    /// KeyValuePairs: Returns List&lt;KeyValuePair&lt;TKey, TValue&gt;&gt;, preserving every pair the server sent
+    /// The mode selects the framework type of a Map column, so it also applies to
+    /// GetFieldValue&lt;T&gt;, reported schema types, and POCO property mapping.
+    /// </summary>
+    public MapReadMode MapReadMode { get; init; } = ClickHouseDefaults.MapReadMode;
+
+    /// <summary>
     /// Gets or sets a custom resolver for mapping .NET types to ClickHouse types
     /// during @-style parameter substitution. When set, this resolver is consulted
     /// after explicit ClickHouseType/SQL type hints but before default type inference.
@@ -449,6 +460,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Roles = builder.Roles,
             JsonReadMode = builder.JsonReadMode,
             JsonWriteMode = builder.JsonWriteMode,
+            MapReadMode = builder.MapReadMode,
             AcceptEncoding = builder.AcceptEncoding,
         };
 
@@ -498,6 +510,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                EnableDebugMode == other.EnableDebugMode &&
                JsonReadMode == other.JsonReadMode &&
                JsonWriteMode == other.JsonWriteMode &&
+               MapReadMode == other.MapReadMode &&
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
                ReadValueConverter == other.ReadValueConverter &&
@@ -541,6 +554,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(EnableDebugMode);
         hash.Add(JsonReadMode);
         hash.Add(JsonWriteMode);
+        hash.Add(MapReadMode);
         hash.Add(ParameterTypeResolver);
         hash.Add(ParameterFormatter);
         hash.Add(ReadValueConverter);
@@ -593,6 +607,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s;" +
                $"ReadBufferSize={ReadBufferSize};" +
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode};" +
+               $"MapReadMode={MapReadMode};" +
                $"UseFormDataParameters={UseFormDataParameters}";
 
         if (!string.IsNullOrEmpty(AcceptEncoding))
