@@ -163,7 +163,6 @@ Example:
 | Error messages clear and actionable? | ☐ Yes ☐ No ☐ N/A | |
 | Docs updated for user-facing changes? | ☐ Yes ☐ No ☐ N/A | |
 | Thread safety reviewed? | ☐ Yes ☐ No ☐ N/A | |
-| Documentation updated? | ☐ Yes ☐ No ☐ N/A | |
 
 ### 6) Performance & Safety Notes
 - Hot-path implications; memory peaks; streaming behavior
