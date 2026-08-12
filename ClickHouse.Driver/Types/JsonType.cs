@@ -201,7 +201,7 @@ internal class JsonType : ParameterizedType
 
         writer.Write7BitEncodedInt(fieldCount);
         tempStream.Position = 0;
-        tempStream.CopyTo(writer.BaseStream);
+        tempStream.CopyTo(writer.RawStream);
     }
 
     /// <summary>
