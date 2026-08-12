@@ -690,4 +690,79 @@ public class PocoReadTests : AbstractConnectionTestFixture
         Assert.That(results, Has.Count.EqualTo(1));
         Assert.That(results[0].Timestamp.Kind, Is.EqualTo(DateTimeKind.Utc));
     }
+
+    public class ConverterProbePoco
+    {
+        public long Scalar { get; set; }
+
+        public int[] Composite { get; set; }
+    }
+
+    // Records which IReadValueConverter overload each column arrived on, and passes values through unchanged.
+    private sealed class OverloadRecordingConverter : IReadValueConverter
+    {
+        public List<string> Boxed { get; } = [];
+
+        public List<string> Typed { get; } = [];
+
+        public object ConvertValue(object value, string columnName, string clickHouseType)
+        {
+            Boxed.Add($"{columnName}|{clickHouseType}");
+            return value;
+        }
+
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
+        {
+            Typed.Add($"{columnName}|{clickHouseType}|{typeof(T).Name}");
+            return value;
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_WithReadValueConverter_ConvertsEachColumnOnTheOverloadMatchingItsRead()
+    {
+        client.RegisterPocoType<ConverterProbePoco>();
+        var converter = new OverloadRecordingConverter();
+        var options = new QueryOptions { ReadValueConverter = converter };
+
+        var results = new List<ConverterProbePoco>();
+        await foreach (var poco in client.QueryAsync<ConverterProbePoco>(
+            "SELECT toInt64(7) AS Scalar, CAST([1, 2, 3], 'Array(Int32)') AS Composite",
+            options: options).ConfigureAwait(false))
+        {
+            results.Add(poco);
+        }
+
+        Assert.That(results, Has.Count.EqualTo(1));
+        Assert.That(results[0].Scalar, Is.EqualTo(7L));
+        Assert.That(results[0].Composite, Is.EqualTo(new[] { 1, 2, 3 }));
+
+        // The scalar column is read box-free, so it converts through ConvertValue<T> with T the property
+        // type. Were the fast path disabled by the converter's presence, it would appear under Boxed.
+        Assert.That(converter.Typed, Is.EqualTo(new[] { "Scalar|Int64|Int64" }));
+
+        // The composite column has no typed read, so it stays on the boxed overload MapTo<T> uses.
+        Assert.That(converter.Boxed, Is.EqualTo(new[] { "Composite|Array(Int32)" }));
+    }
+
+    [Test]
+    public async Task QueryAsync_WithReadValueConverter_AssignsTheConvertedValueOnTheFastPath()
+    {
+        client.RegisterPocoType<ConverterProbePoco>();
+        var options = new QueryOptions
+        {
+            ReadValueConverter = new DictionaryReadValueConverter().For<long>(v => v * 2),
+        };
+
+        var results = new List<ConverterProbePoco>();
+        await foreach (var poco in client.QueryAsync<ConverterProbePoco>(
+            "SELECT toInt64(7) AS Scalar, CAST([1], 'Array(Int32)') AS Composite",
+            options: options).ConfigureAwait(false))
+        {
+            results.Add(poco);
+        }
+
+        Assert.That(results, Has.Count.EqualTo(1));
+        Assert.That(results[0].Scalar, Is.EqualTo(14L));
+    }
 }

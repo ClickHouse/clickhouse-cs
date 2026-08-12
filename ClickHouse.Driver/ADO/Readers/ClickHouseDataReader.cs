@@ -406,23 +406,29 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// <summary>
     /// If <typeparamref name="T"/> is registered for read, returns the per-wire-column materializer delegates
     /// and the constructor; otherwise returns false and the caller uses the <see cref="Read"/> +
-    /// <see cref="MapTo{T}"/> loop. Disabled when a read value converter is present, because the boxed path
-    /// routes every value through it and that conversion must not be bypassed.
+    /// <see cref="MapTo{T}"/> loop.
+    ///
+    /// A read value converter does not disable the fast path. Each column applies it on the overload that
+    /// matches how the column was read: a box-free typed read converts through
+    /// <see cref="IReadValueConverter.ConvertValue{T}"/> with <c>T</c> the property type, as
+    /// <see cref="GetFieldValue{T}"/> does; a boxed-fallback column converts through the boxed
+    /// <see cref="IReadValueConverter.ConvertValue"/>, as <see cref="MapTo{T}"/> does via
+    /// <see cref="GetValue"/>.
     /// </summary>
-    internal bool TryGetRowMaterializer<T>(out Action<ExtendedBinaryReader, T>[] materializers, out Func<T> constructor)
+    internal bool TryGetRowMaterializer<T>(out RowColumnReader<T>[] materializers, out Func<T> constructor)
         where T : class
     {
         materializers = null;
         constructor = null;
 
-        if (readValueConverter != null || pocoRegistry == null)
+        if (pocoRegistry == null)
             return false;
 
         var mapping = pocoRegistry.GetReadMapping<T>();
         if (mapping == null)
             return false;
 
-        var built = pocoRegistry.GetOrBuildRowReaders<T>(FieldNames, RawTypes, mapping);
+        var built = pocoRegistry.GetOrBuildRowReaders<T>(FieldNames, RawTypes, mapping, readValueConverter != null);
         if (built == null)
             return false;
 
@@ -437,7 +443,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// <see cref="Read"/>'s mid-stream server-exception handling. The delegates consume every wire column in
     /// order, so the stream stays aligned even for columns the POCO does not map.
     /// </summary>
-    internal bool TryMaterializeNextRow<T>(Action<ExtendedBinaryReader, T>[] materializers, Func<T> constructor, out T value)
+    internal bool TryMaterializeNextRow<T>(RowColumnReader<T>[] materializers, Func<T> constructor, out T value)
         where T : class
     {
         value = null;
@@ -454,7 +460,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
             var instance = constructor();
             for (var i = 0; i < materializers.Length; i++)
-                materializers[i](reader, instance);
+                materializers[i](reader, instance, readValueConverter, columnTypeNames);
             value = instance;
             return true;
         }

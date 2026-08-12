@@ -5,6 +5,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
+using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
@@ -160,33 +161,48 @@ internal sealed class PocoTypeRegistry
     /// <param name="fieldNames">Wire column names, in order.</param>
     /// <param name="types">Resolved ClickHouse column types, in wire order (parallel to <paramref name="fieldNames"/>).</param>
     /// <param name="mapping">The read mapping for <typeparamref name="T"/> (bindings + constructor).</param>
-    internal Action<ExtendedBinaryReader, T>[] GetOrBuildRowReaders<T>(
-        string[] fieldNames, ClickHouseType[] types, PocoReadMapping<T> mapping)
+    /// <param name="withConverter">
+    /// Whether the delegates should route values through the reader's <see cref="IReadValueConverter"/>.
+    /// Part of the cache key, so a converter-free reader keeps delegates that never touch the converter
+    /// parameters at all.
+    /// </param>
+    internal RowColumnReader<T>[] GetOrBuildRowReaders<T>(
+        string[] fieldNames, ClickHouseType[] types, PocoReadMapping<T> mapping, bool withConverter)
         where T : class
     {
         var byType = rowReaderCache.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<string, object>(StringComparer.Ordinal));
-        var key = BuildRowReaderKey(fieldNames, types);
-        return (Action<ExtendedBinaryReader, T>[])byType.GetOrAdd(key, _ => BuildRowReaders(fieldNames, types, mapping));
+        var key = BuildRowReaderKey(fieldNames, types, withConverter);
+        return (RowColumnReader<T>[])byType.GetOrAdd(key, _ => BuildRowReaders(fieldNames, types, mapping, withConverter));
     }
 
     // Signature over the wire shape: field name + resolved type per column, in order. '\t' and '\n' are the
     // separators because no ClickHouse type name contains either. Only a backtick-quoted alias holding a
-    // literal tab or newline could collide, and the shape comes from the caller's own SQL.
-    private static string BuildRowReaderKey(string[] fieldNames, ClickHouseType[] types)
+    // literal tab or newline could collide, and the shape comes from the caller's own SQL. The converter flag
+    // leads, because it changes the shape of every delegate in the array.
+    private static string BuildRowReaderKey(string[] fieldNames, ClickHouseType[] types, bool withConverter)
     {
-        var parts = new string[types.Length];
+        var parts = new string[types.Length + 1];
+        parts[0] = withConverter ? "conv" : string.Empty;
         for (var i = 0; i < types.Length; i++)
-            parts[i] = fieldNames[i] + "\t" + types[i].ToString();
+            parts[i + 1] = fieldNames[i] + "\t" + types[i].ToString();
         return string.Join("\n", parts);
     }
 
-    private static Action<ExtendedBinaryReader, T>[] BuildRowReaders<T>(
-        string[] fieldNames, ClickHouseType[] types, PocoReadMapping<T> mapping)
+    // The generic ConvertValue<T>, picked out from the non-generic overload of the same name.
+    private static readonly MethodInfo ConvertValueTypedMethod = typeof(IReadValueConverter)
+        .GetMethods()
+        .Single(m => m.Name == nameof(IReadValueConverter.ConvertValue) && m.IsGenericMethodDefinition);
+
+    private static RowColumnReader<T>[] BuildRowReaders<T>(
+        string[] fieldNames, ClickHouseType[] types, PocoReadMapping<T> mapping, bool withConverter)
         where T : class
     {
-        var readers = new Action<ExtendedBinaryReader, T>[types.Length];
+        var readers = new RowColumnReader<T>[types.Length];
         var readerParam = Expression.Parameter(typeof(ExtendedBinaryReader), "reader");
         var instanceParam = Expression.Parameter(typeof(T), "instance");
+        var converterParam = Expression.Parameter(typeof(IReadValueConverter), "converter");
+        var typeNamesParam = Expression.Parameter(typeof(string[]), "columnTypeNames");
+        var parameters = new[] { readerParam, instanceParam, converterParam, typeNamesParam };
 
         for (var i = 0; i < types.Length; i++)
         {
@@ -195,19 +211,33 @@ internal sealed class PocoTypeRegistry
             if (!mapping.Bindings.TryGetValue(fieldNames[i], out var binding))
             {
                 // Unmapped column: its bytes must still be consumed so the next column reads from the right
-                // offset. Boxes the discarded value, which the POCO does not use anyway. Copy to a local for
-                // correct closure capture.
+                // offset. Boxes the discarded value, which the POCO does not use anyway. No conversion: the
+                // value never reaches the caller. Copy to a local for correct closure capture.
                 var discardType = type;
-                readers[i] = (r, _) => discardType.Read(r);
+                readers[i] = (r, _, _, _) => discardType.Read(r);
                 continue;
             }
 
-            var readBody = PocoReadExpressionFactory.TryBuildReadBody(type, readerParam, binding.PropInfo.PropertyType);
+            var propertyType = binding.PropInfo.PropertyType;
+            var readBody = PocoReadExpressionFactory.TryBuildReadBody(type, readerParam, propertyType);
             if (readBody != null)
             {
-                // Exact-typed by construction, so no runtime assignability check is needed.
-                var assign = Expression.Assign(Expression.Property(instanceParam, binding.PropInfo.Property), readBody);
-                readers[i] = Expression.Lambda<Action<ExtendedBinaryReader, T>>(assign, readerParam, instanceParam).Compile();
+                // A typed read yields the property's exact CLR type, so it converts through the typed
+                // ConvertValue<T> — the same overload GetFieldValue<T> uses for a typed read. Exact-typed by
+                // construction, so no runtime assignability check is needed.
+                Expression value = readBody;
+                if (withConverter)
+                {
+                    value = Expression.Call(
+                        converterParam,
+                        ConvertValueTypedMethod.MakeGenericMethod(propertyType),
+                        readBody,
+                        Expression.Constant(fieldNames[i]),
+                        Expression.ArrayIndex(typeNamesParam, Expression.Constant(i)));
+                }
+
+                var assign = Expression.Assign(Expression.Property(instanceParam, binding.PropInfo.Property), value);
+                readers[i] = Expression.Lambda<RowColumnReader<T>>(assign, parameters).Compile();
             }
             else
             {
@@ -221,26 +251,30 @@ internal sealed class PocoTypeRegistry
                         typeof(T), binding.PropInfo, fieldNames[i], type.ToString(), unwrapped));
                 }
 
-                readers[i] = BuildBoxedColumnReader(type, binding, fieldNames[i]);
+                readers[i] = BuildBoxedColumnReader(type, binding, fieldNames[i], i, withConverter);
             }
         }
 
         return readers;
     }
 
-    // Boxed fallback for a single column, replicating MapTo<T>'s per-column assignment. No value converter is
-    // involved: the fast loop only runs when the reader has none.
-    private static Action<ExtendedBinaryReader, T> BuildBoxedColumnReader<T>(
-        ClickHouseType type, ColumnBinding<T> binding, string fieldName)
+    // Boxed fallback for a single column, replicating MapTo<T>'s per-column assignment. The value is boxed
+    // either way here, so it converts through the boxed ConvertValue overload, exactly as MapTo<T> does via
+    // GetValue — including converting before the null test, so a converter still sees a DBNull cell.
+    private static RowColumnReader<T> BuildBoxedColumnReader<T>(
+        ClickHouseType type, ColumnBinding<T> binding, string fieldName, int ordinal, bool withConverter)
         where T : class
     {
         var propInfo = binding.PropInfo;
         var setter = binding.Setter;
         var canAssignNull = propInfo.CanAssignNull;
 
-        return (reader, instance) =>
+        return (reader, instance, converter, columnTypeNames) =>
         {
             var value = type.Read(reader);
+            if (withConverter)
+                value = converter.ConvertValue(value, fieldName, columnTypeNames[ordinal]);
+
             if (value is null || value is DBNull)
             {
                 if (canAssignNull)
