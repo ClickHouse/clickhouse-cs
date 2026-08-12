@@ -32,7 +32,21 @@ public class MapReadModeTests : AbstractConnectionTestFixture
         return new ClickHouseClientSettings(builder);
     }
 
-    private static ClickHouseClient CreateKeyValuePairClient() => new(KeyValuePairSettings());
+    /// <summary>
+    /// Every test here reads in the same mode, so one client is shared: a client is thread-safe and
+    /// owns its own connection pool, so one per test would only prevent connection reuse.
+    /// </summary>
+    private ClickHouseClient pairClient;
+
+    [OneTimeSetUp]
+    public void CreatePairClient() => pairClient = new ClickHouseClient(KeyValuePairSettings());
+
+    [OneTimeTearDown]
+    public void DisposePairClient()
+    {
+        pairClient?.Dispose();
+        pairClient = null;
+    }
 
     private static List<KeyValuePair<string, string>> AsPairs(object value) =>
         (List<KeyValuePair<string, string>>)value;
@@ -40,8 +54,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     [Test]
     public async Task ExecuteReaderAsync_MapWithDuplicateKeys_KeyValuePairsModeKeepsEveryPair()
     {
-        using var pairClient = CreateKeyValuePairClient();
-
         using var reader = await pairClient.ExecuteReaderAsync("SELECT map('key', 'X', 'key', 'Y')");
         Assert.That(reader.Read(), Is.True);
 
@@ -51,8 +63,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     [Test]
     public async Task GetFieldType_KeyValuePairsMode_ReportsListOfKeyValuePairs()
     {
-        using var pairClient = CreateKeyValuePairClient();
-
         using var reader = await pairClient.ExecuteReaderAsync("SELECT map('key', 'X', 'key', 'Y')");
         Assert.That(reader.Read(), Is.True);
 
@@ -64,8 +74,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     public async Task ExecuteReaderAsync_NestedMapWithDuplicateKeys_KeyValuePairsModeKeepsEveryPair()
     {
         // A map is reached through any composite type, so the representation must follow it there
-        using var pairClient = CreateKeyValuePairClient();
-
         using var reader = await pairClient.ExecuteReaderAsync(
             "SELECT [map('key', 'X', 'key', 'Y')], map('outer', map('key', 'X', 'key', 'Y')), tuple('t', map('key', 'X', 'key', 'Y'))");
         Assert.That(reader.Read(), Is.True);
@@ -84,8 +92,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     [Test]
     public async Task ExecuteReaderAsync_MapWithNullValues_KeyValuePairsModeReturnsNullNotDBNull()
     {
-        using var pairClient = CreateKeyValuePairClient();
-
         using var reader = await pairClient.ExecuteReaderAsync(
             "SELECT CAST(map('key', NULL, 'key', 'Y'), 'Map(String, Nullable(String))')");
         Assert.That(reader.Read(), Is.True);
@@ -101,8 +107,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     public async Task ExecuteReaderAsync_MapWithValueTypeKeysAndNullableValues_KeyValuePairsModeKeepsEveryPair()
     {
         // Value-type keys and values go through a different unboxing conversion than strings
-        using var pairClient = CreateKeyValuePairClient();
-
         using var reader = await pairClient.ExecuteReaderAsync(
             "SELECT CAST(map(1, 10, 1, NULL), 'Map(Int32, Nullable(Int32))'), CAST(map(), 'Map(Int32, Int32)')");
         Assert.That(reader.Read(), Is.True);
@@ -120,8 +124,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     public async Task ExecuteReaderAsync_MapInsideDynamicColumn_KeyValuePairsModeKeepsEveryPair()
     {
         // The Dynamic read path decodes the type from its binary description, not from a header
-        using var pairClient = CreateKeyValuePairClient();
-
         using var reader = await pairClient.ExecuteReaderAsync("SELECT map('key', 'X', 'key', 'Y')::Dynamic");
         Assert.That(reader.Read(), Is.True);
 
@@ -132,7 +134,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     public async Task InsertBinaryAsync_KeyValuePairsWithDuplicateKeys_RoundTripsEveryPair()
     {
         // The value read in KeyValuePairs mode must be writable back without losing a pair
-        using var pairClient = CreateKeyValuePairClient();
         var table = CreateTableName();
         await pairClient.ExecuteNonQueryAsync($"CREATE TABLE {table} (m Map(String, String)) ENGINE Memory");
 
@@ -149,7 +150,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     {
         // A Variant member is picked by CanWrite, so it must accept every representation
         // Write accepts - a dictionary stays writable in KeyValuePairs mode
-        using var pairClient = CreateKeyValuePairClient();
         var table = CreateTableName();
         await pairClient.ExecuteNonQueryAsync($"CREATE TABLE {table} (v Variant(String, Map(String, String))) ENGINE Memory");
 
@@ -181,7 +181,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     {
         // Accepting both representations must not make every map match every map member.
         // Three members also exercise the type-keyed lookup, not only the linear scan
-        using var pairClient = CreateKeyValuePairClient();
         var table = CreateTableName();
         await pairClient.ExecuteNonQueryAsync(
             $"CREATE TABLE {table} (id UInt32, v Variant(String, Map(String, String), Map(String, Int64))) ENGINE Memory");
@@ -220,7 +219,6 @@ public class MapReadModeTests : AbstractConnectionTestFixture
     [Test]
     public async Task ExecuteReaderAsync_KeyValuePairsParameterWithDuplicateKeys_SendsEveryPair()
     {
-        using var pairClient = CreateKeyValuePairClient();
         using var connectionWithPairs = pairClient.CreateConnection();
         using var command = connectionWithPairs.CreateCommand();
         command.CommandText = "SELECT {map:Map(String, String)}";
