@@ -97,6 +97,38 @@ public class MapColumnCodecTests
         Assert.ThrowsAsync<ArgumentException>(() => CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
     }
 
+    // The state-aware overloads take the state this codec's own BeginWrite returned, and nothing else. They used to
+    // treat null as "the caller has none to share" and rebuild one, which meant a caller that lost or never opened
+    // the state still got correct bytes, so the mistake could not be seen.
+    [Test]
+    public async Task WriteColumn_StateAwareOverloadGivenNoState_ThrowsArgument()
+    {
+        IColumnCodec codec = Resolve("Map(String, UInt8)");
+        var column = new ArrayColumn<KeyValuePair<string, byte>[]>("c", "Map(String, UInt8)", new[]
+        {
+            Row<string, byte>(("a", 1)),
+        });
+
+        ArgumentException thrown = null;
+        await CodecTestHarness.WriteAsync(writer =>
+            thrown = Assert.Throws<ArgumentException>(() => codec.WriteColumn(writer, column, 0, 1, state: null)));
+
+        Assert.That(thrown.Message, Does.Contain("Map(String, UInt8)"));
+    }
+
+    [Test]
+    public async Task WriteStatePrefix_StateAwareOverloadGivenNoState_ThrowsArgument()
+    {
+        IColumnCodec codec = Resolve("Map(String, UInt8)");
+        var column = new ArrayColumn<KeyValuePair<string, byte>[]>("c", "Map(String, UInt8)", new[]
+        {
+            Row<string, byte>(("a", 1)),
+        });
+
+        await CodecTestHarness.WriteAsync(writer =>
+            Assert.Throws<ArgumentException>(() => codec.WriteStatePrefix(writer, column, 0, 1, state: null)));
+    }
+
     [Test]
     public void CanWrite_AcceptsOnlyMatchingMapColumn()
     {
