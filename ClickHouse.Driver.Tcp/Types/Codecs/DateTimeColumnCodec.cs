@@ -112,12 +112,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     }
 
     // Reduces a DateTime to the UTC instant to encode. Utc and Local already denote an instant. An Unspecified
-    // value has no offset, so its wall-clock is read in the column's timezone, as the HTTP client does.
-    //
-    // At a daylight-saving transition TimeZoneInfo alone diverges from HTTP: it throws inside a spring-forward gap,
-    // and silently picks standard time for an hour that occurs twice. The branches below apply HTTP's lenient rules.
-    // Same rules, not the same tzdb — HTTP resolves zones from NodaTime's, this from the platform's. To close that,
-    // move the whole timezone layer to one provider rather than adding a second engine here.
+    // value has no offset, so its wall-clock is read in the column's timezone.
     internal static DateTime ToUtc(DateTime value, TimeZoneInfo timeZone)
     {
         if (value.Kind != DateTimeKind.Unspecified)
@@ -125,14 +120,20 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
             return value.ToUniversalTime();
         }
 
-        // The pre-transition offset, which is what GetUtcOffset reports for a skipped time. Same instant as
-        // shifting the wall-clock forward across the gap.
+        // A skipped wall-clock names no instant, so it is rejected instead of guessed. Deriving the pre-gap offset
+        // from TimeZoneInfo is not reliable: GetUtcOffset answers with the zone's base offset, which differs from
+        // the pre-gap one wherever the historical standard offset did (America/Juneau in the 1970s, and 27 other
+        // zones as late as 2023).
         if (timeZone.IsInvalidTime(value))
         {
-            return DateTime.SpecifyKind(value - timeZone.GetUtcOffset(value), DateTimeKind.Utc);
+            throw new ArgumentException(
+                $"{value:yyyy-MM-dd HH:mm:ss} does not exist in '{timeZone.Id}': a daylight-saving change skips it. " +
+                "Pass a DateTimeOffset, or a DateTime with Kind=Utc, to name the instant you mean.",
+                nameof(value));
         }
 
-        // The earlier occurrence: the larger offset, since it subtracts to an earlier instant.
+        // An hour that occurs twice takes the earlier occurrence: the larger offset, since it subtracts to an
+        // earlier instant. A fall-back always lowers the offset, so this holds in every zone.
         if (timeZone.IsAmbiguousTime(value))
         {
             TimeSpan[] offsets = timeZone.GetAmbiguousTimeOffsets(value);

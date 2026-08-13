@@ -216,17 +216,17 @@ public class DateTime64ColumnCodecTests
 
     // DateTime64 shares DateTimeColumnCodec.ToUtc; covered here too because a refactor could separate them.
     [Test]
-    public async Task WriteColumn_UnspecifiedKindInDaylightSavingGap_EncodesTheForwardShiftedInstant()
+    public void WriteColumn_UnspecifiedKindInDaylightSavingGap_ThrowsNamingTheZone()
     {
-        // 2024-03-10 02:30 does not exist in New York; shifted forward to 03:30 EDT = 07:30Z.
+        // 2024-03-10 02:30 does not exist in New York, so it names no instant and is rejected.
         const string type = "DateTime64(3, 'America/New_York')";
         DateTime64ColumnCodec codec = Codec(type);
         var gap = new DateTime(2024, 3, 10, 2, 30, 0, DateTimeKind.Unspecified);
 
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { gap })));
+        ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(async () =>
+            await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { gap }))));
 
-        long expected = new DateTimeOffset(2024, 3, 10, 7, 30, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
-        Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(expected));
+        Assert.That(thrown.Message, Does.Contain("America/New_York"));
     }
 
     [Test]
