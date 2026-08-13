@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
@@ -222,4 +223,12 @@ public class DynamicColumnCodecTests
     [Test]
     public void Create_UnknownArgument_Throws()
         => Assert.Throws<FormatException>(() => Resolve("Dynamic(max_sizes=5)"));
+
+    [TestCase(1, 1)]
+    [TestCase(255, 1)]
+    [TestCase(256, 2)]
+    [TestCase(65535, 2)]
+    [TestCase(65536, 4)]
+    public void DiscriminatorWidth_GrowsWithTypeCount(int typeCount, int expectedWidth)
+        => Assert.That(DynamicColumnCodec.DiscriminatorWidth(typeCount), Is.EqualTo(expectedWidth));
 }

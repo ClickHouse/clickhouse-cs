@@ -28,6 +28,20 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class DynamicColumnCodec : IColumnCodec
 {
+    /// <summary>
+    /// The serialization version that heads a <c>Dynamic</c> column's state prefix in the flattened layout — the
+    /// only layout this client reads or writes. It is selected by the query setting
+    /// <c>output_format_native_use_flattened_dynamic_and_json_serialization = 1</c>; the non-flat versions
+    /// (1, 2, 4) carry an internal/on-disk representation this client rejects.
+    /// </summary>
+    private const ulong FlattenedVersion = 3;
+
+    /// <summary>
+    /// A defensive ceiling on the runtime type count read from the wire, so a corrupt length prefix cannot drive
+    /// an unbounded allocation. Far larger than any real <c>Dynamic</c> type set.
+    /// </summary>
+    private const int MaxTypes = 1_000_000;
+
     // Builds a flat typed column from boxed values, one cached delegate per element type — the ergonomic write
     // path's per-runtime-type projection, mirroring the variant codec's.
     private static readonly ConcurrentDictionary<Type, Func<string, string, object[], int, IColumn>> FlatBuilders = new();
@@ -85,18 +99,18 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     public async ValueTask ReadStatePrefixAsync(ClickHouseBinaryReader reader, CancellationToken cancellationToken)
     {
         ulong version = await reader.ReadUInt64Async(cancellationToken).ConfigureAwait(false);
-        if (version != DynamicWire.FlattenedVersion)
+        if (version != FlattenedVersion)
         {
             throw new ClickHouseProtocolException(
-                $"Dynamic column '{TypeName}' uses serialization version {version}; this client supports only the flattened version {DynamicWire.FlattenedVersion}. " +
+                $"Dynamic column '{TypeName}' uses serialization version {version}; this client supports only the flattened version {FlattenedVersion}. " +
                 "Enable it with the query setting output_format_native_use_flattened_dynamic_and_json_serialization=1.");
         }
 
         ulong rawTypeCount = await reader.ReadVarUIntAsync(cancellationToken).ConfigureAwait(false);
-        if (rawTypeCount > DynamicWire.MaxTypes)
+        if (rawTypeCount > MaxTypes)
         {
             throw new ClickHouseProtocolException(
-                $"Dynamic column '{TypeName}' declares {rawTypeCount} runtime types, exceeding the supported maximum of {DynamicWire.MaxTypes} (corrupt stream).");
+                $"Dynamic column '{TypeName}' declares {rawTypeCount} runtime types, exceeding the supported maximum of {MaxTypes} (corrupt stream).");
         }
 
         int typeCount = (int)rawTypeCount;
@@ -140,7 +154,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         }
 
         int typeCount = children.Length;
-        int width = DynamicWire.DiscriminatorWidth(typeCount);
+        int width = DiscriminatorWidth(typeCount);
         int[] discriminators = ArrayPool<int>.Shared.Rent(rowCount);
         var typeColumns = new IColumn[typeCount];
         int read = 0;
@@ -234,7 +248,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     // prefix (empty for a leaf type).
     private static void WriteStatePrefixCore(ClickHouseBinaryWriter writer, DynamicWriteState state)
     {
-        writer.WriteUInt64(DynamicWire.FlattenedVersion);
+        writer.WriteUInt64(FlattenedVersion);
         writer.WriteVarUInt((ulong)state.TypeNames.Length);
         foreach (string name in state.TypeNames)
         {
@@ -256,6 +270,19 @@ internal sealed class DynamicColumnCodec : IColumnCodec
             state.Children[i].WriteColumn(writer, state.ChildColumns[i], state.ChildStart[i], state.ChildLength[i], state.ChildStates[i]);
         }
     }
+
+    /// <summary>
+    /// The discriminator width for <paramref name="typeCount"/> runtime types: the smallest unsigned integer that
+    /// indexes the types plus the NULL slot (NULL is the value <paramref name="typeCount"/>). One byte up to 255
+    /// types, then 2, then 4 — a count is capped at <see cref="MaxTypes"/> and held in an <see cref="int"/>, so it
+    /// never needs the wire format's 8-byte width.
+    /// </summary>
+    /// <param name="typeCount">The number of runtime types.</param>
+    /// <returns>The discriminator width in bytes (1, 2, or 4).</returns>
+    internal static int DiscriminatorWidth(int typeCount)
+        => typeCount <= byte.MaxValue ? 1
+            : typeCount <= ushort.MaxValue ? 2
+            : 4;
 
     private static void WriteDiscriminators(ClickHouseBinaryWriter writer, ReadOnlySpan<int> discriminators, int width)
     {
@@ -371,7 +398,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
             ChildStates = childStates,
             Discriminators = slice,
             Length = length,
-            Width = DynamicWire.DiscriminatorWidth(typeCount),
+            Width = DiscriminatorWidth(typeCount),
         };
     }
 
@@ -475,7 +502,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
                     ChildStates = childStates,
                     Discriminators = discriminators,
                     Length = length,
-                    Width = DynamicWire.DiscriminatorWidth(typeCount),
+                    Width = DiscriminatorWidth(typeCount),
                 };
             }
             catch
