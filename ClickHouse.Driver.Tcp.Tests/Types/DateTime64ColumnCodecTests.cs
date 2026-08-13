@@ -11,10 +11,14 @@ public class DateTime64ColumnCodecTests
 {
     private static DateTime64ColumnCodec Codec(string type, string tz = null) => DateTime64ColumnCodec.Create(TypeParser.Parse(type), tz);
 
+    // Scales 8 and 9 exceed a .NET tick (100 ns), but a write scales up, so it stays exact. The lossy direction is
+    // the read, pinned below.
     [TestCase("DateTime64(0)")]
     [TestCase("DateTime64(3)")]
     [TestCase("DateTime64(6)")]
     [TestCase("DateTime64(7)")]
+    [TestCase("DateTime64(8)")]
+    [TestCase("DateTime64(9)")]
     public async Task RoundTrip_PreservesInstantAtScale(string type)
     {
         DateTime64ColumnCodec codec = Codec(type, "UTC");
@@ -70,6 +74,28 @@ public class DateTime64ColumnCodecTests
         Assert.ThrowsAsync<ArgumentException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
     }
 
+    // Scale 8 sets one digit finer than a .NET tick, scale 9 two. The raw count keeps them; the DateTimeOffset
+    // view truncates toward zero, it does not round.
+    [TestCase("DateTime64(8)", 170_000_000_012_345_678L)]
+    [TestCase("DateTime64(9)", 1_700_000_000_123_456_789L)]
+    public async Task RoundTrip_ScaleFinerThanDotNetTick_KeepsTheCountAndTruncatesTheOffsetView(string type, long count)
+    {
+        const long ExpectedDotNetTicks = 17_000_000_001_234_567L; // 1_700_000_000.1234567 s — the tick-aligned part.
+        DateTime64ColumnCodec codec = Codec(type, "UTC");
+
+        using var column = (DateTime64Column)await RoundTripAsync(
+            codec, new ArrayColumn<long>("c", type, new[] { count }), type, 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[0], Is.EqualTo(count), "the raw wire count must round-trip exactly");
+            Assert.That(
+                column.GetDateTimeOffset(0),
+                Is.EqualTo(new DateTimeOffset(DateTime.UnixEpoch.AddTicks(ExpectedDotNetTicks), TimeSpan.Zero)),
+                "the DateTimeOffset view truncates the sub-tick digits toward zero");
+        });
+    }
+
     [Test]
     public async Task ReadColumn_Scale3_ScalesMillisecondsToInstant()
     {
@@ -112,6 +138,23 @@ public class DateTime64ColumnCodecTests
             CollectionAssert.AreEqual(
                 new[] { DateTimeOffset.FromUnixTimeMilliseconds(1500), DateTimeOffset.FromUnixTimeMilliseconds(-2500) },
                 column.ToDateTimeOffsets());
+        });
+    }
+
+    [Test]
+    public async Task ReadColumn_NoExplicitAndNoServerTimezone_PresentsUtc()
+    {
+        byte[] bytes = await WriteAsync(w => w.WriteInt64(1_700_000_000_000)); // scale 3
+        using var reader = ReaderOver(bytes);
+
+        // No timezone in the type or the session, so values present in UTC, not the host's local zone.
+        using var column = (DateTime64Column)await Codec("DateTime64(3)", tz: null)
+            .ReadColumnAsync(reader, "c", "DateTime64(3)", 1, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(TimeSpan.Zero));
+            Assert.That(column.GetDateTimeOffset(0), Is.EqualTo(DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000)));
         });
     }
 
