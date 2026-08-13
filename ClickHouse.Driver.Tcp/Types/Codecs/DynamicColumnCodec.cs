@@ -317,6 +317,9 @@ internal sealed class DynamicColumnCodec : IColumnCodec
             children[i] = registry.Resolve(names[i], in context);
         }
 
+        // Child values are in row order, so a type's in-slice rows make one run. The local index of the first
+        // in-slice row of a type is that type's count before the slice — where its run starts — and the loop
+        // counts the run length. A NULL row fills no child slot.
         ReadOnlySpan<int> discriminators = dense.Discriminators;
         ReadOnlySpan<int> localIndices = dense.LocalIndices;
         var before = new int[typeCount];
