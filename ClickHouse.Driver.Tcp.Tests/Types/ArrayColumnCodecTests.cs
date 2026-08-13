@@ -137,6 +137,33 @@ public class ArrayColumnCodecTests
             await codec.ReadColumnAsync(reader, "c", "Array(UInt32)", 1, CodecTestHarness.None));
     }
 
+    // The state-aware overloads take the state this codec's own BeginWrite returned, and nothing else. They used to
+    // treat null as "the caller has none to share" and rebuild one, which meant a caller that lost or never opened
+    // the state still got correct bytes, so the mistake could not be seen. Only the state-free overloads build
+    // their own state now.
+    [Test]
+    public async Task WriteColumn_StateAwareOverloadGivenNoState_ThrowsArgument()
+    {
+        IColumnCodec codec = Resolve("Array(UInt32)");
+        var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", new[] { new uint[] { 1, 2 } });
+
+        ArgumentException thrown = null;
+        await CodecTestHarness.WriteAsync(writer =>
+            thrown = Assert.Throws<ArgumentException>(() => codec.WriteColumn(writer, column, 0, 1, state: null)));
+
+        Assert.That(thrown.Message, Does.Contain("Array(UInt32)"));
+    }
+
+    [Test]
+    public async Task WriteStatePrefix_StateAwareOverloadGivenNoState_ThrowsArgument()
+    {
+        IColumnCodec codec = Resolve("Array(UInt32)");
+        var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", new[] { new uint[] { 1, 2 } });
+
+        await CodecTestHarness.WriteAsync(writer =>
+            Assert.Throws<ArgumentException>(() => codec.WriteStatePrefix(writer, column, 0, 1, state: null)));
+    }
+
     [Test]
     public void Resolve_Array_StampsFullTypeName()
         => Assert.That(Resolve("Array(Nullable(String))").TypeName, Is.EqualTo("Array(Nullable(String))"));
