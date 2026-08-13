@@ -128,12 +128,20 @@ internal interface IColumnCodec
     /// Writes the state prefix reusing the scratch from <see cref="BeginWrite"/>. Defaults to the state-free
     /// <see cref="WriteStatePrefix(ClickHouseBinaryWriter, IColumn, int, int)"/>; a codec that returns non-null
     /// from <see cref="BeginWrite"/> overrides this to emit its data-dependent prefix from the shared state.
+    ///
+    /// <para>
+    /// A codec that overrides this requires <paramref name="state"/> to be the state its own
+    /// <see cref="BeginWrite"/> returned, and rejects anything else. Call this overload only with that state; to
+    /// write a slice without one, call the state-free overload, which builds and disposes its own. The two must
+    /// not both be reachable inside one codec — a state-aware path that quietly rebuilt a discarded state would
+    /// write correct bytes and hide the caller's mistake.
+    /// </para>
     /// </summary>
     /// <param name="writer">The writer to encode into.</param>
     /// <param name="column">The column whose prefix to write; must match this codec's element type.</param>
     /// <param name="start">The zero-based first row the following body will write.</param>
     /// <param name="length">The number of rows the following body will write.</param>
-    /// <param name="state">The scratch from <see cref="BeginWrite"/>, or <see langword="null"/>.</param>
+    /// <param name="state">The scratch from this codec's <see cref="BeginWrite"/>; null only for a codec that returns null from it.</param>
     void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
         => WriteStatePrefix(writer, column, start, length);
 
@@ -159,7 +167,7 @@ internal interface IColumnCodec
     /// <param name="column">The column whose values to write; must match this codec's element type.</param>
     /// <param name="start">The zero-based first row to write.</param>
     /// <param name="length">The number of rows to write.</param>
-    /// <param name="state">The scratch from <see cref="BeginWrite"/>, or <see langword="null"/>.</param>
+    /// <param name="state">The scratch from this codec's <see cref="BeginWrite"/>; null only for a codec that returns null from it.</param>
     void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
         => WriteColumn(writer, column, start, length);
 }

@@ -17,7 +17,13 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// then <see cref="IColumnCodec.WriteColumn(ClickHouseBinaryWriter, IColumn, int, int, IColumnWriteState)"/>, and
 /// disposes it after the body — returning any rented buffers to the pool. Codecs that need no scratch return
 /// <see langword="null"/> from <see cref="IColumnCodec.BeginWrite"/>, and the state-aware write overloads then
-/// fall back to the self-contained ones.
+/// default to the self-contained ones.
+///
+/// <para>
+/// A codec that does need scratch has exactly one way in per phase: the state-aware overload, given the state its
+/// own <see cref="IColumnCodec.BeginWrite"/> returned. It does not also accept null there and rebuild. Writing a
+/// slice without a shared state is what the state-free overloads are for; they build one and dispose it.
+/// </para>
 /// </para>
 /// </summary>
 internal interface IColumnWriteState : IDisposable
