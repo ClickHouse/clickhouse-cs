@@ -111,15 +111,45 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         }
     }
 
-    // Reduces a DateTime to the UTC instant to encode. A Utc or Local value already denotes an instant and is
-    // converted directly. An Unspecified value carries no offset, so — matching the HTTP client — its wall-clock
-    // is interpreted in the column's timezone (the session's, or UTC, when the type names none). The encoded
-    // instant therefore depends on the column timezone, never on the host machine's. An Unspecified wall-clock
-    // that does not exist or is ambiguous in that zone (a daylight-saving transition) is resolved by the
-    // platform's TimeZoneInfo rules.
-    internal static DateTime ToUtc(DateTime value, TimeZoneInfo timeZone) => value.Kind == DateTimeKind.Unspecified
-        ? TimeZoneInfo.ConvertTimeToUtc(value, timeZone)
-        : value.ToUniversalTime();
+    // Reduces a DateTime to the UTC instant to encode. Utc and Local already denote an instant. An Unspecified
+    // value has no offset, so its wall-clock is read in the column's timezone, as the HTTP client does.
+    //
+    // At a daylight-saving transition TimeZoneInfo alone diverges from HTTP: it throws inside a spring-forward gap,
+    // and silently picks standard time for an hour that occurs twice. The branches below apply HTTP's lenient rules.
+    // Same rules, not the same tzdb — HTTP resolves zones from NodaTime's, this from the platform's. To close that,
+    // move the whole timezone layer to one provider rather than adding a second engine here.
+    internal static DateTime ToUtc(DateTime value, TimeZoneInfo timeZone)
+    {
+        if (value.Kind != DateTimeKind.Unspecified)
+        {
+            return value.ToUniversalTime();
+        }
+
+        // The pre-transition offset, which is what GetUtcOffset reports for a skipped time. Same instant as
+        // shifting the wall-clock forward across the gap.
+        if (timeZone.IsInvalidTime(value))
+        {
+            return DateTime.SpecifyKind(value - timeZone.GetUtcOffset(value), DateTimeKind.Utc);
+        }
+
+        // The earlier occurrence: the larger offset, since it subtracts to an earlier instant.
+        if (timeZone.IsAmbiguousTime(value))
+        {
+            TimeSpan[] offsets = timeZone.GetAmbiguousTimeOffsets(value);
+            TimeSpan earliest = offsets[0];
+            for (int i = 1; i < offsets.Length; i++)
+            {
+                if (offsets[i] > earliest)
+                {
+                    earliest = offsets[i];
+                }
+            }
+
+            return DateTime.SpecifyKind(value - earliest, DateTimeKind.Utc);
+        }
+
+        return TimeZoneInfo.ConvertTimeToUtc(value, timeZone);
+    }
 
     private static uint ToUnixSeconds(DateTime utc)
     {

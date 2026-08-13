@@ -214,6 +214,35 @@ public class DateTime64ColumnCodecTests
         Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(expectedMillis));
     }
 
+    // DateTime64 shares DateTimeColumnCodec.ToUtc; covered here too because a refactor could separate them.
+    [Test]
+    public async Task WriteColumn_UnspecifiedKindInDaylightSavingGap_EncodesTheForwardShiftedInstant()
+    {
+        // 2024-03-10 02:30 does not exist in New York; shifted forward to 03:30 EDT = 07:30Z.
+        const string type = "DateTime64(3, 'America/New_York')";
+        DateTime64ColumnCodec codec = Codec(type);
+        var gap = new DateTime(2024, 3, 10, 2, 30, 0, DateTimeKind.Unspecified);
+
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { gap })));
+
+        long expected = new DateTimeOffset(2024, 3, 10, 7, 30, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task WriteColumn_UnspecifiedKindInAmbiguousHour_EncodesTheEarlierOccurrence()
+    {
+        // 2024-11-03 01:30 happens twice in New York; the earlier is 01:30 EDT = 05:30Z.
+        const string type = "DateTime64(3, 'America/New_York')";
+        DateTime64ColumnCodec codec = Codec(type);
+        var ambiguous = new DateTime(2024, 11, 3, 1, 30, 0, DateTimeKind.Unspecified);
+
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { ambiguous })));
+
+        long expected = new DateTimeOffset(2024, 11, 3, 5, 30, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(expected));
+    }
+
     [Test]
     public void CanWrite_AcceptsTemporalColumns_RejectsOthers()
     {
