@@ -101,6 +101,23 @@ public class DateTimeColumnCodecTests
     }
 
     [Test]
+    public async Task ReadColumn_NoExplicitAndNoServerTimezone_PresentsUtc()
+    {
+        byte[] bytes = await WriteAsync(w => w.WriteUInt32(1_700_000_000));
+        using var reader = ReaderOver(bytes);
+
+        // No timezone in the type or the session, so values present in UTC, not the host's local zone.
+        using var column = (DateTimeColumn)await Codec("DateTime", serverTimezone: null).ReadColumnAsync(reader, "c", "DateTime", 1, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[0], Is.EqualTo(1_700_000_000u));
+            Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(TimeSpan.Zero));
+            Assert.That(column.GetDateTimeOffset(0), Is.EqualTo(DateTimeOffset.FromUnixTimeSeconds(1_700_000_000)));
+        });
+    }
+
+    [Test]
     public async Task ReadColumn_ExposesRawSecondsAndOffsetViews()
     {
         // The specialized column offers the raw epoch seconds (Values / indexer, zero-copy) and a DateTimeOffset
