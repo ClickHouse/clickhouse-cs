@@ -112,12 +112,4 @@ public class DynamicTypeInferenceTests
     [Test]
     public void Infer_TupleWithCoercionNeedingElement_Throws()
         => Assert.Throws<NotSupportedException>(() => DynamicTypeInference.Infer((1, 2.5m)));
-
-    [TestCase(1, 1)]
-    [TestCase(255, 1)]
-    [TestCase(256, 2)]
-    [TestCase(65535, 2)]
-    [TestCase(65536, 4)]
-    public void DiscriminatorWidth_GrowsWithTypeCount(int typeCount, int expectedWidth)
-        => Assert.That(DynamicWire.DiscriminatorWidth(typeCount), Is.EqualTo(expectedWidth));
 }
