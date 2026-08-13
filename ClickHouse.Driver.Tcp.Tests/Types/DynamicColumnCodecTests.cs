@@ -70,6 +70,46 @@ public class DynamicColumnCodecTests
         CollectionAssert.AreEqual(DocumentedBytes, bytes);
     }
 
+    // The same layout as DocumentedBytes but with two values per type, so a slice can start a run part-way through
+    // it: [42::UInt64, 'hi'::String, NULL, 7::UInt64, 'yo'::String].
+    private static readonly byte[] DocumentedBytesTwoPerType =
+    {
+        0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // state prefix: serialization version = 3 (flattened)
+        0x02,                                           // num_types = 2
+        0x06, 0x53, 0x74, 0x72, 0x69, 0x6E, 0x67,       // type[0] = "String"
+        0x06, 0x55, 0x49, 0x6E, 0x74, 0x36, 0x34,       // type[1] = "UInt64"
+        0x01, 0x00, 0x02, 0x01, 0x00,                   // discriminators: UInt64, String, NULL, UInt64, String
+        0x02, 0x68, 0x69,                               // String run[0] = "hi"
+        0x02, 0x79, 0x6F,                               // String run[1] = "yo"
+        0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run[0] = 42
+        0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run[1] = 7
+    };
+
+    // The dense planner derives each type's child-column run start from the local index of that type's first
+    // in-slice row. At start 0 every one of those is 0, so a slice beginning at row 0 cannot tell a correct planner
+    // from one that ignores the offset entirely — this is the only test that can.
+    [Test]
+    public async Task WriteColumn_DenseColumnSliceAfterEarlierValues_StartsEachRunAtItsSliceOffset()
+    {
+        IColumnCodec codec = Resolve("Dynamic");
+
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytesTwoPerType);
+        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
+        using IColumn dense = await codec.ReadColumnAsync(reader, "d", "Dynamic", 5, CodecTestHarness.None);
+
+        // Slice rows [3, 5): 7 (UInt64) and "yo" (String). Each is the *second* value of its run, so each run must
+        // be written from offset 1.
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, dense, 3, 2));
+
+        byte[] expected =
+        {
+            0x01, 0x00,                                     // discriminators: UInt64, String
+            0x02, 0x79, 0x6F,                               // String run from offset 1: "yo"
+            0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run from offset 1: 7
+        };
+        CollectionAssert.AreEqual(expected, bytes);
+    }
+
     [Test]
     public async Task ReadColumn_DocumentedBytes_ReconstructsValuesAndSurfacesTheRuntimeTypeList()
     {

@@ -214,13 +214,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        // A null state is the caller saying it has none to share, so build one for this call alone.
-        if (state is null)
-        {
-            WriteStatePrefix(writer, column, start, length);
-            return;
-        }
-
         WriteStatePrefixCore(writer, state.Expect<DynamicWriteState>(TypeName));
     }
 
@@ -234,12 +227,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is null)
-        {
-            WriteColumn(writer, column, start, length);
-            return;
-        }
-
         WriteBodyCore(writer, state.Expect<DynamicWriteState>(TypeName));
     }
 
