@@ -225,6 +225,36 @@ public class DateTimeColumnCodecTests
     }
 
     [Test]
+    public async Task WriteColumn_UnspecifiedKindInDaylightSavingGap_EncodesTheForwardShiftedInstant()
+    {
+        // 2024-03-10 02:30 does not exist in New York (02:00 jumps to 03:00). The lenient rule shifts it forward to
+        // 03:30 EDT = 07:30Z, as HTTP does; ConvertTimeToUtc alone throws.
+        const string type = "DateTime('America/New_York')";
+        DateTimeColumnCodec codec = Codec(type);
+        var gap = new DateTime(2024, 3, 10, 2, 30, 0, DateTimeKind.Unspecified);
+
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { gap })));
+
+        long expected = new DateTimeOffset(2024, 3, 10, 7, 30, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+        Assert.That(BitConverter.ToUInt32(bytes), Is.EqualTo((uint)expected));
+    }
+
+    [Test]
+    public async Task WriteColumn_UnspecifiedKindInAmbiguousHour_EncodesTheEarlierOccurrence()
+    {
+        // 2024-11-03 01:30 happens twice in New York. The lenient rule takes the earlier, 01:30 EDT = 05:30Z, as
+        // HTTP does; TimeZoneInfo alone picks standard time (06:30Z) and reports nothing — a silent hour apart.
+        const string type = "DateTime('America/New_York')";
+        DateTimeColumnCodec codec = Codec(type);
+        var ambiguous = new DateTime(2024, 11, 3, 1, 30, 0, DateTimeKind.Unspecified);
+
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { ambiguous })));
+
+        long expected = new DateTimeOffset(2024, 11, 3, 5, 30, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+        Assert.That(BitConverter.ToUInt32(bytes), Is.EqualTo((uint)expected));
+    }
+
+    [Test]
     public void Create_UnknownTimezone_Throws()
         => Assert.Throws<FormatException>(() => Codec("DateTime('Not/AZone')"));
 
