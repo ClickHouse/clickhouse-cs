@@ -523,6 +523,66 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         }
     }
 
+    [Test]
+    public async Task InsertAsync_DenseDynamicColumnSplitAcrossBlocks_RoundTripsEveryRow()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Dynamic) ENGINE = Memory", DynamicSplitSettings);
+
+            // The Dynamic counterpart of the Variant case above, and the one that matters most: a Dynamic slice
+            // plan derives each type's child-column run start from the local index of that type's first in-slice
+            // row, and at start 0 every one of those is 0. Interleaving the two runtime types (and a NULL) so the
+            // maxRowsPerBlock: 2 split lands mid-run for both means every block after the first starts at a
+            // non-zero per-type offset. Discriminator 0 = String, 1 = UInt64, 2 (the type count) = NULL — unlike
+            // Variant, whose NULL is the fixed 255. String rows 1,4,6; UInt64 rows 0,3,5.
+            object[] expected = { 100UL, "a", null, 200UL, "b", 300UL, "c" };
+            var discriminators = new[] { 1, 0, 2, 1, 0, 1, 0 };
+            IColumn[] typeColumns =
+            {
+                new ArrayColumn<string>("value", "String", new[] { "a", "b", "c" }),
+                PrimitiveColumn<ulong>.FromValues("value", "UInt64", new ulong[] { 100, 200, 300 }),
+            };
+            var dense = new DynamicColumn(
+                "value",
+                "Dynamic",
+                new[] { "String", "UInt64" },
+                discriminators,
+                typeColumns,
+                expected.Length,
+                pooledDiscriminators: false,
+                ownsColumns: false);
+
+            IColumn[] columns = { PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(expected.Length)), dense };
+            await connection.InsertAsync(
+                $"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, settings: DynamicSplitSettings, cancellationToken: None);
+
+            var readBack = new List<object>(expected.Length);
+            await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table} ORDER BY id", settings: DynamicSplitSettings, cancellationToken: None))
+            {
+                for (int row = 0; row < block[0].RowCount; row++)
+                {
+                    readBack.Add(block[0].GetValue(row));
+                }
+            }
+
+            Assert.That(readBack, Is.EqualTo(expected));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    private static readonly Dictionary<string, string> DynamicSplitSettings = new(StringComparer.Ordinal)
+    {
+        ["allow_experimental_dynamic_type"] = "1",
+        ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
+    };
+
     private static uint[] RowIds(int count)
     {
         var ids = new uint[count];
