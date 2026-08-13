@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
@@ -40,15 +41,15 @@ public class InsertSlicingIntegrationTests
         string table = UniqueTableName();
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value {testCase.ClickHouseType}) ENGINE = Memory");
+            await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value {testCase.ClickHouseType}) ENGINE = Memory", testCase.Settings);
 
             IColumn insert = testCase.BuildInsertColumn("value");
             IColumn expected = testCase.BuildExpectedColumn("value");
             IColumn[] columns = { RowIds(insert.RowCount), insert };
             await connection.InsertAsync(
-                $"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 1, cancellationToken: None);
+                $"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 1, settings: testCase.Settings, cancellationToken: None);
 
-            await AssertReadsBackAsync(connection, table, expected);
+            await AssertReadsBackAsync(connection, table, expected, testCase.Settings);
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
         }
         finally
@@ -59,10 +60,11 @@ public class InsertSlicingIntegrationTests
 
     // Compares the read-back against a row cursor inside the iteration: the read-back may arrive as several blocks,
     // and a yielded block is borrowed, so no value may be retained past its own iteration.
-    private static async Task AssertReadsBackAsync(ClickHouseTcpConnection connection, string table, IColumn expected)
+    private static async Task AssertReadsBackAsync(
+        ClickHouseTcpConnection connection, string table, IColumn expected, IReadOnlyDictionary<string, string> settings)
     {
         int row = 0;
-        await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table} ORDER BY id", cancellationToken: None))
+        await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table} ORDER BY id", settings: settings, cancellationToken: None))
         {
             IColumn actual = block[0];
             for (int i = 0; i < actual.RowCount; i++, row++)
@@ -86,9 +88,9 @@ public class InsertSlicingIntegrationTests
         return PrimitiveColumn<uint>.FromValues("id", "UInt32", ids);
     }
 
-    private static async Task ExecuteAsync(ClickHouseTcpConnection connection, string sql)
+    private static async Task ExecuteAsync(ClickHouseTcpConnection connection, string sql, IReadOnlyDictionary<string, string> settings = null)
     {
-        await foreach (Block block in connection.QueryAsync(sql, cancellationToken: None))
+        await foreach (Block block in connection.QueryAsync(sql, settings: settings, cancellationToken: None))
         {
             _ = block;
         }
