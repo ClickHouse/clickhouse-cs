@@ -225,18 +225,23 @@ public class DateTimeColumnCodecTests
     }
 
     [Test]
-    public async Task WriteColumn_UnspecifiedKindInDaylightSavingGap_EncodesTheForwardShiftedInstant()
+    public void WriteColumn_UnspecifiedKindInDaylightSavingGap_ThrowsNamingTheZone()
     {
-        // 2024-03-10 02:30 does not exist in New York (02:00 jumps to 03:00). The lenient rule shifts it forward to
-        // 03:30 EDT = 07:30Z, as HTTP does; ConvertTimeToUtc alone throws.
+        // 2024-03-10 02:30 does not exist in New York (02:00 jumps to 03:00), so it names no instant and is
+        // rejected rather than shifted to one of the two neighbouring offsets.
         const string type = "DateTime('America/New_York')";
         DateTimeColumnCodec codec = Codec(type);
         var gap = new DateTime(2024, 3, 10, 2, 30, 0, DateTimeKind.Unspecified);
 
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { gap })));
+        ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(async () =>
+            await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { gap }))));
 
-        long expected = new DateTimeOffset(2024, 3, 10, 7, 30, 0, TimeSpan.Zero).ToUnixTimeSeconds();
-        Assert.That(BitConverter.ToUInt32(bytes), Is.EqualTo((uint)expected));
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("America/New_York"));
+            Assert.That(thrown.Message, Does.Contain("2024-03-10 02:30:00"));
+            Assert.That(thrown.Message, Does.Contain("DateTimeOffset"));
+        });
     }
 
     [Test]
