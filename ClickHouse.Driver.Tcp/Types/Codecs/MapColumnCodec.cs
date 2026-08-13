@@ -193,13 +193,7 @@ internal sealed class MapColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is not null)
-        {
-            shape.WriteStatePrefix(keyCodec, valueCodec, writer, state);
-            return;
-        }
-
-        WriteStatePrefix(writer, column, start, length);
+        shape.WriteStatePrefix(keyCodec, valueCodec, writer, state);
     }
 
     /// <inheritdoc/>
@@ -212,13 +206,7 @@ internal sealed class MapColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        if (state is not null)
-        {
-            shape.WriteBody(keyCodec, valueCodec, writer, column, start, length, state);
-            return;
-        }
-
-        WriteColumn(writer, column, start, length);
+        shape.WriteBody(keyCodec, valueCodec, writer, column, start, length, state);
     }
 }
 
