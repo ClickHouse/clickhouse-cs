@@ -18,8 +18,9 @@ namespace ClickHouse.Driver.Compression;
 /// <see cref="Encode"/>, <see cref="Decode"/>) used by the native protocol's compression frame. This
 /// path is optional: codecs that only support the HTTP path (e.g. the built-in
 /// <see cref="GZipCompressor"/> and <see cref="BrotliCompressor"/>) inherit default implementations that
-/// throw <see cref="NotSupportedException"/>. Block codecs such as LZ4/ZSTD (shipped as opt-in packages)
-/// override them.
+/// throw <see cref="NotSupportedException"/>. Block codecs — the built-in
+/// <see cref="Lz4Compressor"/> and <see cref="ZstdCompressor"/>, both backed by vendored copies rather
+/// than runtime dependencies — override them.
 /// </item>
 /// </list>
 /// </summary>
@@ -56,6 +57,14 @@ public interface IClickHouseCompressor
     /// any pooled buffer must not be returned to the pool twice. Not the native block path — see
     /// <see cref="Decode"/> for that. The default throws <see cref="NotSupportedException"/>.
     /// </summary>
+    /// <exception cref="InvalidDataException">
+    /// Thrown by the returned stream when the payload is corrupt or is not this codec's format. Every
+    /// built-in codec reports that condition as this type — the BCL streams behind gzip, deflate and
+    /// brotli do so natively, and the vendored LZ4 and ZSTD codecs translate their own errors into it —
+    /// so a caller reading a response body need not know which codec the server answered with. An
+    /// implementation over a third-party codec should translate at this boundary too rather than
+    /// surfacing an exception type its callers cannot name.
+    /// </exception>
     Stream Decompress(Stream source, bool leaveOpen)
         => throw new NotSupportedException($"{GetType().Name} does not support decompression.");
 

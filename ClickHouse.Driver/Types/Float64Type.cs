@@ -4,11 +4,13 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class Float64Type : FloatType
+internal class Float64Type : FloatType, ITypedReader<double>
 {
     public override Type FrameworkType => typeof(double);
 
-    public override object Read(ExtendedBinaryReader reader) => reader.ReadDouble();
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public double ReadValue(ExtendedBinaryReader reader) => reader.ReadDouble();
 
     public override string ToString() => "Float64";
 

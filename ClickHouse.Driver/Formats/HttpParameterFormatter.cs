@@ -189,9 +189,9 @@ internal static class HttpParameterFormatter
             case TupleType tupleType when value is IList list:
                 return $"({string.Join(",", tupleType.UnderlyingTypes.Select((x, i) => Format(x, list[i], true, customFormatter, parameterName)))})";
 
-            case MapType mapType when value is IDictionary dict:
-                var strings = string.Join(",", dict.Keys.Cast<object>().Select(k => $"{Format(mapType.KeyType, k, true, customFormatter, parameterName)} : {Format(mapType.ValueType, dict[k], true, customFormatter, parameterName)}"));
-                return $"{{{string.Join(",", strings)}}}";
+            case MapType mapType when MapType.IsMapValue(value):
+                var strings = string.Join(",", MapType.EnumerateEntries(value).Select(entry => $"{Format(mapType.KeyType, entry.Key, true, customFormatter, parameterName)} : {Format(mapType.ValueType, entry.Value, true, customFormatter, parameterName)}"));
+                return $"{{{strings}}}";
 
             case VariantType variantType:
                 if (value is null or DBNull)

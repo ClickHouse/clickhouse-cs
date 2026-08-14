@@ -18,22 +18,23 @@ namespace ClickHouse.Driver.Http;
 /// </para>
 /// <para>
 /// Absent or <c>identity</c> passes the source stream through untouched; a codec in
-/// <see cref="Decoders"/> is decoded; anything else (<c>zstd</c>, <c>snappy</c>, …) is unsupported.
+/// <see cref="Decoders"/> is decoded; anything else (<c>snappy</c>, …) is unsupported.
 /// Token comparison is ordinal-case-insensitive and tolerates surrounding whitespace.
 /// </para>
 /// </summary>
 internal static class ResponseDecompression
 {
     /// <summary>
-    /// Codecs the driver can decode, keyed by <c>Content-Encoding</c> token. <c>br</c> is decodable but
-    /// deliberately not part of <see cref="DefaultAcceptEncoding"/> — see the remarks there. HTTP's
-    /// <c>deflate</c> is the zlib format (RFC 1950), which is what ClickHouse emits and what a bare
-    /// <see cref="DeflateStream"/> cannot parse, so it gets a stream that handles both forms.
+    /// Codecs the driver can decode, keyed by <c>Content-Encoding</c> token. <c>br</c> is decodable
+    /// but deliberately not part of <see cref="DefaultAcceptEncoding"/> — see the remarks
+    /// there. HTTP's <c>deflate</c> is the zlib format (RFC 1950), which is what ClickHouse emits and
+    /// what a bare <see cref="DeflateStream"/> cannot parse, so it gets a stream that handles both forms.
     /// </summary>
     private static readonly Dictionary<string, Func<Stream, bool, Stream>> Decoders =
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["lz4"] = static (source, leaveOpen) => Lz4Compressor.Default.Decompress(source, leaveOpen),
+            ["zstd"] = static (source, leaveOpen) => ZstdCompressor.Default.Decompress(source, leaveOpen),
             ["gzip"] = static (source, leaveOpen) => GZipCompressor.Default.Decompress(source, leaveOpen),
             ["deflate"] = static (source, leaveOpen) => new ZLibOrDeflateStream(source, leaveOpen),
             ["br"] = static (source, leaveOpen) => BrotliCompressor.Default.Decompress(source, leaveOpen),
@@ -44,15 +45,27 @@ internal static class ResponseDecompression
     /// The <c>Accept-Encoding</c> the driver advertises when the caller has not chosen one.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// ClickHouse resolves <c>Accept-Encoding</c> by scanning for tokens in a fixed preference order
     /// (<c>zstd</c> &gt; <c>br</c> &gt; <c>lz4</c> &gt; <c>snappy</c> &gt; <c>gzip</c> &gt;
     /// <c>deflate</c>), ignoring both our ordering and q-values — so the only way to influence its
-    /// choice is which tokens we omit. <c>br</c> is omitted on purpose: advertising it would make every
-    /// response brotli, whose server-side cost scales with <c>http_zlib_compression_level</c> far more
-    /// steeply than lz4's. Listing <c>lz4</c> yields the cheapest codec to produce and to decode; a
-    /// caller who prefers brotli's ratio can ask for it, and it is still decoded whenever it arrives.
+    /// choice is which tokens we omit. Naming <c>zstd</c> therefore makes it the codec for every
+    /// default query; the remaining tokens are the fallback for a server or intermediary that cannot
+    /// do zstd.
+    /// </para>
+    /// <para>
+    /// How the codecs compare on payload size, server CPU and client CPU depends on the data, the
+    /// link and the server's <c>http_zlib_compression_level</c>; the driver also decodes the body on
+    /// the caller's thread. A caller who wants a different balance can set their desired codec explicitly,
+    /// e.g. <c>lz4</c>, on a CPU-bound client over a fast link.
+    /// </para>
+    /// <para>
+    /// <c>br</c> stays omitted: it outranks every fallback token listed here, so advertising it
+    /// would make it the codec whenever the server cannot do zstd. It is decoded whenever it
+    /// arrives, and a caller who wants it can ask explicitly.
+    /// </para>
     /// </remarks>
-    public const string DefaultAcceptEncoding = "lz4, gzip, deflate";
+    public const string DefaultAcceptEncoding = "zstd, lz4, gzip, deflate";
 
     /// <summary>
     /// Returns the single effective <c>Content-Encoding</c> token of <paramref name="response"/>, or

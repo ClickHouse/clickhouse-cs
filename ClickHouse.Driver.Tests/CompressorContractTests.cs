@@ -31,6 +31,12 @@ public class CompressorContractTests
     }
 
     [Test]
+    public void ZstdCompressor_ContentEncoding_IsZstd()
+    {
+        Assert.That(ZstdCompressor.Default.ContentEncoding, Is.EqualTo("zstd"));
+    }
+
+    [Test]
     public void GZipCompressor_Compress_ProducesGzipDecodableStream()
     {
         AssertRoundTripsThroughDecoder(GZipCompressor.Default, raw => new GZipStream(raw, CompressionMode.Decompress));
@@ -126,6 +132,60 @@ public class CompressorContractTests
         yield return new TestCaseData(GZipCompressor.Default).SetName("{m}(gzip)");
         yield return new TestCaseData(BrotliCompressor.Default).SetName("{m}(br)");
         yield return new TestCaseData(Lz4Compressor.Default).SetName("{m}(lz4)");
+        yield return new TestCaseData(ZstdCompressor.Default).SetName("{m}(zstd)");
+    }
+
+    /// <summary>
+    /// The codecs that <i>do</i> implement the native block path, as the counterpart to the
+    /// <c>NotSupportedException</c> cases above: every member the HTTP-only codecs throw on must work
+    /// here, and round-trip.
+    /// </summary>
+    private static IEnumerable<TestCaseData> BlockCapableCompressors()
+    {
+        yield return new TestCaseData(Lz4Compressor.Default, (byte)0x82).SetName("{m}(lz4)");
+        yield return new TestCaseData(ZstdCompressor.Default, (byte)0x90).SetName("{m}(zstd)");
+    }
+
+    [TestCaseSource(nameof(BlockCapableCompressors))]
+    public void MethodByte_OnABlockCapableCodec_IsItsClickHouseCompressionMethodByte(
+        IClickHouseCompressor compressor, byte expected)
+    {
+        Assert.That(compressor.MethodByte, Is.EqualTo(expected));
+    }
+
+    [TestCaseSource(nameof(BlockCapableCompressors))]
+    public void MaxEncodedLength_OnABlockCapableCodec_LeavesRoomForTheWorstCase(
+        IClickHouseCompressor compressor, byte methodByte)
+    {
+        _ = methodByte;
+
+        // Incompressible input is the case the bound exists for: encoding it must fit in the bound.
+        var incompressible = new byte[4096];
+        System.Random.Shared.NextBytes(incompressible);
+        var target = new byte[compressor.MaxEncodedLength(incompressible.Length)];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(target.Length, Is.GreaterThanOrEqualTo(incompressible.Length));
+            Assert.That(compressor.Encode(incompressible, target), Is.GreaterThan(0));
+        });
+    }
+
+    [TestCaseSource(nameof(BlockCapableCompressors))]
+    public void EncodeThenDecode_OnABlockCapableCodec_RoundTripsTheBlock(
+        IClickHouseCompressor compressor, byte methodByte)
+    {
+        _ = methodByte;
+
+        var encoded = new byte[compressor.MaxEncodedLength(Sample.Length)];
+        var encodedLength = compressor.Encode(Sample, encoded);
+        var decoded = new byte[Sample.Length];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(compressor.Decode(encoded.AsSpan(0, encodedLength), decoded), Is.EqualTo(Sample.Length));
+            Assert.That(decoded, Is.EqualTo(Sample));
+        });
     }
 
     [TestCaseSource(nameof(BuiltInCompressors))]

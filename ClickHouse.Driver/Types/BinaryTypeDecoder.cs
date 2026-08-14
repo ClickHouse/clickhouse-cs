@@ -149,7 +149,7 @@ internal static class BinaryTypeDecoder
                 return new LowCardinalityType() { UnderlyingType = FromByteCode(reader, typeSettings) };
 
             case BinaryTypeIndex.Map:
-                return new MapType() { UnderlyingTypes = Tuple.Create(FromByteCode(reader, typeSettings), FromByteCode(reader, typeSettings)) };
+                return new MapType(typeSettings.mapReadMode) { UnderlyingTypes = Tuple.Create(FromByteCode(reader, typeSettings), FromByteCode(reader, typeSettings)) };
 
             case BinaryTypeIndex.IPv4:
                 return IPv4Singleton;
@@ -167,7 +167,7 @@ internal static class BinaryTypeDecoder
                 };
 
             case BinaryTypeIndex.Custom:
-                return DecodeCustomType(reader); // "Ring, Polygon, etc"
+                return DecodeCustomType(reader, typeSettings); // "Ring, Polygon, etc"
 
             case BinaryTypeIndex.Bool:
                 return BooleanSingleton;
@@ -325,13 +325,13 @@ internal static class BinaryTypeDecoder
         return new NestedType { UnderlyingTypes = types };
     }
 
-    private static ClickHouseType DecodeCustomType(ExtendedBinaryReader reader)
+    private static ClickHouseType DecodeCustomType(ExtendedBinaryReader reader, TypeSettings typeSettings)
     {
         var typeName = reader.ReadString();
         // Try to parse custom type name through the type converter
         try
         {
-            return TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default);
+            return TypeConverter.ParseClickHouseType(typeName, typeSettings);
         }
         catch
         {

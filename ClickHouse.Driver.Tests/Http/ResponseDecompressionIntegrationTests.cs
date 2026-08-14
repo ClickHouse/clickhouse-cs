@@ -19,9 +19,12 @@ namespace ClickHouse.Driver.Tests.Http;
 /// the server rather than from the code under test.
 /// <para>
 /// The inherited <c>client</c> is a default one, which means these run over the driver's default
-/// <c>Accept-Encoding</c> — and therefore over lz4, since that is what the server picks from it. That is
+/// <c>Accept-Encoding</c> — and therefore over zstd, since that is what the server picks from it. That is
 /// deliberate: it pins the negotiation and the decode together, so a default that stopped being decodable
-/// would fail here rather than silently degrade.
+/// would fail here rather than silently degrade. It also means the inherited <c>client</c> is only ever
+/// the right instrument for a test <i>about the default</i>: a test that means to exercise one specific
+/// codec must say so with <see cref="CreateClientWith"/>, or it silently follows the default wherever it
+/// goes next.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -47,20 +50,22 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
     /// this one would not.
     /// </summary>
     [Test]
-    public async Task DefaultAcceptEncoding_AgainstRealServer_IsAnsweredWithLz4()
+    public async Task DefaultAcceptEncoding_AgainstRealServer_IsAnsweredWithZstd()
     {
         using var result = await client.ExecuteRawResultAsync(
             "SELECT number FROM numbers(500) FORMAT TSV",
             options: new QueryOptions { AcceptEncoding = ResponseDecompression.DefaultAcceptEncoding });
 
-        Assert.That(result.ContentEncoding, Is.EqualTo("lz4"));
+        Assert.That(result.ContentEncoding, Is.EqualTo("zstd"));
     }
 
     [TestCase("lz4", ExpectedResult = "lz4")]
+    [TestCase("zstd", ExpectedResult = "zstd")]
     [TestCase("gzip", ExpectedResult = "gzip")]
     [TestCase("br", ExpectedResult = "br")]
     [TestCase("lz4, gzip, deflate", ExpectedResult = "lz4")]
     [TestCase("gzip, br", ExpectedResult = "br", TestName = "{m}(br wins over gzip regardless of order)")]
+    [TestCase("gzip, lz4, br, zstd", ExpectedResult = "zstd", TestName = "{m}(zstd wins even when listed last)")]
     public async Task<string> AcceptEncoding_AgainstRealServer_IsResolvedByTheServersOwnPreference(string acceptEncoding)
     {
         using var raw = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None };
@@ -85,6 +90,7 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
     /// still does.)
     /// </summary>
     [TestCase("lz4")]
+    [TestCase("zstd")]
     [TestCase("br")]
     [TestCase("gzip")]
     [TestCase("deflate")]
@@ -113,7 +119,9 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
     /// decoder has to stream across block boundaries instead of decoding one self-contained block. Do not
     /// shrink this: a small body fits in a single block and would not exercise streaming decode at all.
     /// The test first proves on the wire that the response really is a multi-block LZ4 body — otherwise a
-    /// silently-uncompressed response would let a broken decoder pass.
+    /// silently-uncompressed response would let a broken decoder pass. The wire check and the decode both
+    /// go through the <i>same</i> lz4 client, so what was proven on the wire is what is then decoded; the
+    /// fixture's default client would not do, since it now negotiates zstd.
     /// </summary>
     [Test]
     public async Task ExecuteReaderAsync_WithMultiMegabyteLz4Response_DecodesEveryRowAcrossBlockBoundaries()
@@ -130,9 +138,10 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
             CultureInfo.InvariantCulture);
         Assert.That(plaintextBytes, Is.GreaterThan(1024 * 1024), "the payload must exceed 1 MiB");
 
-        using (var rawLz4 = await client.ExecuteRawResultAsync(
-            $"SELECT payload FROM {table} ORDER BY id FORMAT TSV",
-            options: new QueryOptions { AcceptEncoding = "lz4" }))
+        using var lz4 = CreateClientWith("lz4");
+
+        using (var rawLz4 = await lz4.ExecuteRawResultAsync(
+            $"SELECT payload FROM {table} ORDER BY id FORMAT TSV"))
         {
             Assert.That(rawLz4.ContentEncoding, Is.EqualTo("lz4"), "the server must have answered with lz4");
 
@@ -142,13 +151,89 @@ public class ResponseDecompressionIntegrationTests : AbstractConnectionTestFixtu
 
         using var uncompressed = CreateUncompressedClient();
         var expected = await ReadPayloadsAsync(uncompressed, table);
-        var actual = await ReadPayloadsAsync(client, table);
+        var actual = await ReadPayloadsAsync(lz4, table);
 
         Assert.Multiple(() =>
         {
             Assert.That(actual, Has.Count.EqualTo(20000));
             Assert.That(actual, Is.EqualTo(expected));
         });
+    }
+
+    /// <summary>
+    /// The zstd counterpart, and the case that pins streaming decode for this codec: over 1 MiB of
+    /// plaintext, so the server's <c>ZSTD_e_flush</c> boundaries land mid-body and the decoder has to
+    /// carry state across reads instead of decoding one self-contained frame. The wire check first
+    /// proves the body really is a zstd frame, otherwise a silently-uncompressed response would let a
+    /// broken decoder pass — and, as in the lz4 twin, it goes through the same client the decode does, so
+    /// naming the codec once decides both halves.
+    /// </summary>
+    [Test]
+    public async Task ExecuteReaderAsync_WithMultiMegabyteZstdResponse_DecodesEveryRow()
+    {
+        var table = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (id Int64, payload String) ENGINE Memory");
+
+        // 20,000 rows x ~70 bytes of non-repeating hex ~= 1.4 MB of plaintext.
+        await client.ExecuteNonQueryAsync(
+            $"INSERT INTO {table} SELECT number, concat(toString(number), '-', hex(MD5(toString(number))), '-', hex(MD5(toString(number + 1)))) FROM numbers(20000)");
+
+        var plaintextBytes = Convert.ToInt64(
+            await client.ExecuteScalarAsync($"SELECT sum(length(payload) + 1) FROM {table}"),
+            CultureInfo.InvariantCulture);
+        Assert.That(plaintextBytes, Is.GreaterThan(1024 * 1024), "the payload must exceed 1 MiB");
+
+        using var zstd = CreateClientWith("zstd");
+
+        using (var rawZstd = await zstd.ExecuteRawResultAsync(
+            $"SELECT payload FROM {table} ORDER BY id FORMAT TSV"))
+        {
+            Assert.That(rawZstd.ContentEncoding, Is.EqualTo("zstd"), "the server must have answered with zstd");
+
+            var frame = await rawZstd.ReadAsByteArrayAsync();
+            Assert.Multiple(() =>
+            {
+                Assert.That(frame[..4], Is.EqualTo(new byte[] { 0x28, 0xB5, 0x2F, 0xFD }), "expected a zstd frame magic");
+                Assert.That(frame.Length, Is.LessThan(plaintextBytes), "the body must actually be compressed");
+            });
+        }
+
+        using var uncompressed = CreateUncompressedClient();
+        var expected = await ReadPayloadsAsync(uncompressed, table);
+        var actual = await ReadPayloadsAsync(zstd, table);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(actual, Has.Count.EqualTo(20000));
+            Assert.That(actual, Is.EqualTo(expected));
+        });
+    }
+
+    /// <summary>
+    /// <c>ReadDecompressedStreamAsync</c> over zstd, which is the member a caller uses when they asked
+    /// for a compressed export and then want the plaintext after all.
+    /// </summary>
+    [Test]
+    public async Task ReadDecompressedStreamAsync_WithZstd_YieldsTheSameBytesAsAnUncompressedExport()
+    {
+        var table = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (id Int64) ENGINE Memory");
+        await client.ExecuteNonQueryAsync($"INSERT INTO {table} SELECT number FROM numbers(3000)");
+
+        using var plainResult = await client.ExecuteRawResultAsync($"SELECT id FROM {table} ORDER BY id FORMAT TSV");
+        var expected = await plainResult.ReadAsByteArrayAsync();
+
+        using var zstdResult = await client.ExecuteRawResultAsync(
+            $"SELECT id FROM {table} ORDER BY id FORMAT TSV",
+            options: new QueryOptions { AcceptEncoding = "zstd" });
+
+        Assert.That(zstdResult.ContentEncoding, Is.EqualTo("zstd"));
+
+        using var decompressed = await zstdResult.ReadDecompressedStreamAsync();
+        using var buffer = new MemoryStream();
+        await decompressed.CopyToAsync(buffer);
+
+        Assert.That(buffer.ToArray(), Is.EqualTo(expected));
     }
 
     [Test]

@@ -78,12 +78,12 @@ public class ClickHouseRawResult : IDisposable
     /// Reads the response content as a stream, transparently decoding it when the response is
     /// transport-compressed — unlike <see cref="ReadAsStreamAsync"/>, which is a verbatim pass-through of
     /// the raw bytes. The codec is taken from the response's <c>Content-Encoding</c>: absent or
-    /// <c>identity</c> returns the raw stream unchanged, and <c>lz4</c>, <c>gzip</c>, <c>deflate</c> and
-    /// <c>br</c> are decoded.
+    /// <c>identity</c> returns the raw stream unchanged, and <c>lz4</c>, <c>zstd</c>, <c>gzip</c>,
+    /// <c>deflate</c> and <c>br</c> are decoded.
     /// </summary>
     /// <returns>A task that resolves to a plaintext stream over the response content.</returns>
     /// <exception cref="NotSupportedException">
-    /// The response uses a codec this client cannot decode (e.g. <c>zstd</c>); the message names it.
+    /// The response uses a codec this client cannot decode (e.g. <c>snappy</c>); the message names it.
     /// </exception>
     /// <remarks>
     /// Disposing this <see cref="ClickHouseRawResult"/> is always sufficient — it releases the response and

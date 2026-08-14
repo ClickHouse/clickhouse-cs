@@ -50,18 +50,18 @@ internal class PocoBatchSerializer
     public void Serialize<T>(PocoBatch<T> batch, Func<T, object>[] getters, Action<T, ExtendedBinaryWriter>[] writers, Stream stream, IClickHouseCompressor compressor)
     {
         // See BatchSerializer.Serialize for the leaveOpen/flush rationale.
-        var compressing = compressor != null;
-        var target = compressing ? compressor.Compress(stream, leaveOpen: true) : stream;
-
-        PooledStreamWriter.WriteLine(target, batch.Query);
-
-        using var writer = new ExtendedBinaryWriter(target, leaveOpen: !compressing);
+        var target = BatchWriteTarget.Create(stream, compressor);
+        var writer = new ExtendedBinaryWriter(target, leaveOpen: false);
 
         var types = batch.Types;
 
         T current = default;
+        var serializingRows = false;
         try
         {
+            PooledStreamWriter.WriteLine(target, batch.Query);
+            serializingRows = true;
+
             if (writers != null)
             {
                 // RowBinary path
@@ -84,6 +84,12 @@ internal class PocoBatchSerializer
         }
         catch (Exception e)
         {
+            BatchWriteTarget.DisposeSuppressingErrors(writer);
+
+            // A failure writing the query line is not a serialization fault, so it propagates as it is.
+            if (!serializingRows)
+                throw;
+
             // Best-effort: materialize the failing row for diagnostics.
             // Getters may throw again, so swallow secondary failures to preserve
             // the original exception in the wrapper.
@@ -105,5 +111,7 @@ internal class PocoBatchSerializer
 
             throw new ClickHouseBulkCopySerializationException(failedRow, e);
         }
+
+        writer.Dispose();
     }
 }

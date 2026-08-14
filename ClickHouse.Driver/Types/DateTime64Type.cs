@@ -17,12 +17,8 @@ internal class DateTime64Type : AbstractDateTimeType, IInstantReader
 
     public DateTime FromClickHouseTicks(long clickHouseTicks) => ToDateTime(ToInstant(clickHouseTicks));
 
-    public Instant ToInstant(long clickHouseTicks)
-    {
-        // Convert ClickHouse variable precision ticks into "standard" .NET 100ns ones
-        var ticks = MathUtils.ShiftDecimalPlaces(clickHouseTicks, 7 - Scale);
-        return Instant.FromUnixTimeTicks(ticks);
-    }
+    // Converts ClickHouse variable precision ticks into "standard" .NET 100ns ones
+    public Instant ToInstant(long clickHouseTicks) => Instant.FromUnixTimeTicks(MathUtils.ShiftDecimalPlaces(clickHouseTicks, 7 - Scale));
 
     public long ToClickHouseTicks(Instant instant) => MathUtils.ShiftDecimalPlaces(instant.ToUnixTimeTicks(), Scale - 7);
 
@@ -44,13 +40,19 @@ internal class DateTime64Type : AbstractDateTimeType, IInstantReader
         };
     }
 
-    public override object Read(ExtendedBinaryReader reader) => FromClickHouseTicks(reader.ReadInt64());
+    protected override DateTime ReadDateTime(ExtendedBinaryReader reader) => ToDateTime(ReadInstant(reader));
+
+    protected override DateTimeOffset ReadDateTimeOffset(ExtendedBinaryReader reader) => ToDateTimeOffset(ReadInstant(reader));
+
+    // Same conversion as FromClickHouseTicks, exposing the intermediate instant so every read of this type
+    // shares one wire read.
+    private Instant ReadInstant(ExtendedBinaryReader reader) => ToInstant(reader.ReadInt64());
 
     bool IInstantReader.ReportsInstant => true;
 
     object IInstantReader.ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
     {
-        var decoded = ToInstant(reader.ReadInt64());
+        var decoded = ReadInstant(reader);
         instant = decoded;
         return ToDateTime(decoded);
     }

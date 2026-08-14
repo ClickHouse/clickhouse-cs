@@ -21,7 +21,9 @@ internal class DateTimeType : AbstractDateTimeType, IInstantReader
         return new DateTimeType { TimeZone = timeZone };
     }
 
-    public override object Read(ExtendedBinaryReader reader) => ToDateTime(ReadInstant(reader));
+    protected override DateTime ReadDateTime(ExtendedBinaryReader reader) => ToDateTime(ReadInstant(reader));
+
+    protected override DateTimeOffset ReadDateTimeOffset(ExtendedBinaryReader reader) => ToDateTimeOffset(ReadInstant(reader));
 
     bool IInstantReader.ReportsInstant => true;
 

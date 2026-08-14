@@ -15,6 +15,16 @@ internal static class StringExtensions
     public static string QuoteDouble(this string str) => str.StartsWith("\"", StringComparison.InvariantCulture) && str.EndsWith("\"", StringComparison.InvariantCulture) ? str : $"\"{str}\"";
 
     /// <summary>
+    /// Appends a value prefixed with its length, so that a concatenation of appended values maps back to
+    /// exactly one sequence — whatever characters the values themselves hold.
+    /// </summary>
+    /// <param name="builder">Builder to append to</param>
+    /// <param name="value">Value to append</param>
+    /// <returns>The same builder, for chaining</returns>
+    public static StringBuilder AppendLengthPrefixed(this StringBuilder builder, string value) =>
+        builder.Append(value.Length).Append(':').Append(value);
+
+    /// <summary>
     /// Encloses column name in backticks (`). Escapes ` symbol if met inside name
     /// Does nothing if column is already enclosed
     /// </summary>
