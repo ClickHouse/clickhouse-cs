@@ -84,7 +84,10 @@ public class ClickHouseClientTests : AbstractConnectionTestFixture
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("Ok.\n") };
         });
         using var httpClient = new HttpClient(trackingHandler);
-        var settings = new ClickHouseClientSettings { Host = "localhost", Path = path, HttpClient = httpClient };
+        // Protocol and Port are set explicitly so the expected absolute URI does not
+        // depend on the client defaults. The assertion covers the whole absolute URI
+        // (not only the path) to pin that a path such as "//ch" never becomes an authority.
+        var settings = new ClickHouseClientSettings { Protocol = "http", Host = "localhost", Port = 8123, Path = path, HttpClient = httpClient };
         using var client = new ClickHouseClient(settings);
 
         var result = await client.PingAsync();
