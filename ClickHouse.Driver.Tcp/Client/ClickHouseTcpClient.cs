@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Format;
-using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp;
@@ -23,15 +22,15 @@ namespace ClickHouse.Driver.Tcp;
 /// </para>
 /// </summary>
 [Experimental("CHTCP0001")]
-public sealed class ClickHouseTcpClient : IAsyncDisposable
+public sealed class ClickHouseTcpClient : IClickHouseTcpClient
 {
     // Reading and writing Dynamic (and later JSON) requires the flattened native serialization; the client
     // enables it on every operation so callers never have to know about it. A caller-supplied value wins.
     private const string FlattenedSerializationSetting = "output_format_native_use_flattened_dynamic_and_json_serialization";
 
+    private static readonly ClickHouseTcpInsertOptions DefaultInsertOptions = new();
+
     private readonly IConnectionSource source;
-    private readonly IReadOnlyDictionary<string, string> baseSettings;
-    private readonly int maxSendBufferBytes;
 
     /// <summary>Creates a client from options.</summary>
     /// <param name="options">The client configuration (endpoint, credentials, timeouts, client-level settings).</param>
@@ -41,15 +40,8 @@ public sealed class ClickHouseTcpClient : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
-        source = new SingleConnectionSource(options);
-
-        // Copy the caller's settings into an owned dictionary: the client is shared across threads and merges
-        // these on every query, so retaining the caller's reference would let a later mutation of it fault or
-        // partially apply mid-merge.
-        baseSettings = options.CustomSettings is null
-            ? null
-            : new Dictionary<string, string>(options.CustomSettings, StringComparer.Ordinal);
-        maxSendBufferBytes = options.MaxSendBufferBytes;
+        Options = options.WithOwnedCustomSettings();
+        source = new SingleConnectionSource(Options);
     }
 
     /// <summary>Creates a client from a connection string.</summary>
@@ -61,16 +53,18 @@ public sealed class ClickHouseTcpClient : IAsyncDisposable
     {
     }
 
-    /// <summary>Test/pool seam: builds a client over an arbitrary connection source and client-level settings.</summary>
-    internal ClickHouseTcpClient(
-        IConnectionSource source,
-        IReadOnlyDictionary<string, string> baseSettings,
-        int maxSendBufferBytes = ClickHouseTcpClientOptions.DefaultMaxSendBufferBytes)
+    /// <summary>Test/pool seam: builds a client over an arbitrary connection source.</summary>
+    internal ClickHouseTcpClient(IConnectionSource source, ClickHouseTcpClientOptions options = null)
     {
         this.source = source;
-        this.baseSettings = baseSettings;
-        this.maxSendBufferBytes = maxSendBufferBytes;
+        Options = (options ?? new ClickHouseTcpClientOptions()).WithOwnedCustomSettings();
     }
+
+    /// <summary>
+    /// The configuration this client was built with, including the client-level settings applied to every
+    /// operation. Init-only, so it reflects construction and never changes.
+    /// </summary>
+    public ClickHouseTcpClientOptions Options { get; }
 
     /// <summary>
     /// Runs a query and streams its result as a sequence of <see cref="Block"/>s — the low-level columnar tier,
@@ -180,8 +174,7 @@ public sealed class ClickHouseTcpClient : IAsyncDisposable
     /// </summary>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="columns">The row data, matched to the target columns by name.</param>
-    /// <param name="maxRowsPerBlock">A cap on the rows per wire block, applied alongside the internal byte target; null for no row cap.</param>
-    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="options">Per-insert options (query id, settings, block sizing), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server acknowledges the insert.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="columns"/> is null.</exception>
@@ -189,20 +182,39 @@ public sealed class ClickHouseTcpClient : IAsyncDisposable
     public async ValueTask InsertAsync(
         string sql,
         IReadOnlyList<IColumn> columns,
-        int? maxRowsPerBlock = ClickHouseTcpConnection.DefaultMaxRowsPerBlock,
-        ClickHouseTcpQueryOptions options = null,
+        ClickHouseTcpInsertOptions options = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(columns);
 
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
-        string queryId = options?.QueryId;
 
         await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
         await lease.Connection.InsertAsync(
-            sql, columns, settings, parameters: null, queryId, maxRowsPerBlock, maxSendBufferBytes, handlers: null, cancellationToken).ConfigureAwait(false);
+            sql,
+            columns,
+            settings,
+            parameters: null,
+            options?.QueryId,
+            ResolveMaxRowsPerBlock(options),
+            Options.MaxSendBufferBytes,
+            handlers: null,
+            cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The row cap for an insert: the caller's value, or the default when they passed no options at all.
+    /// </summary>
+    /// <param name="options">The per-insert options, or null for the client defaults.</param>
+    /// <returns>The rows-per-block cap, or null to write a single block.</returns>
+    /// <remarks>
+    /// Reads through a default instance rather than coalescing, because null is a meaningful value here: an
+    /// explicit <see cref="ClickHouseTcpInsertOptions.MaxRowsPerBlock"/> of null asks for one block, so a
+    /// <c>?? Default</c> would silently re-enable splitting.
+    /// </remarks>
+    internal static int? ResolveMaxRowsPerBlock(ClickHouseTcpInsertOptions options)
+        => (options ?? DefaultInsertOptions).MaxRowsPerBlock;
 
     /// <summary>Checks connectivity by sending a Ping and awaiting the Pong.</summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
@@ -217,7 +229,7 @@ public sealed class ClickHouseTcpClient : IAsyncDisposable
     public ValueTask DisposeAsync() => source.DisposeAsync();
 
     private IReadOnlyDictionary<string, string> BuildSettings(ClickHouseTcpQueryOptions options)
-        => MergeSettings(baseSettings, options?.Settings);
+        => MergeSettings(Options.CustomSettings, options?.Settings);
 
     /// <summary>
     /// Merges the settings for one operation: the client-level custom settings, overlaid by the per-query

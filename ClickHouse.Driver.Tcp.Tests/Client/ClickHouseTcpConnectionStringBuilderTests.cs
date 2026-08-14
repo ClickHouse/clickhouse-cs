@@ -66,6 +66,61 @@ public class ClickHouseTcpConnectionStringBuilderTests
         Assert.That(options.CustomSettings, Is.Null);
     }
 
+    [TestCase("set_")]
+    [TestCase("SET_")]
+    public void ToOptions_BareSetPrefixKey_ThrowsArgumentException(string bareKey)
+    {
+        // The prefix alone names an empty setting, which on the wire is the key that terminates the settings list.
+        var builder = new ClickHouseTcpConnectionStringBuilder($"Host=h;{bareKey}=1");
+
+        Assert.Throws<ArgumentException>(() => builder.ToOptions());
+    }
+
+    [Test]
+    public void ToOptions_CustomSettingSetAsTypedValue_ConvertedToString()
+    {
+        // A setting assigned programmatically as a typed value must reach CustomSettings as its string form, not
+        // as an empty value.
+        var builder = new ClickHouseTcpConnectionStringBuilder { Host = "h" };
+        builder["set_max_threads"] = 4;
+        builder["set_ratio"] = 0.5;
+
+        var options = builder.ToOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.CustomSettings["max_threads"], Is.EqualTo("4"));
+            Assert.That(options.CustomSettings["ratio"], Is.EqualTo("0.5"));
+        });
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void ToOptions_FractionalValuesUnderCommaDecimalCulture_StayInvariant()
+    {
+        // de-DE writes 0,5 for 0.5. Values sent to the server must not pick up the ambient culture.
+        var builder = new ClickHouseTcpConnectionStringBuilder { Host = "h", DialTimeout = TimeSpan.FromMilliseconds(1500) };
+        builder["set_ratio"] = 0.5;
+
+        var options = builder.ToOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.CustomSettings["ratio"], Is.EqualTo("0.5"));
+            Assert.That(options.DialTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(1500)));
+        });
+    }
+
+    [Test]
+    public void ToOptions_SetKeyWithEmptyValue_IsDroppedAndYieldsNoSetting()
+    {
+        // The base builder removes a key whose value is empty, so 'set_some_flag=' never reaches CustomSettings at
+        // all. A flag-style setting needs an explicit value, e.g. 'set_some_flag=1'.
+        var options = new ClickHouseTcpConnectionStringBuilder("Host=h;set_some_flag=").ToOptions();
+
+        Assert.That(options.CustomSettings, Is.Null);
+    }
+
     [Test]
     public void FromConnectionString_DelegatesToBuilder()
     {
