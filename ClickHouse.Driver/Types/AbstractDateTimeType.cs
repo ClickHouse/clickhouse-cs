@@ -21,7 +21,8 @@ internal static class DateTimeConversions
 }
 
 internal abstract class AbstractDateTimeType : ParameterizedType,
-    ITypedWriter<DateTime>, ITypedWriter<DateTimeOffset>, ITypedWriter<DateOnly>
+    ITypedWriter<DateTime>, ITypedWriter<DateTimeOffset>, ITypedWriter<DateOnly>,
+    ITypedReader<DateTime>, ITypedReader<DateTimeOffset>, ITypedReader<DateOnly>
 {
     // ClickHouse emits synthetic fixed-offset timezone names like "Fixed/UTC+05:30:00" for columns
     // declared with a fixed UTC offset. These names are not in the IANA TZDB so GetZoneOrNull
@@ -117,13 +118,32 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
 
     public override Type FrameworkType => typeof(DateTime);
 
+    // The boxed read keeps returning DateTime, historically the only representation. The typed read can also
+    // produce DateTimeOffset or DateOnly from the same wire value.
+    public override object Read(ExtendedBinaryReader reader) => ReadDateTime(reader);
+
+    DateTime ITypedReader<DateTime>.ReadValue(ExtendedBinaryReader reader) => ReadDateTime(reader);
+
+    DateTimeOffset ITypedReader<DateTimeOffset>.ReadValue(ExtendedBinaryReader reader) => ReadDateTimeOffset(reader);
+
+    DateOnly ITypedReader<DateOnly>.ReadValue(ExtendedBinaryReader reader) => ReadDateOnly(reader);
+
+    // Subclasses decode per their on-wire encoding: seconds, ticks or days.
+    protected abstract DateTime ReadDateTime(ExtendedBinaryReader reader);
+
+    // Offset 0 is correct for the date-only subtypes, whose DateTime is UTC-kind. Timezone-aware subtypes
+    // override to derive the offset from the source instant.
+    protected virtual DateTimeOffset ReadDateTimeOffset(ExtendedBinaryReader reader) => new(ReadDateTime(reader), TimeSpan.Zero);
+
+    protected virtual DateOnly ReadDateOnly(ExtendedBinaryReader reader) => DateOnly.FromDateTime(ReadDateTime(reader));
+
     public DateTimeZone TimeZone { get; set; }
 
     public DateTimeZone TimeZoneOrUtc => TimeZone ?? DateTimeZone.Utc;
 
     public override string ToString() => TimeZone == null ? $"{Name}" : $"{Name}('{TimeZone.Id}')";
 
-    private DateTimeOffset ToDateTimeOffset(Instant instant) => instant.InZone(TimeZoneOrUtc).ToDateTimeOffset();
+    protected DateTimeOffset ToDateTimeOffset(Instant instant) => instant.InZone(TimeZoneOrUtc).ToDateTimeOffset();
 
     public DateTime ToDateTime(Instant instant)
     {

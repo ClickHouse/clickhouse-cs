@@ -4,11 +4,13 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class Float32Type : FloatType
+internal class Float32Type : FloatType, ITypedReader<float>
 {
     public override Type FrameworkType => typeof(float);
 
-    public override object Read(ExtendedBinaryReader reader) => reader.ReadSingle();
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public float ReadValue(ExtendedBinaryReader reader) => reader.ReadSingle();
 
     public override string ToString() => "Float32";
 

@@ -33,7 +33,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly Stream decompressor; // Can be null: only set when the response body was transport-compressed
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
     private readonly IReadValueConverter readValueConverter; // Can be null
-    private readonly string[] columnTypeNames; // Raw server-sent type strings; null when no converter
+    private readonly string[] columnTypeNames; // Raw server-sent type strings, exactly as declared
     private readonly PocoTypeRegistry pocoRegistry;
     private readonly Dictionary<Type, object> bindingPlanCache = new();
     private bool hasCurrentRow;
@@ -53,9 +53,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         RawTypes = types;
         FieldNames = names;
         CurrentRow = new object[FieldNames.Length];
-
-        if (readValueConverter != null)
-            columnTypeNames = rawTypeNames;
+        columnTypeNames = rawTypeNames;
     }
 
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
@@ -116,7 +114,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             buffered = new PooledReadBufferStream(bufferedInner, readBufferSize, leaveOpen: true);
 
             reader = new ExtendedBinaryReader(buffered);
-            var (names, types, rawTypeNames) = ReadHeaders(reader, settings, readValueConverter != null);
+            var (names, types, rawTypeNames) = ReadHeaders(reader, settings);
             return new ClickHouseDataReader(httpResponse, reader, buffered, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter, decompressingStream);
         }
         catch (Exception)
@@ -385,7 +383,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                     continue;
                 }
 
-                throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
                     typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), null));
             }
 
@@ -395,12 +393,85 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             }
             catch (InvalidCastException)
             {
-                throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
                     typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), value.GetType()));
             }
         }
 
         return instance;
+    }
+
+    /// <summary>
+    /// If <typeparamref name="T"/> is registered for read, returns the per-wire-column materializer delegates
+    /// and the constructor; otherwise returns false and the caller uses the <see cref="Read"/> +
+    /// <see cref="MapTo{T}"/> loop.
+    ///
+    /// A read value converter does not disable the fast path. Each column applies it on the overload that
+    /// matches how the column was read: a box-free typed read converts through
+    /// <see cref="IReadValueConverter.ConvertValue{T}"/> with <c>T</c> the property type, as
+    /// <see cref="GetFieldValue{T}"/> does; a boxed-fallback column converts through the boxed
+    /// <see cref="IReadValueConverter.ConvertValue"/>, as <see cref="MapTo{T}"/> does via
+    /// <see cref="GetValue"/>.
+    /// </summary>
+    internal bool TryGetRowMaterializer<T>(out RowColumnReader<T>[] materializers, out Func<T> constructor)
+        where T : class
+    {
+        materializers = null;
+        constructor = null;
+
+        if (pocoRegistry == null)
+            return false;
+
+        var mapping = pocoRegistry.GetReadMapping<T>();
+        if (mapping == null)
+            return false;
+
+        var built = pocoRegistry.GetOrBuildRowReaders<T>(FieldNames, RawTypes, columnTypeNames, mapping, readValueConverter != null);
+        if (built == null)
+            return false;
+
+        materializers = built;
+        constructor = mapping.Constructor;
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the next row straight from the stream via the fast-path delegates, bypassing the shared
+    /// <c>object[]</c> row buffer and its per-value boxing. Returns false at end of stream, and mirrors
+    /// <see cref="Read"/>'s mid-stream server-exception handling. The delegates consume every wire column in
+    /// order, so the stream stays aligned even for columns the POCO does not map.
+    /// </summary>
+    internal bool TryMaterializeNextRow<T>(RowColumnReader<T>[] materializers, Func<T> constructor, out T value)
+        where T : class
+    {
+        value = null;
+
+        try
+        {
+            // PeekChar is inside the try: a mid-stream failure truncates the body at a row
+            // boundary too, so the end-of-stream probe can itself hit the truncation.
+            if (reader.PeekChar() == -1)
+            {
+                hasCurrentRow = false;
+                return false;
+            }
+
+            var instance = constructor();
+            for (var i = 0; i < materializers.Length; i++)
+                materializers[i](reader, instance, readValueConverter, columnTypeNames);
+            value = instance;
+            return true;
+        }
+        // A mid-stream server failure truncates the HTTP body; reading past the truncation surfaces
+        // as an IOException — EndOfStreamException for a buffered body, but HttpIOException
+        // ("response ended prematurely") for a live streamed response. Both derive from IOException.
+        catch (IOException) when (exceptionTagStream != null)
+        {
+            var serverEx = exceptionTagStream.TryExtractMidStreamException();
+            if (serverEx != null)
+                throw serverEx;
+            throw;
+        }
     }
 
     private (int ColumnOrdinal, ColumnBinding<T> Binding)[] GetOrBuildBindingPlan<T>(PocoReadMapping<T> mapping)
@@ -433,34 +504,13 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private void ValidateBinding(Type pocoType, PocoPropertyInfo propInfo, int columnOrdinal)
     {
         var colType = RawTypes[columnOrdinal];
-        var colFrameworkType = colType.FrameworkType;
-        var unwrappedColFrameworkType = Nullable.GetUnderlyingType(colFrameworkType) ?? colFrameworkType;
-
-        if (unwrappedColFrameworkType == typeof(object))
-            return;
-
-        var assignable = propInfo.PropertyType.IsAssignableFrom(unwrappedColFrameworkType)
-            || (propInfo.NullableUnderlyingType != null && propInfo.NullableUnderlyingType.IsAssignableFrom(unwrappedColFrameworkType));
-
-        if (!assignable)
+        if (!PocoColumnAssignment.IsAssignable(propInfo, colType))
         {
-            throw new InvalidOperationException(BuildAssignmentErrorMessage(
+            var colFrameworkType = colType.FrameworkType;
+            var unwrappedColFrameworkType = Nullable.GetUnderlyingType(colFrameworkType) ?? colFrameworkType;
+            throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
                 pocoType, propInfo, FieldNames[columnOrdinal], colType.ToString(), unwrappedColFrameworkType));
         }
-    }
-
-    private static string BuildAssignmentErrorMessage(
-        Type targetType,
-        PocoPropertyInfo propInfo,
-        string columnName,
-        string clickHouseType,
-        Type returnedType)
-    {
-        var returnedDescription = returnedType is null ? "null" : returnedType.FullName;
-        return
-            $"Cannot map ClickHouse column '{columnName}' ({clickHouseType}) to property " +
-            $"{targetType.Name}.{propInfo.PropertyName} ({propInfo.PropertyType.FullName}). " +
-            $"The reader returned {returnedDescription}, which is not assignable to {propInfo.PropertyType.FullName}.";
     }
 
     public override bool Read()
@@ -518,7 +568,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 #pragma warning restore CA2215 // Dispose methods should call base class dispose
 
-    private static (string[], ClickHouseType[], string[]) ReadHeaders(ExtendedBinaryReader reader, TypeSettings settings, bool captureRawTypeNames)
+    // The raw declarations are always kept. Besides feeding IReadValueConverter, they are the row-reader
+    // cache key: a resolved type's ToString() can drop state its Read depends on — JsonType renders as
+    // "Json" whatever its typed-path hints — so keying on it would let one shape reuse another's delegates.
+    private static (string[], ClickHouseType[], string[]) ReadHeaders(ExtendedBinaryReader reader, TypeSettings settings)
     {
         if (reader.PeekChar() == -1)
         {
@@ -533,7 +586,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
         var names = new string[count];
         var types = new ClickHouseType[count];
-        var rawTypeNames = captureRawTypeNames ? new string[count] : null;
+        var rawTypeNames = new string[count];
 
         for (var i = 0; i < count; i++)
         {
@@ -543,8 +596,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         for (var i = 0; i < count; i++)
         {
             var chType = reader.ReadString();
-            if (captureRawTypeNames)
-                rawTypeNames[i] = chType;
+            rawTypeNames[i] = chType;
             types[i] = TypeConverter.ParseClickHouseType(chType, settings);
         }
         return (names, types, rawTypeNames);
