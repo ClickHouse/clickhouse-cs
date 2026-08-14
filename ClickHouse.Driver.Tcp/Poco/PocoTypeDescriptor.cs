@@ -11,7 +11,7 @@ namespace ClickHouse.Driver.Tcp.Poco;
 /// nothing here depends on the columns a particular query or table happens to have.
 ///
 /// <para>
-/// Matching is tiered, most specific first: the exact column name, then case-insensitively, then ignoring
+/// Matching is tiered, most specific first: the exact column name, then ignoring case, then ignoring case and
 /// underscores — so a <c>user_id</c> column reaches a <c>UserId</c> property with no attribute needed. A column
 /// that reaches more than one property at the tier it lands on is an error rather than a silent pick; a column that
 /// reaches none is simply not mapped, which the query path skips and the insert path reports.
@@ -25,12 +25,15 @@ internal abstract class PocoTypeDescriptor
 
     /// <summary>Builds the name lookups over an already-discovered member set.</summary>
     /// <param name="pocoType">The POCO type, for diagnostics.</param>
-    /// <param name="members">The mapped members, in declaration order.</param>
+    /// <param name="members">The mapped members.</param>
     /// <exception cref="InvalidOperationException">Two members map to the same column name.</exception>
     protected PocoTypeDescriptor(Type pocoType, PocoMember[] members)
     {
         PocoType = pocoType;
-        Members = members;
+
+        // Wrapped rather than handed over: the descriptor is cached and shared across threads, so no consumer
+        // should be able to reach the backing array.
+        Members = Array.AsReadOnly(members);
 
         byExactName = new Dictionary<string, PocoMember>(members.Length, StringComparer.Ordinal);
         foreach (PocoMember member in members)
@@ -52,7 +55,10 @@ internal abstract class PocoTypeDescriptor
     /// <summary>The POCO type this describes.</summary>
     public Type PocoType { get; }
 
-    /// <summary>The mapped members, in declaration order. Never empty.</summary>
+    /// <summary>
+    /// The mapped members. Never empty, and in no contracted order — reflection does not promise one, and for an
+    /// inherited property it reports the derived type first.
+    /// </summary>
     public IReadOnlyList<PocoMember> Members { get; }
 
     /// <summary>
@@ -83,17 +89,18 @@ internal abstract class PocoTypeDescriptor
     /// on.
     /// </summary>
     /// <param name="pocoType">The POCO type.</param>
-    /// <returns>The mapped members, in declaration order.</returns>
-    /// <exception cref="InvalidOperationException">Nothing is left to map, or a
-    /// <see cref="ClickHouseTcpColumnAttribute"/> carries a blank name.</exception>
+    /// <returns>The mapped members.</returns>
+    /// <exception cref="InvalidOperationException">Nothing is left to map, a
+    /// <see cref="ClickHouseTcpColumnAttribute"/> carries a blank name, or one name is declared by two unrelated
+    /// interfaces.</exception>
     protected static PocoMember[] DiscoverMembers(Type pocoType)
     {
-        PropertyInfo[] declared = pocoType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+        List<PropertyInfo> visible = VisibleProperties(pocoType);
 
         // Indexers are dropped first because they all report the same name, so they would otherwise collapse into
         // one another in the shadowing pass below.
-        var candidates = new List<PropertyInfo>(declared.Length);
-        foreach (PropertyInfo property in declared)
+        var candidates = new List<PropertyInfo>(visible.Count);
+        foreach (PropertyInfo property in visible)
         {
             if (property.GetIndexParameters().Length == 0)
             {
@@ -116,13 +123,32 @@ internal abstract class PocoTypeDescriptor
 
         if (members.Count == 0)
         {
-            string reason = declared.Length == 0 ? "it declares no public instance properties"
+            string reason = visible.Count == 0 ? "it has no public instance properties"
                 : distinct.Count == 0 ? "its only public instance properties are indexers, which are never mapped"
-                : $"all {distinct.Count} of its public instance properties carry [ClickHouseTcpNotMapped]";
+                : $"every mappable property ({distinct.Count}) carries [ClickHouseTcpNotMapped]";
             throw new InvalidOperationException($"Type '{pocoType.Name}' has no properties to map to ClickHouse columns: {reason}.");
         }
 
         return members.ToArray();
+    }
+
+    // GetProperties walks a class's base types, but an interface has no base type: what an interface inherits sits
+    // on the interfaces it extends. An interface is a legal insert source, so collect those too. GetInterfaces
+    // returns the whole closure, each interface once, so a diamond yields no duplicates.
+    private static List<PropertyInfo> VisibleProperties(Type pocoType)
+    {
+        const BindingFlags Mapped = BindingFlags.Public | BindingFlags.Instance;
+        var properties = new List<PropertyInfo>(pocoType.GetProperties(Mapped));
+
+        if (pocoType.IsInterface)
+        {
+            foreach (Type inherited in pocoType.GetInterfaces())
+            {
+                properties.AddRange(inherited.GetProperties(Mapped));
+            }
+        }
+
+        return properties;
     }
 
     // A property declared with `new` is reported once per declaring type, so it would look like two properties
@@ -137,9 +163,19 @@ internal abstract class PocoTypeDescriptor
         {
             if (ordinalOf.TryGetValue(property.Name, out int at))
             {
-                if (kept[at].DeclaringType.IsAssignableFrom(property.DeclaringType))
+                PropertyInfo previous = kept[at];
+                if (previous.DeclaringType.IsAssignableFrom(property.DeclaringType))
                 {
                     kept[at] = property;
+                }
+                else if (!property.DeclaringType.IsAssignableFrom(previous.DeclaringType))
+                {
+                    // Only an interface can reach here, by extending two interfaces that each declare the name: a
+                    // class hierarchy is a single chain, so one declaration always wins. C# itself needs a cast to
+                    // read such a property, so there is no declaration to prefer.
+                    throw new InvalidOperationException(
+                        $"Property '{property.Name}' is declared by both '{previous.DeclaringType.Name}' and '{property.DeclaringType.Name}', and neither inherits the other, so the column it maps to is undecided. " +
+                        $"Map a type that declares the property once.");
                 }
 
                 continue;
@@ -255,7 +291,10 @@ internal sealed class PocoTypeDescriptor<T> : PocoTypeDescriptor
     /// </summary>
     public bool CanActivate => activator is not null;
 
-    /// <summary>A compiled <c>new T()</c>, as fast as the operator it stands in for.</summary>
+    /// <summary>
+    /// A compiled <c>new T()</c>, so a query pays one delegate call per row instead of
+    /// <see cref="System.Activator"/>'s reflection.
+    /// </summary>
     /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot be instantiated.</exception>
     public Func<T> Activator => activator ?? throw new InvalidOperationException(
         $"Type '{typeof(T).Name}' cannot be materialized from a query result: {activationBlockedReason}.");
@@ -279,8 +318,9 @@ internal sealed class PocoTypeDescriptor<T> : PocoTypeDescriptor
         Type type = typeof(T);
 
         // IsAbstract covers interfaces too. An abstract class can report a public parameterless constructor, and
-        // Expression.New over it even builds, so without this the failure would surface only once the compiled
-        // delegate ran.
+        // Expression.New over it even builds — Compile is what refuses it, and only with "Can't compile a
+        // NewExpression with a constructor declared on an abstract class". Checking here turns that into a message
+        // that names the type, and keeps the type usable for insert instead of failing its whole descriptor.
         if (type.IsAbstract)
         {
             return (null, type.IsInterface ? "it is an interface" : "it is abstract");

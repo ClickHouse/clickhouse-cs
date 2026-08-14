@@ -72,12 +72,11 @@ public class PocoTypeDescriptorTests
     }
 
     [Test]
-    public void Build_StaticProperty_IsNotMapped()
+    public void Build_StaticProperty_IsNotMappedWhileTheInstanceOneIs()
     {
-        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
-            () => PocoTypeDescriptor<StaticOnlyPoco>.Build());
+        PocoTypeDescriptor<StaticAndInstancePoco> descriptor = PocoTypeDescriptor<StaticAndInstancePoco>.Build();
 
-        Assert.That(error.Message, Does.Contain("no public instance properties"));
+        Assert.That(ColumnNames(descriptor), Is.EquivalentTo(new[] { "Instance" }));
     }
 
     [Test]
@@ -97,6 +96,55 @@ public class PocoTypeDescriptorTests
 
         Assert.That(descriptor.Members.Count, Is.EqualTo(1));
         Assert.That(descriptor.Members[0].MemberType, Is.EqualTo(typeof(long)), "the derived declaration should win");
+    }
+
+    [Test]
+    public void Build_Interface_MapsThePropertiesItInheritsFromItsBaseInterfaces()
+    {
+        // GetProperties walks a class's base types but stops dead on an interface, which has no base type. Missing
+        // this would silently drop BaseValue and insert a server default into its column.
+        PocoTypeDescriptor<IDerivedShape> descriptor = PocoTypeDescriptor<IDerivedShape>.Build();
+
+        Assert.That(ColumnNames(descriptor), Is.EquivalentTo(new[] { "BaseValue", "DerivedValue" }));
+    }
+
+    [Test]
+    public void Build_InterfaceRedeclaringAnInheritedProperty_KeepsTheDerivedDeclaration()
+    {
+        PocoTypeDescriptor<IShadowingShape> descriptor = PocoTypeDescriptor<IShadowingShape>.Build();
+
+        Assert.That(descriptor.Members.Count, Is.EqualTo(1));
+        Assert.That(descriptor.Members[0].MemberType, Is.EqualTo(typeof(long)));
+    }
+
+    [Test]
+    public void Build_InterfaceInheritingOneNameFromTwoUnrelatedInterfaces_ThrowsRatherThanPickingOne()
+    {
+        // C# needs a cast to read such a property, so there is no declaration to prefer. Only interfaces can get
+        // here — a class hierarchy is one chain.
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => PocoTypeDescriptor<IAmbiguousShape>.Build());
+
+        Assert.That(error.Message, Does.Contain("ILeftShape"));
+        Assert.That(error.Message, Does.Contain("IRightShape"));
+        Assert.That(error.Message, Does.Contain("neither inherits the other"));
+    }
+
+    [Test]
+    public void Build_NotMappedOnAVirtualBaseProperty_ExcludesTheOverride()
+    {
+        // GetCustomAttribute<T> walks base property definitions, so the attribute carries to the override. Pinned
+        // because PropertyInfo.GetCustomAttributes(type, inherit: true) does not do the same, and swapping the two
+        // APIs would silently change this.
+        PocoTypeDescriptor<OverridingPoco> descriptor = PocoTypeDescriptor<OverridingPoco>.Build();
+
+        Assert.That(ColumnNames(descriptor), Does.Not.Contain("Excluded"));
+    }
+
+    [Test]
+    public void Build_ColumnAttributeOnAVirtualBaseProperty_RenamesTheOverride()
+    {
+        Assert.That(Member<OverridingPoco>("renamed_column").MemberName, Is.EqualTo("Renamed"));
     }
 
     [Test]
@@ -122,8 +170,9 @@ public class PocoTypeDescriptorTests
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(
             () => PocoTypeDescriptor<DuplicateColumnPoco>.Build());
 
-        Assert.That(error.Message, Does.Contain("Value"));
-        Assert.That(error.Message, Does.Contain("Other"));
+        // Asserted as the whole phrase: 'Value' is also the column name, so a bare substring check would pass
+        // without the first property ever being named.
+        Assert.That(error.Message, Does.Contain("both 'Value' and 'Other'"));
     }
 
     [Test]
@@ -150,8 +199,18 @@ public class PocoTypeDescriptorTests
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(
             () => PocoTypeDescriptor<AllNotMappedPoco>.Build());
 
-        Assert.That(error.Message, Does.Contain("all 2"));
+        Assert.That(error.Message, Does.Contain("every mappable property (2)"));
         Assert.That(error.Message, Does.Contain("[ClickHouseTcpNotMapped]"));
+    }
+
+    [Test]
+    public void Build_EveryPropertyNotMappedAlongsideAnIndexer_CountsOnlyTheMappableOnes()
+    {
+        // The count is over what could have been mapped, so the indexer must not inflate it.
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => PocoTypeDescriptor<NotMappedWithIndexerPoco>.Build());
+
+        Assert.That(error.Message, Does.Contain("every mappable property (1)"));
     }
 
     [Test]
@@ -197,6 +256,16 @@ public class PocoTypeDescriptorTests
     public void Build_SetterOnlyProperty_IsSettableButNotGettable()
     {
         PocoMember member = Member<AccessorsPoco>("SetterOnly");
+
+        Assert.That(member.CanGet, Is.False);
+        Assert.That(member.CanSet, Is.True);
+    }
+
+    [Test]
+    public void Build_PrivateGetter_IsNotGettableSoItCannotBeAnInsertSource()
+    {
+        // The insert-side mirror of the private-setter case: reflection reports a getter, but not a public one.
+        PocoMember member = Member<AccessorsPoco>("PrivateGetter");
 
         Assert.That(member.CanGet, Is.False);
         Assert.That(member.CanSet, Is.True);
@@ -304,6 +373,14 @@ public class PocoTypeDescriptorTests
     {
         Assert.That(Match<CaseCollidingPoco>("Value").MemberName, Is.EqualTo("Value"));
         Assert.That(Match<CaseCollidingPoco>("value").MemberName, Is.EqualTo("Lowercase"));
+    }
+
+    [Test]
+    public void TryMatchColumn_ColumnMatchingOneMemberExactlyWhileTheUnderscoreTierIsAmbiguous_PrefersTheExactMatch()
+    {
+        // The tightest tier holds every member, so an exact name wins even when the loosest tier would collide
+        // three ways.
+        Assert.That(Match<ExactBeatsUnderscorePoco>("userid").MemberName, Is.EqualTo("Compact"));
     }
 
     [Test]
@@ -417,9 +494,11 @@ public class PocoTypeDescriptorTests
         public int this[int index] => index;
     }
 
-    private class StaticOnlyPoco
+    private class StaticAndInstancePoco
     {
-        public static int Value { get; set; }
+        public static int Static { get; set; }
+
+        public int Instance { get; set; }
     }
 
     private class EmptyPoco
@@ -433,6 +512,14 @@ public class PocoTypeDescriptorTests
 
         [ClickHouseTcpNotMapped]
         public int Second { get; set; }
+    }
+
+    private class NotMappedWithIndexerPoco
+    {
+        [ClickHouseTcpNotMapped]
+        public int Dropped { get; set; }
+
+        public int this[int index] => index;
     }
 
     private class InheritedBase
@@ -470,6 +557,8 @@ public class PocoTypeDescriptorTests
         public int InitOnly { get; init; }
 
         public int PrivateSetter { get; private set; }
+
+        public int PrivateGetter { private get; set; }
 
         public int SetterOnly
         {
@@ -510,6 +599,60 @@ public class PocoTypeDescriptorTests
         int Value { get; set; }
     }
 
+    private interface IBaseShape
+    {
+        int BaseValue { get; set; }
+    }
+
+    private interface IDerivedShape : IBaseShape
+    {
+        int DerivedValue { get; set; }
+    }
+
+    private interface IShadowedShape
+    {
+        int Value { get; set; }
+    }
+
+    private interface IShadowingShape : IShadowedShape
+    {
+        new long Value { get; set; }
+    }
+
+    private interface ILeftShape
+    {
+        int Value { get; set; }
+    }
+
+    private interface IRightShape
+    {
+        int Value { get; set; }
+    }
+
+    private interface IAmbiguousShape : ILeftShape, IRightShape
+    {
+    }
+
+    private abstract class OverriddenBase
+    {
+        [ClickHouseTcpNotMapped]
+        public virtual int Excluded { get; set; }
+
+        [ClickHouseTcpColumn(Name = "renamed_column")]
+        public virtual int Renamed { get; set; }
+
+        public virtual int Plain { get; set; }
+    }
+
+    private class OverridingPoco : OverriddenBase
+    {
+        public override int Excluded { get; set; }
+
+        public override int Renamed { get; set; }
+
+        public override int Plain { get; set; }
+    }
+
     private class SnakeCasePoco
     {
         public int UserId { get; set; }
@@ -521,6 +664,19 @@ public class PocoTypeDescriptorTests
 
         [ClickHouseTcpColumn(Name = "value")]
         public int Lowercase { get; set; }
+    }
+
+    // Three column names that all collapse to 'userid' once underscores go, one of which is that name exactly.
+    private class ExactBeatsUnderscorePoco
+    {
+        [ClickHouseTcpColumn(Name = "userid")]
+        public int Compact { get; set; }
+
+        [ClickHouseTcpColumn(Name = "user_id")]
+        public int Snake { get; set; }
+
+        [ClickHouseTcpColumn(Name = "us_erid")]
+        public int Odd { get; set; }
     }
 
     // Column names that differ only in where their underscores fall: distinct at the case tier, indistinguishable
