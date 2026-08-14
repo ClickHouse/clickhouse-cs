@@ -387,8 +387,9 @@ public class ClickHouseRawResultDecompressionTests
     {
         // The undecodable-codec throw hands nothing out, so — exactly as on an untagged response — it must
         // not mark the content consumed and lock the other members out of a body that is still whole.
+        // snappy, not zstd: zstd became decodable when the vendored ZstdSharp codec landed.
         var compressed = Lz4Encoded();
-        using var response = CreateTaggedStreamedResponse(compressed, "zstd");
+        using var response = CreateTaggedStreamedResponse(compressed, "snappy");
         using var raw = new ClickHouseRawResult(response);
 
         Assert.ThrowsAsync<NotSupportedException>(() => raw.ReadDecompressedStreamAsync());
