@@ -1,0 +1,1 @@
+* Reading `Map` columns now builds the result `Dictionary` through a cached compiled factory instead of a reflection invoke, removing the per-row constructor resolution that the pre-sizing change added (issue #534).

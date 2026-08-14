@@ -29,6 +29,9 @@ internal class ArrayType : ParameterizedType
 
     public override string ToString() => $"{Name}({UnderlyingType})";
 
+    internal override string CacheSignature =>
+        ComposeCacheSignature(children => $"{Name}({children[0]})", UnderlyingType);
+
     public override object Read(ExtendedBinaryReader reader)
     {
         var length = reader.Read7BitEncodedInt();

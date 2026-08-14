@@ -108,12 +108,12 @@ public class SerializationErrorClassificationTests : AbstractConnectionTestFixtu
         var table = CreateTableName($"outofrange_{path}");
         await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (Id UInt64, Value DateTime) ENGINE = Memory");
 
-        // Enough serializable rows precede the bad one (~240 KB uncompressed, far past the
-        // connection's write buffer) that the server has really received payload by the time
-        // serialization fails, so the insert dies mid-request rather than before it starts.
+        // Enough serializable rows precede the bad one (~480 KB uncompressed, past both the serializer's
+        // 256 KiB write buffer and the connection's) that the server has really received payload by the
+        // time serialization fails, so the insert dies mid-request rather than before it starts.
         var baseValue = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var rows = Enumerable
-            .Range(0, 20_000)
+            .Range(0, 40_000)
             .Select(i => new DateRow { Id = (ulong)i, Value = baseValue.AddSeconds(i) })
             .Append(new DateRow { Id = ulong.MaxValue, Value = OutOfRangeValue })
             .ToList();
@@ -174,11 +174,13 @@ public class SerializationErrorClassificationTests : AbstractConnectionTestFixtu
         var injected = CreateFault(fault);
 
         // Faulting after the first KB puts the failure inside the serializer's row loop, i.e. where it
-        // gets wrapped with the failing row.
+        // gets wrapped with the failing row. The row count has to carry the payload past the
+        // serializer's 256 KiB write buffer, or the loop never reaches the transport at all and the
+        // fault only lands as the batch is flushed on the way out.
         using var httpClient = new HttpClient(new FaultingRequestStreamHandler(injected, bytesBeforeFault: 1024));
         using var faultingClient = CreateClient(httpClient);
 
-        var ex = Assert.CatchAsync(() => InsertPayloadRowsAsync(faultingClient, path, rowCount: 64));
+        var ex = Assert.CatchAsync(() => InsertPayloadRowsAsync(faultingClient, path, rowCount: 512));
 
         Assert.Multiple(() =>
         {
@@ -191,9 +193,11 @@ public class SerializationErrorClassificationTests : AbstractConnectionTestFixtu
     [TestCase(InsertPath.Poco)]
     public void InsertBinaryAsync_WhenRequestStreamFailsBeforeFirstRow_SurfacesTransportErrorUnwrapped(InsertPath path)
     {
-        // The INSERT query line is written before the serializer's try block, so a failure there is not
-        // wrapped in the first place; this guards against future wrapping being introduced around it,
-        // not against the unwrapping being removed. A real peer cannot be made to trigger it reliably:
+        // A batch this small never fills the serializer's write buffer, so the only write that reaches
+        // the transport is the flush after the last row - outside the block that attaches a failing row.
+        // The failure is therefore not wrapped in the first place; this guards against future wrapping
+        // being introduced around it, not against the unwrapping being removed. A real peer cannot be
+        // made to trigger it reliably either:
         // the query line is small enough to disappear into the socket send buffer, so the write
         // succeeds locally even against a dead connection.
         var injected = new IOException("proxy aborted the upload");

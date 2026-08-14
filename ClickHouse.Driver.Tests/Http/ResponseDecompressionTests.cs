@@ -71,6 +71,7 @@ public class ResponseDecompressionTests
         "deflate" => new DeflateStream(destination, CompressionLevel.Fastest, leaveOpen: true),
         "br" or "brotli" => new BrotliStream(destination, CompressionLevel.Fastest, leaveOpen: true),
         "lz4" => Lz4Compressor.Default.Compress(destination, leaveOpen: true),
+        "zstd" => ZstdCompressor.Default.Compress(destination, leaveOpen: true),
         _ => throw new ArgumentOutOfRangeException(nameof(contentEncoding), contentEncoding, null),
     };
 
@@ -93,6 +94,7 @@ public class ResponseDecompressionTests
     private static IEnumerable<TestCaseData> DecodableCodecs()
     {
         yield return new TestCaseData("lz4").SetName("{m}(lz4)");
+        yield return new TestCaseData("zstd").SetName("{m}(zstd)");
         yield return new TestCaseData("gzip").SetName("{m}(gzip)");
         yield return new TestCaseData("deflate").SetName("{m}(deflate)");
         yield return new TestCaseData("br").SetName("{m}(br)");
@@ -192,7 +194,9 @@ public class ResponseDecompressionTests
         Assert.That(ex.Message, Does.Contain("gzip, br"));
     }
 
-    [TestCase("zstd")]
+    // zstd used to be listed here; it is decodable since the vendored ZstdSharp codec landed, so it
+    // moved to DecodableCodecs and `compress` (RFC 9110, which ClickHouse never emits) took its slot.
+    [TestCase("compress")]
     [TestCase("snappy")]
     [TestCase("xz")]
     public void Wrap_WithUnsupportedCodec_ThrowsNamingTheCodecAndTheFix(string contentEncoding)
@@ -216,7 +220,7 @@ public class ResponseDecompressionTests
     {
         using var source = new MemoryStream(new byte[] { 1, 2, 3 });
 
-        var wrapped = ResponseDecompression.TryWrap(source, "zstd", leaveOpen: true, out var decompressed);
+        var wrapped = ResponseDecompression.TryWrap(source, "snappy", leaveOpen: true, out var decompressed);
 
         Assert.Multiple(() =>
         {
@@ -241,7 +245,7 @@ public class ResponseDecompressionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(advertised, Is.EqualTo(new[] { "lz4", "gzip", "deflate" }));
+            Assert.That(advertised, Is.EqualTo(new[] { "zstd", "lz4", "gzip", "deflate" }));
             foreach (var token in advertised)
             {
                 using var source = new MemoryStream(Encode(token, Encoding.UTF8.GetBytes("x")));
@@ -312,6 +316,7 @@ public class ResponseDecompressionTests
     [TestCase(null, TestName = "{m}(no Content-Encoding)")]
     [TestCase("identity", TestName = "{m}(identity)")]
     [TestCase("lz4", TestName = "{m}(lz4)")]
+    [TestCase("zstd", TestName = "{m}(zstd)")]
     [TestCase("gzip", TestName = "{m}(gzip)")]
     [TestCase("deflate", TestName = "{m}(deflate)")]
     [TestCase("br", TestName = "{m}(br)")]
@@ -328,11 +333,11 @@ public class ResponseDecompressionTests
     [Test]
     public void ExecuteReaderAsync_WithUnsupportedResponseCodec_ThrowsActionableErrorNamingTheCodec()
     {
-        using var client = CreateClient(CreateResponse(new byte[] { 0x28, 0xB5, 0x2F, 0xFD }, "zstd"));
+        using var client = CreateClient(CreateResponse([0xFF, 0x06, 0x00, 0x00], "snappy"));
 
         var ex = Assert.ThrowsAsync<NotSupportedException>(() => ReadAllAsync(client));
 
-        Assert.That(ex.Message, Does.Contain("zstd"));
+        Assert.That(ex.Message, Does.Contain("snappy"));
     }
 
     [Test]

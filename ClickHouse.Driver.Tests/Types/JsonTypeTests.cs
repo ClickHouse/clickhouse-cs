@@ -1142,6 +1142,101 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         public long UserId { get; set; }
     }
 
+    public static IEnumerable<TestCaseData> TypedPathNullValueTestCases()
+    {
+        yield return new TestCaseData("x Nullable(Int64)", "{\"x\": null}", "{\"x\":null}")
+            .SetName("TypedNullableInt64PathWithNullValue");
+
+        yield return new TestCaseData("s Nullable(String)", "{\"s\": null}", "{\"s\":null}")
+            .SetName("TypedNullableStringPathWithNullValue");
+
+        yield return new TestCaseData("x Nullable(Int64)", "{}", "{\"x\":null}")
+            .SetName("TypedNullablePathAbsentFromDocument");
+
+        yield return new TestCaseData("a.b Nullable(Int64)", "{\"a\": {\"b\": null}}", "{\"a\":{\"b\":null}}")
+            .SetName("NestedTypedNullablePathWithNullValue");
+
+        yield return new TestCaseData("a.b.c Nullable(Int64)", "{\"a\": {\"b\": {\"c\": null}}}", "{\"a\":{\"b\":{\"c\":null}}}")
+            .SetName("DeeplyNestedTypedNullablePathWithNullValue");
+
+        yield return new TestCaseData("x Dynamic", "{\"x\": null}", "{\"x\":null}")
+            .SetName("TypedDynamicPathWithNullValue");
+
+        yield return new TestCaseData("x Nullable(Int64)", "{\"x\": 42}", "{\"x\":42}")
+            .SetName("TypedNullablePathWithNonNullValue");
+
+        yield return new TestCaseData("arr Array(Nullable(Int32))", "{\"arr\": [1, null, 3]}", "{\"arr\":[1,null,3]}")
+            .SetName("TypedArrayPathWithNullElement");
+
+        yield return new TestCaseData("m Map(String, Nullable(Int64))", "{\"m\": {\"k\": null}}", "{\"m\":{\"k\":null}}")
+            .SetName("TypedMapPathWithNullValue");
+
+        // A typed leaf path may overlap a typed subtree, and the server renders both under the same
+        // key (`{"a":null,"a":{"b":null}}`), which a single JsonObject cannot represent; the subtree
+        // is kept because it is the one that can still carry a value.
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b Nullable(Int64)",
+                "{\"a\": null}",
+                "{\"a\":{\"b\":null}}")
+            .SetName("TypedLeafPathOverlappingTypedSubtreeWithNullValues");
+
+        // Both `a` and `a.b` are typed and the value belongs to the subtree. Descending into an
+        // object at a path that overlaps a typed leaf was added after 25.8: 26.3 and later route
+        // the value to `a.b`, while 25.8 parses `{"b":7}` against `a Nullable(Int64)` and rejects
+        // the insert with INCORRECT_DATA. (The exact boundary is somewhere in between; 26.3 is the
+        // oldest server in the test matrix, so the gate uses it.) The flattened key is the stand-in
+        // where the nested document is not accepted — the two are indistinguishable once stored,
+        // both giving `{"a":null,"a":{"b":7}}`, so the read path under test and the expectation
+        // below are the same either way.
+        var overlappingSubtreeDocument = TestUtilities.ServerVersion >= Version.Parse("26.3")
+            ? "{\"a\": {\"b\": 7}}"
+            : "{\"a.b\": 7}";
+
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b Nullable(Int64)",
+                overlappingSubtreeDocument,
+                "{\"a\":{\"b\":7}}")
+            .SetName("TypedLeafPathOverlappingTypedSubtreeWithValue");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCaseSource(nameof(TypedPathNullValueTestCases))]
+    public async Task Read_WithTypedPathAndNullValue_ShouldMaterializeJsonNull(string jsonDefinition, string jsonData, string expectedJson)
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON({jsonDefinition})) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{jsonData}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That(result.ToJsonString(), Is.EqualTo(expectedJson));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Read_WithUntypedPathAndNullValue_ShouldOmitPath()
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"x\": null}}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That(result.ContainsKey("x"), Is.False);
+        Assert.That(result.ToJsonString(), Is.EqualTo("{}"));
+    }
+
     private class NullableHintedData
     {
         public int? Value { get; set; }
@@ -1175,6 +1270,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await client.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
+        Assert.That(result.ContainsKey("Value"), Is.True);
         Assert.That(result["Value"], Is.Null);
         Assert.That(result["Name"].GetValue<string>(), Is.EqualTo("test"));
     }

@@ -46,6 +46,16 @@
 
   <ItemGroup>
     <None Include="..\README.nuget.md" Link="README.nuget.md" Pack="true" PackagePath="" />
+    <!--
+      The vendored codecs under ClickHouse.Driver.Common/Vendor/ are compiled into the bundled
+      ClickHouse.Driver.Common.dll, and their MIT terms require the copyright and permission notice
+      to accompany every copy, binary included. PackageLicenseExpression states ClickHouse's own
+      grant but names no third party, so ship the notices as package content. Note that setting
+      PackageLicenseFile instead is not an option: it is mutually exclusive with the expression
+      (NU5033), and the expression is what tooling reads.
+    -->
+    <None Include="..\LICENSE" Link="LICENSE" Pack="true" PackagePath="" />
+    <None Include="..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <ItemGroup>

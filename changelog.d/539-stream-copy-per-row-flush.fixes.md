@@ -1,0 +1,1 @@
+* Fixed binary inserts flushing the compression stream once per value written by copying a stream — binary-mode `JSON` POCOs, and `String`/`FixedString` values given as a `Stream` (issue #539). Such inserts were much slower and compressed much worse with ZSTD, GZip and Brotli; LZ4 was unaffected.

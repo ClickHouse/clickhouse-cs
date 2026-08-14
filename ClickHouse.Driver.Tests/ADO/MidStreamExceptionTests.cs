@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -68,6 +69,50 @@ public class MidStreamExceptionTests : AbstractConnectionTestFixture
         {
             using var reader = command.ExecuteReader();
             while (reader.Read())
+            {
+                // Drain until the in-band mid-stream exception surfaces
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("boom mid stream"));
+    }
+
+    public class MidStreamPoco
+    {
+        public int N { get; set; }
+
+        public byte E { get; set; }
+    }
+
+    [Test]
+    [FromVersion(25, 11)]
+    public void QueryAsync_MidStreamExceptionAfterResponseIsCommitted_ThrowsClickHouseServerException()
+    {
+        // Same scenario as ShouldDetectMidStreamException_AfterResponseIsCommitted, but driven through
+        // QueryAsync<T>, which takes the box-free fast path (TryMaterializeNextRow) instead of Read().
+        using var streamingClient = TestUtilities.GetTestClickHouseClient(compression: false);
+        streamingClient.RegisterPocoType<MidStreamPoco>();
+
+        var options = new QueryOptions
+        {
+            CustomSettings = new Dictionary<string, object>
+            {
+                ["http_write_exception_in_output_format"] = 1,
+                ["max_block_size"] = 1000,
+                ["http_response_buffer_size"] = 0,
+                ["wait_end_of_query"] = 0,
+            },
+        };
+
+        const string Sql = @"
+            SELECT toInt32(number) AS N,
+                   throwIf(number = 200000, 'boom mid stream') AS E
+            FROM system.numbers
+            LIMIT 400000";
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        {
+            await foreach (var row in streamingClient.QueryAsync<MidStreamPoco>(Sql, options: options))
             {
                 // Drain until the in-band mid-stream exception surfaces
             }

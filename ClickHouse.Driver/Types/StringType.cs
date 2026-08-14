@@ -5,7 +5,7 @@ using Microsoft.IO;
 
 namespace ClickHouse.Driver.Types;
 
-internal class StringType : ClickHouseType
+internal class StringType : ClickHouseType, ITypedReader<string>, ITypedReader<byte[]>
 {
     private static readonly RecyclableMemoryStreamManager MemoryStreamManager = new();
 
@@ -14,13 +14,19 @@ internal class StringType : ClickHouseType
     public override Type FrameworkType => ReadAsByteArray ? typeof(byte[]) : typeof(string);
 
     public override object Read(ExtendedBinaryReader reader)
+        => ReadAsByteArray ? ReadByteArray(reader) : ReadStringValue(reader);
+
+    // Both representations stay available to the typed read; only the boxed Read follows ReadAsByteArray.
+    string ITypedReader<string>.ReadValue(ExtendedBinaryReader reader) => ReadStringValue(reader);
+
+    byte[] ITypedReader<byte[]>.ReadValue(ExtendedBinaryReader reader) => ReadByteArray(reader);
+
+    private static string ReadStringValue(ExtendedBinaryReader reader) => reader.ReadString();
+
+    private static byte[] ReadByteArray(ExtendedBinaryReader reader)
     {
-        if (ReadAsByteArray)
-        {
-            var length = reader.Read7BitEncodedInt();
-            return reader.ReadBytes(length);
-        }
-        return reader.ReadString();
+        var length = reader.Read7BitEncodedInt();
+        return reader.ReadBytes(length);
     }
 
     public override string ToString() => "String";
@@ -49,7 +55,7 @@ internal class StringType : ClickHouseType
             {
                 var length = checked((int)(stream.Length - stream.Position));
                 writer.Write7BitEncodedInt(length);
-                stream.CopyTo(writer.BaseStream);
+                stream.CopyTo(writer.RawStream);
             }
             else
             {
@@ -59,7 +65,7 @@ internal class StringType : ClickHouseType
                 var length = (int)memoryStream.Length;
                 writer.Write7BitEncodedInt(length);
                 memoryStream.Position = 0;
-                memoryStream.CopyTo(writer.BaseStream);
+                memoryStream.CopyTo(writer.RawStream);
             }
         }
         else

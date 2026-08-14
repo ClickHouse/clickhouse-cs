@@ -24,5 +24,8 @@ internal class ObjectType : ParameterizedType
 
     public override string ToString() => $"{Name}({UnderlyingType})";
 
+    internal override string CacheSignature =>
+        ComposeCacheSignature(children => $"{Name}({children[0]})", UnderlyingType);
+
     public override void Write(ExtendedBinaryWriter writer, object value) => UnderlyingType.Write(writer, value);
 }

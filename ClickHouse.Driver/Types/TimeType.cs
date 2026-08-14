@@ -15,7 +15,7 @@ namespace ClickHouse.Driver.Types;
 /// At the moment, the option enable_time_time64_type must be set to 1 to use Time or Time64.
 /// </para>
 /// </summary>
-internal class TimeType : ClickHouseType, ITypedWriter<TimeSpan>
+internal class TimeType : ClickHouseType, ITypedWriter<TimeSpan>, ITypedReader<TimeSpan>
 {
     // Range: [-999:59:59, 999:59:59] in seconds
     internal const int MinSeconds = -3599999; // -999:59:59
@@ -25,7 +25,9 @@ internal class TimeType : ClickHouseType, ITypedWriter<TimeSpan>
 
     public override string ToString() => "Time";
 
-    public override object Read(ExtendedBinaryReader reader)
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public TimeSpan ReadValue(ExtendedBinaryReader reader)
     {
         var seconds = reader.ReadInt32();
         return TimeSpan.FromSeconds(seconds);

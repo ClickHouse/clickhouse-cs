@@ -28,14 +28,19 @@ public sealed class InsertOptions : QueryOptions
 
     /// <summary>
     /// Gets or sets the compressor applied to the binary insert body. Defaults to
-    /// <see cref="GZipCompressor.Default"/> (GZip, fastest). Set to <see langword="null"/> to send the
-    /// RowBinary payload uncompressed — useful over a fast/local link where the compression CPU
-    /// outweighs the bandwidth savings, or when a proxy already compresses on the client's behalf.
-    /// Provide a configured <see cref="GZipCompressor"/> (or another <see cref="IClickHouseCompressor"/>)
-    /// to change the level, buffer size, or codec. This is independent of
+    /// <see cref="ZstdCompressor.Default"/> (ZSTD at level <see cref="ZstdCompressor.DefaultLevel"/>).
+    /// Set to <see langword="null"/> to send the RowBinary payload uncompressed — useful over a
+    /// fast/local link where the compression CPU outweighs the bandwidth savings, or when a proxy
+    /// already compresses on the client's behalf.
+    /// Provide a configured <see cref="ZstdCompressor"/> (or another <see cref="IClickHouseCompressor"/>,
+    /// e.g. <see cref="GZipCompressor"/>) to change the level, buffer size, or codec — note that
+    /// unlike the <c>Accept-Encoding</c> the driver sends for responses, which the server is free to
+    /// decline, a request body's <c>Content-Encoding</c> is a declaration: an intermediary that
+    /// re-encodes request bodies and does not understand the codec fails the insert outright, so
+    /// <c>gzip</c> remains the safer choice behind such a tier. This is independent of
     /// <see cref="ADO.ClickHouseClientSettings.UseCompression"/>, which governs query/response transport compression.
     /// </summary>
-    public IClickHouseCompressor? Compressor { get; init; } = GZipCompressor.Default;
+    public IClickHouseCompressor? Compressor { get; init; } = ZstdCompressor.Default;
 
     /// <summary>
     /// Gets or sets explicit column type mappings (key: column name; value: ClickHouse type string).

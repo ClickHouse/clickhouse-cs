@@ -42,6 +42,9 @@ internal class VariantType : ParameterizedType
 
     public override string ToString() => $"{Name}({string.Join(",", UnderlyingTypes.Select(t => t.ToString()))})";
 
+    internal override string CacheSignature =>
+        ComposeCacheSignature(children => $"{Name}({string.Join(",", children)})", UnderlyingTypes);
+
     public override object Read(ExtendedBinaryReader reader)
     {
         var typeIndex = reader.ReadByte();
@@ -55,10 +58,12 @@ internal class VariantType : ParameterizedType
 
     public (int, ClickHouseType) GetMatchingType(object value)
     {
-        // Fast path: a ClickHouseType only accepts values whose runtime type equals its FrameworkType
-        // (the IPv4/IPv6 pair shares FrameworkType=IPAddress and is disambiguated within its bucket),
-        // so every candidate that CanWrite(value) lives in the bucket keyed by value.GetType(). The
-        // bucket is ordered by index, so the first match is the same one the linear scan would return.
+        // Fast path: a ClickHouseType usually accepts only values whose runtime type equals its
+        // FrameworkType (the IPv4/IPv6 pair shares FrameworkType=IPAddress and is disambiguated
+        // within its bucket), so such a candidate lives in the bucket keyed by value.GetType(). The
+        // bucket is ordered by index, so the first match is the same one the linear scan would
+        // return. A candidate accepting a wider set of runtime types (MapType accepts both map
+        // representations) is simply missed here and found by the scan below.
         if (value != null && writeLookup != null && writeLookup.TryGetValue(value.GetType(), out var candidates))
         {
             foreach (var (index, type) in candidates)

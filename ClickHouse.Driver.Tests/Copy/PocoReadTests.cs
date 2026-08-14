@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Numerics;
+using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 
@@ -689,5 +691,112 @@ public class PocoReadTests : AbstractConnectionTestFixture
 
         Assert.That(results, Has.Count.EqualTo(1));
         Assert.That(results[0].Timestamp.Kind, Is.EqualTo(DateTimeKind.Utc));
+    }
+
+    public class ConverterProbePoco
+    {
+        public long Scalar { get; set; }
+
+        public int[] Composite { get; set; }
+    }
+
+    // Records which IReadValueConverter overload each column arrived on, and passes values through unchanged.
+    private sealed class OverloadRecordingConverter : IReadValueConverter
+    {
+        public List<string> Boxed { get; } = [];
+
+        public List<string> Typed { get; } = [];
+
+        public object ConvertValue(object value, string columnName, string clickHouseType)
+        {
+            Boxed.Add($"{columnName}|{clickHouseType}");
+            return value;
+        }
+
+        public T ConvertValue<T>(T value, string columnName, string clickHouseType)
+        {
+            Typed.Add($"{columnName}|{clickHouseType}|{typeof(T).Name}");
+            return value;
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_WithReadValueConverter_ConvertsEachColumnOnTheOverloadMatchingItsRead()
+    {
+        client.RegisterPocoType<ConverterProbePoco>();
+        var converter = new OverloadRecordingConverter();
+        var options = new QueryOptions { ReadValueConverter = converter };
+
+        var results = new List<ConverterProbePoco>();
+        await foreach (var poco in client.QueryAsync<ConverterProbePoco>(
+            "SELECT toInt64(7) AS Scalar, CAST([1, 2, 3], 'Array(Int32)') AS Composite",
+            options: options).ConfigureAwait(false))
+        {
+            results.Add(poco);
+        }
+
+        Assert.That(results, Has.Count.EqualTo(1));
+        Assert.That(results[0].Scalar, Is.EqualTo(7L));
+        Assert.That(results[0].Composite, Is.EqualTo(new[] { 1, 2, 3 }));
+
+        // The scalar column is read box-free, so it converts through ConvertValue<T> with T the property
+        // type. Were the fast path disabled by the converter's presence, it would appear under Boxed.
+        Assert.That(converter.Typed, Is.EqualTo(new[] { "Scalar|Int64|Int64" }));
+
+        // The composite column has no typed read, so it stays on the boxed overload MapTo<T> uses.
+        Assert.That(converter.Boxed, Is.EqualTo(new[] { "Composite|Array(Int32)" }));
+    }
+
+    public class JsonDocPoco
+    {
+        public JsonObject Doc { get; set; }
+    }
+
+    // A JSON column's typed-path hints live on the JsonType instance and drive its Read, but they are absent
+    // from ToString(). Two shapes differing only in those hints must not share a cached row reader, or the
+    // second query decodes with the first's hints.
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task QueryAsync_JsonColumnsDifferingOnlyInTypedPaths_DoNotShareARowReader()
+    {
+        client.RegisterPocoType<JsonDocPoco>();
+
+        var asLong = new List<JsonDocPoco>();
+        await foreach (var row in client.QueryAsync<JsonDocPoco>(
+            "SELECT '{\"a\": 1}'::JSON(a Int64) AS Doc").ConfigureAwait(false))
+        {
+            asLong.Add(row);
+        }
+
+        var asString = new List<JsonDocPoco>();
+        await foreach (var row in client.QueryAsync<JsonDocPoco>(
+            "SELECT '{\"a\": \"x\"}'::JSON(a String) AS Doc").ConfigureAwait(false))
+        {
+            asString.Add(row);
+        }
+
+        Assert.That((long)asLong[0].Doc["a"], Is.EqualTo(1L));
+        Assert.That((string)asString[0].Doc["a"], Is.EqualTo("x"));
+    }
+
+    [Test]
+    public async Task QueryAsync_WithReadValueConverter_AssignsTheConvertedValueOnTheFastPath()
+    {
+        client.RegisterPocoType<ConverterProbePoco>();
+        var options = new QueryOptions
+        {
+            ReadValueConverter = new DictionaryReadValueConverter().For<long>(v => v * 2),
+        };
+
+        var results = new List<ConverterProbePoco>();
+        await foreach (var poco in client.QueryAsync<ConverterProbePoco>(
+            "SELECT toInt64(7) AS Scalar, CAST([1], 'Array(Int32)') AS Composite",
+            options: options).ConfigureAwait(false))
+        {
+            results.Add(poco);
+        }
+
+        Assert.That(results, Has.Count.EqualTo(1));
+        Assert.That(results[0].Scalar, Is.EqualTo(14L));
     }
 }

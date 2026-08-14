@@ -39,6 +39,10 @@ public class BinaryInsertCompressionBenchmark
         Lz4Fastest,
         Lz4Max,
 #endif
+#if ZSTD_AVAILABLE
+        ZstdDefault,
+        ZstdHigh,
+#endif
     }
 
     // Use the always-present `default` database rather than creating a custom one: on ClickHouse Cloud
@@ -67,6 +71,11 @@ public class BinaryInsertCompressionBenchmark
         InsertCompression.Lz4Fastest,
         InsertCompression.Lz4Max
 #endif
+#if ZSTD_AVAILABLE
+        ,
+        InsertCompression.ZstdDefault,
+        InsertCompression.ZstdHigh
+#endif
         )]
     public InsertCompression Compression { get; set; }
 
@@ -82,6 +91,12 @@ public class BinaryInsertCompressionBenchmark
         InsertCompression.Lz4Fastest => Lz4Compressor.Default,
         // Max is the maximum level; far slower than fast mode for ~no extra ratio.
         InsertCompression.Lz4Max => new Lz4Compressor(Lz4Level.Max),
+#endif
+#if ZSTD_AVAILABLE
+        InsertCompression.ZstdDefault => ZstdCompressor.Default,
+        // Level 19 rather than the maximum 22: the top levels cost far more CPU and memory for a
+        // marginal ratio gain, so 19 is the highest level anyone should be tempted by.
+        InsertCompression.ZstdHigh => new ZstdCompressor(level: 19),
 #endif
         _ => throw new ArgumentOutOfRangeException(nameof(compression)),
     };

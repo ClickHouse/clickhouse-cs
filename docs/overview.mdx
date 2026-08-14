@@ -98,8 +98,8 @@ Below is a full list of all the settings, their default values, and their effect
 
 | Property | Type | Default | Connection String Key | Description |
 |----------|------|---------|----------------------|-------------|
-| UseCompression | `bool` | `true` | `Compression` | Enable gzip compression for data transfer |
-| AcceptEncoding | `string` | `null` | `AcceptEncoding` | `Accept-Encoding` sent with every request, replacing the codecs the driver advertises by default (`lz4, gzip, deflate`). Whatever the server answers with is decoded transparently. See [Response decompression](#response-decompression) |
+| UseCompression | `bool` | `true` | `Compression` | Governs transport compression in both directions for an ordinary query: it asks the server to compress the response (`enable_http_compression`; see `AcceptEncoding` for the codec, which an explicit value can request even with this off) **and** gzip-compresses the request body — except with `UseFormDataParameters`, whose multipart body is always sent uncompressed. Binary inserts never consult it; they use `InsertOptions.Compressor` — see [Insert compression](#insert-compression) |
+| AcceptEncoding | `string` | `null` | `AcceptEncoding` | `Accept-Encoding` sent with every request, replacing the codecs the driver advertises by default (`zstd, lz4, gzip, deflate`). Whatever the server answers with is decoded transparently. See [Response decompression](#response-decompression) |
 | UseCustomDecimals | `bool` | `true` | `UseCustomDecimals` | Use `ClickHouseDecimal` for arbitrary precision; if false, uses .NET `decimal` (128-bit limit) |
 | ReadStringsAsByteArrays | `bool` | `false` | `ReadStringsAsByteArrays` | Read `String` and `FixedString` columns as `byte[]` instead of `string`; useful for binary data |
 | UseFormDataParameters | `bool` | `false` | `UseFormDataParameters` | Send parameters as form data instead of URL query string |
@@ -109,6 +109,7 @@ Below is a full list of all the settings, their default values, and their effect
 | ReadValueConverter | `IReadValueConverter` | `null` | — | Custom transform applied to values returned by the data reader; see [Custom read value conversion](#read-value-conversion) |
 | JsonReadMode | `JsonReadMode` | `Binary` | `JsonReadMode` | How JSON data is returned: `Binary` (returns `JsonObject`) or `String` (returns raw JSON string) |
 | JsonWriteMode | `JsonWriteMode` | `String` | `JsonWriteMode` | How JSON data is sent: `String` (serializes via `JsonSerializer`, accepts all inputs) or `Binary` (registered POCOs only with type hints) |
+| MapReadMode | `MapReadMode` | `Dictionary` | `MapReadMode` | How `Map(K, V)` data is returned: `Dictionary` (returns `Dictionary<K, V>`; a repeated key keeps only its last value) or `KeyValuePairs` (returns `List<KeyValuePair<K, V>>`, keeping every pair). See [Map type](#type-map-reading-map) |
 
 ### Session management {#session-management}
 
@@ -229,6 +230,7 @@ var reader = await client.ExecuteReaderAsync(
 | BatchSize | `int` | 100,000 | Number of rows per batch |
 | MaxDegreeOfParallelism | `int` | 1 | Number of parallel batch uploads |
 | Format | `RowBinaryFormat` | `RowBinary` | Binary format: `RowBinary` or `RowBinaryWithDefaults` |
+| Compressor | `IClickHouseCompressor` | `ZstdCompressor.Default` | Codec applied to the insert body (`Content-Encoding`). `null` sends it uncompressed. See [Insert compression](#insert-compression) |
 | ColumnTypes | `IReadOnlyDictionary<string, string>` | `null` | Column name → ClickHouse type string. Skips the schema probe query when set. |
 | UseSchemaCache | `bool` | `false` | Cache full table schema per (database, table) for the client's lifetime. |
 
@@ -867,7 +869,7 @@ Common formats: `JSONEachRow`, `CSV`, `TSV`, `Parquet`, `Native`. See the [forma
 
 ### Per-query transport compression {#per-query-accept-encoding}
 
-By default, the client negotiates `lz4, gzip, deflate` when `Compression=true` (the connection-string default) and decodes the stream itself, transparently.
+By default, the client negotiates `zstd, lz4, gzip, deflate` when `Compression=true` (the connection-string default) and decodes the stream itself, transparently.
 
 For raw exports (e.g. Parquet, Arrow, Native) you may want to negotiate a different codec (e.g. `zstd` or `lz4`) to trade CPU for bandwidth without changing the connection-wide setting. `QueryOptions.AcceptEncoding` and `ClickHouseCommand.AcceptEncoding` set the HTTP `Accept-Encoding` header for a single request, replacing whatever default was attached, and force `enable_http_compression=1` on the URL (which ClickHouse requires before it will honor `Accept-Encoding`).
 
@@ -889,25 +891,25 @@ If you supply your own `HttpClient`, leave `AutomaticDecompression` off too. It 
 </Warning>
 
 <Warning>
-If `AcceptEncoding` requests a codec the driver cannot decode (`zstd`, `snappy`), only `ExecuteRawResultAsync` is safe. `ExecuteReaderAsync`, `ExecuteScalarAsync` and `ExecuteNonQueryAsync` fail with a `NotSupportedException` naming the codec (previously they parsed the compressed bytes as the result format and produced garbage).
+If `AcceptEncoding` requests a codec the driver cannot decode (`snappy`), only `ExecuteRawResultAsync` is safe. `ExecuteReaderAsync`, `ExecuteScalarAsync` and `ExecuteNonQueryAsync` fail with a `NotSupportedException` naming the codec (previously they parsed the compressed bytes as the result format and produced garbage).
 </Warning>
 
 #### Error bodies {#per-query-accept-encoding-errors}
 
-When the server responds with a 4xx/5xx and `enable_http_compression=1` was set, it compresses the error body with the same codec it would have used for a successful response. The driver decodes those for every codec it supports (`lz4`, `gzip`, `deflate`, `br`/`brotli`) so the message on `ClickHouseServerException` is readable. For anything else (`zstd`, …) it returns a placeholder naming the codec and pointing at `system.query_log` for the original error text.
+When the server responds with a 4xx/5xx and `enable_http_compression=1` was set, it compresses the error body with the same codec it would have used for a successful response. The driver decodes those for every codec it supports (`lz4`, `zstd`, `gzip`, `deflate`, `br`/`brotli`) so the message on `ClickHouseServerException` is readable. For anything else (`snappy`, …) it returns a placeholder naming the codec and pointing at `system.query_log` for the original error text.
 
 ---
 
 ### Response decompression {#response-decompression}
 
-`Accept-Encoding` only asks the server to compress the response — something still has to decode it. The driver does that itself, from the response's `Content-Encoding`, so all the normal read APIs (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, Dapper, EF Core, linq2db) work over a compressed response with nothing to configure. It decodes `lz4`, `gzip`, `deflate` and `br`; `zstd` and `snappy` are not supported.
+`Accept-Encoding` only asks the server to compress the response — something still has to decode it. The driver does that itself, from the response's `Content-Encoding`, so all the normal read APIs (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, Dapper, EF Core, linq2db) work over a compressed response with nothing to configure. It decodes `lz4`, `zstd`, `gzip`, `deflate` and `br`; `snappy` is not supported.
 
-By default the driver advertises **`lz4, gzip, deflate`**, and ClickHouse answers with `lz4`. To choose differently, set `Accept-Encoding` yourself — client-wide:
+By default the driver advertises **`zstd, lz4, gzip, deflate`**, and ClickHouse answers with `zstd`. To choose differently, set `Accept-Encoding` yourself — client-wide:
 
 ```csharp
 using var client = new ClickHouseClient(new ClickHouseClientSettings("Host=localhost")
 {
-    AcceptEncoding = "br",      // better ratio than lz4, more server CPU
+    AcceptEncoding = "br",      // decodable, but not advertised by default
 });
 ```
 
@@ -927,7 +929,20 @@ Host=localhost;AcceptEncoding=br, gzip
 
 Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends no `Accept-Encoding` at all.
 
-**The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. That is why `br` is *decodable but not advertised by default*: including it would make every response brotli, whose server-side cost climbs steeply with `http_zlib_compression_level`, while `lz4` is the cheapest to produce and to decode.
+**The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. The default includes `zstd`, so a default query is answered with zstd; the remaining tokens act as a fallback. `br` is decodable but not advertised by default.
+
+How the codecs compare on payload size, server CPU and client CPU depends on your data, your link and the server's `http_zlib_compression_level` (shipped default: 3) — see [Tuning compression](#tuning-compression).
+
+- **`http_zlib_compression_level`.** That setting applies to every HTTP codec, and the default value is 3. This value should be tuned based on your data, link speed, and CPU use.
+- **A CPU-bound client on a fast link.** The driver decodes the response body on the calling thread, so when the network is not the bottleneck, client-side decode speed could act as the limiting factor.
+
+Ask for a different codec per query, or client-wide, whenever either applies:
+
+```csharp
+using var reader = await client.ExecuteReaderAsync(
+    "SELECT * FROM events",
+    options: new QueryOptions { AcceptEncoding = "lz4" });   // decode this one with lz4 instead
+```
 
 Because the decision is made from the response, a body is decoded whenever its `Content-Encoding` says so, whatever was requested: absent or `identity` passes through untouched, a supported codec is decoded, and anything else raises an error naming it. There is no risk of double-decoding — if a caller-supplied handler's `AutomaticDecompression` has already decoded a body it also strips `Content-Encoding`, so the driver sees plaintext and leaves it alone.
 
@@ -950,6 +965,127 @@ var json = await bodyReader.ReadToEndAsync();
 Read the returned stream to completion before it goes out of scope, as above. When the response *is* compressed you get a decoder created with `leaveOpen`, so disposing it leaves the response intact; when it is **not** compressed you get the HTTP content stream itself, so disposing it ends the body. Either way the `ClickHouseRawResult` owns the response — don't call its other read members after the stream has been disposed. Disposing the `ClickHouseRawResult` is always required and on its own sufficient: it releases both the response and any decoder inserted here (decoders hold pooled buffers). The `await using` above is therefore optional, and safe to keep. Repeated sequential calls hand back the same stream; the type is not safe to use concurrently.
 
 See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Select/Select_007_ResponseCompression.cs) for a runnable example.
+
+#### Insert (request) compression {#insert-compression}
+
+Zstd is the default codec for inserts. The library includes a number of classes that allow you to control the codec and compression level:
+
+- `ZstdCompressor`
+- `Lz4Compressor`
+- `GZipCompressor`
+- `BrotliCompressor`
+
+Set the compressor of your choice in `InsertOptions`:
+
+```csharp
+var options = new InsertOptions { Compressor = GZipCompressor.Default };  // Content-Encoding: gzip
+await client.InsertBinaryAsync("events", columns, rows, options);
+```
+
+`InsertOptions.Compressor` governs a binary insert only. The driver's other request bodies are compressed by different rules, and none of them goes through it:
+
+- **Every SQL-text request** (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, `ExecuteRawResultAsync`, the ADO.NET layer) sends its statement with `Content-Encoding: gzip` whenever `UseCompression` is `true` — i.e. by default. The codec is not configurable: `AcceptEncoding` steers the response only, so gzip or nothing is the choice. `Compression=false` sends the statement in the clear. Statements are small, so this is rarely worth thinking about — but it is worth knowing when you are watching requests in a proxy or a packet capture.
+- **A multipart body** — a query whose parameters are sent as form data (`UseFormDataParameters=true`) — is always sent uncompressed, whatever `UseCompression` says.
+- **A raw upload** (`InsertRawStreamAsync`, `PostStreamAsync`) takes its own per-call flag and consults neither `UseCompression` nor `InsertOptions.Compressor`: gzip when the flag is set, uncompressed otherwise. Note that `InsertRawStreamAsync`'s `useCompression` parameter defaults to `true`, so a raw upload is gzipped unless you pass `false` — even with `Compression=false` on the client.
+
+---
+
+### Tuning compression {#tuning-compression}
+
+Compression trades CPU for bytes. Whether that is a win depends almost entirely on how fast your
+link is relative to how fast the codec runs, and the answer flips completely between a
+same-datacenter deployment and one crossing the internet. There is no setting that is right for
+everyone.
+
+#### The one number that decides it
+
+Compressing is worth it as long as the codec is *faster than the network*.
+
+That threshold is lower than most people expect on the read path, because ClickHouse compresses
+HTTP responses single-threaded in the output buffer. Measured on a 16-vCPU ClickHouse Cloud
+service (`hits`, RowBinary, level 3), the server produces compressed output at roughly 100-200MB/s.
+
+So for a large result, and assuming a single query being processed at a time, compression stops paying somewhere around 100 MB/s. A single HTTPS stream
+inside one cloud region commonly exceeds that, while anything crossing the public internet, a VPN or a region boundary is usually below it.
+
+The insert path tolerates compression to higher link speeds, because your client compresses on a core of its own and is typically faster than the server's response compression.
+
+#### Rough guide by deployment
+
+| Where your client runs | Typical bandwidth | Reads | Inserts |
+|---|---|---|---|
+| Same host / loopback | > 500 MB/s | `identity` | `lz4` fastest, or none |
+| Same region, same cloud | ~100–500 MB/s | `identity` or `lz4` | `zstd:1` |
+| Cross-region, same cloud | ~10–100 MB/s | `zstd` | `zstd:3` |
+| Internet / VPN / different cloud | < 25 MB/s | `zstd` | `zstd:3` |
+| Metered or very constrained | < 5 MB/s | `zstd` | `zstd:5`+ or `br` |
+
+Three things this table does not capture:
+
+- **Egress cost:** if you are billed for data transfer, bytes have a price beyond latency, and that
+pushes toward higher compression regardless of link speed.
+- **Small results:** all of the above concerns large payloads. For small responses the codec barely
+matters and per-request overhead dominates.
+- **Parallel inserts move the insert thresholds up.** Every throughput figure above is for a *single* thread. `InsertOptions.MaxDegreeOfParallelism` defaults to `1`, but raising it compresses batches concurrently, so the client's aggregate encode rate scales roughly with the cores you give it. So on a fast link a parallel insert can stay worth
+compressing well past the speed at which a single-threaded one stops being worth it. Treat the insert rows in the table as a *floor*, and if you already batch in parallel, retest before concluding that your link is too fast for compression.
+
+The read path only parallelizes across multiple queries.
+
+#### Choosing a codec
+
+| Codec | Ratio | Use it when | Watch out for |
+|---|---|---|---|
+| `lz4` | lowest | Fast links; CPU is scarcer than bandwidth. Cheapest to decode by a wide margin, and the quickest on small results — which makes it the codec to name when you want out of the zstd default. | It has **no entropy coder**, so on data that is skewed but not repetitive (long runs of numeric text, for example) its ratio falls well behind everything else. It is also the codec most punished by raising `http_zlib_compression_level`: level 1 → 3 costs it ~2.7× the CPU for ~29% fewer bytes. |
+| `zstd` | high | The general-purpose choice whenever a real network is involved. Best ratio-per-CPU in the range that matters, and at level 3 it beats `lz4` on bytes *and* server CPU *and* wall clock. | more expensive than `lz4` to **decode** — 1.6× at level 3 in our measurements, though at level 1 the two are comparable — and the driver decodes on your calling thread. At `http_zlib_compression_level=1` specifically it costs slightly *more* server CPU than `lz4`. |
+| `gzip` | medium | Interoperability — universally understood by proxies and gateways. | Dominated on every axis by both `lz4` and `zstd` in our measurements: larger than `zstd` while costing several times more CPU to encode and 5–9× more to decode. Choose it for compatibility, not performance. |
+| `br` | highest at low levels | Bandwidth is genuinely the binding constraint and you can spend CPU for it. | Cliffs badly at higher levels — at `http_zlib_compression_level=6` we measured it at 3–4× `zstd`'s server CPU. Not advertised by default, because it outranks every fallback token in the default list. |
+
+#### Levels
+
+Response compression is governed by a single server setting, `http_zlib_compression_level`, which applies to *every* HTTP codec, not just zlib. It defaults to 3.
+
+Leave it alone unless you have measured a reason. Above the default it buys very little size for a lot of CPU (for `zstd`, 3 → 6 roughly doubles server CPU for ~14% fewer bytes), and `br` becomes pathological. Below it, at level 1, the picture genuinely changes: `lz4` gets much cheaper and `zstd` loses its CPU advantage over it. Set it per query if you need to:
+
+```csharp
+using var reader = await client.ExecuteReaderAsync(
+    "SELECT * FROM events",
+    options: new QueryOptions
+    {
+        AcceptEncoding = "zstd",
+        CustomSettings = new Dictionary<string, object> { ["http_zlib_compression_level"] = 1 },
+    });
+```
+
+#### Measuring your own crossover
+
+The quickest way to optimize your choice of codec and compression level is to time the same query at a few codecs and compare.
+
+```csharp
+foreach (var codec in new[] { "identity", "lz4", "zstd" })
+{
+    var sw = Stopwatch.StartNew();
+    using var reader = await client.ExecuteReaderAsync(
+        "SELECT ... FROM big_table",
+        options: new QueryOptions { AcceptEncoding = codec });
+    while (await reader.ReadAsync()) { }
+    Console.WriteLine($"{codec,-9} {sw.ElapsedMilliseconds} ms");
+}
+```
+
+For the server's side of the same picture, read `ProfileEvents` back out of `system.query_log` — set
+`QueryOptions.QueryId` so you can find the row:
+
+```sql
+SELECT ProfileEvents['UserTimeMicroseconds'] + ProfileEvents['SystemTimeMicroseconds'] AS cpu_us,
+       ProfileEvents['NetworkSendBytes'] AS sent_bytes,
+       query_duration_ms
+FROM system.query_log
+WHERE query_id = 'your-query-id' AND type = 'QueryFinish';
+```
+
+One trap if you benchmark this yourself: a bare `LIMIT n` without `ORDER BY` returns *different rows
+on every run*, so each repetition compresses different data and the ratios become noise. Compare
+against a fixed result set.
 
 ---
 
@@ -1371,6 +1507,36 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 
 ---
 
+#### Map type {#type-map-reading-map}
+
+| ClickHouse Type | .NET Type | Notes |
+|-----------------|-----------|-------|
+| Map(K, V) | `Dictionary<K, V>` | Default (`MapReadMode=Dictionary`) |
+| Map(K, V) | `List<KeyValuePair<K, V>>` | When `MapReadMode=KeyValuePairs` |
+
+A ClickHouse `Map(K, V)` is physically an `Array(Tuple(K, V))` and can hold several entries with the same key. A `Dictionary` cannot, so in the default mode a repeated key keeps only its last value and the earlier pairs are dropped. The `MapReadMode` setting selects the representation:
+
+- **`Dictionary` (default)**: Returns `Dictionary<K, V>`.
+
+- **`KeyValuePairs`**: Returns `List<KeyValuePair<K, V>>` in the order the server sent the pairs, so every pair is preserved, including entries which repeat a key.
+
+```csharp
+// Configure key-value-pair mode via settings
+var settings = new ClickHouseClientSettings("Host=localhost")
+{
+    MapReadMode = MapReadMode.KeyValuePairs
+};
+
+// Or via connection string
+// "Host=localhost;MapReadMode=KeyValuePairs"
+```
+
+The mode selects the framework type of a `Map` column, so it also applies to `GetFieldValue<T>`, the schema types the driver reports, and POCO property mapping. It applies wherever a map appears in a column's type tree — `Array(Map(...))`, `Map(K, Map(...))`, `Tuple(..., Map(...))` and `Dynamic` included.
+
+Both representations are accepted on the write path in either mode — see [writing maps](#type-map-writing-other).
+
+---
+
 #### Other types {#type-map-reading-other}
 
 | ClickHouse Type | .NET Type |
@@ -1382,7 +1548,7 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 | Dynamic | See note |
 | Array(T) | `T[]` (nested `Array(Array(T))` reads as jagged `T[][]`; use `reader.GetFieldValue<T[,]>(ordinal)` to materialize rectangular data as a multidimensional CLR array) |
 | Tuple(T1, T2, ...) | `Tuple<T1, T2, ...>` / `LargeTuple` |
-| Map(K, V) | `Dictionary<K, V>` |
+| Map(K, V) | `Dictionary<K, V>`, or `List<KeyValuePair<K, V>>` when `MapReadMode=KeyValuePairs` — see [Map type](#type-map-reading-map) |
 | Nullable(T) | `T?` |
 | Enum8 | `string` |
 | Enum16 | `string` |
@@ -1664,7 +1830,7 @@ Property name matching with column type hints is case-sensitive. A property `Use
 | Dynamic | — | **Not supported** (throws `NotImplementedException`) |
 | Array(T) | `IList`, `null` | Null writes empty array. For nested types (`Array(Array(T))` and deeper) both jagged shapes (`T[][]`, `List<List<T>>`) and rectangular multidimensional CLR arrays (`T[,]`, `T[,,]`, …) are accepted; the CLR rank must match the ClickHouse nesting depth. |
 | Tuple(T1, T2, ...) | `ITuple`, `IList` | Element count must match tuple arity. See [ValueTuple caveat](#valuetuple-caveat) for >7 elements. |
-| Map(K, V) | `IDictionary` | |
+| Map(K, V) | `IDictionary`, `IEnumerable<KeyValuePair<K, V>>` | A pair sequence (for example the `List<KeyValuePair<K, V>>` produced by `MapReadMode=KeyValuePairs`) is accepted in either read mode, and can repeat a key. Applies to binary inserts and to query parameters |
 | Nullable(T) | `null`, `DBNull`, or types accepted by T | Writes null flag byte before value |
 | Enum8 | `string`, `sbyte`, numeric types | String looked up in enum dictionary |
 | Enum16 | `string`, `short`, numeric types | String looked up in enum dictionary |
@@ -2308,7 +2474,7 @@ With the opt-out enabled, LEFT JOIN returns ClickHouse column defaults and EF's 
 
 #### Inserting data {#ef-core-insert}
 
-`SaveChanges` uses the driver's native `InsertBinaryAsync` API — RowBinary encoding with GZip compression, far more efficient than parameterized SQL:
+`SaveChanges` uses the driver's native `InsertBinaryAsync` API — RowBinary encoding with a compressed request body, far more efficient than parameterized SQL:
 
 ```csharp
 await using var ctx = new AnalyticsContext();
@@ -2334,7 +2500,7 @@ optionsBuilder.UseClickHouse("Host=localhost", o => o.MaxBatchSize(5000));
 
 #### Bulk insert {#ef-core-bulk-insert}
 
-For high-throughput loads, use `BulkInsertAsync` instead of `SaveChanges`. This is an extension method on `DbContext` that bypasses EF Core's change tracker, identity resolution, and state management entirely — it calls the driver's `InsertBinaryAsync` directly with RowBinary encoding and GZip compression.
+For high-throughput loads, use `BulkInsertAsync` instead of `SaveChanges`. This is an extension method on `DbContext` that bypasses EF Core's change tracker, identity resolution, and state management entirely — it calls the driver's `InsertBinaryAsync` directly with RowBinary encoding and a compressed request body.
 
 This makes it suitable for loading large datasets where you don't need entity tracking after insert:
 

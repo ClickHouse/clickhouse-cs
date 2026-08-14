@@ -129,7 +129,7 @@ internal static class SchemaDescriber
 
         foreach (var row in result.Rows.Cast<DataRow>())
         {
-            var clickHouseType = TypeConverter.ParseClickHouseType((string)row["ProviderType"], TypeSettings.Default);
+            var clickHouseType = TypeConverter.ParseClickHouseType((string)row["ProviderType"], connection.ClickHouseClient.TypeSettings);
             row["ProviderType"] = clickHouseType.ToString();
             // TODO: this should return actual framework type like other implementations do
             row["DataType"] = clickHouseType.FrameworkType.ToString().Replace("System.", string.Empty);

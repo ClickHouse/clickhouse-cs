@@ -121,6 +121,9 @@ internal class TupleType : ParameterizedType
 
     public override string ToString() => $"{Name}({string.Join(",", UnderlyingTypes.Select(t => t.ToString()))})";
 
+    internal override string CacheSignature =>
+        ComposeCacheSignature(children => $"{Name}({string.Join(",", children)})", UnderlyingTypes);
+
     public override object Read(ExtendedBinaryReader reader)
     {
         var count = UnderlyingTypes.Length;

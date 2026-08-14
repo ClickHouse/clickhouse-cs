@@ -171,7 +171,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <summary>
     /// Gets the type settings for serialization.
     /// </summary>
-    internal TypeSettings TypeSettings => new(Settings.UseCustomDecimals, Settings.ReadStringsAsByteArrays, jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode);
+    internal TypeSettings TypeSettings => new(Settings.UseCustomDecimals, Settings.ReadStringsAsByteArrays, jsonTypeRegistry, Settings.JsonReadMode, Settings.JsonWriteMode, Settings.MapReadMode);
 
     /// <summary>
     /// Gets the per-client POCO type registry shared by binary insert and read materialization.
@@ -441,12 +441,24 @@ public sealed class ClickHouseClient : IClickHouseClient
         var reader = await ExecuteReaderAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
         try
         {
-            // reader.Read() is sync because ClickHouseDataReader has no async overload — the
-            // underlying HTTP stream is buffered, so per-row reads do not perform real I/O.
-            while (reader.Read())
+            // reader.Read()/TryMaterializeNextRow are sync because ClickHouseDataReader has no async overload —
+            // the underlying HTTP stream is buffered, so per-row reads do not perform real I/O.
+            if (reader.TryGetRowMaterializer<T>(out var materializers, out var constructor))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return reader.MapTo<T>();
+                // Bypasses the shared object[] row buffer and the boxing/unboxing MapTo<T> setter.
+                while (reader.TryMaterializeNextRow(materializers, constructor, out var row))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return row;
+                }
+            }
+            else
+            {
+                while (reader.Read())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return reader.MapTo<T>();
+                }
             }
         }
         finally
@@ -1209,7 +1221,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// transport-compressed (because the caller asked for <c>Accept-Encoding</c>), the server
     /// compresses error bodies the same way it would compress data — so we route the body through the
     /// shared <see cref="ResponseDecompression"/> resolver, and fall back to a placeholder for codecs we
-    /// can't decode (zstd, snappy, …) rather than handing back garbled binary bytes as a string. An error body must never turn a server error into an obscure
+    /// can't decode (snappy, …) rather than handing back garbled binary bytes as a string. An error body must never turn a server error into an obscure
     /// decompression crash, so this uses the non-throwing form of the resolver.
     /// </summary>
     private static async Task<string> ReadErrorBodyAsync(HttpResponseMessage response)
@@ -1230,7 +1242,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             await DrainAndDisposeAsync(rawStream).ConfigureAwait(false);
             return
                 $"<server returned HTTP {(int)response.StatusCode} {response.ReasonPhrase} with unsupported Content-Encoding: {encoding}. " +
-                "The error body is compressed with a codec this client cannot decode (zstd, xz, snappy, …); " +
+                "The error body is compressed with a codec this client cannot decode (xz, snappy, …); " +
                 "please re-run the request without compression or inspect 'system.query_log' on the ClickHouse server to read the original error message.>";
         }
 

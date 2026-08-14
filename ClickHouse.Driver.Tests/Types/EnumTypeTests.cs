@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using ClickHouse.Driver.Types;
 using NUnit.Framework;
 
@@ -118,5 +118,24 @@ public class EnumTypeTests
             TypeSettings.Default);
 
         Assert.That(type.ToString(), Is.EqualTo("Enum16('Low' = -32768, 'High' = 32767)"));
+    }
+
+    // SchemaDescriber writes ToString() back into GetSchemaTable()'s ProviderType and re-parses it, and
+    // PocoTypeRegistry keys its row-reader cache on it, so the rendering has to survive a round trip. An
+    // unquoted or unescaped label containing a comma or a quote would re-parse as the wrong members.
+    [TestCase("Enum8('Active' = 0, 'Inactive' = 1)")]
+    [TestCase("Enum16('Low' = -32768, 'High' = 32767)")]
+    [TestCase("Enum8('a,b' = 1, 'c' = 2)")]
+    [TestCase("Enum8('a=b' = 1, 'plain' = 2)")]
+    [TestCase("Enum8('None' = -1, 'DateTime(\\'UTC\\')' = 0, 'String' = 1)")]
+    [TestCase("Enum8('back\\\\slash' = 1)")]
+    public void ToString_WithQuotableEnumLabels_RoundTripsThroughParse(string typeString)
+    {
+        var original = (EnumType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        var reparsed = (EnumType)TypeConverter.ParseClickHouseType(original.ToString(), TypeSettings.Default);
+
+        Assert.That(reparsed.Values, Is.EqualTo(original.Values));
+        Assert.That(reparsed.ToString(), Is.EqualTo(original.ToString()));
     }
 }
