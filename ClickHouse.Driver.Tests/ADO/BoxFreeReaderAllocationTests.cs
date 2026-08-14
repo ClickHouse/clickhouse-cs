@@ -273,6 +273,107 @@ public class BoxFreeReaderAllocationTests
         });
     }
 
+    private static readonly Guid Uuid = new("2ee6b16f-1b03-4b1e-a1a5-99f7ae6a1c2c");
+
+    private static void WriteUuidRow(ExtendedBinaryWriter writer, ClickHouseType[] types, int row) => types[0].Write(writer, Uuid);
+
+    /// <summary>
+    /// A UUID column decodes into a <see cref="ValueSlot{T}"/> like any other fixed-width column, so no cell of
+    /// it is boxed — but the decode itself took a 16-byte scratch array per value, which no boxing test can see.
+    /// </summary>
+    [Test]
+    public async Task Read_UuidColumn_AllocatesNothingPerRow()
+    {
+        string[] columnTypes = ["UUID"];
+        var payload = BuildPayload(columnTypes, TypeSettings.Default, WriteUuidRow);
+
+        using (var warmup = await CreateReaderAsync(payload))
+            Measure(warmup, ReadUuid, out _);
+
+        long typed;
+        using (var reader = await CreateReaderAsync(payload))
+            typed = Measure(reader, ReadUuid, out _);
+
+        TestContext.Out.WriteLine($"uuid={PerRow(typed)} (bytes/row)");
+
+        Assert.That(typed, Is.LessThan(Rows), $"reading a UUID must not allocate per row, saw {PerRow(typed)} B/row");
+    }
+
+    private static double ReadUuid(ClickHouseDataReader reader) => reader.GetGuid(0).GetHashCode();
+
+    private static void WriteInt32ArrayRow(ExtendedBinaryWriter writer, ClickHouseType[] types, int row)
+        => types[0].Write(writer, new[] { row, row + 1, row + 2 });
+
+    private static void WriteNullableInt32ArrayRow(ExtendedBinaryWriter writer, ClickHouseType[] types, int row)
+        => types[0].Write(writer, new int?[] { row, row + 1, row + 2 });
+
+    private static double ReadArraySum(ClickHouseDataReader reader)
+    {
+        var sum = 0d;
+        foreach (var value in (int[])reader.GetValue(0))
+            sum += value;
+        return sum;
+    }
+
+    private static double ReadNullableArraySum(ClickHouseDataReader reader)
+    {
+        var sum = 0d;
+        foreach (var value in (int?[])reader.GetValue(0))
+            sum += value ?? 0;
+        return sum;
+    }
+
+    /// <summary>
+    /// An array column allocates the <c>T[]</c> it hands back, and nothing else: the elements are decoded
+    /// straight into it rather than boxed one at a time on the way in.
+    /// </summary>
+    /// <remarks>
+    /// Measured against the array itself rather than against zero, since that allocation is the result. The
+    /// control is the same column made <c>Nullable</c>, whose elements have no typed reader and so keep going
+    /// through the boxed decode — without it, both numbers could be "the array plus three boxes" and the test
+    /// would still pass.
+    /// </remarks>
+    [Test]
+    public async Task Read_Int32ArrayColumn_AllocatesOnlyTheArrayPerRow()
+    {
+        const int Elements = 3;
+        var payload = BuildPayload(["Array(Int32)"], TypeSettings.Default, WriteInt32ArrayRow);
+        var nullablePayload = BuildPayload(["Array(Nullable(Int32))"], TypeSettings.Default, WriteNullableInt32ArrayRow);
+
+        using (var warmup = await CreateReaderAsync(payload))
+            Measure(warmup, ReadArraySum, out _);
+        using (var warmup = await CreateReaderAsync(nullablePayload))
+            Measure(warmup, ReadNullableArraySum, out _);
+
+        long typed, boxedElements, arrayOnly;
+        using (var reader = await CreateReaderAsync(payload))
+            typed = Measure(reader, ReadArraySum, out _);
+        using (var reader = await CreateReaderAsync(nullablePayload))
+            boxedElements = Measure(reader, ReadNullableArraySum, out _);
+
+        // What an int[3] costs on this runtime, measured the same way rather than assumed.
+        var arrays = new int[Rows][];
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Rows; i++)
+            arrays[i] = new int[Elements];
+        arrayOnly = GC.GetAllocatedBytesForCurrentThread() - before;
+        GC.KeepAlive(arrays);
+
+        TestContext.Out.WriteLine(
+            $"typed={PerRow(typed)} arrayOnly={PerRow(arrayOnly)} nullable={PerRow(boxedElements)} (bytes/row)");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(typed, Is.LessThanOrEqualTo(arrayOnly + Rows),
+                $"an Int32 array must cost its own storage and no more; saw {PerRow(typed)} B/row against " +
+                $"{PerRow(arrayOnly)} B/row for the bare array");
+
+            // The control: Nullable elements still box, so the comparison above is measuring boxing.
+            Assert.That(boxedElements, Is.GreaterThan(typed + (Rows * Elements * 12)),
+                $"Nullable elements are expected to still box; saw only {PerRow(boxedElements)} B/row");
+        });
+    }
+
     private static FieldInfo SlotsField()
     {
         var field = typeof(ClickHouseDataReader).GetField("slots", BindingFlags.Instance | BindingFlags.NonPublic);
