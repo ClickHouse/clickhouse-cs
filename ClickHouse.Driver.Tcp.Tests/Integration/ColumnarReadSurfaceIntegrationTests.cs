@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
-using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
@@ -30,7 +29,7 @@ public class ColumnarReadSurfaceIntegrationTests
     private static readonly CancellationToken None = CancellationToken.None;
 
     [Test]
-    public async Task QueryAsync_NullableColumn_ExposesInnerAndNullMapThroughINullableColumn()
+    public async Task StreamAsync_NullableColumn_ExposesInnerAndNullMapThroughINullableColumn()
     {
         // A Nullable(T) column's wire layout is a dense inner column (a decoded value at *every* row, placeholder
         // included where the row is null) plus the per-row null-map that says which rows are really null. The
@@ -39,7 +38,7 @@ public class ColumnarReadSurfaceIntegrationTests
         //
         // Note the type argument is the *inner* type: a Nullable(Int32) column is an INullableColumn<int>, not an
         // INullableColumn<int?>, even though its IColumn<T> surface is IColumn<int?>.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matchedInner = false;
         bool matchedNullable = false;
@@ -50,7 +49,7 @@ public class ColumnarReadSurfaceIntegrationTests
         int?[] materialized = null;
         var innerAtNonNullRows = new int[3];
 
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             "SELECT CAST(number = 1 ? NULL : toInt32(number * 10 - 10), 'Nullable(Int32)') FROM system.numbers LIMIT 4",
             cancellationToken: None))
         {
@@ -91,12 +90,12 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_NullableReferenceColumn_ExposesInnerAndNullMapThroughINullableColumn()
+    public async Task StreamAsync_NullableReferenceColumn_ExposesInnerAndNullMapThroughINullableColumn()
     {
         // Nullable(String) decodes to a separate reference-typed column class with its own copy of the pair, whose
         // IColumn<T> surface is IColumn<string> (a reference is already nullable) rather than IColumn<T?>. Its view
         // is still parameterized by the inner type, so the pattern-match spelling stays uniform with the value case.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
         byte[] nullMap = null;
@@ -105,7 +104,7 @@ public class ColumnarReadSurfaceIntegrationTests
         int innerRowCount = 0;
         string[] materialized = null;
 
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             "SELECT CAST(number = 1 ? NULL : concat('v', toString(number)), 'Nullable(String)') FROM system.numbers LIMIT 3",
             cancellationToken: None))
         {
@@ -132,13 +131,13 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_ArrayColumn_ExposesFlatElementsAndOffsetsThroughIArrayColumn()
+    public async Task StreamAsync_ArrayColumn_ExposesFlatElementsAndOffsetsThroughIArrayColumn()
     {
         // An Array(T) column's wire layout is every row's elements concatenated into one flat run plus the per-row
         // offsets that delimit them. The materialized IColumn<T[]> surface allocates a fresh array per row;
         // IArrayColumn<TElement> is the allocation-free alternative, so the test walks the rows through the spans
         // and checks they reconstruct what the materialized surface produced.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
         int rowCount = 0;
@@ -149,7 +148,7 @@ public class ColumnarReadSurfaceIntegrationTests
         int[][] materialized = null;
 
         // Rows: [], [0], [0, 1], [0, 1, 2] — an empty leading row makes a zero-length slice part of the check.
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             "SELECT CAST(range(number), 'Array(Int32)') FROM system.numbers LIMIT 4",
             cancellationToken: None))
         {
@@ -182,13 +181,13 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_NestedArrayColumn_ExposesInnerAsAnotherArrayColumnForRecursion()
+    public async Task StreamAsync_NestedArrayColumn_ExposesInnerAsAnotherArrayColumnForRecursion()
     {
         // Why IArrayColumn exposes Inner as a column and not just InnerValues as a span: when the element type is
         // itself composite, the span's element type is the *materialized* form (here int[]), so reading it defeats
         // the point. Inner hands back the flat inner column instead, which pattern-matches to the element type's own
         // view — so a nested composite can be walked to the bottom without materializing an intermediate level.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool outerMatched = false;
         bool innerMatched = false;
@@ -198,7 +197,7 @@ public class ColumnarReadSurfaceIntegrationTests
         int[][][] materialized = null;
 
         // Rows: [[0], [0, 1]] and [[1], [1, 2]].
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             "SELECT [[toInt32(number)], [toInt32(number), toInt32(number + 1)]] FROM system.numbers LIMIT 2",
             cancellationToken: None))
         {
@@ -227,13 +226,13 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_NamedTupleColumn_ExposesPerElementChildColumnsThroughITupleColumn()
+    public async Task StreamAsync_NamedTupleColumn_ExposesPerElementChildColumnsThroughITupleColumn()
     {
         // A Tuple(...) is stored as its N element columns side by side, each as tall as the tuple. Reading one
         // element through the materialized ValueTuple surface forces every other element to be decoded and boxed
         // into the tuple too; ITupleColumn.Children hands back the element columns directly, so a caller that wants
         // one field pays for one field. FieldNames carries the declared names, which the wire layout does not.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
         int childCount = 0;
@@ -243,7 +242,7 @@ public class ColumnarReadSurfaceIntegrationTests
         string[] secondElement = null;
         (int, string)[] materialized = null;
 
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             "SELECT CAST((toInt32(number), concat('n', toString(number))), 'Tuple(a Int32, b String)') FROM system.numbers LIMIT 3",
             cancellationToken: None))
         {
@@ -272,12 +271,12 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_UnnamedTupleWithCompositeElement_OmitsFieldNamesAndAllowsChildRecursion()
+    public async Task StreamAsync_UnnamedTupleWithCompositeElement_OmitsFieldNamesAndAllowsChildRecursion()
     {
         // Two things the named case cannot show: an unnamed tuple carries no names at all (FieldNames is null, not
         // a list of nulls), and a child that is itself a composite pattern-matches to its own columnar view — so a
         // Tuple(Array(Int32), ...) can be walked into without materializing the tuple or the array rows.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool hasFieldNames = true;
         bool childIsArray = false;
@@ -285,7 +284,7 @@ public class ColumnarReadSurfaceIntegrationTests
         int[] childInnerValues = null;
 
         // Rows: ([], 'r0'), ([0], 'r1'), ([0, 1], 'r2').
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             "SELECT tuple(CAST(range(number), 'Array(Int32)'), concat('r', toString(number))) FROM system.numbers LIMIT 3",
             cancellationToken: None))
         {
@@ -308,12 +307,12 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_MapColumn_ExposesFlatKeyAndValueColumnsThroughIMapColumn()
+    public async Task StreamAsync_MapColumn_ExposesFlatKeyAndValueColumnsThroughIMapColumn()
     {
         // A Map(K, V) is byte-identical to Array(Tuple(K, V)) on the wire: per-row offsets over two flat, aligned
         // runs. The materialized surface builds a KeyValuePair[] per row; IMapColumn hands back the two columns, so
         // a caller wanting only the keys — a common case — never builds a pair at all.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
         int rowCount = 0;
@@ -325,7 +324,7 @@ public class ColumnarReadSurfaceIntegrationTests
         KeyValuePair<string, int>[][] materialized = null;
 
         // Rows: {}, {'k0': 0}, {'k0': 0, 'k1': 100} — an empty leading row keeps a zero-length range in play.
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             """
             SELECT CAST(
                 arrayMap(i -> (concat('k', toString(i)), toInt32(i * 100)), range(number)),
@@ -369,17 +368,17 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_MapColumnWithDuplicateKeys_PreservesWireOrderAndDuplicates()
+    public async Task StreamAsync_MapColumnWithDuplicateKeys_PreservesWireOrderAndDuplicates()
     {
         // The flat columns are the wire's own bytes, so they carry duplicate keys and entry order intact — the
         // property a Dictionary-shaped view would destroy. ClickHouse itself permits a literal map with a repeated
         // key, so this is reachable data, not a hypothetical.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         string[] flatKeys = null;
         int[] flatValues = null;
 
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             "SELECT CAST([('dup', 1), ('dup', 2), ('other', 3)], 'Map(String, Int32)')",
             cancellationToken: None))
         {
@@ -396,14 +395,14 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_NestedColumn_ExposesPerFieldColumnsAndSharedOffsetsThroughINestedColumn()
+    public async Task StreamAsync_NestedColumn_ExposesPerFieldColumnsAndSharedOffsetsThroughINestedColumn()
     {
         // Nested is the case where the columnar view is the *primary* access path rather than an optimization: a
         // Nested can carry any number of fields, so there is no generic per-row value type for it and the
         // IColumn<T> surface has to degrade to object[][] — a boxed object[] per record, per row. INestedColumn is
         // how a consumer reads it typed. One offsets array is shared by every field, since within a row all fields
         // have the same element count.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
         int rowCount = 0;
@@ -417,7 +416,7 @@ public class ColumnarReadSurfaceIntegrationTests
         var recordsOfLastRow = new List<(byte A, string B)>();
 
         // Rows: [], [(0, 'f0')], [(0, 'f0'), (1, 'f1')].
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             """
             SELECT CAST(
                 arrayMap(i -> (toUInt8(i), concat('f', toString(i))), range(number)),
@@ -467,13 +466,13 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_LowCardinalityColumn_ExposesDictionaryAndKeysThroughILowCardinalityColumn()
+    public async Task StreamAsync_LowCardinalityColumn_ExposesDictionaryAndKeysThroughILowCardinalityColumn()
     {
         // LowCardinality is the type with the widest gap between the two surfaces: the materialized one resolves
         // every row to its dictionary entry, so N rows over a K-entry dictionary produce N values. Reading the
         // dictionary and keys instead means touching each distinct value once — the whole reason the encoding exists.
         // Here 12 rows collapse onto 3 distinct values.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
         int rowCount = 0;
@@ -484,7 +483,7 @@ public class ColumnarReadSurfaceIntegrationTests
         string[] materialized = null;
         var resolvedThroughKeys = new List<string>();
 
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             "SELECT CAST(concat('v', toString(number % 3)), 'LowCardinality(String)') FROM system.numbers LIMIT 12",
             cancellationToken: None))
         {
@@ -519,13 +518,13 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_LowCardinalityNullableColumn_ReservesTwoDictionarySlotsAndMarksNullWithKeyZero()
+    public async Task StreamAsync_LowCardinalityNullableColumn_ReservesTwoDictionarySlotsAndMarksNullWithKeyZero()
     {
         // LowCardinality(Nullable(T)) decodes to a different column class whose dictionary reserves *two* leading
         // slots — [0] NULL, [1] the default — so real values start at [2] and a key of 0 means NULL. That shift is
         // the one thing a consumer reading Keys directly has to know, and it is invisible from the materialized
         // surface. Note the view is still spelled with the bare inner type, matching the non-nullable case.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
         int dictionarySize = 0;
@@ -535,7 +534,7 @@ public class ColumnarReadSurfaceIntegrationTests
         string[] materialized = null;
         var nullRowsFromKeys = new List<int>();
 
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             """
             SELECT CAST(number = 1 ? NULL : concat('v', toString(number % 2)), 'LowCardinality(Nullable(String))')
             FROM system.numbers LIMIT 4
@@ -588,11 +587,11 @@ public class ColumnarReadSurfaceIntegrationTests
         //
         // Conflating the two interfaces corrupts data silently, and nothing else covers it, so it is pinned here
         // rather than in the insert fixture — this is where the slot semantics are documented.
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
         string table = $"tcp_lc_dense_exclusion_{Guid.NewGuid():N}";
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {table} (value LowCardinality(Nullable(String))) ENGINE = Memory");
+            await client.ExecuteAsync($"CREATE TABLE {table} (value LowCardinality(Nullable(String))) ENGINE = Memory");
 
             // Row 0's key is 0 deliberately. To a non-nullable dictionary slot 0 is the type default — an ordinary
             // value for a row to reference — while to a nullable dictionary it is the NULL marker. A row keyed at 0
@@ -610,10 +609,10 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(nonNullableDense, Is.Not.InstanceOf<IDenseLowCardinality<string>>(), "the non-nullable column must not claim dense write eligibility");
             Assert.That(nonNullableDense, Is.InstanceOf<ILowCardinalityColumn<string>>(), "though it still exposes the pair for reading");
 
-            await connection.InsertAsync($"INSERT INTO {table} (value) VALUES", new IColumn[] { nonNullableDense }, cancellationToken: None);
+            await client.InsertAsync($"INSERT INTO {table} (value) VALUES", new IColumn[] { nonNullableDense }, cancellationToken: None);
 
             var readBack = new List<string>();
-            await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table}", cancellationToken: None))
+            await foreach (Block block in client.StreamAsync($"SELECT value FROM {table}", cancellationToken: None))
             {
                 readBack.AddRange(((IColumn<string>)block[0]).Values.ToArray());
             }
@@ -622,12 +621,12 @@ public class ColumnarReadSurfaceIntegrationTests
         }
         finally
         {
-            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {table}");
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}");
         }
     }
 
     [Test]
-    public async Task QueryAsync_VariantColumn_ExposesDiscriminatorsAndPerTypeChildColumnsThroughIVariantColumn()
+    public async Task StreamAsync_VariantColumn_ExposesDiscriminatorsAndPerTypeChildColumnsThroughIVariantColumn()
     {
         // Variant is the composite with no useful materialized element type: its IColumn<T> surface is
         // IColumn<object>, so every row read through it is boxed. The columnar view is the only typed way in —
@@ -639,7 +638,7 @@ public class ColumnarReadSurfaceIntegrationTests
             ["allow_experimental_variant_type"] = "1",
             ["allow_suspicious_variant_types"] = "1",
         };
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
         int typeCount = 0;
@@ -653,7 +652,7 @@ public class ColumnarReadSurfaceIntegrationTests
         var materialized = new List<object>();
 
         // Rows: 100, 'a', NULL, 400, 'b' — interleaved so neither child's rows are contiguous by row index.
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             """
             SELECT CAST(multiIf(number = 1, CAST('a', 'Variant(String, UInt64)'),
                                 number = 2, CAST(NULL, 'Variant(String, UInt64)'),
@@ -661,7 +660,7 @@ public class ColumnarReadSurfaceIntegrationTests
                                 CAST(toUInt64((number + 1) * 100), 'Variant(String, UInt64)')), 'Variant(String, UInt64)')
             FROM system.numbers LIMIT 5
             """,
-            settings: settings,
+            new ClickHouseTcpQueryOptions { Settings = settings },
             cancellationToken: None))
         {
             IColumn column = block[0];
@@ -713,7 +712,7 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_DynamicColumn_ExposesRuntimeTypeNamesAndPerTypeChildColumnsThroughIDynamicColumn()
+    public async Task StreamAsync_DynamicColumn_ExposesRuntimeTypeNamesAndPerTypeChildColumnsThroughIDynamicColumn()
     {
         // Dynamic differs from Variant in two ways the columnar view has to expose. Its type list is discovered per
         // block rather than declared, so TypeNames carries the wire's own spelling of each runtime type — that is how
@@ -723,11 +722,12 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             ["allow_experimental_dynamic_type"] = "1",
 
-            // The client reads only the flattened serialization (version 3); without this the server sends version 1
-            // and the codec refuses the block rather than guessing at the layout.
+            // The codec reads only the flattened serialization (version 3); without this the server sends version 1
+            // and refuses the block rather than guessing at the layout. Set explicitly so this test states what it
+            // depends on, even though ClickHouseTcpClient also injects it.
             ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
         };
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
         int typeCount = 0;
@@ -740,14 +740,14 @@ public class ColumnarReadSurfaceIntegrationTests
         var childRowCounts = new List<int>();
 
         // Rows: 'a', NULL, 100, 'b' — two runtime types plus a NULL.
-        await foreach (Block block in connection.QueryAsync(
+        await foreach (Block block in client.StreamAsync(
             """
             SELECT CAST(multiIf(number = 1, CAST(NULL, 'Dynamic'),
                                 number = 2, CAST(toInt64(100), 'Dynamic'),
                                 CAST(concat('s', toString(number)), 'Dynamic')), 'Dynamic')
             FROM system.numbers LIMIT 4
             """,
-            settings: settings,
+            new ClickHouseTcpQueryOptions { Settings = settings },
             cancellationToken: None))
         {
             IColumn column = block[0];
@@ -784,13 +784,5 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(childRowCounts.Sum(), Is.EqualTo(rowCount - 1), "the children together hold every non-NULL row exactly once");
             Assert.That(materialized, Is.EqualTo(new object[] { "s0", null, 100L, "s3" }));
         });
-    }
-
-    private static async Task ExecuteAsync(ClickHouseTcpConnection connection, string sql)
-    {
-        await foreach (Block block in connection.QueryAsync(sql, cancellationToken: None))
-        {
-            _ = block;
-        }
     }
 }

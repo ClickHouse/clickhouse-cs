@@ -66,6 +66,30 @@ public sealed class ClickHouseTcpClientOptions
     /// </summary>
     public TimeSpan ReadTimeout { get; init; } = DefaultReadTimeout;
 
+    /// <summary>
+    /// These options with <see cref="CustomSettings"/> replaced by a private snapshot, or this instance when there
+    /// are none to copy. A client holds its options for its lifetime and merges the settings on every operation, so
+    /// it must own them: keeping the caller's dictionary would let a later mutation of it fault or partially apply
+    /// mid-merge. Every other property is init-only and so cannot change after construction.
+    /// </summary>
+    /// <remarks>Copies each property by hand — add new properties here too. <c>ClickHouseTcpClientOptionsTests</c> pins that.</remarks>
+    internal ClickHouseTcpClientOptions WithOwnedCustomSettings()
+        => CustomSettings is null
+            ? this
+            : new ClickHouseTcpClientOptions
+            {
+                Host = Host,
+                Port = Port,
+                Username = Username,
+                Password = Password,
+                Database = Database,
+                QuotaKey = QuotaKey,
+                CustomSettings = new Dictionary<string, string>(CustomSettings, StringComparer.Ordinal),
+                MaxSendBufferBytes = MaxSendBufferBytes,
+                DialTimeout = DialTimeout,
+                ReadTimeout = ReadTimeout,
+            };
+
     /// <summary>Parses a ClickHouse native-protocol connection string into options.</summary>
     /// <param name="connectionString">The connection string (keys such as <c>Host</c>, <c>Port</c>, <c>Username</c>, <c>set_&lt;name&gt;</c>).</param>
     /// <returns>The parsed options.</returns>
