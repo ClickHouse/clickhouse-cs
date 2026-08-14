@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Copy;
+using ClickHouse.Driver.Json;
+using ClickHouse.Driver.Tests.Attributes;
 using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.Copy;
@@ -955,4 +958,46 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         Assert.That(count, Is.EqualTo(500UL));
     }
 
+    private class JsonPayloadPoco
+    {
+        public decimal Amount { get; set; }
+    }
+
+    private class JsonDocumentPoco
+    {
+        public ulong Id { get; set; }
+        public JsonPayloadPoco Payload { get; set; }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task InsertBinaryAsync_SamePocoIntoDifferentlyHintedJsonColumns_UsesEachTablesHints()
+    {
+        using var jsonClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary);
+        var scale2Table = CreateTableName("scale2");
+        var scale4Table = CreateTableName("scale4");
+
+        await jsonClient.ExecuteNonQueryAsync(
+            $"CREATE TABLE {scale2Table} (Id UInt64, Payload JSON(Amount Decimal64(2))) ENGINE = MergeTree() ORDER BY Id");
+        await jsonClient.ExecuteNonQueryAsync(
+            $"CREATE TABLE {scale4Table} (Id UInt64, Payload JSON(Amount Decimal64(4))) ENGINE = MergeTree() ORDER BY Id");
+
+        jsonClient.RegisterBinaryInsertType<JsonDocumentPoco>();
+        jsonClient.RegisterJsonSerializationType<JsonPayloadPoco>();
+
+        var row = new JsonDocumentPoco { Id = 1, Payload = new JsonPayloadPoco { Amount = 1.23m } };
+
+        // The first insert populates the compiled writer cache for this POCO type. The second insert
+        // targets a table whose JSON column declares a different scale for the same path, so it must
+        // not reuse the first table's writers.
+        await jsonClient.InsertBinaryAsync(scale2Table, new[] { row });
+        await jsonClient.InsertBinaryAsync(scale4Table, new[] { row });
+
+        Assert.That(
+            Convert.ToDecimal(await jsonClient.ExecuteScalarAsync($"SELECT Payload.Amount FROM {scale2Table}"), CultureInfo.InvariantCulture),
+            Is.EqualTo(1.23m), "scale2");
+        Assert.That(
+            Convert.ToDecimal(await jsonClient.ExecuteScalarAsync($"SELECT Payload.Amount FROM {scale4Table}"), CultureInfo.InvariantCulture),
+            Is.EqualTo(1.23m), "scale4");
+    }
 }

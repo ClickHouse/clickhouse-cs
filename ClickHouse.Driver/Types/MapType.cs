@@ -162,6 +162,9 @@ internal class MapType : ParameterizedType
 
     public override string ToString() => $"{Name}({keyType}, {valueType})";
 
+    internal override string CacheSignature =>
+        ComposeCacheSignature(children => $"{Name}({children[0]}, {children[1]})", keyType, valueType);
+
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
         if (value is IDictionary dict)
