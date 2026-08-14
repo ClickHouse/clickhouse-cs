@@ -5,8 +5,9 @@ namespace ClickHouse.Driver.Tcp;
 /// <summary>
 /// Per-query overrides passed to a <see cref="ClickHouseTcpClient"/> operation. All members are optional; a
 /// null options argument (or a null member) falls back to the client-level defaults.
+/// <see cref="ClickHouseTcpInsertOptions"/> extends this with the insert-only knobs.
 /// </summary>
-public sealed class ClickHouseTcpQueryOptions
+public class ClickHouseTcpQueryOptions
 {
     /// <summary>The query id, or null to let the server assign one.</summary>
     public string QueryId { get; init; }
