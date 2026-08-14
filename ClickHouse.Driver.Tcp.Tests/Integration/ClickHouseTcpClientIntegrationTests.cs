@@ -310,6 +310,136 @@ public class ClickHouseTcpClientIntegrationTests
         });
     }
 
+    // 1 forces a block per row, null forces one block for all of them, and the unset case takes the default cap —
+    // every row must survive each sizing.
+    [TestCase(1, TestName = "InsertAsync_MaxRowsPerBlockOne_RoundTripsEveryRow")]
+    [TestCase(null, TestName = "InsertAsync_MaxRowsPerBlockNull_RoundTripsEveryRow")]
+    public async Task InsertAsync_MaxRowsPerBlockViaOptions_RoundTripsEveryRow(int? maxRowsPerBlock)
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = Memory");
+
+            const int rows = 50;
+            var ids = new ulong[rows];
+            for (int i = 0; i < rows; i++)
+            {
+                ids[i] = (ulong)i;
+            }
+
+            IColumn[] columns = { PrimitiveColumn<ulong>.FromValues("id", "UInt64", ids) };
+            await client.InsertAsync(
+                $"INSERT INTO {table} (id) VALUES",
+                columns,
+                new ClickHouseTcpInsertOptions { MaxRowsPerBlock = maxRowsPerBlock });
+
+            var readBack = await client.QueryAsync($"SELECT id FROM {table} ORDER BY id").ToListAsync();
+            CollectionAssert.AreEqual(ids, readBack.Select(r => (ulong)r[0]));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Test]
+    public async Task Options_AfterConstruction_ExposesTheConfigurationIncludingTheSendBufferCap()
+    {
+        await using var client = new ClickHouseTcpClient(new ClickHouseTcpClientOptions
+        {
+            Host = TcpServerFixture.Host,
+            Port = TcpServerFixture.Port,
+            Username = TcpServerFixture.Username,
+            Password = TcpServerFixture.Password,
+            MaxSendBufferBytes = 4096,
+            CustomSettings = new Dictionary<string, string> { ["max_threads"] = "4" },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.Options.Host, Is.EqualTo(TcpServerFixture.Host));
+            Assert.That(client.Options.MaxSendBufferBytes, Is.EqualTo(4096));
+            Assert.That(client.Options.CustomSettings["max_threads"], Is.EqualTo("4"));
+        });
+    }
+
+    [Test]
+    public async Task IClickHouseTcpClient_EveryOperationUsableThroughTheInterface()
+    {
+        // The interface exists so consumers can code against it (and substitute a double), so it has to be
+        // sufficient on its own: this drives the whole surface through an interface-typed reference, never
+        // touching ClickHouseTcpClient.
+        IClickHouseTcpClient client = TcpServerFixture.CreateClient();
+        await using (client)
+        {
+            string table = UniqueTableName();
+            try
+            {
+                await client.PingAsync(None);
+                await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = Memory", cancellationToken: None);
+
+                var ids = new ulong[] { 1, 2, 3 };
+                IColumn[] columns = { PrimitiveColumn<ulong>.FromValues("id", "UInt64", ids) };
+                await client.InsertAsync($"INSERT INTO {table} (id) VALUES", columns, cancellationToken: None);
+
+                var rows = await client.QueryAsync($"SELECT id FROM {table} ORDER BY id").ToListAsync();
+
+                var streamed = new List<ulong>();
+                await foreach (Block block in client.StreamAsync($"SELECT id FROM {table} ORDER BY id"))
+                {
+                    streamed.AddRange(((IColumn<ulong>)block[0]).Values.ToArray());
+                }
+
+                Assert.Multiple(() =>
+                {
+                    CollectionAssert.AreEqual(ids, rows.Select(r => (ulong)r[0]));
+                    CollectionAssert.AreEqual(ids, streamed);
+                });
+            }
+            finally
+            {
+                await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}");
+            }
+        }
+    }
+
+    [Test]
+    public async Task Client_CallerMutatesCustomSettingsAfterConstruction_MutationNotApplied()
+    {
+        // getSetting reports the value the server actually applied to this query, so a client-level setting and any
+        // later mutation of the caller's dictionary are both directly observable.
+        const string ReadSetting = "SELECT toString(getSetting('max_block_size'))";
+
+        var callerSettings = new Dictionary<string, string> { ["max_block_size"] = "1234" };
+        await using var client = new ClickHouseTcpClient(new ClickHouseTcpClientOptions
+        {
+            Host = TcpServerFixture.Host,
+            Port = TcpServerFixture.Port,
+            Username = TcpServerFixture.Username,
+            Password = TcpServerFixture.Password,
+            CustomSettings = callerSettings,
+        });
+
+        var configured = await client.QueryAsync(ReadSetting).ToListAsync();
+        Assert.That((string)configured[0][0], Is.EqualTo("1234"), "the client-level setting should reach the server");
+
+        // Control: the server does apply a changed value, so the mutation below would be observable if it landed.
+        var overridden = await client.QueryAsync(
+            ReadSetting,
+            new ClickHouseTcpQueryOptions { Settings = new Dictionary<string, string> { ["max_block_size"] = "4321" } })
+            .ToListAsync();
+        Assert.That((string)overridden[0][0], Is.EqualTo("4321"), "a per-query override should reach the server");
+
+        // The client owns a copy taken at construction, so this mutation cannot reach the wire (nor fault the
+        // settings merge that runs on every query).
+        callerSettings["max_block_size"] = "4321";
+
+        var afterMutation = await client.QueryAsync(ReadSetting).ToListAsync();
+        Assert.That((string)afterMutation[0][0], Is.EqualTo("1234"), "the caller's later mutation must not be applied");
+    }
+
     [Test]
     public async Task QueryAsync_DynamicColumn_DecodesWithoutCallerSettingFlattenedSerialization()
     {

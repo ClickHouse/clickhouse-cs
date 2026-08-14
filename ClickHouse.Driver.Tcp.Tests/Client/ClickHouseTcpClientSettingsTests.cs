@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace ClickHouse.Driver.Tcp.Tests.Client;
@@ -44,6 +45,35 @@ public class ClickHouseTcpClientSettingsTests
         var merged = ClickHouseTcpClient.MergeSettings(client, perQuery);
 
         Assert.That(merged["max_threads"], Is.EqualTo("8"));
+    }
+
+    [Test]
+    public void MergeSettings_PerQuerySettingWithEmptyName_ThrowsArgumentException()
+    {
+        // Per-query settings bypass the construction-time validation of the client-level ones, so the merge is the
+        // last point before the Query packet where an empty name can be rejected instead of truncating the wire
+        // settings list.
+        var perQuery = new Dictionary<string, string> { [string.Empty] = "1" };
+
+        Assert.Throws<ArgumentException>(() => ClickHouseTcpClient.MergeSettings(clientSettings: null, perQuery));
+    }
+
+    [Test]
+    public void MergeSettings_PerQuerySettingWithNullValue_ThrowsArgumentException()
+    {
+        var perQuery = new Dictionary<string, string> { ["max_threads"] = null };
+
+        Assert.Throws<ArgumentException>(() => ClickHouseTcpClient.MergeSettings(clientSettings: null, perQuery));
+    }
+
+    [Test]
+    public void MergeSettings_PerQuerySettingWithEmptyValue_IsAccepted()
+    {
+        var perQuery = new Dictionary<string, string> { ["some_flag"] = string.Empty };
+
+        var merged = ClickHouseTcpClient.MergeSettings(clientSettings: null, perQuery);
+
+        Assert.That(merged["some_flag"], Is.EqualTo(string.Empty));
     }
 
     [Test]
