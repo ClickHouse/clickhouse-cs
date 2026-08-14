@@ -327,6 +327,14 @@ public sealed class InsertRoundTripCase
         // Array(Array(Nullable(T))) composes the array recursion with the nullable state prefix, which the
         // Array(Nullable(T)) and Array(Array(T)) cases each cover only half of.
         yield return Arrays<uint?[]>("Array(Nullable(UInt32))", new[] { new uint?[] { 1, null } }, Array.Empty<uint?[]>());
+
+        // The deep-nesting ladder, Array(UInt8) wrapped 2 to 5 levels plus a String and a Nullable leaf. Every level
+        // carries an empty row and an uneven run, so no level's offsets stream is trivial. See NestedArrayShape; the
+        // block-splitting tests read the same shapes.
+        foreach (NestedArrayShape shape in NestedArrayShape.Shapes())
+        {
+            yield return Same(shape.ToString(), shape.ClickHouseType, shape.BuildColumn);
+        }
     }
 
     // Array(T) inserts and reads back the inner element arrays; the ergonomic jagged column doubles as expected.
