@@ -26,12 +26,16 @@ public sealed class Block : IDisposable
     /// <param name="info">The block info prefix.</param>
     /// <param name="rowCount">The number of rows every column holds.</param>
     /// <param name="columns">The decoded columns, in header order.</param>
-    internal Block(string name, BlockInfo info, int rowCount, IReadOnlyList<IColumn> columns)
+    /// <param name="codecs">The registry the columns' codecs came from.</param>
+    /// <param name="context">The context they were resolved with.</param>
+    internal Block(string name, BlockInfo info, int rowCount, IReadOnlyList<IColumn> columns, ColumnCodecRegistry codecs, ResolveContext context)
     {
         Name = name;
         Info = info;
         RowCount = rowCount;
         Columns = columns;
+        Codecs = codecs;
+        Context = context;
     }
 
     /// <summary>The block name.</summary>
@@ -39,6 +43,17 @@ public sealed class Block : IDisposable
 
     /// <summary>The block info prefix.</summary>
     internal BlockInfo Info { get; }
+
+    /// <summary>
+    /// How to re-resolve a column's codec from its <see cref="IColumn.TypeName"/>, which the POCO read plan has to
+    /// do to reach the codec's read projections. Carried on the block, rather than assumed, so the plan resolves a
+    /// codec the way the read did — a <c>DateTime</c> column whose type string names no timezone otherwise projects
+    /// against the wrong zone.
+    /// </summary>
+    internal ColumnCodecRegistry Codecs { get; }
+
+    /// <summary>The context the columns' codecs were resolved with (the session timezone). See <see cref="Codecs"/>.</summary>
+    internal ResolveContext Context { get; }
 
     /// <summary>The number of rows in the block.</summary>
     public int RowCount { get; }
