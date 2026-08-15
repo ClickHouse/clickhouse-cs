@@ -16,11 +16,32 @@ namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 internal sealed class ControlledTimeProvider : TimeProvider
 {
     private long timestamp = TimeSpan.TicksPerHour; // Not zero, so "before the start" is representable.
+    private Action onNextTimestamp;
 
     /// <summary>Ticks are the unit, so an elapsed span is exactly the span advanced.</summary>
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
-    public override long GetTimestamp() => Interlocked.Read(ref timestamp);
+    /// <summary>
+    /// Runs once, on the next timestamp read, and is then cleared. The pool reads the clock at points a test
+    /// cannot otherwise reach — inside a checkout, after the connection has left the idle set and before it is
+    /// recorded as leased — so this is how a test acts at such a moment rather than around it.
+    /// </summary>
+    public Action OnNextTimestamp
+    {
+        get => Volatile.Read(ref onNextTimestamp);
+        set => Volatile.Write(ref onNextTimestamp, value);
+    }
+
+    public override long GetTimestamp()
+    {
+        // Cleared before it runs, so a hook that makes the pool read the clock again does not re-enter itself.
+        if (Volatile.Read(ref onNextTimestamp) is not null)
+        {
+            Interlocked.Exchange(ref onNextTimestamp, null)?.Invoke();
+        }
+
+        return Interlocked.Read(ref timestamp);
+    }
 
     public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch + TimeSpan.FromTicks(GetTimestamp());
 
