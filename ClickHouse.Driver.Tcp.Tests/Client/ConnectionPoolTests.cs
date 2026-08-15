@@ -851,6 +851,33 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task DisposeAsync_CalledConcurrently_BothCallersWaitForTheOneTeardown()
+    {
+        // Idempotent is not the same as instant. A second caller that returned as soon as it saw the flag would
+        // report a pool whose connections are still open — and may yet be aborted by the first caller — as
+        // closed, which is exactly what awaiting a disposal is supposed to rule out.
+        var factory = new FakeConnectionFactory();
+        var pool = new ConnectionPool(Options(maxPoolSize: 1), factory, new ControlledTimeProvider());
+
+        // Held, so the first caller's drain cannot finish until it is given back.
+        IConnectionLease held = await pool.RentAsync(None);
+
+        Task first = pool.DisposeAsync().AsTask();
+        Task second = pool.DisposeAsync().AsTask();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.IsCompleted, Is.False, "the drain is waiting on the lease still out");
+            Assert.That(second.IsCompleted, Is.False, "and the second caller has to wait for the same teardown");
+        });
+
+        await held.DisposeAsync();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.That(held.Connection.State, Is.EqualTo(TcpConnectionState.Terminated), "both callers return only once it is really closed");
+    }
+
+    [Test]
     public async Task RentAsync_AfterDispose_ThrowsObjectDisposedException()
     {
         var pool = new ConnectionPool(Options(), new FakeConnectionFactory(), new ControlledTimeProvider());
@@ -1122,6 +1149,58 @@ public class ConnectionPoolTests
 
         async Task DialStartedAsync()
             => Assert.That(await started.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "a dial should have started");
+    }
+
+    [Test]
+    public async Task Sweep_ALeaseIsOutAndNothingIsIdle_RunsRatherThanThrowing()
+    {
+        // The commonest state a sweep can land in, and the one that used to break it. The trim's floor test
+        // counts the connections that are out, so with the default floor of zero it passes with an empty idle
+        // set — and the trim then read idle[0]. On the timer SweepQuietly swallows that, so the sweep silently
+        // stopped trimming and stopped holding the floor for the rest of the pool's life.
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(maxPoolSize: 2), factory, new ControlledTimeProvider());
+
+        await using IConnectionLease held = await pool.RentAsync(None);
+        Assert.That(pool.IdleCount, Is.Zero, "the one connection open is the one checked out");
+
+        Assert.DoesNotThrow(pool.Sweep);
+    }
+
+    [Test]
+    public async Task Sweep_ReapingEmptiesTheIdleSetWhileALeaseIsOut_StillClosesWhatItReaped()
+    {
+        // The damage the throw did, rather than the throw itself: the connections reaped for age have already
+        // left the idle set when the trim runs, so an exception there skips the close that follows the lock and
+        // leaves them open with nothing able to reach them.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 2, maxConnectionLifetime: TimeSpan.FromMinutes(30)), factory, clock);
+
+        IConnectionLease held = await pool.RentAsync(None);
+        IConnectionLease returned = await pool.RentAsync(None);
+        ClickHouseTcpConnection reaped = returned.Connection;
+        await returned.DisposeAsync();
+
+        // Past the lifetime, so the reaping pass takes the only idle connection and leaves the set empty.
+        clock.Advance(TimeSpan.FromMinutes(31));
+
+        try
+        {
+            Assert.DoesNotThrow(pool.Sweep);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(pool.IdleCount, Is.Zero);
+                Assert.That(reaped.State, Is.EqualTo(TcpConnectionState.Terminated), "a reaped connection must still be closed, not dropped");
+                Assert.That(held.Connection.State, Is.EqualTo(TcpConnectionState.Ready), "the lease still out is not the sweep's to touch");
+            });
+        }
+        finally
+        {
+            await held.DisposeAsync();
+        }
     }
 
     [Test]
