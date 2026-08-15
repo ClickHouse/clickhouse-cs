@@ -39,7 +39,7 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// this contract.
     /// </remarks>
     /// <param name="sql">The SQL text.</param>
-    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>An async stream of the result's row-bearing blocks, each valid only for its own iteration.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
@@ -56,7 +56,7 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// <c>LowCardinality</c> values may be shared within a block; array-valued entries must not be mutated in place.
     /// </remarks>
     /// <param name="sql">The SQL text.</param>
-    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>An async stream of result rows.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
@@ -76,7 +76,7 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// </remarks>
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="sql">The SQL text.</param>
-    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>An async stream of result rows.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
@@ -92,7 +92,7 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// returns once the server acknowledges it. Any result blocks are drained and discarded.
     /// </summary>
     /// <param name="sql">The SQL text.</param>
-    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the statement is acknowledged.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
@@ -108,7 +108,7 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// </summary>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="columns">The row data, matched to the target columns by name.</param>
-    /// <param name="options">Per-insert options (query id, settings, block sizing), or null for the client defaults.</param>
+    /// <param name="options">Per-insert options (query id, settings, parameters, block sizing), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server acknowledges the insert.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="columns"/> is null.</exception>
@@ -132,7 +132,7 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="rows">The materialized rows to insert, each non-null.</param>
-    /// <param name="options">Per-insert options (query id, settings, block sizing), or null for the client defaults.</param>
+    /// <param name="options">Per-insert options (query id, settings, parameters, block sizing), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server acknowledges the insert.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="rows"/> is null.</exception>
@@ -157,7 +157,7 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// </remarks>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="rows">The materialized rows to insert, each non-null and one value long per target column.</param>
-    /// <param name="options">Per-insert options (query id, settings, block sizing), or null for the client defaults.</param>
+    /// <param name="options">Per-insert options (query id, settings, parameters, block sizing), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server acknowledges the insert.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="rows"/> is null.</exception>
