@@ -83,6 +83,55 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     public TcpConnectionState State => state;
 
     /// <summary>
+    /// Whether this connection is fit to carry another operation, as far as can be told without sending
+    /// anything. Ready, with a transport the peer has not closed and no bytes left over from the last response.
+    /// The pool asks before every checkout, so it must stay cheap: one non-blocking poll of the socket.
+    /// </summary>
+    /// <remarks>
+    /// A readable idle socket means one of two things, and neither allows reuse: the peer closed and a zero-byte
+    /// read is pending, or bytes are waiting that the last operation did not consume, which means our idea of the
+    /// stream position no longer matches the server's.
+    ///
+    /// <para>
+    /// This detects only a peer that closed in an orderly way. A connection dropped without a FIN — a partition,
+    /// or a machine that lost power — still looks alive here, and the operation sent over it stalls until the
+    /// read deadline or TCP itself gives up. That is inherent to a client-side check, and it can equally strike a
+    /// connection opened a moment ago, so the read deadline is the answer to it rather than a stricter probe.
+    /// </para>
+    /// </remarks>
+    internal bool IsReusable
+    {
+        get
+        {
+            if (state != TcpConnectionState.Ready)
+            {
+                return false;
+            }
+
+            // Bytes already buffered from the socket are invisible to a poll, so check our own buffer first.
+            if (reader.BufferedBytes != 0)
+            {
+                return false;
+            }
+
+            // The scripted-stream seam has no socket; there is nothing to poll, so trust the state.
+            if (socket is null)
+            {
+                return true;
+            }
+
+            try
+            {
+                return !socket.Poll(0, SelectMode.SelectRead);
+            }
+            catch (Exception e) when (e is SocketException or ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
     /// Builds the context passed to the codec registry when reading an operation's blocks, carrying the
     /// session timezone so a timezone-bearing column whose type string omits an explicit timezone resolves
     /// against it. A query's <c>session_timezone</c> setting takes precedence over the handshake default. No
