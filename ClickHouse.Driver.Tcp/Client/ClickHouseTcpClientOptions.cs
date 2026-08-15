@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp;
@@ -118,9 +117,9 @@ public sealed record ClickHouseTcpClientOptions
     /// it fails.
     /// </summary>
     /// <remarks>
-    /// While this is set, the pool also caps each operation's server-side <c>max_execution_time</c> at the
-    /// connection's remaining life, so the server ends a long query cleanly instead of the pool cutting it off
-    /// mid-stream. A connection with too little life left for that is retired at checkout rather than handed out.
+    /// The age is read at checkout and at return, both of which fall between operations, so this never
+    /// interrupts a running query: an operation longer than the limit carries its connection past it, and the
+    /// connection is closed when it comes back rather than reused.
     /// </remarks>
     public TimeSpan MaxConnectionLifetime { get; init; } = DefaultMaxConnectionLifetime;
 
@@ -183,25 +182,16 @@ public sealed record ClickHouseTcpClientOptions
             throw new ArgumentOutOfRangeException(nameof(Port), Port, "Port must be between 1 and 65535.");
         }
 
-        if (DialTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(DialTimeout), DialTimeout, "DialTimeout must be positive.");
-        }
+        RequireUsableTimeout(DialTimeout, nameof(DialTimeout));
 
-        if (ReadTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(ReadTimeout), ReadTimeout, "ReadTimeout must be positive.");
-        }
+        RequireUsableTimeout(ReadTimeout, nameof(ReadTimeout));
 
         if (MaxSendBufferBytes <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(MaxSendBufferBytes), MaxSendBufferBytes, "MaxSendBufferBytes must be positive.");
         }
 
-        if (PoolTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(PoolTimeout), PoolTimeout, "PoolTimeout must be positive.");
-        }
+        RequireUsableTimeout(PoolTimeout, nameof(PoolTimeout));
 
         if (MaxConnectionLifetime < TimeSpan.Zero)
         {
@@ -233,17 +223,6 @@ public sealed record ClickHouseTcpClientOptions
             throw new ArgumentOutOfRangeException(nameof(PoolReusePolicy), PoolReusePolicy, "PoolReusePolicy is not a defined value.");
         }
 
-        // A connection is retired at checkout once too little of its life remains to derive a server-side
-        // deadline from (see ConnectionLifetimeDeadline). A lifetime at or under that floor would retire every
-        // connection the moment it is opened, so the pool could never hand one out.
-        if (MaxConnectionLifetime > TimeSpan.Zero && MaxConnectionLifetime <= ConnectionLifetimeDeadline.RetirementFloor)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(MaxConnectionLifetime),
-                MaxConnectionLifetime,
-                $"MaxConnectionLifetime must exceed {ConnectionLifetimeDeadline.RetirementFloor.TotalSeconds:0.###}s, below which every connection would be retired before it could be used.");
-        }
-
         if (CustomSettings is not null)
         {
             foreach (KeyValuePair<string, string> setting in CustomSettings)
@@ -260,6 +239,26 @@ public sealed record ClickHouseTcpClientOptions
                     throw new ArgumentException($"Custom setting '{setting.Key}' has a null value; use an empty string for a flag-style setting.", nameof(CustomSettings));
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Rejects a deadline that cannot be armed. The timer APIs these feed (<c>CancelAfter</c>,
+    /// <c>SemaphoreSlim.WaitAsync</c>) take a millisecond count as an <see cref="int"/>, so a span beyond about
+    /// 24.85 days would throw from inside every operation instead of at construction.
+    /// </summary>
+    /// <param name="value">The configured deadline.</param>
+    /// <param name="name">The option's name, for the exception.</param>
+    private static void RequireUsableTimeout(TimeSpan value, string name)
+    {
+        if (value <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(name, value, $"{name} must be positive.");
+        }
+
+        if (value.TotalMilliseconds > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(name, value, $"{name} must not exceed {TimeSpan.FromMilliseconds(int.MaxValue)} (about 24.8 days).");
         }
     }
 
