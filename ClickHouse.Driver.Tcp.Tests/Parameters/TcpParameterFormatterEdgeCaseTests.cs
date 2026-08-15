@@ -173,6 +173,17 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
+    [TestCase("Array(Array(Array(Int32)))", "deeper", TestName = "Declared deeper than the CLR rank")]
+    [TestCase("Array(Int32)", "shallower", TestName = "Declared shallower than the CLR rank")]
+    public void FormatSqlText_MultidimensionalArrayOfTheWrongDepth_SaysWhichWayToChangeIt(string typeName, string suggestion)
+    {
+        // Without this check the rank-3 case would emit three bracket levels for a two-level type and only the
+        // server would notice.
+        var exception = Assert.Throws<ArgumentException>(() => Format(new int[,] { { 1, 2 }, { 3, 4 } }, typeName));
+
+        Assert.That(exception.Message, Does.Contain(suggestion));
+    }
+
     [Test]
     public void FormatSqlText_UnsupportedTypeName_ThrowsNamingTheType()
     {

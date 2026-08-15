@@ -279,15 +279,39 @@ internal static class TcpParameterFormatter
 
     private static string FormatMultidimensional(TypeNode type, Array value)
     {
-        TypeNode leaf = type;
-        for (int rank = 0; rank < value.Rank && leaf.Name == "Array" && leaf.Arguments.Count == 1; rank++)
+        var builder = new StringBuilder();
+        AppendAxis(builder, value, new int[value.Rank], dimension: 0, ResolveLeafType(type, value.Rank));
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Peels the declared array nesting down to the element type, and checks it is as deep as the CLR array's
+    /// rank. A mismatch is reported here, where the two depths can be named, rather than as a value/type error
+    /// from the arm that would otherwise be handed the wrong level.
+    /// </summary>
+    /// <param name="outer">The declared array type.</param>
+    /// <param name="rank">The CLR array's rank.</param>
+    /// <returns>The element type.</returns>
+    /// <exception cref="ArgumentException">The declared depth is not the CLR rank.</exception>
+    private static TypeNode ResolveLeafType(TypeNode outer, int rank)
+    {
+        TypeNode leaf = outer;
+        int depth = 0;
+        while (leaf.Name == "Array" && leaf.Arguments.Count == 1)
         {
+            depth++;
             leaf = leaf.Arguments[0];
         }
 
-        var builder = new StringBuilder();
-        AppendAxis(builder, value, new int[value.Rank], dimension: 0, leaf);
-        return builder.ToString();
+        if (depth == rank)
+        {
+            return leaf;
+        }
+
+        string suggestion = rank > depth ? "shallower" : "deeper";
+        throw new ArgumentException(
+            $"CLR array rank {rank} does not match ClickHouse type '{outer}' " +
+            $"(nested array depth {depth}). Provide a {suggestion} array or change the type hint.");
     }
 
     private static void AppendAxis(StringBuilder builder, Array value, int[] indices, int dimension, TypeNode leaf)
