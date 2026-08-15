@@ -1,9 +1,11 @@
 using System;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
+using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 
@@ -97,6 +99,78 @@ public class TcpConnectionFactoryTests
         }
         finally
         {
+            listener.Stop();
+        }
+    }
+
+    [Test]
+    public async Task DisposeAsync_OperationBlockedOnAReadThatNeverArrives_IsFreedByTheAbort()
+    {
+        // The claim the abort path exists for, and the one a scripted connection cannot make: an operation
+        // parked on a read from a server that will never answer is released by disposal rather than left until
+        // TCP gives up. A listener that completes the handshake and then goes silent is exactly that server.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        Task<TcpClient> accepting = listener.AcceptTcpClientAsync();
+        TcpClient server = null;
+        try
+        {
+            var options = new ClickHouseTcpClientOptions
+            {
+                Host = "127.0.0.1",
+                Port = port,
+                DialTimeout = TimeSpan.FromSeconds(10),
+                MaxPoolSize = 1,
+                PoolTimeout = TimeSpan.FromMilliseconds(250),
+            };
+            var pool = new ConnectionPool(options);
+
+            // The rent has to be in flight while the handshake is answered: it blocks reading the Hello.
+            ValueTask<IConnectionLease> renting = pool.RentAsync(CancellationToken.None);
+            server = await accepting;
+            await server.GetStream().WriteAsync(await FakeConnectionFactory.ServerHelloBytesAsync(CancellationToken.None));
+            await server.GetStream().FlushAsync();
+            IConnectionLease lease = await renting;
+
+            // Sends the query, then blocks reading a reply the listener never sends. The lease is deliberately
+            // never disposed, so the drain cannot complete and disposal has to abort this.
+            Task query = Task.Run(async () =>
+            {
+                await foreach (Block block in lease.Connection.QueryAsync("SELECT 1", cancellationToken: CancellationToken.None))
+                {
+                    Assert.That(block, Is.Not.Null);
+                }
+            });
+
+            await WaitUntilAsync(() => lease.Connection.State == TcpConnectionState.ReadingResponse);
+            Assert.That(query.IsCompleted, Is.False, "the query must still be waiting on the server");
+
+            var elapsed = Stopwatch.StartNew();
+            await pool.DisposeAsync();
+            elapsed.Stop();
+
+            // Whether the abort really released the read, as opposed to disposal merely giving up on waiting
+            // for it. Task.WhenAny rather than WaitAsync, whose own timeout would otherwise look like success.
+            Task finished = await Task.WhenAny(query, Task.Delay(TimeSpan.FromSeconds(10)));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(finished, Is.SameAs(query), "the abort must release the operation's pending read");
+                Assert.That(query.IsFaulted, Is.True, "the operation fails rather than quietly returning nothing");
+                Assert.That(elapsed.Elapsed, Is.LessThan(TimeSpan.FromSeconds(10)), "disposal must not wait out the abandoned lease");
+                Assert.That(lease.Connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+                Assert.That(lease.Connection.IsReusable, Is.False);
+            });
+
+            // The operation's own unwinding calls Terminate after the abort already set the state; that is what
+            // returns the pooled buffers, and it must not fault or return them a second time.
+            Assert.DoesNotThrow(lease.Connection.Terminate);
+        }
+        finally
+        {
+            server?.Dispose();
             listener.Stop();
         }
     }

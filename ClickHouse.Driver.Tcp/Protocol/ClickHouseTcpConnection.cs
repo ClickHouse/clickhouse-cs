@@ -955,13 +955,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// then releases the reader and writer's pooled buffers. Idempotent, but not safe to call concurrently with
     /// another operation. Once terminated a connection is never reused.
     /// </summary>
+    /// <remarks>
+    /// There is deliberately no early return for an already-terminated connection. Every step below is
+    /// idempotent, and the buffer release has to run even when the state was set elsewhere — after
+    /// <see cref="AbortTransport"/>, this call as the operation unwinds is the only thing that returns those
+    /// buffers to the pool.
+    /// </remarks>
     public void Terminate()
     {
-        if (state == TcpConnectionState.Terminated)
-        {
-            return;
-        }
-
         state = TcpConnectionState.Terminated;
         try
         {
@@ -995,17 +996,18 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// abandoned it, typically parked on a read that will never arrive.
     /// </summary>
     /// <remarks>
-    /// The pooled reader and writer buffers are deliberately not returned here. Returning a buffer that a
-    /// pending read or write still points at would hand live memory to an unrelated caller, and racing
-    /// <see cref="Terminate"/>'s unsynchronized guard could return the same buffer twice. The abandoned
-    /// operation returns them itself as it unwinds, which closing the socket provokes; if it never unwinds, two
-    /// pooled arrays are left to the garbage collector, which costs an allocation and corrupts nothing.
+    /// The pooled reader and writer buffers are deliberately not returned here: a buffer a pending read or write
+    /// still points at must not go back to the pool, or that memory is handed to an unrelated caller while it is
+    /// still in use. The operation returns them itself, through the <see cref="Terminate"/> its own unwinding
+    /// calls — which closing the socket provokes, and which runs only once the I/O has actually stopped. That
+    /// release is exactly-once even against this call, because the reader and writer guard their disposal with
+    /// an interlocked flag. If the operation never unwinds at all, two pooled arrays are left to the garbage
+    /// collector: an allocation lost, nothing corrupted.
     /// </remarks>
     internal void AbortTransport()
     {
-        // A plain write, and deliberately before the close: an operation's own Terminate then sees Terminated
-        // and skips, so the reader and writer are disposed by at most one of us. If it got there first instead,
-        // it has already done the full teardown and the close below is a no-op on a disposed socket.
+        // Marks the connection unusable so it is never handed out again. Terminate has no early return, so the
+        // operation's own call still releases the buffers afterwards despite the state already being final.
         state = TcpConnectionState.Terminated;
 
         try
