@@ -79,13 +79,16 @@ public sealed record ClickHouseTcpClientOptions
     public TimeSpan ReadTimeout { get; init; } = DefaultReadTimeout;
 
     /// <summary>
-    /// The number of idle connections the pool keeps rather than closing for inactivity. Defaults to 0. Only
-    /// <see cref="IdleTimeout"/> respects this floor: a connection past <see cref="MaxConnectionLifetime"/> is
-    /// retired whatever the count, since age is a correctness limit and inactivity is only a resource one.
+    /// The number of connections the pool keeps open when it can, counting both idle and in-use ones. Defaults
+    /// to 0. Only <see cref="IdleTimeout"/> respects this floor: a connection past
+    /// <see cref="MaxConnectionLifetime"/> is retired whatever the count, since age is a correctness limit and
+    /// inactivity is only a resource one.
     /// </summary>
     /// <remarks>
-    /// The pool does not open connections to reach this floor; it opens them on demand and then keeps up to this
-    /// many warm, so a bursty caller does not re-pay connect and handshake between bursts.
+    /// The floor is maintained by the same sweep that closes idle connections, so a pool below it is topped up
+    /// within one sweep interval rather than at construction — a burst arriving before the first sweep still
+    /// opens its own connections. Topping up never takes a slot from a waiting caller: it only uses capacity
+    /// that is free at that moment, so a pool already at <see cref="MaxPoolSize"/> simply skips it.
     /// </remarks>
     public int MinPoolSize { get; init; } = DefaultMinPoolSize;
 
