@@ -58,9 +58,14 @@ internal sealed class ConnectionPool : IConnectionSource
 
     private readonly object gate = new();
 
-    // Cancelled when the pool is disposed, so a top-up dial in flight gives up promptly instead of holding a
-    // permit the drain is waiting for until DialTimeout elapses.
+    // Cancelled when the pool is disposed, so a dial in flight — a checkout's or a top-up's — gives up promptly
+    // instead of holding a permit the drain is waiting for until DialTimeout elapses.
     private readonly CancellationTokenSource shutdown = new();
+
+    // Connections dialed but not yet in `idle` or `leased`. They count as open: each is committed and holds a
+    // permit, and leaving them out is how a top-up could talk itself past MaxPoolSize while dials were still in
+    // flight. Guarded by `gate`.
+    private int opening;
 
     private int disposed;
 
@@ -115,19 +120,32 @@ internal sealed class ConnectionPool : IConnectionSource
         ThrowIfDisposed();
         await AcquirePermitAsync(cancellationToken).ConfigureAwait(false);
 
-        // From here a permit is held; every path must either return a lease (which releases it on dispose) or
-        // release it before throwing, or the pool loses a slot for good.
+        // From here a permit is held, and past the call below a slot in `opening` with it; every path must either
+        // return a lease (which releases the permit on dispose) or give both back before throwing, or the pool
+        // loses a slot for good.
+        bool reserved = false;
         try
         {
             // Disposal may have started while this caller waited for the permit.
             ThrowIfDisposed();
 
-            PooledConnection connection = TakeReusableIdle()
-                ?? new PooledConnection(await factory.CreateAsync(cancellationToken).ConfigureAwait(false), time);
+            // A null means there was nothing to reuse, and that the dial it commits this caller to is already
+            // counted in `opening`.
+            PooledConnection connection = TakeReusableIdle();
+            reserved = connection is null;
+            connection ??= new PooledConnection(await DialAsync(cancellationToken).ConfigureAwait(false), time);
 
             connection.OnRented();
             lock (gate)
             {
+                // The reservation gives way to the entry in `leased` under one lock, so the total this checkout
+                // contributes never dips in between and lets another dial through.
+                if (reserved)
+                {
+                    opening--;
+                    reserved = false;
+                }
+
                 // Re-checked here rather than only above, and under the same lock as the add: opening a
                 // connection can take up to DialTimeout, long enough for disposal to run its whole drain in
                 // between. Because disposal sets the flag before it ever takes this lock, and empties `leased`
@@ -146,8 +164,16 @@ internal sealed class ConnectionPool : IConnectionSource
         }
         catch
         {
-            // Only the permit is undone. Every throw either precedes the add to `leased` or, in the disposed
-            // case above, removes what it added — so there is nothing else outstanding to clean up here.
+            // Only the permit and any reservation are undone. Every throw either precedes the add to `leased`
+            // or, in the disposed case above, removes what it added — so there is nothing else outstanding.
+            if (reserved)
+            {
+                lock (gate)
+                {
+                    opening--;
+                }
+            }
+
             permits.Release();
             throw;
         }
@@ -175,8 +201,9 @@ internal sealed class ConnectionPool : IConnectionSource
             await sweeper.DisposeAsync().ConfigureAwait(false);
         }
 
-        // A top-up dial in flight holds a permit the drain below is about to wait for. Cancelling it here means
-        // disposal waits out one aborted connect rather than the whole DialTimeout.
+        // A dial in flight — a checkout's or a top-up's — holds a permit the drain below is about to wait for,
+        // and a checkout's is not in `leased` for the abort at the end to find. Cancelling here means disposal
+        // waits out one aborted connect rather than the whole DialTimeout, and leaves no socket behind it.
         await shutdown.CancelAsync().ConfigureAwait(false);
 
         // Nothing can re-enter the idle set after this: `Return` re-reads `disposed` under `gate`, and the
@@ -344,10 +371,11 @@ internal sealed class ConnectionPool : IConnectionSource
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Every connection is opened while holding a permit, exactly as a checkout does, which is what keeps the
-    /// floor from breaching <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>. The permit is taken with a
+    /// Every connection is opened while holding a permit, exactly as a checkout does. The permit is taken with a
     /// zero timeout so this never queues ahead of a real caller: if every slot is busy, the pool needs no
-    /// warming and the top-up simply stops.
+    /// warming and the top-up simply stops. A permit alone is not enough to keep the floor inside
+    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>, though — an idle connection holds none — so each
+    /// round also reserves a slot against the connections already being dialed.
     /// </para>
     /// <para>
     /// A dial that fails ends the round silently. Nobody is waiting on it, there is nothing to report it to
@@ -359,8 +387,17 @@ internal sealed class ConnectionPool : IConnectionSource
     {
         try
         {
-            while (Volatile.Read(ref disposed) == 0 && BelowFloor() && permits.Wait(0))
+            while (Volatile.Read(ref disposed) == 0 && permits.Wait(0))
             {
+                if (!TryReserveOpening())
+                {
+                    // The floor has been met since this round started — by a checkout dialing, or by this
+                    // round's own previous connection.
+                    permits.Release();
+                    return;
+                }
+
+                bool reserved = true;
                 bool pooled = false;
                 try
                 {
@@ -370,8 +407,12 @@ internal sealed class ConnectionPool : IConnectionSource
 
                     lock (gate)
                     {
-                        // Same reasoning as the checkout path: the disposed check has to share the lock with the
-                        // add, or a connection opened during disposal lands in a set nothing will drain again.
+                        // Same reasoning as the checkout path: the reservation becomes the pooled entry under one
+                        // lock, and the disposed check shares it, or a connection opened during disposal lands in
+                        // a set nothing will drain again.
+                        opening--;
+                        reserved = false;
+
                         if (Volatile.Read(ref disposed) == 0)
                         {
                             connection.OnReturned();
@@ -388,6 +429,14 @@ internal sealed class ConnectionPool : IConnectionSource
                 }
                 finally
                 {
+                    if (reserved)
+                    {
+                        lock (gate)
+                        {
+                            opening--;
+                        }
+                    }
+
                     permits.Release();
                 }
             }
@@ -402,18 +451,67 @@ internal sealed class ConnectionPool : IConnectionSource
         }
     }
 
-    /// <summary>Whether the pool holds fewer connections, open or in use, than the floor asks for.</summary>
+    /// <summary>
+    /// The connections the pool is accountable for: idle, in use, or being opened. Read under <c>gate</c>.
+    /// </summary>
+    private int TotalConnections => idle.Count + leased.Count + opening;
+
+    /// <summary>Whether the pool holds fewer connections than the floor asks for.</summary>
     private bool BelowFloor()
     {
         lock (gate)
         {
-            return idle.Count + leased.Count < options.MinPoolSize;
+            return TotalConnections < options.MinPoolSize;
+        }
+    }
+
+    /// <summary>
+    /// Reserves capacity for one more connection unless the floor is already met. Since the floor can never
+    /// exceed <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>, a reservation granted here cannot take the
+    /// pool past the cap either.
+    /// </summary>
+    /// <returns>True when the caller may dial, having taken a slot it has to give back.</returns>
+    private bool TryReserveOpening()
+    {
+        lock (gate)
+        {
+            if (TotalConnections >= options.MinPoolSize)
+            {
+                return false;
+            }
+
+            opening++;
+            return true;
+        }
+    }
+
+    /// <summary>Opens a connection for a checkout, giving up if the pool is disposed while the dial runs.</summary>
+    /// <param name="cancellationToken">The caller's token.</param>
+    /// <returns>The opened connection.</returns>
+    /// <exception cref="ObjectDisposedException">The pool was disposed while the dial was in flight.</exception>
+    /// <remarks>
+    /// A dial in flight is the one connection disposal cannot otherwise reach: it is not in <c>leased</c> yet, so
+    /// the abort at the end of the drain does not see it, and the socket would outlive the pool by as much as
+    /// <see cref="ClickHouseTcpClientOptions.DialTimeout"/>. The caller's own cancellation still surfaces as a
+    /// cancellation; only disposal is reported as disposal.
+    /// </remarks>
+    private async ValueTask<ClickHouseTcpConnection> DialAsync(CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, shutdown.Token);
+        try
+        {
+            return await factory.CreateAsync(linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new ObjectDisposedException(ClientTypeName);
         }
     }
 
     /// <summary>
     /// Takes the next idle connection that can still be used, closing any that cannot on the way. Returns null
-    /// when the idle set holds nothing usable, leaving the caller to open a connection.
+    /// when the idle set holds nothing usable, having reserved the slot in <c>opening</c> for the dial it leaves
+    /// the caller to make — so a null result obliges that caller to give the slot back.
     /// </summary>
     /// <returns>A usable idle connection, or null.</returns>
     /// <remarks>
@@ -431,6 +529,10 @@ internal sealed class ConnectionPool : IConnectionSource
             {
                 if (idle.Count == 0)
                 {
+                    // Reserved in the same lock that saw the set empty, and that pairing is what holds the cap:
+                    // with nothing idle, every connection counted holds a permit of its own, so this one's
+                    // permit leaves the total no higher than the number of permits.
+                    opening++;
                     return null;
                 }
 
