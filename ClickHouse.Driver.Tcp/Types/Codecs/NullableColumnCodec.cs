@@ -37,6 +37,13 @@ internal sealed class NullableColumnCodec : IColumnCodec
     private readonly (Type Spelling, INullableShape Shape)[] writeShapes;
     private readonly bool innerCanWrite;
 
+    // The inner's write types lifted to this codec's nullable surface. Built on first use rather than in the
+    // constructor: a codec is resolved per column per block, so building it eagerly would put an allocation and a
+    // lookup per write type on the streaming path for every Nullable column that is only ever read. The build is
+    // idempotent, so a race just repeats identical work. The read side needs no counterpart — TryProjectRead answers
+    // per target without materializing a list.
+    private Type[] writableElementTypes;
+
     private NullableColumnCodec(string typeName, IColumnCodec inner)
     {
         TypeName = typeName;
@@ -88,10 +95,39 @@ internal sealed class NullableColumnCodec : IColumnCodec
     }
 
     /// <summary>
+    /// The inner codec's writable types, each made nullable — the list form of what <see cref="CanWrite"/> has always
+    /// accepted, so <c>Nullable(DateTime)</c> advertises <c>uint?</c>, <c>DateTimeOffset?</c> and <c>DateTime?</c>.
+    /// The default would report only the canonical <see cref="ElementType"/> and so hide the other two from a caller
+    /// choosing a write type from the list rather than probing with a column.
+    /// </summary>
+    public IReadOnlyList<Type> WritableElementTypes => EnsureWritableElementTypes();
+
+    /// <summary>
     /// The placeholder for an absent <c>Nullable(T)</c> value is <see langword="null"/> itself — a null-marked
     /// row. Relevant only if a future composite nests a <c>Nullable</c> and asks for its placeholder.
     /// </summary>
     public object NullPlaceholder => null;
+
+    /// <summary>
+    /// <see langword="null"/> for every write type this codec accepts, not just the canonical one: a null row of a
+    /// <c>Nullable</c> column is spelled the same whichever CLR type carries the present rows, so the default's
+    /// single-type answer would leave the extra <see cref="WritableElementTypes"/> unanswerable.
+    /// </summary>
+    /// <param name="writeType">The CLR write type to express the placeholder in.</param>
+    /// <returns><see langword="null"/>.</returns>
+    /// <exception cref="NotSupportedException"><paramref name="writeType"/> is not a writable element type.</exception>
+    public object NullPlaceholderAs(Type writeType)
+    {
+        foreach (Type writable in EnsureWritableElementTypes())
+        {
+            if (writable == writeType)
+            {
+                return null;
+            }
+        }
+
+        throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+    }
 
     /// <summary>Builds a <c>Nullable(T)</c> codec, resolving the inner type <c>T</c> through the registry.</summary>
     /// <param name="node">The parsed <c>Nullable</c> type node; its single argument is the inner type.</param>
@@ -192,6 +228,29 @@ internal sealed class NullableColumnCodec : IColumnCodec
         }
 
         return ColumnValueProjections.TryLiftOverAbsent(value, inner, innerTarget, targetType, out projected);
+    }
+
+    /// <summary>
+    /// Builds the lifted write types on first use, in the order <see cref="ResolveWriteShape"/> prefers them — so the
+    /// canonical <see cref="ElementType"/> leads, the inner's own list leading with its canonical type.
+    /// </summary>
+    /// <returns>The write types, each the inner's spelling made nullable.</returns>
+    private Type[] EnsureWritableElementTypes()
+    {
+        Type[] surface = writableElementTypes;
+        if (surface is not null)
+        {
+            return surface;
+        }
+
+        surface = new Type[writeShapes.Length];
+        for (int i = 0; i < writeShapes.Length; i++)
+        {
+            surface[i] = writeShapes[i].Shape.NullableElementType;
+        }
+
+        writableElementTypes = surface;
+        return surface;
     }
 
     /// <inheritdoc/>

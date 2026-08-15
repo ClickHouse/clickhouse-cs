@@ -234,6 +234,99 @@ public class ClickHouseTcpConnectionInsertTests
     }
 
     [Test]
+    public async Task InsertAsync_SuppliedColumns_AreLeftForTheCallerToDispose()
+    {
+        // The ownership half the factory overload contrasts with: a caller's columns outlive the insert, and may be
+        // inserted again.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")),
+            EndOfStreamPacket());
+        using var connection = await ConnectedAsync(script);
+        var spy = new DisposeSpyColumn<ulong>("x", "UInt64", new ulong[] { 1, 2 });
+
+        await connection.InsertAsync("INSERT INTO t VALUES", Columns(spy), cancellationToken: None);
+
+        Assert.That(spy.DisposeCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task InsertAsync_ColumnFactory_SeesTheTargetSchemaAndOwnsWhatItBuilt()
+    {
+        // The row-oriented seam: the factory runs once the target types are known, and the columns it hands over are
+        // the insert's to release — a POCO gather builds them over pooled buffers.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")),
+            EndOfStreamPacket());
+        using var connection = await ConnectedAsync(script);
+        var spy = new DisposeSpyColumn<ulong>("x", "UInt64", new ulong[] { 1, 2 });
+        var targets = new List<string>();
+
+        await connection.InsertAsync(
+            "INSERT INTO t VALUES",
+            rowCount: 2,
+            schema =>
+            {
+                for (int i = 0; i < schema.ColumnCount; i++)
+                {
+                    targets.Add($"{schema[i].Name} {schema[i].TypeName}");
+                }
+
+                return new IColumn[] { spy };
+            },
+            cancellationToken: None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(targets, Is.EqualTo(new[] { "x UInt64" }));
+            Assert.That(spy.DisposeCount, Is.EqualTo(1));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+    }
+
+    [Test]
+    public async Task InsertAsync_ThrowingColumnFactory_RethrowsItAndStaysReady()
+    {
+        // A mapping failure lands mid-INSERT, with the server waiting for row data. Terminating the connection for
+        // what is a caller's shape error would cost a redial on every one, so the insert closes its row stream with
+        // no rows and reports afterwards — the same course the schema-mismatch path takes.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")),
+            EndOfStreamPacket());
+        using var connection = await ConnectedAsync(script);
+        var failure = new InvalidOperationException("no property maps to 'x'");
+
+        InvalidOperationException thrown = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await connection.InsertAsync("INSERT INTO t VALUES", rowCount: 2, _ => throw failure, cancellationToken: None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.SameAs(failure), "the factory's own exception, not a wrapper");
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+    }
+
+    [Test]
+    public void InsertAsync_NegativeRowCount_ThrowsArgumentOutOfRange()
+    {
+        using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(Array.Empty<byte>()), socket: null);
+
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
+            await connection.InsertAsync("INSERT INTO t VALUES", rowCount: -1, _ => Array.Empty<IColumn>(), cancellationToken: None));
+    }
+
+    [Test]
+    public void InsertAsync_NullColumnFactory_ThrowsArgumentNull()
+    {
+        using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(Array.Empty<byte>()), socket: null);
+
+        Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await connection.InsertAsync("INSERT INTO t VALUES", rowCount: 0, buildColumns: null, cancellationToken: None));
+    }
+
+    [Test]
     public void PlanInsertBlocks_NoRowCap_ProducesOneBlock()
     {
         // With no row cap the whole insert is one block; peak memory is bounded by the flush backstop, not a split.
