@@ -62,6 +62,10 @@ internal sealed class ConnectionPool : IConnectionSource
     // instead of holding a permit the drain is waiting for until DialTimeout elapses.
     private readonly CancellationTokenSource shutdown = new();
 
+    // Completed when the first caller's teardown finishes. A second, concurrent DisposeAsync waits on this
+    // rather than returning at once, so awaiting it means the pool is closed and not merely closing.
+    private readonly TaskCompletionSource teardown = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     // Capacity taken but not yet filed in `idle` or `leased`: a dial in flight, or a connection lifted out of
     // `idle` by a checkout that has not yet recorded it. Counting these is what keeps a top-up from opening past
     // MaxPoolSize while they are in the air. Guarded by `gate`.
@@ -193,9 +197,27 @@ internal sealed class ConnectionPool : IConnectionSource
         // that is about to be closed.
         if (Interlocked.Exchange(ref disposed, 1) != 0)
         {
+            // Idempotent is not the same as instant. The first caller can still be draining, and reporting the
+            // pool as closed while its connections are open — and may yet be aborted — would be a lie.
+            await teardown.Task.ConfigureAwait(false);
             return;
         }
 
+        try
+        {
+            await TearDownAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            // Completed rather than faulted even when the teardown threw: that failure belongs to the caller who
+            // caused it, and a task no one may await must not carry an unobserved exception.
+            teardown.TrySetResult();
+        }
+    }
+
+    /// <summary>The teardown itself, run once, by whichever caller won the disposal race.</summary>
+    private async Task TearDownAsync()
+    {
         if (sweeper is not null)
         {
             // Awaited rather than disposed synchronously so a sweep already running finishes before the drain.
@@ -331,7 +353,12 @@ internal sealed class ConnectionPool : IConnectionSource
             // as well: they are open, and MinPoolSize is a floor on open connections, not on spare ones. It does
             // not count `pending`, unlike the top-up: trimming is the reversible direction, so an in-flight
             // checkout is better left to the next sweep than acted on now.
-            while (options.IdleTimeout > TimeSpan.Zero
+            //
+            // The emptiness test is first and is load-bearing: the floor test counts the connections that are
+            // out, so it passes with nothing idle whenever more are leased than the floor asks for — which, with
+            // the default floor of zero, is any sweep at all while one connection is checked out.
+            while (idle.Count > 0
+                && options.IdleTimeout > TimeSpan.Zero
                 && idle.Count + leased.Count > options.MinPoolSize
                 && idle[0].IdleFor >= options.IdleTimeout)
             {
