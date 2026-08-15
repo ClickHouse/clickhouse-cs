@@ -92,7 +92,10 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["MaxSendBufferBytes"] = value;
     }
 
-    /// <summary>The number of idle connections kept rather than closed for inactivity. Defaults to 0.</summary>
+    /// <summary>
+    /// The number of connections kept open rather than closed for inactivity, counting the ones in use as well
+    /// as the idle ones. Defaults to 0.
+    /// </summary>
     public int MinPoolSize
     {
         get => GetIntOrDefault("MinPoolSize", ClickHouseTcpClientOptions.DefaultMinPoolSize);
