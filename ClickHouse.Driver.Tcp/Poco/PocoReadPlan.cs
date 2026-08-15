@@ -1,44 +1,18 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Poco;
 
-/// <summary>
 /// Builds cache keys for result shapes used by <see cref="PocoReadPlan{T}"/>.
 /// </summary>
 internal static class PocoReadPlan
 {
-    /// <summary>
-    /// Builds a length-prefixed key from the resolution context and each column's name and type. Length prefixes
-    /// prevent aliases containing separator characters from colliding with another header.
-    /// </summary>
+    /// <summary>The cache key for the shape of a result block. See <see cref="PocoBlockSignature.Of"/>.</summary>
     /// <param name="block">The block whose header to key on.</param>
     /// <returns>The key.</returns>
-    public static string SignatureOf(Block block)
-    {
-        var key = new StringBuilder();
-        Append(key, ContextKey(block.Context));
-        for (int i = 0; i < block.ColumnCount; i++)
-        {
-            IColumn column = block[i];
-            Append(key, column.Name);
-            Append(key, column.TypeName);
-        }
-
-        return key.ToString();
-    }
-
-    /// <summary>
-    /// Builds the context part of the key, including the session timezone used by timezone-less types.
-    /// </summary>
-    /// <param name="context">The context the block's codecs were resolved with.</param>
-    /// <returns>The key part.</returns>
-    public static string ContextKey(in ResolveContext context) => context.ServerTimezone ?? string.Empty;
-
-    private static void Append(StringBuilder key, string part) => key.Append(part.Length).Append(':').Append(part);
+    public static string SignatureOf(Block block) => PocoBlockSignature.Of(block, block.Context);
 }
 
 /// <summary>
@@ -120,11 +94,11 @@ internal sealed class PocoReadPlan<T>
         if (claimedBy.Count == 0)
         {
             throw new InvalidOperationException(
-                $"No column of the result maps to a property of '{typeof(T).Name}': the result has {Describe(names)}, and the type has {Describe(descriptor)}. " +
+                $"No column of the result maps to a property of '{typeof(T).Name}': the result has {Describe(names)}, and the type has {descriptor.DescribeMappedColumns()}. " +
                 $"Every row would be left at its defaults, so this is reported rather than returned.");
         }
 
-        return new PocoReadPlan<T>(activator, names, types, PocoReadPlan.ContextKey(block.Context), scatters);
+        return new PocoReadPlan<T>(activator, names, types, PocoBlockSignature.ContextKey(block.Context), scatters);
     }
 
     /// <summary>
@@ -135,7 +109,7 @@ internal sealed class PocoReadPlan<T>
     public bool MatchesHeader(Block block)
     {
         if (block.ColumnCount != columnNames.Length
-            || !string.Equals(contextKey, PocoReadPlan.ContextKey(block.Context), StringComparison.Ordinal))
+            || !string.Equals(contextKey, PocoBlockSignature.ContextKey(block.Context), StringComparison.Ordinal))
         {
             return false;
         }
@@ -189,14 +163,4 @@ internal sealed class PocoReadPlan<T>
     private static string Describe(string[] columnNames)
         => columnNames.Length == 0 ? "no columns" : $"columns {string.Join(", ", columnNames)}";
 
-    private static string Describe(PocoTypeDescriptor descriptor)
-    {
-        var names = new string[descriptor.Members.Count];
-        for (int i = 0; i < names.Length; i++)
-        {
-            names[i] = descriptor.Members[i].ColumnName;
-        }
-
-        return $"properties mapping to {string.Join(", ", names)}";
-    }
 }

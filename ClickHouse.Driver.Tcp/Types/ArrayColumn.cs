@@ -70,6 +70,19 @@ internal sealed class ArrayColumn<T> : IColumn<T>, ISpanColumn<T>, IStoredValues
     internal static ArrayColumn<T> OverBuffer(string name, string typeName, T[] buffer, int length)
         => new(name, typeName, buffer, offset: 0, length, pooled: false);
 
+    /// <summary>
+    /// Wraps the first <paramref name="length"/> elements of a buffer rented from <see cref="ArrayPool{T}"/>,
+    /// taking ownership: <see cref="Dispose"/> returns it to the pool. For a column built to be written and then
+    /// dropped — a POCO insert's gathered values — where the buffer has no owner but the column.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="typeName">The ClickHouse type string.</param>
+    /// <param name="buffer">The rented backing buffer; only <paramref name="length"/> elements are exposed.</param>
+    /// <param name="length">The logical row count.</param>
+    /// <returns>A column owning the buffer.</returns>
+    internal static ArrayColumn<T> OverPooledBuffer(string name, string typeName, T[] buffer, int length)
+        => new(name, typeName, buffer, offset: 0, length, pooled: true);
+
     /// <inheritdoc/>
     public string Name { get; }
 
