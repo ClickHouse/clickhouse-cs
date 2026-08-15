@@ -1021,7 +1021,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 stream.Dispose();
             }
         }
-        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
         {
             // Best effort: this runs during disposal, with nothing left to report a teardown failure to.
         }

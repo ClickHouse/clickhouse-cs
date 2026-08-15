@@ -100,7 +100,7 @@ internal sealed class PooledConnection
         {
             Connection.Terminate();
         }
-        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
         {
         }
     }

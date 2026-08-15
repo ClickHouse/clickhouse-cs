@@ -49,16 +49,23 @@ internal sealed class ConnectionPool : IConnectionSource
 
     // Idle connections, ordered by the time they were returned: index 0 was returned first and so has been idle
     // longest. Only ever appended to, so that order holds under either reuse policy. Guarded by `gate`.
-    private readonly List<PooledConnection> idle = [];
+    private readonly List<PooledConnection> idle = new();
 
     // The connections currently checked out. The pool cannot reach a leased connection through `idle`, so
     // without this set a lease that is never returned would leave its socket open with nothing able to close
     // it — not even disposal. Guarded by `gate`.
-    private readonly HashSet<PooledConnection> leased = [];
+    private readonly HashSet<PooledConnection> leased = new();
 
     private readonly object gate = new();
 
+    // Cancelled when the pool is disposed, so a top-up dial in flight gives up promptly instead of holding a
+    // permit the drain is waiting for until DialTimeout elapses.
+    private readonly CancellationTokenSource shutdown = new();
+
     private int disposed;
+
+    // 1 while a top-up is running. Only one at a time, or two sweeps race to fill the same gap.
+    private int refilling;
 
     /// <summary>Creates a pool over the client's options, opening no connection until the first rent.</summary>
     /// <param name="options">The validated client options.</param>
@@ -83,6 +90,12 @@ internal sealed class ConnectionPool : IConnectionSource
             ? null
             : time.CreateTimer(static state => ((ConnectionPool)state).SweepQuietly(), this, period, period);
     }
+
+    /// <summary>
+    /// The top-up the most recent sweep started, or null when it started none. Tests await this; nothing in the
+    /// pool reads it, because a top-up is deliberately something no caller waits on.
+    /// </summary>
+    internal Task LastRefill { get; private set; }
 
     /// <summary>The number of connections currently sitting idle. For tests and diagnostics.</summary>
     internal int IdleCount
@@ -162,6 +175,10 @@ internal sealed class ConnectionPool : IConnectionSource
             await sweeper.DisposeAsync().ConfigureAwait(false);
         }
 
+        // A top-up dial in flight holds a permit the drain below is about to wait for. Cancelling it here means
+        // disposal waits out one aborted connect rather than the whole DialTimeout.
+        await shutdown.CancelAsync().ConfigureAwait(false);
+
         // Nothing can re-enter the idle set after this: `Return` re-reads `disposed` under `gate`, and the
         // Interlocked.Exchange above happens before this lock is taken, so a returner either added before the
         // drain (and is closed by it) or observes the flag and closes its own connection.
@@ -185,24 +202,30 @@ internal sealed class ConnectionPool : IConnectionSource
             // still out, since nothing else can — the pool holds the only other reference to it, and the caller
             // has evidently lost theirs. Aborting closes the transport only, which frees an operation parked on
             // a read that will never arrive without touching the buffers that operation may still be using.
-            foreach (PooledConnection connection in TakeAllLeased() ?? [])
+            List<PooledConnection> stragglers = TakeAllLeased();
+            if (stragglers is not null)
             {
-                connection.Abort();
+                foreach (PooledConnection connection in stragglers)
+                {
+                    connection.Abort();
+                }
             }
         }
 
-        // The semaphore is deliberately not disposed: it holds no unmanaged resource unless its
-        // AvailableWaitHandle is accessed (it never is), and disposing it would fault a rent still waiting on it
-        // instead of letting that caller wake and report the pool as disposed.
+        // Neither the semaphore nor the shutdown source is disposed, for the same reason: each holds no
+        // unmanaged resource here (the semaphore's AvailableWaitHandle is never touched, and the source has no
+        // timer, since nothing calls CancelAfter on it), while disposing either could fault work still winding
+        // down — a rent parked on the semaphore, or a top-up still reading the token — instead of letting it
+        // finish and observe the pool as disposed.
     }
 
     /// <summary>
-    /// The interval between sweeps for the given options, or <see cref="TimeSpan.Zero"/> when nothing can
-    /// expire and no sweep is needed. A quarter of the shortest limit in force, so an expiry is found well
-    /// inside it, clamped at both ends so a short limit cannot make the sweep spin and a long one still
-    /// releases sockets in reasonable time.
+    /// The interval between sweeps for the given options, or <see cref="TimeSpan.Zero"/> when there is nothing
+    /// for a sweep to do. A quarter of the shortest limit in force, so an expiry is found well inside it,
+    /// clamped at both ends so a short limit cannot make the sweep spin and a long one still releases sockets in
+    /// reasonable time.
     /// </summary>
-    /// <param name="options">The client options holding the lifetime and idle limits.</param>
+    /// <param name="options">The client options holding the lifetime, idle, and floor settings.</param>
     /// <returns>The sweep period, or zero for no sweep.</returns>
     internal static TimeSpan SweepInterval(ClickHouseTcpClientOptions options)
     {
@@ -219,7 +242,9 @@ internal sealed class ConnectionPool : IConnectionSource
 
         if (shortest == TimeSpan.Zero)
         {
-            return TimeSpan.Zero;
+            // Nothing expires. The sweep still has to run if there is a floor to hold, since that is the only
+            // thing that tops the pool back up; without one there is genuinely nothing to do and no timer.
+            return options.MinPoolSize > 0 ? MaxSweepInterval : TimeSpan.Zero;
         }
 
         TimeSpan period = shortest / 4;
@@ -243,15 +268,15 @@ internal sealed class ConnectionPool : IConnectionSource
         {
             Sweep();
         }
-        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
         {
         }
     }
 
     /// <summary>
     /// Closes the idle connections that have expired: every one past its lifetime, whatever the count, then the
-    /// longest-idle ones down to <see cref="ClickHouseTcpClientOptions.MinPoolSize"/>. Runs on the sweep timer;
-    /// called directly by tests.
+    /// longest-idle ones down to <see cref="ClickHouseTcpClientOptions.MinPoolSize"/>. Then tops the pool back
+    /// up to that floor, in the background. Runs on the sweep timer; called directly by tests.
     /// </summary>
     internal void Sweep()
     {
@@ -267,24 +292,123 @@ internal sealed class ConnectionPool : IConnectionSource
             {
                 if (idle[i].IsPastLifetime(options.MaxConnectionLifetime))
                 {
-                    (reaped ??= []).Add(idle[i]);
+                    (reaped ??= new List<PooledConnection>()).Add(idle[i]);
                     idle.RemoveAt(i);
                 }
             }
 
             // Index 0 has been idle longest, so trimming from the front retires the coldest connections and
             // keeps the ones most likely to be wanted next. Idleness only decreases along the list, so the
-            // first entry still inside the timeout ends the trim.
+            // first entry still inside the timeout ends the trim. The floor counts the connections that are out
+            // as well: they are open, and MinPoolSize is a floor on open connections, not on spare ones.
             while (options.IdleTimeout > TimeSpan.Zero
-                && idle.Count > options.MinPoolSize
+                && idle.Count + leased.Count > options.MinPoolSize
                 && idle[0].IdleFor >= options.IdleTimeout)
             {
-                (reaped ??= []).Add(idle[0]);
+                (reaped ??= new List<PooledConnection>()).Add(idle[0]);
                 idle.RemoveAt(0);
             }
         }
 
         CloseAll(reaped);
+        LastRefill = StartRefillIfBelowFloor();
+    }
+
+    /// <summary>
+    /// Starts topping the pool back up to <see cref="ClickHouseTcpClientOptions.MinPoolSize"/>, unless a
+    /// top-up is already running or there is nothing to do. Returns without waiting: opening a connection is
+    /// slow and the sweep runs on a timer thread that must not block.
+    /// </summary>
+    /// <returns>The running top-up, for tests to await; null when none was started.</returns>
+    internal Task StartRefillIfBelowFloor()
+    {
+        // The common case by far — the floor defaults to off — and it costs nothing to leave.
+        if (options.MinPoolSize == 0 || Volatile.Read(ref disposed) != 0 || !BelowFloor())
+        {
+            return null;
+        }
+
+        // One at a time. A sweep can fire again while the previous top-up is still dialing, and two of them
+        // would race to fill the same gap and overshoot it.
+        if (Interlocked.CompareExchange(ref refilling, 1, 0) != 0)
+        {
+            return null;
+        }
+
+        return Task.Run(RefillAsync);
+    }
+
+    /// <summary>
+    /// Opens connections until the pool holds <see cref="ClickHouseTcpClientOptions.MinPoolSize"/> of them,
+    /// stopping early if the pool fills up, runs out of free capacity, is disposed, or a dial fails.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every connection is opened while holding a permit, exactly as a checkout does, which is what keeps the
+    /// floor from breaching <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>. The permit is taken with a
+    /// zero timeout so this never queues ahead of a real caller: if every slot is busy, the pool needs no
+    /// warming and the top-up simply stops.
+    /// </para>
+    /// <para>
+    /// A dial that fails ends the round silently. Nobody is waiting on it, there is nothing to report it to
+    /// until Epic P, and the next sweep tries again — so a server that is down costs one failed connect per
+    /// sweep rather than a spin.
+    /// </para>
+    /// </remarks>
+    private async Task RefillAsync()
+    {
+        try
+        {
+            while (Volatile.Read(ref disposed) == 0 && BelowFloor() && permits.Wait(0))
+            {
+                bool pooled = false;
+                try
+                {
+                    ClickHouseTcpConnection opened = await factory
+                        .CreateAsync(shutdown.Token).ConfigureAwait(false);
+                    var connection = new PooledConnection(opened, time);
+
+                    lock (gate)
+                    {
+                        // Same reasoning as the checkout path: the disposed check has to share the lock with the
+                        // add, or a connection opened during disposal lands in a set nothing will drain again.
+                        if (Volatile.Read(ref disposed) == 0)
+                        {
+                            connection.OnReturned();
+                            idle.Add(connection);
+                            pooled = true;
+                        }
+                    }
+
+                    if (!pooled)
+                    {
+                        connection.Close();
+                        return;
+                    }
+                }
+                finally
+                {
+                    permits.Release();
+                }
+            }
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
+        {
+            // A failed dial, or disposal cancelling one. Either way the next sweep reassesses.
+        }
+        finally
+        {
+            Volatile.Write(ref refilling, 0);
+        }
+    }
+
+    /// <summary>Whether the pool holds fewer connections, open or in use, than the floor asks for.</summary>
+    private bool BelowFloor()
+    {
+        lock (gate)
+        {
+            return idle.Count + leased.Count < options.MinPoolSize;
+        }
     }
 
     /// <summary>

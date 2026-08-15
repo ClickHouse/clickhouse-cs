@@ -489,7 +489,7 @@ public class ConnectionPoolTests
     }
 
     [Test]
-    public async Task Sweep_IdleConnectionsPastTheirLifetime_AreClosedEvenBelowMinPoolSize()
+    public async Task Sweep_IdleConnectionsPastTheirLifetime_AreRetiredDespiteTheFloorAndReplaced()
     {
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
@@ -497,11 +497,199 @@ public class ConnectionPoolTests
             Options(maxPoolSize: 4, minPoolSize: 3, maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
 
         await ReturnConcurrentLeasesAsync(pool, 3);
+        ClickHouseTcpConnection[] original = [.. factory.Created];
         clock.Advance(TimeSpan.FromMinutes(11));
 
         pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
 
-        Assert.That(pool.IdleCount, Is.Zero, "age is a correctness limit, so the floor must not hold an over-age connection");
+        Assert.Multiple(() =>
+        {
+            // Age is a correctness limit: the floor must not hold an over-age connection open.
+            Assert.That(original.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+
+            // But the floor is still a floor, so the sweep opens fresh ones to replace them.
+            Assert.That(pool.IdleCount, Is.EqualTo(3));
+            Assert.That(factory.CreateCount, Is.EqualTo(6));
+        });
+    }
+
+    [Test]
+    public async Task Sweep_PoolBelowTheFloor_OpensConnectionsUpToIt()
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 4, minPoolSize: 2), factory, new ControlledTimeProvider());
+
+        // Nothing has been asked of the pool yet, so it holds nothing.
+        Assert.That(factory.CreateCount, Is.Zero);
+
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.IdleCount, Is.EqualTo(2));
+            Assert.That(factory.CreateCount, Is.EqualTo(2), "the floor is a floor, not a target to overshoot");
+        });
+    }
+
+    [Test]
+    public async Task Sweep_PoolAlreadyAtTheFloor_OpensNothing()
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 4, minPoolSize: 2), factory, new ControlledTimeProvider());
+
+        await ReturnConcurrentLeasesAsync(pool, 2);
+
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.That(factory.CreateCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Sweep_FloorPartlyMetByConnectionsInUse_OpensOnlyTheDifference()
+    {
+        // MinPoolSize counts open connections, not spare ones, so one in use already covers half a floor of two.
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 4, minPoolSize: 2), factory, new ControlledTimeProvider());
+
+        await using IConnectionLease held = await pool.RentAsync(None);
+
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.CreateCount, Is.EqualTo(2));
+            Assert.That(pool.IdleCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task Sweep_EverySlotInUse_SkipsTheTopUp()
+    {
+        // A saturated pool needs no warming, and the top-up must never queue ahead of a real caller for a slot.
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 2, minPoolSize: 2), factory, new ControlledTimeProvider());
+
+        await using IConnectionLease first = await pool.RentAsync(None);
+        await using IConnectionLease second = await pool.RentAsync(None);
+
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.That(factory.CreateCount, Is.EqualTo(2), "the floor is already met by the two in use");
+    }
+
+    [Test]
+    public async Task Sweep_NoFloorConfigured_NeverOpensAnything()
+    {
+        // The default. A pool nobody has used must stay at zero connections.
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 4, minPoolSize: 0), factory, new ControlledTimeProvider());
+
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.LastRefill, Is.Null, "no floor means no top-up is even started");
+            Assert.That(factory.CreateCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task Sweep_TopUpDialFails_LeavesThePoolUsableAndRetriesOnTheNextSweep()
+    {
+        var factory = new FakeConnectionFactory { FailNextWith = new TimeoutException("connect timed out") };
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 4, minPoolSize: 2), factory, new ControlledTimeProvider());
+
+        // Nobody is waiting on a top-up, so a failed dial has nowhere to report and must not escape.
+        pool.Sweep();
+        Assert.DoesNotThrowAsync(async () => await (pool.LastRefill ?? Task.CompletedTask));
+        Assert.That(pool.IdleCount, Is.Zero);
+
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.That(pool.IdleCount, Is.EqualTo(2), "the next sweep tries again rather than giving up on the floor");
+    }
+
+    [Test]
+    public async Task Sweep_TopUpAlreadyRunning_DoesNotStartASecondToFillTheSameGap()
+    {
+        // Sweeps fire on a timer and a top-up dials, so a second sweep can easily land while the first is still
+        // opening connections. Two of them would both see the same shortfall and overshoot the floor.
+        var dialing = new TaskCompletionSource();
+        var factory = new FakeConnectionFactory { BeforeCreate = _ => dialing.Task };
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 4, minPoolSize: 2), factory, new ControlledTimeProvider());
+
+        pool.Sweep();
+        Task first = pool.LastRefill;
+        Assert.That(first, Is.Not.Null, "the pool is below the floor, so a top-up must have started");
+
+        // The first is parked mid-dial. The flag is set before the task is queued, so this is not a race.
+        Assert.That(pool.StartRefillIfBelowFloor(), Is.Null);
+
+        dialing.SetResult();
+        await first;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.CreateCount, Is.EqualTo(2));
+            Assert.That(pool.IdleCount, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task Sweep_AfterDispose_DoesNotTopUpTheFloor()
+    {
+        var factory = new FakeConnectionFactory();
+        var pool = new ConnectionPool(
+            Options(maxPoolSize: 4, minPoolSize: 2), factory, new ControlledTimeProvider());
+        await pool.DisposeAsync();
+
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.That(factory.CreateCount, Is.Zero);
+    }
+
+    [Test]
+    public async Task Sweep_IdleConnectionsPastTheIdleTimeoutWithConnectionsInUse_CountsBothAgainstTheFloor()
+    {
+        // Two in use plus two idle, against a floor of three: only one idle connection is surplus.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 4, minPoolSize: 3, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+
+        IConnectionLease[] leases = [await pool.RentAsync(None), await pool.RentAsync(None)];
+        await ReturnConcurrentLeasesAsync(pool, 2);
+        clock.Advance(TimeSpan.FromMinutes(6));
+
+        try
+        {
+            pool.Sweep();
+            await (pool.LastRefill ?? Task.CompletedTask);
+
+            Assert.That(pool.IdleCount, Is.EqualTo(1), "the two in use count toward the floor of three");
+        }
+        finally
+        {
+            foreach (IConnectionLease lease in leases)
+            {
+                await lease.DisposeAsync();
+            }
+        }
     }
 
     [Test]
@@ -609,6 +797,20 @@ public class ConnectionPoolTests
         await pool.DisposeAsync();
 
         Assert.DoesNotThrow(pool.Sweep);
+    }
+
+    [Test]
+    public void SweepInterval_NoLimitsButAFloorToHold_StillSweeps()
+    {
+        // Nothing expires, but the sweep is the only thing that tops the pool back up, so it still has to run.
+        var options = new ClickHouseTcpClientOptions
+        {
+            IdleTimeout = TimeSpan.Zero,
+            MaxConnectionLifetime = TimeSpan.Zero,
+            MinPoolSize = 2,
+        };
+
+        Assert.That(ConnectionPool.SweepInterval(options), Is.EqualTo(TimeSpan.FromSeconds(30)));
     }
 
     [TestCase(0, 0, 0, TestName = "SweepInterval_NoLimitsSet_IsZeroSoNoSweepRuns")]
