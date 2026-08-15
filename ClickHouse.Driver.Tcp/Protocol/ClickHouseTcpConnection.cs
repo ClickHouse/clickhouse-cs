@@ -77,9 +77,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     ///
     /// <para>
     /// This detects only a peer that closed in an orderly way. A connection dropped without a FIN — a partition,
-    /// or a machine that lost power — still looks alive here, and the operation sent over it stalls until the
-    /// read deadline or TCP itself gives up. That is inherent to a client-side check, and it can equally strike a
-    /// connection opened a moment ago, so the read deadline is the answer to it rather than a stricter probe.
+    /// or a machine that lost power — still looks alive here, and the operation sent over it stalls until TCP
+    /// itself gives up, which on Linux takes on the order of fifteen minutes. That is inherent to a client-side
+    /// check, and it can equally strike a connection opened a moment ago, so the answer is an idle read deadline
+    /// rather than a stricter probe. <b>That deadline does not exist yet</b>: <c>ReadTimeout</c> is parsed and
+    /// stored but nothing enforces it, so today a caller's own <see cref="System.Threading.CancellationToken"/>
+    /// is the only bound on such a stall.
     /// </para>
     /// </remarks>
     internal bool IsReusable
