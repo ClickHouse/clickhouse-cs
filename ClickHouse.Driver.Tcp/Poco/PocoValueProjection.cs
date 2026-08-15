@@ -140,11 +140,11 @@ internal static class PocoValueProjection
     /// <param name="pocoType">The POCO type's name.</param>
     /// <param name="memberName">The property name.</param>
     /// <param name="memberType">The property type.</param>
-    /// <param name="row">The zero-based row the NULL was found at.</param>
+    /// <param name="row">The zero-based row of the result the NULL was found at.</param>
     /// <returns>The exception to throw.</returns>
-    public static Exception NullNotAssignable(string columnName, string columnType, string pocoType, string memberName, string memberType, int row)
+    public static Exception NullNotAssignable(string columnName, string columnType, string pocoType, string memberName, string memberType, long row)
         => new InvalidOperationException(
-            $"Column '{columnName}' ({columnType}) is NULL at row {row}, but it maps to property '{pocoType}.{memberName}' of type {memberType}, which cannot hold null. " +
+            $"Column '{columnName}' ({columnType}) is NULL at row {row} of the result, but it maps to property '{pocoType}.{memberName}' of type {memberType}, which cannot hold null. " +
             $"Make that property nullable, or exclude the NULLs in the query.");
 
     /// <summary>Whether the codec advertises a projection to <paramref name="target"/>.</summary>
@@ -233,6 +233,9 @@ internal readonly struct PocoProjectionSite
     /// <summary>The property's name.</summary>
     public string MemberName { get; init; }
 
-    /// <summary>An <see cref="int"/> expression yielding the row being scattered.</summary>
+    /// <summary>
+    /// A <see cref="long"/> expression yielding the row being scattered, counted across the whole result rather than
+    /// within the block — a caller never sees the blocks, so a block-local index would name the wrong row.
+    /// </summary>
     public Expression Row { get; init; }
 }

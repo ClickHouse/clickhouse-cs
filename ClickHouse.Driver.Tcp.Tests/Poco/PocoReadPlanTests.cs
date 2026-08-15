@@ -170,6 +170,32 @@ public class PocoReadPlanTests
     }
 
     [Test]
+    public void Build_EnumLabelSpellingATypeName_StillGetsTheOrdinaryAdvice()
+    {
+        // An enum label is arbitrary text that rides inside the type string, so a column can be perfectly well typed
+        // and still mention Nothing. Diagnosing it as an untyped NULL would send the caller after the wrong thing.
+        Block block = BlockOf(1, PrimitiveColumn<sbyte>.FromValues("value", "Enum8('Nothing' = 1)", new sbyte[] { 1 }));
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => Materialize<Row<Guid>>(block));
+
+        Assert.That(error.Message, Does.Not.Contain("untyped NULL").And.Contain("Give the property one of those types"));
+    }
+
+    [Test]
+    public void Materialize_NullInALaterBlock_NamesTheRowOfTheResultNotOfTheBlock()
+    {
+        // The scatter's counter restarts per block, so without the offset a NULL in the second block of a result
+        // reports as row 1 — pointing the caller at a row that is not the one that failed.
+        Block block = BlockOf(2, new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, null }));
+        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, forcedTier: null);
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => plan.Materialize(block, new Row<int>[2], rowOffset: 65_536));
+
+        Assert.That(error.Message, Does.Contain("row 65537 of the result"));
+    }
+
+    [Test]
     public void Build_BlockWithNoColumns_ThrowsSayingSo()
     {
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => Materialize<IdName>(BlockOf(1)));
@@ -358,7 +384,7 @@ public class PocoReadPlanTests
                 PocoColumnScatter<Row<int>> scatter = PocoColumnScatterFactory.Create<Row<int>>(column, codec, member, tier, preferInterpretation: true);
                 var rows = new[] { new Row<int>(), new Row<int>() };
 
-                scatter(column, rows, rows.Length);
+                scatter(column, rows, rows.Length, rowOffset: 0);
 
                 Assert.That(Values(rows), Is.EqualTo(new[] { 1, -2 }), tier.ToString());
             }
@@ -436,8 +462,8 @@ public class PocoReadPlanTests
 
         var intRows = new Row<object>[1];
         var stringRows = new Row<object>[1];
-        intPlan.Materialize(ints, intRows);
-        stringPlan.Materialize(strings, stringRows);
+        intPlan.Materialize(ints, intRows, rowOffset: 0);
+        stringPlan.Materialize(strings, stringRows, rowOffset: 0);
 
         Assert.Multiple(() =>
         {
@@ -459,8 +485,8 @@ public class PocoReadPlanTests
 
         var spelledRows = new ThreeColumns[1];
         var threeRows = new ThreeColumns[1];
-        registry.ReadPlanFor<ThreeColumns>(spelled, forcedTier: null).Materialize(spelled, spelledRows);
-        registry.ReadPlanFor<ThreeColumns>(three, forcedTier: null).Materialize(three, threeRows);
+        registry.ReadPlanFor<ThreeColumns>(spelled, forcedTier: null).Materialize(spelled, spelledRows, rowOffset: 0);
+        registry.ReadPlanFor<ThreeColumns>(three, forcedTier: null).Materialize(three, threeRows, rowOffset: 0);
 
         Assert.Multiple(() =>
         {
@@ -482,8 +508,8 @@ public class PocoReadPlanTests
 
         var utcRows = new Row<DateTime>[1];
         var kolkataRows = new Row<DateTime>[1];
-        registry.ReadPlanFor<Row<DateTime>>(utc, forcedTier: null).Materialize(utc, utcRows);
-        registry.ReadPlanFor<Row<DateTime>>(kolkata, forcedTier: null).Materialize(kolkata, kolkataRows);
+        registry.ReadPlanFor<Row<DateTime>>(utc, forcedTier: null).Materialize(utc, utcRows, rowOffset: 0);
+        registry.ReadPlanFor<Row<DateTime>>(kolkata, forcedTier: null).Materialize(kolkata, kolkataRows, rowOffset: 0);
 
         Assert.That(kolkataRows[0].Value - utcRows[0].Value, Is.EqualTo(new TimeSpan(5, 30, 0)));
     }
@@ -552,7 +578,7 @@ public class PocoReadPlanTests
     {
         PocoReadPlan<T> plan = PocoReadPlan<T>.Build(PocoTypeDescriptor<T>.Build(), block, tier);
         var rows = new T[block.RowCount];
-        plan.Materialize(block, rows);
+        plan.Materialize(block, rows, rowOffset: 0);
         return rows;
     }
 
