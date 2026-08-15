@@ -47,16 +47,19 @@ internal sealed class PooledConnection
     /// <summary>How long the connection has been sitting idle in the pool.</summary>
     internal TimeSpan IdleFor => time.GetElapsedTime(idleSince);
 
-    /// <summary>Records a checkout: bumps the usage count and stops the idle clock.</summary>
+    /// <summary>Records a checkout, for diagnostics only.</summary>
+    /// <remarks>
+    /// The idle clock deliberately keeps running while the connection is out. Nothing reads
+    /// <see cref="IdleFor"/> except the sweep, which only ever walks the idle set, so the value is meaningless
+    /// for a checked-out connection either way — and stopping it here would cost a timestamp per checkout to
+    /// maintain a number no one reads.
+    /// </remarks>
     internal void OnRented() => UsageCount++;
 
     /// <summary>Records a return to the idle set, restarting the idle clock.</summary>
     internal void OnReturned() => idleSince = time.GetTimestamp();
 
-    /// <summary>
-    /// Whether this connection may still be handed out: usable at the transport level, and with enough of its
-    /// lifetime left to derive a query deadline from.
-    /// </summary>
+    /// <summary>Whether this connection may be handed out: young enough, and usable at the transport level.</summary>
     /// <param name="maxLifetime">The configured age limit, or <see cref="TimeSpan.Zero"/> for none.</param>
     /// <returns>True when the connection can carry another operation.</returns>
     /// <remarks>
@@ -67,26 +70,18 @@ internal sealed class PooledConnection
     internal bool CanBeRented(TimeSpan maxLifetime)
         => !IsPastLifetime(maxLifetime) && Connection.IsReusable;
 
-    /// <summary>
-    /// Whether the connection is too old to hand out. Retirement starts one
-    /// <see cref="ConnectionLifetimeDeadline.RetirementFloor"/> early, so a connection is never leased with too
-    /// little life left to bound a query inside it.
-    /// </summary>
+    /// <summary>Whether the connection is too old to hand out.</summary>
     /// <param name="maxLifetime">The configured age limit, or <see cref="TimeSpan.Zero"/> for none.</param>
     /// <returns>True when the connection must be retired rather than reused.</returns>
+    /// <remarks>
+    /// Asked at checkout and again on return, both of which happen between operations. A connection running an
+    /// operation is never retired under it: the pool reaches a connection only through the idle set, which a
+    /// checkout removes it from. So an operation longer than the limit simply carries its connection past that
+    /// limit and the connection is closed when it comes back, which is what clickhouse-go's ConnMaxLifetime
+    /// does too.
+    /// </remarks>
     internal bool IsPastLifetime(TimeSpan maxLifetime)
-        => maxLifetime > TimeSpan.Zero && Age >= maxLifetime - ConnectionLifetimeDeadline.RetirementFloor;
-
-    /// <summary>
-    /// The life left before the connection reaches its age limit, or null when it has no age limit. This is what
-    /// an operation's server-side deadline is derived from. Because <see cref="IsPastLifetime"/> stops leasing a
-    /// retirement floor early, a leased connection always has more than that floor left, and so a derived
-    /// deadline is always comfortably positive.
-    /// </summary>
-    /// <param name="maxLifetime">The configured age limit, or <see cref="TimeSpan.Zero"/> for none.</param>
-    /// <returns>The remaining lifetime, or null when unlimited.</returns>
-    internal TimeSpan? RemainingLifetime(TimeSpan maxLifetime)
-        => maxLifetime > TimeSpan.Zero ? maxLifetime - Age : null;
+        => maxLifetime > TimeSpan.Zero && Age >= maxLifetime;
 
     /// <summary>Closes the underlying connection. Idempotent, and safe on an already-terminated connection.</summary>
     internal void Close() => Connection.Terminate();

@@ -42,6 +42,12 @@ internal sealed class ConnectionPool : IConnectionSource
     // Idle connections, ordered by the time they were returned: index 0 was returned first and so has been idle
     // longest. Only ever appended to, so that order holds under either reuse policy. Guarded by `gate`.
     private readonly List<PooledConnection> idle = [];
+
+    // The connections currently checked out. The pool cannot reach a leased connection through `idle`, so
+    // without this set a lease that is never returned would leave its socket open with nothing able to close
+    // it — not even disposal. Guarded by `gate`.
+    private readonly HashSet<PooledConnection> leased = [];
+
     private readonly object gate = new();
 
     private int disposed;
@@ -67,7 +73,7 @@ internal sealed class ConnectionPool : IConnectionSource
         TimeSpan period = SweepInterval(options);
         sweeper = period == TimeSpan.Zero
             ? null
-            : time.CreateTimer(static state => ((ConnectionPool)state).Sweep(), this, period, period);
+            : time.CreateTimer(static state => ((ConnectionPool)state).SweepQuietly(), this, period, period);
     }
 
     /// <summary>The number of connections currently sitting idle. For tests and diagnostics.</summary>
@@ -99,6 +105,11 @@ internal sealed class ConnectionPool : IConnectionSource
                 ?? new PooledConnection(await factory.CreateAsync(cancellationToken).ConfigureAwait(false), time);
 
             connection.OnRented();
+            lock (gate)
+            {
+                leased.Add(connection);
+            }
+
             return new Lease(this, connection);
         }
         catch
@@ -125,13 +136,15 @@ internal sealed class ConnectionPool : IConnectionSource
             await sweeper.DisposeAsync().ConfigureAwait(false);
         }
 
+        // Nothing can re-enter the idle set after this: `Return` re-reads `disposed` under `gate`, and the
+        // Interlocked.Exchange above happens before this lock is taken, so a returner either added before the
+        // drain (and is closed by it) or observes the flag and closes its own connection.
         CloseAll(TakeAllIdle());
 
         // Wait for the operations still running to give their connections back — each one, finding the pool
         // disposed, closes rather than pools it — by acquiring every permit. Bounded by PoolTimeout for the
         // same reason a checkout is: an operation that never releases its connection (an `await foreach` whose
-        // enumerator is never disposed) must not turn disposal into a hang. A straggler admitted after that
-        // still closes its own connection when it finally returns.
+        // enumerator is never disposed) must not turn disposal into a hang.
         using var drainDeadline = new CancellationTokenSource(options.PoolTimeout);
         try
         {
@@ -142,12 +155,12 @@ internal sealed class ConnectionPool : IConnectionSource
         }
         catch (OperationCanceledException)
         {
-            // The drain deadline elapsed. Disposal is best-effort past this point, by design.
+            // The drain deadline elapsed: at least one operation did not give its connection back. Close what is
+            // still out, since nothing else can — the pool holds the only other reference to it, and the caller
+            // has evidently lost theirs. Terminate closes the socket first, so an operation parked on a read
+            // that will never arrive is also freed rather than left waiting for TCP to give up.
+            CloseAll(TakeAllLeased());
         }
-
-        // A connection returned during the drain closed itself, but the sweep may have been mid-flight when the
-        // idle set was drained, so clear anything that landed after it.
-        CloseAll(TakeAllIdle());
 
         // The semaphore is deliberately not disposed: it holds no unmanaged resource unless its
         // AvailableWaitHandle is accessed (it never is), and disposing it would fault a rent still waiting on it
@@ -187,6 +200,23 @@ internal sealed class ConnectionPool : IConnectionSource
         }
 
         return period > MaxSweepInterval ? MaxSweepInterval : period;
+    }
+
+    /// <summary>
+    /// Runs a sweep, swallowing anything it throws. What the timer calls. A timer callback runs on a thread-pool
+    /// thread with no one to catch for it, so an exception escaping here would take the process down — and a
+    /// sweep that failed to close one socket is not worth that. There is nothing to log to yet; observability
+    /// lands in Epic P.
+    /// </summary>
+    internal void SweepQuietly()
+    {
+        try
+        {
+            Sweep();
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+        }
     }
 
     /// <summary>
@@ -295,47 +325,60 @@ internal sealed class ConnectionPool : IConnectionSource
     /// <param name="connection">The connection being returned.</param>
     private void Return(PooledConnection connection)
     {
-        // A connection a failed or abandoned operation terminated is never recycled; nor is one so close to its
-        // age limit that the next checkout would retire it anyway — closing now frees the socket sooner.
-        bool reusable = connection.Connection.State == TcpConnectionState.Ready
-            && !connection.IsPastLifetime(options.MaxConnectionLifetime);
-
-        bool pooled = false;
-        if (reusable)
+        // The permit must come back whatever happens below, or the pool silently shrinks by one slot for the
+        // rest of its life and later callers are told they are running too much work at once.
+        try
         {
-            connection.OnReturned();
+            // A connection a failed or abandoned operation terminated is never recycled; nor is one past its age
+            // limit, which the next checkout would retire anyway — closing now frees the socket sooner.
+            bool reusable = connection.Connection.State == TcpConnectionState.Ready
+                && !connection.IsPastLifetime(options.MaxConnectionLifetime);
+
+            bool pooled = false;
             lock (gate)
             {
-                // Under the lock, because disposal marks the pool disposed and then drains the idle set: an
-                // entry added after that drain, by a check made outside the lock, would never be closed.
-                if (Volatile.Read(ref disposed) == 0)
+                leased.Remove(connection);
+
+                // The disposed check belongs under the lock, because disposal marks the pool disposed and then
+                // drains the idle set: an entry added after that drain, by a check made outside the lock, would
+                // never be closed. Stamping the idle clock here too keeps the list ordered by that stamp, which
+                // is what lets the sweep trim the coldest connections and stop at the first live one.
+                if (reusable && Volatile.Read(ref disposed) == 0)
                 {
+                    connection.OnReturned();
                     idle.Add(connection);
                     pooled = true;
                 }
             }
-        }
 
-        if (!pooled)
+            if (!pooled)
+            {
+                connection.Close();
+            }
+        }
+        finally
         {
-            connection.Close();
+            permits.Release();
         }
-
-        permits.Release();
     }
 
     /// <summary>Empties the idle set and returns what it held.</summary>
-    private List<PooledConnection> TakeAllIdle()
+    private List<PooledConnection> TakeAllIdle() => TakeAll(idle);
+
+    /// <summary>Empties the leased set and returns what it held.</summary>
+    private List<PooledConnection> TakeAllLeased() => TakeAll(leased);
+
+    private List<PooledConnection> TakeAll(ICollection<PooledConnection> connections)
     {
         lock (gate)
         {
-            if (idle.Count == 0)
+            if (connections.Count == 0)
             {
                 return null;
             }
 
-            var taken = new List<PooledConnection>(idle);
-            idle.Clear();
+            var taken = new List<PooledConnection>(connections);
+            connections.Clear();
             return taken;
         }
     }
@@ -379,8 +422,6 @@ internal sealed class ConnectionPool : IConnectionSource
         }
 
         public ClickHouseTcpConnection Connection => pooled.Connection;
-
-        public TimeSpan? RemainingLifetime => pooled.RemainingLifetime(pool.options.MaxConnectionLifetime);
 
         public ValueTask DisposeAsync()
         {

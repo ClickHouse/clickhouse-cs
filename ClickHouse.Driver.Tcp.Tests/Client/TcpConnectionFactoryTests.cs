@@ -4,6 +4,8 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
+using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tcp.Tests.Client;
 
@@ -47,6 +49,63 @@ public class TcpConnectionFactoryTests
             {
                 (await accepted).Dispose();
             }
+        }
+    }
+
+    [Test]
+    public async Task IsReusable_PeerClosedTheSocketWhileIdle_IsFalseOverARealSocket()
+    {
+        // The branch that matters most and that a scripted stream cannot reach: the socket poll. Every other
+        // IsReusable test takes the no-socket path, and a live server never hangs up mid-test on request.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        Task<TcpClient> accepting = listener.AcceptTcpClientAsync();
+        try
+        {
+            var factory = new TcpConnectionFactory(new ClickHouseTcpClientOptions
+            {
+                Host = "127.0.0.1",
+                Port = port,
+                DialTimeout = TimeSpan.FromSeconds(10),
+            });
+
+            ValueTask<ClickHouseTcpConnection> connecting = factory.CreateAsync(CancellationToken.None);
+
+            // Play the server's side of the handshake, then leave the connection idle as the pool would.
+            using TcpClient server = await accepting;
+            byte[] hello = await FakeConnectionFactory.ServerHelloBytesAsync(CancellationToken.None);
+            await server.GetStream().WriteAsync(hello);
+            await server.GetStream().FlushAsync();
+
+            using ClickHouseTcpConnection connection = await connecting;
+            Assert.That(connection.IsReusable, Is.True, "a live idle connection must stay reusable");
+
+            // An orderly close from the far end: the socket becomes readable with nothing to read.
+            server.Client.Shutdown(SocketShutdown.Both);
+            server.Close();
+
+            // The FIN travels over loopback, but not instantly.
+            await WaitUntilAsync(() => !connection.IsReusable);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(connection.IsReusable, Is.False, "a connection the peer closed must not be handed out");
+                Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready), "the probe reports, it does not terminate");
+            });
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        for (int attempt = 0; attempt < 100 && !condition(); attempt++)
+        {
+            await Task.Delay(20);
         }
     }
 

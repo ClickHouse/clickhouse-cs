@@ -57,6 +57,9 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
     /// <summary>Awaited before each create completes, so a test can hold a checkout open. Null for none.</summary>
     public Func<CancellationToken, Task> BeforeCreate { get; set; }
 
+    /// <summary>When set, connections are built over a transport whose disposal throws, so closing one fails.</summary>
+    public bool ClosingThrows { get; set; }
+
     /// <summary>How many connections have been opened.</summary>
     public int CreateCount
     {
@@ -95,7 +98,7 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
             throw failure;
         }
 
-        ClickHouseTcpConnection connection = await CreateReadyAsync(cancellationToken).ConfigureAwait(false);
+        ClickHouseTcpConnection connection = await CreateReadyAsync(cancellationToken, throwOnClose: ClosingThrows).ConfigureAwait(false);
         lock (gate)
         {
             created.Add(connection);
@@ -107,10 +110,12 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
     /// <summary>Builds a handshaken, Ready connection over a scripted server Hello and no socket.</summary>
     /// <param name="cancellationToken">A token to observe during the handshake.</param>
     /// <param name="trailing">Extra bytes the "server" sent after the Hello, to leave the reader out of step.</param>
+    /// <param name="throwOnClose">When true, the transport throws when disposed, so terminating the connection fails.</param>
     /// <returns>A connection in the Ready state.</returns>
     internal static async ValueTask<ClickHouseTcpConnection> CreateReadyAsync(
         CancellationToken cancellationToken = default,
-        byte[] trailing = null)
+        byte[] trailing = null,
+        bool throwOnClose = false)
     {
         byte[] hello = await ServerHelloBytesAsync(cancellationToken).ConfigureAwait(false);
         byte[] script = hello;
@@ -121,12 +126,19 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
             trailing.CopyTo(script, hello.Length);
         }
 
-        var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(script), socket: null);
+        Stream transport = throwOnClose
+            ? new ThrowOnDisposeStream(new ScriptedDuplexStream(script))
+            : new ScriptedDuplexStream(script);
+
+        var connection = new ClickHouseTcpConnection(transport, socket: null);
         await connection.HandshakeAsync(new ClientHandshakeParameters { Username = "default" }, cancellationToken).ConfigureAwait(false);
         return connection;
     }
 
-    private static async Task<byte[]> ServerHelloBytesAsync(CancellationToken cancellationToken)
+    /// <summary>The server's Hello reply, for a test that plays the server side over a real socket.</summary>
+    /// <param name="cancellationToken">A token to observe while encoding.</param>
+    /// <returns>The encoded Hello packet.</returns>
+    internal static async Task<byte[]> ServerHelloBytesAsync(CancellationToken cancellationToken)
     {
         using var buffer = new MemoryStream();
         using (var writer = new ClickHouseBinaryWriter(buffer))
@@ -144,4 +156,50 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
 
         return buffer.ToArray();
     }
+}
+
+/// <summary>
+/// Wraps a transport so that disposing it throws, standing in for a socket teardown that fails. Used to prove
+/// the sweep's exception guard is load-bearing: without it such a failure would reach a thread-pool thread with
+/// no one to catch it.
+/// </summary>
+internal sealed class ThrowOnDisposeStream(Stream inner) : Stream
+{
+    public override bool CanRead => inner.CanRead;
+
+    public override bool CanSeek => false;
+
+    public override bool CanWrite => inner.CanWrite;
+
+    public override long Length => inner.Length;
+
+    public override long Position
+    {
+        get => inner.Position;
+        set => throw new NotSupportedException();
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+
+    public override int Read(Span<byte> buffer) => inner.Read(buffer);
+
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        => inner.ReadAsync(buffer, cancellationToken);
+
+    public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+
+    public override void Write(ReadOnlySpan<byte> buffer) => inner.Write(buffer);
+
+    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        => inner.WriteAsync(buffer, cancellationToken);
+
+    public override void Flush() => inner.Flush();
+
+    public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing) => throw new IOException("teardown failed");
 }
