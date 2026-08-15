@@ -20,7 +20,8 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
     private readonly int initialBufferSize;
     private byte[] buffer;
     private int position;
-    private bool disposed;
+    // An int rather than a bool so disposal can be made exactly-once with Interlocked; see Dispose.
+    private int disposed;
 
     /// <summary>Initializes a new writer over <paramref name="stream"/>.</summary>
     /// <param name="stream">The destination stream to write to.</param>
@@ -64,7 +65,7 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
     /// </summary>
     public void TrimBuffer()
     {
-        if (disposed || position != 0 || buffer.Length <= initialBufferSize)
+        if (Volatile.Read(ref disposed) != 0 || position != 0 || buffer.Length <= initialBufferSize)
         {
             return;
         }
@@ -284,7 +285,7 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
     /// <exception cref="ObjectDisposedException">The writer has been disposed.</exception>
     public async ValueTask FlushAsync(CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         if (position > 0)
         {
             await stream.WriteAsync(buffer.AsMemory(0, position), cancellationToken).ConfigureAwait(false);
@@ -295,14 +296,18 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
     }
 
     /// <inheritdoc/>
+    /// <summary>
+    /// Returns the pooled buffer, exactly once. The interlocked guard matters: the connection's teardown can be
+    /// reached both by the operation unwinding and by the pool aborting it, and returning one pooled array twice
+    /// would hand the same memory to two unrelated callers.
+    /// </summary>
     public void Dispose()
     {
-        if (disposed)
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
         {
             return;
         }
 
-        disposed = true;
         ArrayPool<byte>.Shared.Return(buffer);
         buffer = Array.Empty<byte>();
     }
@@ -319,7 +324,7 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
 
         // Slow path only. Guard here (not on the per-write fast path above) so a use-after-dispose can't rent a
         // fresh buffer that Dispose's short-circuit would then never return to the pool.
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         int newSize = Math.Max(buffer.Length * 2, position + count);
         byte[] grown = ArrayPool<byte>.Shared.Rent(newSize);
         Array.Copy(buffer, grown, position);
