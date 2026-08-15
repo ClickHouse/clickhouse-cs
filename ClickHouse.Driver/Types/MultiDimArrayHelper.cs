@@ -55,7 +55,7 @@ internal static class MultiDimArrayHelper
         // Array.GetValue(int[]) + a virtual leaf.Write. Gated on:
         //   - little-endian host (CLR primitive layout == wire layout only on LE);
         //   - a known fixed-width primitive leaf (TryGetBlittableElementSize), looked up on the leaf
-        //     with its wire-transparent wrappers removed (UnwrapTransparent) — a LowCardinality(Int32)
+        //     with its wire-transparent wrappers removed (TransparentWrapper.Unwrap) — a LowCardinality(Int32)
         //     leaf writes the very same bytes as a bare Int32 one, so gating on the concrete wrapper
         //     class alone would send it down the boxing path for nothing;
         //   - the CLR element type matching the leaf's framework type EXACTLY — the slow path
@@ -64,7 +64,7 @@ internal static class MultiDimArrayHelper
         // Non-zero GetLowerBound is handled implicitly: the blit walks flat memory offsets, which are
         // independent of the logical index bounds.
         if (BitConverter.IsLittleEndian
-            && TryGetBlittableElementSize(UnwrapTransparent(leafType), out var elementSize)
+            && TryGetBlittableElementSize(TransparentWrapper.Unwrap(leafType), out var elementSize)
             && array.GetType().GetElementType() == leafType.FrameworkType)
         {
             ref var origin = ref MemoryMarshal.GetArrayDataReference(array);
@@ -119,36 +119,10 @@ internal static class MultiDimArrayHelper
     }
 
     /// <summary>
-    /// Returns the innermost leaf behind the column types that are pass-through on the RowBinary wire —
-    /// their <c>Write</c> delegates straight to the wrapped type and they report its
-    /// <see cref="ClickHouseType.FrameworkType"/> — or <paramref name="leaf"/> itself when it is not one.
-    /// <see cref="NullableType"/> is deliberately <i>not</i> unwrapped: it prefixes a per-element null
-    /// marker byte, so it is not wire-transparent and must keep taking the boxing path.
-    /// </summary>
-    private static ClickHouseType UnwrapTransparent(ClickHouseType leaf)
-    {
-        while (true)
-        {
-            ClickHouseType inner = leaf switch
-            {
-                LowCardinalityType lowCardinality => lowCardinality.UnderlyingType,
-                SimpleAggregateFunctionType simpleAggregate => simpleAggregate.UnderlyingType,
-                ObjectType obj => obj.UnderlyingType,
-                _ => null,
-            };
-
-            if (inner is null)
-                return leaf;
-
-            leaf = inner;
-        }
-    }
-
-    /// <summary>
     /// Returns the wire size in bytes for leaf types whose CLR in-memory representation is byte-identical
     /// to the ClickHouse little-endian wire format. Deliberately gated on the concrete leaf class (not just
     /// <see cref="ClickHouseType.FrameworkType"/>) so only these exact fixed-width primitives qualify —
-    /// callers strip the wire-transparent wrappers first (see <see cref="UnwrapTransparent"/>).
+    /// callers strip the wire-transparent wrappers first (see <see cref="TransparentWrapper.Unwrap"/>).
     /// Int128/UInt128 are excluded: they are <see cref="System.Numerics.BigInteger"/>-backed here, not a
     /// contiguous 16-byte struct. String/DateTime/Decimal/UUID/IP differ in wire layout and fall through.
     /// </summary>
