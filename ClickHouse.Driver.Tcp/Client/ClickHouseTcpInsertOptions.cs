@@ -6,7 +6,7 @@ namespace ClickHouse.Driver.Tcp;
 /// Per-insert overrides passed to <see cref="ClickHouseTcpClient.InsertAsync"/>: the query options (query id,
 /// settings) plus the knobs that only apply when the client writes a data stream.
 /// </summary>
-public sealed class ClickHouseTcpInsertOptions : ClickHouseTcpQueryOptions
+public sealed record ClickHouseTcpInsertOptions : ClickHouseTcpQueryOptions
 {
     /// <summary>
     /// A cap on the rows per wire block, applied alongside the client's internal byte target, so a wide or large
