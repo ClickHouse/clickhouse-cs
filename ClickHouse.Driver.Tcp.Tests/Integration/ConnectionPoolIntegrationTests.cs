@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,8 +9,8 @@ using ClickHouse.Driver.Tcp.Format;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 // What only a real server shows: that concurrent operations over one client really do run at once on separate
-// connections and come back uncorrupted, and that the deadline the pool derives arrives as a query setting. The
-// pool's own decisions — reuse, retirement, queueing, drain — are covered without a server in ConnectionPoolTests.
+// connections, and that their results come back uncorrupted rather than crossed. The pool's own decisions —
+// reuse, retirement, queueing, drain — are covered without a server in ConnectionPoolTests.
 [TestFixture]
 [Category("Integration")]
 public class ConnectionPoolIntegrationTests
@@ -25,24 +24,12 @@ public class ConnectionPoolIntegrationTests
         public ulong Id { get; set; }
     }
 
-    private static ClickHouseTcpClient CreateClient(
-        int maxPoolSize = 4,
-        TimeSpan? poolTimeout = null,
-        TimeSpan? maxConnectionLifetime = null)
-    {
-        ClickHouseTcpClientOptions options = TcpServerFixture.Options() with
+    private static ClickHouseTcpClient CreateClient(int maxPoolSize = 4, TimeSpan? poolTimeout = null)
+        => new(TcpServerFixture.Options() with
         {
             MaxPoolSize = maxPoolSize,
             PoolTimeout = poolTimeout ?? TimeSpan.FromSeconds(30),
-        };
-
-        if (maxConnectionLifetime is { } lifetime)
-        {
-            options = options with { MaxConnectionLifetime = lifetime };
-        }
-
-        return new ClickHouseTcpClient(options);
-    }
+        });
 
     [Test]
     public async Task QueryAsync_FourQueriesAtOnce_RunConcurrentlyRatherThanOneAfterAnother()
@@ -162,68 +149,4 @@ public class ConnectionPoolIntegrationTests
         Assert.DoesNotThrowAsync(async () => await client.ExecuteAsync("SELECT 1", cancellationToken: None));
     }
 
-    [Test]
-    public async Task QueryAsync_WithAConnectionLifetime_CapsMaxExecutionTimeAtTheRemainingLife()
-    {
-        await using ClickHouseTcpClient client = CreateClient(maxConnectionLifetime: TimeSpan.FromSeconds(600));
-
-        double effective = await EffectiveMaxExecutionTimeAsync(client);
-
-        // 600s of life less the 5s margin, minus however long the checkout took.
-        Assert.That(effective, Is.EqualTo(595d).Within(5d));
-    }
-
-    [Test]
-    public async Task QueryAsync_CallerAsksForLessThanTheConnectionsLife_TheirLimitIsKept()
-    {
-        await using ClickHouseTcpClient client = CreateClient(maxConnectionLifetime: TimeSpan.FromSeconds(600));
-        var options = new ClickHouseTcpQueryOptions
-        {
-            Settings = new Dictionary<string, string> { ["max_execution_time"] = "42" },
-        };
-
-        double effective = await EffectiveMaxExecutionTimeAsync(client, options);
-
-        Assert.That(effective, Is.EqualTo(42d));
-    }
-
-    [Test]
-    public async Task QueryAsync_CallerAsksForMoreThanTheConnectionsLife_ItIsClamped()
-    {
-        await using ClickHouseTcpClient client = CreateClient(maxConnectionLifetime: TimeSpan.FromSeconds(600));
-        var options = new ClickHouseTcpQueryOptions
-        {
-            Settings = new Dictionary<string, string> { ["max_execution_time"] = "86400" },
-        };
-
-        double effective = await EffectiveMaxExecutionTimeAsync(client, options);
-
-        Assert.That(effective, Is.EqualTo(595d).Within(5d));
-    }
-
-    [Test]
-    public async Task QueryAsync_LifetimeLimitDisabled_LeavesMaxExecutionTimeToTheServer()
-    {
-        await using ClickHouseTcpClient client = CreateClient(maxConnectionLifetime: TimeSpan.Zero);
-
-        double effective = await EffectiveMaxExecutionTimeAsync(client);
-
-        Assert.That(effective, Is.Not.EqualTo(595d).Within(5d), "with no age limit there is nothing to derive a deadline from");
-    }
-
-    /// <summary>Reads back the <c>max_execution_time</c> the server actually applied to the query.</summary>
-    private static async Task<double> EffectiveMaxExecutionTimeAsync(
-        ClickHouseTcpClient client,
-        ClickHouseTcpQueryOptions options = null)
-    {
-        string raw = null;
-        await foreach (object[] row in client.QueryAsync(
-            "SELECT value FROM system.settings WHERE name = 'max_execution_time'", options, None))
-        {
-            raw = (string)row[0];
-        }
-
-        Assert.That(raw, Is.Not.Null, "the server did not report the setting");
-        return double.Parse(raw, CultureInfo.InvariantCulture);
-    }
 }

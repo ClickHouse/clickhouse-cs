@@ -38,11 +38,4 @@ internal interface IConnectionLease : IAsyncDisposable
 {
     /// <summary>The rented connection, valid until the lease is disposed.</summary>
     ClickHouseTcpConnection Connection { get; }
-
-    /// <summary>
-    /// How long before the source retires this connection for age, or null when it has no age limit. An
-    /// operation bounds its own server-side execution time by this, so the server ends a query that would
-    /// outlive its connection rather than the connection being cut off mid-stream.
-    /// </summary>
-    TimeSpan? RemainingLifetime { get; }
 }
