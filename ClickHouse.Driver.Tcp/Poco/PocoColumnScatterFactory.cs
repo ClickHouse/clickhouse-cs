@@ -4,6 +4,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Poco;
 
@@ -16,7 +17,9 @@ namespace ClickHouse.Driver.Tcp.Poco;
 /// <param name="column">The column to read, already known to the plan that built this delegate.</param>
 /// <param name="rows">The rows to scatter into; at least <paramref name="rowCount"/> long, each already constructed.</param>
 /// <param name="rowCount">The number of rows to fill.</param>
-internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int rowCount);
+/// <param name="rowOffset">How many rows of the result precede this block, so a failure can name the row a caller
+/// counts rather than the row within a block they never see. Read only on the failure path.</param>
+internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int rowCount, long rowOffset);
 
 /// <summary>
 /// Compiles the per-column scatter delegates a <see cref="PocoReadPlan{T}"/> is made of. One delegate handles one
@@ -52,6 +55,7 @@ internal static class PocoColumnScatterFactory
         ParameterExpression columnParameter = Expression.Parameter(typeof(IColumn), "column");
         ParameterExpression rows = Expression.Parameter(typeof(T[]), "rows");
         ParameterExpression rowCount = Expression.Parameter(typeof(int), "rowCount");
+        ParameterExpression rowOffset = Expression.Parameter(typeof(long), "rowOffset");
         ParameterExpression row = Expression.Variable(typeof(int), "row");
         ParameterExpression value = Expression.Variable(elementType, "value");
 
@@ -61,7 +65,7 @@ internal static class PocoColumnScatterFactory
             ColumnType = column.TypeName,
             PocoTypeName = typeof(T).Name,
             MemberName = member.MemberName,
-            Row = row,
+            Row = Expression.Add(rowOffset, Expression.Convert(row, typeof(long))),
         };
 
         if (!PocoValueProjection.TryResolve(codec, value, member.MemberType, site, out Expression projected))
@@ -87,7 +91,7 @@ internal static class PocoColumnScatterFactory
                 Expression.Break(done)),
             done));
 
-        return Expression.Lambda<PocoColumnScatter<T>>(Expression.Block(locals, body), columnParameter, rows, rowCount)
+        return Expression.Lambda<PocoColumnScatter<T>>(Expression.Block(locals, body), columnParameter, rows, rowCount, rowOffset)
             .Compile(preferInterpretation);
     }
 
@@ -175,13 +179,40 @@ internal static class PocoColumnScatterFactory
 
         // A bare NULL or empty-array literal comes back as Nothing (or a composite of it): the column carries no type
         // of its own, so it reads only as object however nullable the property is. Changing the property cannot help,
-        // and no other ClickHouse type name contains the word — hence the remedy is to type the column in the query.
-        string remedy = column.TypeName.Contains("Nothing", StringComparison.Ordinal)
+        // so that case gets its own remedy.
+        string remedy = NamesTheNothingType(TypeParser.Parse(column.TypeName))
             ? "That column is an untyped NULL, so it carries no type to read as anything else: give it one in the query (for example CAST(NULL AS Nullable(String))), or exclude the property with [ClickHouseTcpNotMapped]."
             : "Give the property one of those types, exclude it with [ClickHouseTcpNotMapped], or read the column through the block-level API.";
 
         return new InvalidOperationException(
             $"Column '{column.Name}' ({column.TypeName}) maps to property '{pocoType.Name}.{member.MemberName}' of type {member.MemberType}, which it cannot be read as. " +
             $"It reads as {string.Join(" or ", offered)}. {remedy}");
+    }
+
+    /// <summary>
+    /// Whether a parsed type names <c>Nothing</c> anywhere in its tree. Walked as a tree, and matched exactly,
+    /// because a type <em>string</em> also carries arbitrary caller text: the label of an
+    /// <c>Enum8('Nothing' = 1)</c> and the field name of a named <c>Tuple</c> both live in it, so searching the text
+    /// would diagnose a perfectly well-typed column as an untyped NULL. A label arrives as one childless node whose
+    /// name is its raw token (quotes and ordinal included), so only a real type node matches.
+    /// </summary>
+    /// <param name="node">The parsed column type.</param>
+    /// <returns>Whether the type is, or contains, <c>Nothing</c>.</returns>
+    private static bool NamesTheNothingType(TypeNode node)
+    {
+        if (string.Equals(node.Name, NothingColumnCodec.Instance.TypeName, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        for (int i = 0; i < node.Arguments.Count; i++)
+        {
+            if (NamesTheNothingType(node.Arguments[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

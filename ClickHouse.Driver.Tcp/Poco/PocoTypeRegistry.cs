@@ -6,17 +6,24 @@ namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
 /// Caches the POCO mapping work, so a type is reflected over and its constructor compiled once instead of once per
-/// query or insert. One registry lives per <see cref="ClickHouseTcpClient"/>: the client is meant to be held as a
-/// singleton, so the cost is amortized anyway, and a per-client cache cannot pin types loaded into an
-/// <see cref="System.Runtime.Loader.AssemblyLoadContext"/> the caller later wants to unload.
+/// query or insert. One registry lives per <see cref="ClickHouseTcpClient"/> rather than one per process: the client
+/// is meant to be held as a singleton, so the cost is amortized either way, and scoping the cache to the client is
+/// what lets dropping the client release it.
 ///
 /// <para>
 /// Two levels, because only half of a mapping is per-type. The descriptor is; the compiled loops are per
 /// <c>(type, wire shape)</c> — the column types come from the server, not from the type — so they cache under their
-/// own key, the block signature. Neither level evicts. The descriptors are bounded by the POCO types a program has,
-/// but the plans are bounded by the distinct result <em>shapes</em> it queries, which is caller-controlled (aliases,
-/// ad-hoc column lists): a long-lived client issuing endlessly varied shapes for one type accumulates a plan per
-/// shape. Worth a bound if that ever shows up; it is not the shape of the workloads this is for.
+/// own key, the block signature.
+/// </para>
+///
+/// <para>
+/// Neither level evicts, which has two consequences worth stating. The descriptors are bounded by the POCO types a
+/// program has, but the plans are bounded by the distinct result <em>shapes</em> it queries, and a shape is
+/// caller-controlled (aliases, ad-hoc column lists): a long-lived client issuing endlessly varied shapes for one type
+/// accumulates a plan per shape. And both levels hold their <see cref="Type"/> keys — plus compiled delegates over
+/// that type's members — for as long as the client lives, so a POCO loaded into a collectible
+/// <see cref="System.Runtime.Loader.AssemblyLoadContext"/> keeps that context loaded until the client is disposed.
+/// Neither is the shape of the workloads this is for; both want a weak or bounded cache if they ever show up.
 /// </para>
 /// </summary>
 internal sealed class PocoTypeRegistry
