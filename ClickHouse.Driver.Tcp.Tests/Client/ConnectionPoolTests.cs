@@ -990,6 +990,69 @@ public class ConnectionPoolTests
         Assert.That(all, Has.Count.EqualTo(MaxPoolSize));
     }
 
+    [Test]
+    public async Task RentAsync_WhileTopUpsRunConcurrently_StillNeverExceedsMaxPoolSize()
+    {
+        // The top-up is a third party competing for permits, so the cap now depends on it playing by the same
+        // rules as a checkout. The stress case above runs without a floor and so never exercises that.
+        const int MaxPoolSize = 3;
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: MaxPoolSize, minPoolSize: MaxPoolSize, poolTimeout: TimeSpan.FromMinutes(2)),
+            factory,
+            new ControlledTimeProvider());
+
+        var live = new HashSet<ClickHouseTcpConnection>();
+        var failures = new List<string>();
+        var sweeping = Task.Run(async () =>
+        {
+            // Sweeps fire on a timer in production; here they are driven as fast as the renters run.
+            for (int i = 0; i < 200; i++)
+            {
+                pool.Sweep();
+                await (pool.LastRefill ?? Task.CompletedTask);
+            }
+        });
+
+        await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(async () =>
+        {
+            for (int i = 0; i < 25; i++)
+            {
+                IConnectionLease lease = await pool.RentAsync(None);
+                lock (live)
+                {
+                    if (!live.Add(lease.Connection))
+                    {
+                        failures.Add("a top-up handed out a connection that was already leased");
+                    }
+                }
+
+                try
+                {
+                    await Task.Yield();
+                }
+                finally
+                {
+                    lock (live)
+                    {
+                        live.Remove(lease.Connection);
+                    }
+
+                    await lease.DisposeAsync();
+                }
+            }
+        })));
+
+        await sweeping;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failures, Is.Empty);
+            Assert.That(factory.CreateCount, Is.LessThanOrEqualTo(MaxPoolSize), "the floor must not open past the cap");
+            Assert.That(pool.IdleCount, Is.LessThanOrEqualTo(MaxPoolSize));
+        });
+    }
+
     private static async Task<ClickHouseTcpConnection[]> ReturnTwoThenRentAsync(ClickHouseTcpPoolReusePolicy policy)
     {
         await using var pool = new ConnectionPool(
