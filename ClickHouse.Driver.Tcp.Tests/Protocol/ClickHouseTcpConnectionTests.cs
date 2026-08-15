@@ -214,6 +214,48 @@ public class ClickHouseTcpConnectionTests
         => Assert.ThrowsAsync<ArgumentNullException>(async () =>
             await ClickHouseTcpConnection.ConnectAsync("localhost", 9000, null, None));
 
+    // IsReusable is what the pool asks before every checkout. A live server cannot be made to produce the cases
+    // that matter — a stream left out of step, a connection already terminated — so they are scripted here.
+    [Test]
+    public async Task IsReusable_ReadyWithNothingLeftOnTheWire_IsTrue()
+    {
+        using ClickHouseTcpConnection connection = await FakeConnectionFactory.CreateReadyAsync(None);
+
+        Assert.That(connection.IsReusable, Is.True);
+    }
+
+    [Test]
+    public async Task IsReusable_Terminated_IsFalse()
+    {
+        using ClickHouseTcpConnection connection = await FakeConnectionFactory.CreateReadyAsync(None);
+        connection.Terminate();
+
+        Assert.That(connection.IsReusable, Is.False);
+    }
+
+    [Test]
+    public async Task IsReusable_BytesLeftUnreadFromTheLastResponse_IsFalse()
+    {
+        // The server sent more than the last operation consumed, so the client's idea of the stream position no
+        // longer matches the server's; reusing the connection would decode the leftovers as the next reply.
+        using ClickHouseTcpConnection connection = await FakeConnectionFactory.CreateReadyAsync(
+            None, trailing: PacketBytes(ServerPacketType.Pong));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+            Assert.That(connection.IsReusable, Is.False);
+        });
+    }
+
+    [Test]
+    public void IsReusable_BeforeTheHandshakeCompletes_IsFalse()
+    {
+        using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(Array.Empty<byte>()), socket: null);
+
+        Assert.That(connection.IsReusable, Is.False);
+    }
+
     private static byte[] PacketBytes(ServerPacketType type) => BytesAsync(w => w.WriteVarUInt((ulong)type)).GetAwaiter().GetResult();
 
     // A ServerHello packet (type code + body) reporting the given revision. All gated fields at/below 54460

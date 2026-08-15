@@ -61,6 +61,12 @@ internal sealed class ClickHouseBinaryReader : IDisposable
         this.ownsBuffer = ownsBuffer;
     }
 
+    /// <summary>
+    /// Bytes already read from the stream and not yet consumed. Non-zero between a response's packets; non-zero
+    /// once a response is complete means the stream carried more than we read, so the connection is out of step.
+    /// </summary>
+    public int BufferedBytes => buffer.Buffered;
+
     /// <summary>Reads a single byte.</summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The byte read.</returns>

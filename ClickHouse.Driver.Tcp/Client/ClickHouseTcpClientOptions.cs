@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp;
@@ -22,8 +23,14 @@ public sealed record ClickHouseTcpClientOptions
     internal const string DefaultUsername = "default";
     internal const string DefaultDatabase = "default";
     internal const int DefaultMaxSendBufferBytes = Format.BlockWriter.DefaultFlushThresholdBytes;
+    internal const int DefaultMinPoolSize = 0;
+    internal const int DefaultMaxPoolSize = 20;
+    internal const ClickHouseTcpPoolReusePolicy DefaultPoolReusePolicy = ClickHouseTcpPoolReusePolicy.Lifo;
     internal static readonly TimeSpan DefaultDialTimeout = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(300);
+    internal static readonly TimeSpan DefaultPoolTimeout = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan DefaultMaxConnectionLifetime = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(5);
 
     /// <summary>The server host name or address. Defaults to <c>localhost</c>.</summary>
     public string Host { get; init; } = DefaultHost;
@@ -77,6 +84,60 @@ public sealed record ClickHouseTcpClientOptions
     /// idle-deadline read loop lands in a later change.
     /// </summary>
     public TimeSpan ReadTimeout { get; init; } = DefaultReadTimeout;
+
+    /// <summary>
+    /// The number of idle connections the pool keeps rather than closing for inactivity. Defaults to 0. Only
+    /// <see cref="IdleTimeout"/> respects this floor: a connection past <see cref="MaxConnectionLifetime"/> is
+    /// retired whatever the count, since age is a correctness limit and inactivity is only a resource one.
+    /// </summary>
+    /// <remarks>
+    /// The pool does not open connections to reach this floor; it opens them on demand and then keeps up to this
+    /// many warm, so a bursty caller does not re-pay connect and handshake between bursts.
+    /// </remarks>
+    public int MinPoolSize { get; init; } = DefaultMinPoolSize;
+
+    /// <summary>
+    /// The hard cap on connections the pool opens, and so on operations that run at once — one connection
+    /// carries one query, the protocol having no multiplexing. Defaults to 20. Further callers queue for up to
+    /// <see cref="PoolTimeout"/>.
+    /// </summary>
+    /// <remarks>
+    /// Each connection running an insert buffers up to <see cref="MaxSendBufferBytes"/>, so the client's peak
+    /// send-buffer memory is about that times this cap when every connection inserts at once.
+    /// </remarks>
+    public int MaxPoolSize { get; init; } = DefaultMaxPoolSize;
+
+    /// <summary>
+    /// How long an operation waits for a connection when <see cref="MaxPoolSize"/> are already in use, after
+    /// which it throws a <see cref="TimeoutException"/>. Defaults to 30s. Waiters are not served in a
+    /// guaranteed order.
+    /// </summary>
+    /// <remarks>
+    /// This bounds the wait for a free slot only. Opening the connection that follows is bounded separately by
+    /// <see cref="DialTimeout"/>, so a checkout can take up to the sum of the two.
+    /// </remarks>
+    public TimeSpan PoolTimeout { get; init; } = DefaultPoolTimeout;
+
+    /// <summary>
+    /// How long after it was opened a connection may still be handed out, after which the pool retires it.
+    /// Defaults to 30 minutes; <see cref="TimeSpan.Zero"/> disables the limit and lets a connection live until
+    /// it fails.
+    /// </summary>
+    /// <remarks>
+    /// While this is set, the pool also caps each operation's server-side <c>max_execution_time</c> at the
+    /// connection's remaining life, so the server ends a long query cleanly instead of the pool cutting it off
+    /// mid-stream. A connection with too little life left for that is retired at checkout rather than handed out.
+    /// </remarks>
+    public TimeSpan MaxConnectionLifetime { get; init; } = DefaultMaxConnectionLifetime;
+
+    /// <summary>
+    /// How long a connection may sit unused before the pool closes it, down to <see cref="MinPoolSize"/>.
+    /// Defaults to 5 minutes; <see cref="TimeSpan.Zero"/> keeps idle connections until they expire by age.
+    /// </summary>
+    public TimeSpan IdleTimeout { get; init; } = DefaultIdleTimeout;
+
+    /// <summary>Which idle connection the pool hands out next. Defaults to <see cref="ClickHouseTcpPoolReusePolicy.Lifo"/>.</summary>
+    public ClickHouseTcpPoolReusePolicy PoolReusePolicy { get; init; } = DefaultPoolReusePolicy;
 
     /// <summary>
     /// These options with <see cref="CustomSettings"/> replaced by a private snapshot, or this instance when there
@@ -141,6 +202,52 @@ public sealed record ClickHouseTcpClientOptions
         if (MaxSendBufferBytes <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(MaxSendBufferBytes), MaxSendBufferBytes, "MaxSendBufferBytes must be positive.");
+        }
+
+        if (PoolTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(PoolTimeout), PoolTimeout, "PoolTimeout must be positive.");
+        }
+
+        if (MaxConnectionLifetime < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxConnectionLifetime), MaxConnectionLifetime, "MaxConnectionLifetime must not be negative; use TimeSpan.Zero to disable the limit.");
+        }
+
+        if (IdleTimeout < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(IdleTimeout), IdleTimeout, "IdleTimeout must not be negative; use TimeSpan.Zero to disable idle closing.");
+        }
+
+        if (MaxPoolSize < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxPoolSize), MaxPoolSize, "MaxPoolSize must be at least 1.");
+        }
+
+        if (MinPoolSize < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MinPoolSize), MinPoolSize, "MinPoolSize must not be negative.");
+        }
+
+        if (MinPoolSize > MaxPoolSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MinPoolSize), MinPoolSize, $"MinPoolSize must not exceed MaxPoolSize ({MaxPoolSize}).");
+        }
+
+        if (!Enum.IsDefined(PoolReusePolicy))
+        {
+            throw new ArgumentOutOfRangeException(nameof(PoolReusePolicy), PoolReusePolicy, "PoolReusePolicy is not a defined value.");
+        }
+
+        // A connection is retired at checkout once too little of its life remains to derive a server-side
+        // deadline from (see ConnectionLifetimeDeadline). A lifetime at or under that floor would retire every
+        // connection the moment it is opened, so the pool could never hand one out.
+        if (MaxConnectionLifetime > TimeSpan.Zero && MaxConnectionLifetime <= ConnectionLifetimeDeadline.RetirementFloor)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MaxConnectionLifetime),
+                MaxConnectionLifetime,
+                $"MaxConnectionLifetime must exceed {ConnectionLifetimeDeadline.RetirementFloor.TotalSeconds:0.###}s, below which every connection would be retired before it could be used.");
         }
 
         if (CustomSettings is not null)
