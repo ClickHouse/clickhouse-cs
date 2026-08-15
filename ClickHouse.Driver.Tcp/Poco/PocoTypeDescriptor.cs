@@ -62,6 +62,21 @@ internal abstract class PocoTypeDescriptor
     public IReadOnlyList<PocoMember> Members { get; }
 
     /// <summary>
+    /// Names the columns this type maps to, for a plan reporting that a shape and a type do not meet.
+    /// </summary>
+    /// <returns>The column names, as a phrase.</returns>
+    public string DescribeMappedColumns()
+    {
+        var names = new string[Members.Count];
+        for (int i = 0; i < names.Length; i++)
+        {
+            names[i] = Members[i].ColumnName;
+        }
+
+        return $"properties mapping to {string.Join(", ", names)}";
+    }
+
+    /// <summary>
     /// Finds the member a column maps to, through the tiers described on this class.
     /// </summary>
     /// <param name="columnName">The column name as the server sent it.</param>
