@@ -199,6 +199,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         where T : class
     {
         PocoReadPlan<T> plan = null;
+        long produced = 0;
         await foreach (Block block in StreamAsync(sql, options, cancellationToken).ConfigureAwait(false))
         {
             // The blocks of one result share a header, so the plan is resolved once per result in practice; the
@@ -213,7 +214,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
             {
                 // Materializing in one synchronous call is what lets the scatters hold a span: an iterator method
                 // cannot. The rows are handed out afterwards, when no span is live.
-                plan.Materialize(block, rows);
+                plan.Materialize(block, rows, produced);
+                produced += block.RowCount;
                 for (int i = 0; i < block.RowCount; i++)
                 {
                     yield return rows[i];

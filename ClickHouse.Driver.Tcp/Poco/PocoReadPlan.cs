@@ -182,7 +182,9 @@ internal sealed class PocoReadPlan<T>
     /// </summary>
     /// <param name="block">The block to materialize; must have the shape this plan was built for.</param>
     /// <param name="rows">The destination, at least <see cref="Block.RowCount"/> long.</param>
-    public void Materialize(Block block, T[] rows)
+    /// <param name="rowOffset">How many rows of the result precede this block, so a failure names the row the caller
+    /// counts. Only ever read on a failure path.</param>
+    public void Materialize(Block block, T[] rows, long rowOffset)
     {
         int rowCount = block.RowCount;
         for (int i = 0; i < rowCount; i++)
@@ -192,7 +194,7 @@ internal sealed class PocoReadPlan<T>
 
         for (int i = 0; i < scatters.Length; i++)
         {
-            scatters[i]?.Invoke(block[i], rows, rowCount);
+            scatters[i]?.Invoke(block[i], rows, rowCount, rowOffset);
         }
     }
 
