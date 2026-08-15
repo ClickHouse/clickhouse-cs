@@ -33,6 +33,12 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("String", "a\nb").Returns("a\nb").SetName("String with a newline");
         yield return new TestCaseData("String", "a\tb").Returns("a\tb").SetName("String with a tab");
         yield return new TestCaseData("String", string.Empty).Returns(string.Empty).SetName("Empty string");
+
+        // A carriage return and a NUL need no escape, unlike a newline and a tab, which end the server's
+        // reader. Pinned because the escape set is easy to widen or narrow by accident.
+        yield return new TestCaseData("String", "a\rb").Returns("a\rb").SetName("String with a carriage return");
+        yield return new TestCaseData("String", "a\0b").Returns("a\0b").SetName("String with a NUL");
+        yield return new TestCaseData("String", @"ends\").Returns(@"ends\").SetName("String ending in a backslash");
         yield return new TestCaseData("String", "héllo").Returns("héllo").SetName("String with non-ASCII");
         yield return new TestCaseData("String", "' OR 1=1 --").Returns("' OR 1=1 --").SetName("Injection attempt stays data");
         yield return new TestCaseData("LowCardinality(String)", "x").Returns("x").SetName("LowCardinality");
