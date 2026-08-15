@@ -7,7 +7,13 @@ namespace ClickHouse.Driver.Tcp;
 /// null options argument (or a null member) falls back to the client-level defaults.
 /// <see cref="ClickHouseTcpInsertOptions"/> extends this with the insert-only knobs.
 /// </summary>
-public class ClickHouseTcpQueryOptions
+/// <remarks>
+/// Being a record, one instance can hold the shared settings and each operation can derive its own variant with a
+/// <c>with</c> expression — <c>shared with { QueryId = id }</c>. A <c>with</c> expression on a variable of this type
+/// clones the runtime type, so cloning an instance that is really a <see cref="ClickHouseTcpInsertOptions"/> keeps
+/// the insert-only knobs. See <see cref="ClickHouseTcpClientOptions"/> for how <see cref="Settings"/> compares.
+/// </remarks>
+public record ClickHouseTcpQueryOptions
 {
     /// <summary>The query id, or null to let the server assign one.</summary>
     public string QueryId { get; init; }

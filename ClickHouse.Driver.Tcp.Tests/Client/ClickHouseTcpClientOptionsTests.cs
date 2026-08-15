@@ -126,9 +126,10 @@ public class ClickHouseTcpClientOptionsTests
     [Test]
     public void WithOwnedCustomSettings_CopiesEveryPropertyAndSnapshotsTheSettings()
     {
-        // WithOwnedCustomSettings copies each property by hand, so a property added later could silently stop being
-        // carried across. The two reflection loops make that a test failure: the first insists this test sets every
-        // property to a non-default value, and the second insists the copy preserves each one.
+        // WithOwnedCustomSettings replaces one property and must carry every other one across. The two reflection
+        // loops make a regression here a test failure: the first insists this test sets every property to a
+        // non-default value, and the second insists the copy preserves each one. The `with` expression satisfies
+        // this by construction; the loops stay to catch a later rewrite back to a hand-written copy.
         var original = new ClickHouseTcpClientOptions
         {
             Host = "copy-host",
@@ -196,6 +197,89 @@ public class ClickHouseTcpClientOptionsTests
             Assert.That(copy.CustomSettings["max_threads"], Is.EqualTo("4"));
             Assert.That(copy.CustomSettings.ContainsKey("added_later"), Is.False);
         });
+    }
+
+    [Test]
+    public void With_ChangingOneProperty_CarriesEveryOtherPropertyAcross()
+    {
+        var original = new ClickHouseTcpClientOptions
+        {
+            Host = "with-host",
+            Port = 1234,
+            Username = "with-user",
+            Password = "with-password",
+            Database = "with-db",
+            QuotaKey = "with-quota",
+            CustomSettings = new Dictionary<string, string> { ["max_threads"] = "4" },
+            MaxSendBufferBytes = 4096,
+            DialTimeout = TimeSpan.FromSeconds(3),
+            ReadTimeout = TimeSpan.FromSeconds(4),
+        };
+
+        var derived = original with { Port = 9440 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(derived.Port, Is.EqualTo(9440));
+
+            foreach (PropertyInfo property in typeof(ClickHouseTcpClientOptions).GetProperties())
+            {
+                if (property.Name == nameof(ClickHouseTcpClientOptions.Port))
+                {
+                    continue;
+                }
+
+                Assert.That(property.GetValue(derived), Is.EqualTo(property.GetValue(original)), $"{property.Name} was not carried across");
+            }
+        });
+    }
+
+    [Test]
+    public void ToString_WhenAPasswordIsSet_DoesNotIncludeIt()
+    {
+        // A record prints every property by default, which would put the plaintext password into any log line that
+        // formats the options. ClickHouseTcpClient.Options is public, so a caller can reach this.
+        var options = new ClickHouseTcpClientOptions
+        {
+            Host = "example.invalid",
+            Port = 9440,
+            Username = "alice",
+            Password = "s3cr3t",
+            Database = "analytics",
+        };
+
+        var text = options.ToString();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Not.Contain("s3cr3t"));
+            Assert.That(text, Does.Not.Contain(nameof(ClickHouseTcpClientOptions.Password)));
+            Assert.That(
+                text,
+                Does.Contain("example.invalid").And.Contain("9440").And.Contain("alice").And.Contain("analytics"),
+                "the endpoint, user and database stay, so the text is still useful for diagnostics");
+        });
+    }
+
+    [Test]
+    public void Equals_EqualScalarsButDistinctSettingsDictionaries_AreNotEqual()
+    {
+        // Records give value equality, but IReadOnlyDictionary has no value-equality contract, so the settings are
+        // compared by reference. This pins the limitation the type documents: do not key a cache on these options.
+        var first = new ClickHouseTcpClientOptions { CustomSettings = new Dictionary<string, string> { ["max_threads"] = "4" } };
+        var second = new ClickHouseTcpClientOptions { CustomSettings = new Dictionary<string, string> { ["max_threads"] = "4" } };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.Not.EqualTo(second));
+            Assert.That(first, Is.EqualTo(first with { }), "the clone shares the same dictionary instance, so it does compare equal");
+        });
+    }
+
+    [Test]
+    public void Equals_SettingsAbsentAndEveryScalarEqual_AreEqual()
+    {
+        Assert.That(new ClickHouseTcpClientOptions { Host = "h", Port = 9440 }, Is.EqualTo(new ClickHouseTcpClientOptions { Host = "h", Port = 9440 }));
     }
 
     [Test]
