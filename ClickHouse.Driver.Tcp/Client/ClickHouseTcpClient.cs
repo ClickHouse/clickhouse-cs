@@ -15,8 +15,9 @@ namespace ClickHouse.Driver.Tcp;
 /// <summary>
 /// A high-level client for a ClickHouse server over the native TCP protocol: run queries and stream results,
 /// execute statements, and insert data columnwise or row by row. Build one from a <see cref="ClickHouseTcpClientOptions"/> or a
-/// connection string and reuse it — it is safe to share across threads. Operations are serialized onto the
-/// underlying connection today (one in flight at a time); a future connection pool lifts that transparently.
+/// connection string and reuse it — it is safe to share across threads, and meant to be shared: it owns a
+/// connection pool, so operations run concurrently up to <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>
+/// and queue beyond it. Building a client per operation throws that pool away each time.
 ///
 /// <para>
 /// This type is experimental: its surface may change in a future release. Suppress diagnostic
@@ -59,7 +60,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         Options = options.WithOwnedCustomSettings();
-        source = new SingleConnectionSource(Options);
+        source = new ConnectionPool(Options);
     }
 
     /// <summary>Creates a client from a connection string.</summary>
@@ -109,12 +110,14 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     {
         ArgumentNullException.ThrowIfNull(sql);
 
-        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        Dictionary<string, string> settings = BuildSettings(options);
         string queryId = options?.QueryId;
 
         IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ConnectionLifetimeDeadline.Apply(settings, lease.RemainingLifetime);
+
             // The connection's own enumerator owns each block's storage and, in its finally, returns the
             // connection to Ready or terminates it. We pass the blocks straight through without disposing them.
             await foreach (Block block in lease.Connection
@@ -277,9 +280,10 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(columns);
 
-        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        Dictionary<string, string> settings = BuildSettings(options);
 
         await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        ConnectionLifetimeDeadline.Apply(settings, lease.RemainingLifetime);
         await lease.Connection.InsertAsync(
             sql,
             columns,
@@ -311,11 +315,12 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 nameof(rows));
         }
 
-        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        Dictionary<string, string> settings = BuildSettings(options);
 
         using var buffer = PocoRowBuffer<T>.Create(rows, nameof(rows), cancellationToken);
 
         await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        ConnectionLifetimeDeadline.Apply(settings, lease.RemainingLifetime);
         await lease.Connection.InsertAsync(
             sql,
             buffer.Count,
@@ -339,10 +344,11 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(rows);
 
-        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        Dictionary<string, string> settings = BuildSettings(options);
         using var buffer = PocoRowBuffer<object[]>.Create(rows, nameof(rows), cancellationToken);
 
         await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        ConnectionLifetimeDeadline.Apply(settings, lease.RemainingLifetime);
         await lease.Connection.InsertAsync(
             sql,
             buffer.Count,
@@ -381,7 +387,12 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <inheritdoc/>
     public ValueTask DisposeAsync() => source.DisposeAsync();
 
-    private IReadOnlyDictionary<string, string> BuildSettings(ClickHouseTcpQueryOptions options)
+    /// <summary>
+    /// The settings for one operation, built before a connection is rented so an invalid one is reported without
+    /// costing a checkout. The connection's own deadline is layered on afterwards, once there is a connection
+    /// whose remaining lifetime is known.
+    /// </summary>
+    private Dictionary<string, string> BuildSettings(ClickHouseTcpQueryOptions options)
         => MergeSettings(Options.CustomSettings, options?.Settings);
 
     /// <summary>
@@ -392,7 +403,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <param name="clientSettings">The client-level custom settings, or null for none.</param>
     /// <param name="perQuerySettings">The per-query settings that override the client-level ones, or null for none.</param>
     /// <returns>The merged settings to send with the operation.</returns>
-    internal static IReadOnlyDictionary<string, string> MergeSettings(
+    internal static Dictionary<string, string> MergeSettings(
         IReadOnlyDictionary<string, string> clientSettings,
         IReadOnlyDictionary<string, string> perQuerySettings)
     {
