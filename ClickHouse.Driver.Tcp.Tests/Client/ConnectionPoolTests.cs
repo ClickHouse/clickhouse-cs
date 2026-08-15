@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -292,6 +291,84 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task RentAsync_IdleConnectionExactlyAtItsLifetime_IsRetired()
+    {
+        // The boundary the >= comparison decides. A controlled clock can land on it exactly, which no wall clock
+        // could, so it is worth pinning rather than leaving to the two tests either side of it.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
+
+        await using (await pool.RentAsync(None))
+        {
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(10));
+
+        await using IConnectionLease second = await pool.RentAsync(None);
+        Assert.That(factory.CreateCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Return_ClosingTheConnectionThrows_StillReleasesTheSlotAndDoesNotFailTheCaller()
+    {
+        // A teardown failure must not escape into the operation that was just finishing, nor cost the pool a
+        // slot — which would shrink it by one for the rest of the process.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory { ClosingThrows = true };
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 1, maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
+
+        IConnectionLease lease = await pool.RentAsync(None);
+        clock.Advance(TimeSpan.FromMinutes(11));
+
+        Assert.DoesNotThrowAsync(async () => await lease.DisposeAsync());
+
+        // The slot came back, so the next checkout does not wait for the pool timeout.
+        await using IConnectionLease next = await pool.RentAsync(None);
+        Assert.That(next.Connection.State, Is.EqualTo(TcpConnectionState.Ready));
+    }
+
+    [Test]
+    public async Task DisposeAsync_ClosingAConnectionThrows_StillClosesTheRest()
+    {
+        // TakeAllIdle empties the set before closing, so an exception escaping the loop would strand every
+        // connection after the failing one with nothing able to reach them.
+        var factory = new FakeConnectionFactory { ClosingThrows = true };
+        var pool = new ConnectionPool(Options(maxPoolSize: 3), factory, new ControlledTimeProvider());
+        await ReturnConcurrentLeasesAsync(pool, 3);
+
+        Assert.DoesNotThrowAsync(async () => await pool.DisposeAsync());
+
+        Assert.That(factory.Created.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+    }
+
+    [Test]
+    public async Task RentAsync_StaleIdleConnectionFailsToClose_StillServesTheCaller()
+    {
+        // The discard happens on an unrelated caller's checkout path, so a teardown failure there would fail an
+        // operation that has nothing to do with the dead connection.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory { ClosingThrows = true };
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 2, maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
+
+        await using (await pool.RentAsync(None))
+        {
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(11));
+
+        IConnectionLease replacement = null;
+        Assert.DoesNotThrowAsync(async () => replacement = await pool.RentAsync(None));
+        await using (replacement)
+        {
+            Assert.That(replacement.Connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        }
+    }
+
+    [Test]
     public async Task RentAsync_LifetimeDisabled_KeepsReusingTheSameConnection()
     {
         var clock = new ControlledTimeProvider();
@@ -485,24 +562,44 @@ public class ConnectionPoolTests
     }
 
     [Test]
-    public async Task SweepQuietly_ClosingAConnectionThrows_SwallowsItRatherThanFaultingTheTimerThread()
+    public async Task Sweep_ClosingOneConnectionThrows_StillReapsTheWholeBatch()
     {
+        // The reaped connections leave the idle set before any is closed, so an exception escaping the close
+        // loop would strand the rest with nothing able to reach them. The sweep runs on a timer, so it would
+        // also be an unhandled exception on a thread-pool thread rather than a failed sweep.
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory { ClosingThrows = true };
         await using var pool = new ConnectionPool(
-            Options(maxPoolSize: 1, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+            Options(maxPoolSize: 3, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
 
-        await ReturnConcurrentLeasesAsync(pool, 1);
+        await ReturnConcurrentLeasesAsync(pool, 3);
         clock.Advance(TimeSpan.FromMinutes(6));
 
-        // The guard is load-bearing, so prove there is really something to guard: the sweep itself throws here,
-        // and on the timer's thread-pool thread that would be an unhandled exception, not a failed sweep.
-        Assert.Throws<IOException>(pool.Sweep);
+        Assert.DoesNotThrow(pool.Sweep);
 
-        await ReturnConcurrentLeasesAsync(pool, 1);
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.IdleCount, Is.Zero);
+            Assert.That(factory.Created.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
+    public async Task SweepQuietly_WhateverTheSweepDoes_NeverThrowsAtTheTimer()
+    {
+        // The outer guard the timer calls. Each individual close already swallows, so this is defence in depth
+        // for anything else a future sweep might do: a timer callback has no one to catch for it, and an escape
+        // ends the process rather than the sweep.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory { ClosingThrows = true };
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 2, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+
+        await ReturnConcurrentLeasesAsync(pool, 2);
         clock.Advance(TimeSpan.FromMinutes(6));
 
         Assert.DoesNotThrow(pool.SweepQuietly);
+        Assert.That(pool.IdleCount, Is.Zero);
     }
 
     [Test]
@@ -606,8 +703,10 @@ public class ConnectionPoolTests
         {
             Assert.That(elapsed.Elapsed, Is.LessThan(TimeSpan.FromSeconds(10)), "disposal must not hang on an abandoned lease");
 
-            // Nothing else can reach that connection, so leaving it open would leak the socket for good.
+            // Nothing else can reach that connection, so leaving it open would leak the socket for good. The
+            // transport is aborted rather than fully torn down, because the operation may still hold buffers.
             Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Terminated));
+            Assert.That(factory.Created[0].IsReusable, Is.False);
         });
     }
 
