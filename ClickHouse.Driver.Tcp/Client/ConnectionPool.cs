@@ -28,6 +28,13 @@ namespace ClickHouse.Driver.Tcp.Client;
 /// </remarks>
 internal sealed class ConnectionPool : IConnectionSource
 {
+    /// <summary>
+    /// The type an <see cref="ObjectDisposedException"/> from here names — the client the caller actually holds,
+    /// not this internal pool. Spelled out rather than taken from <c>nameof</c>, because naming the
+    /// <c>[Experimental]</c> client type from ordinary internal code is what CHTCP0001 objects to.
+    /// </summary>
+    private const string ClientTypeName = "ClickHouseTcpClient";
+
     /// <summary>The floor on the sweep period, so a short idle timeout cannot make the sweep spin.</summary>
     private static readonly TimeSpan MinSweepInterval = TimeSpan.FromSeconds(1);
 
@@ -116,7 +123,7 @@ internal sealed class ConnectionPool : IConnectionSource
                 if (Volatile.Read(ref disposed) != 0)
                 {
                     connection.Close();
-                    throw new ObjectDisposedException(nameof(ClickHouseTcpClient));
+                    throw new ObjectDisposedException(ClientTypeName);
                 }
 
                 leased.Add(connection);
@@ -423,7 +430,7 @@ internal sealed class ConnectionPool : IConnectionSource
     {
         if (Volatile.Read(ref disposed) != 0)
         {
-            throw new ObjectDisposedException(nameof(ClickHouseTcpClient));
+            throw new ObjectDisposedException(ClientTypeName);
         }
     }
 
