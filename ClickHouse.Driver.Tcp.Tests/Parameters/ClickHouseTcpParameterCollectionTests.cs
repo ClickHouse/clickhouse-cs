@@ -46,6 +46,53 @@ public class ClickHouseTcpParameterCollectionTests
     }
 
     [Test]
+    public void Constructor_FromASequence_AddsThemInOrder()
+    {
+        var parameters = new ClickHouseTcpParameterCollection(
+        [
+            new ClickHouseTcpParameter("a", 1),
+            new ClickHouseTcpParameter("b", 2, "UInt8"),
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parameters.Count, Is.EqualTo(2));
+            Assert.That(parameters["b"].ClickHouseType, Is.EqualTo("UInt8"));
+        });
+    }
+
+    [Test]
+    public void Constructor_FromASequenceRepeatingAName_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => new ClickHouseTcpParameterCollection(
+        [
+            new ClickHouseTcpParameter("a", 1),
+            new ClickHouseTcpParameter("a", 2),
+        ]));
+    }
+
+    [Test]
+    public void Constructor_FromNull_Throws()
+        => Assert.Throws<ArgumentNullException>(() => new ClickHouseTcpParameterCollection(null));
+
+    [Test]
+    public void Add_NullParameter_Throws()
+        => Assert.Throws<ArgumentNullException>(() => new ClickHouseTcpParameterCollection().Add(null));
+
+    [Test]
+    public void Contains_BoundAndUnboundNames_AnswersForBoth()
+    {
+        var parameters = new ClickHouseTcpParameterCollection { { "id", 1 } };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parameters.Contains("id"), Is.True);
+            Assert.That(parameters.Contains("other"), Is.False);
+            Assert.That(parameters.Contains(null), Is.False);
+        });
+    }
+
+    [Test]
     public void Indexer_UnboundName_Throws()
     {
         var parameters = new ClickHouseTcpParameterCollection();
