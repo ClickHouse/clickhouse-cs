@@ -22,6 +22,12 @@ public class ClickHouseTcpClientOptionsTests
             Assert.That(options.DialTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
             Assert.That(options.ReadTimeout, Is.EqualTo(TimeSpan.FromSeconds(300)));
             Assert.That(options.MaxSendBufferBytes, Is.EqualTo(1024 * 1024));
+            Assert.That(options.MinPoolSize, Is.Zero);
+            Assert.That(options.MaxPoolSize, Is.EqualTo(20));
+            Assert.That(options.PoolTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
+            Assert.That(options.MaxConnectionLifetime, Is.EqualTo(TimeSpan.FromMinutes(30)));
+            Assert.That(options.IdleTimeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
+            Assert.That(options.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Lifo));
         });
     }
 
@@ -49,6 +55,22 @@ public class ClickHouseTcpClientOptionsTests
         Assert.Throws<ArgumentException>(() => options.Validate());
     }
 
+    [Test]
+    public void Validate_EmptyDatabase_ThrowsArgumentException()
+    {
+        var options = new ClickHouseTcpClientOptions { Database = "" };
+
+        Assert.Throws<ArgumentException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NonPositiveReadTimeout_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { ReadTimeout = TimeSpan.Zero };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
     [TestCase(0)]
     [TestCase(-1)]
     [TestCase(65536)]
@@ -71,6 +93,91 @@ public class ClickHouseTcpClientOptionsTests
     public void Validate_NonPositiveMaxSendBufferBytes_ThrowsArgumentOutOfRangeException()
     {
         var options = new ClickHouseTcpClientOptions { MaxSendBufferBytes = 0 };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NonPositivePoolTimeout_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { PoolTimeout = TimeSpan.Zero };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_MaxPoolSizeBelowOne_ThrowsArgumentOutOfRangeException(int maxPoolSize)
+    {
+        var options = new ClickHouseTcpClientOptions { MaxPoolSize = maxPoolSize };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NegativeMinPoolSize_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { MinPoolSize = -1 };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_MinPoolSizeAboveMaxPoolSize_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { MinPoolSize = 5, MaxPoolSize = 4 };
+
+        var thrown = Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+
+        Assert.That(thrown.Message, Does.Contain("MaxPoolSize (4)"));
+    }
+
+    [Test]
+    public void Validate_MinPoolSizeEqualToMaxPoolSize_DoesNotThrow()
+    {
+        var options = new ClickHouseTcpClientOptions { MinPoolSize = 4, MaxPoolSize = 4 };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NegativeMaxConnectionLifetime_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { MaxConnectionLifetime = TimeSpan.FromSeconds(-1) };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NegativeIdleTimeout_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { IdleTimeout = TimeSpan.FromSeconds(-1) };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_LifetimeAndIdleTimeoutDisabled_DoesNotThrow()
+    {
+        var options = new ClickHouseTcpClientOptions { MaxConnectionLifetime = TimeSpan.Zero, IdleTimeout = TimeSpan.Zero };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_MaxConnectionLifetimeUnderTheRetirementFloor_ThrowsBecauseNoConnectionCouldBeUsed()
+    {
+        // Below the floor every connection is retired at checkout, so the pool would open one per operation and
+        // immediately throw it away. Rejected up front rather than left to look like a connection leak.
+        var options = new ClickHouseTcpClientOptions { MaxConnectionLifetime = TimeSpan.FromSeconds(10) };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_UndefinedPoolReusePolicy_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { PoolReusePolicy = (ClickHouseTcpPoolReusePolicy)42 };
 
         Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
     }
@@ -142,6 +249,12 @@ public class ClickHouseTcpClientOptionsTests
             MaxSendBufferBytes = 4096,
             DialTimeout = TimeSpan.FromSeconds(3),
             ReadTimeout = TimeSpan.FromSeconds(4),
+            MinPoolSize = 1,
+            MaxPoolSize = 7,
+            PoolTimeout = TimeSpan.FromSeconds(5),
+            MaxConnectionLifetime = TimeSpan.FromSeconds(6),
+            IdleTimeout = TimeSpan.FromSeconds(7),
+            PoolReusePolicy = ClickHouseTcpPoolReusePolicy.Fifo,
         };
         var defaults = new ClickHouseTcpClientOptions();
 
@@ -214,6 +327,12 @@ public class ClickHouseTcpClientOptionsTests
             MaxSendBufferBytes = 4096,
             DialTimeout = TimeSpan.FromSeconds(3),
             ReadTimeout = TimeSpan.FromSeconds(4),
+            MinPoolSize = 1,
+            MaxPoolSize = 7,
+            PoolTimeout = TimeSpan.FromSeconds(5),
+            MaxConnectionLifetime = TimeSpan.FromSeconds(6),
+            IdleTimeout = TimeSpan.FromSeconds(7),
+            PoolReusePolicy = ClickHouseTcpPoolReusePolicy.Fifo,
         };
 
         var derived = original with { Port = 9440 };
