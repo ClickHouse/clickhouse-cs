@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Parameters;
 using ClickHouse.Driver.Tcp.Poco;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
@@ -109,7 +110,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// drained, or discarded and redialed when enumeration stopped mid-response.
     /// </remarks>
     /// <param name="sql">The SQL text.</param>
-    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>An async stream of the result's row-bearing blocks, each valid only for its own iteration.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
@@ -121,6 +122,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(sql);
 
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
         string queryId = options?.QueryId;
 
         IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
@@ -129,7 +131,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
             // The connection's own enumerator owns each block's storage and, in its finally, returns the
             // connection to Ready or terminates it. We pass the blocks straight through without disposing them.
             await foreach (Block block in lease.Connection
-                .QueryAsync(sql, settings, parameters: null, queryId, handlers: null, cancellationToken)
+                .QueryAsync(sql, settings, parameters, queryId, handlers: null, cancellationToken)
                 .ConfigureAwait(false))
             {
                 yield return block;
@@ -154,7 +156,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <c>LowCardinality(FixedString(N))</c> <c>byte[]</c> in place because another row may reference it.
     /// </remarks>
     /// <param name="sql">The SQL text.</param>
-    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>An async stream of result rows.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
@@ -195,7 +197,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// </remarks>
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="sql">The SQL text.</param>
-    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>An async stream of result rows.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
@@ -252,7 +254,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// and discarded.
     /// </summary>
     /// <param name="sql">The SQL text.</param>
-    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the statement is acknowledged.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
@@ -274,7 +276,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// </summary>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="columns">The row data, matched to the target columns by name.</param>
-    /// <param name="options">Per-insert options (query id, settings, block sizing), or null for the client defaults.</param>
+    /// <param name="options">Per-insert options (query id, settings, parameters, block sizing), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server acknowledges the insert.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="columns"/> is null.</exception>
@@ -289,13 +291,14 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(columns);
 
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
 
         await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
         await lease.Connection.InsertAsync(
             sql,
             columns,
             settings,
-            parameters: null,
+            parameters,
             options?.QueryId,
             ResolveMaxRowsPerBlock(options),
             Options.MaxSendBufferBytes,
@@ -323,6 +326,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         }
 
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
 
         int? maxRowsPerBlock = ResolveMaxRowsPerBlock(options);
         int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
@@ -334,7 +338,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
             buffer.Count,
             schema => pocoTypes.WritePlanFor<T>(schema).CreateSource(buffer, blockRows),
             settings,
-            parameters: null,
+            parameters,
             options?.QueryId,
             maxRowsPerBlock,
             Options.MaxSendBufferBytes,
@@ -353,6 +357,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(rows);
 
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
         int? maxRowsPerBlock = ResolveMaxRowsPerBlock(options);
         int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
         using var buffer = PocoRowBuffer<object[]>.Create(rows, nameof(rows), blockRows, cancellationToken);
@@ -363,7 +368,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
             buffer.Count,
             schema => UntypedRowColumns.CreateSource(schema, buffer, blockRows),
             settings,
-            parameters: null,
+            parameters,
             options?.QueryId,
             maxRowsPerBlock,
             Options.MaxSendBufferBytes,
@@ -398,6 +403,42 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
 
     private IReadOnlyDictionary<string, string> BuildSettings(ClickHouseTcpQueryOptions options)
         => MergeSettings(Options.CustomSettings, options?.Settings);
+
+    /// <summary>
+    /// Resolves each bound parameter to the wire text for the Query packet's parameter list.
+    /// </summary>
+    /// <param name="sql">The SQL text, scanned for the <c>{name:Type}</c> placeholders that give the types.</param>
+    /// <param name="options">The per-query options carrying the parameters, or null for none.</param>
+    /// <returns>The formatted parameters by name, or null when none are bound.</returns>
+    /// <remarks>
+    /// The type each value is formatted as comes from, in order: the parameter's own
+    /// <see cref="ClickHouseTcpParameter.ClickHouseType"/>, the query's <c>{name:Type}</c> placeholder, then the
+    /// value's CLR type. The last rung only carries a parameter the query does not name, because a query that
+    /// does name it must declare the type for the server to read.
+    /// </remarks>
+    internal static IReadOnlyDictionary<string, string> BuildParameters(string sql, ClickHouseTcpQueryOptions options)
+    {
+        ClickHouseTcpParameterCollection parameters = options?.Parameters;
+        if (parameters is null || parameters.Count == 0)
+        {
+            return null;
+        }
+
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+        var formatted = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (ClickHouseTcpParameter parameter in parameters)
+        {
+            string typeName = parameter.ClickHouseType;
+            if (string.IsNullOrWhiteSpace(typeName) && !hints.TryGetValue(parameter.Name, out typeName))
+            {
+                typeName = ParameterTypeInference.Infer(parameter.Value, parameter.Name);
+            }
+
+            formatted[parameter.Name] = TcpParameterFormatter.Format(parameter.Value, typeName, parameter.Name);
+        }
+
+        return formatted;
+    }
 
     /// <summary>
     /// Merges the settings for one operation: the client-level custom settings, overlaid by the per-query
