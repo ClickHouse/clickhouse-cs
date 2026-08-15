@@ -97,17 +97,40 @@ internal static class ParameterTypeInference
 
         string inferred = value switch
         {
+            // A byte array reads as text or as an array of bytes, so an Array alternative takes it first. The
+            // string arms would otherwise win and print the CLR type name instead of the contents.
+            byte[] => node.Name is "Array" or "String" or "FixedString" ? node.Name : "String",
+
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
-            string or char or byte[] => node.Name is "String" or "FixedString" or "Enum8" or "Enum16" ? node.Name : "String",
+            string or char => node.Name is "String" or "FixedString" or "Enum8" or "Enum16" ? node.Name : "String",
             DateTime or DateTimeOffset => node.Name is "DateTime" or "DateTime64" or "Date" or "Date32" ? node.Name : "DateTime64",
             decimal or ClickHouseDecimal => node.Name.StartsWith("Decimal", StringComparison.Ordinal) ? node.Name : "Decimal128",
             IDictionary => "Map",
             ITuple => "Tuple",
             not string and IEnumerable => "Array",
-            _ => TypeParser.Parse(Infer(value, "variant")).Name,
+            _ => InferOrNothing(value),
         };
 
         return string.Equals(inferred, node.Name, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The type a value maps to, or null when it maps to none. Used only when matching a Variant alternative,
+    /// where an unmappable value must simply fail to match and let the caller report the Variant as a whole. An
+    /// exception here would name a parameter the caller never wrote.
+    /// </summary>
+    /// <param name="value">The value to place.</param>
+    /// <returns>The base type name, or null.</returns>
+    private static string InferOrNothing(object value)
+    {
+        try
+        {
+            return TypeParser.Parse(Infer(value, parameterName: null)).Name;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
     }
 
     private static string InferMap(IDictionary dictionary, string parameterName)

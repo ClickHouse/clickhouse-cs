@@ -28,10 +28,21 @@ public record ClickHouseTcpQueryOptions
     /// The values bound to the query's <c>{name:Type}</c> placeholders. Null means none.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Each value is formatted as the type its placeholder declares, so the query text must carry the type —
     /// <c>SELECT * FROM t WHERE id = {id:Int32}</c>. A parameter can override that type; see
     /// <see cref="ClickHouseTcpParameter.ClickHouseType"/>. Parameters need a server whose protocol revision is
     /// 54459 or above; an older one rejects the query rather than running it without them.
+    /// </para>
+    /// <para>
+    /// <b>A parameter must not be named after a server setting.</b> The native protocol carries parameters in
+    /// the settings list, so the server applies a name it recognizes as that setting instead of binding it. The
+    /// common traps are <c>limit</c> and <c>offset</c>; <c>max_threads</c>, <c>readonly</c> and
+    /// <c>log_comment</c> behave the same way. The query then fails with a parse error about a quoted string,
+    /// which does not name the parameter. Rename it (<c>row_limit</c>) and the query works. This is a limit of
+    /// the protocol, not of this client — <c>clickhouse-client --param_limit=</c> fails the same way — but it
+    /// does differ from this driver's HTTP transport, where the name is carried separately and works.
+    /// </para>
     /// </remarks>
     public ClickHouseTcpParameterCollection Parameters { get; init; }
 }
