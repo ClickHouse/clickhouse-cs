@@ -1173,6 +1173,80 @@ public class ConnectionPoolTests
         Assert.That(next.Connection.State, Is.EqualTo(TcpConnectionState.Ready));
     }
 
+    [Test]
+    public async Task RentAsync_PoolDisposedWhileTheDialFinishes_ClosesTheConnectionRatherThanHandingItOut()
+    {
+        // The other side of the checkout race: a dial that cannot be called off and lands just after the drain
+        // emptied the leased set. Nothing else can reach that connection — it was never in either set — so the
+        // checkout has to close it itself rather than hand out a connection from a pool that is already shut.
+        FakeConnectionFactory factory = GatedDialFactory(out SemaphoreSlim dialing, out TaskCompletionSource finishDial);
+        var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
+
+        Task<IConnectionLease> renting = Task.Run(async () => await pool.RentAsync(None));
+        Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the dial should be in flight");
+
+        // Deliberately not awaited: disposal marks the pool disposed before its first await, and its drain then
+        // waits for the permit this checkout still holds.
+        Task disposing = pool.DisposeAsync().AsTask();
+        finishDial.SetResult();
+
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await renting, "a pool that is closing must not hand out a connection");
+        await disposing;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.CreateCount, Is.EqualTo(1), "the dial did finish; what happens to its connection is the point");
+            Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Terminated), "the connection has no other owner, so the checkout must close it");
+        });
+    }
+
+    [Test]
+    public async Task Sweep_PoolDisposedWhileATopUpDialFinishes_ClosesThatConnectionRatherThanPoolingIt()
+    {
+        // The same race on the top-up path, where the connection would otherwise be added to an idle set the
+        // drain has already emptied — open, unreachable, and closed by nothing.
+        FakeConnectionFactory factory = GatedDialFactory(out SemaphoreSlim dialing, out TaskCompletionSource finishDial);
+        var pool = new ConnectionPool(Options(maxPoolSize: 2, minPoolSize: 1), factory, new ControlledTimeProvider());
+
+        pool.Sweep();
+        Task refill = pool.LastRefill;
+        Assert.That(refill, Is.Not.Null, "an empty pool is below the floor, so a top-up must have started");
+        Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the top-up should be dialing");
+
+        Task disposing = pool.DisposeAsync().AsTask();
+        finishDial.SetResult();
+
+        await refill;
+        await disposing;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.IdleCount, Is.Zero, "a connection opened after the drain must not join the idle set");
+            Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Terminated), "the top-up must close what it can no longer pool");
+        });
+    }
+
+    /// <summary>
+    /// A factory whose dials finish only when <paramref name="finishDial"/> is set, and that ignore cancellation
+    /// on the way: these tests need a dial that runs to completion at an awkward moment, not one called off.
+    /// </summary>
+    private static FakeConnectionFactory GatedDialFactory(out SemaphoreSlim dialing, out TaskCompletionSource finishDial)
+    {
+        var started = new SemaphoreSlim(0);
+        var gate = new TaskCompletionSource();
+        dialing = started;
+        finishDial = gate;
+        return new FakeConnectionFactory
+        {
+            IgnoresCancellation = true,
+            BeforeCreate = async _ =>
+            {
+                started.Release();
+                await gate.Task;
+            },
+        };
+    }
+
     /// <summary>A factory whose dials only ever end by cancellation, signalling as each one starts.</summary>
     private static FakeConnectionFactory DialsForeverFactory(out SemaphoreSlim dialing)
     {
