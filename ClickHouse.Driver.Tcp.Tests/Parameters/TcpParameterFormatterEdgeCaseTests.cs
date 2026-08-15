@@ -132,6 +132,46 @@ public class TcpParameterFormatterEdgeCaseTests
     }
 
     [Test]
+    public void FormatSqlText_VariantHoldingAByteArray_PrefersTheArrayAlternative()
+    {
+        // A byte array matched the string alternatives first, and the string arm prints the CLR type name, so
+        // the value silently became "System.Byte[]" instead of its contents.
+        Assert.That(Format(new byte[] { 1, 2 }, "Variant(Array(UInt8), String)"), Is.EqualTo("[1,2]"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantHoldingAnUnmappableValue_NamesTheVariantNotAnInventedParameter()
+    {
+        // Matching an alternative used to infer with a placeholder name, so an unmappable value reported advice
+        // about a parameter the caller never wrote.
+        var exception = Assert.Throws<ArgumentException>(() => Format(new object(), "Variant(Int64, String)"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("no alternative"));
+            Assert.That(exception.Message, Does.Not.Contain("{variant:"));
+        });
+    }
+
+    [TestCase("1E2", ExpectedResult = "100", TestName = "Decimal in exponent form")]
+    [TestCase("1,234.50", ExpectedResult = "1234.50", TestName = "Decimal with thousands separators")]
+    [TestCase("(5)", ExpectedResult = "-5", TestName = "Decimal in accounting parentheses")]
+    [TestCase("1.2345", ExpectedResult = "1.2345", TestName = "Decimal in plain form")]
+    public string FormatSqlText_DecimalStringForm_AcceptsWhatTheHttpFormatterAccepts(string text)
+        => Format(text, "Decimal64(4)");
+
+    [Test]
+    public void FormatSqlText_Time64AtAMidpoint_RoundsToEven()
+    {
+        // decimal.ToString rounds away from zero, which put a midpoint one tick above the HTTP formatter.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format(TimeSpan.FromSeconds(0.5), "Time64(0)"), Is.EqualTo("0:00:00"));
+            Assert.That(Format(TimeSpan.FromSeconds(1.5), "Time64(0)"), Is.EqualTo("0:00:02"));
+        });
+    }
+
+    [Test]
     public void FormatSqlText_VariantHoldingANullableAlternative_MatchesThroughTheWrapper()
     {
         Assert.That(Format(7L, "Variant(Nullable(Int64), String)"), Is.EqualTo("7"));

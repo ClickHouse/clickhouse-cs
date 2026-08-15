@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -62,6 +63,89 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Array(Array(Int32))", new[] { new[] { 1, 2 }, new[] { 3 } }).Returns("[[1,2],[3]]").SetName("Jagged array");
         yield return new TestCaseData("Array(Nullable(Int32))", new int?[] { 1, null, 3 }).Returns("[1,NULL,3]").SetName("Array with a null element");
         yield return new TestCaseData("Tuple(String, Int32)", ("a", 1)).Returns("('a',1)").SetName("Tuple");
+        yield return new TestCaseData("Tuple(String, Int32)", ("O'B", 1)).Returns(@"('O\'B',1)").SetName("Tuple element with a quote");
+
+        // Types whose text form the unit tests pin but no round-trip reached, so nothing proved the server
+        // reads back what the formatter writes.
+        yield return new TestCaseData("Date32", new DateOnly(1950, 3, 4)).Returns("1950-03-04").SetName("Date32");
+        yield return new TestCaseData("Time", new TimeSpan(1, 1, 1)).Returns("01:01:01").SetName("Time");
+        yield return new TestCaseData("Time64(3)", new TimeSpan(0, 1, 1, 1, 500)).Returns("01:01:01.500").SetName("Time64");
+        yield return new TestCaseData("FixedString(3)", Encoding.UTF8.GetBytes("abc")).Returns("abc").SetName("FixedString from bytes");
+        yield return new TestCaseData("Nested(a UInt8, b String)", new object[] { (1, "x"), (2, "y") })
+            .Returns("[(1,'x'),(2,'y')]").SetName("Nested rows");
+        yield return new TestCaseData("Variant(Int64, String)", 7L).Returns("7").SetName("Variant picks the integer");
+        yield return new TestCaseData("Variant(Int64, String)", "x").Returns("x").SetName("Variant picks the string");
+    }
+
+    [Test]
+    public async Task QueryAsync_MapWithSpecialCharacters_RoundTripsThroughTheServer()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        var value = new Dictionary<string, string> { ["k'1"] = @"v\1" };
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", value } },
+        };
+
+        object read = await ScalarAsync(client, "SELECT toString({p:Map(String, String)})", options);
+
+        Assert.That(read, Is.EqualTo(@"{'k\'1':'v\\1'}"));
+    }
+
+    [Test]
+    public async Task QueryAsync_ParameterNamedAfterAServerSetting_IsRejectedByTheServer()
+    {
+        // The parameter list is the settings list, so the server applies a name it knows as that setting rather
+        // than binding it. Pinned because the error names neither the parameter nor the cause, and because
+        // "limit" is a name a caller reaches for. See the remark on ClickHouseTcpQueryOptions.Parameters.
+        await using var client = TcpServerFixture.CreateClient();
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "limit", 3 } },
+        };
+
+        Assert.ThrowsAsync<ClickHouseServerException>(async () => await ScalarAsync(
+            client, "SELECT count() FROM (SELECT number FROM numbers(10) LIMIT {limit:UInt64})", options));
+    }
+
+    [Test]
+    public async Task QueryAsync_SameParameterRenamedOffASettingName_Works()
+    {
+        // The other half of the case above: the query is fine, only the name was.
+        await using var client = TcpServerFixture.CreateClient();
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "row_limit", 3 } },
+        };
+
+        object value = await ScalarAsync(
+            client, "SELECT count() FROM (SELECT number FROM numbers(10) LIMIT {row_limit:UInt64})", options);
+
+        Assert.That(value, Is.EqualTo(3UL));
+    }
+
+    [Test]
+    public async Task QueryAsync_SequenceReadableOnlyOnce_IsNotConsumedByTypeInference()
+    {
+        // With no placeholder the client infers the type, which reads the sequence, and then formats it, which
+        // reads it again. A one-shot sequence would arrive empty the second time.
+        await using var client = TcpServerFixture.CreateClient();
+        IEnumerable<int> once = OneShot();
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", once } },
+        };
+
+        object value = await ScalarAsync(client, "SELECT toString({p:Array(Int32)})", options);
+
+        Assert.That(value, Is.EqualTo("[1,2,3]"));
+
+        static IEnumerable<int> OneShot()
+        {
+            yield return 1;
+            yield return 2;
+            yield return 3;
+        }
     }
 
     [TestCaseSource(nameof(RoundTripCases))]
