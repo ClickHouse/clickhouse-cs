@@ -1404,8 +1404,9 @@ whether each value is *boxed* — put into a heap object — on its way to you.
 | How you read | Boxes each value | Notes |
 |---|---|---|
 | `QueryAsync<T>` | **No** | Reads from the stream directly into your properties. The fast path. |
+| Typed reader accessors (`GetInt32`, `GetInt64`, `GetDouble`, `GetGuid`, `GetDateTime`, `GetFieldValue<T>`) | **No** | Each column has storage of its own type, so the accessor reads a field. |
 | `MapTo<T>` | Yes | Materializes the row first, then copies the values out of it. |
-| `ClickHouseDataReader` accessors (`GetInt32`, `GetValue`, `GetFieldValue<T>`) | Yes | This is also the path that ORMs use. |
+| `GetValue` and `GetValues` | Yes | They return `object`, so the value must be boxed when you ask for it. |
 
 For a 1,000,000-row read of 105 columns:
 
@@ -1433,8 +1434,11 @@ Two more points about the read path:
 - **A column type without a fast path does not slow down the other columns.** The driver selects a
   path for each column on its own. A `Tuple` or `Map` column uses the slower path, and the scalar
   columns next to it keep the fast one.
-- **ORMs (Dapper, EF Core, linq2db) use the ADO.NET reader**, so they use the boxed path. To get the
-  fast path for one hot query, use `QueryAsync<T>` for that query.
+- **`IsDBNull` never materializes the value**, so a null check costs nothing on any path.
+- **ORMs get the fast path when they use typed accessors.** linq2db registers `GetInt64`,
+  `GetDouble` and `GetDateTime` for each column, so it reads without boxing. Code that reads through
+  `GetValue` — including a `dynamic` result from Dapper — boxes each value. If an ORM query is hot
+  and reads through `GetValue`, use `QueryAsync<T>` for that one query.
 
 ---
 
