@@ -932,6 +932,45 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Closes the transport under an operation that is still running, marking the connection final but leaving
+    /// the reader and writer alone. Unlike <see cref="Terminate"/> this <i>is</i> safe to call concurrently with
+    /// an operation, and it is the only teardown that is: it is how the pool frees a connection whose caller
+    /// abandoned it, typically parked on a read that will never arrive.
+    /// </summary>
+    /// <remarks>
+    /// The pooled reader and writer buffers are deliberately not returned here. Returning a buffer that a
+    /// pending read or write still points at would hand live memory to an unrelated caller, and racing
+    /// <see cref="Terminate"/>'s unsynchronized guard could return the same buffer twice. The abandoned
+    /// operation returns them itself as it unwinds, which closing the socket provokes; if it never unwinds, two
+    /// pooled arrays are left to the garbage collector, which costs an allocation and corrupts nothing.
+    /// </remarks>
+    internal void AbortTransport()
+    {
+        // A plain write, and deliberately before the close: an operation's own Terminate then sees Terminated
+        // and skips, so the reader and writer are disposed by at most one of us. If it got there first instead,
+        // it has already done the full teardown and the close below is a no-op on a disposed socket.
+        state = TcpConnectionState.Terminated;
+
+        try
+        {
+            // Socket disposal is thread-safe and aborts the pending I/O, which is the whole point. With no
+            // socket (the scripted-stream seam) the stream itself is the transport.
+            if (socket is not null)
+            {
+                socket.Dispose();
+            }
+            else
+            {
+                stream.Dispose();
+            }
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            // Best effort: this runs during disposal, with nothing left to report a teardown failure to.
+        }
+    }
+
     /// <inheritdoc/>
     public void Dispose() => Terminate();
 

@@ -14,9 +14,10 @@ namespace ClickHouse.Driver.Tcp.Client;
 ///
 /// <para>
 /// A checked-out connection is exclusively the lease-holder's, which is what keeps the non-thread-safe
-/// connection safe under a client that is itself thread-safe. Returned connections are kept for reuse unless
-/// they are terminated, out of step with the server, or too old; retired ones are closed and never handed out
-/// again.
+/// connection safe under a client that is itself thread-safe. The one exception is disposal, which aborts the
+/// transport of anything still out once its drain deadline passes. Returned connections are kept for reuse
+/// unless they are terminated, out of step with the server, or too old; retired ones are closed and never
+/// handed out again.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -107,6 +108,17 @@ internal sealed class ConnectionPool : IConnectionSource
             connection.OnRented();
             lock (gate)
             {
+                // Re-checked here rather than only above, and under the same lock as the add: opening a
+                // connection can take up to DialTimeout, long enough for disposal to run its whole drain in
+                // between. Because disposal sets the flag before it ever takes this lock, and empties `leased`
+                // strictly after that, seeing 0 here proves this add lands before the drain rather than after it
+                // — where nothing would ever close the connection.
+                if (Volatile.Read(ref disposed) != 0)
+                {
+                    connection.Close();
+                    throw new ObjectDisposedException(nameof(ClickHouseTcpClient));
+                }
+
                 leased.Add(connection);
             }
 
@@ -114,12 +126,19 @@ internal sealed class ConnectionPool : IConnectionSource
         }
         catch
         {
+            // Only the permit is undone. Every throw either precedes the add to `leased` or, in the disposed
+            // case above, removes what it added — so there is nothing else outstanding to clean up here.
             permits.Release();
             throw;
         }
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Closes the pool: every idle connection at once, then the ones still out as their operations finish.
+    /// Waits up to <see cref="ClickHouseTcpClientOptions.PoolTimeout"/> for that, after which whatever is left
+    /// is aborted where it stands — so an operation still running then fails rather than holding disposal open
+    /// for good.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         // Idempotent: only the first caller tears the pool down. Marking disposed first means a rent already
@@ -155,11 +174,14 @@ internal sealed class ConnectionPool : IConnectionSource
         }
         catch (OperationCanceledException)
         {
-            // The drain deadline elapsed: at least one operation did not give its connection back. Close what is
+            // The drain deadline elapsed: at least one operation did not give its connection back. Abort what is
             // still out, since nothing else can — the pool holds the only other reference to it, and the caller
-            // has evidently lost theirs. Terminate closes the socket first, so an operation parked on a read
-            // that will never arrive is also freed rather than left waiting for TCP to give up.
-            CloseAll(TakeAllLeased());
+            // has evidently lost theirs. Aborting closes the transport only, which frees an operation parked on
+            // a read that will never arrive without touching the buffers that operation may still be using.
+            foreach (PooledConnection connection in TakeAllLeased() ?? [])
+            {
+                connection.Abort();
+            }
         }
 
         // The semaphore is deliberately not disposed: it holds no unmanaged resource unless its
