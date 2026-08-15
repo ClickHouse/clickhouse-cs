@@ -174,11 +174,140 @@ public class SerialisationTests
         Assert.That(value, Is.EqualTo(-(BigInteger.One << ((size * 8) - 1))));
     }
 
+    // Write-side mirror of the read tests above, after the switch to
+    // BigInteger.TryWriteBytes(span, out written, isUnsigned: !Signed): the emitted bytes are the
+    // value's little-endian two's-complement form, sign-extended (0xFF) or zero-extended to the full
+    // column width. Boundary values are the ones the fill and the unsigned sign-byte handling can get
+    // wrong.
+    public static IEnumerable<TestCaseData> BigIntegerWriteBoundaryCases()
+    {
+        foreach (var size in new[] { 16, 32 })
+        {
+            var bits = size * 8;
+            var signedType = size == 16 ? "Int128" : "Int256";
+            var unsignedType = size == 16 ? "UInt128" : "UInt256";
+
+            yield return WriteCase(signedType, BigInteger.Zero, new byte[size]);
+            yield return WriteCase(signedType, BigInteger.One, Bytes(size, (0, 0x01)));
+            yield return WriteCase(signedType, BigInteger.MinusOne, Filled(size, 0xFF));
+            // -2 is the shortest negative that needs the 0xFF fill past its single written byte.
+            yield return WriteCase(signedType, -BigInteger.One - 1, Filled(size, 0xFF, (0, 0xFE)));
+            yield return WriteCase(signedType, (BigInteger.One << (bits - 1)) - 1, Filled(size, 0xFF, (size - 1, 0x7F)));
+            yield return WriteCase(signedType, -(BigInteger.One << (bits - 1)), Bytes(size, (size - 1, 0x80)));
+
+            yield return WriteCase(unsignedType, BigInteger.Zero, new byte[size]);
+            yield return WriteCase(unsignedType, BigInteger.One, Bytes(size, (0, 0x01)));
+            // The unsigned maximum is the case the old code handled by trimming BigInteger's
+            // trailing sign byte and TryWriteBytes handles with isUnsigned.
+            yield return WriteCase(unsignedType, (BigInteger.One << bits) - 1, Filled(size, 0xFF));
+            yield return WriteCase(unsignedType, BigInteger.One << (bits - 1), Bytes(size, (size - 1, 0x80)));
+        }
+    }
+
+    [Test]
+    [TestCaseSource(nameof(BigIntegerWriteBoundaryCases))]
+    public void BigIntegerWrite_AtBoundaryValues_ShouldEmitTwosComplementBytes(string clickHouseType, BigInteger value, byte[] expected)
+    {
+        Assert.That(WriteRawBigInteger(clickHouseType, value), Is.EqualTo(expected));
+    }
+
+    [Test]
+    [TestCase("UInt128")]
+    [TestCase("UInt256")]
+    public void BigIntegerWrite_WithNegativeValueOnUnsignedType_ShouldThrowArgumentException(string clickHouseType)
+    {
+        Assert.Throws<ArgumentException>(() => WriteRawBigInteger(clickHouseType, BigInteger.MinusOne));
+    }
+
+    [Test]
+    [TestCase("Int128", 16)]
+    [TestCase("Int256", 32)]
+    [TestCase("UInt128", 16)]
+    [TestCase("UInt256", 32)]
+    public void BigIntegerWrite_WithValueWiderThanTheColumn_ShouldThrowOverflowException(string clickHouseType, int size)
+    {
+        // One past the widest value the column holds: 2^bits for the unsigned types, 2^(bits-1) for
+        // the signed ones. Both need one byte more than the column is wide.
+        var bits = size * 8;
+        var tooWide = clickHouseType[0] == 'U' ? BigInteger.One << bits : BigInteger.One << (bits - 1);
+
+        var exception = Assert.Throws<OverflowException>(() => WriteRawBigInteger(clickHouseType, tooWide));
+        Assert.That(exception.Message, Is.EqualTo($"Got {size + 1} bytes, {size} expected"));
+    }
+
+    // The negative side of the same boundary: one below the signed minimum. It is the shape where the
+    // overflow check and the 0xFF sign-extension fill meet.
+    [Test]
+    [TestCase("Int128", 16)]
+    [TestCase("Int256", 32)]
+    public void BigIntegerWrite_WithValueBelowTheSignedMinimum_ShouldThrowOverflowException(string clickHouseType, int size)
+    {
+        var tooNegative = -(BigInteger.One << ((size * 8) - 1)) - 1;
+
+        var exception = Assert.Throws<OverflowException>(() => WriteRawBigInteger(clickHouseType, tooNegative));
+        Assert.That(exception.Message, Is.EqualTo($"Got {size + 1} bytes, {size} expected"));
+    }
+
+    [Test]
+    [TestCase("Int128")]
+    [TestCase("Int256")]
+    [TestCase("UInt128")]
+    [TestCase("UInt256")]
+    public void BigIntegerWrite_OfManyValues_ShouldNotAllocate(string clickHouseType)
+    {
+        const int Count = 5000;
+        var type = TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default);
+        // Boxed once outside the measurement: the box belongs to the caller, the scratch buffers this
+        // test guards against belonged to the write itself.
+        var value = (object)((BigInteger.One << 100) - 12345);
+
+        using var stream = new MemoryStream((Count * 32) + (16 * 1024));
+        using var writer = new ExtendedBinaryWriter(stream);
+
+        // Warm up the JIT and let the writer's buffer settle so only the writes are measured.
+        type.Write(writer, value);
+        writer.Flush();
+        stream.Position = 0;
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Count; i++)
+            type.Write(writer, value);
+        writer.Flush();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.That(allocated, Is.Zero, $"Write should use a stack buffer; allocated {allocated} bytes for {Count} values");
+    }
+
+    private static TestCaseData WriteCase(string clickHouseType, BigInteger value, byte[] expected) =>
+        new TestCaseData(clickHouseType, value, expected)
+            .SetName($"BigIntegerWrite_{clickHouseType}_{value}_ShouldEmitTwosComplementBytes");
+
+    private static byte[] Bytes(int size, params (int Index, byte Value)[] set) => Filled(size, 0x00, set);
+
+    private static byte[] Filled(int size, byte fill, params (int Index, byte Value)[] set)
+    {
+        var bytes = new byte[size];
+        bytes.AsSpan().Fill(fill);
+        foreach (var (index, value) in set)
+            bytes[index] = value;
+        return bytes;
+    }
+
     private static BigInteger ReadRawBigInteger(string clickHouseType, byte[] littleEndianBytes)
     {
         var type = TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default);
         using var stream = new MemoryStream(littleEndianBytes);
         using var reader = new ExtendedBinaryReader(stream);
         return (BigInteger)type.Read(reader);
+    }
+
+    private static byte[] WriteRawBigInteger(string clickHouseType, BigInteger value)
+    {
+        var type = TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default);
+        using var stream = new MemoryStream();
+        using var writer = new ExtendedBinaryWriter(stream);
+        type.Write(writer, value);
+        writer.Flush();
+        return stream.ToArray();
     }
 }
