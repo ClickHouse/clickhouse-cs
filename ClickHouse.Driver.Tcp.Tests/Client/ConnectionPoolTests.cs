@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -264,25 +265,30 @@ public class ConnectionPoolTests
     }
 
     [Test]
-    public async Task RentAsync_IdleConnectionInsideTheRetirementFloor_IsReplacedBeforeItsLimit()
+    public async Task RentAsync_IdleConnectionJustInsideItsLifetime_IsStillHandedOut()
     {
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(
             Options(maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
 
-        await using (await pool.RentAsync(None))
+        ClickHouseTcpConnection first;
+        await using (IConnectionLease lease = await pool.RentAsync(None))
         {
+            first = lease.Connection;
         }
 
-        // Still inside the ten minutes, but with less than the retirement floor left — too little to bound a
-        // query inside, so the pool must not hand it out.
-        clock.Advance(TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(10));
+        // The limit is the whole limit: a connection is reusable right up to it, and an operation started here
+        // simply carries it past — the pool never interrupts a running query.
+        clock.Advance(TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(1));
 
         await using IConnectionLease second = await pool.RentAsync(None);
 
-        Assert.That(factory.CreateCount, Is.EqualTo(2));
-        Assert.That(second.Connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Connection, Is.SameAs(first));
+            Assert.That(factory.CreateCount, Is.EqualTo(1));
+        });
     }
 
     [Test]
@@ -344,34 +350,6 @@ public class ConnectionPoolTests
         await held.DisposeAsync();
         await using IConnectionLease drained = await queued;
         Assert.That(drained, Is.Not.Null);
-    }
-
-    [Test]
-    public async Task Lease_RemainingLifetime_CountsDownFromMaxConnectionLifetime()
-    {
-        var clock = new ControlledTimeProvider();
-        await using var pool = new ConnectionPool(
-            Options(maxConnectionLifetime: TimeSpan.FromMinutes(10)), new FakeConnectionFactory(), clock);
-
-        await using (await pool.RentAsync(None))
-        {
-        }
-
-        clock.Advance(TimeSpan.FromMinutes(4));
-
-        await using IConnectionLease lease = await pool.RentAsync(None);
-        Assert.That(lease.RemainingLifetime, Is.EqualTo(TimeSpan.FromMinutes(6)));
-    }
-
-    [Test]
-    public async Task Lease_RemainingLifetime_IsNullWhenTheLifetimeLimitIsDisabled()
-    {
-        await using var pool = new ConnectionPool(
-            Options(maxConnectionLifetime: TimeSpan.Zero), new FakeConnectionFactory(), new ControlledTimeProvider());
-
-        await using IConnectionLease lease = await pool.RentAsync(None);
-
-        Assert.That(lease.RemainingLifetime, Is.Null);
     }
 
     [Test]
@@ -507,6 +485,27 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task SweepQuietly_ClosingAConnectionThrows_SwallowsItRatherThanFaultingTheTimerThread()
+    {
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory { ClosingThrows = true };
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 1, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+
+        await ReturnConcurrentLeasesAsync(pool, 1);
+        clock.Advance(TimeSpan.FromMinutes(6));
+
+        // The guard is load-bearing, so prove there is really something to guard: the sweep itself throws here,
+        // and on the timer's thread-pool thread that would be an unhandled exception, not a failed sweep.
+        Assert.Throws<IOException>(pool.Sweep);
+
+        await ReturnConcurrentLeasesAsync(pool, 1);
+        clock.Advance(TimeSpan.FromMinutes(6));
+
+        Assert.DoesNotThrow(pool.SweepQuietly);
+    }
+
+    [Test]
     public async Task Sweep_AfterDispose_DoesNothing()
     {
         var pool = new ConnectionPool(Options(), new FakeConnectionFactory(), new ControlledTimeProvider());
@@ -603,7 +602,91 @@ public class ConnectionPoolTests
         await pool.DisposeAsync();
         elapsed.Stop();
 
-        Assert.That(elapsed.Elapsed, Is.LessThan(TimeSpan.FromSeconds(10)), "disposal must not hang on an abandoned lease");
+        Assert.Multiple(() =>
+        {
+            Assert.That(elapsed.Elapsed, Is.LessThan(TimeSpan.FromSeconds(10)), "disposal must not hang on an abandoned lease");
+
+            // Nothing else can reach that connection, so leaving it open would leak the socket for good.
+            Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_ManyCallersAtOnce_NeverExceedsMaxPoolSizeAndNeverSharesAConnection()
+    {
+        // The properties the design leans on hardest — the cap, permit accounting, and one connection to one
+        // caller — are the ones a single-threaded test cannot reach. 200 checkouts over 32 tasks contend hard
+        // enough on the semaphore and the idle list to expose an accounting slip.
+        const int MaxPoolSize = 4;
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(maxPoolSize: MaxPoolSize), factory, new ControlledTimeProvider());
+
+        var live = new HashSet<ClickHouseTcpConnection>();
+        var failures = new List<string>();
+        int concurrent = 0;
+        int peak = 0;
+
+        await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => Task.Run(async () =>
+        {
+            for (int i = 0; i < 25; i++)
+            {
+                IConnectionLease lease = await pool.RentAsync(None);
+
+                // Registered for exactly the window the lease is held: after the rent, and released immediately
+                // before the dispose that gives the connection back.
+                int now = Interlocked.Increment(ref concurrent);
+                lock (live)
+                {
+                    peak = Math.Max(peak, now);
+                    if (!live.Add(lease.Connection))
+                    {
+                        failures.Add("two leases held the same connection at once");
+                    }
+                }
+
+                try
+                {
+                    await Task.Yield();
+                }
+                finally
+                {
+                    lock (live)
+                    {
+                        live.Remove(lease.Connection);
+                    }
+
+                    Interlocked.Decrement(ref concurrent);
+                    await lease.DisposeAsync();
+                }
+            }
+        })));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failures, Is.Empty);
+            Assert.That(peak, Is.LessThanOrEqualTo(MaxPoolSize), "more callers held a connection at once than the cap allows");
+            Assert.That(factory.CreateCount, Is.LessThanOrEqualTo(MaxPoolSize), "open connections must never exceed the cap either");
+            Assert.That(pool.IdleCount, Is.LessThanOrEqualTo(MaxPoolSize));
+        });
+
+        // Every slot must have come back: holding the full cap at once would block if even one permit leaked.
+        var all = new List<IConnectionLease>();
+        try
+        {
+            for (int i = 0; i < MaxPoolSize; i++)
+            {
+                all.Add(await pool.RentAsync(None));
+            }
+        }
+        finally
+        {
+            foreach (IConnectionLease lease in all)
+            {
+                await lease.DisposeAsync();
+            }
+        }
+
+        Assert.That(all, Has.Count.EqualTo(MaxPoolSize));
     }
 
     private static async Task<ClickHouseTcpConnection[]> ReturnTwoThenRentAsync(ClickHouseTcpPoolReusePolicy policy)

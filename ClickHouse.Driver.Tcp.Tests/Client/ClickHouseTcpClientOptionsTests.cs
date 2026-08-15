@@ -165,13 +165,33 @@ public class ClickHouseTcpClientOptionsTests
     }
 
     [Test]
-    public void Validate_MaxConnectionLifetimeUnderTheRetirementFloor_ThrowsBecauseNoConnectionCouldBeUsed()
+    public void Validate_ShortMaxConnectionLifetime_IsAccepted()
     {
-        // Below the floor every connection is retired at checkout, so the pool would open one per operation and
-        // immediately throw it away. Rejected up front rather than left to look like a connection leak.
+        // Nothing forbids rotating connections quickly; the pool never interrupts a running operation for age,
+        // so a short lifetime only means a connection is retired sooner once it comes back.
         var options = new ClickHouseTcpClientOptions { MaxConnectionLifetime = TimeSpan.FromSeconds(10) };
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [TestCase(nameof(ClickHouseTcpClientOptions.DialTimeout))]
+    [TestCase(nameof(ClickHouseTcpClientOptions.ReadTimeout))]
+    [TestCase(nameof(ClickHouseTcpClientOptions.PoolTimeout))]
+    public void Validate_TimeoutBeyondWhatATimerCanHold_ThrowsAtConstructionNotAtEveryOperation(string property)
+    {
+        // These feed CancelAfter / SemaphoreSlim.WaitAsync, which take an int millisecond count. Past ~24.8 days
+        // the failure would otherwise surface from inside every operation instead of here.
+        var tooLong = TimeSpan.FromMilliseconds(int.MaxValue) + TimeSpan.FromSeconds(1);
+        var options = property switch
+        {
+            nameof(ClickHouseTcpClientOptions.DialTimeout) => new ClickHouseTcpClientOptions { DialTimeout = tooLong },
+            nameof(ClickHouseTcpClientOptions.ReadTimeout) => new ClickHouseTcpClientOptions { ReadTimeout = tooLong },
+            _ => new ClickHouseTcpClientOptions { PoolTimeout = tooLong },
+        };
+
+        var thrown = Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+
+        Assert.That(thrown.ParamName, Is.EqualTo(property));
     }
 
     [Test]

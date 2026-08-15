@@ -128,6 +128,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
     }
 
     /// <summary>Which idle connection is handed out next, <c>Lifo</c> or <c>Fifo</c>. Defaults to <c>Lifo</c>.</summary>
+    /// <exception cref="ArgumentException">The stored value names no policy.</exception>
     public ClickHouseTcpPoolReusePolicy PoolReusePolicy
     {
         get => GetEnumOrDefault("PoolReusePolicy", ClickHouseTcpClientOptions.DefaultPoolReusePolicy);
@@ -204,9 +205,11 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         };
     }
 
-    // An enum value read back may be the name a connection string carried, or the boxed enum a typed setter
-    // stored. Names are matched case-insensitively, as connection-string keys are; an unrecognized name is left
-    // for ClickHouseTcpClientOptions.Validate to reject rather than being silently defaulted.
+    // An enum value read back is normally the name a connection string carried (the typed setter stores a name
+    // too); a boxed enum arrives only through the untyped indexer. Names are matched case-insensitively, as
+    // connection-string keys are, and an unrecognized name throws here rather than silently defaulting. A
+    // numeric name parses, so an out-of-range number reaches ClickHouseTcpClientOptions.Validate instead. Any
+    // other stored type falls back to the default, matching how the numeric getters behave.
     private TEnum GetEnumOrDefault<TEnum>(string name, TEnum @default)
         where TEnum : struct, Enum
     {
