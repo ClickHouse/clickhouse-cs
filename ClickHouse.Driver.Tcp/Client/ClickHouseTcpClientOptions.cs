@@ -6,10 +6,16 @@ namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// Client-level configuration for a <see cref="ClickHouseTcpClient"/>: the server endpoint, credentials, and
-/// the connection-lifetime knobs. Values are init-only; build one directly or parse a connection string with
-/// <see cref="FromConnectionString"/>.
+/// the connection-lifetime knobs. Values are init-only; build one directly, parse a connection string with
+/// <see cref="FromConnectionString"/>, or derive a variant of an existing instance with a <c>with</c> expression.
 /// </summary>
-public sealed class ClickHouseTcpClientOptions
+/// <remarks>
+/// Being a record, two instances compare equal when every property does. <see cref="CustomSettings"/> is compared
+/// by reference, not by content, because the declared type is an interface with no value-equality contract: two
+/// options that hold equal-but-distinct dictionaries are <b>not</b> equal. Do not use these options as a cache or
+/// pool key; use a purpose-built key type.
+/// </remarks>
+public sealed record ClickHouseTcpClientOptions
 {
     internal const string DefaultHost = "localhost";
     internal const int DefaultPort = 9000;
@@ -72,23 +78,14 @@ public sealed class ClickHouseTcpClientOptions
     /// it must own them: keeping the caller's dictionary would let a later mutation of it fault or partially apply
     /// mid-merge. Every other property is init-only and so cannot change after construction.
     /// </summary>
-    /// <remarks>Copies each property by hand — add new properties here too. <c>ClickHouseTcpClientOptionsTests</c> pins that.</remarks>
+    /// <remarks>
+    /// The <c>with</c> expression carries every other property across, so a property added later needs no change
+    /// here. Keep it that way — a hand-written copy is what silently drops a new property.
+    /// </remarks>
     internal ClickHouseTcpClientOptions WithOwnedCustomSettings()
         => CustomSettings is null
             ? this
-            : new ClickHouseTcpClientOptions
-            {
-                Host = Host,
-                Port = Port,
-                Username = Username,
-                Password = Password,
-                Database = Database,
-                QuotaKey = QuotaKey,
-                CustomSettings = new Dictionary<string, string>(CustomSettings, StringComparer.Ordinal),
-                MaxSendBufferBytes = MaxSendBufferBytes,
-                DialTimeout = DialTimeout,
-                ReadTimeout = ReadTimeout,
-            };
+            : this with { CustomSettings = new Dictionary<string, string>(CustomSettings, StringComparer.Ordinal) };
 
     /// <summary>Parses a ClickHouse native-protocol connection string into options.</summary>
     /// <param name="connectionString">The connection string (keys such as <c>Host</c>, <c>Port</c>, <c>Username</c>, <c>set_&lt;name&gt;</c>).</param>
@@ -168,4 +165,13 @@ public sealed class ClickHouseTcpClientOptions
             Database = string.IsNullOrEmpty(Database) ? DefaultDatabase : Database,
             QuotaKey = QuotaKey ?? string.Empty,
         };
+
+    /// <summary>The endpoint and user this client connects as. Never includes <see cref="Password"/>.</summary>
+    /// <remarks>
+    /// A record's generated <c>ToString</c> prints every property, which would put the plaintext password into any
+    /// log line that formats these options. This override names the safe properties explicitly instead, so a secret
+    /// added later is left out until someone chooses to include it.
+    /// </remarks>
+    public override string ToString()
+        => $"{nameof(ClickHouseTcpClientOptions)} {{ Host = {Host}, Port = {Port}, Username = {Username}, Database = {Database} }}";
 }

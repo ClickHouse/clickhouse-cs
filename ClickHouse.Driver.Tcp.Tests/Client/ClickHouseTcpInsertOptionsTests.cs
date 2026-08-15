@@ -46,6 +46,38 @@ public class ClickHouseTcpInsertOptionsTests
     }
 
     [Test]
+    public void With_OnAQueryOptionsTypedReference_KeepsTheRuntimeTypeAndTheInsertOnlyKnobs()
+    {
+        // `with` clones through the record's virtual clone method, so it copies the runtime type rather than the
+        // static one. Deriving a per-query variant through a base-typed reference must therefore not quietly
+        // downgrade an insert options instance and reset MaxRowsPerBlock to its default.
+        ClickHouseTcpQueryOptions asQueryOptions = new ClickHouseTcpInsertOptions
+        {
+            QueryId = "insert-1",
+            MaxRowsPerBlock = 32,
+        };
+
+        var derived = asQueryOptions with { QueryId = "insert-2" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(derived, Is.InstanceOf<ClickHouseTcpInsertOptions>());
+            Assert.That(derived.QueryId, Is.EqualTo("insert-2"));
+            Assert.That(((ClickHouseTcpInsertOptions)derived).MaxRowsPerBlock, Is.EqualTo(32));
+        });
+    }
+
+    [Test]
+    public void With_SettingTheCapToNull_KeepsTheExplicitNullRatherThanTheDefault()
+    {
+        // The explicit-null instruction ("one block, whatever the row count") must survive a clone, since a default
+        // MaxRowsPerBlock would silently re-enable splitting.
+        var derived = new ClickHouseTcpInsertOptions { QueryId = "q" } with { MaxRowsPerBlock = null };
+
+        Assert.That(ClickHouseTcpClient.ResolveMaxRowsPerBlock(derived), Is.Null);
+    }
+
+    [Test]
     public void InsertOptions_IsUsableAsQueryOptions_SoTheSettingsMergeSeesThem()
     {
         var options = new ClickHouseTcpInsertOptions
