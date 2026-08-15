@@ -35,13 +35,18 @@ public record ClickHouseTcpQueryOptions
     /// 54459 or above; an older one rejects the query rather than running it without them.
     /// </para>
     /// <para>
-    /// <b>A parameter must not be named after a server setting.</b> The native protocol carries parameters in
-    /// the settings list, so the server applies a name it recognizes as that setting instead of binding it. The
-    /// common traps are <c>limit</c> and <c>offset</c>; <c>max_threads</c>, <c>readonly</c> and
-    /// <c>log_comment</c> behave the same way. The query then fails with a parse error about a quoted string,
-    /// which does not name the parameter. Rename it (<c>row_limit</c>) and the query works. This is a limit of
-    /// the protocol, not of this client — <c>clickhouse-client --param_limit=</c> fails the same way — but it
-    /// does differ from this driver's HTTP transport, where the name is carried separately and works.
+    /// <b>Avoid naming a parameter after a server setting.</b> The native protocol carries parameters in the
+    /// settings list, so a server that reads the name as a setting applies it as that setting instead of
+    /// binding it. The query then fails with a parse error about a quoted string, which names neither the
+    /// parameter nor the cause. The common traps are <c>limit</c> and <c>offset</c>; <c>max_threads</c>,
+    /// <c>readonly</c> and <c>log_comment</c> behave the same way. Rename the parameter (<c>row_limit</c>) and
+    /// the query works.
+    /// </para>
+    /// <para>
+    /// This is the server's behaviour, not this client's — <c>clickhouse-client --param_limit=</c> fails the
+    /// same way — and it is version-dependent: it affects 25.8 through 26.6, while newer servers bind such a
+    /// name correctly. It does not affect this driver's HTTP transport, which carries the name separately.
+    /// Rename the parameter if you support any server in that range.
     /// </para>
     /// </remarks>
     public ClickHouseTcpParameterCollection Parameters { get; init; }

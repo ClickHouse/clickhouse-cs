@@ -92,20 +92,29 @@ public class ClickHouseTcpParameterIntegrationTests
         Assert.That(read, Is.EqualTo(@"{'k\'1':'v\\1'}"));
     }
 
-    [Test]
-    public async Task QueryAsync_ParameterNamedAfterAServerSetting_IsRejectedByTheServer()
+    [TestCase("limit")]
+    [TestCase("offset")]
+    public async Task QueryAsync_ParameterNamedAfterAServerSetting_NeverBindsToTheWrongValue(string name)
     {
-        // The parameter list is the settings list, so the server applies a name it knows as that setting rather
-        // than binding it. Pinned because the error names neither the parameter nor the cause, and because
-        // "limit" is a name a caller reaches for. See the remark on ClickHouseTcpQueryOptions.Parameters.
+        // The parameter list is the settings list, so a server that reads the name as that setting applies it
+        // instead of binding it. Whether it does is version-dependent: 25.8 through 26.6 reject the query, and
+        // newer servers bind it correctly. Both are acceptable; a wrong count is not, and that is the outcome
+        // this pins. See the remark on ClickHouseTcpQueryOptions.Parameters.
         await using var client = TcpServerFixture.CreateClient();
         var options = new ClickHouseTcpQueryOptions
         {
-            Parameters = new ClickHouseTcpParameterCollection { { "limit", 3 } },
+            Parameters = new ClickHouseTcpParameterCollection { { name, 3 } },
         };
+        string sql = $"SELECT count() FROM (SELECT number FROM numbers(10) LIMIT {{{name}:UInt64}})";
 
-        Assert.ThrowsAsync<ClickHouseServerException>(async () => await ScalarAsync(
-            client, "SELECT count() FROM (SELECT number FROM numbers(10) LIMIT {limit:UInt64})", options));
+        try
+        {
+            Assert.That(await ScalarAsync(client, sql, options), Is.EqualTo(3UL));
+        }
+        catch (ClickHouseServerException)
+        {
+            Assert.Pass($"The server applied '{name}' as a setting and rejected the query, which is the older behaviour.");
+        }
     }
 
     [Test]
