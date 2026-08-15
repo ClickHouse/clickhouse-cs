@@ -188,14 +188,24 @@ internal static class TcpParameterFormatter
     };
 
     /// <summary>
-    /// Reads a decimal from its text, keeping every digit. A <see cref="decimal"/> would cap the value at 29
-    /// digits, which the wider ClickHouse decimals exceed.
+    /// Reads a decimal from its text, keeping every digit.
     /// </summary>
     /// <param name="text">The decimal in invariant form.</param>
     /// <returns>The parsed value.</returns>
     /// <exception cref="ArgumentException"><paramref name="text"/> is not a decimal.</exception>
+    /// <remarks>
+    /// Tries <see cref="decimal"/> first, which accepts the forms the HTTP formatter does — an exponent,
+    /// thousands separators, accounting parentheses. Falls back to reading the digits as a
+    /// <see cref="BigInteger"/>, because a decimal caps at 29 digits and the wider ClickHouse decimals exceed
+    /// that; only the plain form reaches that path, which is the only form that can be that wide.
+    /// </remarks>
     private static ClickHouseDecimal ParseDecimalText(string text)
     {
+        if (decimal.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal narrow))
+        {
+            return ClickHouseDecimal.FromDecimal(narrow);
+        }
+
         string trimmed = text.Trim();
         int point = trimmed.IndexOf('.');
         string digits = point < 0 ? trimmed : trimmed.Remove(point, 1);
@@ -413,7 +423,10 @@ internal static class TcpParameterFormatter
         int minutes = (int)(remainder / 60m);
         decimal seconds = remainder % 60m;
 
-        string secondsText = seconds.ToString("00." + new string('0', scale), CultureInfo.InvariantCulture);
+        // Round before formatting, and to even, because decimal.ToString rounds away from zero. Without this a
+        // midpoint lands one tick above where the HTTP formatter puts it.
+        string secondsText = Math.Round(seconds, scale, MidpointRounding.ToEven)
+            .ToString("00." + new string('0', scale), CultureInfo.InvariantCulture);
         string text = $"{hours}:{minutes:D2}:{secondsText}";
         return negative ? "-" + text : text;
     }
