@@ -195,6 +195,16 @@ public class ClickHouseTcpClientOptionsTests
     }
 
     [Test]
+    public void Validate_TimeoutAtExactlyWhatATimerCanHold_IsAccepted()
+    {
+        // The boundary itself: rejecting it too would be an off-by-one that only shows up at an absurd setting.
+        var atLimit = TimeSpan.FromMilliseconds(int.MaxValue);
+        var options = new ClickHouseTcpClientOptions { DialTimeout = atLimit, ReadTimeout = atLimit, PoolTimeout = atLimit };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [Test]
     public void Validate_UndefinedPoolReusePolicy_ThrowsArgumentOutOfRangeException()
     {
         var options = new ClickHouseTcpClientOptions { PoolReusePolicy = (ClickHouseTcpPoolReusePolicy)42 };
