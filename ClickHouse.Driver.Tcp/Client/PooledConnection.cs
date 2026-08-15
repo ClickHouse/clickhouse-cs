@@ -83,6 +83,31 @@ internal sealed class PooledConnection
     internal bool IsPastLifetime(TimeSpan maxLifetime)
         => maxLifetime > TimeSpan.Zero && Age >= maxLifetime;
 
-    /// <summary>Closes the underlying connection. Idempotent, and safe on an already-terminated connection.</summary>
-    internal void Close() => Connection.Terminate();
+    /// <summary>
+    /// Closes the underlying connection and releases its buffers. Idempotent, and safe on an already-terminated
+    /// connection, but only valid between operations — the pool reaches a connection through the idle set, which
+    /// a checkout removes it from, so every caller of this holds one no operation is using.
+    /// </summary>
+    /// <remarks>
+    /// Teardown can throw (a socket that fails to close), and the pool has nothing useful to do about it: the
+    /// connection is being discarded either way, and letting it propagate would abandon the other connections in
+    /// the same batch or fail an unrelated caller's checkout. So this reports nothing; the exception is
+    /// swallowed here rather than at each of the four call sites.
+    /// </remarks>
+    internal void Close()
+    {
+        try
+        {
+            Connection.Terminate();
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+        }
+    }
+
+    /// <summary>
+    /// Closes the transport of a connection whose operation is still running, the one teardown that is safe to
+    /// race with it. See <see cref="ClickHouseTcpConnection.AbortTransport"/>.
+    /// </summary>
+    internal void Abort() => Connection.AbortTransport();
 }
