@@ -50,8 +50,9 @@ internal sealed class PocoRowBuffer<T> : IDisposable
     public static PocoRowBuffer<T> Materialize(IEnumerable<T> source, string parameterName, CancellationToken cancellationToken)
     {
         // Draining the source is the one part of an insert that runs before any I/O, and it can be the long part —
-        // a lazy source of millions of rows is enumerated in full here — so the token is observed as it goes rather
-        // than only once the connection is rented.
+        // a source of millions of rows is enumerated in full here — so the token is observed as it goes rather than
+        // only once the connection is rented. Checked before the rent as well as per row, so an already-cancelled
+        // call is refused even for an empty source.
         cancellationToken.ThrowIfCancellationRequested();
 
         // A counted source sizes the rent exactly; anything else grows by doubling.
@@ -63,6 +64,11 @@ internal sealed class PocoRowBuffer<T> : IDisposable
         {
             foreach (T row in source)
             {
+                // Tested every row, not at the growth points: a counted source rents once and never grows, so a long
+                // one would otherwise be drained in full whatever the token said. The read is a field test against a
+                // token that is usually None, next to a source's own MoveNext — so it costs nothing measurable.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 // Checked here rather than in the compiled gather, which would report a bare NullReferenceException
                 // from a delegate with no name of its own.
                 if (row is null)
@@ -72,9 +78,6 @@ internal sealed class PocoRowBuffer<T> : IDisposable
 
                 if (count == buffer.Length)
                 {
-                    // Every doubling, which is often enough for a long enumeration and rare enough to cost nothing.
-                    cancellationToken.ThrowIfCancellationRequested();
-
                     T[] grown = ArrayPool<T>.Shared.Rent(buffer.Length * 2);
                     Array.Copy(buffer, grown, count);
                     ArrayPool<T>.Shared.Return(buffer, clearArray: true);
