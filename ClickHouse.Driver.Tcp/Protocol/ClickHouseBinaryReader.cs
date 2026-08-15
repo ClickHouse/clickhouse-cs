@@ -24,7 +24,7 @@ internal sealed class ClickHouseBinaryReader : IDisposable
 
     private readonly ReadBuffer buffer;
     private readonly bool ownsBuffer;
-    private bool disposed;
+    private int disposed;
 
     // Decodes a fixed-width value from a span whose length equals the value's byte width. These are cached
     // static delegates, so ReadFixedAsync costs one indirect call and no per-read allocation.
@@ -255,14 +255,18 @@ internal sealed class ClickHouseBinaryReader : IDisposable
     public ValueTask<double> ReadFloat64Async(CancellationToken cancellationToken) => ReadFixedAsync(8, DecodeFloat64, cancellationToken);
 
     /// <inheritdoc/>
+    /// <summary>
+    /// Releases the pooled buffer, exactly once. The interlocked guard matters: the connection's teardown can be
+    /// reached both by the operation unwinding and by the pool aborting it, and returning one pooled array twice
+    /// would hand the same memory to two unrelated callers.
+    /// </summary>
     public void Dispose()
     {
-        if (disposed)
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
         {
             return;
         }
 
-        disposed = true;
         if (ownsBuffer)
         {
             buffer.Dispose();
