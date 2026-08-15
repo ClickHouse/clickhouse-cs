@@ -1053,6 +1053,141 @@ public class ConnectionPoolTests
         });
     }
 
+    [Test]
+    public async Task Sweep_TopUpReassessesWhileCheckoutsAreDialing_CountsThemAndStopsAtTheCap()
+    {
+        // The stress test above overlaps a top-up with checkouts only by luck, since a scripted dial finishes
+        // almost at once. Here every dial is held open by hand, so the interleaving that overshoots is the one
+        // that runs: the top-up finishes one connection and looks again while two checkouts are still dialing,
+        // and the connections those are about to add are in neither set for it to count.
+        const int Size = 3;
+        var gates = new[] { new TaskCompletionSource(), new TaskCompletionSource(), new TaskCompletionSource() };
+        var started = new SemaphoreSlim(0);
+        int dials = -1;
+        var factory = new FakeConnectionFactory
+        {
+            BeforeCreate = async _ =>
+            {
+                int mine = Interlocked.Increment(ref dials);
+                started.Release();
+
+                // Only the first three are held. A fourth is the overshoot itself, and letting it run makes that
+                // a failed assertion below rather than a hang.
+                if (mine < gates.Length)
+                {
+                    await gates[mine].Task;
+                }
+            },
+        };
+
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: Size, minPoolSize: Size), factory, new ControlledTimeProvider());
+
+        // Dialing in a known order: the top-up first, so it is the one that gets to reassess mid-round.
+        pool.Sweep();
+        Task refill = pool.LastRefill;
+        Assert.That(refill, Is.Not.Null, "an empty pool is below the floor, so a top-up must have started");
+        await DialStartedAsync();
+
+        Task<IConnectionLease> first = Task.Run(async () => await pool.RentAsync(None));
+        await DialStartedAsync();
+        Task<IConnectionLease> second = Task.Run(async () => await pool.RentAsync(None));
+        await DialStartedAsync();
+
+        // Three dials are in flight and the pool itself still holds nothing. Letting the top-up's finish leaves
+        // it looking at one connection against a floor of three — which is where it has to count the other two.
+        gates[0].SetResult();
+        await refill;
+
+        Assert.That(factory.CreateCount, Is.EqualTo(1), "the two checkouts already dialing fill the rest of the floor");
+
+        gates[1].SetResult();
+        gates[2].SetResult();
+        IConnectionLease[] leases = [await first, await second];
+        try
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(factory.CreateCount, Is.EqualTo(Size), "more connections were opened than the cap allows");
+                Assert.That(pool.IdleCount, Is.EqualTo(1), "the top-up's one connection, the checkouts holding the other two");
+            });
+        }
+        finally
+        {
+            foreach (IConnectionLease lease in leases)
+            {
+                await lease.DisposeAsync();
+            }
+        }
+
+        async Task DialStartedAsync()
+            => Assert.That(await started.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "a dial should have started");
+    }
+
+    [Test]
+    public async Task DisposeAsync_WhileACheckoutIsStillDialing_EndsThatDialRatherThanWaitingItOut()
+    {
+        // A dial in flight is the one connection disposal cannot reach any other way: its caller is not in the
+        // leased set, so the abort at the end of the drain does not see it. Unlinked, it would hold its permit —
+        // and, once connected, its socket — for as long as DialTimeout allows, well after the pool closed.
+        var pool = new ConnectionPool(Options(), DialsForeverFactory(out SemaphoreSlim dialing), new ControlledTimeProvider());
+        Task<IConnectionLease> renting = Task.Run(async () => await pool.RentAsync(None));
+        Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the dial should be in flight");
+
+        var elapsed = Stopwatch.StartNew();
+        await pool.DisposeAsync();
+        elapsed.Stop();
+
+        // WhenAny rather than an await, so a dial disposal failed to end fails the test instead of hanging it.
+        Task finished = await Task.WhenAny(renting, Task.Delay(TimeSpan.FromSeconds(30)));
+        Assert.That(finished, Is.SameAs(renting), "the caller must be released, not left in a dial nothing can reach");
+
+        ObjectDisposedException thrown = Assert.ThrowsAsync<ObjectDisposedException>(async () => await renting);
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("ClickHouseTcpClient"), "the caller hears about the client, not the pool");
+            Assert.That(elapsed.Elapsed, Is.LessThan(TimeSpan.FromSeconds(10)), "disposal must not wait out a dial it can cancel");
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_CallerCancelsWhileDialing_ReportsCancellationRatherThanDisposal()
+    {
+        // The pool's shutdown token now rides along with the caller's, so the two have to stay distinguishable:
+        // a caller who cancelled must not be told the client was disposed and go looking for a bug they do not
+        // have. The slot has to come back either way.
+        var factory = DialsForeverFactory(out SemaphoreSlim dialing);
+        await using var pool = new ConnectionPool(Options(maxPoolSize: 1), factory, new ControlledTimeProvider());
+
+        using var cts = new CancellationTokenSource();
+        Task<IConnectionLease> renting = Task.Run(async () => await pool.RentAsync(cts.Token));
+        Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the dial should be in flight");
+
+        cts.Cancel();
+        Assert.CatchAsync<OperationCanceledException>(async () => await renting);
+
+        // The pool's only slot: a checkout that gets it proves the cancelled dial gave back both its permit and
+        // the capacity it had reserved.
+        factory.BeforeCreate = null;
+        await using IConnectionLease next = await pool.RentAsync(None);
+        Assert.That(next.Connection.State, Is.EqualTo(TcpConnectionState.Ready));
+    }
+
+    /// <summary>A factory whose dials only ever end by cancellation, signalling as each one starts.</summary>
+    private static FakeConnectionFactory DialsForeverFactory(out SemaphoreSlim dialing)
+    {
+        var started = new SemaphoreSlim(0);
+        dialing = started;
+        return new FakeConnectionFactory
+        {
+            BeforeCreate = async ct =>
+            {
+                started.Release();
+                await Task.Delay(Timeout.Infinite, ct);
+            },
+        };
+    }
+
     private static async Task<ClickHouseTcpConnection[]> ReturnTwoThenRentAsync(ClickHouseTcpPoolReusePolicy policy)
     {
         await using var pool = new ConnectionPool(
