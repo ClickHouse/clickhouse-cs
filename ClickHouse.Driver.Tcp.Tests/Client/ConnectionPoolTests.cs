@@ -1125,12 +1125,52 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task Sweep_CheckoutHoldingAConnectionItHasNotFiledYet_StillCountsItAgainstTheFloor()
+    {
+        // A checkout takes its connection out of the idle set before it records it as leased, so for that moment
+        // the connection is in neither set. A top-up counting only the two sets reads the gap as spare capacity
+        // and dials into it, past MaxPoolSize. The clock is the seam that reaches the moment: the checkout reads
+        // it to test the connection's age, which happens inside exactly that window.
+        const int Size = 2;
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(maxPoolSize: Size, minPoolSize: Size), factory, clock);
+
+        // Both connections idle: the pool sits exactly at its floor, which is also its cap.
+        await ReturnConcurrentLeasesAsync(pool, Size);
+        Assert.That(factory.CreateCount, Is.EqualTo(Size));
+
+        Task refill = null;
+        clock.OnNextTimestamp = () =>
+        {
+            pool.Sweep();
+            refill = pool.LastRefill;
+        };
+
+        await using (IConnectionLease lease = await pool.RentAsync(None))
+        {
+            Assert.That(clock.OnNextTimestamp, Is.Null, "the checkout must have read the clock, or the sweep never ran");
+        }
+
+        await (refill ?? Task.CompletedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refill, Is.Null, "the floor was already met by the connection the checkout was holding");
+            Assert.That(factory.CreateCount, Is.EqualTo(Size), "more connections were opened than the cap allows");
+        });
+    }
+
+    [Test]
     public async Task DisposeAsync_WhileACheckoutIsStillDialing_EndsThatDialRatherThanWaitingItOut()
     {
         // A dial in flight is the one connection disposal cannot reach any other way: its caller is not in the
         // leased set, so the abort at the end of the drain does not see it. Unlinked, it would hold its permit —
         // and, once connected, its socket — for as long as DialTimeout allows, well after the pool closed.
-        var pool = new ConnectionPool(Options(), DialsForeverFactory(out SemaphoreSlim dialing), new ControlledTimeProvider());
+        // Disposed by the using as well as explicitly below, so an assertion that fails first cannot leave the
+        // pool open with a dial parked in it. Disposal is idempotent, so the second call is a no-op.
+        await using var pool = new ConnectionPool(
+            Options(), DialsForeverFactory(out SemaphoreSlim dialing), new ControlledTimeProvider());
         Task<IConnectionLease> renting = Task.Run(async () => await pool.RentAsync(None));
         Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the dial should be in flight");
 
@@ -1155,9 +1195,10 @@ public class ConnectionPoolTests
     {
         // The pool's shutdown token now rides along with the caller's, so the two have to stay distinguishable:
         // a caller who cancelled must not be told the client was disposed and go looking for a bug they do not
-        // have. The slot has to come back either way.
+        // have. The permit and the reserved slot both have to come back either way.
         var factory = DialsForeverFactory(out SemaphoreSlim dialing);
-        await using var pool = new ConnectionPool(Options(maxPoolSize: 1), factory, new ControlledTimeProvider());
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 1, minPoolSize: 1), factory, new ControlledTimeProvider());
 
         using var cts = new CancellationTokenSource();
         Task<IConnectionLease> renting = Task.Run(async () => await pool.RentAsync(cts.Token));
@@ -1166,11 +1207,18 @@ public class ConnectionPoolTests
         cts.Cancel();
         Assert.CatchAsync<OperationCanceledException>(async () => await renting);
 
-        // The pool's only slot: a checkout that gets it proves the cancelled dial gave back both its permit and
-        // the capacity it had reserved.
+        // The floor is what observes the slot: a checkout that failed to give one back would leave the pool
+        // permanently believing it is already at MinPoolSize, and no later top-up would ever run. The permit is
+        // observed with it, since the top-up cannot dial without one.
         factory.BeforeCreate = null;
-        await using IConnectionLease next = await pool.RentAsync(None);
-        Assert.That(next.Connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.LastRefill, Is.Not.Null, "the cancelled checkout must give back the slot it reserved");
+            Assert.That(pool.IdleCount, Is.EqualTo(1), "and the top-up must then be able to fill the floor");
+        });
     }
 
     [Test]
@@ -1180,7 +1228,7 @@ public class ConnectionPoolTests
         // emptied the leased set. Nothing else can reach that connection — it was never in either set — so the
         // checkout has to close it itself rather than hand out a connection from a pool that is already shut.
         FakeConnectionFactory factory = GatedDialFactory(out SemaphoreSlim dialing, out TaskCompletionSource finishDial);
-        var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
+        await using var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
 
         Task<IConnectionLease> renting = Task.Run(async () => await pool.RentAsync(None));
         Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the dial should be in flight");
@@ -1206,7 +1254,8 @@ public class ConnectionPoolTests
         // The same race on the top-up path, where the connection would otherwise be added to an idle set the
         // drain has already emptied — open, unreachable, and closed by nothing.
         FakeConnectionFactory factory = GatedDialFactory(out SemaphoreSlim dialing, out TaskCompletionSource finishDial);
-        var pool = new ConnectionPool(Options(maxPoolSize: 2, minPoolSize: 1), factory, new ControlledTimeProvider());
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 2, minPoolSize: 1), factory, new ControlledTimeProvider());
 
         pool.Sweep();
         Task refill = pool.LastRefill;
