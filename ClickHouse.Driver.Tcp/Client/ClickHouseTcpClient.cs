@@ -21,10 +21,12 @@ namespace ClickHouse.Driver.Tcp;
 /// and queue beyond it.
 ///
 /// <para>
-/// <b>Dispose it.</b> A client holds open connections and a timer that closes the idle ones, and the running
-/// timer keeps the whole pool reachable — so a client that is dropped without being disposed keeps its sockets
-/// open for the life of the process rather than being collected. Build one per endpoint and keep it, rather
-/// than one per operation.
+/// <b>Dispose it.</b> A client holds open connections, and while any lifetime or idle limit is set it also runs
+/// a timer to close the idle ones — and a running timer keeps the whole pool reachable, so a client dropped
+/// without being disposed keeps its sockets open for the life of the process rather than being collected. Build
+/// one per endpoint and keep it, rather than one per operation. Disposal closes the idle connections at once
+/// and waits up to <see cref="ClickHouseTcpClientOptions.PoolTimeout"/> for the operations still running, after
+/// which it aborts them.
 /// </para>
 ///
 /// <para>
