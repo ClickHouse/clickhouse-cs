@@ -23,4 +23,15 @@ public record ClickHouseTcpQueryOptions
     /// <see cref="ClickHouseTcpClientOptions.CustomSettings"/> for any key present in both. Null means none.
     /// </summary>
     public IReadOnlyDictionary<string, string> Settings { get; init; }
+
+    /// <summary>
+    /// The values bound to the query's <c>{name:Type}</c> placeholders. Null means none.
+    /// </summary>
+    /// <remarks>
+    /// Each value is formatted as the type its placeholder declares, so the query text must carry the type —
+    /// <c>SELECT * FROM t WHERE id = {id:Int32}</c>. A parameter can override that type; see
+    /// <see cref="ClickHouseTcpParameter.ClickHouseType"/>. Parameters need a server whose protocol revision is
+    /// 54459 or above; an older one rejects the query rather than running it without them.
+    /// </remarks>
+    public ClickHouseTcpParameterCollection Parameters { get; init; }
 }
