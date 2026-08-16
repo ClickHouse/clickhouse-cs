@@ -17,6 +17,7 @@ internal sealed class PooledConnection
     private readonly TimeProvider time;
     private readonly long openedAt;
     private long idleSince;
+    private bool inUse;
 
     /// <summary>Wraps a freshly opened connection, starting its age and idle clocks now.</summary>
     /// <param name="connection">The connection, already handshaken and Ready.</param>
@@ -44,31 +45,62 @@ internal sealed class PooledConnection
     /// <summary>How long ago the connection was opened.</summary>
     internal TimeSpan Age => time.GetElapsedTime(openedAt);
 
-    /// <summary>How long the connection has been sitting idle in the pool.</summary>
-    internal TimeSpan IdleFor => time.GetElapsedTime(idleSince);
+    /// <summary>
+    /// How long the connection has been sitting unused in the pool, or <see cref="TimeSpan.Zero"/> while it is
+    /// checked out — a connection carrying an operation is not idle, however long that operation runs.
+    /// </summary>
+    internal TimeSpan IdleFor => inUse ? TimeSpan.Zero : time.GetElapsedTime(idleSince);
 
-    /// <summary>Records a checkout, for diagnostics only.</summary>
+    /// <summary>Records a checkout, which counts a usage and stops the idle clock.</summary>
     /// <remarks>
-    /// The idle clock deliberately keeps running while the connection is out. Nothing reads
-    /// <see cref="IdleFor"/> except the sweep, which only ever walks the idle set, so the value is meaningless
-    /// for a checked-out connection either way — and stopping it here would cost a timestamp per checkout to
-    /// maintain a number no one reads.
+    /// <para>
+    /// The clock has to stop, not merely be ignored: <see cref="IdleFor"/> is read on the return path as well as
+    /// by the sweep, and a clock that kept running would report an operation's own duration as idleness — so a
+    /// query longer than <c>IdleTimeout</c> would retire the connection that just ran it successfully.
+    /// </para>
+    /// <para>
+    /// This is the one mutation the pool makes outside its lock, which is safe only because of what the flag it
+    /// sets means: a connection this has been called on is in neither the idle set nor anywhere else read under
+    /// that lock, so nothing can observe the write concurrently. <b>Anything added later that reads
+    /// <see cref="IdleFor"/> for a connection that is checked out — a pool-state metric walking the leased set,
+    /// say — has to publish this write instead of relying on that.</b>
+    /// </para>
     /// </remarks>
-    internal void OnRented() => UsageCount++;
+    internal void OnRented()
+    {
+        UsageCount++;
+        inUse = true;
+    }
 
     /// <summary>Records a return to the idle set, restarting the idle clock.</summary>
-    internal void OnReturned() => idleSince = time.GetTimestamp();
+    internal void OnReturned()
+    {
+        inUse = false;
+        idleSince = time.GetTimestamp();
+    }
 
-    /// <summary>Whether this connection may be handed out: young enough, and usable at the transport level.</summary>
-    /// <param name="maxLifetime">The configured age limit, or <see cref="TimeSpan.Zero"/> for none.</param>
+    /// <summary>Whether this connection may be handed out: inside both limits, and usable at the transport level.</summary>
+    /// <param name="options">The client options holding the age and idle limits.</param>
     /// <returns>True when the connection can carry another operation.</returns>
     /// <remarks>
-    /// Idleness is deliberately not part of this. <c>IdleTimeout</c> exists to release connections nobody is
-    /// using, not to judge whether one works — that is <see cref="ClickHouseTcpConnection.IsReusable"/>'s job —
-    /// so it is applied by the sweep, which honours <c>MinPoolSize</c>, and not at checkout, which cannot.
+    /// The same question is asked at both ends of a lease — at checkout, of a candidate from the idle set, and on
+    /// return, of a connection about to re-enter it — so both ends apply one predicate. Only the limits are
+    /// time-based; <see cref="ClickHouseTcpConnection.IsReusable"/> is the transport test, and it is cheap enough
+    /// to ask on both paths.
     /// </remarks>
-    internal bool CanBeRented(TimeSpan maxLifetime)
-        => !IsPastLifetime(maxLifetime) && Connection.IsReusable;
+    internal bool CanBeRented(ClickHouseTcpClientOptions options)
+        => !IsExpired(options) && Connection.IsReusable;
+
+    /// <summary>Whether either time limit has retired this connection.</summary>
+    /// <param name="options">The client options holding the age and idle limits.</param>
+    /// <returns>True when the connection must be closed rather than reused.</returns>
+    /// <remarks>
+    /// Both limits are read at checkout, on return, and by the sweep, and both override <c>MinPoolSize</c>: the
+    /// floor is held by opening fresh connections, not by keeping expired ones, since a floor of connections a
+    /// checkout would refuse is no floor at all.
+    /// </remarks>
+    internal bool IsExpired(ClickHouseTcpClientOptions options)
+        => IsPastLifetime(options.MaxConnectionLifetime) || IsPastIdleTimeout(options.IdleTimeout);
 
     /// <summary>Whether the connection is too old to hand out.</summary>
     /// <param name="maxLifetime">The configured age limit, or <see cref="TimeSpan.Zero"/> for none.</param>
@@ -82,6 +114,19 @@ internal sealed class PooledConnection
     /// </remarks>
     internal bool IsPastLifetime(TimeSpan maxLifetime)
         => maxLifetime > TimeSpan.Zero && Age >= maxLifetime;
+
+    /// <summary>Whether the connection has sat unused too long to be trusted.</summary>
+    /// <param name="idleTimeout">The configured idle limit, or <see cref="TimeSpan.Zero"/> for none.</param>
+    /// <returns>True when the connection must be retired rather than reused.</returns>
+    /// <remarks>
+    /// This bounds how long a connection may sit unused, and it is a liveness limit as much as a resource one: an
+    /// idle connection is what a proxy or load balancer between client and server silently drops, and such a drop
+    /// is invisible to <see cref="ClickHouseTcpConnection.IsReusable"/> when it arrives without a FIN. So a
+    /// connection past this limit is not handed out, exactly as an over-age one is not — set the limit below the
+    /// shortest idle timeout on the path to the server.
+    /// </remarks>
+    internal bool IsPastIdleTimeout(TimeSpan idleTimeout)
+        => idleTimeout > TimeSpan.Zero && IdleFor >= idleTimeout;
 
     /// <summary>
     /// Closes the underlying connection and releases its buffers. Idempotent, and safe on an already-terminated

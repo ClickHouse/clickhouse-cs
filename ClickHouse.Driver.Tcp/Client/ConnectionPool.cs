@@ -16,8 +16,8 @@ namespace ClickHouse.Driver.Tcp.Client;
 /// A checked-out connection is exclusively the lease-holder's, which is what keeps the non-thread-safe
 /// connection safe under a client that is itself thread-safe. The one exception is disposal, which aborts the
 /// transport of anything still out once its drain deadline passes. Returned connections are kept for reuse
-/// unless they are terminated, out of step with the server, or too old; retired ones are closed and never
-/// handed out again.
+/// unless they are terminated, out of step with the server, too old, or have sat unused too long; retired ones
+/// are closed and never handed out again.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -48,7 +48,8 @@ internal sealed class ConnectionPool : IConnectionSource
     private readonly ITimer sweeper;
 
     // Idle connections, ordered by the time they were returned: index 0 was returned first and so has been idle
-    // longest. Only ever appended to, so that order holds under either reuse policy. Guarded by `gate`.
+    // longest. Only ever appended to, so that order holds, which is what makes either end of the list the
+    // reuse policy's choice. Guarded by `gate`.
     private readonly List<PooledConnection> idle = new();
 
     // The connections currently checked out. The pool cannot reach a leased connection through `idle`, so
@@ -324,9 +325,9 @@ internal sealed class ConnectionPool : IConnectionSource
     }
 
     /// <summary>
-    /// Closes the idle connections that have expired: every one past its lifetime, whatever the count, then the
-    /// longest-idle ones down to <see cref="ClickHouseTcpClientOptions.MinPoolSize"/>. Then tops the pool back
-    /// up to that floor, in the background. Runs on the sweep timer; called directly by tests.
+    /// Closes every idle connection that has expired — past its lifetime or past its idle timeout, whatever the
+    /// count — and then tops the pool back up to <see cref="ClickHouseTcpClientOptions.MinPoolSize"/>, in the
+    /// background. Runs on the sweep timer; called directly by tests.
     /// </summary>
     internal void Sweep()
     {
@@ -338,32 +339,17 @@ internal sealed class ConnectionPool : IConnectionSource
         List<PooledConnection> reaped = null;
         lock (gate)
         {
+            // Walked backwards so removing an entry cannot skip the next one. Neither limit yields to
+            // MinPoolSize: the top-up below holds the floor by opening fresh connections, which is the only way
+            // it can be held usefully — a checkout refuses an expired connection, so a floor made up of them
+            // would serve nobody while still holding the sockets open.
             for (int i = idle.Count - 1; i >= 0; i--)
             {
-                if (idle[i].IsPastLifetime(options.MaxConnectionLifetime))
+                if (idle[i].IsExpired(options))
                 {
                     (reaped ??= new List<PooledConnection>()).Add(idle[i]);
                     idle.RemoveAt(i);
                 }
-            }
-
-            // Index 0 has been idle longest, so trimming from the front retires the coldest connections and
-            // keeps the ones most likely to be wanted next. Idleness only decreases along the list, so the
-            // first entry still inside the timeout ends the trim. The floor counts the connections that are out
-            // as well: they are open, and MinPoolSize is a floor on open connections, not on spare ones. It does
-            // not count `pending`, unlike the top-up: trimming is the reversible direction, so an in-flight
-            // checkout is better left to the next sweep than acted on now.
-            //
-            // The emptiness test is first and is load-bearing: the floor test counts the connections that are
-            // out, so it passes with nothing idle whenever more are leased than the floor asks for — which, with
-            // the default floor of zero, is any sweep at all while one connection is checked out.
-            while (idle.Count > 0
-                && options.IdleTimeout > TimeSpan.Zero
-                && idle.Count + leased.Count > options.MinPoolSize
-                && idle[0].IdleFor >= options.IdleTimeout)
-            {
-                (reaped ??= new List<PooledConnection>()).Add(idle[0]);
-                idle.RemoveAt(0);
             }
         }
 
@@ -578,7 +564,7 @@ internal sealed class ConnectionPool : IConnectionSource
             }
 
             // Outside the lock: closing a socket should not hold up another caller's checkout.
-            if (candidate.CanBeRented(options.MaxConnectionLifetime))
+            if (candidate.CanBeRented(options))
             {
                 return candidate;
             }
@@ -620,10 +606,12 @@ internal sealed class ConnectionPool : IConnectionSource
         // rest of its life and later callers are told they are running too much work at once.
         try
         {
-            // A connection a failed or abandoned operation terminated is never recycled; nor is one past its age
-            // limit, which the next checkout would retire anyway — closing now frees the socket sooner.
-            bool reusable = connection.Connection.State == TcpConnectionState.Ready
-                && !connection.IsPastLifetime(options.MaxConnectionLifetime);
+            // The same test a checkout applies, asked here as well: a connection the next checkout would refuse
+            // anyway is better closed now, which frees the socket sooner. It covers what a failed or abandoned
+            // operation left behind (terminated, or out of step with the server) and a connection past its age
+            // limit. Idleness cannot fire here — the connection has just carried an operation — but it is part of
+            // the one predicate rather than a case the return path has to remember to leave out.
+            bool reusable = connection.CanBeRented(options);
 
             bool pooled = false;
             lock (gate)
@@ -632,8 +620,9 @@ internal sealed class ConnectionPool : IConnectionSource
 
                 // The disposed check belongs under the lock, because disposal marks the pool disposed and then
                 // drains the idle set: an entry added after that drain, by a check made outside the lock, would
-                // never be closed. Stamping the idle clock here too keeps the list ordered by that stamp, which
-                // is what lets the sweep trim the coldest connections and stop at the first live one.
+                // never be closed. Stamping the idle clock here too, rather than before the lock, keeps the list
+                // ordered by that stamp under concurrent returns, which is what makes index 0 the longest idle
+                // and so the reuse policy's choice.
                 if (reusable && Volatile.Read(ref disposed) == 0)
                 {
                     connection.OnReturned();

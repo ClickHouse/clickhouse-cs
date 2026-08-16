@@ -241,10 +241,12 @@ public class ConnectionPoolTests
     [Test]
     public async Task RentAsync_IdleConnectionPastItsLifetime_IsClosedAndReplaced()
     {
+        // The idle limit is off throughout the lifetime tests: both limits bar a checkout, so leaving idleness on
+        // while ageing an idle connection past ten minutes would let either one explain the result.
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(
-            Options(maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
+            Options(maxConnectionLifetime: TimeSpan.FromMinutes(10), idleTimeout: TimeSpan.Zero), factory, clock);
 
         ClickHouseTcpConnection first;
         await using (IConnectionLease lease = await pool.RentAsync(None))
@@ -269,7 +271,7 @@ public class ConnectionPoolTests
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(
-            Options(maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
+            Options(maxConnectionLifetime: TimeSpan.FromMinutes(10), idleTimeout: TimeSpan.Zero), factory, clock);
 
         ClickHouseTcpConnection first;
         await using (IConnectionLease lease = await pool.RentAsync(None))
@@ -298,7 +300,7 @@ public class ConnectionPoolTests
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(
-            Options(maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
+            Options(maxConnectionLifetime: TimeSpan.FromMinutes(10), idleTimeout: TimeSpan.Zero), factory, clock);
 
         await using (await pool.RentAsync(None))
         {
@@ -308,6 +310,215 @@ public class ConnectionPoolTests
 
         await using IConnectionLease second = await pool.RentAsync(None);
         Assert.That(factory.CreateCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task RentAsync_IdleConnectionPastTheIdleTimeout_IsClosedAndReplaced()
+    {
+        // Idleness bars a checkout exactly as age does. A connection nobody used is what a proxy or load balancer
+        // between client and server drops, and such a drop can arrive without a FIN — in which case IsReusable
+        // still says yes and the operation sent over it stalls until TCP gives up.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+
+        ClickHouseTcpConnection first;
+        await using (IConnectionLease lease = await pool.RentAsync(None))
+        {
+            first = lease.Connection;
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+
+        await using IConnectionLease second = await pool.RentAsync(None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Connection, Is.Not.SameAs(first));
+            Assert.That(first.State, Is.EqualTo(TcpConnectionState.Terminated), "the retired connection must be closed, not just dropped");
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_IdleConnectionJustInsideTheIdleTimeout_IsStillHandedOut()
+    {
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+
+        ClickHouseTcpConnection first;
+        await using (IConnectionLease lease = await pool.RentAsync(None))
+        {
+            first = lease.Connection;
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromSeconds(1));
+
+        await using IConnectionLease second = await pool.RentAsync(None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Connection, Is.SameAs(first));
+            Assert.That(factory.CreateCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_IdleConnectionExactlyAtTheIdleTimeout_IsRetired()
+    {
+        // The boundary the >= comparison decides, which only a controlled clock can land on.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+
+        await using (await pool.RentAsync(None))
+        {
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+
+        await using IConnectionLease second = await pool.RentAsync(None);
+        Assert.That(factory.CreateCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task RentAsync_IdleTimeoutDisabled_ReusesAConnectionThatSatIdleForHours()
+    {
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(idleTimeout: TimeSpan.Zero, maxConnectionLifetime: TimeSpan.FromDays(30)), factory, clock);
+
+        ClickHouseTcpConnection first;
+        await using (IConnectionLease lease = await pool.RentAsync(None))
+        {
+            first = lease.Connection;
+        }
+
+        clock.Advance(TimeSpan.FromHours(10));
+
+        await using IConnectionLease second = await pool.RentAsync(None);
+        Assert.That(second.Connection, Is.SameAs(first));
+    }
+
+    [Test]
+    public async Task Return_OperationRanLongerThanTheIdleTimeout_StillPoolsTheConnection()
+    {
+        // The idle clock stops while a connection is checked out, and it has to: the return path applies the same
+        // expiry test a checkout does, so a clock that kept running would read a long query's own duration as
+        // idleness and retire the connection that had just run it successfully.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(idleTimeout: TimeSpan.FromMinutes(5), maxConnectionLifetime: TimeSpan.FromHours(1)), factory, clock);
+
+        ClickHouseTcpConnection connection;
+        await using (IConnectionLease lease = await pool.RentAsync(None))
+        {
+            connection = lease.Connection;
+
+            // A half-hour analytical query, five times the idle timeout.
+            clock.Advance(TimeSpan.FromMinutes(30));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.IdleCount, Is.EqualTo(1));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+
+        await using IConnectionLease second = await pool.RentAsync(None);
+        Assert.That(second.Connection, Is.SameAs(connection), "and it is still the connection handed out next");
+    }
+
+    [Test]
+    public async Task RentAsync_EveryIdleConnectionPastTheIdleTimeout_DiscardsThemAllAndDialsOnce()
+    {
+        // The checkout's discard loop, which idleness reaches for the first time. It walks the idle set closing
+        // candidates until one passes or the set is empty, so a loop that stopped at the first rejection would
+        // leave the rest open and unreachable — and one that reported the rejection would fail the caller.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 3, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+
+        await ReturnConcurrentLeasesAsync(pool, 3);
+        ClickHouseTcpConnection[] original = [.. factory.Created];
+        clock.Advance(TimeSpan.FromMinutes(6));
+
+        await using IConnectionLease lease = await pool.RentAsync(None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(original.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+            Assert.That(lease.Connection, Is.Not.AnyOf(original.Cast<object>().ToArray()));
+            Assert.That(factory.CreateCount, Is.EqualTo(4), "three discarded, one dialled — not one dial per discard");
+            Assert.That(pool.IdleCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task Sweep_RunTwiceOverAQuietPoolAtItsFloor_RotatesTheFloorRatherThanHoldingIt()
+    {
+        // The steady state the design accepts: since neither limit yields to MinPoolSize, a pool nobody is using
+        // re-dials its floor once per IdleTimeout instead of holding the same sockets. Pinned because it is the
+        // cost of the choice — MinPoolSize dials per IdleTimeout — and because a regression would show up here as
+        // either a floor that decays to nothing or one that never refreshes.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 2, minPoolSize: 2, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+
+        await ReturnConcurrentLeasesAsync(pool, 2);
+        ClickHouseTcpConnection[] first = [.. factory.Created];
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+            Assert.That(pool.IdleCount, Is.EqualTo(2), "the floor is restored, not decayed");
+            Assert.That(factory.CreateCount, Is.EqualTo(4), "and restored at its cap, not past it");
+        });
+
+        // The replacements are themselves idle, so the next round reaps and replaces them in turn.
+        ClickHouseTcpConnection[] second = [.. factory.Created.Skip(2)];
+        clock.Advance(TimeSpan.FromMinutes(6));
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+            Assert.That(pool.IdleCount, Is.EqualTo(2));
+            Assert.That(factory.CreateCount, Is.EqualTo(6), "one round of dials per idle timeout, no more");
+        });
+    }
+
+    [Test]
+    public async Task Return_ConnectionLeftBytesOnTheWire_IsClosedRatherThanPooled()
+    {
+        // The transport half of the test the return path now shares with a checkout. A connection whose last
+        // operation did not consume everything the server sent is out of step: the next reply would decode the
+        // leftovers. The old return path only asked for Ready, so it pooled such a connection and left the next
+        // checkout to find it — closing now frees the socket sooner and keeps one predicate at both ends.
+        var factory = new FakeConnectionFactory { Trailing = [0x09] };
+        await using var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
+
+        IConnectionLease lease = await pool.RentAsync(None);
+        Assert.That(lease.Connection.State, Is.EqualTo(TcpConnectionState.Ready), "Ready, but out of step");
+        await lease.DisposeAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.IdleCount, Is.Zero);
+            Assert.That(lease.Connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
     }
 
     [Test]
@@ -352,7 +563,9 @@ public class ConnectionPoolTests
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory { ClosingThrows = true };
         await using var pool = new ConnectionPool(
-            Options(maxPoolSize: 2, maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
+            Options(maxPoolSize: 2, maxConnectionLifetime: TimeSpan.FromMinutes(10), idleTimeout: TimeSpan.Zero),
+            factory,
+            clock);
 
         await using (await pool.RentAsync(None))
         {
@@ -469,7 +682,37 @@ public class ConnectionPoolTests
     }
 
     [Test]
-    public async Task Sweep_IdleConnectionsPastTheIdleTimeout_AreClosedDownToMinPoolSize()
+    public async Task PooledConnection_IdleClock_DoesNotRunWhileTheConnectionIsCheckedOut()
+    {
+        var clock = new ControlledTimeProvider();
+        using ClickHouseTcpConnection connection = await FakeConnectionFactory.CreateReadyAsync();
+        var pooled = new PooledConnection(connection, clock);
+
+        pooled.OnRented();
+        clock.Advance(TimeSpan.FromMinutes(30));
+
+        Assert.Multiple(() =>
+        {
+            // A connection carrying an operation is not idle, however long the operation takes. Both the sweep and
+            // the return path read this, so a clock that kept running would retire a connection mid-use.
+            Assert.That(pooled.IdleFor, Is.EqualTo(TimeSpan.Zero));
+            Assert.That(pooled.IsPastIdleTimeout(TimeSpan.FromMinutes(5)), Is.False);
+            Assert.That(pooled.Age, Is.EqualTo(TimeSpan.FromMinutes(30)), "age runs whatever the connection is doing");
+        });
+
+        pooled.OnReturned();
+        clock.Advance(TimeSpan.FromMinutes(6));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pooled.IdleFor, Is.EqualTo(TimeSpan.FromMinutes(6)), "and it restarts once the connection is back");
+            Assert.That(pooled.IsPastIdleTimeout(TimeSpan.FromMinutes(5)), Is.True);
+            Assert.That(pooled.IsPastIdleTimeout(TimeSpan.Zero), Is.False, "zero disables the limit");
+        });
+    }
+
+    [Test]
+    public async Task Sweep_IdleConnectionsPastTheIdleTimeout_AreRetiredDespiteTheFloorAndReplaced()
     {
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
@@ -477,14 +720,21 @@ public class ConnectionPoolTests
             Options(maxPoolSize: 4, minPoolSize: 1, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
 
         await ReturnConcurrentLeasesAsync(pool, 3);
+        ClickHouseTcpConnection[] original = [.. factory.Created];
         clock.Advance(TimeSpan.FromMinutes(6));
 
         pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
 
         Assert.Multiple(() =>
         {
-            Assert.That(pool.IdleCount, Is.EqualTo(1), "the floor keeps one connection warm");
-            Assert.That(factory.Created.Count(c => c.State == TcpConnectionState.Terminated), Is.EqualTo(2));
+            // Idleness is a liveness limit as much as a resource one, so the floor must not hold an over-idle
+            // connection open: a checkout would refuse it, and the socket may already be dead.
+            Assert.That(original.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+
+            // But the floor is still a floor, so the sweep opens a fresh connection to keep it.
+            Assert.That(pool.IdleCount, Is.EqualTo(1));
+            Assert.That(factory.CreateCount, Is.EqualTo(4));
         });
     }
 
@@ -494,7 +744,13 @@ public class ConnectionPoolTests
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(
-            Options(maxPoolSize: 4, minPoolSize: 3, maxConnectionLifetime: TimeSpan.FromMinutes(10)), factory, clock);
+            Options(
+                maxPoolSize: 4,
+                minPoolSize: 3,
+                maxConnectionLifetime: TimeSpan.FromMinutes(10),
+                idleTimeout: TimeSpan.Zero),
+            factory,
+            clock);
 
         await ReturnConcurrentLeasesAsync(pool, 3);
         ClickHouseTcpConnection[] original = [.. factory.Created];
@@ -664,9 +920,10 @@ public class ConnectionPoolTests
     }
 
     [Test]
-    public async Task Sweep_IdleConnectionsPastTheIdleTimeoutWithConnectionsInUse_CountsBothAgainstTheFloor()
+    public async Task Sweep_IdleConnectionsPastTheIdleTimeoutWithConnectionsInUse_ReplacesOnlyWhatTheFloorNeeds()
     {
-        // Two in use plus two idle, against a floor of three: only one idle connection is surplus.
+        // Two in use plus two over-idle, against a floor of three. Both idle ones go, and the top-up then opens
+        // one — not three — because the two in use count toward the floor just as much as an idle connection does.
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(
@@ -674,6 +931,7 @@ public class ConnectionPoolTests
 
         IConnectionLease[] leases = [await pool.RentAsync(None), await pool.RentAsync(None)];
         await ReturnConcurrentLeasesAsync(pool, 2);
+        ClickHouseTcpConnection[] wereIdle = [.. factory.Created.Skip(2)];
         clock.Advance(TimeSpan.FromMinutes(6));
 
         try
@@ -681,7 +939,16 @@ public class ConnectionPoolTests
             pool.Sweep();
             await (pool.LastRefill ?? Task.CompletedTask);
 
-            Assert.That(pool.IdleCount, Is.EqualTo(1), "the two in use count toward the floor of three");
+            Assert.Multiple(() =>
+            {
+                Assert.That(wereIdle.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+                Assert.That(
+                    leases.Select(l => l.Connection.State),
+                    Is.All.EqualTo(TcpConnectionState.Ready),
+                    "the sweep walks the idle set only, so a lease that is out is not its to touch");
+                Assert.That(pool.IdleCount, Is.EqualTo(1));
+                Assert.That(factory.CreateCount, Is.EqualTo(5), "the two in use cover two thirds of the floor");
+            });
         }
         finally
         {
@@ -727,14 +994,16 @@ public class ConnectionPoolTests
     }
 
     [Test]
-    public async Task Sweep_TrimmingToTheFloor_KeepsTheMostRecentlyUsedConnections()
+    public async Task Sweep_SomeIdleConnectionsPastTheIdleTimeout_RetiresOnlyThose()
     {
+        // The mixed case, which also covers the walk itself: the sweep removes entries while iterating, so one
+        // that skipped a neighbour would leave an expired connection in the set or reap a live one.
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(
-            Options(maxPoolSize: 3, minPoolSize: 1, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+            Options(maxPoolSize: 3, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
 
-        // Returned oldest-first, then aged so all three are past the idle timeout.
+        // Returned a minute apart, then aged so the first two are past the idle timeout and the third is not.
         IConnectionLease[] leases = [await pool.RentAsync(None), await pool.RentAsync(None), await pool.RentAsync(None)];
         foreach (IConnectionLease lease in leases)
         {
@@ -742,11 +1011,19 @@ public class ConnectionPoolTests
             clock.Advance(TimeSpan.FromMinutes(1));
         }
 
-        clock.Advance(TimeSpan.FromMinutes(5));
+        clock.Advance(TimeSpan.FromMinutes(3));
         pool.Sweep();
 
+        Assert.Multiple(() =>
+        {
+            Assert.That(leases[0].Connection.State, Is.EqualTo(TcpConnectionState.Terminated), "idle for 6 minutes");
+            Assert.That(leases[1].Connection.State, Is.EqualTo(TcpConnectionState.Terminated), "idle for 5 minutes, the boundary");
+            Assert.That(leases[2].Connection.State, Is.EqualTo(TcpConnectionState.Ready), "idle for 4 minutes");
+            Assert.That(pool.IdleCount, Is.EqualTo(1));
+        });
+
         await using IConnectionLease survivor = await pool.RentAsync(None);
-        Assert.That(survivor.Connection, Is.SameAs(leases[2].Connection), "the coldest connections go first");
+        Assert.That(survivor.Connection, Is.SameAs(leases[2].Connection));
     }
 
     [Test]
@@ -1154,10 +1431,11 @@ public class ConnectionPoolTests
     [Test]
     public async Task Sweep_ALeaseIsOutAndNothingIsIdle_RunsRatherThanThrowing()
     {
-        // The commonest state a sweep can land in, and the one that used to break it. The trim's floor test
-        // counts the connections that are out, so with the default floor of zero it passes with an empty idle
-        // set — and the trim then read idle[0]. On the timer SweepQuietly swallows that, so the sweep silently
-        // stopped trimming and stopped holding the floor for the rest of the pool's life.
+        // The commonest state a sweep can land in, and the one that used to break it. The idle trim was a second
+        // pass whose floor test counted the connections that are out, so with the default floor of zero it passed
+        // with an empty idle set — and the trim then read idle[0]. On the timer SweepQuietly swallows that, so the
+        // sweep silently stopped trimming and stopped holding the floor for the rest of the pool's life. The trim
+        // is now one indexed walk that cannot reach an entry that is not there, but the state is worth pinning.
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(Options(maxPoolSize: 2), factory, new ControlledTimeProvider());
 
@@ -1170,13 +1448,15 @@ public class ConnectionPoolTests
     [Test]
     public async Task Sweep_ReapingEmptiesTheIdleSetWhileALeaseIsOut_StillClosesWhatItReaped()
     {
-        // The damage the throw did, rather than the throw itself: the connections reaped for age have already
-        // left the idle set when the trim runs, so an exception there skips the close that follows the lock and
-        // leaves them open with nothing able to reach them.
+        // The damage the throw did, rather than the throw itself: a connection reaped for age leaves the idle set
+        // under the lock and is closed only after it, so anything throwing in between leaves it open with nothing
+        // able to reach it. Still worth pinning now the two passes are one — the gap between the two is not.
         var clock = new ControlledTimeProvider();
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(
-            Options(maxPoolSize: 2, maxConnectionLifetime: TimeSpan.FromMinutes(30)), factory, clock);
+            Options(maxPoolSize: 2, maxConnectionLifetime: TimeSpan.FromMinutes(30), idleTimeout: TimeSpan.Zero),
+            factory,
+            clock);
 
         IConnectionLease held = await pool.RentAsync(None);
         IConnectionLease returned = await pool.RentAsync(None);
