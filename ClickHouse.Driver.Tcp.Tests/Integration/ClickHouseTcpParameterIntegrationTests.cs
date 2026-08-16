@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
+using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -153,6 +155,88 @@ public class ClickHouseTcpParameterIntegrationTests
             (1, 2, 3, 4, 5, 6, 7, "eight", "nine")).Returns("(1,2,3,4,5,6,7,'eight','nine')").SetName("Tuple of nine");
     }
 
+    // A ClickHouse String holds bytes, not characters, so a value can hold a sequence that is not UTF-8 —
+    // which is exactly what the read path returns for a byte-array column. Decoding it turned every bad byte
+    // into U+FFFD and sent EF BF BD, changing the value with no error. Compared as hex, because the whole
+    // point is the bytes rather than the text.
+    [TestCase("String", "FFFE41", TestName = "String keeps bytes that are not UTF-8")]
+    [TestCase("FixedString(3)", "FFFE41", TestName = "FixedString keeps bytes that are not UTF-8")]
+    public async Task QueryAsync_ByteArrayThatIsNotUtf8_ArrivesByteForByte(string clickHouseType, string expectedHex)
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", new byte[] { 0xFF, 0xFE, 0x41 } } },
+        };
+
+        object read = await ScalarAsync(client, "SELECT hex({p:" + clickHouseType + "})", options);
+
+        Assert.That(read, Is.EqualTo(expectedHex));
+    }
+
+    [Test]
+    public async Task QueryAsync_ByteArrayHoldingANulAndHighBytes_ArrivesByteForByte()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", new byte[] { 0x00, 0x01, 0xFF, 0x80 } } },
+        };
+
+        object read = await ScalarAsync(client, "SELECT hex({p:String})", options);
+
+        Assert.That(read, Is.EqualTo("0001FF80"));
+    }
+
+    [Test]
+    public async Task QueryAsync_ByteArrayThatIsValidUtf8_KeepsTheReadableForm()
+    {
+        // The fallback must not swallow the common case: valid UTF-8 still travels as text, not as \xHH.
+        await using var client = TcpServerFixture.CreateClient();
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", Encoding.UTF8.GetBytes("héllo") } },
+        };
+
+        object read = await ScalarAsync(client, "SELECT {p:String}", options);
+
+        Assert.That(read, Is.EqualTo("héllo"));
+    }
+
+    [Test]
+    public async Task QueryAsync_MapReadBackAsPairs_CanBeBoundAgain()
+    {
+        // A Map column reads back as KeyValuePair[] so duplicate keys and pair order survive. Binding that
+        // value straight back used to hit the "cannot convert" arm, because only IDictionary was accepted.
+        await using var client = TcpServerFixture.CreateClient();
+        KeyValuePair<string, int>[] pairs = [new("b", 2), new("a", 1)];
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", pairs } },
+        };
+
+        object read = await ScalarAsync(client, "SELECT toString({p:Map(String, Int32)})", options);
+
+        Assert.That(read, Is.EqualTo("{'b':2,'a':1}"));
+    }
+
+    [Test]
+    public async Task QueryAsync_SqlStringHoldingABackslashEscapedQuote_RunsAsWritten()
+    {
+        // Coverage of the scanner fix itself lives in SqlParameterTypeExtractorTests, where the mis-scan is
+        // observable. It is not observable here: whichever type the client resolves, a plain value formats to
+        // the same text, so this only pins that the server accepts the query and the escape survives it.
+        await using var client = TcpServerFixture.CreateClient();
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", 7 } },
+        };
+
+        object read = await ScalarAsync(client, @"SELECT concat('it\'s ', toString({p:Int32}))", options);
+
+        Assert.That(read, Is.EqualTo("it's 7"));
+    }
+
     [Test]
     public async Task QueryAsync_KindedDateTimeWithATimezoneInTheHint_KeepsTheInstant()
     {
@@ -269,27 +353,21 @@ public class ClickHouseTcpParameterIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_SequenceReadableOnlyOnce_IsNotConsumedByTypeInference()
+    public async Task QueryAsync_LazySequenceParameter_ReachesTheServerWhole()
     {
-        // With no placeholder the client infers the type, which reads the sequence, and then formats it, which
-        // reads it again. A one-shot sequence would arrive empty the second time.
+        // A lazy sequence must reach the server whole. The placeholder here means inference does not run, so
+        // this covers the formatter's own single pass; BuildParametersTests covers the inference pass, which
+        // needs SQL that does not name the parameter and so cannot be observed through a query at all.
         await using var client = TcpServerFixture.CreateClient();
-        IEnumerable<int> once = OneShot();
+        IEnumerable<int> lazy = Enumerable.Range(1, 3).Select(i => i);
         var options = new ClickHouseTcpQueryOptions
         {
-            Parameters = new ClickHouseTcpParameterCollection { { "p", once } },
+            Parameters = new ClickHouseTcpParameterCollection { { "p", lazy } },
         };
 
         object value = await ScalarAsync(client, "SELECT toString({p:Array(Int32)})", options);
 
         Assert.That(value, Is.EqualTo("[1,2,3]"));
-
-        static IEnumerable<int> OneShot()
-        {
-            yield return 1;
-            yield return 2;
-            yield return 3;
-        }
     }
 
     [TestCaseSource(nameof(RoundTripCases))]
@@ -406,7 +484,7 @@ public class ClickHouseTcpParameterIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_ParameterizedTarget_WritesToTheNamedTable()
+    public async Task ExecuteAsync_ParameterizedInsertSelect_WritesOnlyTheMatchingRows()
     {
         await using var client = TcpServerFixture.CreateClient();
         string table = $"tcp_param_test_{Guid.NewGuid():N}";
@@ -422,6 +500,60 @@ public class ClickHouseTcpParameterIntegrationTests
             object count = await ScalarAsync(client, $"SELECT count() FROM {table}", null);
 
             Assert.That(count, Is.EqualTo(2UL));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    // InsertAsync takes its own options type and its own call path, so the test above — which goes through
+    // ExecuteAsync — proves nothing about it. A dropped parameters argument in these overloads would have
+    // passed the whole suite. The target table is the parameter, which is the only place one fits in an
+    // INSERT whose values arrive as a data block.
+    [Test]
+    public async Task InsertAsync_RowsWithAParameterizedTarget_WritesToTheNamedTable()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        string table = $"tcp_param_rows_{Guid.NewGuid():N}";
+        await client.ExecuteAsync($"CREATE TABLE {table} (id Int32) ENGINE = Memory", cancellationToken: None);
+        try
+        {
+            var options = new ClickHouseTcpInsertOptions
+            {
+                Parameters = new ClickHouseTcpParameterCollection { { "target", table, "Identifier" } },
+            };
+            object[][] rows = [[1], [2], [3]];
+
+            await client.InsertAsync("INSERT INTO {target:Identifier} (id) VALUES", rows, options, None);
+
+            object sum = await ScalarAsync(client, $"SELECT sum(id) FROM {table}", null);
+            Assert.That(Convert.ToInt64(sum), Is.EqualTo(6));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task InsertAsync_ColumnsWithAParameterizedTarget_WritesToTheNamedTable()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        string table = $"tcp_param_cols_{Guid.NewGuid():N}";
+        await client.ExecuteAsync($"CREATE TABLE {table} (id Int32) ENGINE = Memory", cancellationToken: None);
+        try
+        {
+            var options = new ClickHouseTcpInsertOptions
+            {
+                Parameters = new ClickHouseTcpParameterCollection { { "target", table, "Identifier" } },
+            };
+            IReadOnlyList<IColumn> columns = [new ArrayColumn<int>("id", "Int32", new[] { 4, 5 })];
+
+            await client.InsertAsync("INSERT INTO {target:Identifier} (id) VALUES", columns, options, None);
+
+            object sum = await ScalarAsync(client, $"SELECT sum(id) FROM {table}", null);
+            Assert.That(Convert.ToInt64(sum), Is.EqualTo(9));
         }
         finally
         {

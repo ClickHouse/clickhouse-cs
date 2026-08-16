@@ -29,6 +29,30 @@ public class SqlParameterTypeExtractorTests
         });
     }
 
+    // ClickHouse accepts a backslash-escaped quote in a string literal as well as a doubled one. Treating \'
+    // as the end of the string made everything after it look like SQL, so the real placeholder was skipped
+    // and its type was silently lost.
+    [TestCase(@"SELECT 'it\'s', {p:Int32}", TestName = "A backslash-escaped quote in a literal")]
+    [TestCase(@"SELECT 'ends with a backslash\\', {p:Int32}", TestName = "An escaped backslash at the end of a literal")]
+    [TestCase(@"SELECT 'a\'b\'c', {p:Int32}", TestName = "Several escaped quotes")]
+    [TestCase(@"SELECT 'brace \' {p:Wrong}', {p:Int32}", TestName = "A decoy placeholder inside the literal")]
+    public void ExtractTypeHints_LiteralWithABackslashEscape_StillFindsTheHintAfterIt(string sql)
+    {
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints["p"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_EnumLabelWithABackslashEscapedQuote_KeepsTheWholeType()
+    {
+        const string type = @"Enum8('it\'s' = 1, 'b' = 2)";
+
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints("SELECT {p:" + type + "}");
+
+        Assert.That(hints["p"], Is.EqualTo(type));
+    }
+
     [TestCase(null)]
     [TestCase("")]
     [TestCase("SELECT 1")]

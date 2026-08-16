@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace ClickHouse.Driver.Tcp.Tests.Parameters;
 
@@ -187,6 +189,64 @@ public class BuildParametersTests
         Assert.That(exception.Message, Does.Contain("p"));
     }
 
+    [Test]
+    public void BuildParameters_SequenceReadableOnlyOnce_IsNotConsumedByTypeInference()
+    {
+        // Inference reads the sequence to find the element type and formatting reads it again, so a sequence
+        // that can only be read once used to arrive empty. The SQL must not name the parameter: a placeholder
+        // supplies the type and inference never runs, which is what made the earlier version of this test pass
+        // against the unfixed code.
+        var once = new SingleUseSequence(1, 2, 3);
+
+        IReadOnlyDictionary<string, string> wire = Build(
+            "SELECT 1",
+            new ClickHouseTcpParameterCollection { { "p", once } });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wire["p"], Is.EqualTo("'[1,2,3]'"));
+            Assert.That(once.EnumerationCount, Is.EqualTo(1), "the sequence was copied, so it was read once");
+        });
+    }
+
+    [Test]
+    public void BuildParameters_SequenceReadableOnlyOnceWithAPlaceholder_IsAlsoSafe()
+    {
+        // With a placeholder there is no inference pass, so the sequence is read only by the formatter.
+        var once = new SingleUseSequence(4, 5);
+
+        IReadOnlyDictionary<string, string> wire = Build(
+            "SELECT {p:Array(Int32)}",
+            new ClickHouseTcpParameterCollection { { "p", once } });
+
+        Assert.That(wire["p"], Is.EqualTo("'[4,5]'"));
+    }
+
     private static IReadOnlyDictionary<string, string> Build(string sql, ClickHouseTcpParameterCollection parameters)
         => ClickHouseTcpClient.BuildParameters(sql, new ClickHouseTcpQueryOptions { Parameters = parameters });
+
+    /// <summary>
+    /// A sequence that yields its values once and is empty afterwards. An iterator method will not do: it
+    /// returns a fresh enumerator per enumeration, so it survives being read twice and hides the defect.
+    /// </summary>
+    private sealed class SingleUseSequence(params int[] values) : IEnumerable<int>
+    {
+        private bool consumed;
+
+        public int EnumerationCount { get; private set; }
+
+        public IEnumerator<int> GetEnumerator()
+        {
+            EnumerationCount++;
+            if (consumed)
+            {
+                return Enumerable.Empty<int>().GetEnumerator();
+            }
+
+            consumed = true;
+            return ((IEnumerable<int>)values).GetEnumerator();
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
 }
