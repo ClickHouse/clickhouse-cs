@@ -80,15 +80,13 @@ internal sealed class TlsParameters
             }
             else if (CaCertificates is { Count: > 0 } roots)
             {
-                // The revocation mode is read when the callback runs, not now, so a hook that asks for revocation
-                // checking still gets it — the rebuild would otherwise re-decide with revocation off and accept a
-                // certificate the platform had just refused as revoked.
-                authentication.RemoteCertificateValidationCallback =
-                    (_, certificate, chain, errors) => ValidateAgainstCustomRoots(
-                        roots, certificate, chain, errors, authentication.CertificateRevocationCheckMode);
+                authentication.CertificateChainPolicy = PinnedRootPolicy(roots);
             }
 
-            // Last, so a caller can override any of the above.
+            // Last, so a caller can override any of the above. The pinned roots are expressed as a chain policy
+            // rather than a validation callback partly for this: the hook receives that policy and can adjust it —
+            // the verification time, the revocation mode, the flags — and every change takes effect, because this
+            // is the policy the handshake builds the chain with.
             Configure?.Invoke(authentication);
 
             await ssl.AuthenticateAsClientAsync(authentication, cancellationToken).ConfigureAwait(false);
@@ -103,62 +101,34 @@ internal sealed class TlsParameters
     }
 
     /// <summary>
-    /// Replaces the platform's trust decision with one taken against a private set of roots, leaving every other
-    /// check alone. A name mismatch or a missing certificate still fails: naming a root says who to trust, not
-    /// that identity stops mattering.
+    /// The chain policy that pins the server to a private set of certificate authorities. The handshake builds
+    /// the chain with this policy, so the host-name match it always applies is unaffected.
     /// </summary>
     /// <remarks>
-    /// The rebuild runs even when the platform was satisfied. Naming a certificate authority means the server
-    /// must chain to <i>that</i> authority — accepting whatever the host's trust store already believes would
-    /// make the option additive, so a certificate mis-issued by any public authority would still be taken, which
-    /// is the attack pinning a private root exists to stop.
+    /// Pinning replaces the host's trust store rather than adding to it: the server must chain to one of these
+    /// authorities, and a certificate the host would accept on its own is refused. An additive check would still
+    /// take a certificate mis-issued by any public authority, which is what pinning a private root prevents.
     /// </remarks>
     /// <param name="roots">The certificate authorities to trust.</param>
-    /// <param name="certificate">The server certificate the platform validated.</param>
-    /// <param name="chain">The chain the platform built, whose intermediates the rebuild reuses.</param>
-    /// <param name="errors">The platform's verdict.</param>
-    /// <param name="revocationMode">The revocation checking the TLS options ask for.</param>
-    /// <returns>Whether to accept the certificate.</returns>
-    private static bool ValidateAgainstCustomRoots(
-        X509Certificate2Collection roots,
-        X509Certificate certificate,
-        X509Chain chain,
-        SslPolicyErrors errors,
-        X509RevocationMode revocationMode)
+    /// <returns>The policy to hand the handshake.</returns>
+    private static X509ChainPolicy PinnedRootPolicy(X509Certificate2Collection roots)
     {
-        // Only the trust decision is ours to re-take; anything else the platform flagged stands.
-        if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != SslPolicyErrors.None)
+        var policy = new X509ChainPolicy
         {
-            return false;
-        }
+            TrustMode = X509ChainTrustMode.CustomRootTrust,
 
-        // The runtime always hands the callback an X509Certificate2. Refuse rather than guess if that changes:
-        // a chain cannot be rebuilt from the base type without an API that is obsolete on the newer targets.
-        if (certificate is not X509Certificate2 leaf)
-        {
-            return false;
-        }
+            // The SslStream default. Named here because this policy replaces the one the handshake would have
+            // built, so anything left out is not inherited - it is simply absent.
+            RevocationMode = X509RevocationMode.NoCheck,
+        };
 
-        using var rebuilt = new X509Chain();
-        rebuilt.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-        rebuilt.ChainPolicy.CustomTrustStore.AddRange(roots);
-        rebuilt.ChainPolicy.RevocationMode = revocationMode;
+        policy.CustomTrustStore.AddRange(roots);
 
-        // The platform requires the certificate to be valid for server authentication. This rebuild replaces the
-        // platform's check, so it must apply the same requirement: without it, any certificate under the named
-        // authority whose name covers this host is accepted, including one issued to a client.
-        rebuilt.ChainPolicy.ApplicationPolicy.Add(ServerAuthentication);
-
-        // Intermediates the server sent live in the platform's chain; without them a path to a custom root
-        // that is not the direct issuer cannot be completed.
-        if (chain is not null)
-        {
-            foreach (X509ChainElement element in chain.ChainElements)
-            {
-                rebuilt.ChainPolicy.ExtraStore.Add(element.Certificate);
-            }
-        }
-
-        return rebuilt.Build(leaf);
+        // A server certificate must say it is for server authentication, so that a private authority which also
+        // issues client certificates cannot let the holder of one impersonate a host its name covers. The
+        // handshake applies this requirement to a client-side chain anyway; naming it keeps the requirement in the
+        // policy a caller can read and does not leave it resting on that behaviour.
+        policy.ApplicationPolicy.Add(ServerAuthentication);
+        return policy;
     }
 }

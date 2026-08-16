@@ -101,6 +101,12 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
     /// </summary>
     public bool IgnoresCancellation { get; set; }
 
+    /// <summary>Whether the pool disposed this factory during its teardown.</summary>
+    public bool Disposed { get; private set; }
+
+    /// <summary>Records the call. This double holds nothing to release; the real factory holds TLS certificates.</summary>
+    public void Dispose() => Disposed = true;
+
     /// <summary>How many connections have been opened.</summary>
     public int CreateCount
     {

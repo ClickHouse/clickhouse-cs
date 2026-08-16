@@ -1,9 +1,11 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
@@ -72,8 +74,8 @@ public class TlsParametersTests
     [Test]
     public void WrapAsync_AuthorityTrustedButCertificateNamesAnotherHost_ThrowsAuthenticationException()
     {
-        // The custom-root path re-takes the trust decision only. Naming a private authority says who to trust,
-        // not that the server's identity stopped mattering, so a name mismatch must still fail.
+        // Pinning decides who to trust, not whether the server's identity still matters, so the host-name match
+        // must still fail the handshake.
         using X509Certificate2 authority = TestCertificates.CreateAuthority();
         using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
 
@@ -106,9 +108,9 @@ public class TlsParametersTests
     [Test]
     public void WrapAsync_CertificateUnderTheAuthorityButNotValidForServerAuthentication_ThrowsAuthenticationException()
     {
-        // The rebuild replaces the platform's chain check, so it has to keep the platform's requirement that the
-        // certificate is valid for server authentication. Without that, a private authority which also issues
-        // client certificates lets any holder of one impersonate the server for a name it covers.
+        // A private authority which also issues client certificates must not let the holder of one impersonate the
+        // server for a name it covers. The handshake applies the serverAuth requirement itself, so this passes even
+        // with the policy's ApplicationPolicy removed; it is here to pin the outcome against a change to either.
         using X509Certificate2 authority = TestCertificates.CreateAuthority();
         using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName, CertificatePurpose.ClientAuthentication);
 
@@ -124,8 +126,8 @@ public class TlsParametersTests
     [Test]
     public async Task WrapAsync_LeafUnderAnIntermediateWithOnlyTheRootPinned_CompletesHandshake()
     {
-        // The rebuild starts from an empty store, so a chain that does not end at the pinned root in one hop can
-        // only be completed from the intermediates the server sent. Delete the ExtraStore loop and this fails.
+        // Pinning starts trust from an empty store, so a chain that does not reach the pinned root in one hop
+        // is completed only from the intermediates the server sent alongside its leaf.
         using X509Certificate2 root = TestCertificates.CreateAuthority();
         using X509Certificate2 intermediate = TestCertificates.CreateIntermediate(root);
         using X509Certificate2 server = TestCertificates.IssueServerCertificate(intermediate, ServerName);
@@ -176,11 +178,11 @@ public class TlsParametersTests
     }
 
     [Test]
-    public async Task WrapAsync_ConfigureHookAsksForRevocationChecking_TheCustomRootRebuildUsesIt()
+    public async Task WrapAsync_ConfigureHookEditsThePinnedChainPolicy_TheHandshakeUsesTheEdit()
     {
-        // The rebuild must not hardcode revocation off, or a caller who turned it on gets nothing and a revoked
-        // certificate is accepted. Neither test certificate names a revocation list, so a rebuild that honours
-        // the request cannot determine revocation status and refuses; one that ignores it accepts.
+        // Pinning is expressed as a chain policy so the hook can adjust it and have the adjustment take effect.
+        // Revocation checking is the case with an observable outcome: neither test certificate names a revocation
+        // list, so a handshake that honours the request cannot establish revocation status and refuses.
         using X509Certificate2 authority = TestCertificates.CreateAuthority();
         using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
         string caPath = TestCertificates.WritePemFile(authority);
@@ -189,13 +191,13 @@ public class TlsParametersTests
         {
             TargetHost = ServerName,
             CaCertificates = TlsParameters.LoadCaCertificates(caPath),
-            Configure = options => options.CertificateRevocationCheckMode = X509RevocationMode.Online,
+            Configure = options => options.CertificateChainPolicy.RevocationMode = X509RevocationMode.Online,
         };
 
         Assert.ThrowsAsync<AuthenticationException>(async () => await RoundTripThroughTlsAsync(server, honoured));
 
         // The same chain, with the default of no revocation checking, is accepted — so the refusal above is the
-        // revocation mode taking effect and not something else wrong with the certificate.
+        // hook's edit taking effect and not something else wrong with the certificate.
         var byDefault = new TlsParameters
         {
             TargetHost = ServerName,
@@ -203,6 +205,34 @@ public class TlsParametersTests
         };
 
         Assert.That(await RoundTripThroughTlsAsync(server, byDefault), Is.EqualTo(Payload));
+    }
+
+    [Test]
+    public void WrapAsync_PinnedAuthority_ExposesThePolicyToTheHookRatherThanHidingItInACallback()
+    {
+        // What the hook is handed has to be the policy the handshake will use, or an edit to it is silently lost.
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
+        X509ChainPolicy observed = null;
+
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(authority)),
+            Configure = options => observed = options.CertificateChainPolicy,
+        };
+
+        Assert.That(async () => await RoundTripThroughTlsAsync(server, tls), Throws.Nothing);
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.Not.Null);
+            Assert.That(observed.TrustMode, Is.EqualTo(X509ChainTrustMode.CustomRootTrust));
+            Assert.That(observed.CustomTrustStore, Has.Count.EqualTo(1));
+            Assert.That(
+                observed.ApplicationPolicy.Cast<Oid>().Select(oid => oid.Value),
+                Does.Contain("1.3.6.1.5.5.7.3.1"),
+                "serverAuth is named on the policy rather than left to the handshake applying it");
+        });
     }
 
     [Test]
@@ -284,9 +314,11 @@ public class TlsParametersTests
             await encrypted.WriteAsync(Payload);
             await encrypted.FlushAsync();
 
+            // ReadExactly, not Read: a stream may return a short read whenever it likes, which would leave the
+            // payload comparison below to fail on fragmentation rather than on anything this test is about.
             var received = new byte[Payload.Length];
-            int read = await encrypted.ReadAsync(received);
-            return received.AsSpan(0, read).ToArray();
+            await encrypted.ReadExactlyAsync(received);
+            return received;
         }
         finally
         {
@@ -315,9 +347,11 @@ public class TlsParametersTests
 
         await ssl.AuthenticateAsServerAsync(options);
 
-        var buffer = new byte[64];
-        int read = await ssl.ReadAsync(buffer);
-        await ssl.WriteAsync(buffer.AsMemory(0, read));
+        // This server echoes one known payload, so it can wait for all of it rather than echo a short read back
+        // and leave the client comparing fewer bytes than it sent.
+        var buffer = new byte[Payload.Length];
+        await ssl.ReadExactlyAsync(buffer);
+        await ssl.WriteAsync(buffer);
         await ssl.FlushAsync();
     }
 
