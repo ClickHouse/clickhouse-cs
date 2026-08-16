@@ -198,15 +198,9 @@ internal static class ParameterTypeInference
     /// <returns>True when the arity and every element fit.</returns>
     private static bool AcceptsTupleElements(TypeNode node, ITuple value)
     {
-        TypeNode[] elementTypes;
-        try
-        {
-            elementTypes = NamedElementParser.Split(node).Select(element => element.Type).ToArray();
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
+        // Split does not validate arity — ElementTypeStrings is what raises FormatException — so there is
+        // nothing to guard against here and the arity check below is the one that matters.
+        TypeNode[] elementTypes = NamedElementParser.Split(node).Select(element => element.Type).ToArray();
 
         if (elementTypes.Length != value.Length)
         {
