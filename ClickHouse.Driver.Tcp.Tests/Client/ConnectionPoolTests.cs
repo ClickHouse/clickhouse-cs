@@ -1242,6 +1242,27 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task DisposeAsync_DisposesTheFactoryAfterEveryConnectionIsClosed()
+    {
+        // The factory owns what outlives a single connection — the TLS certificate authorities — so the pool has to
+        // release it, and only once nothing can still be handshaking against it.
+        var factory = new FakeConnectionFactory();
+        var pool = new ConnectionPool(Options(maxPoolSize: 3), factory, new ControlledTimeProvider());
+        await ReturnConcurrentLeasesAsync(pool, 3);
+
+        await pool.DisposeAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.Disposed, Is.True);
+            Assert.That(
+                factory.Created.Select(c => c.State),
+                Is.All.EqualTo(TcpConnectionState.Terminated),
+                "the connections are closed before the factory goes, not after");
+        });
+    }
+
+    [Test]
     public async Task DisposeAsync_CalledTwice_IsNoOp()
     {
         var pool = new ConnectionPool(Options(), new FakeConnectionFactory(), new ControlledTimeProvider());
