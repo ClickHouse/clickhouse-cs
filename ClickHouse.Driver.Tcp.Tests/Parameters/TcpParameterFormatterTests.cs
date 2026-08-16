@@ -52,8 +52,8 @@ public class TcpParameterFormatterTests
         // A kinded value names an instant, so it is moved into the type's timezone to keep that instant.
         yield return new TestCaseData(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), "DateTime('Europe/Amsterdam')")
             .Returns("2024-01-02T04:04:05").SetName("DateTime shifted into the type timezone");
-        yield return new TestCaseData(new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.Zero), "DateTime")
-            .Returns("2024-01-02T03:04:05").SetName("DateTimeOffset defaults to UTC");
+        yield return new TestCaseData(new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.Zero), "DateTime('UTC')")
+            .Returns("2024-01-02T03:04:05").SetName("DateTimeOffset in a UTC type");
 
         // Composites quote their string-like elements; that is the only place quoting appears.
         yield return new TestCaseData(new[] { 1, 2, 3 }, "Array(Int32)").Returns("[1,2,3]").SetName("Array of Int32");
