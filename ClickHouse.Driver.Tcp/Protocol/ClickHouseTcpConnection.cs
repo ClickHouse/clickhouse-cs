@@ -76,6 +76,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// position no longer matches the server's.
     ///
     /// <para>
+    /// Under TLS the poll is one step further from the truth, in both directions. Decrypted bytes held inside the
+    /// <c>SslStream</c> are invisible to it, because a TLS record is read whole while a caller may ask for less;
+    /// and a record that carries no application data, such as a late session ticket, makes the socket readable and
+    /// so discards a healthy connection. Neither has been seen against ClickHouse, and both fail safe — the first
+    /// is caught by the next read being out of step, the second only costs a reconnect.
+    /// </para>
+    ///
+    /// <para>
     /// This detects only a peer that closed in an orderly way. A connection dropped without a FIN, by a partition or a
     /// machine that lost power, still looks alive here, and the operation sent over it stalls until TCP itself gives
     /// up, which on Linux takes about fifteen minutes. That is inherent to a client-side check, so the pool does not
@@ -141,9 +149,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     public NegotiatedProtocol Protocol => server.Negotiated;
 
     /// <summary>
-    /// Opens a connection: dials the socket, runs the handshake, and returns a connection in the Ready state.
-    /// The socket is configured with <c>TCP_NODELAY</c> so message-boundary flushes leave promptly. On any
-    /// failure the socket is closed and the exception propagates; no half-open connection is returned.
+    /// Opens a connection: dials the socket, negotiates TLS when asked, runs the handshake, and returns a
+    /// connection in the Ready state. The socket is configured with <c>TCP_NODELAY</c> so message-boundary
+    /// flushes leave promptly. On any failure the socket is closed and the exception propagates; no half-open
+    /// connection is returned.
     ///
     /// <para>
     /// A connect <i>timeout</i> is the caller's responsibility: the OS-level TCP connect can hang far longer
@@ -152,12 +161,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// </para>
     /// </summary>
     /// <param name="host">The server host name or address.</param>
-    /// <param name="port">The server's native-protocol port (typically 9000).</param>
+    /// <param name="port">The server's native-protocol port (typically 9000, or 9440 with TLS).</param>
     /// <param name="handshake">The client-supplied handshake values (identity and credentials).</param>
+    /// <param name="tls">How to negotiate TLS before the handshake, or null to run in the clear.</param>
     /// <param name="cancellationToken">A token to observe for cancellation (and to bound the connect).</param>
     /// <returns>A connected, handshaken connection ready to accept a request.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="host"/> or <paramref name="handshake"/> is null.</exception>
     /// <exception cref="SocketException">The socket could not connect to the server.</exception>
+    /// <exception cref="System.Security.Authentication.AuthenticationException">The TLS handshake failed (certificate rejected, or the port is not a TLS port).</exception>
     /// <exception cref="ClickHouseServerException">The server rejected the handshake (e.g. authentication failure).</exception>
     /// <exception cref="ClickHouseProtocolException">The server's handshake reply was neither Hello nor Exception.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
@@ -165,6 +176,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         string host,
         int port,
         ClientHandshakeParameters handshake,
+        TlsParameters tls,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(host);
@@ -180,9 +192,18 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
 
         var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        Stream transport;
         try
         {
             await socket.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
+
+            // TLS is negotiated here, before a single protocol byte is written: the ClientHello that follows
+            // carries the password in plaintext, so it must already be inside the encrypted stream.
+            transport = new NetworkStream(socket, ownsSocket: false);
+            if (tls is not null)
+            {
+                transport = await tls.WrapAsync(transport, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch
         {
@@ -192,7 +213,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
         // HandshakeAsync terminates the connection (closing this socket) on any failure, so a throw here needs
         // no extra cleanup.
-        var connection = new ClickHouseTcpConnection(new NetworkStream(socket, ownsSocket: false), socket);
+        var connection = new ClickHouseTcpConnection(transport, socket);
         await connection.HandshakeAsync(handshake, cancellationToken).ConfigureAwait(false);
         return connection;
     }
@@ -912,6 +933,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         try
         {
             // NetworkStream does not own the socket, so close the socket first to abort pending network I/O.
+            // Under TLS the stream is an SslStream over that NetworkStream; neither does I/O when disposed, so
+            // disposing them after the socket is closed is safe and the ordering still holds.
             socket?.Dispose();
         }
         finally

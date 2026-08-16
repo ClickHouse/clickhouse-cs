@@ -46,10 +46,13 @@ jobs:
             9.x
             10.x
 
+      # Category!=Cloud: the Cloud set needs a real ClickHouse Cloud service and credentials this job has
+      # neither of, so it would only report a column of skips. It runs in tests-cloud-tcp.yml instead.
+      #
       # The framework is passed through the environment rather than interpolated into the run
       # script, so a caller-supplied input cannot inject shell.
       - name: Test
-        run: dotnet test ClickHouse.Driver.Tcp.Tests/ClickHouse.Driver.Tcp.Tests.csproj --framework "$FRAMEWORK" --configuration Release --verbosity normal --logger GitHubActions /clp:ErrorsOnly
+        run: dotnet test ClickHouse.Driver.Tcp.Tests/ClickHouse.Driver.Tcp.Tests.csproj --framework "$FRAMEWORK" --configuration Release --verbosity normal --logger GitHubActions /clp:ErrorsOnly --filter "Category!=Cloud"
         env:
           CLICKHOUSE_VERSION: ${{ inputs.clickhouse-version }}
           FRAMEWORK: ${{ inputs.framework }}
