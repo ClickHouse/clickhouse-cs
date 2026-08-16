@@ -24,16 +24,21 @@ namespace ClickHouse.Driver.Tcp.Parameters;
 /// two must be changed together — see the parity-check entry in the TCP TODO.
 /// </para>
 /// <para>
-/// The first deliberate difference is the outer <see cref="ParameterText.Escape"/> and
+/// The transport difference is the outer <see cref="ParameterText.Escape"/> and
 /// <see cref="ParameterText.QuoteSingle"/> in <see cref="Format"/>. HTTP puts the value in the query string,
 /// where the server reads it directly. The native protocol carries it in the settings list as a custom entry,
 /// which the server first restores as a Field, so the whole value must arrive as a quoted SQL literal — for
 /// every type, not only for strings. An unquoted <c>42</c> for an <c>Int32</c> parameter is rejected.
 /// </para>
 /// <para>
-/// The second is the <c>Interval&lt;Unit&gt;</c> family, which this formatter supports and the HTTP one does
-/// not. The difference is in the type systems, not in the two formatters: the RowBinary tree has no Interval
-/// type, so an HTTP query fails while resolving the name, before any formatter runs.
+/// The rest of the differences are places where this formatter is ahead. <c>Interval&lt;Unit&gt;</c>,
+/// <c>QBit</c> and the six geo names format here and throw there, and <c>Json</c> in its lowercase spelling
+/// works here only. Interval is a type-system difference rather than a formatter one: the RowBinary tree has
+/// no Interval type, so an HTTP query fails while resolving the name. These are defects on the HTTP side:
+/// a <c>byte[]</c> that is not valid UTF-8 is decoded there and loses its bytes, a Variant alternative is
+/// matched on its outer name alone, a Map cannot be given as key/value pairs, and a value naming an instant
+/// is accepted for a type with no timezone and silently moved. Each is fixable, and each changes a shipped
+/// client, so none is fixed here — see the parity-check entry in the TCP TODO.
 /// </para>
 /// </remarks>
 internal static class TcpParameterFormatter
@@ -236,7 +241,8 @@ internal static class TcpParameterFormatter
     /// UTF-8 — the read path returns one whenever <c>ReadAsByteArray</c> is used. Decoding such a sequence
     /// turns every bad byte into U+FFFD and sends <c>EF BF BD</c>, which changes the value with no error. Text
     /// that is valid UTF-8 keeps the readable form; anything else goes out as <c>\xHH</c> per byte, which the
-    /// server's escaped-text reader restores exactly. Probed on 26.6.1 over both transports.
+    /// server's escaped-text reader restores exactly. Probed on 26.6.1. The HTTP formatter still decodes, so
+    /// this is a divergence — see the parity-check entry in the TCP TODO.
     /// </remarks>
     private static string BytesToSqlText(byte[] bytes)
     {
