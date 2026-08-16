@@ -467,6 +467,36 @@ public class ClickHouseTcpClientIntegrationTests
     }
 
     [Test]
+    public async Task QueryAsync_JsonColumn_DecodesAsTextWithoutCallerSettingJsonAsString()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        // The caller sets no serialization setting at all — the client injects
+        // output_format_native_write_json_as_string, so the column arrives as its JSON text. Without that injection
+        // the server would send a per-path encoding and the codec would reject the version. (The experimental-type
+        // flag is obsolete on every server this suite supports, so the query needs no settings whatsoever.)
+        var rows = await client.QueryAsync("SELECT CAST('{\"a\":1}', 'JSON') AS j").ToListAsync();
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0][0], Is.EqualTo("{\"a\":1}"));
+    }
+
+    // Registering the JSON codec also makes it reachable as a Dynamic runtime type, where the JSON version word is
+    // nested inside the Dynamic state prefix (after the type-name list) rather than heading the column. Only the
+    // read direction can be exercised: DynamicTypeInference maps a CLR string to String, not JSON, so a JSON value
+    // cannot be written into a Dynamic ergonomically.
+    [Test]
+    public async Task QueryAsync_DynamicColumnHoldingJson_DecodesTheNestedJsonText()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        var rows = await client.QueryAsync("SELECT CAST(CAST('{\"b\":2,\"a\":1}', 'JSON'), 'Dynamic') AS d").ToListAsync();
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0][0], Is.EqualTo("{\"a\":1,\"b\":2}"));
+    }
+
+    [Test]
     public async Task PingAsync_LiveServer_Completes()
     {
         await using var client = TcpServerFixture.CreateClient();
