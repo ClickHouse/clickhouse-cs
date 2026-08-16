@@ -37,8 +37,8 @@ namespace ClickHouse.Driver.Tcp;
 [Experimental("CHTCP0001")]
 public sealed class ClickHouseTcpClient : IClickHouseTcpClient
 {
-    // Reading and writing Dynamic (and later JSON) requires the flattened native serialization; the client
-    // enables it on every operation so callers never have to know about it. A caller-supplied value wins.
+    // Reading and writing Dynamic requires the flattened native serialization; the client enables it on every
+    // operation so callers never have to know about it. A caller-supplied value wins.
     private const string FlattenedSerializationSetting = "output_format_native_use_flattened_dynamic_and_json_serialization";
 
     // How many rows QueryAsync<T> materializes at once. A whole block would otherwise be alive together, and a
@@ -50,6 +50,12 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     // per column, which did not register even on a two-column row of fixed-width values, while the cost of too
     // large a window is the promotion this is here to avoid, against a gen0 budget that varies by host and GC mode.
     private const int MaterializationWindowRows = 256;
+
+    // Reading JSON requires the server to send it as text rather than one column per path, which is the only
+    // encoding this client decodes. Enabled on every operation for the same reason, and likewise overridable.
+    // Writes need no setting: the client always writes the String version and the server reads whichever the
+    // prefix declares.
+    private const string JsonAsStringSetting = "output_format_native_write_json_as_string";
 
     private static readonly ClickHouseTcpInsertOptions DefaultInsertOptions = new();
 
@@ -465,8 +471,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
 
     /// <summary>
     /// Merges the settings for one operation: the client-level custom settings, overlaid by the per-query
-    /// settings, with the flattened-serialization setting injected unless a caller already set it at either
-    /// level.
+    /// settings, with the flattened-serialization and JSON-as-string settings injected unless a caller already set
+    /// them at either level.
     /// </summary>
     /// <param name="clientSettings">The client-level custom settings, or null for none.</param>
     /// <param name="perQuerySettings">The per-query settings that override the client-level ones, or null for none.</param>
@@ -508,6 +514,11 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         if (!merged.ContainsKey(FlattenedSerializationSetting))
         {
             merged[FlattenedSerializationSetting] = "1";
+        }
+
+        if (!merged.ContainsKey(JsonAsStringSetting))
+        {
+            merged[JsonAsStringSetting] = "1";
         }
 
         return merged;

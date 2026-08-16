@@ -1142,6 +1142,126 @@ public sealed class InsertRoundTripCase
                 new (object, string)[] { (null, "d") },
             }),
             DynamicSettings);
+
+        // JSON in its String serialization: each value is its compact JSON text, so the column is an
+        // IColumn<string>. The server parses the text on insert and re-serializes it on read, so a case whose
+        // values are not already canonical reads back normalized — see the normalization case below. These values
+        // are canonical (keys ordinally sorted, no whitespace, no JSON null), so insert equals read-back.
+        yield return JsonTexts("{}", "{\"a\":1}", "{\"a\":1,\"b\":\"hi\"}", "{\"n\":{\"deep\":[1,2,3]}}");
+
+        // Every value empty: the whole column carries no path at all.
+        yield return JsonTexts("{}", "{}");
+
+        // Typed paths are declared in the type string and always materialize, so a value omitting one reads back
+        // with that path at its type's default ("" for String) rather than absent — hence the separate expected
+        // builder. The undeclared path rides along as a dynamic path.
+        yield return new InsertRoundTripCase(
+            "JSON(a UInt32, b String) [typed paths default when absent]",
+            "JSON(a UInt32, b String)",
+            name => new ArrayColumn<string>(name, "JSON(a UInt32, b String)", new[]
+            {
+                "{\"a\":1,\"x\":\"p\"}",
+                "{\"a\":2,\"b\":\"q\"}",
+            }),
+            name => new ArrayColumn<string>(name, "JSON(a UInt32, b String)", new[]
+            {
+                "{\"a\":1,\"b\":\"\",\"x\":\"p\"}",
+                "{\"a\":2,\"b\":\"q\"}",
+            }),
+            JsonSettings);
+
+        // The server parses a JSON value rather than storing the text, so what comes back is its own rendering:
+        // keys ordinally sorted (so "A" precedes "a"), whitespace dropped, numbers re-rendered canonically
+        // (1.0 -> 1, 1e3 -> 1000, -0 -> 0), a dotted key read as nesting, and a JSON null or an empty object
+        // contributing no path at all. Nothing about that is the client's doing, but a client that mangled the text
+        // would show up here.
+        yield return new InsertRoundTripCase(
+            "JSON [server normalizes the text]",
+            "JSON",
+            name => new ArrayColumn<string>(name, "JSON", new[]
+            {
+                "{  \"b\" : 1 ,  \"a\" : 2 }",
+                "{\"a\":1.0,\"b\":1e3,\"c\":-0}",
+                "{\"a\":null,\"b\":{}}",
+                "{\"a.b\":1}",
+                "{\"a\":\"x\",\"A\":\"y\"}",
+            }),
+            name => new ArrayColumn<string>(name, "JSON", new[]
+            {
+                "{\"a\":2,\"b\":1}",
+                "{\"a\":1,\"b\":1000,\"c\":0}",
+                "{}",
+                "{\"a\":{\"b\":1}}",
+                "{\"A\":\"y\",\"a\":\"x\"}",
+            }),
+            JsonSettings);
+
+        // Nullable(JSON): unlike Array/Tuple/Map/Variant, the server does accept it. A NULL row still occupies the
+        // values stream, and those bytes are parsed like any other, so the placeholder written there must be
+        // parseable JSON ("{}") — an empty string is rejected outright. The all-null case is the one that proves it,
+        // since it is placeholder and nothing else.
+        yield return NullableJsonTexts("{\"a\":1}", null, "{}", "{\"b\":\"hi\"}", null);
+        yield return NullableJsonTexts(null, null);
+
+        // Array(JSON): JSON carries a state prefix, so the array has to emit the version once ahead of its offsets
+        // rather than treat JSON as a flat leaf. Empty rows and an all-empty column ride along.
+        yield return Arrays("JSON", JsonSettings, new[] { "{\"a\":1}", "{}" }, Array.Empty<string>(), new[] { "{\"b\":\"hi\"}" });
+
+        // Tuple(JSON, String): each element is its own child column, so the JSON version is written from the
+        // element the tuple projects.
+        yield return Same(
+            "Tuple(JSON, String)",
+            "Tuple(JSON, String)",
+            name => new TupleColumn<string, string>(name, "Tuple(JSON, String)", new (string, string)[]
+            {
+                ("{\"a\":1}", "x"),
+                ("{}", string.Empty),
+            }),
+            JsonSettings);
+
+        // Map(String, JSON): the JSON value stream's version prefix has to travel through the map's shape object,
+        // the same path LowCardinality's dictionary prefix takes.
+        yield return Maps<string, string>(
+            "String",
+            "JSON",
+            JsonSettings,
+            Pairs<string, string>(("a", "{\"a\":1}"), ("b", "{}")),
+            Array.Empty<KeyValuePair<string, string>>(),
+            Pairs<string, string>(("c", "{\"b\":\"hi\"}")));
+
+        // Variant(JSON, UInt64): JSON as a variant alternative. Variant is the trickiest prefix carrier — it writes
+        // every alternative's prefix from that alternative's own row slice, zero-length ones included — so this is
+        // where a JSON version word is most easily lost or duplicated. The alternatives arrive canonicalized and
+        // "JSON" sorts before "UInt64", so JSON is discriminator 0. UInt64 is chosen as the second alternative on
+        // purpose: pairing JSON with String would make the two indistinguishable to the ergonomic write path, which
+        // picks an alternative by runtime CLR type and would send every string to the JSON arm.
+        yield return Same(
+            "Variant(JSON, UInt64)",
+            "Variant(JSON, UInt64)",
+            name => new ArrayColumn<object>(name, "Variant(JSON, UInt64)", new object[]
+            {
+                "{\"a\":1}", 42UL, null, "{}", 0UL,
+            }),
+            MergeSettings(VariantSettings, JsonSettings));
+
+        // Nested(a JSON, b String): a JSON field inside a Nested column.
+        yield return Same(
+            "Nested(a JSON, b String)",
+            "Nested(a JSON, b String)",
+            name => new NestedColumn(
+                name,
+                "Nested(a JSON, b String)",
+                new[] { "a", "b" },
+                new IColumn[]
+                {
+                    new ArrayColumn<string>(name, "JSON", new[] { "{\"a\":1}", "{}", "{\"b\":\"hi\"}" }),
+                    new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
+                },
+                new[] { 0, 2, 2, 3 },
+                rowCount: 3,
+                pooledOffsets: false,
+                ownsFields: false),
+            MergeSettings(NestedSettings, JsonSettings));
     }
 
     // Merges two settings dictionaries into one (later entries win) for cases needing both flags.
@@ -1241,6 +1361,14 @@ public sealed class InsertRoundTripCase
 
     private static InsertRoundTripCase NullableStrings(params string[] values)
         => Same($"Nullable(String) [{values.Length} rows]", "Nullable(String)", name => new ArrayColumn<string>(name, "Nullable(String)", values));
+
+    // JSON is inserted and read back as its compact text, so the column is an ArrayColumn<string> like String's.
+    // Values must already be canonical for insert to equal read-back; see the normalization case.
+    private static InsertRoundTripCase JsonTexts(params string[] values)
+        => Same($"JSON [{values.Length} rows]", "JSON", name => new ArrayColumn<string>(name, "JSON", values), JsonSettings);
+
+    private static InsertRoundTripCase NullableJsonTexts(params string[] values)
+        => Same($"Nullable(JSON) [{values.Length} rows]", "Nullable(JSON)", name => new ArrayColumn<string>(name, "Nullable(JSON)", values), JsonSettings);
 
     private static InsertRoundTripCase NullableIps(string innerType, params string[] values)
     {
@@ -1370,5 +1498,17 @@ public sealed class InsertRoundTripCase
     {
         ["allow_experimental_dynamic_type"] = "1",
         ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
+    };
+
+    /// <summary>
+    /// Enables the experimental <c>JSON</c> type and selects the String serialization the client reads (without it
+    /// the server would emit one of the per-path encodings, which the client rejects). The insert direction needs no
+    /// setting — the server reads whichever version the client's state prefix declares. <c>ClickHouseTcpClient</c>
+    /// injects the output setting itself; these cases drive a connection directly, so they pass it explicitly.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> JsonSettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["allow_experimental_json_type"] = "1",
+        ["output_format_native_write_json_as_string"] = "1",
     };
 }
