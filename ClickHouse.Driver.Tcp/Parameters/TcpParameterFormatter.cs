@@ -60,6 +60,9 @@ internal static class TcpParameterFormatter
         "IntervalHour", "IntervalDay", "IntervalWeek", "IntervalMonth", "IntervalQuarter", "IntervalYear",
     ];
 
+    /// <summary>Decodes UTF-8 and throws on a byte sequence that is not valid UTF-8, rather than substituting.</summary>
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
     /// <summary>Formats a parameter value for the Query packet's parameter list.</summary>
     /// <param name="value">The parameter value.</param>
     /// <param name="typeName">The resolved ClickHouse type name (e.g. <c>DateTime64(3)</c>).</param>
@@ -136,7 +139,7 @@ internal static class TcpParameterFormatter
 
             // Must precede the arm below, which would otherwise print the CLR type name for a byte array.
             case "String" or "FixedString" when value is byte[] bytes:
-                return QuoteIfNeeded(Encoding.UTF8.GetString(bytes).Escape(), quote);
+                return QuoteIfNeeded(BytesToSqlText(bytes), quote);
 
             case "String" or "FixedString" or "Enum8" or "Enum16" or "IPv4" or "IPv6" or "UUID":
                 return QuoteIfNeeded(value.ToString().Escape(), quote);
@@ -186,6 +189,11 @@ internal static class TcpParameterFormatter
             case "Map" when value is IDictionary dictionary && type.Arguments.Count == 2:
                 return FormatMap(type, dictionary);
 
+            // Must follow the dictionary arm, which is the common shape, and precede the Array arm below,
+            // which would otherwise take a pair sequence and write it as a list of tuples.
+            case "Map" when type.Arguments.Count == 2 && MapPairs.IsPairSequence(value):
+                return FormatMapPairs(type, (IEnumerable)value);
+
             case "Variant":
                 return FormatVariant(type, value, quote);
 
@@ -219,6 +227,34 @@ internal static class TcpParameterFormatter
         "MultiPolygon" => "Array(Polygon)",
         _ => throw new ArgumentException($"'{name}' is not a geo type"),
     });
+
+    /// <summary>Writes raw bytes as escaped SQL text without changing any of them.</summary>
+    /// <param name="bytes">The bytes.</param>
+    /// <returns>The escaped text the server reads back as those exact bytes.</returns>
+    /// <remarks>
+    /// A ClickHouse <c>String</c> holds bytes, not characters, so a value can hold a byte sequence that is not
+    /// UTF-8 — the read path returns one whenever <c>ReadAsByteArray</c> is used. Decoding such a sequence
+    /// turns every bad byte into U+FFFD and sends <c>EF BF BD</c>, which changes the value with no error. Text
+    /// that is valid UTF-8 keeps the readable form; anything else goes out as <c>\xHH</c> per byte, which the
+    /// server's escaped-text reader restores exactly. Probed on 26.6.1 over both transports.
+    /// </remarks>
+    private static string BytesToSqlText(byte[] bytes)
+    {
+        try
+        {
+            return StrictUtf8.GetString(bytes).Escape();
+        }
+        catch (DecoderFallbackException)
+        {
+            var builder = new StringBuilder(bytes.Length * 4);
+            foreach (byte b in bytes)
+            {
+                builder.Append("\\x").Append(b.ToString("x2", CultureInfo.InvariantCulture));
+            }
+
+            return builder.ToString();
+        }
+    }
 
     private static string FormatDecimal(object value) => value switch
     {
@@ -455,10 +491,33 @@ internal static class TcpParameterFormatter
     private static string FormatMap(TypeNode type, IDictionary value)
     {
         var pairs = value.Keys.Cast<object>().Select(key =>
-            Format(type.Arguments[0], key, quote: true) + " : " + Format(type.Arguments[1], value[key], quote: true));
+            FormatPair(type, key, value[key]));
 
         return "{" + string.Join(",", pairs) + "}";
     }
+
+    /// <summary>
+    /// Formats a Map given as a sequence of key/value pairs, which is how this client reads one back. The
+    /// codec surfaces a row as <c>KeyValuePair&lt;K, V&gt;[]</c> rather than a dictionary so that duplicate
+    /// keys and pair order survive, so a value read from a Map column must be bindable in that shape.
+    /// </summary>
+    /// <param name="type">The Map type.</param>
+    /// <param name="pairs">The pairs, in order.</param>
+    /// <returns>The map literal.</returns>
+    private static string FormatMapPairs(TypeNode type, IEnumerable pairs)
+    {
+        var formatted = pairs.Cast<object>().Select(pair =>
+        {
+            (object key, object value) = MapPairs.Read(pair);
+            return FormatPair(type, key, value);
+        });
+
+        return "{" + string.Join(",", formatted) + "}";
+    }
+
+    private static string FormatPair(TypeNode type, object key, object value)
+        => Format(type.Arguments[0], key, quote: true) + " : " + Format(type.Arguments[1], value, quote: true);
+
 
     private static string FormatVariant(TypeNode type, object value, bool quote)
     {
