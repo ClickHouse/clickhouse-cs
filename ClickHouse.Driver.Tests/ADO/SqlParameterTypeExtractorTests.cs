@@ -88,6 +88,30 @@ public class SqlParameterTypeExtractorTests
         Assert.That(hints["e"], Is.EqualTo(expectedType));
     }
 
+    // ClickHouse accepts a backslash-escaped quote in a string literal as well as a doubled one. Treating \'
+    // as the end of the string made everything after it look like SQL, so the real placeholder was skipped
+    // and its type was silently lost.
+    [TestCase(@"SELECT 'it\'s', {p:Int32}", TestName = "ExtractTypeHints_BackslashEscapedQuoteInLiteral_FindsLaterHint")]
+    [TestCase(@"SELECT 'a\'b\'c', {p:Int32}", TestName = "ExtractTypeHints_SeveralBackslashEscapedQuotes_FindsLaterHint")]
+    [TestCase(@"SELECT 'decoy \' {p:Wrong}', {p:Int32}", TestName = "ExtractTypeHints_DecoyPlaceholderAfterEscape_FindsRealHint")]
+    public void ExtractTypeHints_LiteralWithBackslashEscape_StillFindsHintAfterIt(string sql)
+    {
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints["p"], Is.EqualTo("Int32"));
+    }
+
+    [Test]
+    public void ExtractTypeHints_BackslashEscapedQuoteInEnum_ReturnsFullType()
+    {
+        var expectedType = @"Enum8('it\'s' = 1, 'hello' = 2)";
+        var sql = $"SELECT {{e:{expectedType}}}";
+
+        var hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.That(hints["e"], Is.EqualTo(expectedType));
+    }
+
     [Test]
     public void ExtractTypeHints_NullString_ReturnsEmptyDictionary()
     {
