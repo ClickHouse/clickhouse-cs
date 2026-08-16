@@ -36,11 +36,24 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["Host"] = value;
     }
 
-    /// <summary>The server's native-protocol port. Defaults to <c>9000</c>.</summary>
-    public int Port
+    /// <summary>
+    /// The server's native-protocol port. Absent, the default, derives it from <see cref="UseTls"/> —
+    /// <c>9440</c> with TLS, <c>9000</c> without. Setting null removes the key.
+    /// </summary>
+    public int? Port
     {
-        get => GetIntOrDefault("Port", ClickHouseTcpClientOptions.DefaultPort);
-        set => this["Port"] = value;
+        get => GetIntOrNull("Port");
+        set
+        {
+            if (value is { } port)
+            {
+                this["Port"] = port;
+            }
+            else
+            {
+                Remove("Port");
+            }
+        }
     }
 
     /// <summary>The user to authenticate as. Defaults to <c>default</c>.</summary>
@@ -69,6 +82,39 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
     {
         get => GetStringOrDefault("QuotaKey", string.Empty);
         set => this["QuotaKey"] = value;
+    }
+
+    /// <summary>Whether to encrypt the transport with TLS. Defaults to false.</summary>
+    /// <exception cref="ArgumentException">The stored value is not a boolean.</exception>
+    public bool UseTls
+    {
+        get => GetBoolOrDefault("UseTls", false);
+        set => this["UseTls"] = value;
+    }
+
+    /// <summary>The host name to match the server certificate against. Absent, the default, uses <see cref="Host"/>.</summary>
+    public string TlsServerName
+    {
+        get => GetStringOrDefault("TlsServerName", null);
+        set => this["TlsServerName"] = value;
+    }
+
+    /// <summary>
+    /// Whether to accept a server certificate that fails validation. Defaults to false; setting it true removes
+    /// the protection TLS provides against an intercepted connection, so keep it to development.
+    /// </summary>
+    /// <exception cref="ArgumentException">The stored value is not a boolean.</exception>
+    public bool TlsAllowInvalidCertificates
+    {
+        get => GetBoolOrDefault("TlsAllowInvalidCertificates", false);
+        set => this["TlsAllowInvalidCertificates"] = value;
+    }
+
+    /// <summary>Path to a PEM file of certificate authorities to validate the server against. Absent uses the host's trust store.</summary>
+    public string TlsCaCertificatePath
+    {
+        get => GetStringOrDefault("TlsCaCertificatePath", null);
+        set => this["TlsCaCertificatePath"] = value;
     }
 
     /// <summary>The connect-plus-handshake deadline, in seconds. Defaults to 30.</summary>
@@ -190,6 +236,10 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             Password = Password,
             Database = Database,
             QuotaKey = QuotaKey,
+            UseTls = UseTls,
+            TlsServerName = TlsServerName,
+            TlsAllowInvalidCertificates = TlsAllowInvalidCertificates,
+            TlsCaCertificatePath = TlsCaCertificatePath,
             DialTimeout = DialTimeout,
             ReadTimeout = ReadTimeout,
             MaxSendBufferBytes = MaxSendBufferBytes,
@@ -229,6 +279,48 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             int i => i,
             string s when int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result) => result,
             _ => @default,
+        };
+    }
+
+    // The nullable form, for a key whose absence means "derive it" rather than "use the default".
+    private int? GetIntOrNull(string name)
+    {
+        if (!TryGetValue(name, out object value))
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            int i => i,
+            string s when int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result) => result,
+            _ => null,
+        };
+    }
+
+    // Unlike the numeric getters, an unreadable value throws rather than falling back. These keys decide whether
+    // the transport is encrypted and how far its certificate is checked, so 'UseTls=yes' reading as false would
+    // hand the caller a plaintext connection they believe is secure. '1' and '0' are accepted alongside the names
+    // bool.TryParse takes, matching how boolean settings are written elsewhere in ClickHouse.
+    //
+    // The base indexer converts whatever it is given to a string, so a value set programmatically arrives here as
+    // one too and the bool arm is only reached through this class's own typed setter. The final arm is therefore
+    // defensive rather than reachable; it throws because that is the safe direction for these keys.
+    private bool GetBoolOrDefault(string name, bool @default)
+    {
+        if (!TryGetValue(name, out object value))
+        {
+            return @default;
+        }
+
+        return value switch
+        {
+            bool b => b,
+            string s when bool.TryParse(s, out bool parsed) => parsed,
+            string s when s == "1" => true,
+            string s when s == "0" => false,
+            _ => throw new ArgumentException(
+                $"Connection-string key '{name}' has value '{value}', which is not a boolean. Use true, false, 1, or 0."),
         };
     }
 
