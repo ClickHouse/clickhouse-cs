@@ -68,7 +68,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <summary>
     /// Whether this connection is fit to carry another operation, as far as can be told without sending
     /// anything. Ready, with a transport the peer has not closed and no bytes left over from the last response.
-    /// The pool asks before every checkout, so it must stay cheap: one non-blocking poll of the socket.
+    /// The pool asks at both ends of every lease, so it must stay cheap: one non-blocking poll of the socket.
     /// </summary>
     /// <remarks>
     /// A readable idle socket means one of two things, and neither allows reuse: the peer closed and a zero-byte
@@ -79,10 +79,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// This detects only a peer that closed in an orderly way. A connection dropped without a FIN — a partition,
     /// or a machine that lost power — still looks alive here, and the operation sent over it stalls until TCP
     /// itself gives up, which on Linux takes on the order of fifteen minutes. That is inherent to a client-side
-    /// check, and it can equally strike a connection opened a moment ago, so the answer is an idle read deadline
-    /// rather than a stricter probe. <b>That deadline does not exist yet</b>: <c>ReadTimeout</c> is parsed and
-    /// stored but nothing enforces it, so today a caller's own <see cref="System.Threading.CancellationToken"/>
-    /// is the only bound on such a stall.
+    /// check, so the pool does not rely on this alone: it also refuses a connection that has sat idle past
+    /// <c>IdleTimeout</c>, which covers the common case of an intermediary dropping a connection nobody was
+    /// using. What neither catches is a drop that strikes a connection in active use, and the answer to that is
+    /// an idle read deadline rather than a stricter probe. <b>That deadline does not exist yet</b>:
+    /// <c>ReadTimeout</c> is parsed and stored but nothing enforces it, so today a caller's own
+    /// <see cref="System.Threading.CancellationToken"/> is the only bound on such a stall.
     /// </para>
     /// </remarks>
     internal bool IsReusable

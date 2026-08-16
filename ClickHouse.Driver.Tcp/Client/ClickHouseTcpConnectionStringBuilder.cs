@@ -93,8 +93,8 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
     }
 
     /// <summary>
-    /// The number of connections kept open rather than closed for inactivity, counting the ones in use as well
-    /// as the idle ones. Defaults to 0.
+    /// The number of connections the pool keeps open, counting the ones in use as well as the idle ones. An
+    /// expired connection is still retired, and a fresh one opened in its place. Defaults to 0.
     /// </summary>
     public int MinPoolSize
     {
@@ -123,7 +123,10 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["MaxConnectionLifetime"] = value.TotalSeconds;
     }
 
-    /// <summary>How long a connection may sit unused before it is closed, in seconds; 0 disables. Defaults to 300.</summary>
+    /// <summary>
+    /// How long a connection may sit unused before it is retired rather than reused, in seconds; 0 disables.
+    /// Defaults to 300. Keep it below the shortest idle timeout on the path to the server.
+    /// </summary>
     public TimeSpan IdleTimeout
     {
         get => GetTimeSpanSecondsOrDefault("IdleTimeout", ClickHouseTcpClientOptions.DefaultIdleTimeout);
