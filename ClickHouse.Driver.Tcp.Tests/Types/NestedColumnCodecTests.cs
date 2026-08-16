@@ -49,9 +49,9 @@ public class NestedColumnCodecTests
     [Test]
     public async Task ReadColumn_CompositeFields_RoundTrip()
     {
-        // Fields recurse through the registry. The Nullable and Array field compositions are covered against a
-        // real server by the "Nested(a Nullable(Int32), b Array(String))" case; a Tuple field has no integration
-        // case, so only that assertion remains here.
+        // Fields recurse through the registry. The live-server insert matrix covers each supported composite
+        // category in both legal directions; this direct codec round-trip keeps representative child layouts
+        // aligned in one Nested body.
         const string type = "Nested(a Nullable(Int32), b Array(String), c Tuple(UInt8, String))";
         IColumnCodec codec = Resolve(type);
         var column = Nested(
@@ -160,6 +160,18 @@ public class NestedColumnCodecTests
     [Test]
     public void Constructor_FieldNameCountMismatch_ThrowsArgument()
         => Assert.Throws<ArgumentException>(() => new NestedColumn("c", "Nested(a UInt8)", new[] { "a", "b" }, new[] { Field<byte>("UInt8", 1) }, new[] { 0, 1 }, 1, false, false));
+
+    [Test]
+    public void Constructor_OffsetsShorterThanRowCountPlusOne_Throws()
+    {
+        // rowCount is load-bearing here — every field column is flat and the offsets may be pooled — so it is
+        // validated rather than derived. One offset per row plus the leading zero is the minimum.
+        IColumn[] fields = { Field<byte>("UInt8", 1, 2, 3) };
+
+        Assert.That(
+            () => new NestedColumn("c", "Nested(a UInt8)", new[] { "a" }, fields, new[] { 0, 3 }, rowCount: 2, pooledOffsets: false, ownsFields: false),
+            Throws.ArgumentException.With.Message.Contains("fewer than"));
+    }
 
     [Test]
     public void WriteColumn_NonNestedColumn_ThrowsArgument()
