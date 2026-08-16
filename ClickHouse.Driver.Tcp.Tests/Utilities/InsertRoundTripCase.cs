@@ -495,6 +495,40 @@ public sealed class InsertRoundTripCase
                 (255, 127, ushort.MaxValue, short.MaxValue, uint.MaxValue, int.MaxValue, "héllo✓"),
             }));
 
+        // Tuple(): the zero-element tuple is a legal type, but it has none of the layout above — no element
+        // streams and no state prefix, just one placeholder byte per row, the way Nothing is serialized. Rows
+        // carry no data, so the row count is the only thing the round-trip can get wrong.
+        yield return Same(
+            "Tuple() [3 rows]",
+            "Tuple()",
+            name => new ArrayColumn<ValueTuple>(name, "Tuple()", new ValueTuple[3]));
+
+        // The empty tuple as an element of a real one: the per-element codec has to interleave a child that
+        // contributes a placeholder byte run between children that contribute values.
+        yield return Same(
+            "Tuple(Int32, Tuple(), String)",
+            "Tuple(Int32, Tuple(), String)",
+            name => new TupleColumn<int, ValueTuple, string>(name, "Tuple(Int32, Tuple(), String)", new (int, ValueTuple, string)[]
+            {
+                (1, default, "a"),
+                (int.MinValue, default, string.Empty),
+            }));
+
+        // Naming the empty element makes the parser rebuild its node from the glued "y Tuple" token, which is where
+        // the empty argument list is easiest to drop.
+        yield return Same(
+            "Tuple(x Int32, y Tuple())",
+            "Tuple(x Int32, y Tuple())",
+            name => new TupleColumn<int, ValueTuple>(name, "Tuple(x Int32, y Tuple())", new (int, ValueTuple)[]
+            {
+                (1, default),
+                (-2, default),
+            }));
+
+        // Array(Tuple()) flattens to a placeholder byte per element rather than per row, so the offsets are the
+        // only thing carrying the shape; an empty row and an uneven run keep them non-trivial.
+        yield return Arrays<ValueTuple>("Tuple()", new ValueTuple[2], Array.Empty<ValueTuple>(), new ValueTuple[1]);
+
         // Array(Tuple(...)): the array flattens its jagged tuple rows into one values stream handed to the tuple
         // codec, exercising the boxed per-element write path; empty rows and an empty column ride along.
         yield return Same(

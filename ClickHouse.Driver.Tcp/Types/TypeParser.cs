@@ -59,6 +59,15 @@ internal static class TypeParser
         }
 
         position++; // consume '('
+
+        // An immediately closing paren is an empty argument list, which the zero-element Tuple() needs. It stays
+        // distinct from a bare name so a type that requires arguments can still reject it.
+        if (position < tokens.Count && tokens[position] == ")")
+        {
+            position++;
+            return new TypeNode(name, Array.Empty<TypeNode>(), hasArgumentList: true);
+        }
+
         var arguments = new List<TypeNode>();
         while (true)
         {
