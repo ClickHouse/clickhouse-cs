@@ -1050,6 +1050,44 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task Sweep_ReEnteredWhileItClosesAConnection_DoesNothingOnTheNestedCall()
+    {
+        // Two overlapping sweeps, which is what the one-at-a-time guard is for. Sweeps share one `reaped` buffer,
+        // so a second sweep clearing it would break the first sweep's own iteration and strand the rest of the
+        // batch. Real overlap needs a timer callback that outlives its period, which is possible because closing
+        // sockets happens outside the lock; re-entering from inside a close is the same window, made deterministic.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(maxPoolSize: 2, idleTimeout: TimeSpan.FromMinutes(5)), factory, clock);
+
+        int closes = 0;
+        bool reentered = false;
+        factory.OnClose = () =>
+        {
+            closes++;
+            if (!reentered)
+            {
+                reentered = true;
+                pool.Sweep();
+            }
+        };
+
+        await ReturnConcurrentLeasesAsync(pool, 2);
+        clock.Advance(TimeSpan.FromMinutes(6));
+
+        Assert.DoesNotThrow(pool.Sweep);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reentered, Is.True, "the nested sweep must really have been attempted");
+            Assert.That(closes, Is.EqualTo(2), "each connection is closed once, by the outer sweep alone");
+            Assert.That(pool.IdleCount, Is.Zero);
+            Assert.That(factory.Created.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
     public async Task SweepQuietly_WhateverTheSweepDoes_NeverThrowsAtTheTimer()
     {
         // The outer guard the timer calls. Each individual close already swallows, so this is defence in depth
@@ -1104,6 +1142,91 @@ public class ConnectionPoolTests
         };
 
         Assert.That(ConnectionPool.SweepInterval(options), Is.EqualTo(TimeSpan.FromSeconds(expectedSeconds)));
+    }
+
+    [Test]
+    public void SweepInterval_SetExplicitly_ReplacesTheDerivedPeriod()
+    {
+        // The derived period for these limits is 30 seconds, so the assertion fails if the override is ignored.
+        var options = new ClickHouseTcpClientOptions
+        {
+            IdleTimeout = TimeSpan.FromMinutes(5),
+            MaxConnectionLifetime = TimeSpan.FromMinutes(30),
+            SweepInterval = TimeSpan.FromSeconds(3),
+        };
+
+        Assert.That(ConnectionPool.SweepInterval(options), Is.EqualTo(TimeSpan.FromSeconds(3)));
+    }
+
+    [TestCase(100, TestName = "SweepInterval_SetBelowTheDerivedFloor_IsNotRaisedToIt")]
+    [TestCase(600_000, TestName = "SweepInterval_SetAboveTheDerivedCeiling_IsNotLoweredToIt")]
+    public void SweepInterval_SetOutsideTheDerivedBounds_IsUsedAsGiven(int milliseconds)
+    {
+        // The bounds shape the derivation only. Clamping an explicit value would ignore what the caller asked for
+        // and leave no way to find out, which is worse than honouring an awkward period.
+        var options = new ClickHouseTcpClientOptions
+        {
+            IdleTimeout = TimeSpan.FromSeconds(4),
+            MaxConnectionLifetime = TimeSpan.Zero,
+            SweepInterval = TimeSpan.FromMilliseconds(milliseconds),
+        };
+
+        Assert.That(ConnectionPool.SweepInterval(options), Is.EqualTo(TimeSpan.FromMilliseconds(milliseconds)));
+    }
+
+    [Test]
+    public void SweepInterval_SetWithNoLimitsButAFloorToHold_ReplacesTheFloorHoldingPeriod()
+    {
+        var options = new ClickHouseTcpClientOptions
+        {
+            IdleTimeout = TimeSpan.Zero,
+            MaxConnectionLifetime = TimeSpan.Zero,
+            MinPoolSize = 2,
+            SweepInterval = TimeSpan.FromSeconds(7),
+        };
+
+        Assert.That(ConnectionPool.SweepInterval(options), Is.EqualTo(TimeSpan.FromSeconds(7)));
+    }
+
+    [Test]
+    public void SweepInterval_SetButWithNothingToSweep_IsStillZeroSoNoTimerIsCreated()
+    {
+        // The override sets the period, not whether there is work. Nothing expires and there is no floor, so a
+        // timer would wake only to find nothing — and while one runs it holds a reference to the pool, so an
+        // undisposed client could never be collected.
+        var options = new ClickHouseTcpClientOptions
+        {
+            IdleTimeout = TimeSpan.Zero,
+            MaxConnectionLifetime = TimeSpan.Zero,
+            MinPoolSize = 0,
+            SweepInterval = TimeSpan.FromSeconds(5),
+        };
+
+        Assert.That(ConnectionPool.SweepInterval(options), Is.EqualTo(TimeSpan.Zero));
+    }
+
+    [Test]
+    public async Task Sweep_OnAPoolBuiltWithAnExplicitInterval_StillRetiresExpiredConnections()
+    {
+        // The override changes when the sweep runs, not what it does. The clock here is controlled and its timers
+        // are inert, so this drives the sweep directly rather than waiting for the period.
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        ClickHouseTcpClientOptions options = Options(maxPoolSize: 2, idleTimeout: TimeSpan.FromMinutes(5)) with
+        {
+            SweepInterval = TimeSpan.FromSeconds(2),
+        };
+        await using var pool = new ConnectionPool(options, factory, clock);
+
+        await ReturnConcurrentLeasesAsync(pool, 2);
+        clock.Advance(TimeSpan.FromMinutes(6));
+        pool.Sweep();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.IdleCount, Is.Zero);
+            Assert.That(factory.Created.Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Terminated));
+        });
     }
 
     [Test]

@@ -79,34 +79,32 @@ public sealed record ClickHouseTcpClientOptions
     public TimeSpan ReadTimeout { get; init; } = DefaultReadTimeout;
 
     /// <summary>
-    /// The number of connections the pool keeps open when it can, counting both idle and in-use ones. Defaults
-    /// to 0. Neither <see cref="MaxConnectionLifetime"/> nor <see cref="IdleTimeout"/> respects this floor: an
-    /// expired connection is retired whatever the count, and the floor is then restored by opening a fresh one.
-    /// So a quiet pool rotates its connections rather than holding the same ones, which is what makes the floor
-    /// worth having — a checkout refuses an expired connection, so keeping one to meet the count would only hold
-    /// a socket that serves nobody.
+    /// The number of connections the pool keeps open when it can, counting both idle and in-use ones. Defaults to 0.
+    /// Neither <see cref="MaxConnectionLifetime"/> nor <see cref="IdleTimeout"/> respects this floor: an expired
+    /// connection is retired whatever the count, and the floor is then restored by opening a fresh one. So a quiet
+    /// pool rotates its connections rather than holding the same ones. That is what makes the floor useful, because a
+    /// checkout refuses an expired connection: keeping one to meet the count would hold a socket that serves nobody.
     /// </summary>
     /// <remarks>
     /// <para>
     /// The floor is maintained by the same sweep that closes expired connections, so a pool below it is topped up
-    /// within one sweep interval rather than at construction — a burst arriving before the first sweep still
-    /// opens its own connections. Topping up never takes a slot from a waiting caller: it only uses capacity
-    /// that is free at that moment, so a pool already at <see cref="MaxPoolSize"/> simply skips it.
+    /// within one sweep period rather than at construction, and a burst arriving before the first sweep still opens
+    /// its own connections. Topping up never takes a slot from a waiting caller: it uses only capacity that is free
+    /// at that moment, so a pool already at <see cref="MaxPoolSize"/> skips it.
     /// </para>
     /// <para>
-    /// Because the rotation is what holds the floor, a pool that carries no traffic at all still reconnects: this
-    /// many connections per <see cref="IdleTimeout"/>, indefinitely. At the defaults that is nothing, the floor
-    /// being 0. Raising the floor while lowering <see cref="IdleTimeout"/> multiplies the two, so a floor of 10
-    /// against a 5-second idle limit is 10 connects, handshakes and authentications every 5 seconds from an
-    /// application issuing no queries. Size the pair together.
+    /// Because the rotation is what holds the floor, a pool carrying no traffic at all still reconnects: this many
+    /// connections per <see cref="IdleTimeout"/>, indefinitely. At the defaults that is nothing, the floor being 0.
+    /// Raising the floor while lowering <see cref="IdleTimeout"/> multiplies the two, so a floor of 10 against a
+    /// 5-second idle limit is 10 connects, handshakes and authentications every 5 seconds from an application issuing
+    /// no queries. Size the pair together.
     /// </para>
     /// </remarks>
     public int MinPoolSize { get; init; } = DefaultMinPoolSize;
 
     /// <summary>
-    /// The hard cap on connections the pool opens, and so on operations that run at once — one connection
-    /// carries one query, the protocol having no multiplexing. Defaults to 20. Further callers queue for up to
-    /// <see cref="PoolTimeout"/>.
+    /// The hard cap on connections the pool opens, and so on operations that run at once, one connection carrying one
+    /// query. Defaults to 20. Further callers queue for up to <see cref="PoolTimeout"/>.
     /// </summary>
     /// <remarks>
     /// Each connection running an insert buffers up to <see cref="MaxSendBufferBytes"/>, so the client's peak
@@ -142,13 +140,34 @@ public sealed record ClickHouseTcpClientOptions
     /// <see cref="TimeSpan.Zero"/> keeps idle connections until they expire by age.
     /// </summary>
     /// <remarks>
-    /// This releases sockets nobody is using, and it is also the client's defence against a connection killed
-    /// while idle. A proxy or load balancer between client and server drops an idle connection on its own
-    /// schedule, and such a drop can arrive without a FIN, in which case the transport still looks alive and the
-    /// next operation over it stalls until TCP gives up. So a connection past this limit is not handed out either,
-    /// exactly as an over-age one is not: set it below the shortest idle timeout on the path to the server.
+    /// This releases sockets nobody is using, and it is also the client's defence against a connection killed while
+    /// idle. A proxy or load balancer between client and server drops an idle connection on its own schedule, and
+    /// such a drop can arrive without a FIN, in which case the transport still looks alive and the next operation over
+    /// it stalls until TCP gives up. So a connection past this limit is not handed out, just as an over-age one is
+    /// not. Set it below the shortest idle timeout on the path to the server.
     /// </remarks>
     public TimeSpan IdleTimeout { get; init; } = DefaultIdleTimeout;
+
+    /// <summary>
+    /// How often the pool looks for connections to retire and tops itself back up to <see cref="MinPoolSize"/>.
+    /// Null, the default, derives the period from the limits in force. An explicit value is used as given.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The derived period is a quarter of the shorter of <see cref="MaxConnectionLifetime"/> and
+    /// <see cref="IdleTimeout"/>, held between 1 and 30 seconds. The fraction keeps the delay in noticing an
+    /// expiry proportional to the limit being enforced, which one fixed period cannot do for limits that range
+    /// from seconds to hours. The lower bound stops a short limit making the sweep spin; the upper bound still
+    /// releases idle sockets in good time when both limits are long. At the default limits the period is 30
+    /// seconds.
+    /// </para>
+    /// <para>
+    /// Set this only for a workload the derivation does not suit. The value is used unclamped, so a very short period
+    /// costs a wake-up that often for as long as the client lives. It must be positive. When both limits are zero and
+    /// there is no floor to hold, the pool schedules no sweep at all, whatever this says.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? SweepInterval { get; init; }
 
     /// <summary>Which idle connection the pool hands out next. Defaults to <see cref="ClickHouseTcpPoolReusePolicy.Lifo"/>.</summary>
     public ClickHouseTcpPoolReusePolicy PoolReusePolicy { get; init; } = DefaultPoolReusePolicy;
@@ -161,7 +180,7 @@ public sealed record ClickHouseTcpClientOptions
     /// </summary>
     /// <remarks>
     /// The <c>with</c> expression carries every other property across, so a property added later needs no change
-    /// here. Keep it that way — a hand-written copy is what silently drops a new property.
+    /// here. Keep it that way: a hand-written copy is what silently drops a new property.
     /// </remarks>
     internal ClickHouseTcpClientOptions WithOwnedCustomSettings()
         => CustomSettings is null
@@ -222,6 +241,12 @@ public sealed record ClickHouseTcpClientOptions
         if (IdleTimeout < TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(IdleTimeout), IdleTimeout, "IdleTimeout must not be negative; use TimeSpan.Zero to disable idle closing.");
+        }
+
+        // Only when set. Null is not a value here but a request to derive the period, which cannot be out of range.
+        if (SweepInterval is { } sweepInterval)
+        {
+            RequireUsableTimeout(sweepInterval, nameof(SweepInterval));
         }
 
         if (MaxPoolSize < 1)
