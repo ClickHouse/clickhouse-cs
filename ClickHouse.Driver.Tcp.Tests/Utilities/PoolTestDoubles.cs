@@ -82,6 +82,12 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
     public bool ClosingThrows { get; set; }
 
     /// <summary>
+    /// Runs when the pool closes a connection, so a test can act at that moment. Read when the connection is
+    /// created, so set it before the connections are opened.
+    /// </summary>
+    public Action OnClose { get; set; }
+
+    /// <summary>
     /// Extra bytes the "server" sends after its Hello, so the connection reaches Ready with the reader out of
     /// step. What an operation that did not consume its whole reply leaves behind, which no scripted-clean
     /// connection can reproduce.
@@ -136,7 +142,8 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
         ClickHouseTcpConnection connection = await CreateReadyAsync(
             IgnoresCancellation ? CancellationToken.None : cancellationToken,
             trailing: Trailing,
-            throwOnClose: ClosingThrows).ConfigureAwait(false);
+            throwOnClose: ClosingThrows,
+            onClose: OnClose).ConfigureAwait(false);
         lock (gate)
         {
             created.Add(connection);
@@ -149,11 +156,13 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
     /// <param name="cancellationToken">A token to observe during the handshake.</param>
     /// <param name="trailing">Extra bytes the "server" sent after the Hello, to leave the reader out of step.</param>
     /// <param name="throwOnClose">When true, the transport throws when disposed, so terminating the connection fails.</param>
+    /// <param name="onClose">Runs when the transport is disposed. Null for none.</param>
     /// <returns>A connection in the Ready state.</returns>
     internal static async ValueTask<ClickHouseTcpConnection> CreateReadyAsync(
         CancellationToken cancellationToken = default,
         byte[] trailing = null,
-        bool throwOnClose = false)
+        bool throwOnClose = false,
+        Action onClose = null)
     {
         byte[] hello = await ServerHelloBytesAsync(cancellationToken).ConfigureAwait(false);
         byte[] script = hello;
@@ -164,9 +173,15 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
             trailing.CopyTo(script, hello.Length);
         }
 
-        Stream transport = throwOnClose
-            ? new ThrowOnDisposeStream(new ScriptedDuplexStream(script))
-            : new ScriptedDuplexStream(script);
+        Stream transport = new ScriptedDuplexStream(script);
+        if (throwOnClose)
+        {
+            transport = new OnDisposeStream(transport, static () => throw new IOException("teardown failed"));
+        }
+        else if (onClose is not null)
+        {
+            transport = new OnDisposeStream(transport, onClose);
+        }
 
         var connection = new ClickHouseTcpConnection(transport, socket: null);
         await connection.HandshakeAsync(new ClientHandshakeParameters { Username = "default" }, cancellationToken).ConfigureAwait(false);
@@ -197,11 +212,12 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
 }
 
 /// <summary>
-/// Wraps a transport so that disposing it throws, standing in for a socket teardown that fails. Used to prove
-/// the sweep's exception guard is load-bearing: without it such a failure would reach a thread-pool thread with
-/// no one to catch it.
+/// Wraps a transport and runs an action when it is disposed. Used two ways: with an action that throws, to stand
+/// in for a socket teardown that fails — which proves the sweep's exception guard is load-bearing, since such a
+/// failure would otherwise reach a thread-pool thread with no one to catch it — and with an ordinary action, to
+/// let a test act at the moment the pool closes a connection.
 /// </summary>
-internal sealed class ThrowOnDisposeStream(Stream inner) : Stream
+internal sealed class OnDisposeStream(Stream inner, Action onDispose) : Stream
 {
     public override bool CanRead => inner.CanRead;
 
@@ -239,5 +255,11 @@ internal sealed class ThrowOnDisposeStream(Stream inner) : Stream
 
     public override void SetLength(long value) => throw new NotSupportedException();
 
-    protected override void Dispose(bool disposing) => throw new IOException("teardown failed");
+    // The inner stream is disposed after the action, so an action that throws leaves it alone — which is what the
+    // failing-teardown case needs.
+    protected override void Dispose(bool disposing)
+    {
+        onDispose();
+        inner.Dispose();
+    }
 }
