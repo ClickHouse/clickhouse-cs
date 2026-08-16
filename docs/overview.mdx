@@ -993,13 +993,12 @@ await client.InsertBinaryAsync("events", columns, rows, options);
 ### Tuning compression {#tuning-compression}
 
 Compression trades CPU for bytes. Whether that is a win depends almost entirely on how fast your
-link is relative to how fast the codec runs, and the answer flips completely between a
-same-datacenter deployment and one crossing the internet. There is no setting that is right for
+link is relative to how fast the codec runs. There is no setting that is right for
 everyone.
 
 #### The one number that decides it
 
-Compressing is worth it as long as the codec is *faster than the network*.
+Compressing is worth it as long as the codec is faster than the network.
 
 That threshold is lower than most people expect on the read path, because ClickHouse compresses
 HTTP responses single-threaded in the output buffer. Measured on a 16-vCPU ClickHouse Cloud
@@ -2267,11 +2266,11 @@ increases with the buffer size and with the number of concurrent readers.
 var settings = new ClickHouseClientSettings("Host=localhost") { ReadBufferSize = 256 * 1024 };
 ```
 
-<Note>
+<Warning>
 *Always dispose readers.* A reader returns its pooled buffer and releases its HTTP connection when
-you dispose it. A reader that you do not dispose holds both until the garbage collector finalizes it,
-which decreases the number of connections available in the pool.
-</Note>
+you dispose it. Abandoning a reader does not return the buffer to the pool and may leave the HTTP
+connection unavailable; ordinary garbage collection is not a substitute for disposal.
+</Warning>
 
 ---
 
