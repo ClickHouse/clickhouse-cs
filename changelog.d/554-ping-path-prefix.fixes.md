@@ -1,0 +1,1 @@
+* Fixed `PingAsync` ignoring the `Path` connection setting: the ping request now targets `<Path>/ping`, so clients behind a reverse-proxy prefix no longer report a healthy server as unreachable (issue #554).

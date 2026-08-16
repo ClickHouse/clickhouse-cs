@@ -188,7 +188,10 @@ public sealed class ClickHouseClient : IClickHouseClient
     {
         try
         {
-            var pingUri = new Uri(serverUri, "ping");
+            // Append to the configured path instead of resolving "ping" as a relative reference:
+            // relative resolution replaces the last segment, dropping a reverse-proxy prefix
+            // configured via the Path setting (e.g. http://host:8123/ch -> http://host:8123/ping).
+            var pingUri = new UriBuilder(serverUri) { Path = serverUri.AbsolutePath.TrimEnd('/') + "/ping" }.Uri;
             using var request = new HttpRequestMessage(HttpMethod.Get, pingUri);
             AddDefaultHttpHeaders(request.Headers, queryOptions);
 
