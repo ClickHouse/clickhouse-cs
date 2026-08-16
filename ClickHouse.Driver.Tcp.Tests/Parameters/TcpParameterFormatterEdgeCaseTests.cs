@@ -167,6 +167,67 @@ public class TcpParameterFormatterEdgeCaseTests
         Assert.That(Format(value, "Map(String, Int32)"), Is.EqualTo("{'A' : 1,'a' : 2}"));
     }
 
+    // A value that names an instant cannot go into a type with no timezone without the instant moving, so the
+    // formatter refuses instead of guessing. See RequireDeclaredTimezone.
+    private static IEnumerable<TestCaseData> InstantWithoutATimezoneCases()
+    {
+        yield return new TestCaseData(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), "DateTime")
+            .SetName("DateTime of Kind Utc");
+        yield return new TestCaseData(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Local), "DateTime")
+            .SetName("DateTime of Kind Local");
+        yield return new TestCaseData(new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.FromHours(9)), "DateTime")
+            .SetName("DateTimeOffset");
+        yield return new TestCaseData(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), "DateTime64(3)")
+            .SetName("DateTime64, whose digit is a precision and not a timezone");
+        yield return new TestCaseData(new[] { new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc) }, "Array(DateTime)")
+            .SetName("Inside a composite");
+        yield return new TestCaseData(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), "Nullable(DateTime)")
+            .SetName("Through a Nullable");
+    }
+
+    [TestCaseSource(nameof(InstantWithoutATimezoneCases))]
+    public void FormatSqlText_InstantForATypeWithNoTimezone_ThrowsAndSaysHowToFixIt(object value, string typeName)
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format(value, typeName));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("names an instant"), "says what about the value is the problem");
+            Assert.That(exception.Message, Does.Contain("declares no timezone"), "says what about the type is the problem");
+            Assert.That(exception.Message, Does.Contain("session timezone"), "says what the server would do instead");
+            Assert.That(exception.Message, Does.Contain("'UTC'"), "shows the type to write");
+            Assert.That(exception.Message, Does.Contain("Kind=Unspecified"), "offers the other way out");
+            Assert.That(exception.Message, Does.Contain("Parameter 'p'"), "names the parameter");
+        });
+    }
+
+    [Test]
+    public void FormatSqlText_InstantForADateTime64WithNoTimezone_SuggestsAScaleAndATimezone()
+    {
+        // The suggestion has to stay valid for the type it is about: DateTime64('UTC') is not a type.
+        var exception = Assert.Throws<ArgumentException>(
+            () => Format(new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc), "DateTime64(3)"));
+
+        Assert.That(exception.Message, Does.Contain("DateTime64(3, 'UTC')"));
+    }
+
+    [TestCase("DateTime('UTC')", TestName = "A named timezone")]
+    [TestCase("DateTime('Europe/Amsterdam')", TestName = "A timezone that is not UTC")]
+    [TestCase("DateTime64(3, 'UTC')", TestName = "A scale and a timezone")]
+    public void FormatSqlText_InstantForATypeThatDeclaresATimezone_IsAccepted(string typeName)
+    {
+        Assert.DoesNotThrow(() => Format(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), typeName));
+    }
+
+    [TestCase("DateTime", ExpectedResult = "2024-01-02T03:04:05", TestName = "DateTime keeps the wall clock")]
+    [TestCase("DateTime64(3)", ExpectedResult = "2024-01-02 03:04:05.0000000", TestName = "DateTime64 keeps the wall clock")]
+    public string FormatSqlText_UnspecifiedKindForATypeWithNoTimezone_StillPasses(string typeName)
+    {
+        // Unspecified means a wall-clock time with no instant attached, which is exactly what a type with no
+        // timezone carries. Nothing is lost, so this stays legal.
+        return Format(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Unspecified), typeName);
+    }
+
     [Test]
     public void FormatSqlText_VariantWithNoMatchingAlternative_Throws()
     {
@@ -236,13 +297,15 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_DateTime64WithATimezoneAndAPrecision_ReadsTheTimezoneNotThePrecision()
     {
-        // The timezone is the last argument, so the precision digit must not be mistaken for one.
+        // The timezone is the last argument, so the precision digit must not be mistaken for one. The pair
+        // shows both halves: the named zone shifts the value, and the lone digit counts as no zone at all —
+        // if it were read as one, the second call would format instead of refusing.
         var instant = new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.Zero);
 
         Assert.Multiple(() =>
         {
             Assert.That(Format(instant, "DateTime64(3, 'Europe/Amsterdam')"), Is.EqualTo("2024-01-02 04:04:05.0000000"));
-            Assert.That(Format(instant, "DateTime64(3)"), Is.EqualTo("2024-01-02 03:04:05.0000000"));
+            Assert.Throws<ArgumentException>(() => Format(instant, "DateTime64(3)"));
         });
     }
 
