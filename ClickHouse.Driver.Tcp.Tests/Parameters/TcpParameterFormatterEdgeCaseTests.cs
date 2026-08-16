@@ -327,6 +327,61 @@ public class TcpParameterFormatterEdgeCaseTests
     }
 
     [Test]
+    public void FormatSqlText_VariantHoldingKeyValuePairs_PicksTheMapAlternative()
+    {
+        // A pair sequence is also an IEnumerable, so without its own arm the Array alternative would claim it.
+        KeyValuePair<string, int>[] pairs = [new("a", 1)];
+
+        Assert.That(Format(pairs, "Variant(Array(String), Map(String, Int32))"), Is.EqualTo("{'a' : 1}"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantHoldingKeyValuePairsWhoseValuesDoNotFit_Throws()
+    {
+        KeyValuePair<string, string>[] pairs = [new("a", "b")];
+
+        var exception = Assert.Throws<ArgumentException>(() => Format(pairs, "Variant(Map(String, Int32), Int64)"));
+
+        Assert.That(exception.Message, Does.Contain("no alternative"));
+    }
+
+    [TestCase("Variant(Int64, String)", TestName = "A dictionary where no alternative is a Map")]
+    public void FormatSqlText_VariantWhereACompositeMatchesNoAlternative_Throws(string typeName)
+    {
+        var value = new Dictionary<string, int> { ["a"] = 1 };
+
+        var exception = Assert.Throws<ArgumentException>(() => Format(value, typeName));
+
+        Assert.That(exception.Message, Does.Contain("no alternative"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantHoldingATupleWhereNoAlternativeIsATuple_Throws()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format(("a", 1), "Variant(Int64, String)"));
+
+        Assert.That(exception.Message, Does.Contain("no alternative"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantHoldingASequenceWhereNoAlternativeIsAnArray_Throws()
+    {
+        // The sequence never reaches the recursive Array arm, so the fallback name comparison is what has to
+        // reject it.
+        var exception = Assert.Throws<ArgumentException>(() => Format(new[] { 1, 2 }, "Variant(Int64, String)"));
+
+        Assert.That(exception.Message, Does.Contain("no alternative"));
+    }
+
+    [Test]
+    public void FormatSqlText_MapTypeGivenAValueThatIsNeitherDictionaryNorPairs_Throws()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format(42, "Map(String, Int32)"));
+
+        Assert.That(exception.Message, Does.Contain("Map(String, Int32)"));
+    }
+
+    [Test]
     public void FormatSqlText_MapGivenAsKeyValuePairs_FormatsInSequenceOrder()
     {
         // The shape a Map column reads back as. Order is kept, and duplicate keys are not collapsed, which is
