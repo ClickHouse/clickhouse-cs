@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -125,7 +126,11 @@ public class ClickHouseTcpParameterIntegrationTests
             .Returns("[[(0,0),(1,0),(1,1)]]").SetName("Polygon");
         yield return new TestCaseData("MultiPolygon", new[] { new[] { new[] { (0.0, 0.0), (1.0, 0.0), (1.0, 1.0) } } })
             .Returns("[[[(0,0),(1,0),(1,1)]]]").SetName("MultiPolygon");
-        yield return new TestCaseData("QBit(Float32, 4)", new[] { 1f, 2f, 3f, 4f }).Returns("[1,2,3,4]").SetName("QBit");
+
+        if (TcpServerFeatures.Has(TcpFeature.QBit))
+        {
+            yield return new TestCaseData("QBit(Float32, 4)", new[] { 1f, 2f, 3f, 4f }).Returns("[1,2,3,4]").SetName("QBit");
+        }
 
         // An Enum bound by its numeric value rather than its label. Neither transport had a case for it.
         yield return new TestCaseData("Enum8('a' = 1, 'b' = 2)", 2).Returns("b").SetName("Enum by number");
