@@ -2,7 +2,8 @@ namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// Which idle connection the pool hands out next. Both policies are equally correct — a connection is checked
-/// for age and liveness whichever end it comes from — so the choice is about how work spreads over the pool.
+/// for age, idleness and liveness whichever end it comes from — so the choice is about how work spreads over the
+/// pool.
 /// </summary>
 public enum ClickHouseTcpPoolReusePolicy
 {
@@ -13,8 +14,9 @@ public enum ClickHouseTcpPoolReusePolicy
     Lifo,
 
     /// <summary>
-    /// Hand out the least recently returned connection. Spreads traffic evenly, so every connection is exercised
-    /// often enough that a server-side or network-side drop is found by use rather than at the next checkout.
+    /// Hand out the least recently returned connection. Spreads traffic evenly, so under steady load every
+    /// connection is used again inside its idle window and fewer are retired for idleness — at the cost of
+    /// keeping the whole pool warm rather than letting the surplus go.
     /// </summary>
     Fifo,
 }

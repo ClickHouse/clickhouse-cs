@@ -24,11 +24,15 @@ public class ConnectionPoolIntegrationTests
         public ulong Id { get; set; }
     }
 
-    private static ClickHouseTcpClient CreateClient(int maxPoolSize = 4, TimeSpan? poolTimeout = null)
+    private static ClickHouseTcpClient CreateClient(
+        int maxPoolSize = 4,
+        TimeSpan? poolTimeout = null,
+        TimeSpan? idleTimeout = null)
         => new(TcpServerFixture.Options() with
         {
             MaxPoolSize = maxPoolSize,
             PoolTimeout = poolTimeout ?? TimeSpan.FromSeconds(30),
+            IdleTimeout = idleTimeout ?? TimeSpan.FromMinutes(5),
         });
 
     [Test]
@@ -149,4 +153,87 @@ public class ConnectionPoolIntegrationTests
         Assert.DoesNotThrowAsync(async () => await client.ExecuteAsync("SELECT 1", cancellationToken: None));
     }
 
+    [Test]
+    public async Task QueryAsync_AfterThePoolSatIdlePastTheIdleTimeout_RunsOnAFreshConnection()
+    {
+        // Retirement end to end, over a real socket and a real clock: ConnectionPoolTests drives a hand-held
+        // TimeProvider whose timers do nothing, so nothing there proves an over-idle connection is retired
+        // without a test calling Sweep itself. This does not say which mechanism did it — the sweep timer and the
+        // checkout would both refuse that connection, and either is a correct answer — only that the caller is
+        // given a working connection and not the stale one.
+        //
+        // A temporary table is the marker, because the server scopes one to the connection that created it: while
+        // the pool reuses that connection the table is visible, and it is gone the moment the pool replaces it.
+        // Five seconds, not one: the read-back below has to happen inside the window to prove the marker was ever
+        // there, and the net8/net9/net10 suites run at once against one server, so a tight window would fail on a
+        // scheduling stall rather than on the pool. Reuse itself is proven without any timing dependency by
+        // Return_AfterEachKindOfOperation_KeepsTheSameConnection, which leaves the timeout at its 5-minute default.
+        await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1, idleTimeout: TimeSpan.FromSeconds(5));
+        string marker = UniqueTableName();
+
+        await client.ExecuteAsync($"CREATE TEMPORARY TABLE {marker} (id UInt64)", cancellationToken: None);
+        Assert.That(
+            await TemporaryTableExistsAsync(client, marker),
+            Is.EqualTo(1UL),
+            "the marker must exist to begin with, or the assertion below proves nothing");
+
+        await Task.Delay(TimeSpan.FromSeconds(7));
+
+        Assert.That(
+            await TemporaryTableExistsAsync(client, marker),
+            Is.EqualTo(0UL),
+            "a connection left idle past the timeout must not be handed out again");
+    }
+
+    [Test]
+    public async Task Return_AfterEachKindOfOperation_KeepsTheSameConnection()
+    {
+        // The return path now asks IsReusable, not just for Ready, so it polls the socket and inspects the read
+        // buffer of a connection that has just finished work. If any operation leaves bytes behind, that turns
+        // into a fresh connection per operation — a silent throughput loss no other test would show. The same
+        // temporary table proves the connection survived: with a pool of one, it is gone if the pool replaced it.
+        await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1);
+        string marker = UniqueTableName();
+
+        await client.ExecuteAsync($"CREATE TEMPORARY TABLE {marker} (id UInt64)", cancellationToken: None);
+        await client.InsertAsync(
+            $"INSERT INTO {marker} (id) VALUES",
+            new List<ValueRow> { new() { Id = 1 }, new() { Id = 2 } },
+            cancellationToken: None);
+
+        ulong sum = 0;
+        await foreach (ValueRow row in client.QueryAsync<ValueRow>($"SELECT sum(id) AS id FROM {marker}", cancellationToken: None))
+        {
+            sum = row.Id;
+        }
+
+        await foreach (Block block in client.StreamAsync($"SELECT id FROM {marker}", cancellationToken: None))
+        {
+            Assert.That(block.RowCount, Is.GreaterThan(0));
+        }
+
+        ulong stillThere = await TemporaryTableExistsAsync(client, marker);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sum, Is.EqualTo(3UL), "the insert and the query ran on the connection that holds the table");
+            Assert.That(
+                stillThere,
+                Is.EqualTo(1UL),
+                "execute, insert, query and stream must each leave a connection the pool can keep");
+        });
+    }
+
+    private static async Task<ulong> TemporaryTableExistsAsync(ClickHouseTcpClient client, string name)
+    {
+        ulong exists = 0;
+        await foreach (ValueRow row in client.QueryAsync<ValueRow>(
+            $"SELECT toUInt64(count()) AS id FROM system.tables WHERE is_temporary AND name = '{name}'",
+            cancellationToken: None))
+        {
+            exists = row.Id;
+        }
+
+        return exists;
+    }
 }
