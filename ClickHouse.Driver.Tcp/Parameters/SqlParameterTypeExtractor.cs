@@ -8,6 +8,12 @@ namespace ClickHouse.Driver.Tcp.Parameters;
 /// This is a port of the HTTP scanner <c>ClickHouse.Driver.ADO.Parameters.SqlParameterTypeExtractor</c>. The TCP
 /// assembly cannot reference <c>ClickHouse.Driver</c>, because the project reference runs the other way. Keep the
 /// two copies in step: a change to one must be applied to the other.
+/// <para>
+/// The two have already diverged in one place. This copy treats a backslash as an escape inside a string
+/// literal, which the HTTP copy does not, so a query holding <c>\'</c> keeps its type hints here and loses
+/// them there. That is a defect in the HTTP copy; fixing it changes a shipped client, so it is filed rather
+/// than done — see the parity-check entry in the TCP TODO.
+/// </para>
 /// </summary>
 internal static class SqlParameterTypeExtractor
 {
