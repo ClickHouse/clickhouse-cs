@@ -35,6 +35,19 @@ public class TcpParameterFormatterEdgeCaseTests
     }
 
     [Test]
+    public void FormatSqlText_StringFromBytes_DecodesAsUtf8()
+    {
+        // Only FixedString read the bytes, so a String parameter printed the CLR type name instead.
+        Assert.That(Format(Encoding.UTF8.GetBytes("héllo"), "String"), Is.EqualTo("héllo"));
+    }
+
+    [Test]
+    public void FormatSqlText_StringFromBytesInsideAnArray_IsEscapedAndQuoted()
+    {
+        Assert.That(Format(new[] { Encoding.UTF8.GetBytes(@"a'b\c") }, "Array(String)"), Is.EqualTo(@"['a\'b\\c']"));
+    }
+
+    [Test]
     public void FormatSqlText_DateFromADateTime_DropsTheTimeOfDay()
     {
         Assert.That(Format(new DateTime(2024, 1, 2, 3, 4, 5), "Date"), Is.EqualTo("2024-01-02"));
