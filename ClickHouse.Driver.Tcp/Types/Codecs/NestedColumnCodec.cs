@@ -44,9 +44,9 @@ internal sealed class NestedColumnCodec : IColumnCodec
     public string TypeName { get; }
 
     /// <summary>
-    /// A <c>Nested</c> column surfaces as an array of records (<c>object[][]</c>). This is never consumed
-    /// compositionally — ClickHouse does not allow <c>Nested</c> as an inner type of another type — but the
-    /// interface requires an element type.
+    /// A <c>Nested</c> column surfaces as an array of records (<c>object[][]</c>). With
+    /// <c>flatten_nested = 0</c>, ClickHouse supports arbitrary nesting, so another composite can use this as its
+    /// element type while retaining the dense <see cref="NestedColumn"/> as the write source.
     /// </summary>
     public Type ElementType => typeof(object[][]);
 

@@ -53,7 +53,7 @@ internal sealed class NestedColumn : IColumn<object[][]>, INestedColumn
     /// <param name="rowCount">The number of rows.</param>
     /// <param name="pooledOffsets">Whether <paramref name="offsets"/> was rented and should be returned on dispose.</param>
     /// <param name="ownsFields">Whether this column owns and disposes <paramref name="fields"/> (false when a caller retains them).</param>
-    /// <exception cref="ArgumentException"><paramref name="fieldNames"/> and <paramref name="fields"/> differ in length, or <paramref name="fields"/> is empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="fieldNames"/> and <paramref name="fields"/> differ in length, <paramref name="fields"/> is empty, or <paramref name="offsets"/> holds fewer than <paramref name="rowCount"/> + 1 entries.</exception>
     public NestedColumn(string name, string typeName, string[] fieldNames, IColumn[] fields, int[] offsets, int rowCount, bool pooledOffsets, bool ownsFields)
     {
         this.fieldNames = fieldNames ?? throw new ArgumentNullException(nameof(fieldNames));
@@ -74,6 +74,16 @@ internal sealed class NestedColumn : IColumn<object[][]>, INestedColumn
         this.rowCount = rowCount;
         this.pooledOffsets = pooledOffsets;
         this.ownsFields = ownsFields;
+
+        // The row count cannot be derived here: every field column is flat (one entry per element across all rows,
+        // so its height is the element total) and the offsets are typically a pooled buffer longer than the column.
+        // A short offsets array would leave the row bounds reading past its end.
+        if (offsets.Length < rowCount + 1)
+        {
+            throw new ArgumentException(
+                $"The offsets for column '{name}' ({typeName}) hold {offsets.Length} entries, fewer than the {rowCount + 1} needed for {rowCount} rows.",
+                nameof(offsets));
+        }
     }
 
     /// <summary>
