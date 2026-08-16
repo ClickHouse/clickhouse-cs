@@ -71,6 +71,9 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Time", new TimeSpan(1, 1, 1)).Returns("01:01:01").SetName("Time");
         yield return new TestCaseData("Time64(3)", new TimeSpan(0, 1, 1, 1, 500)).Returns("01:01:01.500").SetName("Time64");
         yield return new TestCaseData("FixedString(3)", Encoding.UTF8.GetBytes("abc")).Returns("abc").SetName("FixedString from bytes");
+        yield return new TestCaseData("String", Encoding.UTF8.GetBytes("abc")).Returns("abc").SetName("String from bytes");
+        yield return new TestCaseData("IntervalSecond", 5L).Returns("5").SetName("IntervalSecond");
+        yield return new TestCaseData("IntervalDay", -3L).Returns("-3").SetName("IntervalDay negative");
         yield return new TestCaseData("Nested(a UInt8, b String)", new object[] { (1, "x"), (2, "y") })
             .Returns("[(1,'x'),(2,'y')]").SetName("Nested rows");
         yield return new TestCaseData("Variant(Int64, String)", 7L).Returns("7").SetName("Variant picks the integer");
