@@ -189,14 +189,36 @@ internal static class TcpParameterFormatter
             case "Variant":
                 return FormatVariant(type, value, quote);
 
-            case "JSON":
+            // The server takes either spelling and reports the type as JSON, so both must format.
+            case "JSON" or "Json":
                 return value is string json ? json : JsonSerializer.Serialize(value);
+
+            // A QBit is a fixed-width vector of its element type, written as an array.
+            case "QBit" when value is IEnumerable components && type.Arguments.Count == 2:
+                return "[" + string.Join(",", components.Cast<object>().Select(c => Format(type.Arguments[0], c, quote: true))) + "]";
+
+            // The geo types are named shapes over Point, which is itself a pair of Float64. Formatting them as
+            // the shape they stand for is what the HTTP formatter does, where they subclass Tuple and Array.
+            case "Point" or "Ring" or "LineString" or "Polygon" or "MultiLineString" or "MultiPolygon":
+                return Format(GeoShapeOf(name), value, quote);
 
             default:
                 throw new ArgumentException(
                     $"Cannot convert value of type '{value.GetType().FullName}' ({value}) to ClickHouse type {type}");
         }
     }
+
+    /// <summary>Expands a geo type name into the Tuple/Array shape it stands for.</summary>
+    /// <param name="name">The geo type name.</param>
+    /// <returns>The parsed structural equivalent.</returns>
+    private static TypeNode GeoShapeOf(string name) => TypeParser.Parse(name switch
+    {
+        "Point" => "Tuple(Float64, Float64)",
+        "Ring" or "LineString" => "Array(Point)",
+        "Polygon" or "MultiLineString" => "Array(Ring)",
+        "MultiPolygon" => "Array(Polygon)",
+        _ => throw new ArgumentException($"'{name}' is not a geo type"),
+    });
 
     private static string FormatDecimal(object value) => value switch
     {

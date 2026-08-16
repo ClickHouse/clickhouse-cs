@@ -25,8 +25,20 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("UInt64", ulong.MaxValue).Returns("18446744073709551615").SetName("UInt64 max");
         yield return new TestCaseData("Int128", Int128.MinValue).Returns("-170141183460469231731687303715884105728").SetName("Int128 min");
         yield return new TestCaseData("Float64", 1.5d).Returns("1.5").SetName("Float64");
+        yield return new TestCaseData("Float32", 1.5f).Returns("1.5").SetName("Float32");
         yield return new TestCaseData("Bool", true).Returns("true").SetName("Bool");
+        yield return new TestCaseData("Bool", false).Returns("false").SetName("Bool false");
         yield return new TestCaseData("Decimal64(4)", 1.2345m).Returns("1.2345").SetName("Decimal64");
+
+        // .NET spells these NaN/Infinity and ClickHouse spells them nan/inf. The server's reader accepts both,
+        // so the formatter needs no special case — but only a round-trip can show that.
+        yield return new TestCaseData("Float64", double.NaN).Returns("nan").SetName("Float64 NaN");
+        yield return new TestCaseData("Float64", double.PositiveInfinity).Returns("inf").SetName("Float64 +Infinity");
+        yield return new TestCaseData("Float64", double.NegativeInfinity).Returns("-inf").SetName("Float64 -Infinity");
+
+        // A Bool inside a composite must stay true/false. The server rejects 1/0 there, though it takes them
+        // for a scalar Bool, so a formatter that emitted digits would pass the scalar case and fail this one.
+        yield return new TestCaseData("Array(Bool)", new[] { true, false }).Returns("[true,false]").SetName("Array of Bool");
 
         yield return new TestCaseData("String", "plain").Returns("plain").SetName("String");
         yield return new TestCaseData("String", "O'Brien").Returns("O'Brien").SetName("String with a quote");
@@ -56,6 +68,18 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("DateTime64(3)", new DateTime(2024, 1, 2, 3, 4, 5, 123, DateTimeKind.Unspecified))
             .Returns("2024-01-02 03:04:05.123").SetName("DateTime64");
 
+        // The range ends, where a formatter that overflows or clamps shows it.
+        yield return new TestCaseData("Date", new DateOnly(1970, 1, 1)).Returns("1970-01-01").SetName("Date epoch");
+        yield return new TestCaseData("Date", new DateOnly(2149, 6, 6)).Returns("2149-06-06").SetName("Date maximum");
+        yield return new TestCaseData("Date32", new DateOnly(1900, 1, 1)).Returns("1900-01-01").SetName("Date32 minimum");
+        yield return new TestCaseData("Date32", new DateOnly(2299, 12, 31)).Returns("2299-12-31").SetName("Date32 maximum");
+
+        // Pre-epoch, where a naive seconds-and-fraction split puts the sign on the wrong part.
+        yield return new TestCaseData("DateTime64(3, 'UTC')", new DateTime(1969, 12, 31, 23, 59, 59, 500, DateTimeKind.Utc))
+            .Returns("1969-12-31 23:59:59.500").SetName("DateTime64 just before the epoch");
+        yield return new TestCaseData("DateTime64(9)", new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Unspecified).AddTicks(1234567))
+            .Returns("2024-01-02 03:04:05.123456700").SetName("DateTime64 at scale 9");
+
         yield return new TestCaseData("Array(Int32)", new[] { 1, 2, 3 }).Returns("[1,2,3]").SetName("Array of Int32");
         yield return new TestCaseData("Array(String)", new[] { "a", "b" }).Returns("['a','b']").SetName("Array of String");
         yield return new TestCaseData("Array(String)", new[] { "O'B" }).Returns(@"['O\'B']").SetName("Array element with a quote");
@@ -64,6 +88,17 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Array(Nullable(Int32))", new int?[] { 1, null, 3 }).Returns("[1,NULL,3]").SetName("Array with a null element");
         yield return new TestCaseData("Tuple(String, Int32)", ("a", 1)).Returns("('a',1)").SetName("Tuple");
         yield return new TestCaseData("Tuple(String, Int32)", ("O'B", 1)).Returns(@"('O\'B',1)").SetName("Tuple element with a quote");
+
+        // Map shapes past the one-pair case: the empty literal, a key needing escapes, a non-string key, and
+        // two levels of nesting. Each has its own way of producing text the server will not read back.
+        yield return new TestCaseData("Map(String, String)", new Dictionary<string, string>())
+            .Returns("{}").SetName("Empty map");
+        yield return new TestCaseData("Map(String, UInt8)", new Dictionary<string, byte> { [@"a'b\c"] = 1 })
+            .Returns(@"{'a\'b\\c':1}").SetName("Map key needing escapes");
+        yield return new TestCaseData("Map(Bool, String)", new Dictionary<bool, string> { [true] = "x" })
+            .Returns("{true:'x'}").SetName("Map with a Bool key");
+        yield return new TestCaseData("Map(String, Array(Bool))", new Dictionary<string, bool[]> { ["a"] = [true, false] })
+            .Returns("{'a':[true,false]}").SetName("Map holding an array");
 
         // Types whose text form the unit tests pin but no round-trip reached, so nothing proved the server
         // reads back what the formatter writes.
@@ -78,6 +113,78 @@ public class ClickHouseTcpParameterIntegrationTests
             .Returns("[(1,'x'),(2,'y')]").SetName("Nested rows");
         yield return new TestCaseData("Variant(Int64, String)", 7L).Returns("7").SetName("Variant picks the integer");
         yield return new TestCaseData("Variant(Int64, String)", "x").Returns("x").SetName("Variant picks the string");
+
+        // Types the HTTP formatter accepts and this one used to reject. The server takes both JSON spellings,
+        // and the geo names stand for shapes over Point, so each must reach the arm it stands for.
+        yield return new TestCaseData("Json", "{\"a\":1}").Returns("{\"a\":1}").SetName("Json in the lowercase spelling");
+        yield return new TestCaseData("JSON", "{\"a\":1}").Returns("{\"a\":1}").SetName("JSON in the uppercase spelling");
+        yield return new TestCaseData("Point", (10.0, 20.0)).Returns("(10,20)").SetName("Point");
+        yield return new TestCaseData("Ring", new[] { (0.0, 0.0), (1.0, 1.0) }).Returns("[(0,0),(1,1)]").SetName("Ring");
+        yield return new TestCaseData("LineString", new[] { (0.0, 0.0), (1.0, 1.0) }).Returns("[(0,0),(1,1)]").SetName("LineString");
+        yield return new TestCaseData("Polygon", new[] { new[] { (0.0, 0.0), (1.0, 0.0), (1.0, 1.0) } })
+            .Returns("[[(0,0),(1,0),(1,1)]]").SetName("Polygon");
+        yield return new TestCaseData("MultiPolygon", new[] { new[] { new[] { (0.0, 0.0), (1.0, 0.0), (1.0, 1.0) } } })
+            .Returns("[[[(0,0),(1,0),(1,1)]]]").SetName("MultiPolygon");
+        yield return new TestCaseData("QBit(Float32, 4)", new[] { 1f, 2f, 3f, 4f }).Returns("[1,2,3,4]").SetName("QBit");
+
+        // An Enum bound by its numeric value rather than its label. Neither transport had a case for it.
+        yield return new TestCaseData("Enum8('a' = 1, 'b' = 2)", 2).Returns("b").SetName("Enum by number");
+
+        // A wide decimal past what a CLR decimal can hold, so the BigInteger path is the one under test.
+        yield return new TestCaseData("Decimal128(0)", new string('1', 30)).Returns(new string('1', 30)).SetName("Decimal128 of 30 digits");
+        yield return new TestCaseData("Decimal256(0)", new string('1', 50)).Returns(new string('1', 50)).SetName("Decimal256 of 50 digits");
+
+        // Negative and past-24h durations, where the sign belongs on the whole value and not on one part.
+        yield return new TestCaseData("Time", new TimeSpan(-5, -25, -5)).Returns("-05:25:05").SetName("Time negative");
+        yield return new TestCaseData("Time", new TimeSpan(55, 25, 5)).Returns("55:25:05").SetName("Time past 24 hours");
+        yield return new TestCaseData("Time64(6)", new TimeSpan(-(new TimeSpan(5, 25, 5) + TimeSpan.FromTicks(1234560)).Ticks))
+            .Returns("-05:25:05.123456").SetName("Time64 negative");
+
+        // A surrogate pair, which a formatter that walks chars rather than runes can split.
+        yield return new TestCaseData("String", "a\U0001F600b").Returns("a\U0001F600b").SetName("String with an emoji");
+
+        // A ValueTuple past 7 elements nests its tail in TRest, which ITuple flattens back out.
+        yield return new TestCaseData("Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, String, String)",
+            (1, 2, 3, 4, 5, 6, 7, "eight", "nine")).Returns("(1,2,3,4,5,6,7,'eight','nine')").SetName("Tuple of nine");
+    }
+
+    [Test]
+    public async Task QueryAsync_KindedDateTimeWithATimezoneInTheHint_KeepsTheInstant()
+    {
+        // The safe form. The client moves the instant into the timezone the hint declares, and the server reads
+        // the wall-clock text back in that same timezone, so the two agree whatever the session is set to.
+        await using var client = TcpServerFixture.CreateClient();
+        var instant = new DateTimeOffset(2020, 1, 2, 12, 0, 0, TimeSpan.FromHours(9));
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Settings = new Dictionary<string, string> { ["session_timezone"] = "Asia/Tokyo" },
+            Parameters = new ClickHouseTcpParameterCollection { { "d", instant } },
+        };
+
+        object epoch = await ScalarAsync(client, "SELECT toUnixTimestamp({d:DateTime('UTC')})", options);
+
+        Assert.That(Convert.ToInt64(epoch), Is.EqualTo(instant.ToUnixTimeSeconds()));
+    }
+
+    [Test]
+    public async Task QueryAsync_KindedDateTimeWithABareHint_ReadsTheTextInTheSessionTimezone()
+    {
+        // The foot-gun, shared with the HTTP transport and pinned here so a change to it is deliberate. A bare
+        // {d:DateTime} hint names no timezone, so the server reads the wall-clock text in session_timezone. The
+        // client wrote that text in UTC, so the instant moves by the session's offset. Put the timezone in the
+        // hint, as the test above does. Only the text is agreed here; the instant is not.
+        await using var client = TcpServerFixture.CreateClient();
+        var instant = new DateTimeOffset(2020, 1, 2, 12, 0, 0, TimeSpan.FromHours(9));
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Settings = new Dictionary<string, string> { ["session_timezone"] = "Asia/Tokyo" },
+            Parameters = new ClickHouseTcpParameterCollection { { "d", instant } },
+        };
+
+        object epoch = await ScalarAsync(client, "SELECT toUnixTimestamp({d:DateTime})", options);
+
+        // The UTC wall clock of the instant, read back as if it were Tokyo local time: nine hours earlier.
+        Assert.That(Convert.ToInt64(epoch), Is.EqualTo(instant.ToUnixTimeSeconds() - (9 * 3600)));
     }
 
     [Test]

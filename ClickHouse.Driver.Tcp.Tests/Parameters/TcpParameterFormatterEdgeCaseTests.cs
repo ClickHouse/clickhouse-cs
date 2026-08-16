@@ -136,6 +136,37 @@ public class TcpParameterFormatterEdgeCaseTests
         Assert.That(Format(value, "Array(Nullable(DateTime))"), Is.EqualTo("['2024-01-02T03:04:05',null]"));
     }
 
+    // A rank-2 array whose indices do not start at zero. GetLowerBound must drive the walk; using 0..Length
+    // reads outside the array and throws, and the emitted text must not differ from the zero-based equivalent.
+    [Test]
+    public void FormatSqlText_ArrayWithANonZeroLowerBound_ReadsFromItsOwnBounds()
+    {
+        var value = Array.CreateInstance(typeof(int), [2, 3], [5, 10]);
+        for (int i = 0; i < 2; i++)
+        {
+            for (int j = 0; j < 3; j++)
+            {
+                value.SetValue((i * 3) + j, 5 + i, 10 + j);
+            }
+        }
+
+        Assert.That(Format(value, "Array(Array(Int32))"), Is.EqualTo("[[0,1,2],[3,4,5]]"));
+    }
+
+    [TestCase(0, 5, ExpectedResult = "[]", TestName = "Rank-2 array with no rows")]
+    [TestCase(3, 0, ExpectedResult = "[[],[],[]]", TestName = "Rank-2 array of empty rows")]
+    public string FormatSqlText_ArrayWithAZeroLengthAxis_KeepsTheOtherAxis(int rows, int columns)
+        => Format(new int[rows, columns], "Array(Array(Int32))");
+
+    [Test]
+    public void FormatSqlText_MapWithKeysDifferingOnlyByCase_KeepsBoth()
+    {
+        // A ClickHouse Map is an Array(Tuple(..)), so it does not collapse keys. The formatter must not either.
+        var value = new Dictionary<string, int> { ["A"] = 1, ["a"] = 2 };
+
+        Assert.That(Format(value, "Map(String, Int32)"), Is.EqualTo("{'A' : 1,'a' : 2}"));
+    }
+
     [Test]
     public void FormatSqlText_VariantWithNoMatchingAlternative_Throws()
     {
