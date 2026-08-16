@@ -276,6 +276,72 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
+    // Matching an alternative on its outer name alone let the first Array arm take any sequence, so a
+    // string[] was formatted as Array(Int32) and every element went out unquoted.
+    [TestCase("Variant(Array(Int32), Array(String))", ExpectedResult = "['a','b']", TestName = "Array picks by element type")]
+    [TestCase("Variant(Array(String), Array(Int32))", ExpectedResult = "['a','b']", TestName = "Array picks by element type, declared the other way round")]
+    public string FormatSqlText_VariantOfTwoArrays_PicksTheOneWhoseElementsFit(string typeName)
+        => Format(new[] { "a", "b" }, typeName);
+
+    [Test]
+    public void FormatSqlText_VariantOfTwoArraysHoldingIntegers_PicksTheIntegerArray()
+    {
+        Assert.That(Format(new[] { 1, 2 }, "Variant(Array(String), Array(Int32))"), Is.EqualTo("[1,2]"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantOfTwoMaps_PicksTheOneWhoseValuesFit()
+    {
+        var value = new Dictionary<string, string> { ["k"] = "v" };
+
+        Assert.That(Format(value, "Variant(Map(String, Int32), Map(String, String))"), Is.EqualTo("{'k' : 'v'}"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantOfTwoTuples_PicksTheOneWhoseElementsFit()
+    {
+        Assert.That(Format(("a", 1), "Variant(Tuple(Int32, Int32), Tuple(String, Int32))"), Is.EqualTo("('a',1)"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantOfTuplesOfDifferentArity_PicksTheMatchingArity()
+    {
+        Assert.That(Format((1, 2), "Variant(Tuple(Int32, Int32, Int32), Tuple(Int32, Int32))"), Is.EqualTo("(1,2)"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantWhereNoArrayElementTypeFits_Throws()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => Format(new[] { "a" }, "Variant(Array(Int32), Array(Date))"));
+
+        Assert.That(exception.Message, Does.Contain("no alternative"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantWithAnEmptyArray_TakesTheFirstArrayAlternative()
+    {
+        // Nothing in an empty sequence can contradict an element type, so the first Array arm is as good as
+        // any. Pinned so the recursive match does not start rejecting empties.
+        Assert.That(Format(Array.Empty<string>(), "Variant(Array(Int32), Array(String))"), Is.EqualTo("[]"));
+    }
+
+    [Test]
+    public void FormatSqlText_MapGivenAsKeyValuePairs_FormatsInSequenceOrder()
+    {
+        // The shape a Map column reads back as. Order is kept, and duplicate keys are not collapsed, which is
+        // why the read path uses pairs rather than a dictionary in the first place.
+        KeyValuePair<string, int>[] pairs = [new("b", 2), new("a", 1), new("b", 3)];
+
+        Assert.That(Format(pairs, "Map(String, Int32)"), Is.EqualTo("{'b' : 2,'a' : 1,'b' : 3}"));
+    }
+
+    [Test]
+    public void FormatSqlText_EmptyKeyValuePairsForAMap_ProducesTheEmptyLiteral()
+    {
+        Assert.That(Format(Array.Empty<KeyValuePair<string, int>>(), "Map(String, Int32)"), Is.EqualTo("{}"));
+    }
+
     [Test]
     public void FormatSqlText_VariantHoldingANullableAlternative_MatchesThroughTheWrapper()
     {

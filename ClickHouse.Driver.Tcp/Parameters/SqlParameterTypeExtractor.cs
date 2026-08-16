@@ -38,6 +38,14 @@ internal static class SqlParameterTypeExtractor
 
             if (inSqlString)
             {
+                // A backslash escapes whatever follows, so \' stays inside the string. Without this the
+                // string appears to end early and the real placeholder after it is never seen.
+                if (c == '\\' && i + 1 < sql.Length)
+                {
+                    i += 2;
+                    continue;
+                }
+
                 // An escaped quote ('') stays inside the string.
                 if (c == '\'' && i + 1 < sql.Length && sql[i + 1] == '\'')
                 {
@@ -140,6 +148,14 @@ internal static class SqlParameterTypeExtractor
 
             if (inQuote)
             {
+                // A backslash escapes whatever follows, so \' stays inside the quoted argument. Without this
+                // an enum label such as 'it\'s' ends early and the type is truncated.
+                if (c == '\\' && i + 1 < sql.Length)
+                {
+                    i += 2;
+                    continue;
+                }
+
                 // An escaped quote ('') stays inside the string.
                 if (c == '\'' && i + 1 < sql.Length && sql[i + 1] == '\'')
                 {
