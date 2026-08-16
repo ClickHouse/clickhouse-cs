@@ -71,20 +71,19 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// The pool asks at both ends of every lease, so it must stay cheap: one non-blocking poll of the socket.
     /// </summary>
     /// <remarks>
-    /// A readable idle socket means one of two things, and neither allows reuse: the peer closed and a zero-byte
-    /// read is pending, or bytes are waiting that the last operation did not consume, which means our idea of the
-    /// stream position no longer matches the server's.
+    /// A readable idle socket means one of two things, and neither allows reuse: the peer closed and a zero-byte read
+    /// is pending, or bytes the last operation did not consume are waiting, which means this side's idea of the stream
+    /// position no longer matches the server's.
     ///
     /// <para>
-    /// This detects only a peer that closed in an orderly way. A connection dropped without a FIN — a partition,
-    /// or a machine that lost power — still looks alive here, and the operation sent over it stalls until TCP
-    /// itself gives up, which on Linux takes on the order of fifteen minutes. That is inherent to a client-side
-    /// check, so the pool does not rely on this alone: it also refuses a connection that has sat idle past
-    /// <c>IdleTimeout</c>, which covers the common case of an intermediary dropping a connection nobody was
-    /// using. What neither catches is a drop that strikes a connection in active use, and the answer to that is
-    /// an idle read deadline rather than a stricter probe. <b>That deadline does not exist yet</b>:
-    /// <c>ReadTimeout</c> is parsed and stored but nothing enforces it, so today a caller's own
-    /// <see cref="System.Threading.CancellationToken"/> is the only bound on such a stall.
+    /// This detects only a peer that closed in an orderly way. A connection dropped without a FIN, by a partition or a
+    /// machine that lost power, still looks alive here, and the operation sent over it stalls until TCP itself gives
+    /// up, which on Linux takes about fifteen minutes. That is inherent to a client-side check, so the pool does not
+    /// rely on this alone: it also refuses a connection that has sat idle past <c>IdleTimeout</c>, which covers the
+    /// common case of an intermediary dropping a connection nobody was using. Neither catches a drop that strikes a
+    /// connection in active use. The answer to that is an idle read deadline rather than a stricter probe, and
+    /// <b>that deadline does not exist yet</b>: <c>ReadTimeout</c> is parsed and stored but nothing enforces it, so a
+    /// caller's own <see cref="System.Threading.CancellationToken"/> is currently the only bound on such a stall.
     /// </para>
     /// </remarks>
     internal bool IsReusable

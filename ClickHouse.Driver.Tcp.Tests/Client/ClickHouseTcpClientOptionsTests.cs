@@ -123,6 +123,39 @@ public class ClickHouseTcpClientOptionsTests
     }
 
     [Test]
+    public void Validate_NoSweepInterval_DoesNotThrow()
+    {
+        // Null is not a value out of range but a request to derive the period, so it must pass validation.
+        var options = new ClickHouseTcpClientOptions { SweepInterval = null };
+
+        Assert.Multiple(() =>
+        {
+            Assert.DoesNotThrow(() => options.Validate());
+            Assert.That(new ClickHouseTcpClientOptions().SweepInterval, Is.Null, "deriving the period is the default");
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_NonPositiveSweepInterval_ThrowsArgumentOutOfRangeException(int seconds)
+    {
+        // Zero does not mean "no sweep" here, unlike the two limits: that is what leaving it null does.
+        var options = new ClickHouseTcpClientOptions { SweepInterval = TimeSpan.FromSeconds(seconds) };
+
+        var thrown = Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+
+        Assert.That(thrown.Message, Does.Contain("SweepInterval"));
+    }
+
+    [Test]
+    public void Validate_SweepIntervalTooLargeToArm_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { SweepInterval = TimeSpan.FromDays(30) };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
     public void Validate_MinPoolSizeAboveMaxPoolSize_ThrowsArgumentOutOfRangeException()
     {
         var options = new ClickHouseTcpClientOptions { MinPoolSize = 5, MaxPoolSize = 4 };
@@ -284,6 +317,7 @@ public class ClickHouseTcpClientOptionsTests
             PoolTimeout = TimeSpan.FromSeconds(5),
             MaxConnectionLifetime = TimeSpan.FromSeconds(6),
             IdleTimeout = TimeSpan.FromSeconds(7),
+            SweepInterval = TimeSpan.FromSeconds(8),
             PoolReusePolicy = ClickHouseTcpPoolReusePolicy.Fifo,
         };
         var defaults = new ClickHouseTcpClientOptions();
