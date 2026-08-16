@@ -138,13 +138,21 @@ internal sealed class TupleColumnCodec : IColumnCodec
     /// <param name="node">The parsed <c>Tuple</c> node; its arguments are the element types (each optionally name-prefixed).</param>
     /// <param name="context">The resolution context, forwarded to each element codec's factory.</param>
     /// <param name="registry">The registry used to resolve the element codecs.</param>
-    /// <returns>The codec.</returns>
-    /// <exception cref="FormatException">The tuple has no elements.</exception>
+    /// <returns>The codec: <see cref="EmptyTupleColumnCodec"/> for <c>Tuple()</c>, otherwise this per-element one.</returns>
+    /// <exception cref="FormatException">The type names no elements and has no argument list either.</exception>
     /// <exception cref="NotSupportedException">The tuple has more elements than this client supports.</exception>
-    public static TupleColumnCodec Create(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry)
+    public static IColumnCodec Create(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry)
     {
         if (node.Arguments.Count == 0)
         {
+            // Tuple() is the legal zero-element tuple. It has no element streams, so it is not this codec's
+            // layout at all — one placeholder byte per row, like Nothing. A bare Tuple names no elements and
+            // carries no argument list, and stays malformed.
+            if (node.HasArgumentList)
+            {
+                return EmptyTupleColumnCodec.Instance;
+            }
+
             throw new FormatException($"Tuple type '{node}' must have at least one element type argument.");
         }
 

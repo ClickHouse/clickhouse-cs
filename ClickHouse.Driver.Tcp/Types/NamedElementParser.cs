@@ -35,7 +35,10 @@ internal static class NamedElementParser
                 // with a leading space that would then fail codec resolution.
                 string fieldName = argument.Name.Substring(0, space);
                 string baseName = argument.Name.Substring(space).TrimStart();
-                elements[i] = (fieldName, new TypeNode(baseName, argument.Arguments));
+
+                // Carry the argument list forward rather than re-deriving it from the argument count, or a named
+                // element of the zero-element type (e.g. "y Tuple()") would come out as a bare, malformed Tuple.
+                elements[i] = (fieldName, new TypeNode(baseName, argument.Arguments, argument.HasArgumentList));
             }
         }
 

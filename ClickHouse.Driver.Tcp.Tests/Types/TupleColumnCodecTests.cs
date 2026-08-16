@@ -232,4 +232,103 @@ public class TupleColumnCodecTests
             Assert.That(borrowed.DisposeCount, Is.EqualTo(0), "an unflagged (borrowed) child must not be disposed");
         });
     }
+
+    [Test]
+    public void Resolve_EmptyTuple_IsTheEmptyTupleCodec_AndABareTupleIsRejected()
+    {
+        // Tuple() and Tuple both parse to zero arguments, so only the argument list separates the legal
+        // zero-element tuple from a type naming no elements at all. Neither branch is reachable from a round-trip.
+        Assert.Multiple(() =>
+        {
+            IColumnCodec codec = Resolve("Tuple()");
+            Assert.That(codec.TypeName, Is.EqualTo("Tuple()"));
+            Assert.That(codec.ElementType, Is.EqualTo(typeof(ValueTuple)));
+            Assert.That(codec.NullPlaceholder, Is.EqualTo(default(ValueTuple)));
+            Assert.That(
+                () => Resolve("Tuple"),
+                Throws.TypeOf<FormatException>().With.Message.Contains("at least one element"));
+        });
+    }
+
+    [Test]
+    public void Resolve_NamedEmptyTupleElement_KeepsItsArgumentList()
+    {
+        // A named element arrives as one token ("y Tuple") that NamedElementParser has to split and rebuild into a
+        // node. Rebuilding must carry the argument list over rather than re-derive it from the argument count,
+        // which is zero here — otherwise the element becomes a bare, malformed Tuple and resolution throws.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Resolve("Tuple(x Int32, y Tuple())").ElementType, Is.EqualTo(typeof((int, ValueTuple))));
+            Assert.That(Resolve("Tuple(x Int32, y Tuple())").TypeName, Is.EqualTo("Tuple(x Int32, y Tuple())"));
+            Assert.That(Resolve("Array(Tuple(y Tuple()))").ElementType, Is.EqualTo(typeof(ValueTuple<ValueTuple>[])));
+        });
+    }
+
+    [Test]
+    public async Task EmptyTuple_WritesOnePlaceholderBytePerRow_WithNoStatePrefix()
+    {
+        // The wire shape a round-trip cannot observe: the server ignores the placeholder byte's value, so only a
+        // byte-level assertion pins that the client emits one per row, emits the same ASCII '0' the server does,
+        // and writes no serialization state prefix.
+        IColumnCodec codec = Resolve("Tuple()");
+        var column = new ArrayColumn<ValueTuple>("c", "Tuple()", new ValueTuple[3]);
+
+        byte[] prefix = await CodecTestHarness.WriteAsync(w => codec.WriteStatePrefix(w, column, 0, 3));
+        byte[] body = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column, 0, 3));
+        byte[] slice = await CodecTestHarness.WriteSliceAsync(codec, column, 1, 2);
+        byte[] empty = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column, 0, 0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prefix, Is.Empty, "the empty tuple has no state prefix");
+            Assert.That(body, Is.EqualTo(new byte[] { (byte)'0', (byte)'0', (byte)'0' }));
+            Assert.That(slice, Is.EqualTo(new byte[] { (byte)'0', (byte)'0' }), "a slice writes one byte per row written");
+            Assert.That(empty, Is.Empty, "a zero-row write emits nothing");
+        });
+    }
+
+    [Test]
+    public async Task EmptyTuple_ReadColumn_ConsumesOneBytePerRow_AndLeavesTheStreamAligned()
+    {
+        // The read discards the placeholder bytes, so nothing downstream of it can prove they were consumed. The
+        // sentinel does: if the read stopped short the stream would be misaligned and the next column would be
+        // decoded from the wrong offset.
+        IColumnCodec codec = Resolve("Tuple()");
+        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
+        {
+            w.WriteByte((byte)'0');
+            w.WriteByte((byte)'0');
+            w.WriteByte(0x7F);
+        });
+
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn column = await codec.ReadColumnAsync(reader, "c", "Tuple()", 2, CodecTestHarness.None);
+        byte sentinel = await reader.ReadByteAsync(CodecTestHarness.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column.RowCount, Is.EqualTo(2));
+            Assert.That(column.TypeName, Is.EqualTo("Tuple()"));
+            Assert.That(column.GetValue(0), Is.EqualTo(default(ValueTuple)));
+            Assert.That(((IColumn<ValueTuple>)column).Values.ToArray(), Is.EqualTo(new ValueTuple[2]));
+            Assert.That(sentinel, Is.EqualTo(0x7F), "the placeholder bytes must all be consumed");
+        });
+    }
+
+    [Test]
+    public void EmptyTuple_CanWrite_RejectsAnotherElementType()
+    {
+        // The write ignores the values entirely, so a mismatched column would otherwise be serialized as the right
+        // number of placeholder bytes instead of being refused.
+        IColumnCodec codec = Resolve("Tuple()");
+        var wrong = new ArrayColumn<int>("c", "Int32", new[] { 1, 2 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWrite(new ArrayColumn<ValueTuple>("c", "Tuple()", new ValueTuple[1])), Is.True);
+            Assert.That(codec.CanWrite(wrong), Is.False);
+            Assert.ThrowsAsync<InvalidCastException>(
+                async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, wrong, 0, 2)));
+        });
+    }
 }
