@@ -24,11 +24,16 @@ namespace ClickHouse.Driver.Tcp.Parameters;
 /// two must be changed together — see the parity-check entry in the TCP TODO.
 /// </para>
 /// <para>
-/// The one deliberate difference is the outer <see cref="ParameterText.Escape"/> and
+/// The first deliberate difference is the outer <see cref="ParameterText.Escape"/> and
 /// <see cref="ParameterText.QuoteSingle"/> in <see cref="Format"/>. HTTP puts the value in the query string,
 /// where the server reads it directly. The native protocol carries it in the settings list as a custom entry,
 /// which the server first restores as a Field, so the whole value must arrive as a quoted SQL literal — for
 /// every type, not only for strings. An unquoted <c>42</c> for an <c>Int32</c> parameter is rejected.
+/// </para>
+/// <para>
+/// The second is the <c>Interval&lt;Unit&gt;</c> family, which this formatter supports and the HTTP one does
+/// not. The difference is in the type systems, not in the two formatters: the RowBinary tree has no Interval
+/// type, so an HTTP query fails while resolving the name, before any formatter runs.
 /// </para>
 /// </remarks>
 internal static class TcpParameterFormatter
@@ -44,6 +49,16 @@ internal static class TcpParameterFormatter
     private static readonly string[] FloatTypeNames = ["Float32", "Float64", "BFloat16"];
 
     private static readonly string[] DecimalTypeNames = ["Decimal", "Decimal32", "Decimal64", "Decimal128", "Decimal256"];
+
+    /// <summary>
+    /// The <c>Interval&lt;Unit&gt;</c> family, which the server reads as its underlying <c>Int64</c> count. The
+    /// list mirrors the codec registry's; a unit missing from both is reported as an unformattable type.
+    /// </summary>
+    private static readonly string[] IntervalTypeNames =
+    [
+        "IntervalNanosecond", "IntervalMicrosecond", "IntervalMillisecond", "IntervalSecond", "IntervalMinute",
+        "IntervalHour", "IntervalDay", "IntervalWeek", "IntervalMonth", "IntervalQuarter", "IntervalYear",
+    ];
 
     /// <summary>Formats a parameter value for the Query packet's parameter list.</summary>
     /// <param name="value">The parameter value.</param>
@@ -96,7 +111,9 @@ internal static class TcpParameterFormatter
     {
         string name = type.Name;
 
-        if (Array.IndexOf(IntegerTypeNames, name) >= 0 || Array.IndexOf(FloatTypeNames, name) >= 0)
+        if (Array.IndexOf(IntegerTypeNames, name) >= 0
+            || Array.IndexOf(FloatTypeNames, name) >= 0
+            || Array.IndexOf(IntervalTypeNames, name) >= 0)
         {
             return Convert.ToString(value, CultureInfo.InvariantCulture);
         }
@@ -117,7 +134,8 @@ internal static class TcpParameterFormatter
             case "Date" or "Date32":
                 return FormatDate(value, quote);
 
-            case "FixedString" when value is byte[] bytes:
+            // Must precede the arm below, which would otherwise print the CLR type name for a byte array.
+            case "String" or "FixedString" when value is byte[] bytes:
                 return QuoteIfNeeded(Encoding.UTF8.GetString(bytes).Escape(), quote);
 
             case "String" or "FixedString" or "Enum8" or "Enum16" or "IPv4" or "IPv6" or "UUID":

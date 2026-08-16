@@ -40,6 +40,11 @@ public class TcpParameterFormatterTests
         yield return new TestCaseData(IPAddress.Parse("192.168.1.1"), "IPv4").Returns("192.168.1.1").SetName("IPv4");
         yield return new TestCaseData(IPAddress.Parse("::1"), "IPv6").Returns("::1").SetName("IPv6");
 
+        // Interval<Unit> carries its underlying Int64 count, the same form the codecs surface it as.
+        yield return new TestCaseData(5L, "IntervalSecond").Returns("5").SetName("IntervalSecond");
+        yield return new TestCaseData(-3, "IntervalDay").Returns("-3").SetName("IntervalDay negative");
+        yield return new TestCaseData(new[] { 1L, 2L }, "Array(IntervalMonth)").Returns("[1,2]").SetName("Array of IntervalMonth");
+
         yield return new TestCaseData(new DateOnly(2024, 1, 2), "Date").Returns("2024-01-02").SetName("Date");
         yield return new TestCaseData(Unspecified, "DateTime").Returns("2024-01-02T03:04:05").SetName("DateTime unspecified");
         yield return new TestCaseData(Unspecified, "DateTime64(3)").Returns("2024-01-02 03:04:05.0000000").SetName("DateTime64 unspecified");
