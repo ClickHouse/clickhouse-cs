@@ -31,8 +31,8 @@ internal interface IConnectionSource : IAsyncDisposable
 /// <summary>
 /// A rented connection. Disposing the lease returns the connection to its source exactly once (disposing more
 /// than once is a no-op). The lease does not own the connection's teardown — the source decides, when the lease
-/// is returned, whether to keep the connection for reuse or discard it (a connection left terminated by a failed
-/// operation is never reused).
+/// is returned, whether to keep the connection for reuse or discard it. A connection a failed operation left
+/// terminated is never reused, nor is one out of step with the server or past either of its time limits.
 /// </summary>
 internal interface IConnectionLease : IAsyncDisposable
 {

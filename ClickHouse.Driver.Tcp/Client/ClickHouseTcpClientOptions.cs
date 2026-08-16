@@ -86,15 +86,26 @@ public sealed record ClickHouseTcpClientOptions
 
     /// <summary>
     /// The number of connections the pool keeps open when it can, counting both idle and in-use ones. Defaults
-    /// to 0. Only <see cref="IdleTimeout"/> respects this floor: a connection past
-    /// <see cref="MaxConnectionLifetime"/> is retired whatever the count, since age is a correctness limit and
-    /// inactivity is only a resource one.
+    /// to 0. Neither <see cref="MaxConnectionLifetime"/> nor <see cref="IdleTimeout"/> respects this floor: an
+    /// expired connection is retired whatever the count, and the floor is then restored by opening a fresh one.
+    /// So a quiet pool rotates its connections rather than holding the same ones, which is what makes the floor
+    /// worth having — a checkout refuses an expired connection, so keeping one to meet the count would only hold
+    /// a socket that serves nobody.
     /// </summary>
     /// <remarks>
-    /// The floor is maintained by the same sweep that closes idle connections, so a pool below it is topped up
+    /// <para>
+    /// The floor is maintained by the same sweep that closes expired connections, so a pool below it is topped up
     /// within one sweep interval rather than at construction — a burst arriving before the first sweep still
     /// opens its own connections. Topping up never takes a slot from a waiting caller: it only uses capacity
     /// that is free at that moment, so a pool already at <see cref="MaxPoolSize"/> simply skips it.
+    /// </para>
+    /// <para>
+    /// Because the rotation is what holds the floor, a pool that carries no traffic at all still reconnects: this
+    /// many connections per <see cref="IdleTimeout"/>, indefinitely. At the defaults that is nothing, the floor
+    /// being 0. Raising the floor while lowering <see cref="IdleTimeout"/> multiplies the two, so a floor of 10
+    /// against a 5-second idle limit is 10 connects, handshakes and authentications every 5 seconds from an
+    /// application issuing no queries. Size the pair together.
+    /// </para>
     /// </remarks>
     public int MinPoolSize { get; init; } = DefaultMinPoolSize;
 
@@ -133,9 +144,16 @@ public sealed record ClickHouseTcpClientOptions
     public TimeSpan MaxConnectionLifetime { get; init; } = DefaultMaxConnectionLifetime;
 
     /// <summary>
-    /// How long a connection may sit unused before the pool closes it, down to <see cref="MinPoolSize"/>.
-    /// Defaults to 5 minutes; <see cref="TimeSpan.Zero"/> keeps idle connections until they expire by age.
+    /// How long a connection may sit unused before the pool retires it. Defaults to 5 minutes;
+    /// <see cref="TimeSpan.Zero"/> keeps idle connections until they expire by age.
     /// </summary>
+    /// <remarks>
+    /// This releases sockets nobody is using, and it is also the client's defence against a connection killed
+    /// while idle. A proxy or load balancer between client and server drops an idle connection on its own
+    /// schedule, and such a drop can arrive without a FIN, in which case the transport still looks alive and the
+    /// next operation over it stalls until TCP gives up. So a connection past this limit is not handed out either,
+    /// exactly as an over-age one is not: set it below the shortest idle timeout on the path to the server.
+    /// </remarks>
     public TimeSpan IdleTimeout { get; init; } = DefaultIdleTimeout;
 
     /// <summary>Which idle connection the pool hands out next. Defaults to <see cref="ClickHouseTcpPoolReusePolicy.Lifo"/>.</summary>

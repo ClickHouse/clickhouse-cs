@@ -82,6 +82,13 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
     public bool ClosingThrows { get; set; }
 
     /// <summary>
+    /// Extra bytes the "server" sends after its Hello, so the connection reaches Ready with the reader out of
+    /// step. What an operation that did not consume its whole reply leaves behind, which no scripted-clean
+    /// connection can reproduce.
+    /// </summary>
+    public byte[] Trailing { get; set; }
+
+    /// <summary>
     /// When set, the create ignores the token it is given. This is the dial whose connect and handshake had
     /// already finished when the cancellation arrived, so it returns a connection the pool then has to deal with
     /// — the race that a dial which simply observes the token never reaches.
@@ -128,6 +135,7 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
 
         ClickHouseTcpConnection connection = await CreateReadyAsync(
             IgnoresCancellation ? CancellationToken.None : cancellationToken,
+            trailing: Trailing,
             throwOnClose: ClosingThrows).ConfigureAwait(false);
         lock (gate)
         {
