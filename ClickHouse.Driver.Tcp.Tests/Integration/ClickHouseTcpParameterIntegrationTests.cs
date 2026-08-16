@@ -172,24 +172,44 @@ public class ClickHouseTcpParameterIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_KindedDateTimeWithABareHint_ReadsTheTextInTheSessionTimezone()
+    public async Task QueryAsync_KindedDateTimeWithABareHint_IsRefusedBeforeItReachesTheServer()
     {
-        // The foot-gun, shared with the HTTP transport and pinned here so a change to it is deliberate. A bare
-        // {d:DateTime} hint names no timezone, so the server reads the wall-clock text in session_timezone. The
-        // client wrote that text in UTC, so the instant moves by the session's offset. Put the timezone in the
-        // hint, as the test above does. Only the text is agreed here; the instant is not.
+        // A bare {d:DateTime} hint names no timezone, so the server would read the wall-clock text in
+        // session_timezone and the instant would move with no error raised. The client refuses instead. This
+        // runs against the server to prove the refusal happens first, so no wrong value is ever stored.
         await using var client = TcpServerFixture.CreateClient();
-        var instant = new DateTimeOffset(2020, 1, 2, 12, 0, 0, TimeSpan.FromHours(9));
         var options = new ClickHouseTcpQueryOptions
         {
             Settings = new Dictionary<string, string> { ["session_timezone"] = "Asia/Tokyo" },
-            Parameters = new ClickHouseTcpParameterCollection { { "d", instant } },
+            Parameters = new ClickHouseTcpParameterCollection
+            {
+                { "d", new DateTimeOffset(2020, 1, 2, 12, 0, 0, TimeSpan.FromHours(9)) },
+            },
         };
 
-        object epoch = await ScalarAsync(client, "SELECT toUnixTimestamp({d:DateTime})", options);
+        var exception = Assert.ThrowsAsync<ArgumentException>(
+            async () => await ScalarAsync(client, "SELECT toUnixTimestamp({d:DateTime})", options));
 
-        // The UTC wall clock of the instant, read back as if it were Tokyo local time: nine hours earlier.
-        Assert.That(Convert.ToInt64(epoch), Is.EqualTo(instant.ToUnixTimeSeconds() - (9 * 3600)));
+        Assert.That(exception.Message, Does.Contain("declares no timezone"));
+    }
+
+    [Test]
+    public async Task QueryAsync_UnspecifiedDateTimeWithABareHint_IsReadInTheSessionTimezone()
+    {
+        // The other half, and the reason the refusal above is limited to a value that names an instant. An
+        // unspecified DateTime is a wall-clock time with no instant attached, so reading it in the session
+        // timezone is what the caller asked for. It stays legal.
+        await using var client = TcpServerFixture.CreateClient();
+        var wallClock = new DateTime(2020, 1, 2, 12, 0, 0, DateTimeKind.Unspecified);
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Settings = new Dictionary<string, string> { ["session_timezone"] = "Asia/Tokyo" },
+            Parameters = new ClickHouseTcpParameterCollection { { "d", wallClock } },
+        };
+
+        object read = await ScalarAsync(client, "SELECT toString({d:DateTime})", options);
+
+        Assert.That(read, Is.EqualTo("2020-01-02 12:00:00"));
     }
 
     [Test]

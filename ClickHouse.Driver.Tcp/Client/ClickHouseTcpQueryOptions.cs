@@ -35,6 +35,16 @@ public record ClickHouseTcpQueryOptions
     /// 54459 or above; an older one rejects the query rather than running it without them.
     /// </para>
     /// <para>
+    /// <b>Declare a timezone when the value names an instant.</b> A <see cref="DateTime"/> whose
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Utc"/> or <see cref="DateTimeKind.Local"/>, and
+    /// any <see cref="DateTimeOffset"/>, names a point in time. The wire carries a wall-clock time and no
+    /// timezone, so the server reads it in its session timezone: a type that declares none moves the instant
+    /// whenever that session is not UTC, and reports no error. The client refuses such a parameter rather than
+    /// send it. Write <c>{t:DateTime('UTC')}</c> or <c>{t:DateTime64(3, 'UTC')}</c>, or pass a
+    /// <see cref="DateTime"/> of <see cref="DateTimeKind.Unspecified"/> when you do mean a wall-clock time for
+    /// the server to read in its own timezone.
+    /// </para>
+    /// <para>
     /// <b>Avoid naming a parameter after a server setting.</b> The native protocol carries parameters in the
     /// settings list, so a server that reads the name as a setting applies it as that setting instead of
     /// binding it. The query then fails with a parse error about a quoted string, which names neither the

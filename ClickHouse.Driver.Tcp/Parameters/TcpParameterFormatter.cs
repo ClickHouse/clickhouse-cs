@@ -280,7 +280,7 @@ internal static class TcpParameterFormatter
             return unspecified.ToString("s", CultureInfo.InvariantCulture);
         }
 
-        DateTime local = InTargetTimezone(type, ToOffset(value));
+        DateTime local = InTargetTimezone(ToOffset(value), RequireDeclaredTimezone(type, value));
         return local.ToString("s", CultureInfo.InvariantCulture);
     }
 
@@ -291,8 +291,59 @@ internal static class TcpParameterFormatter
             return unspecified.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture);
         }
 
-        DateTime local = InTargetTimezone(type, ToOffset(value));
+        DateTime local = InTargetTimezone(ToOffset(value), RequireDeclaredTimezone(type, value));
         return local.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Returns the timezone the type declares, and rejects the type that declares none.
+    /// </summary>
+    /// <param name="type">The date-and-time type.</param>
+    /// <param name="value">The value, named in the error so the caller can see which kind caused it.</param>
+    /// <returns>The declared timezone.</returns>
+    /// <exception cref="ArgumentException">The type declares no timezone.</exception>
+    /// <remarks>
+    /// Only a value that names an instant reaches this. Such a value has a timezone and the type must too,
+    /// because the wire carries a wall-clock time and nothing else: the server reads that text in whatever
+    /// <c>session_timezone</c> is in force, so if the two disagree the instant moves and no error is raised.
+    /// Sending the instant as an epoch count instead would avoid the question, but the server rejects a count
+    /// below five digits — it reads it as a year — so that encoding cannot carry the first hours of 1970.
+    /// </remarks>
+    private static string RequireDeclaredTimezone(TypeNode type, object value)
+    {
+        string declared = DeclaredTimezone(type);
+        if (declared is not null)
+        {
+            return declared;
+        }
+
+        string valueDescription = value is DateTimeOffset
+            ? "A DateTimeOffset names an instant"
+            : $"A DateTime with Kind={((DateTime)value).Kind} names an instant";
+
+        throw new ArgumentException(
+            $"{valueDescription}, but the type declares no timezone, so the instant cannot be sent without " +
+            $"loss. The server reads the value in its session timezone, which moves the instant when that is " +
+            $"not UTC, and reports no error. Declare the timezone in the type — {type.Name}" +
+            $"{(type.Name == "DateTime64" ? "(3, 'UTC')" : "('UTC')")} — or pass a DateTime with " +
+            $"Kind=Unspecified to send a wall-clock time for the server to read in its own timezone.");
+    }
+
+    /// <summary>Reads the timezone a date-and-time type declares.</summary>
+    /// <param name="type">The date-and-time type.</param>
+    /// <returns>The timezone name, or null when the type declares none.</returns>
+    private static string DeclaredTimezone(TypeNode type)
+    {
+        // The timezone is the last argument: DateTime('UTC') or DateTime64(3, 'UTC').
+        string declared = type.Arguments.Count > 0
+            ? DateTimeZones.UnquoteTimezone(type.Arguments[^1])
+            : null;
+
+        // A DateTime64 precision digit is not a timezone.
+        return declared is not null
+            && int.TryParse(declared, NumberStyles.None, CultureInfo.InvariantCulture, out _)
+                ? null
+                : declared;
     }
 
     private static DateTimeOffset ToOffset(object value) => value switch
@@ -303,27 +354,13 @@ internal static class TcpParameterFormatter
             $"Cannot convert value of type '{value.GetType().FullName}' ({value}) to a date and time"),
     };
 
-    /// <summary>
-    /// Moves an instant into the type's timezone. The timezone defaults to UTC, not to the session timezone,
-    /// which is what the HTTP formatter does.
-    /// </summary>
-    /// <param name="type">The timezone-bearing type.</param>
+    /// <summary>Moves an instant into the timezone the type declares.</summary>
     /// <param name="value">The instant.</param>
-    /// <returns>The wall-clock time in the type's timezone.</returns>
-    private static DateTime InTargetTimezone(TypeNode type, DateTimeOffset value)
+    /// <param name="declaredTimezone">The timezone the type declares.</param>
+    /// <returns>The wall-clock time in that timezone.</returns>
+    private static DateTime InTargetTimezone(DateTimeOffset value, string declaredTimezone)
     {
-        // The timezone is the last argument: DateTime('UTC') or DateTime64(3, 'UTC').
-        string explicitTimezone = type.Arguments.Count > 0
-            ? DateTimeZones.UnquoteTimezone(type.Arguments[^1])
-            : null;
-
-        // A DateTime64 precision digit is not a timezone.
-        if (explicitTimezone is not null && int.TryParse(explicitTimezone, NumberStyles.None, CultureInfo.InvariantCulture, out _))
-        {
-            explicitTimezone = null;
-        }
-
-        TimeZoneInfo timeZone = DateTimeZones.Resolve(explicitTimezone, serverTimezone: null);
+        TimeZoneInfo timeZone = DateTimeZones.Resolve(declaredTimezone, serverTimezone: null);
         return TimeZoneInfo.ConvertTime(value, timeZone).DateTime;
     }
 
