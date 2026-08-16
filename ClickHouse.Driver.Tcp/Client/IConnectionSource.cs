@@ -29,16 +29,16 @@ internal interface IConnectionSource : IAsyncDisposable
 }
 
 /// <summary>
-/// A rented connection. Disposing the lease returns the connection to its source exactly once (disposing more
-/// than once is a no-op). The lease does not own the connection's teardown — the source decides, when the lease
-/// is returned, whether to keep the connection for reuse or discard it. A connection a failed operation left
-/// terminated is never reused, nor is one out of step with the server or past either of its time limits.
+/// A rented connection. Disposing the lease returns the connection to its source, and a second dispose does nothing.
+/// The lease does not own the connection's teardown: the source decides, when the lease is returned, whether to keep
+/// the connection for reuse or discard it. A connection a failed operation left terminated is never reused, nor is one
+/// out of step with the server or past either of its time limits.
 /// </summary>
 internal interface IConnectionLease : IAsyncDisposable
 {
     /// <summary>
-    /// The rented connection, valid until the lease is disposed — or until the source itself is disposed, which
-    /// aborts an operation still running once its own deadline passes.
+    /// The rented connection, valid until the lease is disposed, or until the source itself is disposed, which aborts
+    /// an operation still running once its own deadline passes.
     /// </summary>
     ClickHouseTcpConnection Connection { get; }
 }

@@ -133,6 +133,26 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["IdleTimeout"] = value.TotalSeconds;
     }
 
+    /// <summary>
+    /// How often the pool looks for connections to retire, in seconds. Absent, the default, derives the period
+    /// from the limits in force; a value overrides that and must be positive. Setting null removes the key.
+    /// </summary>
+    public TimeSpan? SweepInterval
+    {
+        get => GetTimeSpanSecondsOrNull("SweepInterval");
+        set
+        {
+            if (value is { } interval)
+            {
+                this["SweepInterval"] = interval.TotalSeconds;
+            }
+            else
+            {
+                Remove("SweepInterval");
+            }
+        }
+    }
+
     /// <summary>Which idle connection is handed out next, <c>Lifo</c> or <c>Fifo</c>. Defaults to <c>Lifo</c>.</summary>
     /// <exception cref="ArgumentException">The stored value names no policy.</exception>
     public ClickHouseTcpPoolReusePolicy PoolReusePolicy
@@ -178,6 +198,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             PoolTimeout = PoolTimeout,
             MaxConnectionLifetime = MaxConnectionLifetime,
             IdleTimeout = IdleTimeout,
+            SweepInterval = SweepInterval,
             PoolReusePolicy = PoolReusePolicy,
             CustomSettings = customSettings,
         };
@@ -231,6 +252,23 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             string s => throw new ArgumentException(
                 $"Connection-string key '{name}' has value '{s}', which is not one of: {string.Join(", ", Enum.GetNames<TEnum>())}."),
             _ => @default,
+        };
+    }
+
+    // The nullable form, for a key whose absence means "derive it" rather than "use the default". An unparseable
+    // value reads as absent, matching how the non-nullable helper falls back.
+    private TimeSpan? GetTimeSpanSecondsOrNull(string name)
+    {
+        if (!TryGetValue(name, out object value))
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            double d => TimeSpan.FromSeconds(d),
+            string s when double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) => TimeSpan.FromSeconds(seconds),
+            _ => null,
         };
     }
 
