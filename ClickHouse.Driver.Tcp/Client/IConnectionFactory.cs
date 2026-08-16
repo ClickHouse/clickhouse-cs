@@ -1,4 +1,5 @@
 using System;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -10,7 +11,12 @@ namespace ClickHouse.Driver.Tcp.Client;
 /// operation. A seam rather than a direct call so the pool's own behaviour — queueing, reuse, retirement — can
 /// be exercised over connections that need no server.
 /// </summary>
-internal interface IConnectionFactory
+/// <remarks>
+/// Disposable because a factory may hold resources for the client's whole life — the TLS certificate authorities
+/// are the case that exists today. The pool disposes it at the very end of its teardown, once no connection can
+/// still be handshaking against them.
+/// </remarks>
+internal interface IConnectionFactory : IDisposable
 {
     /// <summary>Opens a connection and returns it Ready. On failure nothing is left open.</summary>
     /// <param name="cancellationToken">A token to observe while connecting.</param>
@@ -59,6 +65,26 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
         }
     }
 
+    /// <summary>
+    /// Releases the certificate authorities loaded for TLS, which hold native key handles. Safe to call more than
+    /// once, and a no-op for a plaintext client, which loaded none.
+    /// </summary>
+    public void Dispose()
+    {
+        if (tls?.CaCertificates is not { } certificates)
+        {
+            return;
+        }
+
+        foreach (X509Certificate2 certificate in certificates)
+        {
+            certificate.Dispose();
+        }
+
+        // Emptied so a second call finds nothing to dispose rather than disposing the same handles again.
+        certificates.Clear();
+    }
+
     /// <summary>The TLS configuration these options describe, or null when the client connects in the clear.</summary>
     /// <param name="options">The client's validated options.</param>
     /// <returns>The parameters a connect uses to wrap its socket, or null.</returns>
@@ -70,7 +96,9 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
                 // names something else (an internal alias, or a Host given as an address).
                 TargetHost = string.IsNullOrEmpty(options.TlsServerName) ? options.Host : options.TlsServerName,
                 AllowInvalidCertificates = options.TlsAllowInvalidCertificates,
-                CaCertificates = options.TlsCaCertificatePath is null
+                // IsNullOrEmpty, matching Validate: an empty path is not a configured authority there, so reading
+                // it as one here would fail construction for a client that validation just accepted.
+                CaCertificates = string.IsNullOrEmpty(options.TlsCaCertificatePath)
                     ? null
                     : TlsParameters.LoadCaCertificates(options.TlsCaCertificatePath),
                 Configure = options.ConfigureTls,
