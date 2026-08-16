@@ -35,11 +35,15 @@ public class ClickHouseTcpConnectionStringBuilderTests
         Assert.Multiple(() =>
         {
             Assert.That(options.Host, Is.EqualTo("only-host"));
-            Assert.That(options.Port, Is.EqualTo(9000));
+            Assert.That(options.Port, Is.Null, "an absent Port key derives the port from UseTls");
             Assert.That(options.Username, Is.EqualTo("default"));
             Assert.That(options.Password, Is.EqualTo(string.Empty));
             Assert.That(options.Database, Is.EqualTo("default"));
             Assert.That(options.DialTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
+            Assert.That(options.UseTls, Is.False);
+            Assert.That(options.TlsServerName, Is.Null);
+            Assert.That(options.TlsAllowInvalidCertificates, Is.False);
+            Assert.That(options.TlsCaCertificatePath, Is.Null);
         });
     }
 
@@ -152,6 +156,28 @@ public class ClickHouseTcpConnectionStringBuilderTests
             Assert.That(builder.MaxSendBufferBytes, Is.EqualTo(2048));
             Assert.That(builder.DialTimeout, Is.EqualTo(TimeSpan.FromSeconds(7)));
             Assert.That(builder.ReadTimeout, Is.EqualTo(TimeSpan.FromSeconds(45)));
+        });
+    }
+
+    [Test]
+    public void TypedTlsSetters_ReadBackOnSameInstance_ReturnValuesNotDefaults()
+    {
+        // The boolean setters store a boxed bool, which is a different getter arm from the string a parsed
+        // connection string leaves behind. Both have to read back, as they already must for the numeric keys.
+        var builder = new ClickHouseTcpConnectionStringBuilder
+        {
+            UseTls = true,
+            TlsAllowInvalidCertificates = true,
+            TlsServerName = "sni.example",
+            TlsCaCertificatePath = "/etc/ca.pem",
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.UseTls, Is.True);
+            Assert.That(builder.TlsAllowInvalidCertificates, Is.True);
+            Assert.That(builder.TlsServerName, Is.EqualTo("sni.example"));
+            Assert.That(builder.TlsCaCertificatePath, Is.EqualTo("/etc/ca.pem"));
         });
     }
 
@@ -280,6 +306,131 @@ public class ClickHouseTcpConnectionStringBuilderTests
             Assert.That(reparsed.Port, Is.EqualTo(9001));
             Assert.That(reparsed.Username, Is.EqualTo("u"));
             Assert.That(reparsed.Database, Is.EqualTo("d"));
+        });
+    }
+
+    [Test]
+    public void ToOptions_TlsKeys_ParsesEachValue()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder(
+            "Host=db.example;UseTls=true;TlsServerName=cert.example;TlsAllowInvalidCertificates=true;TlsCaCertificatePath=/etc/ca.pem");
+
+        var options = builder.ToOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.UseTls, Is.True);
+            Assert.That(options.TlsServerName, Is.EqualTo("cert.example"));
+            Assert.That(options.TlsAllowInvalidCertificates, Is.True);
+            Assert.That(options.TlsCaCertificatePath, Is.EqualTo("/etc/ca.pem"));
+        });
+    }
+
+    [Test]
+    public void ToOptions_UseTlsWithNoPortKey_ResolvesToTheSecureNativePort()
+    {
+        var options = ClickHouseTcpClientOptions.FromConnectionString("Host=db.example;UseTls=true");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Port, Is.Null, "no key was given, so nothing is stored");
+            Assert.That(options.ResolvedPort, Is.EqualTo(9440));
+        });
+    }
+
+    [Test]
+    public void ToOptions_UseTlsWithAnExplicitPort_KeepsThatPort()
+    {
+        // A server may serve secure native connections on a non-standard port; an explicit key always wins.
+        var options = ClickHouseTcpClientOptions.FromConnectionString("Host=db.example;UseTls=true;Port=9000");
+
+        Assert.That(options.ResolvedPort, Is.EqualTo(9000));
+    }
+
+    [TestCase("true", true)]
+    [TestCase("True", true)]
+    [TestCase("TRUE", true)]
+    [TestCase("1", true)]
+    [TestCase("false", false)]
+    [TestCase("0", false)]
+    public void UseTls_RecognizedBooleanSpelling_Parses(string value, bool expected)
+    {
+        var options = ClickHouseTcpClientOptions.FromConnectionString($"Host=h;UseTls={value}");
+
+        Assert.That(options.UseTls, Is.EqualTo(expected));
+    }
+
+    // 'UseTls=' with nothing after it is not covered: DbConnectionStringBuilder drops a key with an empty value
+    // while parsing, so it never reaches the getter and reads as absent, exactly like omitting the key.
+    [TestCase("yes")]
+    [TestCase("on")]
+    [TestCase("2")]
+    public void UseTls_UnrecognizedValue_ThrowsRatherThanReadingAsFalse(string value)
+    {
+        // Falling back to the default here would hand back a plaintext connection the caller believes is
+        // encrypted, so an unparseable value must be loud.
+        var builder = new ClickHouseTcpConnectionStringBuilder($"Host=h;UseTls={value}");
+
+        Assert.Throws<ArgumentException>(() => builder.ToOptions());
+    }
+
+    [Test]
+    public void TlsAllowInvalidCertificates_UnrecognizedValue_ThrowsRatherThanReadingAsFalse()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder("Host=h;UseTls=true;TlsAllowInvalidCertificates=maybe");
+
+        Assert.Throws<ArgumentException>(() => builder.ToOptions());
+    }
+
+    [TestCase(1, true)]
+    [TestCase(0, false)]
+    [TestCase(true, true)]
+    [TestCase(false, false)]
+    public void UseTls_SetThroughTheUntypedIndexer_ReadsAsTheValueGiven(object value, bool expected)
+    {
+        // The untyped indexer is a supported path on this class, and the base converts whatever it is handed to a
+        // string — so an int or a bool set this way must still read as the boolean it means, never fall back to
+        // false, which would connect in the clear while the caller believes otherwise.
+        var builder = new ClickHouseTcpConnectionStringBuilder { Host = "h" };
+        builder["UseTls"] = value;
+
+        Assert.That(builder.ToOptions().UseTls, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void TlsSetters_RoundTripThroughConnectionString()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder
+        {
+            Host = "rt-host",
+            UseTls = true,
+            TlsServerName = "rt-sni",
+            TlsAllowInvalidCertificates = true,
+            TlsCaCertificatePath = "/tmp/rt-ca.pem",
+        };
+
+        var reparsed = new ClickHouseTcpConnectionStringBuilder(builder.ConnectionString).ToOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reparsed.UseTls, Is.True);
+            Assert.That(reparsed.TlsServerName, Is.EqualTo("rt-sni"));
+            Assert.That(reparsed.TlsAllowInvalidCertificates, Is.True);
+            Assert.That(reparsed.TlsCaCertificatePath, Is.EqualTo("/tmp/rt-ca.pem"));
+        });
+    }
+
+    [Test]
+    public void Port_SetToNull_RemovesTheKeySoThePortIsDerivedAgain()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder { Host = "h", Port = 9001, UseTls = true };
+
+        builder.Port = null;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.Port, Is.Null);
+            Assert.That(builder.ToOptions().ResolvedPort, Is.EqualTo(9440));
         });
     }
 }
