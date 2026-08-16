@@ -276,6 +276,10 @@ internal sealed class ConnectionPool : IConnectionSource
             }
         }
 
+        // Last, once every connection is closed or aborted: the factory owns what outlives a single connection,
+        // today the TLS certificate authorities, and a handshake still reading them would be using freed handles.
+        factory.Dispose();
+
         // Neither the semaphore nor the shutdown source is disposed, for the same reason. Neither holds an
         // unmanaged resource here: the semaphore's AvailableWaitHandle is never touched, and the source has no
         // timer, because nothing calls CancelAfter on it. Disposing either would instead fault work still winding
