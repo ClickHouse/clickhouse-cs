@@ -15,6 +15,7 @@ on:
       - "Directory.Packages.props"
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
+      - ".github/workflows/tests-cloud-tcp.yml"
   pull_request:
     # Matches the PR's base branch, so a PR stacked onto another tcp/** epic branch triggers too.
     branches: [main, tcp-client, "tcp/**"]
@@ -24,6 +25,7 @@ on:
       - "Directory.Packages.props"
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
+      - ".github/workflows/tests-cloud-tcp.yml"
   workflow_dispatch:
     inputs:
       ref:
@@ -63,3 +65,13 @@ jobs:
       fail-fast: false
       matrix:
         framework: ["net10.0", "net9.0", "net8.0"] # TCP library targets net8.0+ only
+
+  cloud-tcp:
+    name: Cloud (TCP)
+    # Not on pull_request: every stacked tcp/** epic PR would otherwise queue another run against the shared
+    # Cloud service. Landing on an integration branch, or asking for it by hand, is enough.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/tests-cloud-tcp.yml
+    secrets: inherit
+    with:
+      ref: ${{ inputs.ref }}
