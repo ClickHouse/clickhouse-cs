@@ -159,7 +159,7 @@ public class ClickHouseTcpConnectionStringBuilderTests
     public void ToOptions_PoolKeys_ParsesEachValue()
     {
         var builder = new ClickHouseTcpConnectionStringBuilder(
-            "Host=h;MinPoolSize=2;MaxPoolSize=8;PoolTimeout=15;MaxConnectionLifetime=600;IdleTimeout=120;PoolReusePolicy=Fifo");
+            "Host=h;MinPoolSize=2;MaxPoolSize=8;PoolTimeout=15;MaxConnectionLifetime=600;IdleTimeout=120;SweepInterval=5;PoolReusePolicy=Fifo");
 
         var options = builder.ToOptions();
 
@@ -170,6 +170,7 @@ public class ClickHouseTcpConnectionStringBuilderTests
             Assert.That(options.PoolTimeout, Is.EqualTo(TimeSpan.FromSeconds(15)));
             Assert.That(options.MaxConnectionLifetime, Is.EqualTo(TimeSpan.FromMinutes(10)));
             Assert.That(options.IdleTimeout, Is.EqualTo(TimeSpan.FromMinutes(2)));
+            Assert.That(options.SweepInterval, Is.EqualTo(TimeSpan.FromSeconds(5)));
             Assert.That(options.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Fifo));
         });
     }
@@ -186,6 +187,7 @@ public class ClickHouseTcpConnectionStringBuilderTests
             Assert.That(options.PoolTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
             Assert.That(options.MaxConnectionLifetime, Is.EqualTo(TimeSpan.FromMinutes(30)));
             Assert.That(options.IdleTimeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
+            Assert.That(options.SweepInterval, Is.Null, "an absent key means the period is derived");
             Assert.That(options.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Lifo));
         });
     }
@@ -218,6 +220,7 @@ public class ClickHouseTcpConnectionStringBuilderTests
             PoolTimeout = TimeSpan.FromSeconds(11),
             MaxConnectionLifetime = TimeSpan.FromMinutes(20),
             IdleTimeout = TimeSpan.FromMinutes(3),
+            SweepInterval = TimeSpan.FromSeconds(4),
             PoolReusePolicy = ClickHouseTcpPoolReusePolicy.Fifo,
         };
 
@@ -228,8 +231,34 @@ public class ClickHouseTcpConnectionStringBuilderTests
             Assert.That(builder.PoolTimeout, Is.EqualTo(TimeSpan.FromSeconds(11)));
             Assert.That(builder.MaxConnectionLifetime, Is.EqualTo(TimeSpan.FromMinutes(20)));
             Assert.That(builder.IdleTimeout, Is.EqualTo(TimeSpan.FromMinutes(3)));
+            Assert.That(builder.SweepInterval, Is.EqualTo(TimeSpan.FromSeconds(4)));
             Assert.That(builder.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Fifo));
         });
+    }
+
+    [Test]
+    public void SweepInterval_SetToNull_RemovesTheKeyRatherThanStoringAValue()
+    {
+        // Null is how a caller goes back to deriving the period, so it must leave no key behind: a stored zero
+        // would fail validation, and any stored number would keep overriding the derivation.
+        var builder = new ClickHouseTcpConnectionStringBuilder { SweepInterval = TimeSpan.FromSeconds(4) };
+
+        builder.SweepInterval = null;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.SweepInterval, Is.Null);
+            Assert.That(builder.ConnectionString, Does.Not.Contain("SweepInterval").IgnoreCase);
+            Assert.That(builder.ToOptions().SweepInterval, Is.Null);
+        });
+    }
+
+    [Test]
+    public void SweepInterval_Unparseable_ReadsAsAbsentSoThePeriodIsDerived()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder("Host=h;SweepInterval=soon");
+
+        Assert.That(builder.SweepInterval, Is.Null);
     }
 
     [Test]
