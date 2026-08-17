@@ -52,6 +52,17 @@ internal static class PocoWriteConversion
             }
         }
 
+        // Nothing the codec lists fits, so ask whether it can be written from the property's own type. This is what
+        // reaches a composite's lifted element types: an Array(DateTime) column lists only uint[], but its element
+        // codec accepts a DateTime, so a DateTime[] row is writable and needs no conversion here at all — the inner
+        // codec does the arithmetic as it writes. Second, because the listed types are the ones a caller already holds
+        // in the shape the writer wants.
+        if (codec.CanWriteElementType(memberType))
+        {
+            writeType = memberType;
+            return true;
+        }
+
         writeType = null;
         return false;
     }

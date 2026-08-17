@@ -216,6 +216,111 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
+    public async Task InsertRowsAsync_ArrayOfDateTimeFromCalendarRows_RoundTripsThroughTheLiftedElements()
+    {
+        // The lifted write path: the column decodes as uint[], the property is DateTime[], and the inner codec does
+        // the conversion as it writes. Only a round-trip shows the write and the read agree on the value.
+        await using var client = TcpServerFixture.CreateClient();
+        string table = CreateTableName();
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} (value Array(DateTime('UTC'))) ENGINE = Memory", cancellationToken: None);
+
+            var first = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+            var second = new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+            var written = new[]
+            {
+                new Row<DateTime[]> { Value = new[] { first, second } },
+                new Row<DateTime[]> { Value = Array.Empty<DateTime>() },
+            };
+
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", written, cancellationToken: None);
+
+            List<object[]> raw = await client
+                .QueryAsync($"SELECT toUInt32(value[1]), length(value) FROM {table} ORDER BY length(value)", cancellationToken: None)
+                .ToListAsync();
+            List<Row<DateTime[]>> read = await client
+                .QueryAsync<Row<DateTime[]>>($"SELECT value FROM {table} ORDER BY length(value)", cancellationToken: None)
+                .ToListAsync();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(read[1].Value, Is.EqualTo(new[] { first, second }));
+                Assert.That(read[0].Value, Is.Empty);
+
+                // The bytes really carry the epoch seconds, not some other reading that happens to round-trip.
+                Assert.That(Convert.ToUInt32(raw[1][0]), Is.EqualTo(1_705_314_600u));
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task InsertRowsAsync_DeeplyNestedCompositeProperties_RoundTripThroughTheLiftedElements()
+    {
+        // Lifting composes, so the calendar conversion happens at whatever depth the child sits. A round-trip is the
+        // only thing that shows the read and write sides agree at depth: either alone would look fine.
+        await using var client = TcpServerFixture.CreateClient();
+        string table = CreateTableName();
+        try
+        {
+            const string columns = "pairs, buckets, span, maybe";
+            await client.ExecuteAsync(
+                $"CREATE TABLE {table} (" +
+                $"pairs Array(Array(Tuple(DateTime('UTC'), String))), " +
+                $"buckets Map(String, Array(DateTime('UTC'))), " +
+                $"span Tuple(Array(DateTime('UTC')), Nullable(Int32)), " +
+                $"maybe Array(Nullable(DateTime('UTC')))) ENGINE = Memory",
+                cancellationToken: None);
+
+            var first = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+            var second = new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+            var written = new[]
+            {
+                new NestedCompositeRow
+                {
+                    Pairs = new[]
+                    {
+                        new[] { new ValueTuple<DateTime, string>(first, "a"), new ValueTuple<DateTime, string>(second, "b") },
+                        Array.Empty<ValueTuple<DateTime, string>>(),
+                    },
+                    Buckets = new[]
+                    {
+                        new KeyValuePair<string, DateTime[]>("x", new[] { first, second }),
+                        new KeyValuePair<string, DateTime[]>("y", Array.Empty<DateTime>()),
+                    },
+                    Span = new ValueTuple<DateTime[], int?>(new[] { second }, null),
+                    Maybe = new DateTime?[] { first, null, second },
+                },
+            };
+
+            await client.InsertRowsAsync($"INSERT INTO {table} ({columns}) VALUES", written, cancellationToken: None);
+
+            List<NestedCompositeRow> read = await client
+                .QueryAsync<NestedCompositeRow>($"SELECT {columns} FROM {table}", cancellationToken: None)
+                .ToListAsync();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(read, Has.Count.EqualTo(1));
+                Assert.That(read[0].Pairs[0], Is.EqualTo(written[0].Pairs[0]));
+                Assert.That(read[0].Pairs[1], Is.Empty);
+                Assert.That(read[0].Buckets, Is.EquivalentTo(written[0].Buckets));
+                Assert.That(read[0].Span.Item1, Is.EqualTo(new[] { second }));
+                Assert.That(read[0].Span.Item2, Is.Null);
+                Assert.That(read[0].Maybe, Is.EqualTo(new DateTime?[] { first, null, second }));
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
     public async Task InsertRowsAsync_NamedColumnSubset_LeavesTheRestToTheirDefaults()
     {
         // The INSERT column list controls which properties are used.
@@ -737,6 +842,18 @@ public class PocoWriteIntegrationTests
         public DateTime? MaybeStamp { get; set; }
 
         public DateTimeOffset? MaybePrecise { get; set; }
+    }
+
+    /// <summary>Uses caller-facing CLR types inside nested composite columns.</summary>
+    private sealed class NestedCompositeRow
+    {
+        public ValueTuple<DateTime, string>[][] Pairs { get; set; }
+
+        public KeyValuePair<string, DateTime[]>[] Buckets { get; set; }
+
+        public ValueTuple<DateTime[], int?> Span { get; set; }
+
+        public DateTime?[] Maybe { get; set; }
     }
 
     /// <summary>A getter-only type that can be inserted but not materialized.</summary>
