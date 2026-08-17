@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Tcp.Numerics;
 
@@ -45,6 +47,9 @@ internal static class DynamicTypeInference
         [typeof(Guid)] = "UUID",
         [typeof(DateOnly)] = "Date32",
     };
+
+    // Per KeyValuePair<K, V> type, the delegate that scans a pair array for its key and value types.
+    private static readonly ConcurrentDictionary<Type, Func<Array, (string Key, string Value)>> PairScanners = new();
 
     /// <summary>Infers the ClickHouse type string a non-null <paramref name="value"/> should be written as.</summary>
     /// <param name="value">The value to infer a type for; must not be null (a NULL row rides the discriminator, not a type).</param>
@@ -106,42 +111,71 @@ internal static class DynamicTypeInference
             $"No ClickHouse type is inferred for a Dynamic value of CLR type '{type}'. Supported: the fixed-width scalars, String, UUID, Date, IP addresses, decimals, date-times, and arrays/maps/tuples of them.");
     }
 
-    // An array is either a Map (an array of KeyValuePair<K, V>) or a plain Array(T). The element type is inferred
-    // from the first present element when the array is non-empty, else from the CLR element type.
+    // An array is either a Map (an array of KeyValuePair<K, V>) or a plain Array(T). Both read their inner types
+    // from the present values, and fall back to the declared CLR type where there is nothing present to read.
     private static string InferArrayOrMap(Array array)
     {
         Type elementType = array.GetType().GetElementType();
         if (elementType is not null && elementType.IsGenericType && elementType.GetGenericTypeDefinition() == typeof(KeyValuePair<,>))
         {
             Type[] pair = elementType.GetGenericArguments();
-            return $"Map({InferFromClrType(pair[0])}, {InferFromClrType(pair[1])})";
+            (string key, string value) = PairScannerFor(elementType)(array);
+            return $"Map({key ?? InferFromClrType(pair[0])}, {value ?? InferFromClrType(pair[1])})";
         }
 
-        // Prefer a present element's runtime type (so IPAddress and other value-disambiguated types resolve), and
-        // fall back to the declared element type for an empty (or all-null) array. Every present element must
-        // infer the same type: the write path buckets the whole array as one element type, so a heterogeneous
-        // array (e.g. IPv4 mixed with IPv6 in an IPAddress[]) would fail the element cast later — reject it here.
         string inferredElement = null;
         foreach (object element in array)
         {
-            if (element is null)
-            {
-                continue;
-            }
-
-            string current = InferComposable(element);
-            if (inferredElement is null)
-            {
-                inferredElement = current;
-            }
-            else if (!string.Equals(inferredElement, current, StringComparison.Ordinal))
-            {
-                throw new NotSupportedException(
-                    $"A Dynamic array must have a single element type, but it mixes '{inferredElement}' and '{current}'. Provide an array whose values all map to one ClickHouse type.");
-            }
+            inferredElement = Agree(inferredElement, element, "The elements of a Dynamic array");
         }
 
         return $"Array({inferredElement ?? InferFromClrType(elementType)})";
+    }
+
+    // A Map's key and value types are inferred from the present pairs, the same way an Array's element type is, so
+    // that a value-disambiguated type (an IPAddress's family, a ClickHouseDecimal's scale) resolves as a Map key or
+    // value too. The scan runs through a cached per-pair-type delegate, over the typed pairs, so it neither boxes
+    // each pair nor reflects over Key/Value once per entry.
+    private static (string Key, string Value) ScanPairs<TKey, TValue>(Array pairs)
+    {
+        string key = null;
+        string value = null;
+        foreach (KeyValuePair<TKey, TValue> pair in (KeyValuePair<TKey, TValue>[])pairs)
+        {
+            key = Agree(key, pair.Key, "The keys of a Dynamic map");
+            value = Agree(value, pair.Value, "The values of a Dynamic map");
+        }
+
+        return (key, value);
+    }
+
+    private static Func<Array, (string Key, string Value)> PairScannerFor(Type pairType)
+        => PairScanners.GetOrAdd(pairType, static type => (Func<Array, (string Key, string Value)>)
+            (typeof(DynamicTypeInference)
+                .GetMethod(nameof(ScanPairs), BindingFlags.NonPublic | BindingFlags.Static)
+                    ?? throw new InvalidOperationException($"Method '{nameof(ScanPairs)}' was not found."))
+                .MakeGenericMethod(type.GetGenericArguments())
+                .CreateDelegate(typeof(Func<Array, (string Key, string Value)>)));
+
+    // Folds one more value into the type inferred so far for one slot of a composite (an array's elements, a map's
+    // keys, a map's values). A null contributes nothing, so an empty or all-null slot falls back to the declared
+    // CLR type. Every present value must infer the same type: the write path buckets the whole composite as one
+    // type per slot, so a mixed slot (IPv4 with IPv6, say) would fail the element cast later — reject it here.
+    private static string Agree(string soFar, object value, string subject)
+    {
+        if (value is null)
+        {
+            return soFar;
+        }
+
+        string current = InferComposable(value);
+        if (soFar is not null && !string.Equals(soFar, current, StringComparison.Ordinal))
+        {
+            throw new NotSupportedException(
+                $"{subject} must all map to one ClickHouse type, but they mix '{soFar}' and '{current}'.");
+        }
+
+        return current;
     }
 
     private static string InferTuple(ITuple tuple)
