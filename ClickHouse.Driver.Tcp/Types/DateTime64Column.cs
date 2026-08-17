@@ -4,7 +4,6 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
-using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
@@ -23,9 +22,6 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </summary>
 internal sealed class DateTime64Column : IColumn<long>
 {
-    private const int DotNetTickScale = 7; // .NET tick = 100 ns = 10^-7 s.
-    private static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
-
     private readonly int scale;
     private readonly TimeZoneInfo timeZone;
     private readonly int length;
@@ -159,22 +155,5 @@ internal sealed class DateTime64Column : IColumn<long>
     // Projects a raw count onto the .NET calendar and presents it in the column's timezone. Sub-100 ns digits at
     // scale 8/9 are truncated toward zero here; the exact value stays in Values. The offset is resolved from the
     // instant so both daylight-saving transitions and historical base-offset changes are honored.
-    private DateTimeOffset ToDateTimeOffset(long count)
-    {
-        // Projecting the count onto the .NET calendar overflows for counts outside DateTimeOffset's range even
-        // though the raw count itself is decodable. Surface that as an actionable message pointing at Values
-        // rather than a bare arithmetic exception.
-        try
-        {
-            long dotNetTicks = FixedPointScaling.ShiftDecimalPlaces(count, DotNetTickScale - scale);
-            var utc = new DateTimeOffset(UnixEpochTicks + dotNetTicks, TimeSpan.Zero);
-            return TimeZoneInfo.ConvertTime(utc, timeZone);
-        }
-        catch (Exception ex) when (ex is OverflowException or ArgumentOutOfRangeException)
-        {
-            throw new OverflowException(
-                $"A DateTime64 count of {count} at scale {scale} is outside the range presentable as a DateTimeOffset in timezone '{timeZone.Id}'; read the raw count via Values instead.",
-                ex);
-        }
-    }
+    private DateTimeOffset ToDateTimeOffset(long count) => ColumnValueProjections.DateTime64ToOffset(count, scale, timeZone);
 }
