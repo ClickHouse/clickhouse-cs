@@ -1263,6 +1263,44 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task DisposeAsync_ADialStillRunningPastTheDrainDeadline_LeavesTheFactoryUndisposed()
+    {
+        // The dial is the one caller disposal cannot reach: it holds a permit but is not in `leased`, so the abort
+        // after the drain deadline does not see it. Disposing the factory anyway would free the TLS certificate
+        // authorities under a live handshake, which surfaces as a cryptographic error from inside the platform.
+        // Holding every permit is the only proof that no dial is running, so a drain that timed out must not.
+        var gate = new TaskCompletionSource();
+        var factory = new FakeConnectionFactory { BeforeCreate = _ => gate.Task };
+        var pool = new ConnectionPool(
+            Options(maxPoolSize: 1, poolTimeout: TimeSpan.FromMilliseconds(150)),
+            factory,
+            new ControlledTimeProvider());
+
+        // Started and left running: BeforeCreate never completes, so this dial ignores the shutdown token the way a
+        // slow ConfigureTls callback or an uncancellable name resolution would.
+        Task<IConnectionLease> stuck = pool.RentAsync(CancellationToken.None).AsTask();
+        await Task.Delay(50);
+
+        await pool.DisposeAsync();
+
+        Assert.That(
+            factory.Disposed,
+            Is.False,
+            "the drain timed out, so a dial may still be inside the factory and its certificates must survive");
+
+        // Release the dial so the test leaves nothing running.
+        gate.SetResult();
+        try
+        {
+            await (await stuck).DisposeAsync();
+        }
+        catch (Exception e) when (e is ObjectDisposedException or OperationCanceledException)
+        {
+            // Either is a correct outcome for a checkout that raced disposal; which one is not this test's subject.
+        }
+    }
+
+    [Test]
     public async Task DisposeAsync_CalledTwice_IsNoOp()
     {
         var pool = new ConnectionPool(Options(), new FakeConnectionFactory(), new ControlledTimeProvider());

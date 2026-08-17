@@ -208,6 +208,63 @@ public class TlsParametersTests
     }
 
     [Test]
+    public void WrapAsync_ConfigureHookSetsTheTopLevelRevocationMode_TheHandshakeStillHonoursIt()
+    {
+        // The trap this covers: the platform reads CertificateRevocationCheckMode only when it builds the chain
+        // policy itself. Pinning supplies one, so setting the obvious top-level property was silently ignored and
+        // a revoked certificate would have been accepted. Neither test certificate names a revocation list, so a
+        // handshake that honours the request cannot establish revocation status and refuses.
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
+
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(authority)),
+            Configure = options => options.CertificateRevocationCheckMode = X509RevocationMode.Online,
+        };
+
+        Assert.ThrowsAsync<AuthenticationException>(async () => await RoundTripThroughTlsAsync(server, tls));
+    }
+
+    // Both revocation modes reject a certificate that names no revocation list, so the handshake outcome cannot say
+    // which value was applied. The policy object can: the hook captures the instance, and normalization mutates that
+    // same instance, so reading it afterwards shows the value the handshake was given.
+    [TestCase(X509RevocationMode.NoCheck, X509RevocationMode.Online, TestName = "{m}(nested left default, top-level carried in)")]
+    [TestCase(X509RevocationMode.Offline, X509RevocationMode.Offline, TestName = "{m}(nested set explicitly, nested kept)")]
+    public async Task WrapAsync_HookSetsRevocationOnBothForms_ThePolicyEndsUpWithTheRightValue(
+        X509RevocationMode nested,
+        X509RevocationMode expected)
+    {
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
+        X509ChainPolicy captured = null;
+
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(authority)),
+            Configure = options =>
+            {
+                captured = options.CertificateChainPolicy;
+                options.CertificateRevocationCheckMode = X509RevocationMode.Online;
+                options.CertificateChainPolicy.RevocationMode = nested;
+            },
+        };
+
+        try
+        {
+            await RoundTripThroughTlsAsync(server, tls);
+        }
+        catch (AuthenticationException)
+        {
+            // Expected either way: neither certificate names a revocation list. The value is the subject here.
+        }
+
+        Assert.That(captured?.RevocationMode, Is.EqualTo(expected));
+    }
+
+    [Test]
     public void WrapAsync_PinnedAuthority_ExposesThePolicyToTheHookRatherThanHidingItInACallback()
     {
         // What the hook is handed has to be the policy the handshake will use, or an edit to it is silently lost.
