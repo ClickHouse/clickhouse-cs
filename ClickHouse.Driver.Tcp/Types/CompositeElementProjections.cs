@@ -74,16 +74,24 @@ internal static class CompositeElementProjections
     }
 
     /// <summary>
-    /// Whether <paramref name="candidate"/> is a single-dimension array, and if so its element type. A container's
-    /// surface is always <c>T[]</c>, so a multi-dimension or jagged-rank target is refused rather than being
-    /// mistaken for one.
+    /// Whether <paramref name="candidate"/> is a zero-based vector (<c>T[]</c>), and if so its element type. A
+    /// container's surface is always exactly that, so a multi-dimension target is refused rather than being mistaken
+    /// for one.
+    ///
+    /// <para>
+    /// <see cref="Type.IsSZArray"/>, not <c>IsArray</c> plus a rank check: <c>Type.MakeArrayType(1)</c> builds the
+    /// non-zero-based <c>T[*]</c>, which has rank one and the right element type but is a distinct type. Accepting it
+    /// would break both directions — a read projection builds a zero-based array, so it would return a type the caller
+    /// did not ask for, and a write shape casts the column to <c>IColumn&lt;T[]&gt;</c>, so a plan-build refusal would
+    /// become a cast failure with the insert already open.
+    /// </para>
     /// </summary>
     /// <param name="candidate">The type to test.</param>
     /// <param name="elementType">The element type, or null when <paramref name="candidate"/> is not such an array.</param>
-    /// <returns>Whether <paramref name="candidate"/> is a single-dimension array.</returns>
+    /// <returns>Whether <paramref name="candidate"/> is a zero-based vector.</returns>
     public static bool TryGetArrayElement(Type candidate, out Type elementType)
     {
-        if (candidate.IsArray && candidate.GetArrayRank() == 1)
+        if (candidate.IsSZArray)
         {
             elementType = candidate.GetElementType();
             return true;
