@@ -298,6 +298,8 @@ public sealed class InsertRoundTripCase
         yield return Arrays("Date32", new[] { new DateOnly(1900, 1, 1), new DateOnly(2299, 12, 31) });
 
         // Array(DateTime) reads back raw uint epoch seconds; Array(DateTime64) raw long counts at the column scale.
+        // Those are the canonical readings, which is what the corpus pins. A caller may also use the lifted DateTime[]
+        // in either direction — covered by the projection tests, the lift matrix, and the composite POCO round-trips.
         yield return Arrays<uint>("DateTime", new uint[] { 1_700_000_000, 0 }, Array.Empty<uint>());
         yield return Arrays<long>("DateTime64(3)", new[] { 0L, 1_700_000_000_123L });
         yield return Arrays<long>("DateTime64(9)", new[] { 1_700_000_000_123_456_789L }, Array.Empty<long>());

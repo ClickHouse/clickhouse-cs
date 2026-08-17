@@ -406,7 +406,68 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => innerCanWrite && shape.CanWrite(column);
+    public bool CanWriteElementType(Type elementType)
+        => TryInnerWriteType(elementType, out Type innerType) && inner.CanWriteElementType(innerType);
+
+    /// <inheritdoc/>
+    public bool CanWrite(IColumn column) => WriteShapeFor(column) is not null;
+
+    /// <summary>
+    /// Undoes this codec's surface rule on a candidate element type to recover the inner codec's own spelling. A
+    /// non-nullable <c>LowCardinality</c> is transparent, so the surface <em>is</em> the inner type; a nullable one
+    /// wraps it exactly as <c>Nullable(T)</c> does.
+    ///
+    /// <para>
+    /// A nullable surface refuses a bare value type: such a column has null rows and the type has nowhere to put one.
+    /// That refusal is what keeps the write side inside the read side — every element type accepted here is one
+    /// <see cref="TryProjectRead"/> also offers, so a property that inserts can be read back.
+    /// </para>
+    /// </summary>
+    /// <param name="elementType">The candidate surface element type.</param>
+    /// <param name="innerType">The inner codec's spelling of it, or null.</param>
+    /// <returns>Whether the surface rule can be undone.</returns>
+    private bool TryInnerWriteType(Type elementType, out Type innerType)
+    {
+        if (!nullable)
+        {
+            innerType = elementType;
+            return true;
+        }
+
+        innerType = Nullable.GetUnderlyingType(elementType);
+        if (innerType is not null)
+        {
+            return true;
+        }
+
+        if (elementType.IsValueType)
+        {
+            return false;
+        }
+
+        innerType = elementType;
+        return true;
+    }
+
+    // The shape for the CLR type this column's rows hold, or null when the inner codec cannot encode them. The
+    // canonical surface keeps this codec's own shape; any other resolves the shape for the lifted inner type, so a
+    // LowCardinality(DateTime) column takes a DateTime column with the inner codec converting as it writes.
+    private ILowCardinalityShape WriteShapeFor(IColumn column)
+    {
+        Type elementType = column.ElementType;
+        if (elementType == ElementType)
+        {
+            return innerCanWrite && shape.CanWrite(column) ? shape : null;
+        }
+
+        if (!TryInnerWriteType(elementType, out Type innerType) || !inner.CanWriteElementType(innerType))
+        {
+            return null;
+        }
+
+        ILowCardinalityShape lifted = LowCardinalityShapes.For(innerType, nullable);
+        return lifted.CanWrite(column) ? lifted : null;
+    }
 
     /// <inheritdoc/>
     // The prefix is a fixed version marker, independent of the data; the column/slice is unused.
@@ -415,5 +476,8 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-        => shape.WriteBody(inner, writer, column, start, length);
+        => (WriteShapeFor(column) ?? throw new ArgumentException(
+                $"A {TypeName} column must hold a CLR type its inner codec accepts, not {column.GetType()}.",
+                nameof(column)))
+            .WriteBody(inner, writer, column, start, length);
 }
