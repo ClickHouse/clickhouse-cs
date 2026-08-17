@@ -119,6 +119,13 @@ public sealed record ClickHouseTcpClientOptions
     /// <c>RemoteCertificateValidationCallback</c> drops the check configured above, and clearing
     /// <c>TargetHost</c> stops the server name being matched at all while chain validation still appears to run.
     /// </para>
+    /// <para>
+    /// With <see cref="TlsCaCertificatePath"/> set, a <c>CertificateChainPolicy</c> is already in place, and the
+    /// hook receives it and may edit it. Revocation checking can be asked for either way — on
+    /// <c>CertificateRevocationCheckMode</c> or on the policy's own <c>RevocationMode</c> — because a value set on
+    /// the former is carried into the latter, which is the only one the handshake reads once a policy exists. A
+    /// value set directly on the policy takes precedence.
+    /// </para>
     /// </remarks>
     public Action<SslClientAuthenticationOptions> ConfigureTls { get; init; }
 

@@ -15,12 +15,16 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 ///
 /// <para>
 /// TLS is below the protocol, so nothing above the transport changes: the native protocol sends the same bytes
-/// encrypted or not. TLS keeps the ClientHello private, and that message carries the password as plaintext.
+/// encrypted or not. What TLS keeps private is the native protocol's client Hello packet, which carries the
+/// password as plaintext. (That packet is named ClientHello in the protocol spec; it is not the TLS ClientHello,
+/// which is part of the visible handshake below it and carries no credentials.)
 /// </para>
 /// </summary>
 internal sealed class TlsParameters : IDisposable
 {
-    // id-kp-serverAuth: the purpose a certificate must declare to authenticate a server.
+    // id-kp-serverAuth: the extended key usage a certificate must permit to authenticate a server. A certificate
+    // carrying no such extension is unrestricted and satisfies this (RFC 5280 4.2.1.12); it constrains the
+    // extension when present rather than requiring it.
     private static readonly Oid ServerAuthentication = new("1.3.6.1.5.5.7.3.1");
 
     private bool disposed;
@@ -96,6 +100,8 @@ internal sealed class TlsParameters : IDisposable
             // is the policy the handshake builds the chain with.
             Configure?.Invoke(authentication);
 
+            NormalizeRevocationMode(authentication);
+
             await ssl.AuthenticateAsClientAsync(authentication, cancellationToken).ConfigureAwait(false);
             return ssl;
         }
@@ -104,6 +110,27 @@ internal sealed class TlsParameters : IDisposable
             // Built with leaveInnerStreamOpen false, so this closes the inner stream as well.
             ssl.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Carries a revocation mode set on the options into the chain policy, which is the only place the handshake
+    /// reads it from once a policy is present.
+    /// </summary>
+    /// <remarks>
+    /// The platform copies <c>CertificateRevocationCheckMode</c> into the chain policy it builds, but only when it
+    /// builds one. Once a policy is supplied — which pinning does — the top-level property is ignored, so
+    /// <c>ConfigureTls</c> setting the obvious property would silently do nothing and a revoked certificate would
+    /// be accepted. Both values start at <c>NoCheck</c>, so a change to either is visible; a nested edit wins,
+    /// because a caller who reached into the policy meant that policy.
+    /// </remarks>
+    /// <param name="authentication">The options about to be handed to the handshake.</param>
+    private static void NormalizeRevocationMode(SslClientAuthenticationOptions authentication)
+    {
+        if (authentication.CertificateChainPolicy is { RevocationMode: X509RevocationMode.NoCheck } policy
+            && authentication.CertificateRevocationCheckMode != X509RevocationMode.NoCheck)
+        {
+            policy.RevocationMode = authentication.CertificateRevocationCheckMode;
         }
     }
 
@@ -160,7 +187,7 @@ internal sealed class TlsParameters : IDisposable
 
         policy.CustomTrustStore.AddRange(roots);
 
-        // A server certificate must say it is for server authentication, so that a private authority which also
+        // A server certificate must not exclude server authentication, so that a private authority which also
         // issues client certificates cannot let the holder of one impersonate a host its name covers. The
         // handshake applies this requirement to a client-side chain anyway; naming it keeps the requirement in the
         // policy a caller can read and does not leave it resting on that behaviour.
