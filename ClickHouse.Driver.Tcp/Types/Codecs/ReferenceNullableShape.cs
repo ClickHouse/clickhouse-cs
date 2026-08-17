@@ -19,7 +19,7 @@ internal sealed class ReferenceNullableShape<T> : INullableShape
     public bool CanWrite(IColumn column) => column is IColumn<T>;
 
     /// <inheritdoc/>
-    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWrite(new ArrayColumn<T>(string.Empty, inner.TypeName, Array.Empty<T>()));
+    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWriteElementType(typeof(T));
 
     /// <inheritdoc/>
     // A dense column (inner column + null-map) writes both directly with no copy. The ergonomic nullable-reference

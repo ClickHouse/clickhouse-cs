@@ -151,16 +151,7 @@ internal static class PocoWriteConversion
     /// <param name="codec">The target column's codec.</param>
     /// <param name="writeType">The candidate write type.</param>
     /// <returns>Whether the codec accepts such a column.</returns>
-    private static bool Accepts(IColumnCodec codec, Type writeType)
-    {
-        var probe = (IColumn)Activator.CreateInstance(
-            typeof(ArrayColumn<>).MakeGenericType(writeType),
-            string.Empty,
-            codec.TypeName,
-            Array.CreateInstance(writeType, 0));
-
-        return codec.CanWrite(probe);
-    }
+    private static bool Accepts(IColumnCodec codec, Type writeType) => codec.CanWriteElementType(writeType);
 
     private static Expression Lift(Expression value, Type target)
         => value.Type == target ? value : Expression.Convert(value, target);

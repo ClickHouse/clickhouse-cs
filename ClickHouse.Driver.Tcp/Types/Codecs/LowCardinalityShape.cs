@@ -29,7 +29,7 @@ internal sealed class LowCardinalityShape<T> : ILowCardinalityShape
     public bool CanWrite(IColumn column) => column is IColumn<T>;
 
     /// <inheritdoc/>
-    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWrite(new ArrayColumn<T>(string.Empty, inner.TypeName, Array.Empty<T>()));
+    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWriteElementType(typeof(T));
 
     /// <inheritdoc/>
     public void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length)
