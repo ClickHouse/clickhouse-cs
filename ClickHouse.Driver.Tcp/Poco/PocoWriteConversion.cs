@@ -7,8 +7,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// Selects a codec-compatible write type and builds the POCO property conversion. Numeric conversions are excluded
-/// to preserve read/write symmetry.
+/// Selects codec-compatible write types and builds POCO property conversions, including child-lifted composite
+/// shapes. Numeric conversions are excluded to preserve read/write symmetry.
 /// </summary>
 internal static class PocoWriteConversion
 {
@@ -16,7 +16,8 @@ internal static class PocoWriteConversion
         typeof(PocoWriteConversion).GetMethod(nameof(NullNotWritable), BindingFlags.Public | BindingFlags.Static);
 
     /// <summary>
-    /// Returns the codec's writable CLR types that work in an array-backed column.
+    /// Returns the codec's canonical writable CLR types that row columns can build. Composite codecs may accept
+    /// additional child-lifted shapes.
     /// </summary>
     /// <param name="codec">The target column's codec.</param>
     /// <returns>The write types, possibly none.</returns>
