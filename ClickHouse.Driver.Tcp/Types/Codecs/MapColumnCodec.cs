@@ -339,8 +339,9 @@ internal interface IMapShape
 
     /// <summary>
     /// Whether <paramref name="column"/> is a writable map column of this key/value type pair. A dense column is
-    /// checked against its actual key/value children; an ergonomic jagged column relies on the flattened child
-    /// probe supplied in <paramref name="projectedChildrenCanWrite"/>.
+    /// checked against its actual key/value children; an ergonomic jagged column relies on
+    /// <paramref name="projectedChildrenCanWrite"/>, which says whether both child codecs accept the flattened columns
+    /// this shape would hand them.
     /// </summary>
     bool CanWrite(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, bool projectedChildrenCanWrite);
 

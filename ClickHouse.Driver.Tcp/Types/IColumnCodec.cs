@@ -170,6 +170,14 @@ internal interface IColumnCodec
     /// <returns>Whether a column of that element type can be written.</returns>
     bool CanWriteElementType(Type elementType)
     {
+        // Answered without touching the list, which the default builds fresh on every call: this is asked once per
+        // column per slice, and the canonical type is the common answer. Every implementation leads its list with
+        // ElementType, so the shortcut cannot disagree with the walk below.
+        if (elementType == ElementType)
+        {
+            return true;
+        }
+
         IReadOnlyList<Type> writable = WritableElementTypes;
         for (int i = 0; i < writable.Count; i++)
         {

@@ -235,10 +235,47 @@ public class CompositeLiftMatrixTests
     [TestCase("Array(Array(Nested(a UInt8)))")]
     [TestCase("Array(Nothing)")]
     [TestCase("Tuple(Nothing, String)")]
+
+    // A wrapper hides an unwritable child behind an element type of its own, so the refusal has to come from the
+    // wrapper's own gate rather than from the shape of the type. Without that, the insert gate passes and the codec
+    // faults part-way through writing the block, having already put bytes on the wire.
+    [TestCase("Nullable(Nothing)")]
+    [TestCase("Array(Nullable(Nothing))")]
+    [TestCase("Array(Array(Nullable(Nothing)))")]
+    [TestCase("Map(String, Nullable(Nothing))")]
+    [TestCase("Tuple(Nullable(Nothing), String)")]
+    [TestCase("Variant(String, Nested(a UInt8))")]
+    [TestCase("Array(Variant(String, Nested(a UInt8)))")]
+    [TestCase("Map(String, Variant(String, Nested(a UInt8)))")]
+    [TestCase("Tuple(Variant(String, Nested(a UInt8)), String)")]
     public void CanWriteElementType_CompositeOverAnUnwritableChild_RefusesItsOwnElementType(string type)
     {
         IColumnCodec codec = Codec(type);
 
         Assert.That(codec.CanWriteElementType(codec.ElementType), Is.False);
+    }
+
+    /// <summary>
+    /// The contract <see cref="IColumnCodec.CanWriteElementType"/> states: the two must agree wherever both can answer.
+    /// A codec that gates <see cref="IColumnCodec.CanWrite"/> on something beyond the element type has to gate this on
+    /// it too, or every composite that asks the interrogative question skips that gate.
+    /// </summary>
+    [TestCase("Nullable(Nothing)", typeof(object))]
+    [TestCase("Variant(String, Nested(a UInt8))", typeof(object))]
+    [TestCase("Array(Nullable(Nothing))", typeof(object[]))]
+    [TestCase("Map(String, Nullable(Nothing))", typeof(object))]
+    [TestCase("Nullable(Int32)", typeof(int?))]
+    [TestCase("Variant(String, UInt64)", typeof(object))]
+    [TestCase("Array(UInt32)", typeof(uint[]))]
+    public void CanWriteElementType_AndCanWrite_AgreeOnAnArrayBackedColumn(string type, Type elementType)
+    {
+        IColumnCodec codec = Codec(type);
+        var probe = (IColumn)Activator.CreateInstance(
+            typeof(ArrayColumn<>).MakeGenericType(elementType),
+            string.Empty,
+            codec.TypeName,
+            Array.CreateInstance(elementType, 0));
+
+        Assert.That(codec.CanWriteElementType(elementType), Is.EqualTo(codec.CanWrite(probe)));
     }
 }

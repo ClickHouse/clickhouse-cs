@@ -221,6 +221,9 @@ internal sealed class VariantColumnCodec : IColumnCodec
     // that checked, and the first thing the writer does is put the discriminators on the wire — so a bad value
     // would desync the block mid-stream rather than fail cleanly. Anything else writable arrives as IColumn<object>
     // and goes down the scattered path, which validates as it goes.
+    public bool CanWriteElementType(Type elementType) => allChildrenWritable && elementType == ElementType;
+
+    /// <inheritdoc/>
     public bool CanWrite(IColumn column)
         => allChildrenWritable && (column is VariantColumn dense ? dense.TypeCount == children.Length : column is IColumn<object>);
 
