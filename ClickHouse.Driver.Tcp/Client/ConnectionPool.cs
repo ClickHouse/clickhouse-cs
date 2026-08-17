@@ -253,6 +253,7 @@ internal sealed class ConnectionPool : IConnectionSource
         // same reason a checkout is: an operation that never releases its connection, such as an `await foreach`
         // whose enumerator is never disposed, must not turn disposal into a hang.
         using var drainDeadline = new CancellationTokenSource(options.PoolTimeout);
+        bool drained = true;
         try
         {
             for (int i = 0; i < options.MaxPoolSize; i++)
@@ -262,6 +263,7 @@ internal sealed class ConnectionPool : IConnectionSource
         }
         catch (OperationCanceledException)
         {
+            drained = false;
             // The drain deadline elapsed: at least one operation did not give its connection back. Abort what is
             // still out, since nothing else can. The pool holds the only other reference to it, and the caller has
             // evidently lost theirs. Aborting closes the transport only, which frees an operation parked on a read
@@ -276,9 +278,19 @@ internal sealed class ConnectionPool : IConnectionSource
             }
         }
 
-        // Last, once every connection is closed or aborted: the factory owns what outlives a single connection,
-        // today the TLS certificate authorities, and a handshake still reading them would be using freed handles.
-        factory.Dispose();
+        // Only when the drain finished. Holding every permit is the proof that no dial is running: a checkout keeps
+        // its permit across its dial, and a new one cannot start, so nothing can still be inside the factory. The
+        // factory owns what outlives a single connection — today the TLS certificate authorities — and a handshake
+        // reading those while they are freed fails with a cryptographic error out of the depths of the platform.
+        //
+        // A dial that ignores the shutdown token for longer than PoolTimeout is the case that misses the deadline:
+        // it is not in `leased`, so the abort above does not reach it either. Its certificates are then left to the
+        // finalizer, which is where they were before this call existed. Releasing handles promptly is worth having,
+        // but not at the price of freeing them under a live handshake.
+        if (drained)
+        {
+            factory.Dispose();
+        }
 
         // Neither the semaphore nor the shutdown source is disposed, for the same reason. Neither holds an
         // unmanaged resource here: the semaphore's AvailableWaitHandle is never touched, and the source has no
