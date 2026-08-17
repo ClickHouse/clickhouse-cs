@@ -160,6 +160,39 @@ public class CompositeElementProjectionTests
         });
     }
 
+    /// <summary>
+    /// A rank-one array is not necessarily the <c>T[]</c> a row holds: <c>Type.MakeArrayType(1)</c> builds the non-zero-based
+    /// <c>T[*]</c>, which has rank one and the right element type but is a different type. Offering it would break the
+    /// contract outright — the projection builds a zero-based array, so the result would not be the type asked for.
+    /// </summary>
+    [Test]
+    public void TryProjectRead_ArrayAskedForANonZeroBasedRankOneTarget_ReturnsFalse()
+    {
+        IColumnCodec codec = Codec("Array(DateTime('UTC'))");
+        ParameterExpression source = Expression.Parameter(typeof(uint[]), "v");
+        Type nonZeroBased = typeof(DateTime).MakeArrayType(1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(nonZeroBased, Is.Not.EqualTo(typeof(DateTime[])), "the test needs the non-SZ spelling to be a distinct type");
+            Assert.That(codec.TryProjectRead(source, nonZeroBased, out Expression projected), Is.False);
+            Assert.That(projected, Is.Null);
+        });
+    }
+
+    [Test]
+    public void TryProjectRead_MapAskedForANonZeroBasedRankOnePairArray_ReturnsFalse()
+    {
+        IColumnCodec codec = Codec("Map(String, DateTime('UTC'))");
+        ParameterExpression source = Expression.Parameter(typeof(KeyValuePair<string, uint>[]), "v");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.TryProjectRead(source, typeof(KeyValuePair<string, DateTime>).MakeArrayType(1), out Expression projected), Is.False);
+            Assert.That(projected, Is.Null);
+        });
+    }
+
     [Test]
     public void TryProjectRead_ArrayAskedForANonArrayTarget_ReturnsFalse()
         => AssertNotOffered<DateTime>(Codec("Array(DateTime('UTC'))"), typeof(uint[]));
