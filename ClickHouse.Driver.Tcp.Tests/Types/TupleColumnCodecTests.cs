@@ -358,4 +358,40 @@ public class TupleColumnCodecTests
                 async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, wrong, 0, 2)));
         });
     }
+    /// <summary>
+    /// A dense tuple column of a different arity cannot fill this codec, however its children look. Refused on the
+    /// column's own CLR tuple type before any child is consulted, so a mismatched dense column is never part-written.
+    /// </summary>
+    [Test]
+    public void CanWrite_DenseTupleColumnOfADifferentArity_ReturnsFalse()
+    {
+        IColumnCodec codec = Resolve("Tuple(Int32, String)");
+        var narrower = new TupleColumn<int>(
+            "c",
+            "Tuple(Int32)",
+            new IColumn[] { new ArrayColumn<int>("c", "Int32", new[] { 1 }) },
+            fieldNames: null,
+            ownsChildren: false);
+
+        Assert.That(codec.CanWrite(narrower), Is.False);
+    }
+
+    /// <summary>
+    /// Writing a flat tuple column whose field types no child accepts fails naming the tuple type. Reachable only by
+    /// calling the codec directly — an insert asks CanWrite first — so it is the guard behind that check rather than
+    /// the message a caller normally sees.
+    /// </summary>
+    [Test]
+    public async Task WriteColumn_FlatTupleColumnOfUnacceptableFieldTypes_ThrowsNamingTheTupleType()
+    {
+        IColumnCodec codec = Resolve("Tuple(Int32, String)");
+        var wrongFields = new ArrayColumn<(int, int)>("c", "Tuple(Int32, String)", new[] { (1, 2) });
+
+        ArgumentException thrown = null;
+        await CodecTestHarness.WriteAsync(writer =>
+            thrown = Assert.Throws<ArgumentException>(() => codec.WriteColumn(writer, wrongFields, 0, 1)));
+
+        Assert.That(thrown.Message, Does.Contain("Tuple(Int32, String)").And.Contain("field codecs accept"));
+    }
+
 }
