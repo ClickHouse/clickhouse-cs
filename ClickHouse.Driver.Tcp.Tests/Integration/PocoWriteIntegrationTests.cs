@@ -45,7 +45,11 @@ public class PocoWriteIntegrationTests
             // A Nested target is the one corpus shape rows cannot be gathered into: its codec writes from its own
             // column type (flat field columns behind shared offsets), which no property can hold. It has to say so
             // rather than fail once the values are on the wire.
-            if (testCase.ClickHouseType.StartsWith("Nested(", StringComparison.Ordinal))
+            //
+            // Contains, not StartsWith: a Nested inside a composite is just as ungatherable, because the composite
+            // can only hand its child the column shape a row yields. Array(Nested(...)), Tuple(Nested(...), String)
+            // and both Map positions are corpus cases, and each one refuses for exactly this reason.
+            if (testCase.ClickHouseType.Contains("Nested(", StringComparison.Ordinal))
             {
                 InvalidOperationException refusal = Assert.ThrowsAsync<InvalidOperationException>(
                     async () => await InsertColumnAsRowsAsync(client, sql, insertOptions, insert, ElementTypeOf(insert)));
