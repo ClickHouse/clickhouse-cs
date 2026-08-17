@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -25,11 +26,15 @@ internal interface IColumnCodec
     /// <summary>
     /// The CLR element type the decoded column surfaces — the <c>T</c> of the <see cref="IColumn{T}"/> that
     /// <see cref="ReadColumnAsync"/> produces (e.g. <see cref="ulong"/> for <c>UInt64</c>, <see cref="string"/>
-    /// for <c>String</c>, <see cref="System.DateTimeOffset"/> for <c>DateTime</c>). Composite codecs consult a
-    /// child codec's element type to build the right typed wrapper column (e.g. <c>Nullable(T)</c> surfaces
-    /// <c>T?</c> for a value-type inner and the nullable reference for a reference-type inner). A codec may still
-    /// <see cref="CanWrite"/> more CLR types than this on the write path (see <see cref="WritableElementTypes"/>);
-    /// this is the one it reads back.
+    /// for <c>String</c>, <see cref="uint"/> — the raw epoch-second count — for <c>DateTime</c>). Composite codecs
+    /// consult a child codec's element type to build the right typed wrapper column (e.g. <c>Nullable(T)</c>
+    /// surfaces <c>T?</c> for a value-type inner and the nullable reference for a reference-type inner).
+    ///
+    /// <para>
+    /// This is the one type the column is *decoded* into. A codec may accept more CLR types than this on the
+    /// write path (<see cref="WritableElementTypes"/>, which leads with this type) and may project to more on the
+    /// read path (<see cref="TryProjectRead"/>).
+    /// </para>
     /// </summary>
     Type ElementType { get; }
 
@@ -42,6 +47,53 @@ internal interface IColumnCodec
     /// <see cref="CanWrite"/> and <see cref="NullPlaceholderAs"/>.
     /// </summary>
     IReadOnlyList<Type> WritableElementTypes => new[] { ElementType };
+
+    /// <summary>
+    /// The readings this codec offers, canonical <see cref="ElementType"/> first — <b>for diagnostics only</b>.
+    /// Defaults to just <see cref="ElementType"/>; a codec whose canonical type is a raw wire count lists the
+    /// calendar readings it can also offer (e.g. <c>DateTime</c> surfaces <see cref="uint"/> epoch seconds and can
+    /// also project <see cref="System.DateTimeOffset"/> and <see cref="System.DateTime"/>).
+    ///
+    /// <para>
+    /// <b>Do not use this to decide whether a projection is available</b> — ask <see cref="TryProjectRead"/>, which
+    /// is the authority. This list is not exhaustive and cannot be: a composite's readable set is the cartesian
+    /// product of its children's (a seven-field tuple of <c>DateTime64</c>s would be 3^7 entries), so a composite
+    /// that lifts its children answers <see cref="TryProjectRead"/> for shapes it does not enumerate here. Only ever
+    /// read on a failure path, to tell a caller what a column can be read as — so this is also not a hot property,
+    /// and it may allocate.
+    /// </para>
+    /// </summary>
+    IReadOnlyList<Type> ReadableElementTypes => new[] { ElementType };
+
+    /// <summary>
+    /// Builds an expression projecting <paramref name="value"/> — an expression of type <see cref="ElementType"/> —
+    /// to <paramref name="targetType"/>. The identity for <see cref="ElementType"/> itself. This is the authority on
+    /// which readings exist: it answers the one type a caller asks about, rather than making the caller search
+    /// <see cref="ReadableElementTypes"/>, so a codec cannot advertise a projection it does not have and a composite
+    /// can recurse into its children without enumerating their cartesian product.
+    ///
+    /// <para>
+    /// An <em>expression</em> rather than a delegate, so a caller compiling a per-column read loop can inline the
+    /// conversion into it; returning a <c>Func&lt;,&gt;</c> would cost an indirect call per row and defeat the
+    /// point. Any per-column state the conversion needs (scale, timezone) is embedded as a constant, so the
+    /// returned expression closes over nothing.
+    /// </para>
+    /// </summary>
+    /// <param name="value">An expression of type <see cref="ElementType"/> yielding one decoded value. Some
+    /// projections reference it more than once, so a caller must pass a variable or another repeatable expression.</param>
+    /// <param name="targetType">The CLR type to project to. Must not be null; implementations are not required to
+    /// agree on what a null does, so a caller with a possibly-absent target must check before asking.</param>
+    /// <param name="projected">An expression of type <paramref name="targetType"/>, or null when this codec offers
+    /// no projection to it.</param>
+    /// <returns>Whether a projection to <paramref name="targetType"/> exists.</returns>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is not of type <see cref="ElementType"/>. A
+    /// caller mistake, distinct from a target this codec simply does not offer.</exception>
+    bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
+        projected = targetType == ElementType ? value : null;
+        return projected is not null;
+    }
 
     /// <summary>
     /// A value of <see cref="ElementType"/> to encode where a row has no value of its own — the placeholder
