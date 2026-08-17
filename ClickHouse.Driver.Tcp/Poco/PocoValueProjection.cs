@@ -15,7 +15,7 @@ namespace ClickHouse.Driver.Tcp.Poco;
 /// The rules, first match winning:
 /// <list type="number">
 /// <item>the property type is the column's element type — the identity;</item>
-/// <item>the codec advertises the property type in <see cref="IColumnCodec.ReadableElementTypes"/> — its own
+/// <item>the codec offers a projection to the property type (<see cref="IColumnCodec.TryProjectRead"/>) — its own
 /// projection is inlined, which is what reads a <c>DateTime</c> column into a <see cref="DateTime"/> property
 /// rather than into the raw epoch seconds;</item>
 /// <item>a <c>Nullable(T)</c> column into a property that cannot hold null — projected through the nullable
@@ -67,9 +67,8 @@ internal static class PocoValueProjection
             return true;
         }
 
-        if (Offers(codec, target))
+        if (codec.TryProjectRead(value, target, out projected))
         {
-            projected = codec.ProjectRead(value, target);
             return true;
         }
 
@@ -84,9 +83,9 @@ internal static class PocoValueProjection
             Expression onNull = ThrowNull(site, target);
             Type lifted = typeof(Nullable<>).MakeGenericType(target);
 
-            if (Offers(codec, lifted))
+            if (codec.TryProjectRead(value, lifted, out Expression liftedProjection))
             {
-                projected = OverValue(codec.ProjectRead(value, lifted), target, onNull, static present => present);
+                projected = OverValue(liftedProjection, target, onNull, static present => present);
                 return true;
             }
 
@@ -146,24 +145,6 @@ internal static class PocoValueProjection
         => new InvalidOperationException(
             $"Column '{columnName}' ({columnType}) is NULL at row {row} of the result, but it maps to property '{pocoType}.{memberName}' of type {memberType}, which cannot hold null. " +
             $"Make that property nullable, or exclude the NULLs in the query.");
-
-    /// <summary>Whether the codec advertises a projection to <paramref name="target"/>.</summary>
-    /// <param name="codec">The codec.</param>
-    /// <param name="target">The type to look for.</param>
-    /// <returns>Whether the type is one of the codec's readable element types.</returns>
-    private static bool Offers(IColumnCodec codec, Type target)
-    {
-        IReadOnlyList<Type> readable = codec.ReadableElementTypes;
-        for (int i = 0; i < readable.Count; i++)
-        {
-            if (readable[i] == target)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     /// <summary>
     /// The conversions that need no codec: a CLR <c>enum</c> over its own ordinal type, and a target the source is
