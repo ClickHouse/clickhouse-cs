@@ -206,7 +206,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         {
             await socket.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
 
-            // TLS is negotiated here, before a single protocol byte is written: the ClientHello that follows
+            // TLS is negotiated here, before a single protocol byte is written: the native client Hello that follows
             // carries the password in plaintext, so it must already be inside the encrypted stream.
             transport = new NetworkStream(socket, ownsSocket: false);
             if (tls is not null)
