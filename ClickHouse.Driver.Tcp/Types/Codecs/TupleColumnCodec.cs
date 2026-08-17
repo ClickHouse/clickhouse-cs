@@ -106,10 +106,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
         MethodInfo projectionTemplate = typeof(TupleColumnCodec).GetMethod(nameof(BuildProjection), BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException($"Method '{nameof(BuildProjection)}' was not found.");
 
-        // Closed once per element type to build an empty child column for the up-front writability probe below.
-        MethodInfo emptyTemplate = typeof(TupleColumnCodec).GetMethod(nameof(BuildEmptyColumn), BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException($"Method '{nameof(BuildEmptyColumn)}' was not found.");
-
         bool writable = true;
         for (int i = 0; i < arity; i++)
         {
@@ -117,13 +113,10 @@ internal sealed class TupleColumnCodec : IColumnCodec
                 .MakeGenericMethod(elementTypes[i])
                 .CreateDelegate(typeof(Func<string, IColumn, int, IColumn>));
 
-            // Probe the flat ValueTuple path with the projected child shape it will actually hand the codec. A
+            // Ask each child whether the flat ValueTuple path's projected child shape is one it can encode from. A
             // dense TupleColumn is checked against its real child columns in CanWrite instead, which lets a
             // Tuple(Nested(...)) re-insert its wire-shaped NestedColumn child.
-            var emptyBuilder = (Func<string, IColumn>)emptyTemplate
-                .MakeGenericMethod(elementTypes[i])
-                .CreateDelegate(typeof(Func<string, IColumn>));
-            writable &= children[i].CanWrite(emptyBuilder(children[i].TypeName));
+            writable &= children[i].CanWriteElementType(elementTypes[i]);
         }
 
         projectedChildrenWritable = writable;
@@ -388,10 +381,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
             states[i]?.Dispose();
         }
     }
-
-    // Builds an empty typed column for the constructor's up-front child writability probe.
-    private static IColumn BuildEmptyColumn<T>(string typeName)
-        => new ArrayColumn<T>(string.Empty, typeName, Array.Empty<T>());
 
     // Builds the lazy per-element projection view the ergonomic write path hands each child codec (reached through
     // the cached childProjectionBuilders delegates).

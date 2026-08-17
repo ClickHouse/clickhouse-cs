@@ -56,6 +56,10 @@ internal sealed class NothingColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => false;
 
     /// <inheritdoc/>
+    // Nothing has no values to encode, so no element type can fill it either.
+    public bool CanWriteElementType(Type elementType) => false;
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
         => throw new NotSupportedException("Values cannot be written to a ClickHouse Nothing column.");
 }

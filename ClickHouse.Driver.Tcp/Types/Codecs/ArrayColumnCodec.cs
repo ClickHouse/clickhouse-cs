@@ -85,7 +85,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         // Whether the ergonomic jagged path can project its flattened values through the inner codec (e.g.
         // Nothing cannot, and Nested requires its dense NestedColumn). A dense ArrayValueColumn is checked against
         // its actual inner column instead, so Array(Nested(...)) can re-insert the wire-shaped column a read yields.
-        projectedInnerCanWrite = inner.CanWrite(new ArrayColumn<TElement>(string.Empty, inner.TypeName, Array.Empty<TElement>()));
+        projectedInnerCanWrite = inner.CanWriteElementType(typeof(TElement));
     }
 
     /// <inheritdoc/>
