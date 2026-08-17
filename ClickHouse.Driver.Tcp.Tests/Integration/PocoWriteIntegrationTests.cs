@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
@@ -281,6 +282,68 @@ public class PocoWriteIntegrationTests
                 Assert.That(read[0].Span.Item1, Is.EqualTo(new[] { second }));
                 Assert.That(read[0].Span.Item2, Is.Null);
                 Assert.That(read[0].Maybe, Is.EqualTo(new DateTime?[] { first, null, second }));
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task InsertAsync_LowCardinalityOverACalendarInner_RoundTripsFromTheCalendarProperty()
+    {
+        // The asymmetry this epic closes: the column read into a DateTime property but could be written only from raw
+        // epoch seconds. A non-nullable LowCardinality surfaces its inner's element type unchanged, so the dictionary
+        // is now built from DateTime values and the inner codec converts them as it writes.
+        await using var client = TcpServerFixture.CreateClient();
+
+        // LowCardinality over a fixed-width type is refused by default as a performance foot-gun. It is named here
+        // because it is the exact type whose asymmetry this closes, so the setting is enabled rather than the case
+        // swapped for one the server likes better.
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["allow_suspicious_low_cardinality_types"] = "1",
+        };
+        var options = new ClickHouseTcpQueryOptions { Settings = settings };
+        string table = UniqueTableName();
+        try
+        {
+            await client.ExecuteAsync(
+                $"CREATE TABLE {table} (value LowCardinality(DateTime('UTC'))) ENGINE = Memory",
+                options,
+                None);
+
+            var repeated = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+            var other = new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            // The repeat matters: it is what makes the dictionary smaller than the row count, so a wrong dictionary
+            // would show up as a wrong value rather than merely a different encoding.
+            var written = new[]
+            {
+                new Row<DateTime> { Value = repeated },
+                new Row<DateTime> { Value = other },
+                new Row<DateTime> { Value = repeated },
+            };
+
+            await client.InsertAsync(
+                $"INSERT INTO {table} (value) VALUES",
+                written,
+                new ClickHouseTcpInsertOptions { Settings = settings },
+                None);
+
+            List<Row<DateTime>> read = await client
+                .QueryAsync<Row<DateTime>>($"SELECT value FROM {table} ORDER BY value", options, None)
+                .ToListAsync();
+            List<object[]> distinct = await client
+                .QueryAsync($"SELECT uniqExact(value), toUInt32(min(value)) FROM {table}", options, None)
+                .ToListAsync();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(read.Select(r => r.Value), Is.EqualTo(new[] { repeated, other, repeated }.OrderBy(v => v)));
+                Assert.That(Convert.ToUInt64(distinct[0][0]), Is.EqualTo(2ul), "two distinct values, so the dictionary really deduplicated");
+                Assert.That(Convert.ToUInt32(distinct[0][1]), Is.EqualTo(1_705_314_600u), "the wire carries epoch seconds");
             });
         }
         finally
