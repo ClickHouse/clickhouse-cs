@@ -263,6 +263,52 @@ public class TlsParametersTests
     }
 
     [Test]
+    public void WrapAsync_AfterDispose_RefusesInsteadOfFallingBackToTheHostTrustStore()
+    {
+        // The pinned-roots branch tests for a non-empty collection, so roots that were disposed and emptied would
+        // skip it and leave the handshake validating against the host trust store instead. This certificate is
+        // from a private authority, so that fall-through happens to fail here too — but against a publicly
+        // trusted certificate, which is exactly what pinning a private authority is meant to exclude, it would
+        // succeed. Hence a refusal rather than a fall-through.
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
+
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(authority)),
+        };
+
+        tls.Dispose();
+
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await RoundTripThroughTlsAsync(server, tls));
+    }
+
+    [Test]
+    public void Dispose_CalledTwice_IsANoOp()
+    {
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(authority)),
+        };
+
+        tls.Dispose();
+
+        // Disposing an X509Certificate2 twice is harmless, but the second pass must not depend on that.
+        Assert.DoesNotThrow(tls.Dispose);
+    }
+
+    [Test]
+    public void Dispose_PlaintextParametersWithNoAuthorities_IsANoOp()
+    {
+        var tls = new TlsParameters { TargetHost = ServerName, AllowInvalidCertificates = true };
+
+        Assert.DoesNotThrow(tls.Dispose);
+    }
+
+    [Test]
     public void LoadCaCertificates_FileHoldingNoCertificate_ThrowsArgumentException()
     {
         string path = Path.Combine(Path.GetTempPath(), $"tcp-tls-empty-{Guid.NewGuid():N}.pem");
