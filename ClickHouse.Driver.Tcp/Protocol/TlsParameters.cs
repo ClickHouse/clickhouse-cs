@@ -18,10 +18,12 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 /// encrypted or not. TLS keeps the ClientHello private, and that message carries the password as plaintext.
 /// </para>
 /// </summary>
-internal sealed class TlsParameters
+internal sealed class TlsParameters : IDisposable
 {
     // id-kp-serverAuth: the purpose a certificate must declare to authenticate a server.
     private static readonly Oid ServerAuthentication = new("1.3.6.1.5.5.7.3.1");
+
+    private bool disposed;
 
     /// <summary>The host name presented as SNI and matched against the server certificate.</summary>
     required public string TargetHost { get; init; }
@@ -64,6 +66,11 @@ internal sealed class TlsParameters
     /// <returns>The encrypted stream.</returns>
     internal async ValueTask<Stream> WrapAsync(Stream inner, CancellationToken cancellationToken)
     {
+        // Refused rather than continued: the pinned authorities are gone once this is disposed, and the branch
+        // below that selects them tests for a non-empty collection. Carrying on would fall through to the host
+        // trust store, quietly turning exclusive pinning into whatever the machine happens to trust.
+        ObjectDisposedException.ThrowIf(disposed, this);
+
         var ssl = new SslStream(inner, leaveInnerStreamOpen: false);
         try
         {
@@ -98,6 +105,35 @@ internal sealed class TlsParameters
             ssl.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Releases the loaded certificate authorities, which hold native key handles. Idempotent, and a no-op when
+    /// none were loaded. The owner calls this once nothing can still be handshaking: <see cref="WrapAsync"/>
+    /// refuses afterwards rather than negotiating without them.
+    /// </summary>
+    public void Dispose()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        // Set first, so a use racing this disposal is refused rather than handed certificates being freed.
+        disposed = true;
+
+        if (CaCertificates is not { } certificates)
+        {
+            return;
+        }
+
+        foreach (X509Certificate2 certificate in certificates)
+        {
+            certificate.Dispose();
+        }
+
+        // The collection is deliberately left populated. Clearing it would make the pinned-roots branch in
+        // WrapAsync see an empty set and skip, which is the fall-through to host trust the flag above prevents.
     }
 
     /// <summary>

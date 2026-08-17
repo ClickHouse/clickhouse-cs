@@ -1,5 +1,4 @@
 using System;
-using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -66,24 +65,10 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
     }
 
     /// <summary>
-    /// Releases the certificate authorities loaded for TLS, which hold native key handles. Safe to call more than
-    /// once, and a no-op for a plaintext client, which loaded none.
+    /// Releases the TLS configuration this factory built, and with it the certificate authorities it loaded. Safe
+    /// to call more than once, and a no-op for a plaintext client, which built none.
     /// </summary>
-    public void Dispose()
-    {
-        if (tls?.CaCertificates is not { } certificates)
-        {
-            return;
-        }
-
-        foreach (X509Certificate2 certificate in certificates)
-        {
-            certificate.Dispose();
-        }
-
-        // Emptied so a second call finds nothing to dispose rather than disposing the same handles again.
-        certificates.Clear();
-    }
+    public void Dispose() => tls?.Dispose();
 
     /// <summary>The TLS configuration these options describe, or null when the client connects in the clear.</summary>
     /// <param name="options">The client's validated options.</param>
