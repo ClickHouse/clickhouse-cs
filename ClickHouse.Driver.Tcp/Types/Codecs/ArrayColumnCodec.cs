@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -193,6 +194,39 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             offsets[i + 1] = (int)end;
             previous = end;
         }
+    }
+
+    /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, typeof(TElement[]), TypeName);
+
+        if (targetType == typeof(TElement[]))
+        {
+            projected = value;
+            return true;
+        }
+
+        projected = null;
+
+        // Only an array can hold this surface's rows, and its element type is the one reading the inner codec is
+        // asked for. Nothing about the inner is inferred from the outer shape: a rank-2 or jagged target is refused
+        // here rather than being read as if it were T[].
+        if (!CompositeElementProjections.TryGetArrayElement(targetType, out Type targetElement))
+        {
+            return false;
+        }
+
+        // Ask the inner codec before building anything. The element variable has to exist first so the inner can
+        // project from it, but if the inner declines there is no tree to unwind.
+        ParameterExpression element = Expression.Variable(typeof(TElement), "element");
+        if (!inner.TryProjectRead(element, targetElement, out Expression elementProjection))
+        {
+            return false;
+        }
+
+        projected = CompositeElementProjections.ProjectArray(value, element, elementProjection);
+        return true;
     }
 
     /// <inheritdoc/>

@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -174,6 +175,47 @@ internal sealed class MapColumnCodec : IColumnCodec
         {
             ArrayPool<byte>.Shared.Return(scratch);
         }
+    }
+
+    /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
+
+        if (targetType == ElementType)
+        {
+            projected = value;
+            return true;
+        }
+
+        projected = null;
+
+        // The only shape that can hold this surface's rows is another array of pairs. Both of its type arguments are
+        // read off the target and neither is inferred from this codec's own: a caller may lift the key, the value, or
+        // both, so the two are asked for independently.
+        if (!CompositeElementProjections.TryGetArrayElement(targetType, out Type targetPair)
+            || !targetPair.IsGenericType
+            || targetPair.GetGenericTypeDefinition() != typeof(KeyValuePair<,>))
+        {
+            return false;
+        }
+
+        Type[] targetArguments = targetPair.GetGenericArguments();
+        ParameterExpression pair = Expression.Variable(ElementType.GetElementType(), "pair");
+        if (!keyCodec.TryProjectRead(Expression.Property(pair, "Key"), targetArguments[0], out Expression projectedKey)
+            || !valueCodec.TryProjectRead(Expression.Property(pair, "Value"), targetArguments[1], out Expression projectedValue))
+        {
+            return false;
+        }
+
+        // A KeyValuePair is immutable, so a lifted pair is a new one rather than a mutated copy.
+        Expression rebuilt = Expression.New(
+            targetPair.GetConstructor(targetArguments) ?? throw new InvalidOperationException($"KeyValuePair<,> is missing its ({targetArguments[0]}, {targetArguments[1]}) constructor."),
+            projectedKey,
+            projectedValue);
+
+        projected = CompositeElementProjections.ProjectArray(value, pair, rebuilt);
+        return true;
     }
 
     /// <inheritdoc/>
