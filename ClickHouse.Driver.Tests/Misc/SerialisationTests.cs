@@ -278,6 +278,46 @@ public class SerialisationTests
         Assert.That(allocated, Is.Zero, $"Write should use a stack buffer; allocated {allocated} bytes for {Count} values");
     }
 
+#if NET8_0_OR_GREATER
+    // The read-side mirror of the test above. Int128/UInt128 carry their own typed readers precisely so a
+    // POCO property of the native CLR type avoids BigInteger's heap array; decoding through a per-value
+    // byte[Size] puts an allocation straight back onto that path. Int256/UInt256 have no native CLR
+    // counterpart, so they only have the BigInteger reader and are not covered here.
+    [Test]
+    public void NativeWideIntegerRead_OfManyValues_ShouldNotAllocate()
+    {
+        Assert.Multiple(() =>
+        {
+            var int128 = MeasureTypedRead<Int128>("Int128", size: 16);
+            Assert.That(int128, Is.Zero, $"Int128 read should use a stack buffer; allocated {int128} bytes");
+
+            var uint128 = MeasureTypedRead<UInt128>("UInt128", size: 16);
+            Assert.That(uint128, Is.Zero, $"UInt128 read should use a stack buffer; allocated {uint128} bytes");
+        });
+    }
+
+    // Reads Count values through the type's ITypedReader<T> and returns the bytes allocated doing so. The
+    // typed readers are explicit interface implementations, so the cast is what selects them over the base
+    // ITypedReader<BigInteger>.
+    private static long MeasureTypedRead<T>(string clickHouseType, int size)
+    {
+        const int Count = 5000;
+        var reader = (ITypedReader<T>)TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default);
+
+        using var stream = new MemoryStream(new byte[(Count + 1) * size]);
+        using var binaryReader = new ExtendedBinaryReader(stream);
+
+        // Warm up the JIT, then rewind so only the measured reads consume the buffer.
+        _ = reader.ReadValue(binaryReader);
+        stream.Position = 0;
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Count; i++)
+            _ = reader.ReadValue(binaryReader);
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+#endif
+
     private static TestCaseData WriteCase(string clickHouseType, BigInteger value, byte[] expected) =>
         new TestCaseData(clickHouseType, value, expected)
             .SetName($"BigIntegerWrite_{clickHouseType}_{value}_ShouldEmitTwosComplementBytes");
