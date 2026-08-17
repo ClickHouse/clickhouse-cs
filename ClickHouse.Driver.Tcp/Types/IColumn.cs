@@ -28,6 +28,55 @@ public interface IColumn : IDisposable
     /// <param name="row">The zero-based row index.</param>
     /// <returns>The value at that row.</returns>
     object GetValue(int row);
+
+    /// <summary>
+    /// The CLR element type this column holds — the <c>T</c> of the <see cref="IColumn{T}"/> it implements. Lets a
+    /// codec interrogate a column it was handed without knowing that <c>T</c> statically, which is what a composite
+    /// needs to decide whether its children can encode the column's elements.
+    ///
+    /// <para>
+    /// Resolved from the implemented interface and cached per column type, so an implementation gets a correct answer
+    /// for free. Override it to skip the lookup.
+    /// </para>
+    /// </summary>
+    Type ElementType => ColumnElementTypes.Of(GetType());
+}
+
+/// <summary>
+/// Resolves the <c>T</c> of the <see cref="IColumn{T}"/> a column class implements. Cached per type, because the
+/// reflection is the same answer every time and the question is asked once per column per insert.
+/// </summary>
+internal static class ColumnElementTypes
+{
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Type> Cache = new();
+
+    /// <summary>Returns the element type <paramref name="columnType"/> surfaces.</summary>
+    /// <param name="columnType">A type implementing <see cref="IColumn{T}"/>.</param>
+    /// <returns>The element type.</returns>
+    /// <exception cref="InvalidOperationException"><paramref name="columnType"/> implements no <see cref="IColumn{T}"/>,
+    /// or more than one — in which case no single element type describes it.</exception>
+    public static Type Of(Type columnType) => Cache.GetOrAdd(columnType, static type =>
+    {
+        Type found = null;
+        foreach (Type candidate in type.GetInterfaces())
+        {
+            if (!candidate.IsGenericType || candidate.GetGenericTypeDefinition() != typeof(IColumn<>))
+            {
+                continue;
+            }
+
+            if (found is not null)
+            {
+                // Refused rather than resolved to whichever came first: a codec asking this needs the column's one
+                // element type, and a class surfacing two has no such thing.
+                throw new InvalidOperationException($"Column type '{type}' implements IColumn<> more than once, so it has no single element type.");
+            }
+
+            found = candidate.GenericTypeArguments[0];
+        }
+
+        return found ?? throw new InvalidOperationException($"Column type '{type}' does not implement IColumn<>.");
+    });
 }
 
 /// <summary>
