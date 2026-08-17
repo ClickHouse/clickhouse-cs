@@ -35,6 +35,25 @@ public class WritePathEquivalenceTests
             new[] { new KeyValuePair<string, int>("a", 1), new KeyValuePair<string, int>("b", 2) },
             Array.Empty<KeyValuePair<string, int>>(),
         }));
+
+        // Lifted ergonomic columns: the row's elements arrive in a CLR type the child codec converts, so the write goes
+        // through a shape resolved from the row's type rather than the codec's own. The dense read-back is always in the
+        // canonical type, so byte equality here is what proves a lifted write encodes exactly as the canonical one does.
+        var stamps = new[] { DateTimeOffset.FromUnixTimeSeconds(0).UtcDateTime, DateTimeOffset.FromUnixTimeSeconds(1_705_314_600).UtcDateTime };
+        yield return Case("Array(DateTime('UTC'))", new ArrayColumn<DateTime[]>("c", "Array(DateTime('UTC'))", new[] { stamps, Array.Empty<DateTime>() }));
+        yield return Case("Array(Array(DateTime('UTC')))", new ArrayColumn<DateTime[][]>("c", "Array(Array(DateTime('UTC')))", new[] { new[] { stamps, Array.Empty<DateTime>() }, Array.Empty<DateTime[]>() }));
+        yield return Case("Array(Nullable(DateTime('UTC')))", new ArrayColumn<DateTime?[]>("c", "Array(Nullable(DateTime('UTC')))", new[] { new DateTime?[] { stamps[0], null, stamps[1] }, new DateTime?[] { null } }));
+        yield return Case("Tuple(DateTime('UTC'), String)", new ArrayColumn<(DateTime, string)>("c", "Tuple(DateTime('UTC'), String)", new[] { (stamps[0], "a"), (stamps[1], "bb") }));
+        yield return Case("Map(String, DateTime('UTC'))", new ArrayColumn<KeyValuePair<string, DateTime>[]>("c", "Map(String, DateTime('UTC'))", new[]
+        {
+            new[] { new KeyValuePair<string, DateTime>("a", stamps[0]), new KeyValuePair<string, DateTime>("b", stamps[1]) },
+            Array.Empty<KeyValuePair<string, DateTime>>(),
+        }));
+
+        // A lift through two levels, over an inner that has a state prefix of its own: the Array resolves a shape for
+        // DateTime, and the LowCardinality it hands the flattened view resolves one too.
+        yield return Case("Array(LowCardinality(DateTime('UTC')))", new ArrayColumn<DateTime[]>("c", "Array(LowCardinality(DateTime('UTC')))", new[] { new[] { stamps[0], stamps[1], stamps[0] }, Array.Empty<DateTime>() }));
+        yield return Case("LowCardinality(DateTime('UTC'))", new ArrayColumn<DateTime>("c", "LowCardinality(DateTime('UTC'))", new[] { stamps[0], stamps[1], stamps[0] }));
     }
 
     private static TestCaseData Case(string type, IColumn ergonomic) => new TestCaseData(type, ergonomic).SetName($"WritePathEquivalence({type})");
