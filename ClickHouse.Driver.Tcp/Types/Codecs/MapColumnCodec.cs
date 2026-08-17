@@ -345,8 +345,7 @@ internal sealed class MapShape<TKey, TValue> : IMapShape
 
     /// <inheritdoc/>
     public bool CanInnerWrite(IColumnCodec keyCodec, IColumnCodec valueCodec)
-        => keyCodec.CanWrite(new ArrayColumn<TKey>(string.Empty, keyCodec.TypeName, Array.Empty<TKey>()))
-        && valueCodec.CanWrite(new ArrayColumn<TValue>(string.Empty, valueCodec.TypeName, Array.Empty<TValue>()));
+        => keyCodec.CanWriteElementType(typeof(TKey)) && valueCodec.CanWriteElementType(typeof(TValue));
 
     /// <inheritdoc/>
     public IColumnWriteState BeginWrite(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, int start, int length)

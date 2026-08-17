@@ -96,10 +96,8 @@ internal sealed class VariantColumnCodec : IColumnCodec
 
             discriminatorByClrType.TryAdd(children[i].ElementType, i);
 
-            // Probe writability with an empty child column so a Variant over a non-writable alternative (e.g.
-            // Nothing) is rejected up front rather than mid-write.
-            IColumn probe = childFlatBuilders[i](string.Empty, children[i].TypeName, Array.Empty<object>(), 0);
-            writable &= children[i].CanWrite(probe);
+            // A Variant over a non-writable alternative (e.g. Nothing) is rejected up front rather than mid-write.
+            writable &= children[i].CanWriteElementType(children[i].ElementType);
         }
 
         allChildrenWritable = writable;

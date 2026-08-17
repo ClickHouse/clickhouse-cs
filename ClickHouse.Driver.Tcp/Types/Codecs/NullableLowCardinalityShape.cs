@@ -41,7 +41,7 @@ internal abstract class NullableLowCardinalityShape<T> : ILowCardinalityShape
     protected abstract T Value(IColumn column, int row);
 
     /// <inheritdoc/>
-    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWrite(new ArrayColumn<T>(string.Empty, inner.TypeName, Array.Empty<T>()));
+    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWriteElementType(typeof(T));
 
     /// <inheritdoc/>
     public void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length)
