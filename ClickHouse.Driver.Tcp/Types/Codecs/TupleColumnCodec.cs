@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -217,6 +219,51 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
             throw;
         }
+    }
+
+    /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
+
+        if (targetType == ElementType)
+        {
+            projected = value;
+            return true;
+        }
+
+        projected = null;
+
+        // Only a ValueTuple of this same arity can hold the row. Arity is part of the shape, not something a child
+        // could absorb, so a wider or narrower tuple is refused rather than being filled or truncated.
+        int arity = children.Length;
+        if (!targetType.IsGenericType || targetType.GetGenericTypeDefinition() != ValueTupleDefinitions[arity])
+        {
+            return false;
+        }
+
+        // Bound to a local: every field is read off it, so splicing the source expression per field would evaluate it
+        // up to MaxArity times.
+        ParameterExpression source = Expression.Variable(ElementType, "tuple");
+        Type[] targetArguments = targetType.GetGenericArguments();
+        var fieldProjections = new Expression[arity];
+        for (int i = 0; i < arity; i++)
+        {
+            // ValueTuple's elements are fields, not properties. Each child is asked for its own field's target, so a
+            // caller may lift one field and leave the rest canonical.
+            if (!children[i].TryProjectRead(Expression.Field(source, "Item" + (i + 1).ToString(CultureInfo.InvariantCulture)), targetArguments[i], out fieldProjections[i]))
+            {
+                return false;
+            }
+        }
+
+        projected = Expression.Block(
+            new[] { source },
+            Expression.Assign(source, value),
+            Expression.New(
+                targetType.GetConstructor(targetArguments) ?? throw new InvalidOperationException($"The tuple type '{targetType}' is missing its all-element constructor."),
+                fieldProjections));
+        return true;
     }
 
     /// <inheritdoc/>
