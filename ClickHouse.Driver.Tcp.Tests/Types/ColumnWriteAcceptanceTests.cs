@@ -80,6 +80,21 @@ public class ColumnWriteAcceptanceTests
         => Assert.That(Codec("Array(DateTime('UTC'))").CanWriteElementType(typeof(DateTime[,])), Is.False);
 
     /// <summary>
+    /// Nor is a non-zero-based rank-one array (<c>T[*]</c>, from <c>MakeArrayType(1)</c>). It has rank one and the right
+    /// element type, but the write shape casts the column to <c>IColumn&lt;T[]&gt;</c>, so accepting it would turn a
+    /// plan-build refusal into a cast failure once the insert was already open.
+    /// </summary>
+    [Test]
+    public void CanWriteElementType_ArrayGivenANonZeroBasedRankOneType_IsRefused()
+        => Assert.That(Codec("Array(DateTime('UTC'))").CanWriteElementType(typeof(DateTime).MakeArrayType(1)), Is.False);
+
+    [Test]
+    public void CanWriteElementType_MapGivenANonZeroBasedRankOnePairArray_IsRefused()
+        => Assert.That(
+            Codec("Map(String, DateTime('UTC'))").CanWriteElementType(typeof(KeyValuePair<string, DateTime>).MakeArrayType(1)),
+            Is.False);
+
+    /// <summary>
     /// The asymmetry this closes: a <c>LowCardinality(DateTime)</c> column read into a <see cref="DateTime"/> property
     /// but could be written only from raw epoch seconds. A non-nullable <c>LowCardinality</c> surfaces its inner's
     /// element type unchanged, so whatever the inner accepts, it accepts.
