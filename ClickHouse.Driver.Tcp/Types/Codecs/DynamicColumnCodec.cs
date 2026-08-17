@@ -408,8 +408,8 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     {
         string[] rowTypes = ArrayPool<string>.Shared.Rent(length);
 
-        // The value coerced to its inferred codec's element type (e.g. a DateTimeOffset becomes a
-        // ClickHouseDateTime64), so the per-type bucket holds what that codec writes.
+        // The value coerced to its inferred codec's element type (e.g. a DateTimeOffset becomes the raw Int64
+        // nanosecond count DateTime64(9) writes), so the per-type bucket holds what that codec writes.
         object[] rowValues = ArrayPool<object>.Shared.Rent(length);
         try
         {

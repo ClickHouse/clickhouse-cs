@@ -97,6 +97,56 @@ public class DynamicTypeInferenceTests
     public void Infer_Map_MapsToMapOfKeyAndValue()
         => Assert.That(DynamicTypeInference.Infer(new[] { new KeyValuePair<string, uint>("a", 1) }).TypeName, Is.EqualTo("Map(String, UInt32)"));
 
+    // A Map key or value whose ClickHouse type only its value can settle — an IPAddress's family, a
+    // ClickHouseDecimal's scale — resolves from the pairs, the same way an Array element or a Tuple element does.
+    [Test]
+    public void Infer_MapWithValueDisambiguatedKeyAndValue_ReadsThePairs()
+        => Assert.That(
+            DynamicTypeInference.Infer(new[] { new KeyValuePair<IPAddress, ClickHouseDecimal>(IPAddress.Parse("::1"), new ClickHouseDecimal(new System.Numerics.BigInteger(12345), 2)) }).TypeName,
+            Is.EqualTo("Map(IPv6, Decimal(76, 2))"));
+
+    [Test]
+    public void Infer_MapOfBoxedValues_ReadsTheRuntimeTypeOfEachValue()
+        => Assert.That(
+            DynamicTypeInference.Infer(new[] { new KeyValuePair<string, object>("a", IPAddress.Parse("127.0.0.1")) }).TypeName,
+            Is.EqualTo("Map(String, IPv4)"));
+
+    [Test]
+    public void Infer_EmptyMap_UsesDeclaredKeyAndValueTypes()
+        => Assert.That(DynamicTypeInference.Infer(Array.Empty<KeyValuePair<string, uint>>()).TypeName, Is.EqualTo("Map(String, UInt32)"));
+
+    // The write path buckets a whole map as one key type and one value type, so a mixed slot must be rejected at
+    // inference rather than failing the element cast later.
+    [Test]
+    public void Infer_MapWithMixedKeyTypes_Throws()
+        => Assert.That(
+            () => DynamicTypeInference.Infer(new[]
+            {
+                new KeyValuePair<IPAddress, uint>(IPAddress.Parse("127.0.0.1"), 1),
+                new KeyValuePair<IPAddress, uint>(IPAddress.Parse("::1"), 2),
+            }),
+            Throws.TypeOf<NotSupportedException>().With.Message.Contains("keys").And.Message.Contains("IPv4").And.Message.Contains("IPv6"));
+
+    [Test]
+    public void Infer_MapWithMixedValueTypes_Throws()
+        => Assert.That(
+            () => DynamicTypeInference.Infer(new[]
+            {
+                new KeyValuePair<string, object>("a", 1),
+                new KeyValuePair<string, object>("b", "x"),
+            }),
+            Throws.TypeOf<NotSupportedException>().With.Message.Contains("values").And.Message.Contains("Int32").And.Message.Contains("String"));
+
+    [Test]
+    public void Infer_MapWithCoercionNeedingValue_Throws()
+        => Assert.Throws<NotSupportedException>(() => DynamicTypeInference.Infer(new[] { new KeyValuePair<string, decimal>("a", 2.5m) }));
+
+    [Test]
+    public void Infer_ArrayWithMixedElementTypes_Throws()
+        => Assert.That(
+            () => DynamicTypeInference.Infer(new object[] { IPAddress.Parse("127.0.0.1"), IPAddress.Parse("::1") }),
+            Throws.TypeOf<NotSupportedException>().With.Message.Contains("elements").And.Message.Contains("IPv4").And.Message.Contains("IPv6"));
+
     [Test]
     public void Infer_Tuple_MapsToTupleOfElements()
         => Assert.That(DynamicTypeInference.Infer((1, "a")).TypeName, Is.EqualTo("Tuple(Int32, String)"));
