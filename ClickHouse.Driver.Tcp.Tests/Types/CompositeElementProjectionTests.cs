@@ -321,6 +321,21 @@ public class CompositeElementProjectionTests
     }
 
     /// <summary>
+    /// The element variable is what the caller's projection reads, so a type that does not match the row's elements
+    /// would otherwise surface as an opaque expression-tree failure well away from the codec that got it wrong.
+    /// </summary>
+    [Test]
+    public void ProjectArray_ElementVariableOfTheWrongType_ThrowsArgumentException()
+    {
+        ParameterExpression source = Expression.Parameter(typeof(uint[]), "row");
+        ParameterExpression wrongElement = Expression.Variable(typeof(long), "element");
+
+        Assert.That(
+            () => CompositeElementProjections.ProjectArray(source, wrongElement, wrongElement),
+            Throws.ArgumentException.With.Message.Contains("whose elements are"));
+    }
+
+    /// <summary>
     /// A source expression of the wrong type is a caller mistake, distinct from a target the codec does not offer, so
     /// a container throws rather than reporting "no such projection".
     /// </summary>

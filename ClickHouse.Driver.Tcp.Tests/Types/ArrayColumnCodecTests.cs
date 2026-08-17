@@ -161,6 +161,27 @@ public class ArrayColumnCodecTests
             await codec.ReadColumnAsync(reader, "c", "Array(UInt32)", 1, CodecTestHarness.None));
     }
 
+    /// <summary>
+    /// An Array(T) row is not nullable on the wire, so a null row is refused with a message naming the column, the row
+    /// and the two ways out. Asserted for a lifted element type as well as the canonical one: the offsets are computed
+    /// by a shape resolved from the row's own type, and the diagnosis has to survive that indirection.
+    /// </summary>
+    [TestCase("Array(UInt32)", false)]
+    [TestCase("Array(DateTime('UTC'))", true)]
+    public async Task WriteColumn_ErgonomicColumnWithANullRow_ThrowsNamingTheRowAndTheRemedy(string type, bool lifted)
+    {
+        IColumnCodec codec = Resolve(type);
+        IColumn column = lifted
+            ? new ArrayColumn<DateTime[]>("c", type, new[] { Array.Empty<DateTime>(), null })
+            : new ArrayColumn<uint[]>("c", type, new[] { new uint[] { 1 }, null });
+
+        ArgumentException thrown = null;
+        await CodecTestHarness.WriteAsync(writer =>
+            thrown = Assert.Throws<ArgumentException>(() => codec.WriteColumn(writer, column, 0, 2)));
+
+        Assert.That(thrown.Message, Does.Contain("null value at row 1").And.Contain("Array(Nullable(T))"));
+    }
+
     // The state-aware overloads take the state this codec's own BeginWrite returned, and nothing else. They used to
     // treat null as "the caller has none to share" and rebuild one, which meant a caller that lost or never opened
     // the state still got correct bytes, so the mistake could not be seen. Only the state-free overloads build
