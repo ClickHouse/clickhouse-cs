@@ -1010,6 +1010,19 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<object>(name, "Dynamic", new object[] { Pairs<string, uint>(("a", 1), ("b", 2)), 5, null }),
             DynamicSettings);
 
+        // A map whose key and value types only the pair values can settle: an IPAddress picks IPv4 or IPv6 by its
+        // address family, and a ClickHouseDecimal carries its own scale. Inferring from the CLR type alone cannot
+        // reach either, so this covers the Map slots the Array and Tuple cases above already cover.
+        yield return Same(
+            "Dynamic [map value, value-disambiguated key and value]",
+            "Dynamic",
+            name => new ArrayColumn<object>(name, "Dynamic", new object[]
+            {
+                Pairs<IPAddress, ClickHouseDecimal>((IPAddress.Parse("10.0.0.1"), ParseWide("12345.6789")), (IPAddress.Parse("10.0.0.2"), ParseWide("-1.0002"))),
+                null,
+            }),
+            DynamicSettings);
+
         yield return Same(
             "Dynamic [tuple value]",
             "Dynamic",
