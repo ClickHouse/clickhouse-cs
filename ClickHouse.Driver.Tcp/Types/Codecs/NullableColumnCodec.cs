@@ -238,6 +238,28 @@ internal sealed class NullableColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
+    // Gated on innerCanWrite as CanWrite is, not left to the interface default: an inner that cannot be written at all
+    // (Nothing) still reports a surface element type, so membership alone would accept Nullable(Nothing) and the write
+    // would fault part-way through a block instead of being refused before any byte went out.
+    public bool CanWriteElementType(Type elementType)
+    {
+        if (!innerCanWrite)
+        {
+            return false;
+        }
+
+        foreach (Type surface in EnsureWritableElementTypes())
+        {
+            if (surface == elementType)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <inheritdoc/>
     public bool CanWrite(IColumn column) => innerCanWrite && ResolveWriteShape(column) is not null;
 
     /// <inheritdoc/>

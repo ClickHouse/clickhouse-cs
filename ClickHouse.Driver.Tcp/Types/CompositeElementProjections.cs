@@ -9,10 +9,9 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// pairs, so the caller's element projection builds the new pair and this loop does the rest.
 ///
 /// <para>
-/// Direction-agnostic. The caller resolves the child projection first and passes it in already built, so the same
-/// loop serves <see cref="IColumnCodec.TryProjectRead"/> and <see cref="IColumnCodec.TryProjectWrite"/>. Passing the
-/// projection rather than a callback is what lets a caller refuse before any tree is built: a child that offers no
-/// projection means the container offers none either, and there is nothing to unwind.
+/// The caller resolves the child projection first and passes it in already built, rather than handing over a callback.
+/// That is what lets a caller refuse before any tree is built: a child that offers no projection means the container
+/// offers none either, and there is nothing to unwind.
 /// </para>
 /// </summary>
 internal static class CompositeElementProjections
