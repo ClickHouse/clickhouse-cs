@@ -8,9 +8,10 @@
 // heading. Instead every change drops its own file in changelog.d/, so two pull requests add two
 // distinct paths and git has nothing to reconcile. This script folds them in at release time.
 //
-// CHANGELOG.md is the source of truth (full history). RELEASENOTES.md is *generated* from it by
-// dropping every section below ReleaseNotesFloor -- it ships inside the NuGet package via the
-// PackageReleaseNotes target in ClickHouse.Driver/ClickHouse.Driver.csproj.
+// CHANGELOG.md is the source of truth (full history). RELEASENOTES.md is *generated* from it and
+// holds the newest released section alone -- it ships inside the NuGet package via the
+// PackageReleaseNotes target in ClickHouse.Driver/ClickHouse.Driver.csproj, where it describes the
+// version being published rather than repeating history the changelog already keeps.
 //
 //   dotnet run scripts/changelog.cs -- --new fixes 512-variant-null
 //   dotnet run scripts/changelog.cs -- --check          # CI gate
@@ -39,10 +40,6 @@ var categories = new[]
     ("fixes", "Bug Fixes"),
     ("docs", "Documentation and Usage Examples"),
 };
-
-// RELEASENOTES.md keeps only sections at or above this version. Bump it when a new major line
-// starts, so the notes shipped in the package describe the current major rather than all history.
-const string ReleaseNotesFloor = "v1.0.0";
 
 // A section header is a line whose successor is exactly "---" *and* which itself looks like a
 // version. The version test is load-bearing: the v1.0.0 section body uses bare "---" lines as
@@ -88,7 +85,7 @@ int Check()
             + "so concurrent pull requests cannot conflict.");
     }
 
-    var expectedNotes = TrimToFloor(string.Join("\n", changelog));
+    var expectedNotes = LatestSection(string.Join("\n", changelog));
     if (Normalize(File.ReadAllText(releaseNotesPath)) != expectedNotes)
     {
         problems.Add(
@@ -156,7 +153,7 @@ int Release(string rawVersion)
 
     updated = Normalize(updated);
     File.WriteAllText(changelogPath, updated);
-    File.WriteAllText(releaseNotesPath, TrimToFloor(updated));
+    File.WriteAllText(releaseNotesPath, LatestSection(updated));
     foreach (var f in fragments)
         File.Delete(f.Path);
 
@@ -193,14 +190,14 @@ int VerifyRelease(string rawVersion)
     var changelog = ReadLines(changelogPath);
     var sections = FindSections(changelog);
 
-    // Repeated from --check on purpose. If a hand-edited Unreleased section reaches this point it
-    // ships: TrimToFloor only drops that section while it is empty, so RELEASENOTES.md -- and with
-    // it PackageReleaseNotes -- would carry draft prose under an "Unreleased" heading.
+    // Repeated from --check on purpose, and it stays relevant now that the notes carry the released
+    // section alone: entries left under Unreleased describe changes that are in this build, yet they
+    // reach neither the section being released nor the notes generated from it.
     if (sections.Count > 0 && sections[0].Title == "Unreleased" && !IsBodyEmpty(changelog, sections, 0))
     {
         problems.Add(
-            "CHANGELOG.md has content under 'Unreleased', which would ship inside the package as "
-            + "unreleased prose. Move each entry into a changelog.d/ fragment, then re-run "
+            "CHANGELOG.md has content under 'Unreleased', so those entries are in this build but "
+            + "not in its notes. Move each entry into a changelog.d/ fragment, then re-run "
             + $"--release {version}.");
     }
 
@@ -217,7 +214,7 @@ int VerifyRelease(string rawVersion)
             $"CHANGELOG.md's newest released section is {newest!.Title}, but this release is {version}. "
             + $"Either the changelog was not assembled for {version}, or the wrong version was entered.");
 
-    if (Normalize(File.ReadAllText(releaseNotesPath)) != TrimToFloor(string.Join("\n", changelog)))
+    if (Normalize(File.ReadAllText(releaseNotesPath)) != LatestSection(string.Join("\n", changelog)))
     {
         problems.Add(
             "RELEASENOTES.md is out of sync with CHANGELOG.md, so the package would ship stale notes. "
@@ -238,7 +235,7 @@ int VerifyRelease(string rawVersion)
 
 int SyncNotes()
 {
-    var generated = TrimToFloor(string.Join("\n", ReadLines(changelogPath)));
+    var generated = LatestSection(string.Join("\n", ReadLines(changelogPath)));
     var changed = Normalize(File.ReadAllText(releaseNotesPath)) != generated;
     File.WriteAllText(releaseNotesPath, generated);
     Console.WriteLine(changed
@@ -370,34 +367,26 @@ bool IsBodyEmpty(List<string> lines, List<Section> sections, int index)
     return true;
 }
 
-// RELEASENOTES.md = CHANGELOG.md with every section below the floor removed, and without the
-// Unreleased stub.
-string TrimToFloor(string changelog)
+// RELEASENOTES.md = the newest released section of CHANGELOG.md, and nothing else. Starting at the
+// first section that is not Unreleased drops both the empty Unreleased stub, which is noise for
+// package consumers, and every older release, which stays in CHANGELOG.md.
+string LatestSection(string changelog)
 {
     var lines = Normalize(changelog).Split('\n').ToList();
-    var floor = ParseVersion(ReleaseNotesFloor)!;
-
-    foreach (var section in FindSections(lines))
-    {
-        var version = ParseVersion(section.Title);
-        if (version is null || version >= floor)
-            continue;
-
-        lines = lines.Take(section.Index).ToList();
-        break;
-    }
-
-    // These notes ship inside the NuGet package, so they should open on the newest released
-    // version. The Unreleased section is always empty here (--check enforces that entries live in
-    // changelog.d/ until release), and an empty stub section is just noise for consumers.
     var sections = FindSections(lines);
-    if (sections.Count > 0 && sections[0].Title == "Unreleased" && IsBodyEmpty(lines, sections, 0))
-        lines = lines.Skip(sections.Count > 1 ? sections[1].Index : lines.Count).ToList();
 
-    while (lines.Count > 0 && lines[^1].Trim().Length == 0)
-        lines.RemoveAt(lines.Count - 1);
+    var newest = sections.FindIndex(s => s.Title != "Unreleased");
+    if (newest < 0)
+        return string.Empty;
 
-    return lines.Count == 0 ? string.Empty : string.Join("\n", lines) + "\n";
+    var start = sections[newest].Index;
+    var end = newest + 1 < sections.Count ? sections[newest + 1].Index : lines.Count;
+    var kept = lines.GetRange(start, end - start);
+
+    while (kept.Count > 0 && kept[^1].Trim().Length == 0)
+        kept.RemoveAt(kept.Count - 1);
+
+    return kept.Count == 0 ? string.Empty : string.Join("\n", kept) + "\n";
 }
 
 Version? ParseVersion(string title)
