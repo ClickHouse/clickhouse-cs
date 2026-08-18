@@ -39,6 +39,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClickHouse.Driver.Tcp\ClickHouse.Driver.Tcp.csproj" />
+    <!-- Tcp references Common with PrivateAssets="all" so only one copy is packed, which stops the reference
+         flowing transitively; the compression types appear in Tcp's own signatures, so name it here too. -->
+    <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
   </ItemGroup>
 
 </Project>
