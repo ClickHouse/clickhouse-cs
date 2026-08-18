@@ -6,6 +6,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Compression;
+using ClickHouse.Driver.Tcp.Compression;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
 
@@ -51,6 +53,17 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     private readonly Stream stream;
     private readonly ClickHouseBinaryReader reader;
     private readonly ClickHouseBinaryWriter writer;
+
+    // Null means every query on this connection is uncompressed. Compression is per-query on the wire, but the
+    // codec is a client-level option today, so it is fixed for a connection's life; a per-query override would
+    // move this to the operation entry points.
+    private readonly IClickHouseCompressor compressor;
+
+    // Created on the first compressed block and kept for the connection's life, so their pooled buffers are
+    // reused across blocks and queries rather than rented per block.
+    private CompressedFrameReader frameReader;
+    private CompressedFrameWriter frameWriter;
+
     private ServerHandshake server;
     private ClientMetadata clientMetadata;
     private TcpConnectionState state;
@@ -62,10 +75,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// </summary>
     /// <param name="stream">The duplex transport stream (a network stream in production).</param>
     /// <param name="socket">The underlying socket, closed on termination; null when the stream owns teardown.</param>
-    internal ClickHouseTcpConnection(Stream stream, Socket socket)
+    /// <param name="compressor">Frame codec for this connection's queries, or null to run them uncompressed.</param>
+    internal ClickHouseTcpConnection(Stream stream, Socket socket, IClickHouseCompressor compressor = null)
     {
         this.stream = stream;
         this.socket = socket;
+        this.compressor = compressor;
         reader = new ClickHouseBinaryReader(stream);
         writer = new ClickHouseBinaryWriter(stream);
         state = TcpConnectionState.Handshaking;
@@ -114,6 +129,13 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
             // Bytes already buffered from the socket are invisible to a poll, so check our own buffer first.
             if (reader.BufferedBytes != 0)
+            {
+                return false;
+            }
+
+            // Decoded plaintext nobody read is the same fault one layer up: the last response's frames carried
+            // more than its blocks declared, so this side's idea of the stream position is wrong.
+            if (frameReader is { PendingPlaintext: not 0 })
             {
                 return false;
             }
@@ -186,7 +208,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         int port,
         ClientHandshakeParameters handshake,
         TlsParameters tls,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IClickHouseCompressor compressor = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(handshake);
@@ -222,7 +245,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
         // HandshakeAsync terminates the connection (closing this socket) on any failure, so a throw here needs
         // no extra cleanup.
-        var connection = new ClickHouseTcpConnection(transport, socket);
+        var connection = new ClickHouseTcpConnection(transport, socket, compressor);
         await connection.HandshakeAsync(handshake, cancellationToken).ConfigureAwait(false);
         return connection;
     }
@@ -357,9 +380,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         // so discard the partial packet and leave the connection Ready and reusable rather than terminating it.
         try
         {
-            Query.Write(writer, negotiated, clientMetadata, queryId, sql, settings, parameters);
-            writer.WriteClientPacketType(ClientPacketType.Data);
-            BlockWriter.WriteEmptyBlock(writer);
+            Query.Write(writer, negotiated, clientMetadata, queryId, sql, settings, parameters, compressor is not null);
+            await WriteEndOfInputBlockAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -399,7 +421,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
                 if (packet == ServerPacketType.Data)
                 {
-                    Block block = await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, readContext, cancellationToken).ConfigureAwait(false);
+                    Block block = await ReadBlockAsync(ServerPacketType.Data, negotiated, readContext, cancellationToken).ConfigureAwait(false);
                     if (block.RowCount != 0)
                     {
                         // Held as the current block so it is released when the consumer advances or stops.
@@ -590,9 +612,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         {
             // The empty end-of-input block must follow the Query: the server waits for it before sending the
             // schema block, so omitting it deadlocks.
-            Query.Write(writer, negotiated, clientMetadata, queryId, sql, settings, parameters);
-            writer.WriteClientPacketType(ClientPacketType.Data);
-            BlockWriter.WriteEmptyBlock(writer);
+            Query.Write(writer, negotiated, clientMetadata, queryId, sql, settings, parameters, compressor is not null);
+            await WriteEndOfInputBlockAsync(cancellationToken).ConfigureAwait(false);
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             // Drain metadata until the schema block (the first Data packet) or a terminal packet.
@@ -783,15 +804,13 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             // backstop the caller's send-buffer cap tunes — is what bounds peak client memory while a block streams.
             foreach ((int start, int length) in PlanInsertBlocks(rowCount, maxRowsPerBlock))
             {
-                writer.WriteClientPacketType(ClientPacketType.Data);
-                await BlockWriter.WriteDataBlockAsync(
-                    writer, negotiated, plan, start, length, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
+                await WriteDataBlockPacketAsync(
+                    negotiated, plan, start, length, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
                 await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
         }
 
-        writer.WriteClientPacketType(ClientPacketType.Data);
-        BlockWriter.WriteEmptyBlock(writer);
+        await WriteEndOfInputBlockAsync(cancellationToken).ConfigureAwait(false);
         await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
 
         // Return the pooled buffer to baseline so an idle connection doesn't retain a large insert's peak size.
@@ -956,17 +975,103 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    /// Reads a block whose name is next on the raw stream. The name belongs to the packet envelope and is never
+    /// compressed, so it is read from the raw reader; the body comes from the frame reader when compression is
+    /// active <i>and</i> this packet is one whose body the server frames.
+    /// <para>
+    /// This is the only place in the driver that knows two readers exist. Everything below it — the block
+    /// reader, every column codec — is handed one reader and cannot tell which.
+    /// </para>
+    /// </summary>
+    /// <param name="packet">The packet type just read from the envelope, which decides whether the body is framed.</param>
+    /// <param name="negotiated">The negotiated protocol, for version-gated header fields.</param>
+    /// <param name="context">The resolution context passed to each column's codec factory.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The decoded block.</returns>
+    private async ValueTask<Block> ReadBlockAsync(
+        ServerPacketType packet,
+        NegotiatedProtocol negotiated,
+        ResolveContext context,
+        CancellationToken cancellationToken)
+    {
+        string name = await reader.ReadStringAsync(cancellationToken).ConfigureAwait(false);
+
+        if (compressor is null || !FramedPackets.CarriesFramedBody(packet))
+        {
+            return await BlockReader.ReadBodyAsync(reader, name, negotiated, ColumnCodecRegistry.Default, context, cancellationToken).ConfigureAwait(false);
+        }
+
+        frameReader ??= new CompressedFrameReader(reader);
+        Block block = await BlockReader.ReadBodyAsync(frameReader.Reader, name, negotiated, ColumnCodecRegistry.Default, context, cancellationToken).ConfigureAwait(false);
+
+        // A block end coincides with a frame boundary, so anything left decoded means the peer and the column
+        // decoders disagree about the body's length.
+        frameReader.EndBlock();
+        return block;
+    }
+
+    /// <summary>
+    /// Writes a Data packet carrying the empty end-of-input block. With compression on the server expects the
+    /// client's own blocks framed too, this marker included, so it is framed like any other body.
+    /// </summary>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    private async ValueTask WriteEndOfInputBlockAsync(CancellationToken cancellationToken)
+    {
+        writer.WriteClientPacketType(ClientPacketType.Data);
+        writer.WriteString(string.Empty); // table_name: envelope, never framed
+
+        if (compressor is null)
+        {
+            BlockWriter.WriteEmptyBlockBody(writer);
+            return;
+        }
+
+        frameWriter ??= new CompressedFrameWriter(writer, compressor);
+        BlockWriter.WriteEmptyBlockBody(frameWriter.Writer);
+        await frameWriter.EndBlockAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Writes a Data packet carrying rows <c>[start, start + rowCount)</c>, framed when compression is on.</summary>
+    /// <param name="negotiated">The negotiated protocol, gating the <c>has_custom_serialization</c> byte.</param>
+    /// <param name="columns">The columns to write, in header order.</param>
+    /// <param name="start">The zero-based first row of the range each column contributes.</param>
+    /// <param name="rowCount">The number of rows the block holds.</param>
+    /// <param name="flushThresholdBytes">The buffered-byte cap that triggers a between-column flush.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    private async ValueTask WriteDataBlockPacketAsync(
+        NegotiatedProtocol negotiated,
+        IReadOnlyList<InsertColumn> columns,
+        int start,
+        int rowCount,
+        int flushThresholdBytes,
+        CancellationToken cancellationToken)
+    {
+        writer.WriteClientPacketType(ClientPacketType.Data);
+        writer.WriteString(string.Empty); // table_name: empty for the INSERT row stream, and never framed
+
+        if (compressor is null)
+        {
+            await BlockWriter.WriteDataBlockBodyAsync(writer, negotiated, columns, start, rowCount, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        frameWriter ??= new CompressedFrameWriter(writer, compressor);
+        await BlockWriter.WriteDataBlockBodyAsync(frameWriter.Writer, negotiated, columns, start, rowCount, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
+        await frameWriter.EndBlockAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Reads a metadata block, lends it to the handler if one is set (borrowed only for the duration of the
     /// call), then releases its storage. A throwing handler propagates after the block has been released.
     /// </summary>
-    private static async ValueTask ReadMetadataBlockAsync(
-        ClickHouseBinaryReader reader,
+    private async ValueTask ReadMetadataBlockAsync(
+        ServerPacketType packet,
         NegotiatedProtocol negotiated,
         ResolveContext context,
         Action<Block> handler,
         CancellationToken cancellationToken)
     {
-        Block block = await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, context, cancellationToken).ConfigureAwait(false);
+        Block block = await ReadBlockAsync(packet, negotiated, context, cancellationToken).ConfigureAwait(false);
         try
         {
             handler?.Invoke(block);
@@ -1012,7 +1117,23 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 }
                 finally
                 {
-                    writer.Dispose();
+                    try
+                    {
+                        writer.Dispose();
+                    }
+                    finally
+                    {
+                        // The frame buffers are pooled like the reader's and writer's, and this runs under the
+                        // same guarantee: Terminate happens once the I/O that pointed at them has unwound.
+                        try
+                        {
+                            frameReader?.Dispose();
+                        }
+                        finally
+                        {
+                            frameWriter?.Dispose();
+                        }
+                    }
                 }
             }
         }
@@ -1137,7 +1258,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     return (null, await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false));
 
                 case ServerPacketType.Data:
-                    return (await BlockReader.ReadBlockAsync(reader, negotiated, ColumnCodecRegistry.Default, context, cancellationToken).ConfigureAwait(false), null);
+                    return (await ReadBlockAsync(ServerPacketType.Data, negotiated, context, cancellationToken).ConfigureAwait(false), null);
 
                 default:
                     await ConsumeMetadataAsync(packet, negotiated, context, handlers, cancellationToken).ConfigureAwait(false);
@@ -1168,19 +1289,19 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         {
             // Block-bearing packets lend the borrowed block to the handler for the call, then release it.
             case ServerPacketType.Totals:
-                await ReadMetadataBlockAsync(reader, negotiated, context, handlers?.OnTotals, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(ServerPacketType.Totals, negotiated, context, handlers?.OnTotals, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.Extremes:
-                await ReadMetadataBlockAsync(reader, negotiated, context, handlers?.OnExtremes, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(ServerPacketType.Extremes, negotiated, context, handlers?.OnExtremes, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.ProfileEvents:
-                await ReadMetadataBlockAsync(reader, negotiated, context, handlers?.OnProfileEvents, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(ServerPacketType.ProfileEvents, negotiated, context, handlers?.OnProfileEvents, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.Log:
-                await ReadMetadataBlockAsync(reader, negotiated, context, handlers?.OnLog, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(ServerPacketType.Log, negotiated, context, handlers?.OnLog, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.Progress:
