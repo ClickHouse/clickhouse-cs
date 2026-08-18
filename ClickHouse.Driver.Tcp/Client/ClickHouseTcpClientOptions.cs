@@ -310,9 +310,6 @@ public sealed record ClickHouseTcpClientOptions
         return new ClickHouseTcpConnectionStringBuilder(connectionString).ToOptions();
     }
 
-    /// <summary>Validates the options, throwing if any value is unusable. Runs at client construction.</summary>
-    /// <exception cref="ArgumentException"><see cref="Host"/>, <see cref="Username"/>, or <see cref="Database"/> is null or empty.</exception>
-    /// <exception cref="ArgumentOutOfRangeException"><see cref="Port"/> is out of range, or a timeout / buffer size is not positive.</exception>
     /// <summary>
     /// Maps a <c>Compression</c> connection-string value to its codec. <c>none</c> yields
     /// <see langword="null"/>, meaning the query is not compressed at all.
@@ -330,6 +327,9 @@ public sealed record ClickHouseTcpClientOptions
             nameof(name)),
     };
 
+    /// <summary>Validates the options, throwing if any value is unusable. Runs at client construction.</summary>
+    /// <exception cref="ArgumentException"><see cref="Host"/>, <see cref="Username"/>, or <see cref="Database"/> is null or empty.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="Port"/> is out of range, or a timeout / buffer size is not positive.</exception>
     internal void Validate()
     {
         // A codec that only implements the HTTP body path cannot frame a block. Refuse it here rather than
