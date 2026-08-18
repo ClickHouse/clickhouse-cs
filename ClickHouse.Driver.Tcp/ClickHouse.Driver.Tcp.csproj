@@ -24,4 +24,10 @@
     </PackageReference>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The compression frame's codecs (LZ4/ZSTD) and CityHash live here, shared with the HTTP driver.
+         PrivateAssets matches how ClickHouse.Driver references it: one copy is packed, not two. -->
+    <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" PrivateAssets="all" />
+  </ItemGroup>
+
 </Project>
