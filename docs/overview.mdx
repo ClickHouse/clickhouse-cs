@@ -103,7 +103,7 @@ Below is a full list of all the settings, their default values, and their effect
 | UseCustomDecimals | `bool` | `true` | `UseCustomDecimals` | Use `ClickHouseDecimal` for arbitrary precision; if false, uses .NET `decimal` (128-bit limit) |
 | ReadStringsAsByteArrays | `bool` | `false` | `ReadStringsAsByteArrays` | Read `String` and `FixedString` columns as `byte[]` instead of `string`; useful for binary data |
 | UseFormDataParameters | `bool` | `false` | `UseFormDataParameters` | Send parameters as form data instead of URL query string |
-| ReadBufferSize | `int` | `8192` (8 KiB) | `ReadBufferSize` | Size in bytes of the buffer used to read HTTP query responses. Increase to reduce buffer refills for large result sets. Values at or above 85,000 bytes are allocated on the Large Object Heap, which can cause LOH fragmentation and longer GC pauses. |
+| ReadBufferSize | `int` | `65536` (64 KiB) | `ReadBufferSize` | Size in bytes of the buffer that reads HTTP query responses. The driver rents the buffer from a shared pool and returns it when it disposes the reader, so it is not an allocation for each query. Increase it to reduce buffer refills on large result sets. The driver holds one buffer for each concurrent reader, so memory use increases with the buffer size and the number of concurrent readers. See [Buffers](#perf-buffers). |
 | ParameterTypeResolver | `IParameterTypeResolver` | `null` | — | Custom resolver for `@`-style parameter type mapping; see [Custom parameter type mapping](#parameter-type-mapping) |
 | ParameterFormatter | `IParameterFormatter` | `null` | — | Custom formatter for parameter value serialization; see [Custom parameter value formatting](#parameter-value-formatting) |
 | ReadValueConverter | `IReadValueConverter` | `null` | — | Custom transform applied to values returned by the data reader; see [Custom read value conversion](#read-value-conversion) |
@@ -993,13 +993,12 @@ await client.InsertBinaryAsync("events", columns, rows, options);
 ### Tuning compression {#tuning-compression}
 
 Compression trades CPU for bytes. Whether that is a win depends almost entirely on how fast your
-link is relative to how fast the codec runs, and the answer flips completely between a
-same-datacenter deployment and one crossing the internet. There is no setting that is right for
+link is relative to how fast the codec runs. There is no setting that is right for
 everyone.
 
 #### The one number that decides it
 
-Compressing is worth it as long as the codec is *faster than the network*.
+Compressing is worth it as long as the codec is faster than the network.
 
 That threshold is lower than most people expect on the read path, because ClickHouse compresses
 HTTP responses single-threaded in the output buffer. Measured on a 16-vCPU ClickHouse Cloud
@@ -1367,6 +1366,8 @@ await cmd2.ExecuteNonQueryAsync();
 await using var cmd3 = connection.CreateCommand("SELECT * FROM users WHERE id IN (SELECT id FROM temp_ids)");
 await using var reader = await cmd3.ExecuteReaderAsync();
 ```
+
+---
 
 ## Supported data types {#supported-data-types}
 
@@ -2139,6 +2140,201 @@ Important considerations when providing a custom HttpClient
 - **Automatic decompression**: leave `AutomaticDecompression` off. The driver decodes compressed responses itself, so it is not needed — and enabling it works against you on the request side: at send time the handler *also adds* every algorithm in its mask to the outgoing `Accept-Encoding`, widening whatever the driver advertised, so ClickHouse can answer with a codec you did not ask for. See [Response decompression](#response-decompression).
 - **Idle timeout**: Set `PooledConnectionIdleTimeout` smaller than the server's `keep_alive_timeout` (10 seconds for ClickHouse Cloud) to avoid connection errors from half-open connections.
 </Note>
+
+## Performance tuning {#performance-tuning}
+
+This section describes how to use the client to achieve optimal performance, and the various options you can tune to make the client performant for your particular use case.
+
+### At a glance {#perf-at-a-glance}
+
+| If you | Do this |
+|---|---|---|
+| Read rows into POCOs | Use [`QueryAsync<T>`](#perf-read-path), not `MapTo<T>` |
+| Do large inserts | Increase [`InsertOptions.BatchSize`](#perf-insert-batching) |
+| Run an insert-heavy console or worker app | Turn on [Server GC](#perf-gc) |
+| Read large results across a network | Keep response compression on (the default) |
+| Insert across a fast link | Try [`InsertOptions.Compressor = null`](#perf-compression) |
+| Insert into the same table many times | Use [`UseSchemaCache` or `ColumnTypes`](#skip-schema-query) |
+| Read very large results | Increase [`ReadBufferSize`](#perf-buffers) |
+
+---
+
+### Reading: choose the materialization path {#perf-read-path}
+
+There are three ways to get a row out of a result, and they do not cost the same. Some of the paths box the results, causing increased allocations and decreased performance.
+
+| How you read | Boxes each value | Notes |
+|---|---|---|
+| `QueryAsync<T>` | **No** | Reads from the stream directly into your properties. The fast path. |
+| Typed reader accessors (`GetInt32`, `GetInt64`, `GetDouble`, `GetGuid`, `GetDateTime`, `GetFieldValue<T>`) | **No** | Unboxed read from a typed value store. |
+| `MapTo<T>` | Yes | Materializes the row first, then copies the values out of it. |
+| `GetValue` and `GetValues` | Yes | They return `object`, so the value must be boxed when you ask for it. |
+
+For a 1,000,000-row read of 105 columns of the *hits* dataset:
+
+| API | Allocated |
+|---|---:|
+| `QueryAsync<T>` | **1,372 MB** |
+| `MapTo<T>` | 3,133 MB |
+
+```csharp
+// Fast path: register the type once, then stream rows directly into it.
+client.RegisterPocoType<HitRow>();
+
+await foreach (var row in client.QueryAsync<HitRow>("SELECT * FROM hits"))
+    Process(row);
+```
+
+<Note>
+*ORMs get the fast path when they use typed accessors.* linq2db registers `GetInt64`,
+`GetDouble` and `GetDateTime` for each column, so it reads without boxing. Code that reads through
+`GetValue` (including a `dynamic` result from Dapper) boxes each value. If an ORM query is hot
+and reads through `GetValue`, use `QueryAsync<T>` for that one query.
+</Note>
+
+---
+
+### Inserting: batch size and parallelism {#perf-insert-batching}
+
+Batch size is the largest single control on insert throughput. `InsertOptions.BatchSize` defaults to
+100,000 rows.
+
+**Use large batches.** For a 1,000,000-row insert, an increase from 10,000 to 100,000 rows for each
+batch gave:
+
+| Insert | 10,000 rows/batch | 100,000 rows/batch | |
+|---|---:|---:|---:|
+| POCO | 15,308 ms | 7,853 ms | −49% |
+| `object[]` | 17,027 ms | 10,671 ms | −37% |
+
+If you cannot control the batch size (for example when many small producers send rows independently) use [async inserts](#async-inserts) and let the server do the batching.
+
+**Parallel uploads.** `InsertOptions.MaxDegreeOfParallelism` defaults to `1`. Increase it to send
+batches at the same time. This helps most when compression is on, because each batch then compresses
+on its own thread. Sessions do not work with parallel inserts: either turn sessions off, or keep
+`MaxDegreeOfParallelism = 1`.
+
+**Remove the schema probe.** Each `InsertBinaryAsync` call sends a `SELECT ... WHERE 1=0` query first,
+to find the column types. See [Skipping the schema probe query](#skip-schema-query) to remove that
+round trip with `ColumnTypes` or `UseSchemaCache`.
+
+<Note>
+The box-free insert path applies to the default `RowBinary` format. `RowBinaryWithDefaults` must
+examine each value to find the `DBDefault` marker, so it keeps the slower path.
+</Note>
+
+---
+
+### Compression: the two directions disagree {#perf-compression}
+
+Compression exchanges CPU for bytes. Whether that exchange is good depends on the direction of the
+transfer, the bandwidth of your connection to the ClickHouse server, how your data interacts with your chosen compression algorithm, and whether you have to pay for each byte transferred.
+
+**Reads:** keep compression on, unless your server is running on the same machine. This is the default. Compared with no compression, `zstd` at level 1
+gave:
+
+| Client to server | Effect of compression |
+|---|---|
+| Same host (loopback) | Costs 8% |
+| Same cloud region | **Saves 16%** |
+| One region away | **Saves 33%** |
+
+**Inserts:** measure before you compress. The savings may not be high enough to justify turning it on. Also keep in mind that decompression will put additional load on the server; that load is modest for Zstd and LZ4 but can be high for other algorithms (eg Brotli).
+
+To turn insert compression off:
+
+```csharp
+var options = new InsertOptions { Compressor = null };
+await client.InsertBinaryAsync("my_table", columns, rows, options);
+```
+
+For codec selection, compression levels, and how to find your own crossover point, see
+[Tuning compression](#tuning-compression).
+
+---
+
+### Buffers {#perf-buffers}
+
+`ReadBufferSize` sets the size of the buffer that reads HTTP responses. It defaults to 64 KiB.
+
+The driver rents this buffer from a shared pool and returns it when it disposes the reader, so it is
+not an allocation for each query. Increase it to reduce the number of buffer refills on large
+results. The driver holds one buffer for each reader that is open at the same time, so memory use
+increases with the buffer size and with the number of concurrent readers.
+
+```csharp
+var settings = new ClickHouseClientSettings("Host=localhost") { ReadBufferSize = 256 * 1024 };
+```
+
+<Warning>
+*Always dispose readers.* A reader returns its pooled buffer and releases its HTTP connection when
+you dispose it. Abandoning a reader does not return the buffer to the pool and may leave the HTTP
+connection unavailable; ordinary garbage collection is not a substitute for disposal.
+</Warning>
+
+---
+
+### Runtime and GC {#perf-gc}
+
+**Turn on Server GC for insert-heavy applications.** With the same code, and with the same number of
+allocated bytes, Workstation GC was up to 97% slower on inserts than Server GC.
+
+```xml
+<PropertyGroup>
+  <ServerGarbageCollection>true</ServerGarbageCollection>
+</PropertyGroup>
+```
+
+ASP.NET Core projects set this already. Console applications, worker services, and most container
+images do not.
+
+The cause is the size of the generation 0 budget. Workstation GC uses a small budget, so the
+short-lived buffers that an insert creates do not die in generation 0. They move into generation 1
+instead, which increases promotion and causes much more generation 2 work. On one insert case,
+generation 2 collections for each 1,000 operations were 4,000 with Server GC and 73,000 with
+Workstation GC.
+
+<Note>
+Server GC is a throughput setting, not a latency setting. In the same measurements, Server GC spent
+less than half as much total time paused, but its individual pauses were longer
+(95th percentile 114.6 ms against 61.9 ms). If your service is sensitive to tail latency, measure
+both modes before you choose.
+</Note>
+
+---
+
+### Latency: reuse connections {#perf-latency}
+
+Establishing a new TCP connection and performing the TLS handshake takes a significant amount of time. 
+Reusing connections will significantly cut down the latency of your queries. 
+
+- Do not create a client for each request. Each new client with its own `HttpClient` creates a new
+  connection pool, and pays for the handshake again. Use one `ClickHouseClient` for the life of the application. It is thread-safe and is made for
+  singleton use.
+- For ADO.NET and ORMs, use `ClickHouseDataSource`, so that all connections share one pool.
+
+For the full set of patterns, see
+[Connection lifetime and pooling](#best-practices-connection-lifetime).
+
+---
+
+### Measure it yourself {#perf-measuring}
+
+In many cases, performance will depend on the shape of your data, the speed of your link to the server,
+whether you want to trade off client CPU for server CPU (or the other way around), your hardware limitations, etc.
+It is therefore recommended that you measure performance yourself based on your data and environment.
+
+To see the server's part of the work, set `QueryOptions.QueryId` and read the counters back:
+
+```sql
+SELECT ProfileEvents['UserTimeMicroseconds'] + ProfileEvents['SystemTimeMicroseconds'] AS cpu_us,
+       ProfileEvents['NetworkSendBytes'] AS sent_bytes,
+       query_duration_ms
+FROM system.query_log
+WHERE query_id = 'your-query-id' AND type = 'QueryFinish';
+```
+
+---
 
 ## ORM support {#orm-support}
 
