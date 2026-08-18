@@ -36,6 +36,19 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private readonly string[] columnTypeNames; // Raw server-sent type strings, exactly as declared
     private readonly PocoTypeRegistry pocoRegistry;
     private readonly Dictionary<Type, object> bindingPlanCache = new();
+
+    // Per-column typed storage for the current row; replaces the old shared object[] buffer. Built on the first
+    // Read() and mutated in place by every one after it.
+    //
+    // Not built in the constructor: QueryAsync<T>'s box-free POCO path materializes straight from the stream and
+    // never touches a slot, so eager construction would allocate one permanently dead object per column on the
+    // primary read API. Empty result sets and metadata-only readers likewise pay nothing.
+    //
+    // Built once and never nulled again, so `hasCurrentRow` implies non-null — the whole safety argument, which
+    // every value accessor establishes by going through Slot(). GetValues is the one exception: it indexes this
+    // array directly and carries its own copy of the guard, so "simplifying" that guard away yields a
+    // NullReferenceException instead of the intended InvalidOperationException.
+    private ColumnSlot[] slots;
     private bool hasCurrentRow;
 
     private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, PooledReadBufferStream pooledReadBuffer, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null, Stream decompressor = null)
@@ -52,7 +65,6 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         this.pocoRegistry = pocoRegistry;
         RawTypes = types;
         FieldNames = names;
-        CurrentRow = new object[FieldNames.Length];
         columnTypeNames = rawTypeNames;
     }
 
@@ -180,36 +192,89 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override int RecordsAffected { get; }
 
-    protected object[] CurrentRow { get; set; }
-
     protected string[] FieldNames { get; set; }
 
     private protected ClickHouseType[] RawTypes { get; set; }
 
-    public override bool GetBoolean(int ordinal) => Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
+    /// <summary>
+    /// Shared body for the strict typed accessors, which cast rather than coerce: the value must already be
+    /// the requested <typeparamref name="T"/>. This is the path compiled ORM mappers drive (linq2db inlines
+    /// <c>GetInt64</c>/<c>GetDouble</c>/<c>GetDateTime</c>/… per column per row), so it is where the boxing
+    /// elimination is worth the most.
+    /// </summary>
+    /// <remarks>
+    /// An <see cref="IReadValueConverter"/> does not force the accessor onto the boxed path. The value comes
+    /// out of the slot unboxed and converts through <c>ConvertValue&lt;T&gt;</c>, the overload
+    /// <see cref="GetFieldValue{T}"/> uses for a typed read. Only genuinely boxed reads —
+    /// <see cref="GetValue"/>, <see cref="GetValues"/>, and the coercing fall-throughs below — use
+    /// <c>ConvertValue(object, …)</c>.
+    /// </remarks>
+    private T GetTypedValue<T>(int ordinal)
+    {
+        var value = GetSlotValue<T>(ordinal);
+        return readValueConverter == null ? value : ConvertTyped(ordinal, value);
+    }
 
-    public override byte GetByte(int ordinal) => (byte)GetValue(ordinal);
+    // Applies the converter on the typed overload to a value already read out of its slot.
+    private T ConvertTyped<T>(int ordinal, T value)
+        => readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
+
+    // Unlike its neighbours this one coerces rather than casts, so only an exact Bool column takes the fast path;
+    // anything else keeps Convert.ToBoolean's widening and its exception messages. A NULL cell falls through too,
+    // so Convert.ToBoolean(DBNull.Value) still throws exactly as it did.
+    public override bool GetBoolean(int ordinal)
+    {
+        var slot = Slot(ordinal);
+        if (slot is ValueSlot<bool> boolSlot)
+            return readValueConverter == null ? boolSlot.Value : ConvertTyped(ordinal, boolSlot.Value);
+        if (slot is NullableSlot<bool> nullableSlot && nullableSlot.HasValue)
+            return readValueConverter == null ? nullableSlot.Value : ConvertTyped(ordinal, nullableSlot.Value);
+
+        return Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
+    }
+
+    public override byte GetByte(int ordinal) => GetTypedValue<byte>(ordinal);
 
     public override long GetBytes(int ordinal, long dataOffset, byte[] buffer, int bufferOffset, int length) => throw new NotImplementedException();
 
+    // No ClickHouse type reads as char, so there is no slot to hit — left on the boxed cast.
     public override char GetChar(int ordinal) => (char)GetValue(ordinal);
 
     public override long GetChars(int ordinal, long dataOffset, char[] buffer, int bufferOffset, int length) => throw new NotImplementedException();
 
     public override string GetDataTypeName(int ordinal) => GetClickHouseType(ordinal).ToString();
 
-    public override DateTime GetDateTime(int ordinal) => (DateTime)GetValue(ordinal);
+    public override DateTime GetDateTime(int ordinal) => GetTypedValue<DateTime>(ordinal);
 
+    // Box-free by construction once GetDateTime is: CoerceToDateTimeOffset has a DateTime overload.
     public virtual DateTimeOffset GetDateTimeOffset(int ordinal) => GetEffectiveClickHouseType(ordinal) is AbstractDateTimeType adt ?
         adt.CoerceToDateTimeOffset(GetDateTime(ordinal)) : throw new InvalidCastException();
 
     public override decimal GetDecimal(int ordinal)
     {
+        // Which of the two representations a Decimal column resolves to is the UseBigDecimal setting's doing;
+        // both reach the same decimal without a box, nullable or not. A NULL cell falls through to the boxed
+        // path below, where casting DBNull.Value throws exactly as it did.
+        var slot = Slot(ordinal);
+        decimal? unboxed = slot switch
+        {
+            ValueSlot<decimal> decimalSlot => decimalSlot.Value,
+            NullableSlot<decimal> n when n.HasValue => n.Value,
+            ValueSlot<ClickHouseDecimal> bigDecimalSlot => bigDecimalSlot.Value.ToDecimal(CultureInfo.InvariantCulture),
+            NullableSlot<ClickHouseDecimal> nb when nb.HasValue => nb.Value.ToDecimal(CultureInfo.InvariantCulture),
+            _ => null,
+        };
+
+        // A ClickHouseDecimal column is narrowed first, so the converter sees the decimal this accessor
+        // returns rather than the column's own representation.
+        if (unboxed.HasValue)
+            return readValueConverter == null ? unboxed.Value : ConvertTyped(ordinal, unboxed.Value);
+
         var value = GetValue(ordinal);
         return value is ClickHouseDecimal clickHouseDecimal ? clickHouseDecimal.ToDecimal(CultureInfo.InvariantCulture) : (decimal)value;
     }
 
-    public override double GetDouble(int ordinal) => (double)GetValue(ordinal);
+    public override double GetDouble(int ordinal) => GetTypedValue<double>(ordinal);
 
     public override Type GetFieldType(int ordinal)
     {
@@ -217,15 +282,15 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         return rawType is NullableType nt ? nt.UnderlyingType.FrameworkType : rawType.FrameworkType;
     }
 
-    public override float GetFloat(int ordinal) => (float)GetValue(ordinal);
+    public override float GetFloat(int ordinal) => GetTypedValue<float>(ordinal);
 
-    public override Guid GetGuid(int ordinal) => (Guid)GetValue(ordinal);
+    public override Guid GetGuid(int ordinal) => GetTypedValue<Guid>(ordinal);
 
-    public override short GetInt16(int ordinal) => (short)GetValue(ordinal);
+    public override short GetInt16(int ordinal) => GetTypedValue<short>(ordinal);
 
-    public override int GetInt32(int ordinal) => (int)GetValue(ordinal);
+    public override int GetInt32(int ordinal) => GetTypedValue<int>(ordinal);
 
-    public override long GetInt64(int ordinal) => (long)GetValue(ordinal);
+    public override long GetInt64(int ordinal) => GetTypedValue<long>(ordinal);
 
     public override string GetName(int ordinal) => FieldNames[ordinal];
 
@@ -240,43 +305,86 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         return index;
     }
 
-    public override string GetString(int ordinal) => GetValue(ordinal)?.ToString();
+    // Deliberately narrower than the other accessors: only a non-nullable String column short-circuits. Every other
+    // shape keeps ToString()'s coercion, including the quirk that a NULL cell yields "" rather than null, because
+    // DBNull.Value.ToString() is the empty string.
+    public override string GetString(int ordinal)
+        => Slot(ordinal) is ValueSlot<string> stringSlot
+            ? (readValueConverter == null ? stringSlot.Value : ConvertTyped(ordinal, stringSlot.Value))
+            : GetValue(ordinal)?.ToString();
 
+    /// <summary>
+    /// The one boxing entry point on the read path. Boxes lazily, per call, so a query that projects ten columns
+    /// and reads two pays for two — where the old <c>object[]</c> buffer boxed all ten during <see cref="Read"/>
+    /// regardless.
+    /// </summary>
+    /// <remarks>
+    /// Consequence of boxing per call rather than once per row: two <c>GetValue(i)</c> calls on the same value-type
+    /// cell return two distinct boxes. They still compare equal by <see cref="object.Equals(object)"/> — the
+    /// ADO.NET-relevant comparison — but no longer by <see cref="object.ReferenceEquals"/>.
+    /// </remarks>
     public override object GetValue(int ordinal)
-        => readValueConverter == null
-            ? CurrentRow[ordinal]
-            : readValueConverter.ConvertValue(CurrentRow[ordinal], FieldNames[ordinal], columnTypeNames[ordinal]);
+    {
+        var value = Slot(ordinal).GetBoxed();
+        return readValueConverter == null
+            ? value
+            : readValueConverter.ConvertValue(value, FieldNames[ordinal], columnTypeNames[ordinal]);
+    }
 
     public override int GetValues(object[] values)
     {
-        if (CurrentRow == null)
-        {
-            throw new InvalidOperationException();
-        }
+        if (!hasCurrentRow)
+            ThrowNoCurrentRow();
 
-        var count = Math.Min(CurrentRow.Length, values.Length);
+        var count = Math.Min(slots.Length, values.Length);
 
         if (readValueConverter != null)
         {
             for (var i = 0; i < count; i++)
-                values[i] = readValueConverter.ConvertValue(CurrentRow[i], FieldNames[i], columnTypeNames[i]);
+                values[i] = readValueConverter.ConvertValue(slots[i].GetBoxed(), FieldNames[i], columnTypeNames[i]);
         }
         else
         {
-            Array.Copy(CurrentRow, values, count);
+            for (var i = 0; i < count; i++)
+                values[i] = slots[i].GetBoxed();
         }
 
         return count;
     }
 
     public override bool IsDBNull(int ordinal)
+        // Asks the slot directly rather than going through GetValue: a configured IReadValueConverter must not run
+        // during a null check (it could throw, do expensive work, or change the result's nullness), and a null
+        // check has no business materializing a box.
+        => Slot(ordinal).IsNull;
+
+    /// <summary>
+    /// The single gate every value accessor passes through. Column metadata (<see cref="FieldCount"/>,
+    /// <see cref="GetName"/>, <see cref="GetFieldType"/>, <see cref="GetSchemaTable"/>, …) is available
+    /// without a current row and is deliberately not gated.
+    /// </summary>
+    /// <remarks>
+    /// Slots hold typed storage, so without this a non-nullable value column would read back before the first
+    /// <see cref="Read"/> as a perfectly plausible <c>0</c>/<c>false</c>/<c>Guid.Empty</c> — a value
+    /// indistinguishable from real data. Worth a branch to report the mistake instead, as <c>SqlClient</c> and the
+    /// rest of ADO.NET do.
+    /// </remarks>
+    private ColumnSlot Slot(int ordinal)
     {
-        // Read CurrentRow directly rather than going through GetValue so a configured
-        // IReadValueConverter does not run during a null check — it could throw, do
-        // expensive work, or change the nullness of the result.
-        var value = CurrentRow[ordinal];
-        return value is DBNull || value is null;
+        if (!hasCurrentRow)
+            ThrowNoCurrentRow();
+
+        return slots[ordinal];
     }
+
+    // Separate and non-inlined so the check above stays small enough for the JIT to inline into the hot
+    // accessors.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowNoCurrentRow()
+        => throw new InvalidOperationException(
+            "The reader has no current row. Call Read() and check that it returned true before reading " +
+            "column values. Column metadata (FieldCount, GetName, GetFieldType, GetSchemaTable) is " +
+            "available without a current row.");
 
     public override bool NextResult() => false;
 
@@ -324,10 +432,40 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             }
         }
 
-        var value = (T)CurrentRow[ordinal];
+        var value = GetSlotValue<T>(ordinal);
         if (readValueConverter != null)
             return readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
         return value;
+    }
+
+    /// <summary>
+    /// Extracts the current row's column value as <typeparamref name="T"/>, without boxing where the slot
+    /// already holds exactly that type.
+    /// </summary>
+    /// <remarks>
+    /// <para>Both checks are sealed-class type tests, so for a value-typed <typeparamref name="T"/> each is a plain
+    /// <c>isinst</c> against a known method table. A generic <c>IValueGetter&lt;T&gt;</c> implemented twice would let
+    /// one slot serve both <c>long</c> and <c>long?</c>, but it goes through the shared-generics dictionary and
+    /// measured several times slower — so <c>T = U?</c> is deliberately left to the boxed fallback.</para>
+    ///
+    /// <para>That fallback is the pre-slot expression verbatim, which preserves the exact-type strictness callers
+    /// depend on: <c>GetFieldValue&lt;long&gt;</c> over an <c>Int32</c> column throws rather than widening, and
+    /// reading a NULL as a non-nullable <typeparamref name="T"/> throws the runtime's own "cannot cast DBNull"
+    /// <see cref="InvalidCastException"/> as before.</para>
+    /// </remarks>
+    private T GetSlotValue<T>(int ordinal)
+    {
+        var slot = Slot(ordinal);
+
+        if (slot is ValueSlot<T> valueSlot)
+            return valueSlot.Value;
+
+        // A Nullable(T) column holds the underlying T, so this also serves GetFieldValue<long> over
+        // Nullable(Int64) — and when the cell is null it falls through to the box, which throws.
+        if (slot is NullableSlot<T> nullableSlot && nullableSlot.HasValue)
+            return nullableSlot.Value;
+
+        return (T)slot.GetBoxed();
     }
 
     /// <summary>
@@ -351,25 +489,25 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken) => Task.FromResult(false);
 
     // Custom extension
-    public ushort GetUInt16(int ordinal) => (ushort)GetValue(ordinal);
+    public ushort GetUInt16(int ordinal) => GetTypedValue<ushort>(ordinal);
 
     // Custom extension
-    public uint GetUInt32(int ordinal) => (uint)GetValue(ordinal);
+    public uint GetUInt32(int ordinal) => GetTypedValue<uint>(ordinal);
 
     // Custom extension
-    public ulong GetUInt64(int ordinal) => (ulong)GetValue(ordinal);
+    public ulong GetUInt64(int ordinal) => GetTypedValue<ulong>(ordinal);
 
     // Custom extension
-    public IPAddress GetIPAddress(int ordinal) => (IPAddress)GetValue(ordinal);
+    public IPAddress GetIPAddress(int ordinal) => GetTypedValue<IPAddress>(ordinal);
 
-    // Custom extension
+    // Custom extension. Tuple columns have no typed slot, so this stays on the boxed cast.
     public ITuple GetTuple(int ordinal) => (ITuple)GetValue(ordinal);
 
     // Custom extension
-    public sbyte GetSByte(int ordinal) => (sbyte)GetValue(ordinal);
+    public sbyte GetSByte(int ordinal) => GetTypedValue<sbyte>(ordinal);
 
     // Custom extension
-    public BigInteger GetBigInteger(int ordinal) => (BigInteger)GetValue(ordinal);
+    public BigInteger GetBigInteger(int ordinal) => GetTypedValue<BigInteger>(ordinal);
 
     /// <summary>
     /// Materializes the current row into a new instance of <typeparamref name="T"/>.
@@ -467,8 +605,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 
     /// <summary>
-    /// Reads the next row straight from the stream via the fast-path delegates, bypassing the shared
-    /// <c>object[]</c> row buffer and its per-value boxing. Returns false at end of stream, and mirrors
+    /// Reads the next row straight from the stream via the fast-path delegates, bypassing the reader's column
+    /// slots, which this path never allocates. Returns false at end of stream, and mirrors
     /// <see cref="Read"/>'s mid-stream server-exception handling. The delegates consume every wire column in
     /// order, so the stream stays aligned even for columns the POCO does not map.
     /// </summary>
@@ -546,11 +684,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override bool Read()
     {
-        var count = RawTypes.Length;
-        var data = CurrentRow;
-
         // Clear before the per-column loop so a mid-row throw cannot leave a stale
-        // CurrentRow visible to MapTo<T> if the caller catches and continues.
+        // row visible to MapTo<T> if the caller catches and continues.
         hasCurrentRow = false;
         try
         {
@@ -559,10 +694,13 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             if (reader.PeekChar() == -1)
                 return false; // End of stream reached
 
-            for (var i = 0; i < count; i++)
+            // Built on the first row rather than in the ctor: the POCO fast path materializes straight
+            // from the stream and never touches a slot, so eager construction would allocate a
+            // permanently dead object per column on the primary read API. An empty result never gets here.
+            var columns = slots ??= CreateSlots();
+            for (var i = 0; i < columns.Length; i++)
             {
-                var rawType = RawTypes[i];
-                data[i] = rawType.Read(reader);
+                columns[i].Read(reader);
             }
             hasCurrentRow = true;
             return true;
@@ -579,6 +717,17 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                 throw serverEx;
             throw;
         }
+    }
+
+    // Runs at most once per reader, so it is kept out of Read() to leave that method small enough for the
+    // JIT to treat the slot loop as the hot path it is.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ColumnSlot[] CreateSlots()
+    {
+        var created = new ColumnSlot[RawTypes.Length];
+        for (var i = 0; i < created.Length; i++)
+            created[i] = ColumnSlotFactory.Create(RawTypes[i]);
+        return created;
     }
 
 #pragma warning disable CA2215 // Dispose methods should call base class dispose
