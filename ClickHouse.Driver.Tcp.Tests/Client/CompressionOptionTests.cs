@@ -12,6 +12,19 @@ namespace ClickHouse.Driver.Tcp.Tests.Client;
 [TestFixture]
 public class CompressionOptionTests
 {
+    [Test]
+    public void Compressor_WhenNotOverridden_DefaultsToLz4()
+    {
+        // The default is on. LZ4 is what clickhouse-client uses on this protocol: cheapest in CPU and lightest
+        // on the server. A change here alters what every query puts on the wire, so it is pinned.
+        Assert.Multiple(() =>
+        {
+            Assert.That(new ClickHouseTcpClientOptions().Compressor, Is.SameAs(Lz4Compressor.Default));
+            Assert.That(ClickHouseTcpClientOptions.FromConnectionString("Host=localhost").Compressor, Is.SameAs(Lz4Compressor.Default));
+            Assert.That(new ClickHouseTcpConnectionStringBuilder().Compression, Is.EqualTo("lz4"));
+        });
+    }
+
     [TestCase("lz4", CompressionFrame.MethodLz4)]
     [TestCase("LZ4", CompressionFrame.MethodLz4)]
     [TestCase("  lz4  ", CompressionFrame.MethodLz4)]

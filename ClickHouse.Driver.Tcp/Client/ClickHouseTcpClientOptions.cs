@@ -30,8 +30,12 @@ public sealed record ClickHouseTcpClientOptions
     internal const int DefaultMaxPoolSize = 20;
     internal const ClickHouseTcpPoolReusePolicy DefaultPoolReusePolicy = ClickHouseTcpPoolReusePolicy.Lifo;
 
-    /// <summary>The <c>Compression</c> connection-string value used when the key is absent.</summary>
-    internal const string DefaultCompression = CompressionNone;
+    /// <summary>
+    /// The <c>Compression</c> connection-string value used when the key is absent. LZ4 is what
+    /// <c>clickhouse-client</c> uses on this protocol: the cheapest codec in CPU and the lightest on the
+    /// server. Pass <c>Compression=none</c>, or a null <see cref="Compressor"/>, to turn it off.
+    /// </summary>
+    internal const string DefaultCompression = CompressionLz4;
 
     internal const string CompressionNone = "none";
     internal const string CompressionLz4 = "lz4";
