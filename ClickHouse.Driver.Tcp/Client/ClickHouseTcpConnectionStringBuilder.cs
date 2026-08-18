@@ -256,7 +256,8 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
 
     /// <summary>
     /// Frame codec for the native protocol: <c>lz4</c>, <c>zstd</c>, or <c>none</c>. Defaults to
-    /// <c>none</c>. Maps to <see cref="ClickHouseTcpClientOptions.Compressor"/>.
+    /// <c>lz4</c>, so compression is on unless this key turns it off. Maps to
+    /// <see cref="ClickHouseTcpClientOptions.Compressor"/>.
     /// </summary>
     public string Compression
     {
