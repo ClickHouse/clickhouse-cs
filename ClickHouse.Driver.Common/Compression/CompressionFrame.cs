@@ -43,10 +43,12 @@ internal static class CompressionFrame
     /// <summary>Method byte for a ZSTD body, a raw single zstd frame including its magic number.</summary>
     public const byte MethodZstd = 0x90;
 
-    // Both sizes arrive from the peer, so a corrupt or hostile stream can declare anything. Cap them well
-    // above any legitimate frame (the server flushes at ~1 MiB) so a bad length cannot drive a huge rent.
-    private const int MaxBodySize = 1 << 30;
-    private const int MaxPlaintextSize = 1 << 30;
+    // Both sizes arrive from the peer, so a corrupt or hostile stream can declare anything, and a decoder rents
+    // a buffer for each before it can check the checksum. The server flushes at ~1 MiB, so 128 MiB is ample
+    // headroom while keeping the worst case a peer can force to a size a process can absorb. The Go client caps
+    // both at the same figure.
+    private const int MaxBodySize = 128 * 1024 * 1024;
+    private const int MaxPlaintextSize = 128 * 1024 * 1024;
 
     /// <summary>
     /// The largest frame <see cref="Write"/> can produce for <paramref name="plaintextLength"/> bytes, so a
