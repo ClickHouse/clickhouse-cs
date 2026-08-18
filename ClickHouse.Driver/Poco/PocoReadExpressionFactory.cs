@@ -10,16 +10,16 @@ namespace ClickHouse.Driver.Poco;
 /// <summary>
 /// Builds box-free read expressions for the POCO read (materialization) fast path.
 ///
-/// The default path boxes every value-type column through
-/// <see cref="ClickHouseType.Read(ExtendedBinaryReader)"/> into the reader's shared <c>object[]</c> row
-/// buffer, then unboxes it in a compiled <c>Action&lt;T,object&gt;</c> setter (<c>MapTo&lt;T&gt;</c>). Where a
-/// type can decode straight into the target CLR type, this compiles a fused read-and-assign delegate
-/// instead, dropping both the box and the unbox.
+/// The fallback path decodes each column into the reader's per-column slot, boxes it on the way out through
+/// <c>GetValue</c>, then unboxes it in a compiled <c>Action&lt;T,object&gt;</c> setter (<c>MapTo&lt;T&gt;</c>).
+/// Where a type can decode straight into the target CLR type, this compiles a fused read-and-assign delegate
+/// instead, dropping both the box and the unbox and bypassing the slots.
 ///
 /// Dispatch is driven by <see cref="ITypedReader{T}"/>: a column type takes the fast path for a property CLR
 /// type iff it implements <c>ITypedReader&lt;thatType&gt;</c>, which also lets one column offer several
-/// representations. <see cref="NullableType"/> and <see cref="LowCardinalityType"/> are transparent. Anything
-/// with no typed reader returns <c>null</c>, and the caller falls back to the boxed path for that column.
+/// representations. <see cref="NullableType"/> and the wire-transparent wrappers (see
+/// <see cref="TransparentWrapper"/>) are handled transparently. Anything with no typed reader returns
+/// <c>null</c>, and the caller falls back to the boxed path for that column.
 /// </summary>
 internal static class PocoReadExpressionFactory
 {
@@ -42,10 +42,10 @@ internal static class PocoReadExpressionFactory
     /// <param name="targetClrType">The bound property's CLR type; the returned expression has this type.</param>
     public static Expression TryBuildReadBody(ClickHouseType type, Expression reader, Type targetClrType)
     {
-        // LowCardinality is transparent on the RowBinary wire (LowCardinalityType.Read delegates to the
-        // underlying), so read the underlying value directly.
-        if (type is LowCardinalityType lowCardinality)
-            return TryBuildReadBody(lowCardinality.UnderlyingType, reader, targetClrType);
+        // LowCardinality / SimpleAggregateFunction / Object are transparent on the RowBinary wire (their
+        // Read delegates to the wrapped type), so read the wrapped value directly. Without this a wrapped
+        // column would silently fall back to the boxed path despite decoding identically to a bare one.
+        type = TransparentWrapper.Unwrap(type);
 
         if (type is NullableType nullableType)
             return TryBuildNullableRead(nullableType, reader, targetClrType);

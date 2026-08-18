@@ -1,11 +1,10 @@
 ﻿using System;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
-using NodaTime;
 
 namespace ClickHouse.Driver.Types;
 
-internal class NullableType : ParameterizedType, IInstantReader
+internal class NullableType : ParameterizedType
 {
     public ClickHouseType UnderlyingType { get; set; }
 
@@ -29,23 +28,6 @@ internal class NullableType : ParameterizedType, IInstantReader
     }
 
     public override object Read(ExtendedBinaryReader reader) => reader.ReadByte() > 0 ? DBNull.Value : UnderlyingType.Read(reader);
-
-    bool IInstantReader.ReportsInstant => UnderlyingType is IInstantReader { ReportsInstant: true };
-
-    object IInstantReader.ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
-    {
-        if (reader.ReadByte() > 0)
-        {
-            instant = null;
-            return DBNull.Value;
-        }
-
-        if (UnderlyingType is IInstantReader underlying)
-            return underlying.ReadWithInstant(reader, out instant);
-
-        instant = null;
-        return UnderlyingType.Read(reader);
-    }
 
     public override string ToString() => $"{Name}({UnderlyingType})";
 

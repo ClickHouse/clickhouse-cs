@@ -1379,6 +1379,15 @@ public class ReadDateTimeOffsetAmbiguousDstTests : AbstractConnectionTestFixture
             $"SELECT toTimeZone(toDateTime64({SecondOccurrence}, 3, 'UTC'), 'America/New_York')",
             SecondOccurrence, TimeSpan.FromHours(-5))
             .SetName("ReadDateTimeOffset_DateTime64_SecondOccurrence");
+        // Every DateTime64 scale reaches the instant through the same tick shift, so the whole range is pinned.
+        yield return new TestCaseData(
+            $"SELECT toTimeZone(toDateTime64({SecondOccurrence}, 0, 'UTC'), 'America/New_York')",
+            SecondOccurrence, TimeSpan.FromHours(-5))
+            .SetName("ReadDateTimeOffset_DateTime64Scale0_SecondOccurrence");
+        yield return new TestCaseData(
+            $"SELECT toTimeZone(toDateTime64({SecondOccurrence}, 9, 'UTC'), 'America/New_York')",
+            SecondOccurrence, TimeSpan.FromHours(-5))
+            .SetName("ReadDateTimeOffset_DateTime64Scale9_SecondOccurrence");
         yield return new TestCaseData(
             $"SELECT CAST(toTimeZone(toDateTime({SecondOccurrence}, 'UTC'), 'America/New_York') AS Nullable(DateTime('America/New_York')))",
             SecondOccurrence, TimeSpan.FromHours(-5))
@@ -1498,6 +1507,30 @@ public class ReadDateTimeOffsetAmbiguousDstTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
+    /// A NULL cell decodes nothing, so the instant kept from an earlier row must not be reported for it:
+    /// reading a NULL must throw exactly as it did before, not hand back the previous row's offset.
+    /// </summary>
+    [Test]
+    public async Task ReadDateTimeOffset_FromNullAfterValue_DoesNotReportTheEarlierRowInstant()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync($@"
+            SELECT CAST(toTimeZone(toDateTime({SecondOccurrence}, 'UTC'), 'America/New_York') AS Nullable(DateTime('America/New_York'))) AS dt
+            UNION ALL
+            SELECT CAST(NULL AS Nullable(DateTime('America/New_York'))) AS dt
+            ORDER BY dt DESC");
+
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetDateTimeOffset(0).ToUnixTimeSeconds(), Is.EqualTo(SecondOccurrence));
+
+        Assert.That(reader.Read(), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.IsDBNull(0), Is.True);
+            Assert.That(() => reader.GetDateTimeOffset(0), Throws.InstanceOf<InvalidCastException>());
+        });
+    }
+
+    /// <summary>
     /// Contrast case: a zone whose offset is zero at the read instant keeps returning a Kind=Utc
     /// wall clock with a zero offset (the London fall-back hour ends in GMT, not BST).
     /// </summary>
@@ -1523,25 +1556,32 @@ public class ReadDateTimeOffsetAmbiguousDstTests : AbstractConnectionTestFixture
     // (type string, whether the type decodes an absolute instant)
     private static IEnumerable<TestCaseData> InstantReportingTypes()
     {
-        yield return new TestCaseData("DateTime('America/New_York')", true).SetName("ReportsInstant_DateTime");
-        yield return new TestCaseData("DateTime64(3, 'America/New_York')", true).SetName("ReportsInstant_DateTime64");
-        yield return new TestCaseData("Nullable(DateTime('America/New_York'))", true).SetName("ReportsInstant_NullableDateTime");
-        yield return new TestCaseData("Date", false).SetName("ReportsInstant_Date");
-        yield return new TestCaseData("Date32", false).SetName("ReportsInstant_Date32");
-        yield return new TestCaseData("Nullable(Date)", false).SetName("ReportsInstant_NullableDate");
-        yield return new TestCaseData("Int32", false).SetName("ReportsInstant_Int32");
+        yield return new TestCaseData("DateTime('America/New_York')", true).SetName("CapturesInstant_DateTime");
+        yield return new TestCaseData("DateTime64(3, 'America/New_York')", true).SetName("CapturesInstant_DateTime64");
+        yield return new TestCaseData("Nullable(DateTime('America/New_York'))", true).SetName("CapturesInstant_NullableDateTime");
+        yield return new TestCaseData("Date", false).SetName("CapturesInstant_Date");
+        yield return new TestCaseData("Date32", false).SetName("CapturesInstant_Date32");
+        yield return new TestCaseData("Nullable(Date)", false).SetName("CapturesInstant_NullableDate");
+        yield return new TestCaseData("Int32", false).SetName("CapturesInstant_Int32");
     }
 
     /// <summary>
-    /// Instants are captured only for the types that decode one, so a result set of Date/Date32 columns —
-    /// which encode a day number, not an instant — keeps the plain decode path instead of taking the
-    /// instant-capturing one to be reported nothing.
+    /// A column decodes through the instant-capturing reader only when its type decodes an instant, so
+    /// Date/Date32 columns — which encode a day number — keep the typed reader of their own type.
     /// </summary>
     [TestCaseSource(nameof(InstantReportingTypes))]
-    public void Create_ForResultSetOfType_ReturnsReaderOnlyWhenAnInstantIsDecoded(string typeString, bool expected)
+    public void CreateSlot_ForColumnOfType_CapturesInstantOnlyWhenOneIsDecoded(string typeString, bool expected)
     {
         var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
 
-        Assert.That(RowInstantReader.Create([type]), expected ? Is.Not.Null : Is.Null);
+        var slot = ColumnSlotFactory.Create(type);
+
+        var reader = slot switch
+        {
+            ValueSlot<DateTime> valueSlot => valueSlot.Reader,
+            NullableSlot<DateTime> nullableSlot => nullableSlot.Reader,
+            _ => null,
+        };
+        Assert.That(reader, expected ? Is.TypeOf<InstantCapturingReader>() : Is.Not.TypeOf<InstantCapturingReader>());
     }
 }

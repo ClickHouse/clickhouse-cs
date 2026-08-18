@@ -25,14 +25,7 @@ internal class DateTimeType : AbstractDateTimeType, IInstantReader
 
     protected override DateTimeOffset ReadDateTimeOffset(ExtendedBinaryReader reader) => ToDateTimeOffset(ReadInstant(reader));
 
-    bool IInstantReader.ReportsInstant => true;
-
-    object IInstantReader.ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
-    {
-        var decoded = ReadInstant(reader);
-        instant = decoded;
-        return ToDateTime(decoded);
-    }
+    Instant IInstantReader.ReadInstant(ExtendedBinaryReader reader) => ReadInstant(reader);
 
     private static Instant ReadInstant(ExtendedBinaryReader reader) => Instant.FromUnixTimeSeconds(reader.ReadUInt32());
 

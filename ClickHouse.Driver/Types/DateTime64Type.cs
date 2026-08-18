@@ -48,14 +48,7 @@ internal class DateTime64Type : AbstractDateTimeType, IInstantReader
     // shares one wire read.
     private Instant ReadInstant(ExtendedBinaryReader reader) => ToInstant(reader.ReadInt64());
 
-    bool IInstantReader.ReportsInstant => true;
-
-    object IInstantReader.ReadWithInstant(ExtendedBinaryReader reader, out Instant? instant)
-    {
-        var decoded = ReadInstant(reader);
-        instant = decoded;
-        return ToDateTime(decoded);
-    }
+    Instant IInstantReader.ReadInstant(ExtendedBinaryReader reader) => ReadInstant(reader);
 
     // No range check: any coerced instant is representable, so 'original' is unused.
     protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T original)

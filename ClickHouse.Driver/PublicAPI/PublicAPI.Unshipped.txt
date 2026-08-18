@@ -104,6 +104,7 @@ ClickHouse.Driver.ADO.QueryStats.Deconstruct(out long ReadRows, out long ReadByt
 ClickHouse.Driver.ADO.QueryStats.QueryStats(ClickHouse.Driver.ADO.QueryStats original) -> void
 ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetTuple(int ordinal) -> System.Runtime.CompilerServices.ITuple
 ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetFieldValue<T>(string name) -> T
+ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.TryGetEnumOrdinal(int ordinal, out int value) -> bool
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.get -> Microsoft.IO.RecyclableMemoryStreamManager
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.init -> void
 ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions
