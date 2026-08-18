@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Security;
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp;
@@ -28,6 +29,13 @@ public sealed record ClickHouseTcpClientOptions
     internal const int DefaultMinPoolSize = 0;
     internal const int DefaultMaxPoolSize = 20;
     internal const ClickHouseTcpPoolReusePolicy DefaultPoolReusePolicy = ClickHouseTcpPoolReusePolicy.Lifo;
+
+    /// <summary>The <c>Compression</c> connection-string value used when the key is absent.</summary>
+    internal const string DefaultCompression = CompressionNone;
+
+    internal const string CompressionNone = "none";
+    internal const string CompressionLz4 = "lz4";
+    internal const string CompressionZstd = "zstd";
     internal static readonly TimeSpan DefaultDialTimeout = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(300);
     internal static readonly TimeSpan DefaultPoolTimeout = TimeSpan.FromSeconds(30);
@@ -262,6 +270,24 @@ public sealed record ClickHouseTcpClientOptions
     public ClickHouseTcpPoolReusePolicy PoolReusePolicy { get; init; } = DefaultPoolReusePolicy;
 
     /// <summary>
+    /// Codec for the native protocol's compression frames, or <see langword="null"/> to exchange blocks
+    /// uncompressed. Use <see cref="Lz4Compressor"/> (cheapest, lowest server-side load) or
+    /// <see cref="ZstdCompressor"/> (smaller, more CPU); a custom <see cref="IClickHouseCompressor"/> works if
+    /// it implements the native block path.
+    /// <para>
+    /// Compression is requested per query, so this is the default for every query the client runs. It governs
+    /// both directions: the server compresses the blocks it sends and expects the client's own blocks framed
+    /// the same way. Null means the request carries no compression at all, which is not the same as a frame
+    /// whose method byte is NONE.
+    /// </para>
+    /// <para>
+    /// A codec chooses the method byte and the body encoding, but never the decoding: the server picks its own
+    /// codec, so a client that asks for LZ4 can still be sent ZSTD and must decode whatever arrives.
+    /// </para>
+    /// </summary>
+    public IClickHouseCompressor Compressor { get; init; } = ResolveCompressor(DefaultCompression);
+
+    /// <summary>
     /// These options with <see cref="CustomSettings"/> replaced by a private snapshot, or this instance when there
     /// are none to copy. A client holds its options for its lifetime and merges the settings on every operation, so
     /// it must own them: keeping the caller's dictionary would let a later mutation of it fault or partially apply
@@ -289,8 +315,42 @@ public sealed record ClickHouseTcpClientOptions
     /// <summary>Validates the options, throwing if any value is unusable. Runs at client construction.</summary>
     /// <exception cref="ArgumentException"><see cref="Host"/>, <see cref="Username"/>, or <see cref="Database"/> is null or empty.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><see cref="Port"/> is out of range, or a timeout / buffer size is not positive.</exception>
+    /// <summary>
+    /// Maps a <c>Compression</c> connection-string value to its codec. <c>none</c> yields
+    /// <see langword="null"/>, meaning the query is not compressed at all.
+    /// </summary>
+    /// <param name="name">The codec name, case-insensitive. Null or empty means none.</param>
+    /// <returns>The codec, or null for no compression.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> names no known codec.</exception>
+    internal static IClickHouseCompressor ResolveCompressor(string name) => name?.Trim().ToLowerInvariant() switch
+    {
+        null or "" or CompressionNone => null,
+        CompressionLz4 => Lz4Compressor.Default,
+        CompressionZstd => ZstdCompressor.Default,
+        _ => throw new ArgumentException(
+            $"Compression '{name}' is not a known codec; expected '{CompressionLz4}', '{CompressionZstd}' or '{CompressionNone}'.",
+            nameof(name)),
+    };
+
     internal void Validate()
     {
+        // A codec that only implements the HTTP body path cannot frame a block. Refuse it here rather than
+        // mid-query, where the Query packet has already promised the server compressed blocks.
+        if (Compressor is not null)
+        {
+            try
+            {
+                _ = Compressor.MethodByte;
+            }
+            catch (NotSupportedException e)
+            {
+                throw new ArgumentException(
+                    $"{Compressor.GetType().Name} does not support the native block path, so it cannot frame a block; use {nameof(Lz4Compressor)} or {nameof(ZstdCompressor)}.",
+                    nameof(Compressor),
+                    e);
+            }
+        }
+
         if (string.IsNullOrEmpty(Host))
         {
             throw new ArgumentException("Host must not be null or empty.", nameof(Host));
