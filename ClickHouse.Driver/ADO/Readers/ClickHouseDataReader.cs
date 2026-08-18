@@ -167,7 +167,18 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// </returns>
     public bool TryGetEnumOrdinal(int ordinal, out int value)
     {
-        if (CurrentRow[ordinal] is string label &&
+        // Takes the label straight from the slot instead of through GetValue: the ordinal is the raw wire value, so
+        // a configured IReadValueConverter must not run here — it rewrites the label, which would then resolve to a
+        // different ordinal or to none at all. An enum column decodes into its own FrameworkType (string), so these
+        // are the only two slot kinds it can get; a NULL cell leaves HasValue false and falls through to false.
+        var label = Slot(ordinal) switch
+        {
+            ValueSlot<string> stringSlot => stringSlot.Value,
+            NullableSlot<string> nullableSlot when nullableSlot.HasValue => nullableSlot.Value,
+            _ => null,
+        };
+
+        if (label is not null &&
             GetEffectiveClickHouseType(ordinal) is EnumType enumType &&
             enumType.TryLookup(label, out value))
         {
