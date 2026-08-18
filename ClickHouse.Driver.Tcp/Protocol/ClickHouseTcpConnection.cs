@@ -375,13 +375,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         Block current = null;
         bool completed = false;
 
-        // Encode the request into the write buffer before any of it reaches the socket. A failure here is a
+        // Encode the Query packet into the write buffer before any of it reaches the socket. A failure here is a
         // client-side error (e.g. parameters on a protocol revision that predates them): nothing has been sent,
         // so discard the partial packet and leave the connection Ready and reusable rather than terminating it.
         try
         {
             Query.Write(writer, negotiated, clientMetadata, queryId, sql, settings, parameters, compressor is not null);
-            await WriteEndOfInputBlockAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -392,6 +391,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
         try
         {
+            // The end-of-input marker is written here rather than above, because framing it is not buffer-only
+            // work: each frame is flushed as it is emitted. A failure part-way through would leave the Query
+            // packet on the wire, so it must terminate the connection instead of returning it to the pool
+            // looking reusable — the reusable path above holds only work that cannot have sent anything.
+            await WriteEndOfInputBlockAsync(cancellationToken).ConfigureAwait(false);
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             while (true)
