@@ -171,6 +171,67 @@ public class TupleTypeTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public void ParseClickHouseType_EmptyTuple_ReturnsTupleWithoutUnderlyingTypes()
+    {
+        var type = TypeConverter.ParseClickHouseType("Tuple()", TypeSettings.Default);
+        ClassicAssert.IsInstanceOf<TupleType>(type);
+        Assert.That(((TupleType)type).UnderlyingTypes, Is.Empty);
+    }
+
+    [Test]
+    public async Task ShouldReadEmptyTupleColumn_FollowedByAnotherColumn_ReturnsBothValues()
+    {
+        // The server accepts Tuple() as a column type and reports it back verbatim, so the client has
+        // to parse and read it. An empty tuple has no System.Tuple arity and occupies no bytes on the
+        // wire, so it materializes as a tuple of length zero and the following column stays aligned.
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (t Tuple(), value Int32) ENGINE Memory");
+        await client.ExecuteNonQueryAsync($"INSERT INTO {targetTable} VALUES (tuple(), 5)");
+
+        using var reader = await client.ExecuteReaderAsync($"SELECT t, value FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(((ITuple)reader.GetValue(0)).Length, Is.EqualTo(0));
+            Assert.That(reader.GetValue(1), Is.EqualTo(5));
+        });
+    }
+
+    [Test]
+    public async Task ShouldReadDynamicWrappedEmptyTuple_ReturnsTupleWithoutElements()
+    {
+        // A value in a Dynamic column carries its own binary type header, which is decoded
+        // structurally rather than through the type parser: a second entry point which reaches an
+        // element count of zero on its own.
+        using var reader = await client.ExecuteReaderAsync("SELECT tuple()::Dynamic AS d, toInt32(5) AS value");
+        Assert.That(reader.Read(), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(((ITuple)reader.GetValue(0)).Length, Is.EqualTo(0));
+            Assert.That(reader.GetValue(1), Is.EqualTo(5));
+        });
+    }
+
+    [Test]
+    public async Task ShouldInsertBinary_IntoEmptyTupleColumn_RoundTripsRow()
+    {
+        // The insert path resolves the destination column types from the server, so it parses
+        // Tuple() too; an empty tuple writes no bytes, leaving the next column's bytes in place.
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (t Tuple(), value Int32) ENGINE Memory");
+
+        await client.InsertBinaryAsync(targetTable, ["t", "value"], [[Array.Empty<object>(), 5]]);
+
+        using var reader = await client.ExecuteReaderAsync($"SELECT t, value FROM {targetTable}");
+        Assert.That(reader.Read(), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(((ITuple)reader.GetValue(0)).Length, Is.EqualTo(0));
+            Assert.That(reader.GetValue(1), Is.EqualTo(5));
+        });
+    }
+
+    [Test]
     [TestCase("Tuple(String, Int32)")]
     [TestCase("Tuple(name String, age Int32)")]
     public void ShouldParseNamedTupleFields(string typeString)

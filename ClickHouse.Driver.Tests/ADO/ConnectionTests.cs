@@ -460,6 +460,21 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task GetSchema_ColumnsOfTableWithEmptyTupleColumn_DescribesThatColumn()
+    {
+        // Describing columns parses every type reported by system.columns, so a single Tuple()
+        // column anywhere in the described scope has to be parseable.
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (t Tuple(), value Int32) ENGINE Memory");
+
+        var schema = connection.GetSchema("Columns", [TestUtilities.TestDatabase, TestUtilities.BareTableName(targetTable)]);
+
+        var rows = schema.Rows.Cast<DataRow>().ToList();
+        Assert.That(rows.Select(r => (string)r["Name"]), Is.EquivalentTo(new[] { "t", "value" }));
+        Assert.That(rows.Single(r => (string)r["Name"] == "t")["ProviderType"], Is.EqualTo("Tuple()"));
+    }
+
+    [Test]
     public void ChangeDatabaseShouldChangeDatabase()
     {
         // Using separate connection instance here to avoid conflicting with other tests
