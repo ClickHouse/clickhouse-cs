@@ -1,1 +1,0 @@
-* Fixed `ClickHouseConnection.GetSchema("Columns", ...)` building invalid SQL when the table restriction is supplied without the database restriction (for example `[null, "functions"]`). The `WHERE` clause is now composed from the restrictions that are actually set, so filtering by table alone no longer fails with a server syntax error.
