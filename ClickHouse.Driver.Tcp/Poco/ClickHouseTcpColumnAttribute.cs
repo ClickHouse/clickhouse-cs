@@ -10,13 +10,6 @@ namespace ClickHouse.Driver.Tcp;
 /// then ignoring underscores — so <c>UserId</c> already finds a <c>user_id</c> column. Use the attribute only when
 /// the names differ by more than that.
 /// </para>
-///
-/// <para>
-/// This is deliberately not <c>ClickHouse.Driver.ClickHouseColumnAttribute</c>: the two clients are separate
-/// assemblies, and the native-TCP client cannot see the other one's types. The HTTP attribute also carries an
-/// explicit ClickHouse <c>Type</c>, which exists only to skip that client's schema-probe query; the native protocol
-/// sends the target types with the insert itself, so there is nothing here for such a property to do.
-/// </para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Property)]
 public sealed class ClickHouseTcpColumnAttribute : Attribute
