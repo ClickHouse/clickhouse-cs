@@ -1,1 +1,0 @@
-* Fixed mid-stream server exceptions never surfacing on the streaming read path (`ExecuteReader`/`ExecuteReaderAsync`). A query that fails after the HTTP response is committed (for example a `throwIf` partway through a large result) now raises a `ClickHouseServerException` with the real server error, instead of a bare `HttpIOException` or `EndOfStreamException` (issue #476).
