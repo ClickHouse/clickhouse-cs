@@ -45,25 +45,18 @@ internal abstract class AbstractBigIntegerType : IntegerType, ITypedWriter<BigIn
         if (value < 0 && !Signed)
             throw new ArgumentException("Cannot convert negative BigInteger to UInt");
 
-        byte[] bigIntBytes = value.ToByteArray();
-        byte[] decimalBytes = new byte[Size];
+        // Size is 16 or 32 (Int128/UInt128/Int256/UInt256), so a stack buffer avoids both the
+        // BigInteger.ToByteArray() and the new byte[Size] allocation. isUnsigned mirrors the read
+        // side above: on an unsigned type the extra sign byte a positive value carries is dropped,
+        // which is what the old "trim a trailing zero" step did.
+        Span<byte> buffer = stackalloc byte[Size];
+        if (!value.TryWriteBytes(buffer, out int bytesWritten, isUnsigned: !Signed))
+            throw new OverflowException($"Got {value.GetByteCount(isUnsigned: !Signed)} bytes, {Size} expected");
 
-        var lengthToCopy = bigIntBytes.Length;
-        if (!Signed && bigIntBytes[bigIntBytes.Length - 1] == 0)
-            lengthToCopy = bigIntBytes.Length - 1;
-
-        if (lengthToCopy > Size)
-            throw new OverflowException($"Got {lengthToCopy} bytes, {Size} expected");
-
-        Array.Copy(bigIntBytes, decimalBytes, lengthToCopy);
-
-        // If a negative BigInteger is not long enough to fill the whole buffer,
-        // the remainder needs to be filled with 0xFF
-        if (value < 0)
-        {
-            for (int i = bigIntBytes.Length; i < Size; i++)
-                decimalBytes[i] = 0xFF;
-        }
-        writer.Write(decimalBytes);
+        // Fill the bytes past the value: 0xFF to sign-extend a negative value, 0x00 for a positive
+        // one. The positive case is explicit rather than relying on the stackalloc being
+        // zero-initialized (guaranteed only while the compiler emits localsinit).
+        buffer.Slice(bytesWritten).Fill(value.Sign < 0 ? (byte)0xFF : (byte)0x00);
+        writer.Write(buffer);
     }
 }
