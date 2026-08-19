@@ -30,6 +30,13 @@ namespace ClickHouse.Driver.Tcp;
 /// </para>
 ///
 /// <para>
+/// An operation runs on whichever connection the pool hands it, which may or may not be the one before it used.
+/// So server-side state a connection holds — a temporary table, a <c>SET</c> — is neither reliably still there for
+/// the next operation nor reliably gone from it. Where that state is the point, use
+/// <see cref="OpenSessionAsync"/>, which pins one connection for as long as the session lives.
+/// </para>
+///
+/// <para>
 /// This type is experimental: its surface may change in a future release. Suppress diagnostic
 /// <c>CHTCP0001</c> to acknowledge that.
 /// </para>
@@ -61,12 +68,6 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
 
     private readonly IConnectionSource source;
 
-    // Per-client, as HTTP's registry is: the client is meant to be a singleton, so the reflection and the compiles
-    // are amortized anyway. It does hold its Type keys and compiled delegates strongly, so it pins a collectible
-    // AssemblyLoadContext for as long as the client is reachable; scoping it to the client is what makes disposing
-    // the client release them, rather than holding them for the process. See PocoTypeRegistry.
-    private readonly PocoTypeRegistry pocoTypes = new();
-
     /// <summary>Creates a client from options.</summary>
     /// <param name="options">The client configuration (endpoint, credentials, timeouts, client-level settings).</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
@@ -89,10 +90,22 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     }
 
     /// <summary>Test/pool seam: builds a client over an arbitrary connection source.</summary>
-    internal ClickHouseTcpClient(IConnectionSource source, ClickHouseTcpClientOptions options = null)
+    /// <param name="source">The source the client rents its connections from.</param>
+    /// <param name="options">The client configuration, or null for the defaults.</param>
+    /// <param name="optionsAreOwned">
+    /// True when <paramref name="options"/> already holds a private snapshot of its custom settings, so this
+    /// client can share it rather than take another copy. Only a session passes true, handing over the options its
+    /// parent client already owns — which also makes <c>session.Options</c> the very instance
+    /// <c>client.Options</c> is, rather than an equal-looking copy.
+    /// </param>
+    internal ClickHouseTcpClient(
+        IConnectionSource source,
+        ClickHouseTcpClientOptions options = null,
+        bool optionsAreOwned = false)
     {
         this.source = source;
-        Options = (options ?? new ClickHouseTcpClientOptions()).WithOwnedCustomSettings();
+        ClickHouseTcpClientOptions resolved = options ?? new ClickHouseTcpClientOptions();
+        Options = optionsAreOwned ? resolved : resolved.WithOwnedCustomSettings();
     }
 
     /// <summary>
@@ -100,6 +113,14 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// operation. Init-only, so it reflects construction and never changes.
     /// </summary>
     public ClickHouseTcpClientOptions Options { get; }
+
+    /// <summary>
+    /// The compiled POCO read and write plans. Per-client, as HTTP's registry is: the client is meant to be a
+    /// singleton, so the reflection and the compiles are amortized anyway, and a per-client cache cannot pin a type
+    /// whose AssemblyLoadContext the caller unloads. A session shares the registry of the client it came from, so
+    /// running the same query through a session costs no second compile.
+    /// </summary>
+    internal PocoTypeRegistry PocoTypes { get; init; } = new();
 
     /// <summary>
     /// Runs a query and streams its result as a sequence of <see cref="Block"/>s — the low-level columnar tier,
@@ -223,7 +244,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
             // check also covers the header changing mid-enumeration, which the cache then serves.
             if (plan is null || !plan.MatchesHeader(block))
             {
-                plan = pocoTypes.ReadPlanFor<T>(block, forcedTier: null);
+                plan = PocoTypes.ReadPlanFor<T>(block, forcedTier: null);
             }
 
             T[] rows = ArrayPool<T>.Shared.Rent(Math.Min(MaterializationWindowRows, block.RowCount));
@@ -339,7 +360,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         await lease.Connection.InsertAsync(
             sql,
             buffer.Count,
-            schema => pocoTypes.WritePlanFor<T>(schema).BuildColumns(buffer.Rows, buffer.Count),
+            schema => PocoTypes.WritePlanFor<T>(schema).BuildColumns(buffer.Rows, buffer.Count),
             settings,
             parameters,
             options?.QueryId,
@@ -389,6 +410,57 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// </remarks>
     internal static int? ResolveMaxRowsPerBlock(ClickHouseTcpInsertOptions options)
         => (options ?? DefaultInsertOptions).MaxRowsPerBlock;
+
+    /// <summary>
+    /// Opens a session: one connection, taken from this client's pool and held until the session is disposed, that
+    /// every operation on the returned object runs over. Server-side state a connection owns therefore survives from
+    /// one operation to the next — a temporary table stays visible, and a <c>SET</c> keeps applying.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Dispose it, and keep it short.</b> The session holds one of the pool's
+    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/> connections for its whole lifetime, so a session left
+    /// open is capacity the client cannot use, and as many sessions as the pool is wide leaves nothing for anything
+    /// else — including for opening the next session, which then waits out
+    /// <see cref="ClickHouseTcpClientOptions.PoolTimeout"/>. Disposal closes the connection rather than pooling it,
+    /// since it carries the session's state, so it also costs the next caller a reconnect. Dispose the sessions
+    /// before the client, too: an open one holds a slot the client's own disposal waits out
+    /// <see cref="ClickHouseTcpClientOptions.PoolTimeout"/> for before aborting it.
+    /// </para>
+    /// <para>
+    /// The session runs one operation at a time and refuses a second started while the first is still going; the
+    /// client itself is what runs operations concurrently. Both may be used at once — a session's connection is its
+    /// own, and the pool keeps serving the client from the rest.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">A token to observe while waiting for and establishing the connection.</param>
+    /// <returns>A session pinned to one connection.</returns>
+    /// <exception cref="TimeoutException">No connection became available within
+    /// <see cref="ClickHouseTcpClientOptions.PoolTimeout"/>.</exception>
+    /// <exception cref="ObjectDisposedException">This client has been disposed.</exception>
+    public async ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default)
+    {
+        IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        var pinned = new PinnedConnectionSource(lease);
+        try
+        {
+            // The session's operations are this client's, run over the pinned source. The registry is shared so a
+            // plan compiled either side serves both.
+            var operations = new ClickHouseTcpClient(pinned, Options, optionsAreOwned: true)
+            {
+                PocoTypes = PocoTypes,
+            };
+
+            return new ClickHouseTcpSession(pinned, operations);
+        }
+        catch
+        {
+            // Nothing here is expected to throw, but a connection this method fails to hand over is one nobody can
+            // return: the caller has no session to dispose, and the pool is a slot short for the rest of its life.
+            await pinned.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
 
     /// <summary>Checks connectivity by sending a Ping and awaiting the Pong.</summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
