@@ -40,6 +40,11 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     public object CanonicalWritePlaceholder => ToWireValue((IPAddress)NullPlaceholder);
 
     /// <inheritdoc/>
+    // The address family is the whole of the IPv4/IPv6 tie-break: an IPv4 address is this alternative's, and the
+    // IPv6 codec declines it so that exactly one claims.
+    public bool ClaimsValue(object value) => value is IPAddress address && address.AddressFamily == AddressFamily.InterNetwork;
+
+    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => ArrayColumn<IPAddress>.ReadAsync(reader, columnName, columnType, rowCount, checked(rowCount * Size), Fill, cancellationToken);
 
@@ -129,6 +134,12 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public object CanonicalWritePlaceholder => ToWireValue((IPAddress)NullPlaceholder);
+
+    /// <inheritdoc/>
+    // Declines an IPv4 address even though the writer below maps one into 16 bytes: beside an IPv4 alternative
+    // that address means IPv4, and claiming it too would leave the tie unresolved. A standalone IPv6 column, and
+    // an IPv6 alternative with no IPv4 sibling, never reach here and still accept it.
+    public bool ClaimsValue(object value) => value is IPAddress address && address.AddressFamily == AddressFamily.InterNetworkV6;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
