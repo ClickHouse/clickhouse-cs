@@ -317,7 +317,7 @@ public class NullableColumnCodecTests
 
     [Test]
     public void Resolve_UnsupportedInner_ThrowsNotSupported()
-        => Assert.Throws<NotSupportedException>(() => Resolve("Nullable(Point)"));
+        => Assert.Throws<NotSupportedException>(() => Resolve("Nullable(NotAType)"));
 
     [Test]
     public void Resolve_Nullable_StampsFullTypeName()
