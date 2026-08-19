@@ -25,9 +25,12 @@ internal static class ArrayColumnCodec
     /// <param name="node">The parsed <c>Array</c> type node; its single argument is the inner type.</param>
     /// <param name="context">The resolution context, forwarded to the inner codec's factory.</param>
     /// <param name="registry">The registry used to resolve the inner type's codec.</param>
+    /// <param name="typeName">The name to report as the codec's <see cref="IColumnCodec.TypeName"/>, or null to use
+    /// <paramref name="node"/>'s own. An alias whose structure is an array (<c>Ring</c>, <c>Polygon</c>) passes its
+    /// own name so diagnostics name the type the server sent rather than the structure it stands for.</param>
     /// <returns>The codec, closed over the inner codec's element type.</returns>
     /// <exception cref="FormatException">The type has other than one argument.</exception>
-    public static IColumnCodec Create(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry)
+    public static IColumnCodec Create(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry, string typeName = null)
     {
         if (node.Arguments.Count != 1)
         {
@@ -35,7 +38,7 @@ internal static class ArrayColumnCodec
         }
 
         IColumnCodec inner = registry.ResolveNode(node.Arguments[0], in context);
-        return Factories.GetOrAdd(inner.ElementType, BuildFactory)(node.ToString(), inner);
+        return Factories.GetOrAdd(inner.ElementType, BuildFactory)(typeName ?? node.ToString(), inner);
     }
 
     // Closes ArrayColumnCodec<T> over elementType once — via a generic helper invoked reflectively — and returns a
