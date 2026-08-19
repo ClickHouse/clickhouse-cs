@@ -47,9 +47,13 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v7
 
+    # As in verify_changelog, the version reaches the run script through the environment. This
+    # job runs on windows-latest, where the default shell is PowerShell, hence $env:VERSION.
     - name: Build & pack
       id: build_pack
-      run: dotnet build ClickHouse.Driver\ClickHouse.Driver.csproj --configuration Release /p:Version=${{ inputs.version }}
+      env:
+        VERSION: ${{ inputs.version }}
+      run: dotnet build ClickHouse.Driver\ClickHouse.Driver.csproj --configuration Release "/p:Version=$env:VERSION"
 
     - name: Upload unsigned package
       uses: actions/upload-artifact@v7
@@ -176,7 +180,7 @@ jobs:
         name: package
     - name: Create Release
       id: create_release
-      uses: ncipollo/release-action@v1
+      uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
       with:
         artifacts: "*.nupkg,*.snupkg"
         commit: ${{ github.sha }}
