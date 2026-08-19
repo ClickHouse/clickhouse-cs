@@ -94,10 +94,9 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <param name="source">The source the client rents its connections from.</param>
     /// <param name="options">The client configuration, or null for the defaults.</param>
     /// <param name="optionsAreOwned">
-    /// True when <paramref name="options"/> already holds a private snapshot of its custom settings, so this
-    /// client can share it rather than take another copy. Only a session passes true, handing over the options its
-    /// parent client already owns — which also makes <c>session.Options</c> the very instance
-    /// <c>client.Options</c> is, rather than an equal-looking copy.
+    /// True when <paramref name="options"/> already holds a private snapshot of its custom settings, so this client
+    /// can share it rather than copy it again. Only a session passes true, which also makes <c>session.Options</c>
+    /// the very instance <c>client.Options</c> is rather than an equal-looking copy.
     /// </param>
     internal ClickHouseTcpClient(
         IConnectionSource source,
@@ -118,8 +117,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <summary>
     /// The compiled POCO read and write plans. Per-client, as HTTP's registry is: the client is meant to be a
     /// singleton, so the reflection and the compiles are amortized anyway, and a per-client cache cannot pin a type
-    /// whose AssemblyLoadContext the caller unloads. A session shares the registry of the client it came from, so
-    /// running the same query through a session costs no second compile.
+    /// whose AssemblyLoadContext the caller unloads. A session shares the registry of the client it came from.
     /// </summary>
     internal PocoTypeRegistry PocoTypes { get; init; } = new();
 
@@ -422,21 +420,14 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// one operation to the next — a temporary table stays visible, and a <c>SET</c> keeps applying.
     /// </summary>
     /// <remarks>
-    /// <para>
     /// <b>Dispose it, and keep it short.</b> The session holds one of the pool's
-    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/> connections for its whole lifetime, so a session left
-    /// open is capacity the client cannot use, and as many sessions as the pool is wide leaves nothing for anything
-    /// else — including for opening the next session, which then waits out
-    /// <see cref="ClickHouseTcpClientOptions.PoolTimeout"/>. Disposal closes the connection rather than pooling it,
-    /// since it carries the session's state, so it also costs the next caller a reconnect. Dispose the sessions
-    /// before the client, too: an open one holds a slot the client's own disposal waits out
-    /// <see cref="ClickHouseTcpClientOptions.PoolTimeout"/> for before aborting it.
-    /// </para>
-    /// <para>
-    /// The session runs one operation at a time and refuses a second started while the first is still going; the
-    /// client itself is what runs operations concurrently. Both may be used at once — a session's connection is its
-    /// own, and the pool keeps serving the client from the rest.
-    /// </para>
+    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/> connections for its whole lifetime, so as many sessions as
+    /// the pool is wide leaves nothing for anything else, including for opening the next session — which then waits
+    /// out <see cref="ClickHouseTcpClientOptions.PoolTimeout"/>. Disposal closes the connection rather than pooling
+    /// it, since it carries the session's state, so it costs the next caller a reconnect. Dispose the sessions before
+    /// the client: an open one holds a slot the client's own disposal waits out <c>PoolTimeout</c> for. A session runs
+    /// one operation at a time, while the client itself runs them concurrently; both may be used at once, the
+    /// session's connection being its own.
     /// </remarks>
     /// <param name="cancellationToken">A token to observe while waiting for and establishing the connection.</param>
     /// <returns>A session pinned to one connection.</returns>

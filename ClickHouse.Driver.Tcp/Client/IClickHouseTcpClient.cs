@@ -20,14 +20,14 @@ public interface IClickHouseTcpClient : IClickHouseTcpOperations
 {
     /// <summary>
     /// Opens a session: one connection, taken from the pool and held until the session is disposed, that every
-    /// operation on the returned object runs over. That is what carries the server-side state a single connection
-    /// owns — temporary tables, and the settings a <c>SET</c> statement changes — from one operation to the next.
+    /// operation on the returned object runs over. That is what carries a connection's server-side state — a
+    /// temporary table, a <c>SET</c> — from one operation to the next.
     /// </summary>
     /// <remarks>
     /// <b>Dispose it, and keep it short.</b> A session holds one of the pool's
-    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/> connections for its whole lifetime, so as many
-    /// sessions as the pool is wide leaves nothing for anything else. Disposal closes the connection rather than
-    /// pooling it — see <see cref="IClickHouseTcpSession"/> for why — so it costs a reconnect.
+    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/> connections for its whole lifetime, so as many sessions
+    /// as the pool is wide leaves nothing for anything else. Disposal closes the connection rather than pooling it
+    /// (see <see cref="IClickHouseTcpSession"/>), so it costs a reconnect.
     /// </remarks>
     /// <param name="cancellationToken">A token to observe while waiting for and establishing the connection.</param>
     /// <returns>A session pinned to one connection.</returns>
