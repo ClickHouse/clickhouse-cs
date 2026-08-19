@@ -15,7 +15,7 @@ namespace ClickHouse.Driver.Tcp;
 /// <remarks>
 /// The operations are the client's own, run over a source that hands out the pinned connection instead of a pooled
 /// one (<see cref="PinnedConnectionSource"/>). Nothing here re-implements a query or an insert, so a session cannot
-/// drift from the client, and the pinning rules live in one place rather than in each operation.
+/// drift from the client.
 /// </remarks>
 [Experimental("CHTCP0001")]
 internal sealed class ClickHouseTcpSession : IClickHouseTcpSession
@@ -101,16 +101,11 @@ internal sealed class ClickHouseTcpSession : IClickHouseTcpSession
     /// unaffected and keeps working.
     /// </summary>
     /// <returns>
-    /// A task that completes when the session is closed — which is not always when its connection is: an operation
+    /// A task that completes when the session is closed, which is not always when its connection is: an operation
     /// still running is aborted rather than waited for, and it is that operation's unwinding, not this call, that
-    /// gives the slot back. See <see cref="PinnedConnectionSource.DisposeAsync"/> for what that costs when the
-    /// operation is one nothing can resume.
+    /// gives the slot back — see <see cref="PinnedConnectionSource.DisposeAsync"/> for what that costs when nothing
+    /// can resume the operation. A second call does nothing rather than waiting for the first, a session having one
+    /// owner.
     /// </returns>
-    /// <remarks>
-    /// Disposing the inner client disposes the pinned source, which is where the closing happens. The inner client
-    /// owns no pool of its own, so there is nothing else to tear down. A second call does nothing rather than
-    /// waiting for the first, a session having one owner; the pool, which does not, makes concurrent disposals
-    /// wait.
-    /// </remarks>
     public ValueTask DisposeAsync() => operations.DisposeAsync();
 }
