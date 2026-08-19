@@ -1264,6 +1264,132 @@ public sealed class InsertRoundTripCase
                 pooledOffsets: false,
                 ownsFields: false),
             MergeSettings(NestedSettings, JsonSettings));
+
+        // The geo aliases name structures already covered above — Point is Tuple(Float64, Float64) and the rest
+        // are arrays over it — so what these cases prove is not the layout but that the alias resolves to it: the
+        // server puts "Point"/"Ring"/… in the column header, and the client has to accept that name in both
+        // directions. Like Array and Tuple, they take no Nullable case: Nullable(Point) needs
+        // enable_nullable_tuple_type and the server rejects a Nullable array outright.
+        // Supplied as a flat column of tuples rather than a dense TupleColumn: that column's convenience
+        // constructor derives its children's types by re-parsing its own type name, which an alias is not. The
+        // dense shape is still covered — the read comes back as one, and the dense-readback case re-inserts it.
+        yield return Same(
+            "Point",
+            "Point",
+            name => new ArrayColumn<(double, double)>(name, "Point", new[] { (0d, 0d), (1.5d, -2.5d), (double.MinValue, double.MaxValue) }));
+
+        // Ring and LineString share a structure and differ only in name, so each needs its own case — a
+        // registration that mapped one of them to the wrong codec would still pass the other's.
+        yield return Same(
+            "Ring",
+            "Ring",
+            name => new ArrayColumn<(double, double)[]>(name, "Ring", new[]
+            {
+                new[] { (0d, 0d), (1d, 0d), (1d, 1d), (0d, 0d) },
+                Array.Empty<(double, double)>(),
+            }));
+
+        yield return Same(
+            "LineString",
+            "LineString",
+            name => new ArrayColumn<(double, double)[]>(name, "LineString", new[]
+            {
+                new[] { (0d, 0d), (1.5d, 2.5d) },
+                Array.Empty<(double, double)>(),
+            }));
+
+        // Polygon and MultiLineString likewise share a structure (an array of the array-of-Point aliases) and
+        // differ only in which alias sits underneath.
+        yield return Same(
+            "Polygon",
+            "Polygon",
+            name => new ArrayColumn<(double, double)[][]>(name, "Polygon", new[]
+            {
+                new[] { new[] { (0d, 0d), (2d, 0d), (2d, 2d), (0d, 0d) }, new[] { (0.5d, 0.5d), (1d, 0.5d), (1d, 1d), (0.5d, 0.5d) } },
+                Array.Empty<(double, double)[]>(),
+            }));
+
+        yield return Same(
+            "MultiLineString",
+            "MultiLineString",
+            name => new ArrayColumn<(double, double)[][]>(name, "MultiLineString", new[]
+            {
+                new[] { new[] { (0d, 0d), (1d, 1d) }, new[] { (2d, 2d), (3d, 3d) } },
+                Array.Empty<(double, double)[]>(),
+            }));
+
+        yield return Same(
+            "MultiPolygon",
+            "MultiPolygon",
+            name => new ArrayColumn<(double, double)[][][]>(name, "MultiPolygon", new[]
+            {
+                new[] { new[] { new[] { (0d, 0d), (2d, 0d), (2d, 2d), (0d, 0d) } } },
+                Array.Empty<(double, double)[][]>(),
+            }));
+
+        // The alias inside a composite: the registry has to reach it while resolving a child node, not only as a
+        // whole column type.
+        yield return Arrays("Point", new[] { (0d, 0d), (1d, 2d) }, Array.Empty<(double, double)>());
+
+        // No Nullable(Point) case, though the server accepts the type behind enable_nullable_tuple_type and this
+        // client reads it correctly. Writing it hits a pre-existing defect that has nothing to do with geo:
+        // NullableColumnCodec forwards the *outer* column to the inner's state-prefix phase, and TupleColumnCodec
+        // builds its write state there, so it is handed a column of (double, double)? where it needs
+        // (double, double). Any Nullable(Tuple(...)) fails the same way. Tracked as an I6 residual.
+
+        // Geometry is a Variant over the six aliases, and the column header carries only "Geometry" — the client
+        // expands it and picks the discriminator order itself. A row against each of the six discriminators, plus a
+        // NULL on 255, catches an order that disagrees with the server for Point and MultiPolygon, whose shapes are
+        // unique. It cannot catch a transposition within the two structurally identical pairs — the block is
+        // byte-identical either way — so GeometryIntegrationTests reads variantType() back for that.
+        // The insert source is the dense column: a gathered row of one of those pairs would name neither
+        // alternative, so only explicit discriminators can express this column.
+        if (TcpServerFeatures.Has(TcpFeature.Geometry))
+        {
+            yield return Same("Geometry", "Geometry", name => BuildGeometryColumn(name));
+        }
+
+        // SimpleAggregateFunction(func, T) encodes as a bare T — the function only tells the server how to merge
+        // rows — so these cases prove the alias is transparent, including when T is itself composite or nullable.
+        // A Memory table stores the column as declared, so the round-trip never merges and the value is what was
+        // written.
+        yield return Same(
+            "SimpleAggregateFunction(sum, UInt64)",
+            "SimpleAggregateFunction(sum, UInt64)",
+            name => PrimitiveColumn<ulong>.FromValues(name, "SimpleAggregateFunction(sum, UInt64)", new ulong[] { 0, 1, ulong.MaxValue }));
+
+        yield return Same(
+            "SimpleAggregateFunction(anyLast, Nullable(String))",
+            "SimpleAggregateFunction(anyLast, Nullable(String))",
+            name => new ArrayColumn<string>(name, "SimpleAggregateFunction(anyLast, Nullable(String))", new[] { "a", null, string.Empty }));
+
+        yield return Same(
+            "SimpleAggregateFunction(groupArrayArray, Array(UInt64))",
+            "SimpleAggregateFunction(groupArrayArray, Array(UInt64))",
+            name => new ArrayColumn<ulong[]>(name, "SimpleAggregateFunction(groupArrayArray, Array(UInt64))", new[]
+            {
+                new ulong[] { 1, 2, 3 },
+                Array.Empty<ulong>(),
+            }));
+    }
+
+    // One row per Geometry alternative, in declared discriminator order, plus a NULL. Each alternative column holds
+    // only the rows that selected it — one each here — so every child is a single-row column.
+    private static IColumn BuildGeometryColumn(string name)
+    {
+        var square = new[] { (0d, 0d), (2d, 0d), (2d, 2d), (0d, 0d) };
+        IColumn[] alternatives =
+        {
+            new ArrayColumn<(double, double)[]>(name, "LineString", new[] { new[] { (0d, 0d), (1d, 1d) } }),
+            new ArrayColumn<(double, double)[][]>(name, "MultiLineString", new[] { new[] { new[] { (2d, 2d), (3d, 3d) } } }),
+            new ArrayColumn<(double, double)[][][]>(name, "MultiPolygon", new[] { new[] { new[] { square } } }),
+            new ArrayColumn<(double, double)>(name, "Point", new[] { (1.5d, -2.5d) }),
+            new ArrayColumn<(double, double)[][]>(name, "Polygon", new[] { new[] { square } }),
+            new ArrayColumn<(double, double)[]>(name, "Ring", new[] { square }),
+        };
+
+        var discriminators = new byte[] { 0, 1, 2, 3, 4, 5, IVariantColumn.NullDiscriminator };
+        return new VariantColumn(name, "Geometry", discriminators, alternatives, rowCount: discriminators.Length, pooledDiscriminators: false, ownsColumns: false);
     }
 
     // Merges two settings dictionaries into one (later entries win) for cases needing both flags.

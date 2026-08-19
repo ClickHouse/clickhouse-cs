@@ -166,6 +166,26 @@ internal sealed class ColumnCodecRegistry
         // so every JSON spelling resolves to the same codec and the arguments ride along in the type name only.
         AddFactory("JSON", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => JsonStringColumnCodec.Create(node));
 
+        // The geo aliases name structures the codecs above already encode — Point is a two-element Float64 tuple and
+        // the rest are arrays over it. The server puts the alias in the column header, so each resolves its structure
+        // and keeps its own name. Ring and LineString share a structure, as do Polygon and MultiLineString.
+        AddFactory("Point", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreatePoint(in context, registry));
+        AddFactory("Ring", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateRing(in context, registry));
+        AddFactory("LineString", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateLineString(in context, registry));
+        AddFactory("Polygon", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreatePolygon(in context, registry));
+        AddFactory("MultiLineString", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateMultiLineString(in context, registry));
+        AddFactory("MultiPolygon", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateMultiPolygon(in context, registry));
+
+        // Geometry is an alias too, but to a Variant over the six above rather than to a nested array. The header
+        // carries only "Geometry", so the client expands it itself, in the server's name-sorted discriminator order.
+        AddFactory("Geometry", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateGeometry(in context, registry));
+
+        // SimpleAggregateFunction(func, T) encodes as a bare T, so it resolves to T's codec and the function name
+        // rides in the type string only. AggregateFunction is unrelated in every way but its name: its body is the
+        // function's own intermediate state, so it is refused with the query that reads it.
+        AddFactory("SimpleAggregateFunction", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => AggregateFunctionColumnCodecs.CreateSimple(node, in context, registry));
+        AddFactory("AggregateFunction", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => AggregateFunctionColumnCodecs.RefuseAggregateFunction(node));
+
         return new ColumnCodecRegistry(byName);
     }
 }
