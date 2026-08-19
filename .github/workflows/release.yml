@@ -178,13 +178,13 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         name: package
+    # gh is preinstalled on the runner, so creating the release needs no third-party action.
+    # draft and prerelease default to false. The version goes through the environment, as
+    # everywhere else in this file. This job does not check out the repository, so gh cannot
+    # infer which repository to act on from a git remote -- hence GH_REPO.
     - name: Create Release
-      id: create_release
-      uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
-      with:
-        artifacts: "*.nupkg,*.snupkg"
-        commit: ${{ github.sha }}
-        tag: ${{ inputs.version }}
-        generateReleaseNotes: true
-        draft: false
-        prerelease: false
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        VERSION: ${{ inputs.version }}
+      run: gh release create "$VERSION" --target "$GITHUB_SHA" --generate-notes *.nupkg *.snupkg
