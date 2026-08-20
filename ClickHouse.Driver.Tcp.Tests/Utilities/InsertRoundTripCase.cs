@@ -1367,6 +1367,69 @@ public sealed class InsertRoundTripCase
             yield return Same("Geometry", "Geometry", name => BuildGeometryColumn(name));
         }
 
+        // QBit(T, N): the vector's bit planes transposed, so the values a row round-trips through are spread one
+        // bit at a time across the whole body. The insert source is the ergonomic ArrayColumn<float[]>, which
+        // takes the transposing write path; the dense read-back is re-inserted by the shared dense case below,
+        // which is what covers the plane-copy path. Signed zero, infinity and NaN pin the sign and exponent
+        // planes, which an all-positive vector leaves untouched.
+        if (TcpServerFeatures.Has(TcpFeature.QBit))
+        {
+            yield return Same(
+                "QBit(Float32, 4)",
+                "QBit(Float32, 4)",
+                name => new ArrayColumn<float[]>(name, "QBit(Float32, 4)", new[]
+                {
+                    new[] { 1f, 2f, 3f, 4f },
+                    new[] { 0f, -0f, float.MaxValue, float.MinValue },
+                    new[] { float.Epsilon, float.PositiveInfinity, float.NegativeInfinity, float.NaN },
+                }));
+
+            // A dimension that is not a multiple of 8 leaves the high bits of each row's last plane byte unused;
+            // 9 spans two bytes so a mis-set stride shows up as a shifted element rather than a lost one.
+            yield return Same(
+                "QBit(Float32, 9)",
+                "QBit(Float32, 9)",
+                name => new ArrayColumn<float[]>(name, "QBit(Float32, 9)", new[]
+                {
+                    new[] { 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f },
+                    new[] { -1f, 0f, -0f, 0.5f, -0.5f, 1e10f, -1e10f, 1e-10f, -1e-10f },
+                }));
+
+            // Float64 is the 64-plane path and its own accumulator width.
+            yield return Same(
+                "QBit(Float64, 3)",
+                "QBit(Float64, 3)",
+                name => new ArrayColumn<double[]>(name, "QBit(Float64, 3)", new[]
+                {
+                    new[] { 1d, -2d, 3.5d },
+                    new[] { double.MaxValue, double.MinValue, double.Epsilon },
+                    new[] { 0d, -0d, double.NaN },
+                }));
+
+            // BFloat16 keeps only the float's high 16 bits, so every value here is one a brain-float represents
+            // exactly — otherwise the round-trip would compare the narrowed value against the original.
+            yield return Same(
+                "QBit(BFloat16, 4)",
+                "QBit(BFloat16, 4)",
+                name => new ArrayColumn<float[]>(name, "QBit(BFloat16, 4)", new[]
+                {
+                    new[] { 1f, 2f, -3f, 0f },
+                    new[] { -0f, 0.5f, -0.5f, 256f },
+                }));
+
+            // Nullable(QBit(...)) is accepted by the server and round-trips NULL, which is the only thing that
+            // reads the codec's all-zero placeholder vector.
+            yield return Same(
+                "Nullable(QBit(Float32, 4))",
+                "Nullable(QBit(Float32, 4))",
+                name => new ArrayColumn<float[]>(name, "Nullable(QBit(Float32, 4))", new[]
+                {
+                    new[] { 1f, 2f, 3f, 4f },
+                    null,
+                    new[] { -1f, -2f, -3f, -4f },
+                }));
+        }
+
         // SimpleAggregateFunction(func, T) encodes as a bare T — the function only tells the server how to merge
         // rows — so these cases prove the alias is transparent, including when T is itself composite or nullable
         // and when the function carries parameters.
