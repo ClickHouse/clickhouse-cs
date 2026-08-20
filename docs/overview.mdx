@@ -439,6 +439,24 @@ var options = new InsertOptions
 * Use `RowBinaryFormat.RowBinaryWithDefaults` in `InsertOptions.Format` if you want the server to apply DEFAULT values for columns not provided.
 </Note>
 
+##### How a batch is sent {#bulk-insert-transport}
+
+`InsertBinaryAsync` serializes rows straight into the HTTP request body rather than building the
+batch in memory first. The request therefore carries no `Content-Length` and is framed with
+`Transfer-Encoding: chunked`. This is true for both overloads, compressed or not. A proxy, WAF or
+gateway between you and the server has to accept a chunked request body.
+
+A value the driver cannot encode for its target column throws
+`ClickHouseBulkCopySerializationException`, whose `Row` property holds the `object[]` that failed
+and whose `InnerException` is the underlying error. A network failure part way through the upload
+surfaces as the transport exception itself — `IOException`, `OperationCanceledException` or
+`ObjectDisposedException` — not wrapped in a serialization exception.
+
+<Note>
+*`ClickHouseClient.MemoryStreamManager` is obsolete.* Batches no longer buffer through a
+`RecyclableMemoryStream`, so the property has no effect. It will be removed in a future version.
+</Note>
+
 #### POCO inserts {#poco-insert}
 
 Instead of constructing `object[]` arrays, you can insert strongly-typed POCO objects directly. Register the type once, then pass `IEnumerable<T>`:
@@ -683,6 +701,41 @@ INSERT INTO table VALUES ({val1:Int32}, {val2:Array(UInt8)})
 SQL 'bind' parameters are passed as HTTP URI query parameters, so using too many of them may result in a "URL too long" exception. Use `InsertBinaryAsync` for bulk data insertion to avoid this limitation.
 </Note>
 
+#### ADO-style `@name` placeholders {#at-style-placeholders}
+
+The driver also accepts `@name` placeholders, which ORMs such as Dapper emit. These are a
+client-side convenience: before the request is sent, each one is rewritten to
+`{name:ResolvedType}`, so the server never sees an `@`. See
+[type resolution](#parameter-type-mapping) for how the type is chosen.
+
+Rewriting happens only where the placeholder is **code**. The driver lexes the statement the way the
+server does and leaves these regions alone:
+
+- Single-quoted strings, double-quoted identifiers and backtick identifiers. A backslash escape
+  (`\'`) or a doubled delimiter (`''`) does not end the region.
+- `--`, `//`, `# ` and `#!` line comments. A bare `#` is not a comment marker.
+- `/* ... */` block comments, which nest.
+- `$$ ... $$` and `$tag$ ... $tag$` heredocs.
+
+So `'user@id'` stays a literal instead of being corrupted into `'user{id:Int32}'`.
+
+A `$` is part of a placeholder name, so `@id$x` refers to a parameter named `id$x`. A `$tag$`
+heredoc opens only where a token can start — after whitespace or punctuation, not in the middle of
+an identifier — so the `b$c$` in `WITH 1 AS b$c$ SELECT @id` is an identifier and the placeholder
+after it is still rewritten.
+
+A `@name` with no matching parameter is left untouched for the server to reject. Matching is
+case-sensitive, so `@ID` does not bind a parameter named `id`.
+
+<Note>
+The `{name:Type}` hint scanner follows the same rules, so a hint inside a string or comment is
+likewise ignored. Declaring two different types for one name throws `ArgumentException`.
+
+To turn the rewrite off, set the `ClickHouse.Driver.DisableReplacingParameters` AppContext switch
+before the first use of the driver. Only the text rewrite stops; parameters are still sent, so
+queries written with native `{name:Type}` syntax keep working.
+</Note>
+
 #### Identifier parameters {#identifier-parameters}
 
 The `Identifier` parameter type lets you safely bind a database, table, or column name instead of a quoted string literal. Use it via the `{name:Identifier}` syntax in SQL, or by setting `ClickHouseDbParameter.ClickHouseType = "Identifier"`:
@@ -911,6 +964,22 @@ You can also set a converter per-query via `QueryOptions.ReadValueConverter`; wh
 
 The converter is invoked once per column with the entire deserialized cell value, it does **not** recurse into composite containers. For an `Array(Int32)` column the value passed in is an `int[]`; for `Tuple(Int32, String)` it is an `ITuple`.
 
+**Which overload runs:**
+
+Both overloads must agree, because the one the driver calls depends on how the caller read the
+column:
+
+- `ConvertValue<T>` — the typed accessors `GetByte`, `GetSByte`, `GetInt16`/`32`/`64`,
+  `GetUInt16`/`32`/`64`, `GetFloat`, `GetDouble`, `GetGuid`, `GetDateTime`, `GetIPAddress`,
+  `GetBigInteger` and `GetFieldValue<T>`, plus every box-free column on the
+  [POCO read path](#poco-read-converters).
+- `ConvertValue` (boxed) — `GetValue`, `GetValues`, the indexers, `GetChar`, `GetTuple`, and the
+  coercing paths in `GetBoolean`, `GetDecimal` and `GetString`.
+
+`IsDBNull` runs no converter at all: it reads the null flag directly, so a converter can never
+change whether a value counts as null. `TryGetEnumOrdinal` likewise bypasses it — see
+[reading an enum's ordinal](#ado-net-reader-enum-ordinal).
+
 The converter works with the ADO.NET `ClickHouseConnection` path — the settings are inherited by connections created from the client.
 
 ---
@@ -995,6 +1064,24 @@ Host=localhost;AcceptEncoding=br, gzip
 
 Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends no `Accept-Encoding` at all.
 
+`Accept-Encoding` can be set in four places. The first of these that names a codec wins:
+
+1. `QueryOptions.AcceptEncoding` (or `ClickHouseCommand.AcceptEncoding`)
+2. `CustomHeaders["Accept-Encoding"]` on the query
+3. `CustomHeaders["Accept-Encoding"]` on the client
+4. `ClickHouseClientSettings.AcceptEncoding`, or the `AcceptEncoding` connection-string keyword
+
+If none of them does, the driver sends its default list. A value that names no codec — null, empty,
+whitespace, or only commas — counts as unset and falls through to the next place. It does not turn
+compression off; use `identity` for that.
+
+<Note>
+A custom header is opaque to the driver, so setting `Accept-Encoding` through `CustomHeaders`
+changes the header but does **not** force `enable_http_compression=1`. ClickHouse then ignores the
+header unless something else has set the flag. Prefer the `AcceptEncoding` property, which sets
+both.
+</Note>
+
 **The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. The default includes `zstd`, so a default query is answered with zstd; the remaining tokens act as a fallback. `br` is decodable but not advertised by default.
 
 How the codecs compare on payload size, server CPU and client CPU depends on your data, your link and the server's `http_zlib_compression_level` (shipped default: 3) — see [Tuning compression](#tuning-compression).
@@ -1034,25 +1121,80 @@ See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse
 
 #### Insert (request) compression {#insert-compression}
 
-Zstd is the default codec for inserts. The library includes a number of classes that allow you to control the codec and compression level:
-
-- `ZstdCompressor`
-- `Lz4Compressor`
-- `GZipCompressor`
-- `BrotliCompressor`
-
-Set the compressor of your choice in `InsertOptions`:
+Zstd is the default codec for inserts: `InsertOptions.Compressor` starts as `ZstdCompressor.Default`,
+which is zstd at level 3. Set it to another compressor to change the codec, or to `null` to send the
+body uncompressed.
 
 ```csharp
 var options = new InsertOptions { Compressor = GZipCompressor.Default };  // Content-Encoding: gzip
 await client.InsertBinaryAsync("events", columns, rows, options);
 ```
 
+Four codecs ship with the driver. Each has a `Default` instance, and a constructor that takes a level
+and the size of the write buffer:
+
+| Compressor | `Content-Encoding` | Constructor | `Default` |
+|---|---|---|---|
+| `ZstdCompressor` | `zstd` | `(int level = 3, int bufferSize = 262144)` | level 3 |
+| `Lz4Compressor` | `lz4` | `(Lz4Level level = Lz4Level.Fast, int bufferSize = 262144)` | `Lz4Level.Fast` |
+| `GZipCompressor` | `gzip` | `(CompressionLevel level = CompressionLevel.Fastest, int bufferSize = 262144)` | `Fastest` |
+| `BrotliCompressor` | `br` | `(CompressionLevel level = CompressionLevel.Fastest, int bufferSize = 262144)` | `Fastest` |
+
+```csharp
+var options = new InsertOptions { Compressor = new ZstdCompressor(level: 1) };
+```
+
+`Lz4Level` has the members `Fast` (0), `High3` to `High9`, `Optimal10`, `Optimal11` and `Max` (12).
+
+`ZstdCompressor` is the only one that checks its level: a value outside
+`ZstdCompressor.MinLevel` to `ZstdCompressor.MaxLevel` throws `ArgumentOutOfRangeException`. Read
+those two properties rather than hard-coding the bounds, because they come from the codec and change
+with its version. Negative levels are legal and trade ratio for speed. Every constructor rejects a
+`bufferSize` of zero or less.
+
+<Note>
+*Share compressor instances.* Every `Default` is one shared instance, and all four compressors are
+safe to use from several threads at the same time — which is what happens when
+`InsertOptions.MaxDegreeOfParallelism` is above 1, since one insert uses one compressor for every
+batch. None of them implements `IDisposable`. Construct your own instance once and reuse it, the
+same way `Default` is used.
+</Note>
+
+##### A custom codec {#custom-compressor}
+
+`IClickHouseCompressor` is public, and an implementation must provide only two members:
+
+```csharp
+public sealed class MyCompressor : IClickHouseCompressor
+{
+    public string ContentEncoding => "my-codec";
+
+    public Stream Compress(Stream destination, bool leaveOpen) => /* a compressing write stream */;
+}
+```
+
+The server must accept the `Content-Encoding` you name. The remaining members —
+`Decompress`, `MethodByte`, `MaxEncodedLength`, `Encode` and `Decode` — have default
+implementations that throw `NotSupportedException`, so override only the ones your codec needs.
+Implement `Decompress` to decode response bodies as well as compress requests, and raise
+`InvalidDataException` from the stream it returns when a body is corrupt or in the wrong format.
+
 `InsertOptions.Compressor` governs a binary insert only. The driver's other request bodies are compressed by different rules, and none of them goes through it:
 
 - **Every SQL-text request** (`ExecuteReaderAsync`, `ExecuteScalarAsync`, `ExecuteNonQueryAsync`, `QueryAsync<T>`, `ExecuteRawResultAsync`, the ADO.NET layer) sends its statement with `Content-Encoding: gzip` whenever `UseCompression` is `true` — i.e. by default. The codec is not configurable: `AcceptEncoding` steers the response only, so gzip or nothing is the choice. `Compression=false` sends the statement in the clear. Statements are small, so this is rarely worth thinking about — but it is worth knowing when you are watching requests in a proxy or a packet capture.
 - **A multipart body** — a query whose parameters are sent as form data (`UseFormDataParameters=true`) — is always sent uncompressed, whatever `UseCompression` says.
 - **A raw upload** (`InsertRawStreamAsync`, `PostStreamAsync`) takes its own per-call flag and consults neither `UseCompression` nor `InsertOptions.Compressor`: gzip when the flag is set, uncompressed otherwise. Note that `InsertRawStreamAsync`'s `useCompression` parameter defaults to `true`, so a raw upload is gzipped unless you pass `false` — even with `Compression=false` on the client.
+
+<Warning>
+*The insert default changed in 1.4.0.* Binary inserts were compressed with gzip before, and are
+compressed with zstd now. The `Content-Encoding` header tells the server how to read the body, so an
+intermediary that inspects or re-encodes request bodies and does not understand zstd fails the
+insert. To get the earlier behavior back:
+
+```csharp
+var options = new InsertOptions { Compressor = GZipCompressor.Default };
+```
+</Warning>
 
 ---
 
@@ -1161,15 +1303,27 @@ Use `InsertRawStreamAsync` to insert data directly from file or memory streams i
 **Insert from a CSV file:**
 
 ```csharp
-await using var fileStream = File.OpenRead("data.csv");
-
 using var response = await client.InsertRawStreamAsync(
     table: "my_table",
-    stream: fileStream,
+    stream: File.OpenRead("data.csv"),
     format: "CSV",
     columns: ["id", "product", "price"] // Optional: specify columns
 );
 ```
+
+<Warning>
+*The driver takes ownership of the stream.* `InsertRawStreamAsync` and `PostStreamAsync` dispose the
+stream you give them once the request finishes, whether it succeeded or failed. Do not dispose it
+yourself and do not reuse it afterwards — which is why the example above does not wrap the
+`FileStream` in a `using`.
+
+A `using` of your own runs after the driver has already disposed the stream. For a `FileStream` or
+`MemoryStream` that second call is harmless, but for a stream whose `Dispose` returns a pooled
+buffer or drops a reference count it releases the resource twice.
+
+Ownership passes only once the arguments are accepted: if the call throws `ArgumentException` or
+`ArgumentNullException` for a missing table, stream or format, the stream is still yours.
+</Warning>
 
 <Note>
 See the [format settings documentation](/reference/settings/formats) for options to control data ingestion behavior.
@@ -1297,6 +1451,187 @@ while (reader.Read())
     }
 }
 ```
+
+#### Read a row before you read a value {#ado-net-reader-current-row}
+
+Every accessor that reads a *value* needs a current row. Before the first `Read()`, and after
+`Read()` has returned `false`, all of these throw `InvalidOperationException`:
+
+`this[int]`, `this[string]`, `GetValue`, `GetValues`, `GetFieldValue<T>`, `IsDBNull`,
+`GetBoolean`, `GetByte`, `GetChar`, `GetDateTime`, `GetDecimal`, `GetDouble`, `GetFloat`,
+`GetGuid`, `GetInt16`, `GetInt32`, `GetInt64`, `GetSByte`, `GetString`, `GetUInt16`, `GetUInt32`,
+`GetUInt64`, `GetBigInteger`, `GetIPAddress`, `GetTuple`, `TryGetEnumOrdinal`, `MapTo<T>`, and the
+inherited `GetProviderSpecificValue`, `GetProviderSpecificValues`, `IsDBNullAsync` and
+`GetFieldValueAsync<T>`.
+
+Column *metadata* needs no row, and keeps working: `FieldCount`, `GetName`, `GetOrdinal`,
+`GetFieldType`, `GetDataTypeName`, `GetSchemaTable`, `GetColumnSchema`, `HasRows`, `IsClosed`,
+`Depth`, `RecordsAffected` and `NextResult`.
+
+<Warning>
+*This is a behavior change in 1.4.0.* Earlier versions let a value accessor run with no current row
+and gave back whatever the buffer held. Because column values now live in typed storage, an
+unguarded read would return a plausible `0`, `false` or `Guid.Empty` that you could not tell from
+real data — so it throws instead. Code that read a value before its first `Read()` was already
+wrong, and now fails loudly.
+</Warning>
+
+<Note>
+*`HasRows` is not a row check.* It always returns `true`, even for an empty result, and `IsClosed`
+always returns `false`. Drive the loop from the return value of `Read()`.
+</Note>
+
+#### Reading an enum's ordinal {#ado-net-reader-enum-ordinal}
+
+An `Enum8` or `Enum16` column materializes as its **label**: `GetFieldType` reports `string`, and
+`GetString`, `GetValue` and `GetFieldValue<string>` all give you the label. The numeric accessors
+throw `InvalidCastException` on an enum column, because the value being held is a string.
+
+Use `TryGetEnumOrdinal` to get the number behind the label:
+
+```csharp
+if (reader.TryGetEnumOrdinal(ordinal, out int value))
+    Console.WriteLine(value);   // e.g. 1 for 'Active' in Enum8('Active' = 1)
+```
+
+It returns `true` and sets `value` for an `Enum8`/`Enum16` column, and for a `Nullable(Enum...)`
+column whose cell is not NULL. It returns `false`, with `value` set to `0`, for a NULL cell or for
+any column that is not an enum at the top level — including `Array(Enum8)`. The ordinal is the
+signed value from the wire, so it can be negative, and an `Enum16` ordinal can be larger than a
+byte.
+
+<Note>
+`TryGetEnumOrdinal` reads the ordinal from the column's own storage, so an installed
+[read value converter](#read-value-conversion) does not change it. The converter still applies to
+the label, so on the same cell `GetString` can report a converted label while `TryGetEnumOrdinal`
+reports the original ordinal.
+</Note>
+
+#### Column metadata {#ado-net-reader-schema}
+
+`GetSchemaTable()` describes the result columns. `GetColumnSchema()` is the framework extension
+built from the same data, so the two always agree.
+
+`NumericPrecision` and `NumericScale` are filled in only for the types that have them, and only
+from the **top-level** column type:
+
+| Column type | `NumericPrecision` | `NumericScale` |
+|---|---|---|
+| `Decimal(p, s)` | `p` | `s` |
+| `DateTime64(N)` | unset | `N` |
+| `Time64(N)` | unset | `N` |
+| `DateTime`, `Date`, `Date32`, `Time` | unset | unset |
+| everything else | unset | unset |
+
+`DateTime64(0)` reports a scale of `0`, not "unset". An inner type does not count, so
+`Array(Decimal(10, 2))` leaves both unset.
+
+`Nullable(...)` is unwrapped before precision and scale are read, so `Nullable(Decimal(9, 2))`
+reports the same numbers as `Decimal(9, 2)`. `AllowDBNull` is what tells you the column was
+nullable, and `DataType` is the unwrapped CLR type — never a `Nullable<T>`.
+
+`ColumnSize` is `-1` for every column except `Decimal`, where it is the width in bytes (4, 8, 16
+or 32). `ProviderType` is the driver's type string, which for a decimal is the sized name with the
+precision dropped — `Decimal(10, 2)` reports `Decimal64(2)`. Take the precision from
+`NumericPrecision`.
+
+<Note>
+`DbColumn.DataTypeName` is always null, because the schema table carries no such column. Use
+`GetDataTypeName(ordinal)` on the reader instead.
+</Note>
+
+### Listing columns with GetSchema {#ado-net-getschema}
+
+`ClickHouseConnection.GetSchema` reads column metadata out of `system.columns`. The connection does
+not have to be open.
+
+```csharp
+var all      = connection.GetSchema("Columns");
+var inDb     = connection.GetSchema("Columns", ["system", null]);
+var oneTable = connection.GetSchema("Columns", [null, "columns"]);   // every database
+```
+
+`"Columns"` is the only collection, and the name is matched case-sensitively. Any other name — and
+the parameterless `GetSchema()` — throws `NotSupportedException`.
+
+Two restrictions are supported: index 0 is the database and index 1 is the table. A `null` at either
+position means "no filter", so trailing nulls are fine. An empty string is a real filter value and
+matches nothing. A non-null value at index 2 or beyond throws `ArgumentException` rather than being
+ignored. Both restrictions are sent as query parameters, not pasted into SQL.
+
+The result has five string columns: `Database`, `Table`, `Name`, `ProviderType` and `DataType`.
+
+<Note>
+`DataType` here is a **string** — the CLR type name with `System.` removed, such as `Byte` — and not
+a `System.Type`. This differs from other ADO.NET providers.
+</Note>
+
+## Error handling {#error-handling}
+
+A failed query raises `ClickHouseServerException`, which derives from `DbException`. It carries the
+server's message, an `ErrorCode` taken from the `Code: N.` prefix the server writes, and a `Query`
+property holding the SQL that failed.
+
+### Errors with an empty body {#error-empty-body}
+
+A non-2xx response normally carries the error text in its body. Sometimes it does not — an upstream
+proxy, a load balancer or the ClickHouse Cloud edge can reject a request with a status code and
+nothing else. Rather than raise a blank exception, the driver builds the message from what it does
+have:
+
+```text
+ClickHouse server returned HTTP 503 (Service Unavailable) with an empty response body. X-ClickHouse-Exception-Code: 241.
+```
+
+The reason phrase appears only when the response carries one. `ErrorCode` is the value of the
+`X-ClickHouse-Exception-Code` response header when that header holds an integer, and `-1` otherwise
+— including when the header is present but not a number.
+
+This applies to every request the driver makes, queries and inserts alike. Responses that *do* carry
+a body are unaffected: the message is the server's text, exactly as before.
+
+### Errors after the response has started {#error-mid-stream}
+
+A query can fail after the server has already sent `200 OK` and started streaming rows — a
+`throwIf` that trips partway through a large result, a memory limit reached late, a disk read that
+fails. The status code has been sent by then and cannot be taken back, so ClickHouse appends the
+error to the body it is already writing.
+
+The driver finds that block and raises it as a `ClickHouseServerException` with the server's real
+message, from the call that hits the end of the stream:
+
+```csharp
+await using var reader = await client.ExecuteReaderAsync("SELECT throwIf(number = 200000) FROM numbers(400000)");
+
+while (reader.Read())   // throws ClickHouseServerException when the failure point is reached
+{
+    // ...
+}
+```
+
+Earlier versions surfaced this as a bare `HttpIOException` ("The response ended prematurely") or
+`EndOfStreamException`, with the server's message lost.
+
+This covers `ExecuteReaderAsync`, `ExecuteScalarAsync`, `QueryAsync<T>` — where it throws from
+`await foreach` — and the ADO.NET command layer, including ORMs reading through `DbDataReader`.
+Transport compression makes no difference; the driver scans the body after decoding it.
+
+<Note>
+Two paths do **not** get this, and still surface the transport exception:
+
+- `ExecuteNonQueryAsync`, which reads its row count without the scanner.
+- `ExecuteRawResultAsync` and the other raw-body APIs, which hand you the bytes untouched. A raw
+  export that fails mid-stream leaves the appended error block in the body for you to find.
+
+There is also a size limit: the driver keeps a 4 KiB window of the most recent bytes, so an error
+message larger than that — a message quoting a very long query, for example — is missed, and the
+original `IOException` is raised instead.
+</Note>
+
+An error that happens *before* the server commits the response is an ordinary 4xx/5xx and raises
+`ClickHouseServerException` through the normal path. Which of the two you get for a given failure
+depends on how much output the server had already flushed, so the same query can fail either way on
+different runs.
 
 ## Best practices {#best-practices}
 
@@ -1503,6 +1838,10 @@ Decimal type conversion is controlled via the UseCustomDecimals setting.
 
 <Note>
 By default, both `String` and `FixedString(N)` columns are returned as `string`. Set `ReadStringsAsByteArrays=true` in your connection string to read them as `byte[]` instead. This is useful when storing binary data that may not be valid UTF-8.
+
+The setting reaches strings nested inside other types too, so `Array(String)` reads as `byte[][]`
+and `Map(String, String)` as `Dictionary<byte[], byte[]>` — keys included. The one exception is a
+`JSON` column, whose string leaves are always text; see [JSON type](#type-map-reading-json).
 </Note>
 
 ---
@@ -1571,6 +1910,56 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 // Or via connection string
 // "Host=localhost;JsonReadMode=String"
 ```
+
+`None` is a third mode. It reads exactly as `Binary` does, but sends no server setting with the
+query — use it on a connection that is not allowed to set one.
+
+##### Typed paths and nulls {#type-map-reading-json-nulls}
+
+A path declared in the column type is a **typed path**; any other path in the document is a
+**dynamic path**. The two differ when a value is null.
+
+A typed path always appears in the `JsonObject`. Declared `Nullable(T)` or `Dynamic`, it comes back
+as a JSON null both when the stored value is null and when the document has no such path — the two
+cases are indistinguishable:
+
+```csharp
+// Column type JSON(x Nullable(Int64))
+// stored '{"x":null}'  ->  {"x":null}
+// stored '{}'          ->  {"x":null}
+```
+
+Declared with a non-nullable type, an absent path takes the type's default instead — `JSON(x String)`
+gives `{"x":""}` and `JSON(x Int64)` gives `{"x":0}`.
+
+A dynamic path whose value is null is dropped from the object entirely, so `ContainsKey` returns
+false for it. Reading `{"x":null}` from a plain `JSON` column gives `{}`.
+
+Nested typed paths build their parents, so `JSON(a.b Nullable(Int64))` yields `{"a":{"b":null}}`
+even for an empty document.
+
+<Note>
+This is what the server itself renders, so `Binary` and `String` modes now agree. Before 1.4.0 a
+typed path holding null was dropped from the `JsonObject`, which made `{"x":null}` read back as
+`{}` — and for a nested path such as `JSON(a.b Nullable(Int64))` the whole `a` subtree disappeared.
+</Note>
+
+##### Strings inside a JSON column {#type-map-reading-json-strings}
+
+String leaves inside a `JSON` column are always returned as text, whatever
+`ReadStringsAsByteArrays` is set to — `JsonValue` has no byte-array form, so a `byte[]` would
+render as base64. This holds for `String`, `FixedString`, and for those wrapped in
+`LowCardinality`, `Nullable` or `SimpleAggregateFunction`, and for strings inside `Array` and `Map`,
+map keys included.
+
+<Note>
+A byte array the JSON reader cannot see the type of does still render as base64: a
+`Variant` or `Dynamic` typed path holds a value whose type is known only for each row, so a string
+under `Variant(Array(UInt8), String)` comes back base64-encoded. That is the same in both settings.
+
+A JSON map key type other than exactly `String` — `Map(LowCardinality(String), String)`, for
+example — throws `NotSupportedException`.
+</Note>
 
 ---
 
@@ -1697,6 +2086,13 @@ When inserting data, the driver converts .NET types to their corresponding Click
 | String | `string`, `byte[]`, `ReadOnlyMemory<byte>`, `Stream` | Binary types written directly; streams can be seekable or non-seekable |
 | FixedString(N) | `string`, `byte[]`, `ReadOnlyMemory<byte>`, `Stream` | String is UTF-8 encoded and padded; binary types must be exactly N bytes |
 
+<Note>
+As a *query parameter*, a `byte[]` or `ReadOnlyMemory<byte>` bound to `String` or `FixedString` is
+escaped byte by byte, so a payload that is not valid UTF-8 round-trips without loss. Earlier
+versions sent the literal text `System.Byte[]` instead. `Stream` is not accepted as a query
+parameter — it works on the binary write path only.
+</Note>
+
 ---
 
 #### Date and time types {#type-map-writing-datetime}
@@ -1708,13 +2104,25 @@ When inserting data, the driver converts .NET types to their corresponding Click
 | DateTime | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | See below for details; supported range `[1970-01-01, 2106-02-07 06:28:15]` UTC |
 | DateTime32 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Same as DateTime |
 | DateTime64 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Precision based on Scale parameter |
-| Time | `TimeSpan`, `int` | Clamped to ±999:59:59; int treated as seconds |
-| Time64 | `TimeSpan`, `decimal`, `double`, `float`, `int`, `long`, `string` | String parsed as `[-]HHH:MM:SS[.fraction]`; clamped to ±999:59:59.999999999 |
+| Time | `TimeSpan`, `TimeOnly`, `int` | Clamped to ±999:59:59; int treated as seconds |
+| Time64 | `TimeSpan`, `TimeOnly`, `decimal`, `double`, `float`, `int`, `long`, `string` | String parsed as `[-]HHH:MM:SS[.fraction]`; clamped to ±999:59:59.999999999 |
 
 <Note>
 **Out-of-range values**
 
 On the binary write path, `Date`, `Date32`, `DateTime`, and `DateTime32` values outside their supported range throw `ArgumentOutOfRangeException` at `Write` time, naming the column type and the supported range. Previously, out-of-range values could be silently truncated through a 32-bit integer and reinterpreted by the server, producing real-but-wrong timestamps.
+</Note>
+
+<Note>
+**`TimeOnly` and query parameters**
+
+The table above is the binary write path. As a *query parameter*, `Time` accepts `TimeSpan`,
+`TimeOnly` and `int`, but `Time64` accepts only `TimeSpan` and `TimeOnly` — the other CLR types
+listed for it throw `ArgumentException` on that path.
+
+A `TimeOnly` with no explicit `ClickHouseType` and no `{name:Type}` hint infers as `Time64(7)`, the
+same as `TimeSpan`. Both `Time` and `Time64` always read back as `TimeSpan`; there is no `TimeOnly`
+read.
 </Note>
 
 The driver respects `DateTime.Kind` when writing values:
