@@ -660,6 +660,12 @@ public sealed class ClickHouseClient : IClickHouseClient
             throw new ArgumentOutOfRangeException(nameof(options), "BatchSize must be greater than zero");
         if (options.MaxDegreeOfParallelism <= 0)
             throw new ArgumentOutOfRangeException(nameof(options), "MaxDegreeOfParallelism must be greater than zero");
+        // A cast or a configuration binding can put a value outside the enum into QueryPlacement. Both
+        // send paths derive the URL parameter and the body framing from it separately, so a value that
+        // is neither Body nor Url would leave the statement out of both. Reject it here, where every
+        // insert passes, rather than sending a request the server cannot read.
+        if (options.QueryPlacement is not InsertQueryPlacement.Body and not InsertQueryPlacement.Url)
+            throw new ArgumentOutOfRangeException(nameof(options), options.QueryPlacement, "QueryPlacement must be InsertQueryPlacement.Body or InsertQueryPlacement.Url");
 
         var useSession = options.UseSession ?? Settings.UseSession;
         if (useSession && options.MaxDegreeOfParallelism > 1)
