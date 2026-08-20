@@ -60,6 +60,56 @@ public class InsertBinaryQueryPlacementTests : AbstractConnectionTestFixture
         Assert.That(new InsertOptions().QueryPlacement, Is.EqualTo(InsertQueryPlacement.Body));
     }
 
+    /// <summary>
+    /// A cast or a configuration binding can put a value outside the enum into the property. Each send
+    /// path derives the URL parameter and the body framing from it separately, so an unrecognized value
+    /// would put the statement in neither place and the server would receive rows with no INSERT. Both
+    /// paths reject it up front, before anything is sent.
+    /// </summary>
+    [Test]
+    public void InsertBinaryAsync_WithAnUndefinedQueryPlacement_ThrowsAndSendsNothing(
+        [Values(false, true)] bool poco)
+    {
+        var requestsSent = 0;
+        using var httpClient = MockHttpClientHelper.Create((_, _) =>
+        {
+            requestsSent++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(string.Empty) });
+        });
+
+        using var stubbedClient = new ClickHouseClient(new ClickHouseClientSettings { HttpClient = httpClient });
+        var table = TestUtilities.CreateTableName("query_placement_undefined");
+        var options = new InsertOptions
+        {
+            QueryPlacement = (InsertQueryPlacement)42,
+            ColumnTypes = ColumnTypes,
+        };
+
+        ArgumentOutOfRangeException ex;
+        if (poco)
+        {
+            stubbedClient.RegisterBinaryInsertType<SimplePoco>();
+            ex = Assert.CatchAsync<ArgumentOutOfRangeException>(() => stubbedClient.InsertBinaryAsync(
+                table,
+                new[] { new SimplePoco { Id = 1UL, Value = "hello" } },
+                options));
+        }
+        else
+        {
+            ex = Assert.CatchAsync<ArgumentOutOfRangeException>(() => stubbedClient.InsertBinaryAsync(
+                table,
+                new[] { "Id", "Value" },
+                new List<object[]> { new object[] { 1UL, "hello" } },
+                options));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Does.Contain("QueryPlacement"));
+            Assert.That(requestsSent, Is.Zero, "no request may be sent for an unusable placement");
+        });
+    }
+
     // Both placements, on both insert paths, compressed with the default codec and uncompressed: the
     // placement of the statement and the encoding of the body are independent settings, so each
     // combination has to hold.
