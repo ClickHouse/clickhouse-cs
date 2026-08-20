@@ -34,9 +34,15 @@ public interface IQBitColumn : IColumn
     int BitWidth { get; }
 
     /// <summary>
-    /// The bytes one row occupies within a single plane — <c>ceil(Dimension / 8)</c>. Element <c>i</c> of a row
-    /// sits at bit <c>i % 8</c> of byte <c>i / 8</c> of the row's slice, least-significant bit first. When
-    /// <see cref="Dimension"/> is not a multiple of 8 the high bits of the last byte are unused.
+    /// The bytes one row occupies within a single plane — <c>ceil(Dimension / 8)</c>.
+    ///
+    /// <para>
+    /// Element <c>i</c> of a row sits at bit <c>i % 8</c> of byte <c>BytesPerRow - 1 - i / 8</c>: the bits within
+    /// a byte run least significant first, but the bytes run in the <b>reverse</b> of the element order, so
+    /// elements 0-7 are in the <em>last</em> byte. Equivalently, the row's bitmap is the big-endian encoding of a
+    /// <c>BytesPerRow</c>-byte integer whose bit <c>i</c> is element <c>i</c>. When <see cref="Dimension"/> is not
+    /// a multiple of 8 the unused bits are the high bits of byte 0.
+    /// </para>
     /// </summary>
     int BytesPerRow { get; }
 

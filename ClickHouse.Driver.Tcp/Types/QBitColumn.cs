@@ -5,6 +5,30 @@ using System.Runtime.InteropServices;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
+/// Where an element sits inside one row's bitmap of a <c>QBit</c> plane. Shared by the read and write paths so
+/// the two cannot disagree about it.
+/// </summary>
+internal static class QBitLayout
+{
+    /// <summary>
+    /// The byte, within a row's <c>ceil(N / 8)</c>-byte bitmap, holding the group of 8 elements starting at
+    /// <c>group * 8</c>. The bytes run in the <b>reverse</b> of the element order — the row's bitmap is the
+    /// big-endian encoding of a <c>ceil(N / 8)</c>-byte integer whose bit <c>i</c> is element <c>i</c> — so group
+    /// 0 is the <em>last</em> byte. Verified against a 26.6 server with <c>QBit(Float32, 72)</c>: element 0 lands
+    /// in byte 8 and element 64 in byte 0.
+    ///
+    /// <para>
+    /// This is invisible whenever <c>N &lt;= 8</c>, where a row is a single byte — which is why the layout notes
+    /// in <c>native-format.md</c> describe it the other way round.
+    /// </para>
+    /// </summary>
+    /// <param name="group">The element's group index, <c>element / 8</c>.</param>
+    /// <param name="bytesPerRow">The row's bitmap width, <c>ceil(N / 8)</c>.</param>
+    /// <returns>The byte offset within the row's bitmap.</returns>
+    public static int ByteOfGroup(int group, int bytesPerRow) => bytesPerRow - 1 - group;
+}
+
+/// <summary>
 /// A decoded <c>QBit(T, N)</c> column: the bit-plane blob exactly as it arrived, plus the geometry needed to
 /// read it. The blob is <c>BitWidth</c> planes, each holding one <c>ceil(N / 8)</c>-byte bitmap per row, and the
 /// planes are stored most-significant first — so the plane for bit <c>b</c> is at wire index
@@ -261,7 +285,7 @@ internal sealed class QBitFloatColumn : QBitColumnBase<float>
             uint mask = 1u << (BitWidth - 1 - wireIndex);
             for (int i = 0; i < bits.Length; i++)
             {
-                if ((plane[i >> 3] & (1 << (i & 7))) != 0)
+                if ((plane[QBitLayout.ByteOfGroup(i >> 3, BytesPerRow)] & (1 << (i & 7))) != 0)
                 {
                     bits[i] |= mask;
                 }
@@ -309,7 +333,7 @@ internal sealed class QBitDoubleColumn : QBitColumnBase<double>
             ulong mask = 1UL << (BitWidth - 1 - wireIndex);
             for (int i = 0; i < bits.Length; i++)
             {
-                if ((plane[i >> 3] & (1 << (i & 7))) != 0)
+                if ((plane[QBitLayout.ByteOfGroup(i >> 3, BytesPerRow)] & (1 << (i & 7))) != 0)
                 {
                     bits[i] |= mask;
                 }
