@@ -1406,6 +1406,30 @@ public sealed class InsertRoundTripCase
                     new[] { 0d, -0d, double.NaN },
                 }));
 
+            // Dimensions of 8 and above reach the vector write path, which works a group of 8 elements at a time;
+            // everything narrower is handled entirely by its scalar tail. 17 is two whole groups plus one element,
+            // so it covers the group loop and the tail together, and it is an embedding-shaped width rather than
+            // the hand-checked fixtures above.
+            yield return Same(
+                "QBit(Float32, 17)",
+                "QBit(Float32, 17)",
+                name => new ArrayColumn<float[]>(name, "QBit(Float32, 17)", new[]
+                {
+                    Ramp(17, i => (i * 0.5f) - 4f),
+                    Ramp(17, i => i % 2 == 0 ? float.MaxValue : float.MinValue),
+                }));
+
+            // The Float64 group loop takes two extracts per plane byte, where the Float32 one takes a single
+            // extract, so it needs its own multi-group case.
+            yield return Same(
+                "QBit(Float64, 17)",
+                "QBit(Float64, 17)",
+                name => new ArrayColumn<double[]>(name, "QBit(Float64, 17)", new[]
+                {
+                    Ramp(17, i => (i * 0.25d) - 2d),
+                    Ramp(17, i => i % 2 == 0 ? double.MaxValue : double.MinValue),
+                }));
+
             // BFloat16 keeps only the float's high 16 bits, so every value here is one a brain-float represents
             // exactly — otherwise the round-trip would compare the narrowed value against the original.
             yield return Same(
@@ -1676,6 +1700,19 @@ public sealed class InsertRoundTripCase
     /// <summary>A case that inserts and reads back the same column — the common shape.</summary>
     private static InsertRoundTripCase Same(string label, string clickHouseType, Func<string, IColumn> build, IReadOnlyDictionary<string, string> settings = null)
         => new(label, clickHouseType, build, build, settings);
+
+    /// <summary>A vector of <paramref name="length"/> values from their index — for the wider QBit dimensions,
+    /// where spelling out every element would obscure the width being tested.</summary>
+    private static T[] Ramp<T>(int length, Func<int, T> value)
+    {
+        var values = new T[length];
+        for (int i = 0; i < length; i++)
+        {
+            values[i] = value(i);
+        }
+
+        return values;
+    }
 
     /// <summary>Enables the experimental BFloat16 type for the round-trip.</summary>
     private static readonly IReadOnlyDictionary<string, string> BFloat16Settings = new Dictionary<string, string>(StringComparer.Ordinal)

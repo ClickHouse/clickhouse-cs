@@ -36,6 +36,19 @@ public class QBitColumnCodecTests
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     };
 
+    // Captured the same way, for QBit(Float32, 16) holding one row of [1, -2, 3, -4, ... 15, -16]. Two bytes per
+    // row per plane, so this is the only fixture that spans more than one 8-element group — the unit the vector
+    // write path works in. The signs alternate, which makes the sign plane 0xAA 0xAA.
+    private static readonly byte[] DocumentedBytes16 =
+    {
+        0xAA, 0xAA, 0xFF, 0xFE, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x01, 0xFF, 0x81, 0x80, 0x79, 0x78, 0x64, 0x66, 0x50, 0x55, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    };
+
     private static IColumnCodec Codec(string type) => ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite);
 
     [Test]
@@ -58,6 +71,23 @@ public class QBitColumnCodecTests
         using IColumn read = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
 
         CollectionAssert.AreEqual(new[] { 1f, 2f, 3f, 4f }, (float[])read.GetValue(0));
+    }
+
+    [Test]
+    public async Task WriteColumn_SpanningSeveralGroupsOfEight_ProducesTheServersOwnBytes()
+    {
+        // 16 elements is two whole 8-element groups, which is the unit the vector write path works in; the
+        // dimension-4 fixture above never leaves the scalar tail. Pins the group loop against real server bytes.
+        const string Type = "QBit(Float32, 16)";
+        IColumnCodec codec = Codec(Type);
+        using var column = new ArrayColumn<float[]>("v", Type, new[]
+        {
+            new[] { 1f, -2f, 3f, -4f, 5f, -6f, 7f, -8f, 9f, -10f, 11f, -12f, 13f, -14f, 15f, -16f },
+        });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
+
+        CollectionAssert.AreEqual(DocumentedBytes16, bytes);
     }
 
     [Test]
