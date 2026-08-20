@@ -258,3 +258,8 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.MapReadMode.init -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.MapReadMode.get -> ClickHouse.Driver.MapReadMode
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.MapReadMode.set -> void
 const ClickHouse.Driver.ADO.ClickHouseDefaults.MapReadMode = ClickHouse.Driver.MapReadMode.Dictionary -> ClickHouse.Driver.MapReadMode
+ClickHouse.Driver.InsertOptions.QueryPlacement.get -> ClickHouse.Driver.InsertQueryPlacement
+ClickHouse.Driver.InsertOptions.QueryPlacement.init -> void
+ClickHouse.Driver.InsertQueryPlacement
+ClickHouse.Driver.InsertQueryPlacement.Body = 0 -> ClickHouse.Driver.InsertQueryPlacement
+ClickHouse.Driver.InsertQueryPlacement.Url = 1 -> ClickHouse.Driver.InsertQueryPlacement

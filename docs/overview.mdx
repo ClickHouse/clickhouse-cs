@@ -231,6 +231,7 @@ var reader = await client.ExecuteReaderAsync(
 | MaxDegreeOfParallelism | `int` | 1 | Number of parallel batch uploads |
 | Format | `RowBinaryFormat` | `RowBinary` | Binary format: `RowBinary` or `RowBinaryWithDefaults` |
 | Compressor | `IClickHouseCompressor` | `ZstdCompressor.Default` | Codec applied to the insert body (`Content-Encoding`). `null` sends it uncompressed. See [Insert compression](#insert-compression) |
+| QueryPlacement | `InsertQueryPlacement` | `Body` | Where the `INSERT INTO ... FORMAT ...` statement is sent: `Body` (ahead of the rows) or `Url` (as the `query` URL parameter). See [Insert query placement](#insert-query-placement) |
 | ColumnTypes | `IReadOnlyDictionary<string, string>` | `null` | Column name → ClickHouse type string. Skips the schema probe query when set. |
 | UseSchemaCache | `bool` | `false` | Cache full table schema per (database, table) for the client's lifetime. |
 
@@ -506,6 +507,19 @@ If `ColumnTypes` is set in `InsertOptions`, they will override the POCO attribut
 #### Schema evolution {#poco-insert-schema-evolution}
 
 POCO inserts work seamlessly when columns are added to the target table after the type is registered. Because the driver only inserts the columns mapped by the POCO, any new columns with `DEFAULT` (or other default expressions) are filled in by the server automatically. No code changes or re-registration are needed.
+
+#### Insert query placement {#insert-query-placement}
+
+A binary insert writes its `INSERT INTO ... FORMAT ...` statement as the first line of the request body, ahead of the rows. The body is compressed by default, so an intermediary cannot read the statement there. Set `InsertOptions.QueryPlacement` to `InsertQueryPlacement.Url` to send the statement as the `query` URL parameter instead, leaving the body to the rows alone:
+
+```csharp
+var options = new InsertOptions { QueryPlacement = InsertQueryPlacement.Url };
+await client.InsertBinaryAsync("events", columns, rows, options);
+```
+
+Use it when a proxy, load balancer or gateway routes or inspects on the `query` parameter, or when you want the statement in access logs and observability tooling. It is opt-in because the statement then counts towards the URL length: a long column list can exceed the server's `max_uri_size` (1 MiB by default), which the server rejects with `400 Bad Request` (`HTTP request URI invalid or too long`), or a lower limit of an intermediary. The body has no such limit.
+
+The setting is independent of `Compressor`: the body is encoded the same way in both modes.
 
 ---
 

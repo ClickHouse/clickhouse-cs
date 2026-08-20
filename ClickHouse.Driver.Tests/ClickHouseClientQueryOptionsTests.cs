@@ -967,6 +967,7 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
         MaxDegreeOfParallelism = 4,
         Format = RowBinaryFormat.RowBinaryWithDefaults,
         Compressor = BrotliCompressor.Default,
+        QueryPlacement = InsertQueryPlacement.Url,
         ColumnTypes = new Dictionary<string, string> { ["existing"] = "String" },
         UseSchemaCache = true,
     };
