@@ -97,7 +97,7 @@ internal sealed class ColumnCodecRegistry
         AddFactory("FixedString", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => FixedStringColumnCodec.Create(node));
 
         // QBit(T, N): an N-element vector stored as bits(T) transposed bit planes, most significant first, each
-        // plane holding one ceil(N/8)-byte bitmap per row. Fixed width per row, no state prefix.
+        // plane holding one big-endian ceil(N/8)-byte bitmap per row. Fixed width per row, no state prefix.
         AddFactory("QBit", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => QBitColumnCodec.Create(node));
 
         // Dates and times.

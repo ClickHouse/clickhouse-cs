@@ -1,6 +1,9 @@
 using System;
 using System.Buffers;
 using System.Globalization;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -15,9 +18,10 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <para>
 /// The column carries no state prefix. Its body is <c>bits(T)</c> planes, ordered from the <b>most</b>
 /// significant bit of <c>T</c> down to bit 0; each plane holds one <c>ceil(N / 8)</c>-byte bitmap per row, rows
-/// contiguous within the plane, and element <c>i</c> sits at bit <c>i % 8</c> of byte <c>i / 8</c>
-/// (least-significant bit first). So the body is plane-major and exactly
-/// <c>bits(T) * num_rows * ceil(N / 8)</c> bytes — every row the same width.
+/// contiguous within the plane. Element <c>i</c> sits at bit <c>i % 8</c> of the bitmap byte
+/// <see cref="QBitLayout.ByteOfGroup"/> names — the bytes run in the reverse of the element order, so group 0 is
+/// the last byte. The body is plane-major and exactly <c>bits(T) * num_rows * ceil(N / 8)</c> bytes — every row
+/// the same width.
 /// </para>
 ///
 /// <para>
@@ -248,22 +252,35 @@ internal sealed class QBitFloatColumnCodec : QBitColumnCodec
         byte[] scratch = RentScratch(length, out int byteCount);
         try
         {
+            // Hoisted out of the row loop, as UuidColumnCodec does: the answer is the same for every row.
+            bool simd = Vector256.IsHardwareAccelerated;
+            int planeStride = length * BytesPerRow;
             for (int r = 0; r < length; r++)
             {
                 float[] vector = Validate(typed[start + r], start + r);
-                for (int i = 0; i < vector.Length; i++)
-                {
-                    // A brain-float keeps only the float's high half, so shift it down to sit in bits 15..0.
-                    uint raw = BitConverter.SingleToUInt32Bits(vector[i]);
-                    uint stored = BitWidth == 16 ? raw >> 16 : raw;
+                int rowBase = (r * BytesPerRow);
+                int whole = simd ? Dimension >> 3 : 0;
 
-                    int slot = i >> 3;
+                if (whole != 0)
+                {
+                    TransposeGroups(scratch, vector, whole, rowBase, planeStride);
+                }
+
+                // The elements past the last whole group of 8, and every element when there is no hardware
+                // acceleration. They occupy byte `whole` of the row, which the vector path never writes, so the
+                // two cannot collide.
+                for (int i = whole << 3; i < vector.Length; i++)
+                {
+                    uint raw = BitConverter.SingleToUInt32Bits(vector[i]);
+                    int slot = QBitLayout.ByteOfGroup(i >> 3, BytesPerRow);
                     byte bit = (byte)(1 << (i & 7));
                     for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
                     {
-                        if (((stored >> (BitWidth - 1 - wireIndex)) & 1) != 0)
+                        // Plane `wireIndex` is bit 31 - wireIndex of the float, for a brain-float too: its 16
+                        // bits *are* the float's high half, so its planes are the float's top 16.
+                        if (((raw >> (31 - wireIndex)) & 1) != 0)
                         {
-                            scratch[((((wireIndex * length) + r) * BytesPerRow) + slot)] |= bit;
+                            scratch[(wireIndex * planeStride) + rowBase + slot] |= bit;
                         }
                     }
                 }
@@ -274,6 +291,33 @@ internal sealed class QBitFloatColumnCodec : QBitColumnCodec
         finally
         {
             ArrayPool<byte>.Shared.Return(scratch);
+        }
+    }
+
+    /// <summary>
+    /// Transposes the first <paramref name="whole"/> groups of 8 elements of one row.
+    /// <see cref="Vector256{T}.ExtractMostSignificantBits"/> gathers the top bit of 8 lanes into a byte, which
+    /// <em>is</em> one plane byte for 8 <see cref="float"/>s in the order the wire wants (element <c>i</c> at bit
+    /// <c>i</c>), so a plane costs one extract plus one shift rather than 8 test-and-sets. Walking the planes
+    /// most significant first is then just shifting the vector left one bit each step.
+    /// </summary>
+    /// <param name="scratch">The zeroed plane-major slice buffer.</param>
+    /// <param name="vector">The row's vector.</param>
+    /// <param name="whole">The number of complete 8-element groups.</param>
+    /// <param name="rowBase">The row's byte offset within a plane.</param>
+    /// <param name="planeStride">The bytes one plane occupies for the whole slice.</param>
+    private void TransposeGroups(byte[] scratch, float[] vector, int whole, int rowBase, int planeStride)
+    {
+        ref uint source = ref Unsafe.As<float, uint>(ref MemoryMarshal.GetArrayDataReference(vector));
+        for (int group = 0; group < whole; group++)
+        {
+            Vector256<uint> lanes = Vector256.LoadUnsafe(ref source, (nuint)(group << 3));
+            int slot = rowBase + QBitLayout.ByteOfGroup(group, BytesPerRow);
+            for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
+            {
+                scratch[(wireIndex * planeStride) + slot] = (byte)lanes.ExtractMostSignificantBits();
+                lanes <<= 1;
+            }
         }
     }
 }
@@ -311,19 +355,29 @@ internal sealed class QBitDoubleColumnCodec : QBitColumnCodec
         byte[] scratch = RentScratch(length, out int byteCount);
         try
         {
+            bool simd = Vector256.IsHardwareAccelerated;
+            int planeStride = length * BytesPerRow;
             for (int r = 0; r < length; r++)
             {
                 double[] vector = Validate(typed[start + r], start + r);
-                for (int i = 0; i < vector.Length; i++)
+                int rowBase = r * BytesPerRow;
+                int whole = simd ? Dimension >> 3 : 0;
+
+                if (whole != 0)
                 {
-                    ulong stored = BitConverter.DoubleToUInt64Bits(vector[i]);
-                    int slot = i >> 3;
+                    TransposeGroups(scratch, vector, whole, rowBase, planeStride);
+                }
+
+                for (int i = whole << 3; i < vector.Length; i++)
+                {
+                    ulong raw = BitConverter.DoubleToUInt64Bits(vector[i]);
+                    int slot = QBitLayout.ByteOfGroup(i >> 3, BytesPerRow);
                     byte bit = (byte)(1 << (i & 7));
                     for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
                     {
-                        if (((stored >> (BitWidth - 1 - wireIndex)) & 1) != 0)
+                        if (((raw >> (63 - wireIndex)) & 1) != 0)
                         {
-                            scratch[((((wireIndex * length) + r) * BytesPerRow) + slot)] |= bit;
+                            scratch[(wireIndex * planeStride) + rowBase + slot] |= bit;
                         }
                     }
                 }
@@ -334,6 +388,35 @@ internal sealed class QBitDoubleColumnCodec : QBitColumnCodec
         finally
         {
             ArrayPool<byte>.Shared.Return(scratch);
+        }
+    }
+
+    /// <summary>
+    /// Transposes the first <paramref name="whole"/> groups of 8 elements of one row. A
+    /// <see cref="Vector256{T}"/> of <see cref="double"/> holds only 4 lanes, so a plane byte takes two extracts
+    /// — the low group in bits 3..0 and the high group in bits 7..4 — against the single extract the
+    /// <see cref="float"/> path needs.
+    /// </summary>
+    /// <param name="scratch">The zeroed plane-major slice buffer.</param>
+    /// <param name="vector">The row's vector.</param>
+    /// <param name="whole">The number of complete 8-element groups.</param>
+    /// <param name="rowBase">The row's byte offset within a plane.</param>
+    /// <param name="planeStride">The bytes one plane occupies for the whole slice.</param>
+    private void TransposeGroups(byte[] scratch, double[] vector, int whole, int rowBase, int planeStride)
+    {
+        ref ulong source = ref Unsafe.As<double, ulong>(ref MemoryMarshal.GetArrayDataReference(vector));
+        for (int group = 0; group < whole; group++)
+        {
+            Vector256<ulong> low = Vector256.LoadUnsafe(ref source, (nuint)(group << 3));
+            Vector256<ulong> high = Vector256.LoadUnsafe(ref source, (nuint)((group << 3) + 4));
+            int slot = rowBase + QBitLayout.ByteOfGroup(group, BytesPerRow);
+            for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
+            {
+                uint bits = low.ExtractMostSignificantBits() | (high.ExtractMostSignificantBits() << 4);
+                scratch[(wireIndex * planeStride) + slot] = (byte)bits;
+                low <<= 1;
+                high <<= 1;
+            }
         }
     }
 }
