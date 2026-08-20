@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -262,6 +263,13 @@ public class InsertBinaryQueryPlacementTests : AbstractConnectionTestFixture
     /// <c>InsertOptions.WithQueryId</c>, so a placement that failed to survive that copy would send
     /// every batch the other way — with the statement then missing from both the URL and the body.
     /// </summary>
+    /// <remarks>
+    /// The totals are read through <see cref="WaitForTotalsAsync"/> rather than once. Each batch
+    /// travels on a connection of its own, so against a service that spreads them over several
+    /// replicas the read that follows can be served by a replica that has not picked up the newest
+    /// part yet. Waiting removes that race without weakening the assertion: the exact row count and
+    /// the checksum over every Id are still asserted, and a batch that never arrives still fails.
+    /// </remarks>
     [Test]
     public async Task InsertBinaryAsync_WithQueryInUrl_MultipleParallelBatches_InsertsEveryRow()
     {
@@ -281,12 +289,11 @@ public class InsertBinaryQueryPlacementTests : AbstractConnectionTestFixture
 
         await client.InsertBinaryAsync(tableName, new[] { "Id", "Value" }, rows, options);
 
-        var count = (ulong)await client.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
-        var sum = await client.ExecuteScalarAsync($"SELECT sum(Id) FROM {tableName}");
+        var (count, sum) = await WaitForTotalsAsync(tableName, rowCount);
         Assert.Multiple(() =>
         {
             Assert.That(count, Is.EqualTo((ulong)rowCount));
-            Assert.That(Convert.ToInt64(sum), Is.EqualTo(((long)rowCount - 1) * rowCount / 2));
+            Assert.That(sum, Is.EqualTo(((long)rowCount - 1) * rowCount / 2));
         });
     }
 
@@ -341,6 +348,38 @@ public class InsertBinaryQueryPlacementTests : AbstractConnectionTestFixture
             });
 
         Assert.That(await ReadBackAsync(tableName), Is.EqualTo(new[] { (1UL, "hello") }));
+    }
+
+    /// <summary>Number of reads before the totals are returned as they last came back.</summary>
+    private const int TotalsAttempts = 20;
+
+    private static readonly TimeSpan TotalsRetryDelay = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Reads the row count and the sum of every Id, retrying while the count stays below
+    /// <paramref name="expectedRowCount"/>. Both totals come from one query, so they always describe
+    /// the same read. The totals of the last attempt are returned as they are, leaving the caller to
+    /// assert on them — waiting first only makes that assertion stronger.
+    /// </summary>
+    private async Task<(ulong Count, long Sum)> WaitForTotalsAsync(string tableName, int expectedRowCount)
+    {
+        var totals = (Count: 0UL, Sum: 0L);
+        for (var attempt = 1; attempt <= TotalsAttempts; attempt++)
+        {
+            using (var reader = await client.ExecuteReaderAsync($"SELECT count(), sum(Id) FROM {tableName}"))
+            {
+                var row = reader.GetEnsureSingleRow();
+                totals = (Convert.ToUInt64(row[0], CultureInfo.InvariantCulture), Convert.ToInt64(row[1], CultureInfo.InvariantCulture));
+            }
+
+            if (totals.Count >= (ulong)expectedRowCount)
+                return totals;
+
+            if (attempt < TotalsAttempts)
+                await Task.Delay(TotalsRetryDelay);
+        }
+
+        return totals;
     }
 
     private async Task<List<(ulong Id, string Value)>> ReadBackAsync(string tableName)
