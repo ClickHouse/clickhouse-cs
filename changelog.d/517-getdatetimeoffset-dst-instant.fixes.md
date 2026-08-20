@@ -1,0 +1,1 @@
+* Fixed `ClickHouseDataReader.GetDateTimeOffset()` returning an instant one hour off for timestamps in the later half of a DST fall-back hour in a timezone-aware `DateTime`/`DateTime64` column. It now returns the stored instant with the offset that instant had in the column timezone (issue #515).

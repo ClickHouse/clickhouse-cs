@@ -143,7 +143,9 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
 
     public override string ToString() => TimeZone == null ? $"{Name}" : $"{Name}('{TimeZone.Id}')";
 
-    protected DateTimeOffset ToDateTimeOffset(Instant instant) => instant.InZone(TimeZoneOrUtc).ToDateTimeOffset();
+    // Internal rather than protected: subclasses use it for their typed reads, and InstantCapturingReader
+    // uses it to report a captured instant.
+    internal DateTimeOffset ToDateTimeOffset(Instant instant) => instant.InZone(TimeZoneOrUtc).ToDateTimeOffset();
 
     public DateTime ToDateTime(Instant instant)
     {
