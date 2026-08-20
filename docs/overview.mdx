@@ -573,7 +573,59 @@ A registered type must have:
 
 Column matching is case-sensitive. Missing result columns leave properties at their default value; extra result columns are ignored.
 
-There are no automatic conversions and a type mismatch throws `InvalidOperationException`.
+The driver does not widen or narrow values. Apart from the alternate representations listed below,
+the column's framework type must be assignable to the property type, and a mismatch throws
+`InvalidOperationException`. An `object` property therefore accepts any column.
+
+`QueryAsync<T>` makes this check once, when it builds the readers for a result shape — before it
+yields the first row. `MapTo<T>` makes it when it builds the binding plan. `Variant` and `Dynamic`
+columns are the exception: the driver knows their type only for each row, so a mismatch there throws
+when the offending row arrives.
+
+##### Supported property types {#poco-read-types}
+
+`QueryAsync<T>` reads each of these columns straight into a matching property:
+
+| ClickHouse column | Property type(s) |
+|---|---|
+| `Int8`/`Int16`/`Int32`/`Int64` | `sbyte`/`short`/`int`/`long` |
+| `UInt8`/`UInt16`/`UInt32`/`UInt64` | `byte`/`ushort`/`uint`/`ulong` |
+| `Int128`/`UInt128` | `BigInteger`, or native `System.Int128`/`System.UInt128` on .NET 8 and later |
+| `Int256`/`UInt256` | `BigInteger` |
+| `Float32`/`Float64`/`BFloat16` | `float`/`double`/`float` |
+| `Bool` | `bool` |
+| `Decimal` | `decimal` **or** `ClickHouseDecimal` |
+| `Date`/`Date32`/`DateTime`/`DateTime64` | `DateTime`, `DateTimeOffset` **or** `DateOnly` |
+| `Time`/`Time64` | `TimeSpan` |
+| `UUID` | `Guid` |
+| `IPv4`/`IPv6` | `IPAddress` |
+| `Enum8`/`Enum16` | `string` (the label) **or** `int` (the wire ordinal) |
+| `String`/`FixedString` | `string` **or** `byte[]` |
+
+Every row also accepts the nullable form of its property type (`long?`, `DateOnly?`, and so on),
+whether or not the column is `Nullable(...)`. A non-nullable value-type property on a `Nullable(T)`
+column is accepted at registration, but throws when a NULL arrives.
+
+The wire-transparent wrappers — `LowCardinality(T)`, `SimpleAggregateFunction(f, T)` and
+`Object(T)` — map exactly as `T`.
+
+Composite columns are supported too, and take the framework type given in the
+[reading type reference](#clickhouse-native-type-map-reading): `Array(T)` into `T[]`, `Tuple(...)`
+into `System.Tuple<...>`, `Nested(...)` into `Tuple<...>[]`, `JSON` into `JsonObject` (or `string`
+under [`JsonReadMode=String`](#type-map-reading-json)), and `Variant`/`Dynamic` into `object`. The
+driver reads these one column at a time through a boxed read rather than the box-free path, so a
+POCO that mixes scalar and composite columns still gets the faster read on its scalar ones.
+
+A `Map(K, V)` column is a special case: a `List<KeyValuePair<K, V>>` or `KeyValuePair<K, V>[]`
+property reads on the box-free path and keeps the on-wire order and any repeated keys, in either
+[`MapReadMode`](#type-map-reading-map). A `Dictionary<K, V>` property works in the default mode
+only — under `MapReadMode=KeyValuePairs` it throws. The key and value types must match exactly, so
+`Map(String, Nullable(Int32))` needs `KeyValuePair<string, int?>`.
+
+Where a column offers more than one property type — a `DateTime` column as `DateTime`,
+`DateTimeOffset` or `DateOnly`, a `String` column as `string` or `byte[]`, an enum as its label or
+its ordinal — the declared property type selects the representation. These alternate representations
+belong to the POCO path, so `QueryAsync<T>` has them and `MapTo<T>` does not.
 
 ##### Materializing a single row {#poco-read-mapto}
 
@@ -588,6 +640,20 @@ while (reader.Read())
     Console.WriteLine($"{reading.SensorName}: {reading.Value}");
 }
 ```
+
+Use `MapTo<T>` when you must drive the reader loop yourself — for example to mix raw column access
+with POCO materialization. It reads the row through the reader's boxed values, so it does not offer
+the alternate property types above, and it allocates more than `QueryAsync<T>` does. Prefer
+`QueryAsync<T>` when you only need the rows; see
+[choose the materialization path](#perf-read-path) for the numbers.
+
+##### Read value converters {#poco-read-converters}
+
+A client-level or per-query [read value converter](#read-value-conversion) applies to both paths and
+does not disable the box-free read. The driver converts each column on the overload that matches how
+it read the column: the typed `ConvertValue<T>` — where `T` is the property type — for a box-free
+column, and the boxed `ConvertValue` for a composite column. Implement the two overloads
+consistently, or the same column gives different results on different paths.
 
 ##### Registration diagnostics {#poco-read-diagnostics}
 
@@ -2265,6 +2331,12 @@ increases with the buffer size and with the number of concurrent readers.
 ```csharp
 var settings = new ClickHouseClientSettings("Host=localhost") { ReadBufferSize = 256 * 1024 };
 ```
+
+The pool rounds a request up to a power of two. The default 64 KiB gives a 65,536-byte array, which
+stays on the normal heap; any larger value gives an array of 128 KiB or more, which the runtime puts
+on the Large Object Heap. Because the pool reuses these arrays, that is memory the process retains
+rather than garbage it makes for each query. Increase the size only if a measurement shows that
+buffer refills cost you.
 
 <Warning>
 *Always dispose readers.* A reader returns its pooled buffer and releases its HTTP connection when
