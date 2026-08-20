@@ -1,9 +1,7 @@
 # Configuration for zizmor, the GitHub Actions static analyzer run by
 # .github/workflows/zizmor.yml. Reference: https://docs.zizmor.sh/configuration/
 #
-# Two things live here: the pinning policy, and a baseline of the high-severity
-# findings that already exist on main. The baseline keeps the CI gate green on
-# day one, so the gate only fails on findings a pull request *introduces*.
+# Two things live here: the pinning policy, and the findings accepted by design.
 # To see the full picture, including everything ignored below:
 #
 #   zizmor --no-ignores .
@@ -22,11 +20,6 @@ rules:
         github/*: ref-pin
         ClickHouse/*: ref-pin
         "*": hash-pin
-    # BASELINE, to remove: pin these three third-party actions to a SHA.
-    ignore:
-      - release.yml:179 # ncipollo/release-action@v1
-      - reusable.yml:58 # codecov/codecov-action@v7
-      - tests-windows.yml:16 # Vampire/setup-wsl@v6
 
   # --- Accepted by design ---------------------------------------------------
   # These workflows must test against the current server and the current docs
@@ -42,24 +35,5 @@ rules:
   # after a merge and checks out the base ref or a release tag. It never checks
   # out pull request head code, which is the case the audit warns about.
   dangerous-triggers:
-    ignore:
-      - docs_sync.yml
-
-  # --- Baseline, to remove --------------------------------------------------
-  # Each entry below is a real finding that a follow-up pull request fixes.
-  # Delete the entry in the same pull request that fixes the finding.
-
-  # Hoist the interpolation into an env: block, so the value is passed as data
-  # instead of being pasted into the shell command.
-  template-injection:
-    ignore:
-      - benchmark-compare.yml:55 # ${{ inputs.pr_number }}
-      - release.yml:50 # ${{ inputs.version }}
-      - reusable.yml:53 # ${{ inputs.framework }}
-
-  # The app token in docs_sync.yml inherits every permission the installation
-  # holds. Add permission-contents: write and permission-pull-requests: write
-  # to scope it down to what the docs sync actually does.
-  github-app:
     ignore:
       - docs_sync.yml

@@ -50,12 +50,15 @@ jobs:
             9.x
             10.x
 
+      # The framework is passed through the environment rather than interpolated into the run
+      # script, so a caller-supplied input cannot inject shell.
       - name: Test
-        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework ${{ inputs.framework }} --configuration Release --verbosity normal --logger GitHubActions /clp:ErrorsOnly ${{ inputs.coverage && '/p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true' || '' }}
+        run: dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj --framework "$FRAMEWORK" --configuration Release --verbosity normal --logger GitHubActions /clp:ErrorsOnly ${{ inputs.coverage && '/p:CollectCoverage=true /p:CoverletOutputFormat=opencover /p:SkipAutoProps=true' || '' }}
         env:
           CLICKHOUSE_VERSION: ${{ inputs.clickhouse-version }}
+          FRAMEWORK: ${{ inputs.framework }}
 
-      - uses: codecov/codecov-action@v7
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         if: inputs.coverage
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

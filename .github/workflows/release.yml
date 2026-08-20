@@ -47,9 +47,13 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v7
 
+    # As in verify_changelog, the version reaches the run script through the environment. This
+    # job runs on windows-latest, where the default shell is PowerShell, hence $env:VERSION.
     - name: Build & pack
       id: build_pack
-      run: dotnet build ClickHouse.Driver\ClickHouse.Driver.csproj --configuration Release /p:Version=${{ inputs.version }}
+      env:
+        VERSION: ${{ inputs.version }}
+      run: dotnet build ClickHouse.Driver\ClickHouse.Driver.csproj --configuration Release "/p:Version=$env:VERSION"
 
     - name: Upload unsigned package
       uses: actions/upload-artifact@v7
@@ -174,13 +178,13 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         name: package
+    # gh is preinstalled on the runner, so creating the release needs no third-party action.
+    # draft and prerelease default to false. The version goes through the environment, as
+    # everywhere else in this file. This job does not check out the repository, so gh cannot
+    # infer which repository to act on from a git remote -- hence GH_REPO.
     - name: Create Release
-      id: create_release
-      uses: ncipollo/release-action@v1
-      with:
-        artifacts: "*.nupkg,*.snupkg"
-        commit: ${{ github.sha }}
-        tag: ${{ inputs.version }}
-        generateReleaseNotes: true
-        draft: false
-        prerelease: false
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        VERSION: ${{ inputs.version }}
+      run: gh release create "$VERSION" --target "$GITHUB_SHA" --generate-notes *.nupkg *.snupkg

@@ -126,6 +126,9 @@ jobs:
           echo "owner=${TARGET_REPO%%/*}" >> "$GITHUB_OUTPUT"
           echo "name=${TARGET_REPO##*/}" >> "$GITHUB_OUTPUT"
 
+      # Without permission-* inputs the token inherits every permission the app installation
+      # holds. Ask for only the two this job uses: contents to push the sync branch, and pull
+      # requests to open, refresh and label the docs pull request.
       - name: Generate token for target repo
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -134,6 +137,8 @@ jobs:
           private-key: ${{ secrets.WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY }}
           owner: ${{ steps.parse.outputs.owner }}
           repositories: ${{ steps.parse.outputs.name }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Sync docs and open/refresh PR
         env:
