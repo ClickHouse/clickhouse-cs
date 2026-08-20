@@ -496,17 +496,22 @@ public sealed class ClickHouseClient : IClickHouseClient
             // first materializing the whole payload into a rented MemoryStream and seeking back to the
             // start. A serialization failure is captured and rethrown so callers still observe the
             // original ClickHouseBulkCopySerializationException rather than a transport-level wrapper.
+            // With InsertQueryPlacement.Url the statement travels as the query URL parameter, where
+            // proxies and access logs can read it, and the serializer leaves it out of the body.
+            var queryPlacement = insertOptions.QueryPlacement;
+            var urlQuery = queryPlacement == InsertQueryPlacement.Url ? batch.Query : null;
+
             ExceptionDispatchInfo serializationError = null;
             try
             {
                 using var response = await PostStreamAsync(
-                    null,
+                    urlQuery,
                     (stream, ct) =>
                     {
                         ct.ThrowIfCancellationRequested();
                         try
                         {
-                            serializer.Serialize(batch, stream, compressor);
+                            serializer.Serialize(batch, stream, compressor, queryPlacement);
                         }
                         catch (Exception ex)
                         {
@@ -757,18 +762,21 @@ public sealed class ClickHouseClient : IClickHouseClient
             logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
 
             // Stream the (optionally compressed) batch straight into the request stream (see
-            // SendBatchAsync for the serialization-error capture rationale).
+            // SendBatchAsync for the serialization-error capture and query-placement rationale).
+            var queryPlacement = insertOptions.QueryPlacement;
+            var urlQuery = queryPlacement == InsertQueryPlacement.Url ? batch.Query : null;
+
             ExceptionDispatchInfo serializationError = null;
             try
             {
                 using var response = await PostStreamAsync(
-                    null,
+                    urlQuery,
                     (stream, ct) =>
                     {
                         ct.ThrowIfCancellationRequested();
                         try
                         {
-                            serializer.Serialize(batch, getters, writers, stream, compressor);
+                            serializer.Serialize(batch, getters, writers, stream, compressor, queryPlacement);
                         }
                         catch (Exception ex)
                         {
