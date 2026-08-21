@@ -79,6 +79,36 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
+    /// A codec with no absence concept refuses a <see cref="Nullable{T}"/> target, even for a reading it offers bare.
+    /// This is a gap, not a rule: widening a non-nullable column into a nullable member loses nothing. Closing it
+    /// belongs in the caller — one unwrap-and-widen step where <see cref="IColumnCodec.TryProjectRead"/> is consumed,
+    /// not a nullable arm in every codec. Pinned so that closing it is a visible change.
+    /// </summary>
+    [TestCase("UInt64", typeof(ulong?))]
+    [TestCase("Date", typeof(DateOnly?))]
+    [TestCase("UUID", typeof(Guid?))]
+    [TestCase("DateTime('UTC')", typeof(DateTime?))]
+    [TestCase("DateTime('UTC')", typeof(DateTimeOffset?))]
+    [TestCase("DateTime64(3, 'UTC')", typeof(DateTime?))]
+    [TestCase("Time", typeof(TimeSpan?))]
+    [TestCase("Time64(3)", typeof(TimeSpan?))]
+    public void TryProjectRead_NullableTargetOnCodecWithoutNulls_ReturnsFalse(string type, Type nullableTarget)
+    {
+        IColumnCodec codec = Codec(type);
+        ParameterExpression source = Expression.Parameter(codec.ElementType, "v");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                codec.TryProjectRead(source, Nullable.GetUnderlyingType(nullableTarget), out Expression _), Is.True,
+                "the test case must name a reading the codec actually offers bare");
+
+            Assert.That(codec.TryProjectRead(source, nullableTarget, out Expression projected), Is.False);
+            Assert.That(projected, Is.Null);
+        });
+    }
+
+    /// <summary>
     /// A source expression of the wrong type is a caller mistake, distinct from a target the codec does not offer, so
     /// it still throws rather than being reported as "no such projection".
     /// </summary>
@@ -504,12 +534,10 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// The lifting rule reads the source shape and the target shape independently, each from the type in front of it.
-    /// No registered type pair distinguishes that from inferring one out of the other — every codec's readings share
-    /// their value/reference-ness with its <see cref="IColumnCodec.ElementType"/> — so a stand-in codec supplies the
-    /// pair that does: a reference-typed element with a value-typed reading, which is what a <c>FixedString(16)</c>
-    /// read as a <see cref="Guid"/> would be. Lifting such a source by testing it for <c>HasValue</c>, or handing it
-    /// to the inner unlifted, both produce a wrong answer here.
+    /// The lifting rule reads source and target shapes independently. No registered pair distinguishes that from
+    /// inferring one out of the other, so a stand-in codec supplies the pair that does: a reference-typed element
+    /// with a value-typed reading, as <c>FixedString(16)</c> read as a <see cref="Guid"/> would be. Testing such a
+    /// source for <c>HasValue</c>, or handing it to the inner unlifted, both answer wrongly here.
     /// </summary>
     [Test]
     public void TryLiftOverAbsent_ReferenceSourceWithValueTypedReading_LiftsAndKeepsAbsentAbsent()
@@ -601,11 +629,10 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// The wrapper's own half of the rule, which no registered type can reach: asked for a reading whose inner
-    /// spelling is a value type over a <b>reference-typed</b> inner element, <c>Nullable</c> must still lift. Deciding
-    /// that from the inner codec's canonical type — which is reference-typed here, so "no lift" — hands back a bare
-    /// <c>int</c> where an <c>int?</c> was asked for, and a null row becomes <c>default(int)</c>. Built over a stand-in
-    /// inner through <see cref="NullableColumnCodec.Over"/>, because the registry cannot produce this shape.
+    /// The wrapper's own half of the rule, which no registered type reaches: asked for a value-typed reading over a
+    /// <b>reference-typed</b> inner element, <c>Nullable</c> must still lift. Deciding that from the inner's canonical
+    /// type — reference-typed here, so "no lift" — returns a bare <c>int</c> where an <c>int?</c> was asked for, and a
+    /// null row becomes <c>default(int)</c>. Built over a stand-in via <see cref="NullableColumnCodec.Over"/>.
     /// </summary>
     [Test]
     public void TryProjectRead_NullableOverReferenceInnerWithValueTypedReading_StillLifts()
