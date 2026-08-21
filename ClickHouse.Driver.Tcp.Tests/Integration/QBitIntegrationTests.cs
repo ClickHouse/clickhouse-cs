@@ -33,8 +33,13 @@ public class QBitIntegrationTests
     // rather than a coincidence.
     private const int Dimension = 17;
     private const string Float32Type = "QBit(Float32, 17)";
+    private const string Int8Type = "QBit(Int8, 17)";
 
     private static float[] Vector() => Enumerable.Range(0, Dimension).Select(i => (i * 3f) - 20f).ToArray();
+
+    // Spans the sign, both whole bytes and the one-element tail, with MinValue pinning the all-ones pattern.
+    private static sbyte[] Int8Vector()
+        => Enumerable.Range(0, Dimension).Select(i => i == 16 ? sbyte.MinValue : (sbyte)((i * 7) - 60)).ToArray();
 
     [Test]
     public async Task InsertAsync_QBitWrittenByTheClient_IsReadBackByTheServerAsTheSameVector()
@@ -119,6 +124,33 @@ public class QBitIntegrationTests
                 bool negativeInPlane = (signPlane[slot] & (1 << (i % 8))) != 0;
                 Assert.That(negativeInPlane, Is.EqualTo(vector[i] < 0 || float.IsNegative(vector[i])), $"element {i}");
             }
+        }
+        finally
+        {
+            await Drain(client, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Test]
+    [RequiresServerFeature(TcpFeature.QBitInt8)]
+    public async Task InsertAsync_Int8QBitWrittenByTheClient_IsReadBackByTheServerAsTheSameVector()
+    {
+        // QBit(Int8, N) has its own hand-written transpose loop, so the Float32 check above does not cover it. The
+        // frozen byte fixture in the unit suite is 16 elements — two whole bytes — and this is the non-multiple-of-8
+        // width, where the last byte is partly unused. Server-side toString() keeps the client's read path out of it.
+        await using var client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+
+        await Drain(client, $"CREATE TABLE {table} (v {Int8Type}) ENGINE = Memory");
+        try
+        {
+            sbyte[] vector = Int8Vector();
+            using var column = new ArrayColumn<sbyte[]>("v", Int8Type, new[] { vector });
+            await client.InsertAsync($"INSERT INTO {table} (v) VALUES", new IColumn[] { column }, cancellationToken: None);
+
+            string rendered = await ScalarStringAsync(client, $"SELECT toString(v) FROM {table}");
+
+            Assert.That(rendered, Is.EqualTo("[" + string.Join(",", vector.Select(v => v.ToString(CultureInfo.InvariantCulture))) + "]"));
         }
         finally
         {
