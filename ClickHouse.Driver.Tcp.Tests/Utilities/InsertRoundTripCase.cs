@@ -1452,6 +1452,34 @@ public sealed class InsertRoundTripCase
                     null,
                     new[] { -1f, -2f, -3f, -4f },
                 }));
+
+            // QBit(Int8, N) arrived in 26.7. Its 8 planes are the element's raw two's-complement byte, so
+            // MinValue/-1 pin the sign plane and the all-ones pattern that a widening bug would drop. Dimension 17
+            // is three bytes per row and crosses two whole 8-element groups plus a tail. The byte order itself is
+            // *not* what these prove — writing and reading share QBitLayout.ByteOfGroup, so a reversed convention
+            // round-trips clean; DocumentedInt8Bytes16 and QBitIntegrationTests are what pin it.
+            if (TcpServerFeatures.Has(TcpFeature.QBitInt8))
+            {
+                yield return Same(
+                    "QBit(Int8, 17)",
+                    "QBit(Int8, 17)",
+                    name => new ArrayColumn<sbyte[]>(name, "QBit(Int8, 17)", new[]
+                    {
+                        Ramp(17, i => (sbyte)(i - 8)),
+                        Ramp(17, i => i % 2 == 0 ? sbyte.MaxValue : sbyte.MinValue),
+                        Ramp(17, i => i == 0 ? (sbyte)-1 : (sbyte)0),
+                    }));
+
+                yield return Same(
+                    "Nullable(QBit(Int8, 4))",
+                    "Nullable(QBit(Int8, 4))",
+                    name => new ArrayColumn<sbyte[]>(name, "Nullable(QBit(Int8, 4))", new[]
+                    {
+                        new sbyte[] { 1, -2, sbyte.MaxValue, sbyte.MinValue },
+                        null,
+                        new sbyte[] { 0, -1, 0, -1 },
+                    }));
+            }
         }
 
         // SimpleAggregateFunction(func, T) encodes as a bare T — the function only tells the server how to merge
