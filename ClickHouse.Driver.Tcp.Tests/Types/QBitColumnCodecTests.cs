@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -8,7 +9,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Types;
 
 /// <summary>
 /// Unit coverage for <c>QBit(T, N)</c>, limited to what a server round-trip cannot observe: the exact plane
-/// layout, the significance ordering <see cref="IQBitColumn.GetPlane"/> imposes on top of it, the type-resolution
+/// layout, the significance ordering <see cref="IQBitColumn.GetPlane(int)"/> imposes on top of it, the type-resolution
 /// and write error paths, and the pooled <c>Values</c> cache. Per-type values are covered by
 /// <see cref="InsertRoundTripCase"/> against a real server.
 /// </summary>
@@ -47,6 +48,21 @@ public class QBitColumnCodecTests
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00,
+    };
+
+    // Captured from a ClickHouse 26.7 `SELECT v FROM t FORMAT Native` where v is QBit(Int8, 16) holding one row of
+    // [1, -2, 3, -4, ... 15, -16] — the same input values as DocumentedBytes16, over a two's-complement encoding
+    // rather than IEEE-754. 8 planes of two bytes, most significant (the sign) first. Two bytes per row is what
+    // makes the reversed byte order within a bitmap observable at all.
+    private static readonly byte[] DocumentedInt8Bytes16 =
+    {
+        0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+        0x55, 0xAA, 0x5A, 0x5A, 0x66, 0x66, 0x55, 0x55,
+    };
+
+    private static readonly sbyte[] DocumentedInt8Vector =
+    {
+        1, -2, 3, -4, 5, -6, 7, -8, 9, -10, 11, -12, 13, -14, 15, -16,
     };
 
     private static IColumnCodec Codec(string type) => ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite);
@@ -306,11 +322,128 @@ public class QBitColumnCodecTests
             Throws.ArgumentException.With.Message.Contains("Nullable"));
     }
 
+    [Test]
+    public async Task WriteColumn_Int8Vector_ProducesTheServersOwnBytes()
+    {
+        const string Type = "QBit(Int8, 16)";
+        IColumnCodec codec = Codec(Type);
+        using var column = new ArrayColumn<sbyte[]>("v", Type, new[] { DocumentedInt8Vector });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
+
+        CollectionAssert.AreEqual(DocumentedInt8Bytes16, bytes);
+    }
+
+    [Test]
+    public async Task ReadColumnAsync_Int8ServerBytes_DecodesTheTwosComplementVector()
+    {
+        // The negative values are what a de-transpose that rebuilt the byte through a signed accumulator would
+        // get wrong; the sign is just plane 0's bit, with no widening involved.
+        const string Type = "QBit(Int8, 16)";
+        IColumnCodec codec = Codec(Type);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedInt8Bytes16);
+
+        using IColumn read = await codec.ReadColumnAsync(reader, "v", Type, 1, CodecTestHarness.None);
+
+        CollectionAssert.AreEqual(DocumentedInt8Vector, (sbyte[])read.GetValue(0));
+        Assert.That(((IQBitColumn)read).BitWidth, Is.EqualTo(8));
+    }
+
+    [Test]
+    public void CanWrite_Int8Codec_AcceptsOnlySByteVectors()
+    {
+        IColumnCodec codec = Codec("QBit(Int8, 4)");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.ElementType, Is.EqualTo(typeof(sbyte[])));
+            Assert.That(codec.CanWrite(new ArrayColumn<sbyte[]>("v", "QBit(Int8, 4)", new[] { new sbyte[4] })), Is.True);
+            Assert.That(codec.CanWrite(new ArrayColumn<float[]>("v", "QBit(Int8, 4)", new[] { new float[4] })), Is.False);
+            Assert.That(codec.NullPlaceholder, Is.EqualTo(new sbyte[4]));
+        });
+    }
+
+    [Test]
+    public async Task GetPlane_UnstridedColumn_ReportsOneGroupAndAgreesWithTheGroupOverload()
+    {
+        // Stride and GroupCount describe the strided QBit(T, N, stride) layout 26.7 added, which is not decoded
+        // yet — so every column reports a single group, and GetPlane(bit) is GetPlane(bit, 0). Pinning that keeps
+        // the two accessors from drifting apart when the strided layout does land.
+        IColumnCodec codec = Codec(Float32X4);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
+        var qbit = (IQBitColumn)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(qbit.Stride, Is.EqualTo(qbit.Dimension));
+            Assert.That(qbit.GroupCount, Is.EqualTo(1));
+            Assert.That(qbit.GetPlane(30, 0).ToArray(), Is.EqualTo(qbit.GetPlane(30).ToArray()));
+        });
+    }
+
+    [Test]
+    public async Task GetPlane_GroupPastTheOnlyGroup_ThrowsArgumentOutOfRange()
+    {
+        IColumnCodec codec = Codec(Float32X4);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
+        var qbit = (IQBitColumn)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => qbit.GetPlane(0, 1).ToArray(), Throws.InstanceOf<ArgumentOutOfRangeException>());
+            Assert.That(() => qbit.GetPlane(0, -1).ToArray(), Throws.InstanceOf<ArgumentOutOfRangeException>());
+        });
+    }
+
+    [TestCase(1, 3, TestName = "length runs past the last row")]
+    [TestCase(3, 1, TestName = "start is past the last row")]
+    [TestCase(0, -1, TestName = "negative length")]
+    public async Task WriteColumn_DenseSliceOutsideTheColumn_ThrowsArgumentOutOfRange(int start, int length)
+    {
+        // The dense path slices the blob per plane. The blob is rented and may be longer than the column, so an
+        // over-long range has to be bounded against RowCount rather than against the array — otherwise it would
+        // quietly emit stale pooled bytes instead of failing. Only the dense path can reach this.
+        IColumnCodec codec = Codec(Float32X4);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
+        using IColumn dense = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
+
+        Assert.That(
+            async () => await CodecTestHarness.WriteSliceAsync(codec, dense, start, length),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void ReadColumnAsync_TruncatedPlaneBody_ThrowsEndOfStream()
+    {
+        // A body shorter than BitWidth * rows * BytesPerRow must fail rather than decode whatever the rented blob
+        // happened to contain. This also drives the catch that hands the rent back before rethrowing — that half
+        // is not observable from here, since ArrayPool gives no way to ask whether an array came home.
+        IColumnCodec codec = Codec(Float32X4);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(new byte[] { 0x00, 0x0E });
+
+        Assert.That(
+            async () => await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None),
+            Throws.InstanceOf<EndOfStreamException>());
+    }
+
     [TestCase("QBit(Float32)", TestName = "one argument")]
-    [TestCase("QBit(Float32, 4, 2)", TestName = "the stride form no server accepts")]
+    [TestCase("QBit(Float32, 4, 2, 1)", TestName = "four arguments")]
     public void Resolve_WrongArgumentCount_ThrowsFormatException(string type)
     {
         Assert.That(() => Codec(type), Throws.InstanceOf<FormatException>().With.Message.Contains("exactly two"));
+    }
+
+    [Test]
+    public void Resolve_TheStrideFormAddedIn267_ThrowsNotSupportedException()
+    {
+        // 26.7 added QBit(T, N, stride), whose body is N / stride groups each carrying a full set of planes. The
+        // server prints the third argument only when stride != N, so this is always a genuinely strided column.
+        // Not decoded yet, and the error has to say which of the two it is rather than "wrong argument count".
+        Assert.That(
+            () => Codec("QBit(Float32, 16, 8)"),
+            Throws.InstanceOf<NotSupportedException>().With.Message.Contains("strided"));
     }
 
     [TestCase("QBit(Float32, 0)")]
@@ -321,6 +454,10 @@ public class QBitColumnCodecTests
         Assert.That(() => Codec(type), Throws.InstanceOf<FormatException>().With.Message.Contains("vector length"));
     }
 
+    // Int16 and UInt8 are the near misses: 26.7 widened the element type to Int8 only, so the neighbouring integer
+    // widths stay rejected and a codec that matched on "any integer" would let them through.
+    [TestCase("QBit(Int16, 4)")]
+    [TestCase("QBit(UInt8, 4)")]
     [TestCase("QBit(Int32, 4)")]
     [TestCase("QBit(String, 4)")]
     [TestCase("QBit(Float16, 4)")]
@@ -328,6 +465,6 @@ public class QBitColumnCodecTests
     {
         Assert.That(
             () => Codec(type),
-            Throws.InstanceOf<NotSupportedException>().With.Message.Contains("BFloat16, Float32 and Float64"));
+            Throws.InstanceOf<NotSupportedException>().With.Message.Contains("Int8, BFloat16, Float32 and Float64"));
     }
 }

@@ -25,9 +25,10 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </para>
 ///
 /// <para>
-/// <c>T</c> is <c>BFloat16</c>, <c>Float32</c> or <c>Float64</c> only; the server rejects any other element
-/// type. Note this is the <c>Native</c> layout: over <c>RowBinary</c> the same type is a plain array, which is
-/// why the HTTP driver's <c>QBitType</c> reads a length-prefixed run of values instead.
+/// <c>T</c> is <c>Int8</c>, <c>BFloat16</c>, <c>Float32</c> or <c>Float64</c> only — <c>Int8</c> since 26.7 —
+/// and the server rejects any other element type. Note this is the <c>Native</c> layout: over <c>RowBinary</c>
+/// the same type is a plain array, which is why the HTTP driver's <c>QBitType</c> reads a length-prefixed run
+/// of values instead.
 /// </para>
 /// </summary>
 internal abstract class QBitColumnCodec : IColumnCodec
@@ -41,7 +42,7 @@ internal abstract class QBitColumnCodec : IColumnCodec
         TypeName = typeName;
         Dimension = dimension;
         BitWidth = bitWidth;
-        BytesPerRow = (dimension + 7) / 8;
+        BytesPerRow = QBitLayout.BytesPerRow(dimension);
     }
 
     /// <inheritdoc/>
@@ -62,13 +63,29 @@ internal abstract class QBitColumnCodec : IColumnCodec
     /// <summary>The bytes one row occupies within a single plane, <c>ceil(N / 8)</c>.</summary>
     protected int BytesPerRow { get; }
 
+    /// <summary>
+    /// The elements one group of planes covers. Always <see cref="Dimension"/>: the strided <c>QBit(T, N, stride)</c>
+    /// form is rejected in <see cref="Create"/>, so every column here is a single group.
+    /// </summary>
+    protected int Stride => Dimension;
+
     /// <summary>Builds a <c>QBit(T, N)</c> codec from its element type and dimension arguments.</summary>
     /// <param name="node">The parsed <c>QBit</c> type node.</param>
     /// <returns>The codec.</returns>
     /// <exception cref="FormatException">The type does not have exactly one element type and one positive integer dimension.</exception>
-    /// <exception cref="NotSupportedException">The element type is not one the server allows.</exception>
+    /// <exception cref="NotSupportedException">The element type is not one this client decodes, or the type is strided.</exception>
     public static QBitColumnCodec Create(TypeNode node)
     {
+        // ClickHouse 26.7 added an optional third argument, the stride, which splits a row into N / stride groups
+        // that each carry their own full set of planes. The server only prints it when stride != N, so a
+        // three-argument type is always a genuinely strided column, whose group-major body this client does not
+        // decode yet.
+        if (node.Arguments.Count == 3)
+        {
+            throw new NotSupportedException(
+                $"QBit type '{node}' is strided; this client does not support the strided QBit layout yet.");
+        }
+
         if (node.Arguments.Count != 2)
         {
             throw new FormatException(
@@ -85,15 +102,16 @@ internal abstract class QBitColumnCodec : IColumnCodec
                 $"QBit type '{node}' has an invalid vector length '{token}'; expected a positive integer.");
         }
 
-        // The same three the server allows; anything else is rejected at CREATE TABLE, so a column of one can
-        // only reach us from a server that has changed, not from a table a user could have made today.
+        // The same four the server allows: BFloat16/Float32/Float64 from the start, and Int8 from 26.7. Every one
+        // is stored the same way — bits(T) planes over the element's raw bit pattern, most significant first.
         return element switch
         {
+            "Int8" => new QBitSByteColumnCodec(typeName, dimension),
             "BFloat16" => new QBitFloatColumnCodec(typeName, dimension, bitWidth: 16),
             "Float32" => new QBitFloatColumnCodec(typeName, dimension, bitWidth: 32),
             "Float64" => new QBitDoubleColumnCodec(typeName, dimension),
             _ => throw new NotSupportedException(
-                $"QBit type '{node}' has element type '{element}'; only BFloat16, Float32 and Float64 are supported."),
+                $"QBit type '{node}' has element type '{element}'; only Int8, BFloat16, Float32 and Float64 are supported."),
         };
     }
 
@@ -132,7 +150,11 @@ internal abstract class QBitColumnCodec : IColumnCodec
         // straight back. One copy per plane rather than one for the whole range: the body is plane-major, so a
         // row range is contiguous *within* a plane but the planes themselves are strided by the source's own row
         // count, which is not this range's length unless the whole column is being written.
-        if (column is QBitColumn dense && dense.Dimension == Dimension && dense.BitWidth == BitWidth)
+        // The stride has to be compared too, not just the dimension and plane count: QBit(Float32, 16, 8) and
+        // QBit(Float32, 16) agree on both and even on total body size (2 groups x 32 planes x 1 byte against
+        // 32 planes x 2 bytes), so without this a strided source would blit a group-major body into an unstrided
+        // column with nothing to catch it. Always true today — no strided column resolves — and cheap to keep.
+        if (column is QBitColumn dense && dense.Dimension == Dimension && dense.BitWidth == BitWidth && dense.Stride == Stride)
         {
             for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
             {
@@ -206,6 +228,78 @@ internal abstract class QBitColumnCodec : IColumnCodec
         }
 
         return vector;
+    }
+}
+
+/// <summary>
+/// The <c>QBit(Int8, N)</c> codec, added by ClickHouse 26.7: 8 planes over each element's raw two's-complement
+/// byte, most significant first, so plane 0 on the wire is the sign bit.
+///
+/// <para>
+/// Not vectorized yet. <c>Vector256&lt;byte&gt;.ExtractMostSignificantBits</c> would yield four plane bytes per
+/// extract against the <see cref="float"/> path's one, so the headroom is real; it wants a benchmark rather
+/// than a guess, and the follow-up is filed with the read-direction one.
+/// </para>
+/// </summary>
+internal sealed class QBitSByteColumnCodec : QBitColumnCodec
+{
+    private sbyte[] nullPlaceholder;
+
+    /// <summary>Initializes the 8-bit integer codec.</summary>
+    /// <param name="typeName">The canonical type string.</param>
+    /// <param name="dimension">The vector length <c>N</c>.</param>
+    public QBitSByteColumnCodec(string typeName, int dimension)
+        : base(typeName, dimension, bitWidth: 8)
+    {
+    }
+
+    /// <inheritdoc/>
+    public override Type ElementType => typeof(sbyte[]);
+
+    /// <summary>The all-zero placeholder vector; see <see cref="QBitFloatColumnCodec.NullPlaceholder"/>.</summary>
+    public override object NullPlaceholder => nullPlaceholder ??= new sbyte[Dimension];
+
+    /// <inheritdoc/>
+    public override bool CanWrite(IColumn column) => column is IColumn<sbyte[]>;
+
+    /// <inheritdoc/>
+    protected override IColumn CreateColumn(string name, string typeName, byte[] blob, int rowCount, bool pooled)
+        => new QBitSByteColumn(name, typeName, Dimension, blob, rowCount, pooled);
+
+    /// <inheritdoc/>
+    protected override void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        var typed = (IColumn<sbyte[]>)column;
+        byte[] scratch = RentScratch(length, out int byteCount);
+        try
+        {
+            int planeStride = length * BytesPerRow;
+            for (int r = 0; r < length; r++)
+            {
+                sbyte[] vector = Validate(typed[start + r], start + r);
+                int rowBase = r * BytesPerRow;
+                for (int i = 0; i < vector.Length; i++)
+                {
+                    // Reinterpreted, not converted: a negative element is its two's-complement byte.
+                    uint raw = unchecked((byte)vector[i]);
+                    int slot = QBitLayout.ByteOfGroup(i >> 3, BytesPerRow);
+                    byte bit = (byte)(1 << (i & 7));
+                    for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
+                    {
+                        if (((raw >> (7 - wireIndex)) & 1) != 0)
+                        {
+                            scratch[(wireIndex * planeStride) + rowBase + slot] |= bit;
+                        }
+                    }
+                }
+            }
+
+            writer.WriteBytes(scratch.AsSpan(0, byteCount));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(scratch);
+        }
     }
 }
 
