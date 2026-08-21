@@ -18,14 +18,22 @@ internal static class QBitLayout
     /// in byte 8 and element 64 in byte 0.
     ///
     /// <para>
-    /// This is invisible whenever <c>N &lt;= 8</c>, where a row is a single byte — which is why the layout notes
-    /// in <c>native-format.md</c> describe it the other way round.
+    /// This is invisible whenever <c>N &lt;= 8</c>, where a row is a single byte, so only a fixture wider than
+    /// that pins it.
     /// </para>
     /// </summary>
     /// <param name="group">The element's group index, <c>element / 8</c>.</param>
     /// <param name="bytesPerRow">The row's bitmap width, <c>ceil(N / 8)</c>.</param>
     /// <returns>The byte offset within the row's bitmap.</returns>
     public static int ByteOfGroup(int group, int bytesPerRow) => bytesPerRow - 1 - group;
+
+    /// <summary>
+    /// The bytes a row's bitmap occupies, <c>ceil(span / 8)</c>. Written as <c>(span - 1) / 8 + 1</c> rather than
+    /// the usual <c>(span + 7) / 8</c> so it cannot overflow for any positive <paramref name="span"/>.
+    /// </summary>
+    /// <param name="span">The number of elements the bitmap covers; must be positive.</param>
+    /// <returns>The bitmap width in bytes.</returns>
+    public static int BytesPerRow(int span) => ((span - 1) / 8) + 1;
 }
 
 /// <summary>
@@ -42,14 +50,14 @@ internal static class QBitLayout
 /// </para>
 ///
 /// <para>
-/// This non-generic base carries everything that does not depend on whether the elements surface as
-/// <see cref="float"/> or <see cref="double"/>, which is what lets the codec's dense write path recognise a
-/// QBit column and copy its planes without knowing the element type.
+/// This non-generic base carries everything that does not depend on which CLR type the elements surface as,
+/// which is what lets the codec's dense write path recognise a QBit column and copy its planes without knowing
+/// the element type.
 /// </para>
 ///
 /// <para>
 /// The blob is rented from <see cref="ArrayPool{T}"/> and returned on <see cref="Dispose"/>; like every column,
-/// the bytes and any span returned by <see cref="GetPlane"/> are borrowed for the block's lifetime.
+/// the bytes and any span returned by <see cref="GetPlane(int)"/> are borrowed for the block's lifetime.
 /// </para>
 /// </summary>
 internal abstract class QBitColumn : IQBitColumn
@@ -72,7 +80,7 @@ internal abstract class QBitColumn : IQBitColumn
         TypeName = typeName;
         Dimension = dimension;
         BitWidth = bitWidth;
-        BytesPerRow = (dimension + 7) / 8;
+        BytesPerRow = QBitLayout.BytesPerRow(dimension);
         this.blob = blob ?? throw new ArgumentNullException(nameof(blob));
         this.rowCount = rowCount;
         this.pooled = pooled;
@@ -96,8 +104,31 @@ internal abstract class QBitColumn : IQBitColumn
     /// <inheritdoc/>
     public int BytesPerRow { get; }
 
+    /// <summary>
+    /// Always <see cref="Dimension"/>: the strided <c>QBit(T, N, stride)</c> form that 26.7 added is rejected at
+    /// codec resolution, so every column that reaches here is a single group.
+    /// </summary>
+    public int Stride => Dimension;
+
+    /// <summary>Always 1; see <see cref="Stride"/>.</summary>
+    public int GroupCount => 1;
+
     /// <inheritdoc/>
     public ReadOnlySpan<byte> GetPlane(int bit)
+    {
+        // Unreachable while GroupCount is 1, and deliberately so: when the strided layout lands, a caller of this
+        // overload would otherwise get one group's bytes — a shorter span, silently misindexed — instead of an error.
+        if (GroupCount != 1)
+        {
+            throw new InvalidOperationException(
+                $"Column '{Name}' ({TypeName}) has {GroupCount} plane groups, so a plane is not one contiguous run; use GetPlane(bit, group).");
+        }
+
+        return GetPlane(bit, group: 0);
+    }
+
+    /// <inheritdoc/>
+    public ReadOnlySpan<byte> GetPlane(int bit, int group)
     {
         if ((uint)bit >= (uint)BitWidth)
         {
@@ -106,7 +137,14 @@ internal abstract class QBitColumn : IQBitColumn
                 $"Bit {bit} is outside the {BitWidth} plane(s) of column '{Name}' ({TypeName}).");
         }
 
-        return WirePlane(BitWidth - 1 - bit, 0, rowCount);
+        if ((uint)group >= (uint)GroupCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(group),
+                $"Group {group} is outside the {GroupCount} group(s) of column '{Name}' ({TypeName}).");
+        }
+
+        return WirePlane(((group * BitWidth) + BitWidth - 1 - bit), 0, rowCount);
     }
 
     /// <inheritdoc/>
@@ -170,7 +208,7 @@ internal abstract class QBitColumn : IQBitColumn
 /// The typed per-row view over a <see cref="QBitColumn"/>: each row's vector as a
 /// <typeparamref name="T"/>[], de-transposed on demand and cached.
 /// </summary>
-/// <typeparam name="T">The CLR element type a row's vector surfaces as — <see cref="float"/> or <see cref="double"/>.</typeparam>
+/// <typeparam name="T">The CLR element type a row's vector surfaces as — <see cref="float"/>, <see cref="double"/> or <see cref="sbyte"/>.</typeparam>
 internal abstract class QBitColumnBase<T> : QBitColumn, IColumn<T[]>
     where T : struct
 {
@@ -193,7 +231,7 @@ internal abstract class QBitColumnBase<T> : QBitColumn, IColumn<T[]>
     /// The rows as per-row vectors, materialized once and cached. Every row costs
     /// <c>BitWidth * BytesPerRow</c> byte fetches to de-transpose — 4 KiB for a 1024-dimension
     /// <c>Float32</c> embedding — so this is built on first use, not on read. Prefer
-    /// <see cref="QBitColumn.GetPlane"/> where the planes themselves are what is wanted.
+    /// <see cref="QBitColumn.GetPlane(int)"/> where the planes themselves are what is wanted.
     /// </summary>
     public ReadOnlySpan<T[]> Values
     {
@@ -298,6 +336,50 @@ internal sealed class QBitFloatColumn : QBitColumnBase<float>
             for (int i = 0; i < bits.Length; i++)
             {
                 bits[i] <<= 16;
+            }
+        }
+
+        return vector;
+    }
+}
+
+/// <summary>
+/// A <c>QBit(Int8, N)</c> column: 8 planes rebuilding each element's raw two's-complement byte.
+/// </summary>
+internal sealed class QBitSByteColumn : QBitColumnBase<sbyte>
+{
+    /// <summary>Initializes an 8-bit integer QBit column.</summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="typeName">The ClickHouse type string.</param>
+    /// <param name="dimension">The vector length <c>N</c>.</param>
+    /// <param name="blob">The plane blob.</param>
+    /// <param name="rowCount">The number of rows.</param>
+    /// <param name="pooled">Whether <paramref name="blob"/> was rented.</param>
+    public QBitSByteColumn(string name, string typeName, int dimension, byte[] blob, int rowCount, bool pooled)
+        : base(name, typeName, dimension, bitWidth: 8, blob, rowCount, pooled)
+    {
+    }
+
+    /// <inheritdoc/>
+    protected override sbyte[] DetransposeRow(int row)
+    {
+        CheckRow(row);
+
+        var vector = new sbyte[Dimension];
+
+        // Gather through the unsigned view, as the float paths do: the bits being collected are the raw
+        // two's-complement pattern, so setting bit 7 gives the negative value without any signed cast.
+        Span<byte> bits = MemoryMarshal.Cast<sbyte, byte>(vector.AsSpan());
+        for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
+        {
+            ReadOnlySpan<byte> plane = WirePlaneRow(wireIndex, row);
+            byte mask = (byte)(1 << (BitWidth - 1 - wireIndex));
+            for (int i = 0; i < bits.Length; i++)
+            {
+                if ((plane[QBitLayout.ByteOfGroup(i >> 3, BytesPerRow)] & (1 << (i & 7))) != 0)
+                {
+                    bits[i] |= mask;
+                }
             }
         }
 
