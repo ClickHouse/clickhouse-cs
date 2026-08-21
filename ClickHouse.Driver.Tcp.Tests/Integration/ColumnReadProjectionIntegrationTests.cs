@@ -10,14 +10,11 @@ using ClickHouse.Driver.Tcp.Types.Codecs;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// Checks <see cref="IColumnCodec.TryProjectRead"/> against a real server: the projection of a decoded column must
-/// agree with the instant the server itself means by that value. The unit tests pin the arithmetic against
-/// hand-computed constants; these pin it against the server's own timezone and scale handling, which is the part
-/// a hand-computed constant could agree with only by luck.
-///
+/// Checks <see cref="IColumnCodec.TryProjectRead"/> against a real server: a projection must agree with the instant
+/// the server itself means by that value. The unit tests pin the arithmetic against hand-computed constants; these
+/// pin it against the server's own timezone and scale handling, which a constant could match only by luck.
 /// <para>
-/// Every case names its timezone explicitly in the type, so the assertions do not depend on the container's
-/// session timezone.
+/// Every case names its timezone in the type, so no assertion depends on the container's session timezone.
 /// </para>
 /// </summary>
 [TestFixture]
