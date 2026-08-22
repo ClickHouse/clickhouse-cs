@@ -52,6 +52,11 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// Runs a query and streams its result one row at a time as <c>object[]</c>, each entry the boxed value of a
     /// column in header order. Each returned array is owned and safe to retain past the enumeration.
     /// </summary>
+    /// <remarks>
+    /// Owned, but not unshared: a <c>LowCardinality</c> column hands each row its dictionary entry rather than a copy,
+    /// so an array-valued entry must not be mutated in place — with a <c>LowCardinality(FixedString(N))</c> the
+    /// <c>byte[]</c> may be another row's too. An implementation must honor that, since a consumer cannot tell.
+    /// </remarks>
     /// <param name="sql">The SQL text.</param>
     /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>

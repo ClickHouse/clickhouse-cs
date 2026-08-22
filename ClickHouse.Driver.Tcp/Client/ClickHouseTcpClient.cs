@@ -45,7 +45,9 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     private readonly IConnectionSource source;
 
     // Per-client, as HTTP's registry is: the client is meant to be a singleton, so the reflection and the compiles
-    // are amortized anyway, and a per-client cache cannot pin a type whose AssemblyLoadContext the caller unloads.
+    // are amortized anyway. It does hold its Type keys and compiled delegates strongly, so it pins a collectible
+    // AssemblyLoadContext for as long as the client is reachable; scoping it to the client is what makes disposing
+    // the client release them, rather than holding them for the process. See PocoTypeRegistry.
     private readonly PocoTypeRegistry pocoTypes = new();
 
     /// <summary>Creates a client from options.</summary>
@@ -136,6 +138,14 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// column in header order (pair with <see cref="Block.ColumnNames"/> — via <see cref="StreamAsync"/> — to
     /// address by name). Each returned array is owned and safe to retain past the enumeration.
     /// </summary>
+    /// <remarks>
+    /// One caveat on <em>sharing</em>, as opposed to lifetime: a <c>LowCardinality</c> column holds a dictionary of
+    /// distinct values and one key per row, and hands each row that dictionary entry rather than a copy of it. So do
+    /// not mutate an array-valued entry in place — with a <c>LowCardinality(FixedString(N))</c> the <c>byte[]</c> may
+    /// be another row's too. The aliasing is bounded to one block, since each block ships its own dictionary, which
+    /// makes it harder to catch rather than easier: a small result is a single block and aliases throughout, while a
+    /// large one aliases only within each block.
+    /// </remarks>
     /// <param name="sql">The SQL text.</param>
     /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
