@@ -43,6 +43,20 @@ public class PocoWriteIntegrationTests
             IColumn insert = testCase.BuildInsertColumn("value");
             string sql = $"INSERT INTO {table} (value) VALUES";
 
+            // Geometry rows cannot be gathered either, but it fails a step later than Nested and for a different
+            // reason, so it needs its own branch. Its codec accepts a column of object like any Variant — an
+            // IColumn<object> says nothing about the runtime types it holds — and only the individual value is
+            // refused, because four of its six alternatives are structurally identical in pairs. Still before any
+            // byte reaches the wire.
+            if (testCase.ClickHouseType == "Geometry")
+            {
+                ArgumentException ambiguous = Assert.ThrowsAsync<ArgumentException>(
+                    async () => await InsertColumnAsRowsAsync(client, sql, insertOptions, insert, ElementTypeOf(insert)));
+
+                Assert.That(ambiguous.Message, Does.Contain("more than one alternative"));
+                return;
+            }
+
             // A Nested target is the one corpus shape rows cannot be gathered into: its codec writes from its own
             // column type (flat field columns behind shared offsets), which no property can hold. It has to say so
             // rather than fail once the values are on the wire.

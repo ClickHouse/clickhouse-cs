@@ -67,6 +67,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
     private readonly IColumnCodec[] children;
     private readonly Func<string, string, object[], int, IColumn>[] childFlatBuilders;
     private readonly Dictionary<Type, int> discriminatorByClrType;
+    private readonly HashSet<Type> ambiguousClrTypes;
     private readonly bool allChildrenWritable;
 
     private VariantColumnCodec(string typeName, IColumnCodec[] children)
@@ -84,9 +85,17 @@ internal sealed class VariantColumnCodec : IColumnCodec
         // here — not a codec's extra convenience write types (e.g. DateTime alongside DateTimeOffset): the
         // per-alternative bucket is materialized as that exact element type (BuildFlatColumn<ElementType>), so a
         // convenience-typed value would fail the bucket cast. Rejecting it up front with a clear "no alternative"
-        // error beats a deep InvalidCastException. If two alternatives claimed the same CLR type the lower
-        // discriminator would win (the server forbids duplicate alternative types, so this is only a tie-break).
+        // error beats a deep InvalidCastException.
+        //
+        // Two alternatives can share a CLR type even though the server forbids duplicate alternative *types*: they
+        // only have to be structurally identical. Ring and LineString are both Array(Point), so both surface as
+        // (double, double)[], as do Polygon and MultiLineString — which makes four of Geometry's six collide.
+        // IPv4 and IPv6 both surface IPAddress, and JSON and String both surface string. A value of a colliding
+        // type names no single alternative, so it is struck from the map instead of tie-breaking to the lower
+        // discriminator, and asking for it throws. The rest of the map still resolves: a string written into
+        // Variant(IPv4, IPv6, String) is unambiguous and keeps working, and only an IPAddress is refused.
         discriminatorByClrType = new Dictionary<Type, int>();
+        ambiguousClrTypes = new HashSet<Type>();
         bool writable = true;
         for (int i = 0; i < typeCount; i++)
         {
@@ -94,7 +103,11 @@ internal sealed class VariantColumnCodec : IColumnCodec
                 .MakeGenericMethod(children[i].ElementType)
                 .CreateDelegate(typeof(Func<string, string, object[], int, IColumn>));
 
-            discriminatorByClrType.TryAdd(children[i].ElementType, i);
+            if (!discriminatorByClrType.TryAdd(children[i].ElementType, i))
+            {
+                ambiguousClrTypes.Add(children[i].ElementType);
+                discriminatorByClrType.Remove(children[i].ElementType);
+            }
 
             // A Variant over a non-writable alternative (e.g. Nothing) is rejected up front rather than mid-write.
             writable &= children[i].CanWriteElementType(children[i].ElementType);
@@ -105,6 +118,14 @@ internal sealed class VariantColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public string TypeName { get; }
+
+    /// <summary>
+    /// The alternatives' ClickHouse type names, in discriminator order — alternative <c>i</c> is what discriminator
+    /// <c>i</c> selects. For a spelled-out <c>Variant(...)</c> this only restates the type string, but for an alias
+    /// the client expands itself (<c>Geometry</c>) it is the whole of the client's claim about the ordering, which
+    /// nothing on the wire carries and which callers of the dense column depend on to mean what they intend.
+    /// </summary>
+    internal IReadOnlyList<string> AlternativeTypeNames => Array.ConvertAll(children, child => child.TypeName);
 
     /// <inheritdoc/>
     public Type ElementType => typeof(object);
@@ -118,10 +139,13 @@ internal sealed class VariantColumnCodec : IColumnCodec
     /// <param name="node">The parsed <c>Variant</c> node; its arguments are the alternative types in discriminator order.</param>
     /// <param name="context">The resolution context, forwarded to each alternative codec's factory.</param>
     /// <param name="registry">The registry used to resolve the alternative codecs.</param>
+    /// <param name="typeName">The name to report as the codec's <see cref="IColumnCodec.TypeName"/>, or null to use
+    /// <paramref name="node"/>'s own. An alias whose structure is a variant (<c>Geometry</c>) passes its own name so
+    /// diagnostics name the type the server sent rather than the structure it stands for.</param>
     /// <returns>The codec.</returns>
     /// <exception cref="FormatException">The variant has no alternatives, or an alternative is <c>Nullable</c>.</exception>
     /// <exception cref="NotSupportedException">The variant has more alternatives than the BASIC layout can address.</exception>
-    public static VariantColumnCodec Create(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry)
+    public static VariantColumnCodec Create(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry, string typeName = null)
     {
         if (node.Arguments.Count == 0)
         {
@@ -156,7 +180,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
             childCodecs[i] = registry.ResolveNode(argument, in context);
         }
 
-        return new VariantColumnCodec(node.ToString(), childCodecs);
+        return new VariantColumnCodec(typeName ?? node.ToString(), childCodecs);
     }
 
     /// <inheritdoc/>
@@ -221,6 +245,11 @@ internal sealed class VariantColumnCodec : IColumnCodec
     // that checked, and the first thing the writer does is put the discriminators on the wire — so a bad value
     // would desync the block mid-stream rather than fail cleanly. Anything else writable arrives as IColumn<object>
     // and goes down the scattered path, which validates as it goes.
+    //
+    // Whether a *value* names an alternative is not answerable here: an IColumn<object> says nothing about the
+    // runtime types it holds, so a Variant with colliding alternatives is still accepted at this gate and refuses
+    // the individual value later, in DiscriminatorFor. Refusing the whole column here instead would also reject
+    // every unambiguous value it holds.
     public bool CanWriteElementType(Type elementType) => allChildrenWritable && elementType == ElementType;
 
     /// <inheritdoc/>
@@ -491,12 +520,23 @@ internal sealed class VariantColumnCodec : IColumnCodec
         };
     }
 
-    // Resolves the discriminator for a value's runtime CLR type, or throws if no alternative accepts it.
+    // Resolves the discriminator for a value's runtime CLR type, or throws if no alternative accepts it — or if
+    // more than one does. Reached from BeginWrite, so either refusal happens before a byte is on the wire.
     private int DiscriminatorFor(Type clrType)
     {
         if (discriminatorByClrType.TryGetValue(clrType, out int discriminator))
         {
             return discriminator;
+        }
+
+        // Struck from the map because two alternatives share it. Picking one would silently store the value as the
+        // other type — a Ring written as a LineString — so the caller has to say which, by supplying the dense
+        // column whose discriminators are explicit.
+        if (ambiguousClrTypes.Contains(clrType))
+        {
+            throw new ArgumentException(
+                $"Variant '{TypeName}' has more than one alternative of CLR type '{clrType}', so a value of that type does not say which " +
+                "one it is. Supply a dense VariantColumn, whose per-row discriminators name the alternative.");
         }
 
         throw new ArgumentException(

@@ -133,10 +133,13 @@ internal sealed class TupleColumnCodec : IColumnCodec
     /// <param name="node">The parsed <c>Tuple</c> node; its arguments are the element types (each optionally name-prefixed).</param>
     /// <param name="context">The resolution context, forwarded to each element codec's factory.</param>
     /// <param name="registry">The registry used to resolve the element codecs.</param>
+    /// <param name="typeName">The name to report as the codec's <see cref="IColumnCodec.TypeName"/>, or null to use
+    /// <paramref name="node"/>'s own. An alias whose structure is a tuple (<c>Point</c>) passes its own name so
+    /// diagnostics name the type the server sent rather than the structure it stands for.</param>
     /// <returns>The codec: <see cref="EmptyTupleColumnCodec"/> for <c>Tuple()</c>, otherwise this per-element one.</returns>
     /// <exception cref="FormatException">The type names no elements and has no argument list either.</exception>
     /// <exception cref="NotSupportedException">The tuple has more elements than this client supports.</exception>
-    public static IColumnCodec Create(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry)
+    public static IColumnCodec Create(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry, string typeName = null)
     {
         if (node.Arguments.Count == 0)
         {
@@ -168,7 +171,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
             anyNamed |= elements[i].Name is not null;
         }
 
-        return new TupleColumnCodec(node.ToString(), childCodecs, anyNamed ? names : null);
+        return new TupleColumnCodec(typeName ?? node.ToString(), childCodecs, anyNamed ? names : null);
     }
 
     /// <inheritdoc/>

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Net;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -122,6 +124,48 @@ public class VariantColumnCodecTests
         var column = new ArrayColumn<object>("v", StringUInt64, new object[] { 3.14 }); // double matches neither String nor UInt64
 
         Assert.ThrowsAsync<ArgumentException>(async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
+    }
+
+    // Two alternatives can share a CLR element type even though the server forbids duplicate alternative types —
+    // they only have to be structurally identical. IPv4 and IPv6 are both IPAddress; JSON and String are both
+    // string; Geometry collides twice over (Ring/LineString, Polygon/MultiLineString). Such a value names neither
+    // alternative, and picking the lower discriminator would store it as the wrong one with no error.
+    [TestCaseSource(nameof(AmbiguousAlternativeCases))]
+    public void WriteColumn_ValueWhoseClrTypeTwoAlternativesShare_Throws(string type, object ambiguous)
+    {
+        IColumnCodec codec = Resolve(type);
+        var column = new ArrayColumn<object>("v", type, new[] { ambiguous });
+
+        ArgumentException refusal = Assert.ThrowsAsync<ArgumentException>(
+            async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
+        Assert.That(refusal.Message, Does.Contain("more than one alternative"));
+    }
+
+    // The refusal above is per value, not per column: an IColumn<object> says nothing about the runtime types it
+    // holds, so refusing the whole column would also reject every unambiguous value in it. A string is unambiguous
+    // in Variant(IPv4, IPv6, String) and a UInt64 is in Variant(JSON, String, UInt64), and both still write.
+    [TestCaseSource(nameof(UnambiguousAlternativeCases))]
+    public async Task WriteColumn_ValueWhoseClrTypeOneAlternativeHas_WritesEvenWhenOthersCollide(string type, object unambiguous)
+    {
+        IColumnCodec codec = Resolve(type);
+        var column = new ArrayColumn<object>("v", type, new[] { unambiguous });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
+        Assert.That(bytes, Is.Not.Empty);
+    }
+
+    private static IEnumerable<TestCaseData> AmbiguousAlternativeCases()
+    {
+        // Parse, not IPAddress.Loopback: the well-known statics are a private ReadOnlyIPAddress subclass, whose
+        // runtime type is not IPAddress and so matches no alternative at all — a different refusal.
+        yield return new TestCaseData("Variant(IPv4, IPv6, String)", (object)IPAddress.Parse("127.0.0.1")).SetName("IPv4 and IPv6 are both IPAddress");
+        yield return new TestCaseData("Variant(JSON, String, UInt64)", (object)"{}").SetName("JSON and String are both string");
+    }
+
+    private static IEnumerable<TestCaseData> UnambiguousAlternativeCases()
+    {
+        yield return new TestCaseData("Variant(IPv4, IPv6, String)", (object)"abc").SetName("String beside the colliding IP pair");
+        yield return new TestCaseData("Variant(JSON, String, UInt64)", (object)7UL).SetName("UInt64 beside the colliding text pair");
     }
 
     [Test]
