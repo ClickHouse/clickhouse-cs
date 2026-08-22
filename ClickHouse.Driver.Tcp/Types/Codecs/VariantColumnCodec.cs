@@ -96,10 +96,8 @@ internal sealed class VariantColumnCodec : IColumnCodec
 
             discriminatorByClrType.TryAdd(children[i].ElementType, i);
 
-            // Probe writability with an empty child column so a Variant over a non-writable alternative (e.g.
-            // Nothing) is rejected up front rather than mid-write.
-            IColumn probe = childFlatBuilders[i](string.Empty, children[i].TypeName, Array.Empty<object>(), 0);
-            writable &= children[i].CanWrite(probe);
+            // A Variant over a non-writable alternative (e.g. Nothing) is rejected up front rather than mid-write.
+            writable &= children[i].CanWriteElementType(children[i].ElementType);
         }
 
         allChildrenWritable = writable;
@@ -223,6 +221,9 @@ internal sealed class VariantColumnCodec : IColumnCodec
     // that checked, and the first thing the writer does is put the discriminators on the wire — so a bad value
     // would desync the block mid-stream rather than fail cleanly. Anything else writable arrives as IColumn<object>
     // and goes down the scattered path, which validates as it goes.
+    public bool CanWriteElementType(Type elementType) => allChildrenWritable && elementType == ElementType;
+
+    /// <inheritdoc/>
     public bool CanWrite(IColumn column)
         => allChildrenWritable && (column is VariantColumn dense ? dense.TypeCount == children.Length : column is IColumn<object>);
 

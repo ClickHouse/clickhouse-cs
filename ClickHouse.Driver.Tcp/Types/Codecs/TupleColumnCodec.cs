@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -59,12 +62,17 @@ internal sealed class TupleColumnCodec : IColumnCodec
         typeof(TupleColumn<,,,,,,>),
     };
 
+    // The per-field projection builders for a source tuple type other than this codec's canonical one, built on
+    // demand. Keyed by the tuple type alone, since the builders depend only on its field types -- so a shape is built
+    // once for the whole process rather than once per codec, and the cartesian set of accepted tuples is never
+    // materialized: only the tuples actually written get an entry.
+    private static readonly ConcurrentDictionary<Type, Func<string, IColumn, int, IColumn>[]> LiftedProjectionBuilders = new();
+
     private readonly IColumnCodec[] children;
     private readonly string[] fieldNames;
     private readonly ConstructorInfo columnConstructor;
     private readonly Type icolumnOfTupleType;
     private readonly Func<string, IColumn, int, IColumn>[] childProjectionBuilders;
-    private readonly bool projectedChildrenWritable;
 
     private TupleColumnCodec(string typeName, IColumnCodec[] children, string[] fieldNames)
     {
@@ -104,27 +112,12 @@ internal sealed class TupleColumnCodec : IColumnCodec
         MethodInfo projectionTemplate = typeof(TupleColumnCodec).GetMethod(nameof(BuildProjection), BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException($"Method '{nameof(BuildProjection)}' was not found.");
 
-        // Closed once per element type to build an empty child column for the up-front writability probe below.
-        MethodInfo emptyTemplate = typeof(TupleColumnCodec).GetMethod(nameof(BuildEmptyColumn), BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException($"Method '{nameof(BuildEmptyColumn)}' was not found.");
-
-        bool writable = true;
         for (int i = 0; i < arity; i++)
         {
             childProjectionBuilders[i] = (Func<string, IColumn, int, IColumn>)projectionTemplate
                 .MakeGenericMethod(elementTypes[i])
                 .CreateDelegate(typeof(Func<string, IColumn, int, IColumn>));
-
-            // Probe the flat ValueTuple path with the projected child shape it will actually hand the codec. A
-            // dense TupleColumn is checked against its real child columns in CanWrite instead, which lets a
-            // Tuple(Nested(...)) re-insert its wire-shaped NestedColumn child.
-            var emptyBuilder = (Func<string, IColumn>)emptyTemplate
-                .MakeGenericMethod(elementTypes[i])
-                .CreateDelegate(typeof(Func<string, IColumn>));
-            writable &= children[i].CanWrite(emptyBuilder(children[i].TypeName));
         }
-
-        projectedChildrenWritable = writable;
     }
 
     /// <inheritdoc/>
@@ -220,32 +213,136 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column)
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
     {
-        if (!icolumnOfTupleType.IsInstanceOfType(column))
+        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
+
+        if (targetType == ElementType)
+        {
+            projected = value;
+            return true;
+        }
+
+        projected = null;
+
+        // Only a ValueTuple of this same arity can hold the row. Arity is part of the shape, not something a child
+        // could absorb, so a wider or narrower tuple is refused rather than being filled or truncated.
+        int arity = children.Length;
+        if (!targetType.IsGenericType || targetType.GetGenericTypeDefinition() != ValueTupleDefinitions[arity])
         {
             return false;
         }
 
-        if (column is not ITupleColumn dense)
+        // Bound to a local: every field is read off it, so splicing the source expression per field would evaluate it
+        // up to MaxArity times.
+        ParameterExpression source = Expression.Variable(ElementType, "tuple");
+        Type[] targetArguments = targetType.GetGenericArguments();
+        var fieldProjections = new Expression[arity];
+        for (int i = 0; i < arity; i++)
         {
-            return projectedChildrenWritable;
+            // ValueTuple's elements are fields, not properties. Each child is asked for its own field's target, so a
+            // caller may lift one field and leave the rest canonical.
+            if (!children[i].TryProjectRead(Expression.Field(source, "Item" + (i + 1).ToString(CultureInfo.InvariantCulture)), targetArguments[i], out fieldProjections[i]))
+            {
+                return false;
+            }
         }
 
-        if (dense.Children.Count != children.Length)
+        projected = Expression.Block(
+            new[] { source },
+            Expression.Assign(source, value),
+            Expression.New(
+                targetType.GetConstructor(targetArguments) ?? throw new InvalidOperationException($"The tuple type '{targetType}' is missing its all-element constructor."),
+                fieldProjections));
+        return true;
+    }
+
+    /// <inheritdoc/>
+    public bool CanWriteElementType(Type elementType)
+    {
+        int arity = children.Length;
+        if (!elementType.IsGenericType || elementType.GetGenericTypeDefinition() != ValueTupleDefinitions[arity])
         {
             return false;
         }
 
-        for (int i = 0; i < children.Length; i++)
+        // Each field is asked of its own child, so one field may be lifted while the rest stay canonical. Arity is part
+        // of the shape and no child can absorb it, so a wider or narrower tuple was already refused above.
+        Type[] arguments = elementType.GetGenericArguments();
+        for (int i = 0; i < arity; i++)
         {
-            if (!children[i].CanWrite(dense.Children[i]))
+            if (!children[i].CanWriteElementType(arguments[i]))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /// <inheritdoc/>
+    public bool CanWrite(IColumn column)
+    {
+        // A dense tuple column is the wire's own shape: check it against its real child columns, which is what lets a
+        // Tuple(Nested(...)) re-insert the wire-shaped NestedColumn child a read yields.
+        if (column is ITupleColumn dense)
+        {
+            if (!icolumnOfTupleType.IsInstanceOfType(column) || dense.Children.Count != children.Length)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < children.Length; i++)
+            {
+                if (!children[i].CanWrite(dense.Children[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return CanWriteElementType(column.ElementType);
+    }
+
+    // The per-field projection builders for the CLR tuple type this column's rows hold. The canonical tuple keeps the
+    // builders closed at construction; any other gets builders closed over its own field types, so a
+    // Tuple(DateTime, String) column takes a (DateTime, string) row with the field codecs converting as they write.
+    private Func<string, IColumn, int, IColumn>[] ProjectionBuildersFor(Type tupleType)
+    {
+        if (tupleType == ElementType)
+        {
+            return childProjectionBuilders;
+        }
+
+        if (!CanWriteElementType(tupleType))
+        {
+            throw new ArgumentException(
+                $"A {TypeName} column must hold rows of a CLR tuple type its field codecs accept, not {tupleType}.",
+                nameof(tupleType));
+        }
+
+        return LiftedProjectionBuilders.GetOrAdd(tupleType, BuildProjectionBuilders);
+    }
+
+    // Closes BuildProjection<T> over each of a tuple type's field types, matching what the constructor does for the
+    // canonical tuple.
+    private static Func<string, IColumn, int, IColumn>[] BuildProjectionBuilders(Type tupleType)
+    {
+        MethodInfo template = typeof(TupleColumnCodec).GetMethod(nameof(BuildProjection), BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException($"Method '{nameof(BuildProjection)}' was not found.");
+
+        Type[] arguments = tupleType.GetGenericArguments();
+        var builders = new Func<string, IColumn, int, IColumn>[arguments.Length];
+        for (int i = 0; i < arguments.Length; i++)
+        {
+            builders[i] = (Func<string, IColumn, int, IColumn>)template
+                .MakeGenericMethod(arguments[i])
+                .CreateDelegate(typeof(Func<string, IColumn, int, IColumn>));
+        }
+
+        return builders;
     }
 
     /// <inheritdoc/>
@@ -309,6 +406,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
         var childColumns = new IColumn[arity];
         var childStates = new IColumnWriteState[arity];
         ITupleColumn dense = column is ITupleColumn tuple && tuple.Children.Count == arity ? tuple : null;
+        Func<string, IColumn, int, IColumn>[] builders = dense is not null ? null : ProjectionBuildersFor(column.ElementType);
 
         int built = 0;
         try
@@ -317,7 +415,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
             {
                 childColumns[i] = dense is not null
                     ? dense.Children[i]
-                    : childProjectionBuilders[i](children[i].TypeName, column, i);
+                    : builders[i](children[i].TypeName, column, i);
                 childStates[i] = children[i].BeginWrite(childColumns[i], start, length);
                 built = i + 1;
             }
@@ -341,10 +439,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
             states[i]?.Dispose();
         }
     }
-
-    // Builds an empty typed column for the constructor's up-front child writability probe.
-    private static IColumn BuildEmptyColumn<T>(string typeName)
-        => new ArrayColumn<T>(string.Empty, typeName, Array.Empty<T>());
 
     // Builds the lazy per-element projection view the ergonomic write path hands each child codec (reached through
     // the cached childProjectionBuilders delegates).

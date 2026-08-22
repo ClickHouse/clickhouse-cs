@@ -204,15 +204,31 @@ public class PocoReadPlanTests
     }
 
     [Test]
-    public void Build_CompositePropertyNeedingElementProjection_ThrowsNamingWhatTheColumnReadsAs()
+    public void Build_CompositePropertyLiftingItsChildsReading_FillsTheLiftedElements()
     {
-        // A composite does not lift its child's readable types, so Array(DateTime) reads as uint[] and nothing else.
-        // The message has to say so, since DateTime[] is the shape a caller would reasonably expect.
+        // A container lifts its child's readings, so Array(DateTime) — which decodes as uint[] — fills a DateTime[]
+        // property, the shape a caller would reasonably expect. The timezone is named so the reading is deterministic.
+        Block block = BlockOf(1, new ArrayColumn<uint[]>("value", "Array(DateTime('UTC'))", new[] { new uint[] { 0, 60 } }));
+
+        Row<DateTime[]>[] rows = Materialize<Row<DateTime[]>>(block);
+
+        Assert.That(rows[0].Value, Is.EqualTo(new[]
+        {
+            DateTimeOffset.FromUnixTimeSeconds(0).UtcDateTime,
+            DateTimeOffset.FromUnixTimeSeconds(60).UtcDateTime,
+        }));
+    }
+
+    [Test]
+    public void Build_CompositePropertyNeedingAnUnofferedElementReading_ThrowsNamingWhatTheColumnReadsAs()
+    {
+        // Lifting reaches only the readings the child actually offers, and Guid is not one of a DateTime's. The
+        // message still has to name what the column does read as.
         Block block = BlockOf(1, new ArrayColumn<uint[]>("value", "Array(DateTime)", new[] { new uint[] { 1, 2 } }));
 
-        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => Materialize<Row<DateTime[]>>(block));
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => Materialize<Row<Guid[]>>(block));
 
-        Assert.That(error.Message, Does.Contain("Array(DateTime)").And.Contain("System.UInt32[]").And.Contain("System.DateTime[]"));
+        Assert.That(error.Message, Does.Contain("Array(DateTime)").And.Contain("System.UInt32[]").And.Contain("System.Guid[]"));
     }
 
     [Test]

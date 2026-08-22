@@ -195,9 +195,13 @@ internal static class PocoColumnBuilderFactory
 
         // No accepted type at all means the target's writer needs a column shape rows cannot be gathered into
         // (Nested), so naming property types would send the caller round a loop they cannot win.
+        // The listed types are not exhaustive for a composite: its element codecs each accept their own set, and the
+        // product of those is what it really takes, so the message names the canonical shape and says the rest exists
+        // rather than materializing a list that could run to thousands of entries.
         string remedy = accepted.Count == 0
             ? $"No property type can fill a '{column.TypeName}' column: insert it through the columnar API, which can build the column shape it needs."
-            : $"It accepts {string.Join(" or ", offered)}. Give the property one of those types, or insert that column through the columnar API.";
+            : $"It accepts {string.Join(" or ", offered)}, and — for a composite type — rows whose elements are any type its element codecs accept. " +
+              "Give the property one of those types, or insert that column through the columnar API.";
 
         return new InvalidOperationException(
             $"Column '{column.Name}' ({column.TypeName}) is filled from property '{pocoType.Name}.{member.MemberName}' of type {member.MemberType}, which it cannot be written from. " + remedy);

@@ -141,6 +141,56 @@ internal interface IColumnCodec
     bool CanWrite(IColumn column);
 
     /// <summary>
+    /// Whether <see cref="WriteColumn"/> can encode a column whose CLR element type is
+    /// <paramref name="elementType"/> — the interrogative form of <see cref="CanWrite"/>, answerable before any column
+    /// exists.
+    ///
+    /// <para>
+    /// This is the authority on what a codec can be written from, and it is a question rather than a list for the same
+    /// reason <see cref="TryProjectRead"/> is: a composite answers by asking its children about the corresponding part
+    /// of <paramref name="elementType"/>, so it never enumerates the cartesian product of what they each accept. A
+    /// seven-field tuple of <c>DateTime64</c> accepts 3^7 element types; it answers each in seven steps and
+    /// materializes none of them.
+    /// </para>
+    ///
+    /// <para>
+    /// <see cref="CanWrite"/> stays the gate an insert actually checks, because a column carries more than its element
+    /// type: a wire-shaped column (a dense <c>ArrayValueColumn</c>, a <c>NestedColumn</c>) is recognised by its class,
+    /// which no <see cref="Type"/> alone describes. The two must agree wherever both can answer — a codec whose writer
+    /// needs a particular column class answers <see langword="false"/> here for every element type.
+    /// </para>
+    ///
+    /// <para>
+    /// Defaults to membership of <see cref="WritableElementTypes"/>, which is right for a leaf. A composite overrides
+    /// this to recurse; so does any codec whose <see cref="CanWrite"/> would refuse a plain array-backed column of its
+    /// own element type.
+    /// </para>
+    /// </summary>
+    /// <param name="elementType">The candidate CLR element type.</param>
+    /// <returns>Whether a column of that element type can be written.</returns>
+    bool CanWriteElementType(Type elementType)
+    {
+        // Answered without touching the list, which the default builds fresh on every call: this is asked once per
+        // column per slice, and the canonical type is the common answer. Every implementation leads its list with
+        // ElementType, so the shortcut cannot disagree with the walk below.
+        if (elementType == ElementType)
+        {
+            return true;
+        }
+
+        IReadOnlyList<Type> writable = WritableElementTypes;
+        for (int i = 0; i < writable.Count; i++)
+        {
+            if (writable[i] == elementType)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Computes any per-operation scratch this codec needs to write rows [<paramref name="start"/>,
     /// <paramref name="start"/> + <paramref name="length"/>), shared across the following state-prefix and body
     /// phases so a data-dependent prefix or an element-flattening composite does its discovery/flatten exactly
