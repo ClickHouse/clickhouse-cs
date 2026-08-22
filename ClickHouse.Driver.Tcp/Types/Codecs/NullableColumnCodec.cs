@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -67,6 +68,26 @@ internal sealed class NullableColumnCodec : IColumnCodec
     public Type ElementType => canonicalShape.NullableElementType;
 
     /// <summary>
+    /// The inner codec's readings, each made nullable through the same shape rule reads use — so
+    /// <c>Nullable(DateTime)</c> reports <c>uint?</c>, <c>DateTimeOffset?</c> and <c>DateTime?</c>. Diagnostics only,
+    /// and only ever read on a failure path, so it is built per call rather than cached.
+    /// </summary>
+    public IReadOnlyList<Type> ReadableElementTypes
+    {
+        get
+        {
+            IReadOnlyList<Type> innerTypes = inner.ReadableElementTypes;
+            var lifted = new Type[innerTypes.Count];
+            for (int i = 0; i < innerTypes.Count; i++)
+            {
+                lifted[i] = NullableShapes.For(innerTypes[i]).NullableElementType;
+            }
+
+            return lifted;
+        }
+    }
+
+    /// <summary>
     /// The placeholder for an absent <c>Nullable(T)</c> value is <see langword="null"/> itself — a null-marked
     /// row. Relevant only if a future composite nests a <c>Nullable</c> and asks for its placeholder.
     /// </summary>
@@ -94,6 +115,16 @@ internal sealed class NullableColumnCodec : IColumnCodec
         IColumnCodec inner = registry.ResolveNode(innerNode, in context);
         return new NullableColumnCodec(node.ToString(), inner);
     }
+
+    /// <summary>
+    /// Wraps an inner codec directly, bypassing the registry. Exists so a test can build this wrapper over a stand-in
+    /// inner whose read surface no registered type has — the read lifting rule is written for shapes the registry
+    /// cannot yet produce, and this is the only way to reach them.
+    /// </summary>
+    /// <param name="inner">The inner codec to wrap.</param>
+    /// <returns>The codec.</returns>
+    internal static NullableColumnCodec Over(IColumnCodec inner)
+        => new($"Nullable({inner.TypeName})", inner);
 
     /// <inheritdoc/>
     public ValueTask ReadStatePrefixAsync(ClickHouseBinaryReader reader, CancellationToken cancellationToken)
@@ -128,6 +159,39 @@ internal sealed class NullableColumnCodec : IColumnCodec
             innerColumn?.Dispose();
             throw;
         }
+    }
+
+    /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
+
+        if (targetType == ElementType)
+        {
+            projected = value;
+            return true;
+        }
+
+        projected = null;
+
+        // Undo this surface's wrap on the target to recover the inner's spelling. The wrap is invertible, so the
+        // target alone decides it — see ColumnValueProjections.TryLiftOverAbsent for why nothing may be inferred from
+        // the inner codec's canonical type instead.
+        Type innerTarget = Nullable.GetUnderlyingType(targetType);
+        if (innerTarget is null)
+        {
+            // A bare value-typed target has nowhere to put a null row, so this surface cannot offer it — that is what
+            // stops Nullable(Int64) from claiming it can produce a plain long.
+            if (targetType.IsValueType)
+            {
+                return false;
+            }
+
+            // A reference-typed target holds the null itself, and the surface left it unwrapped.
+            innerTarget = targetType;
+        }
+
+        return ColumnValueProjections.TryLiftOverAbsent(value, inner, innerTarget, targetType, out projected);
     }
 
     /// <inheritdoc/>
