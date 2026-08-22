@@ -75,6 +75,59 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     public TcpConnectionState State => state;
 
     /// <summary>
+    /// Whether this connection is fit to carry another operation, as far as can be told without sending
+    /// anything. Ready, with a transport the peer has not closed and no bytes left over from the last response.
+    /// The pool asks at both ends of every lease, so it must stay cheap: one non-blocking poll of the socket.
+    /// </summary>
+    /// <remarks>
+    /// A readable idle socket means one of two things, and neither allows reuse: the peer closed and a zero-byte read
+    /// is pending, or bytes the last operation did not consume are waiting, which means this side's idea of the stream
+    /// position no longer matches the server's.
+    ///
+    /// <para>
+    /// This detects only a peer that closed in an orderly way. A connection dropped without a FIN, by a partition or a
+    /// machine that lost power, still looks alive here, and the operation sent over it stalls until TCP itself gives
+    /// up, which on Linux takes about fifteen minutes. That is inherent to a client-side check, so the pool does not
+    /// rely on this alone: it also refuses a connection that has sat idle past <c>IdleTimeout</c>, which covers the
+    /// common case of an intermediary dropping a connection nobody was using. Neither catches a drop that strikes a
+    /// connection in active use. The answer to that is an idle read deadline rather than a stricter probe, and
+    /// <b>that deadline does not exist yet</b>: <c>ReadTimeout</c> is parsed and stored but nothing enforces it, so a
+    /// caller's own <see cref="System.Threading.CancellationToken"/> is currently the only bound on such a stall.
+    /// </para>
+    /// </remarks>
+    internal bool IsReusable
+    {
+        get
+        {
+            if (state != TcpConnectionState.Ready)
+            {
+                return false;
+            }
+
+            // Bytes already buffered from the socket are invisible to a poll, so check our own buffer first.
+            if (reader.BufferedBytes != 0)
+            {
+                return false;
+            }
+
+            // The scripted-stream seam has no socket; there is nothing to poll, so trust the state.
+            if (socket is null)
+            {
+                return true;
+            }
+
+            try
+            {
+                return !socket.Poll(0, SelectMode.SelectRead);
+            }
+            catch (Exception e) when (e is SocketException or ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
     /// Builds the context passed to the codec registry when reading an operation's blocks, carrying the
     /// session timezone so a timezone-bearing column whose type string omits an explicit timezone resolves
     /// against it. A query's <c>session_timezone</c> setting takes precedence over the handshake default. No
@@ -908,13 +961,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// then releases the reader and writer's pooled buffers. Idempotent, but not safe to call concurrently with
     /// another operation. Once terminated a connection is never reused.
     /// </summary>
+    /// <remarks>
+    /// There is deliberately no early return for an already-terminated connection. Every step below is
+    /// idempotent, and the buffer release has to run even when the state was set elsewhere — after
+    /// <see cref="AbortTransport"/>, this call as the operation unwinds is the only thing that returns those
+    /// buffers to the pool.
+    /// </remarks>
     public void Terminate()
     {
-        if (state == TcpConnectionState.Terminated)
-        {
-            return;
-        }
-
         state = TcpConnectionState.Terminated;
         try
         {
@@ -938,6 +992,46 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     writer.Dispose();
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Closes the transport under an operation that is still running, marking the connection final but leaving
+    /// the reader and writer alone. Unlike <see cref="Terminate"/> this <i>is</i> safe to call concurrently with
+    /// an operation, and it is the only teardown that is: it is how the pool frees a connection whose caller
+    /// abandoned it, typically parked on a read that will never arrive.
+    /// </summary>
+    /// <remarks>
+    /// The pooled reader and writer buffers are deliberately not returned here: a buffer a pending read or write
+    /// still points at must not go back to the pool, or that memory is handed to an unrelated caller while it is
+    /// still in use. The operation returns them itself, through the <see cref="Terminate"/> its own unwinding
+    /// calls — which closing the socket provokes, and which runs only once the I/O has actually stopped. That
+    /// release is exactly-once even against this call, because the reader and writer guard their disposal with
+    /// an interlocked flag. If the operation never unwinds at all, two pooled arrays are left to the garbage
+    /// collector: an allocation lost, nothing corrupted.
+    /// </remarks>
+    internal void AbortTransport()
+    {
+        // Marks the connection unusable so it is never handed out again. Terminate has no early return, so the
+        // operation's own call still releases the buffers afterwards despite the state already being final.
+        state = TcpConnectionState.Terminated;
+
+        try
+        {
+            // Socket disposal is thread-safe and aborts the pending I/O, which is the whole point. With no
+            // socket (the scripted-stream seam) the stream itself is the transport.
+            if (socket is not null)
+            {
+                socket.Dispose();
+            }
+            else
+            {
+                stream.Dispose();
+            }
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
+        {
+            // Best effort: this runs during disposal, with nothing left to report a teardown failure to.
         }
     }
 

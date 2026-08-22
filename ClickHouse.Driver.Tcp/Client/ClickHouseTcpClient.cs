@@ -15,8 +15,18 @@ namespace ClickHouse.Driver.Tcp;
 /// <summary>
 /// A high-level client for a ClickHouse server over the native TCP protocol: run queries and stream results,
 /// execute statements, and insert data columnwise or row by row. Build one from a <see cref="ClickHouseTcpClientOptions"/> or a
-/// connection string and reuse it — it is safe to share across threads. Operations are serialized onto the
-/// underlying connection today (one in flight at a time); a future connection pool lifts that transparently.
+/// connection string and reuse it — it is safe to share across threads, and meant to be shared: it owns a
+/// connection pool, so operations run concurrently up to <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>
+/// and queue beyond it.
+///
+/// <para>
+/// <b>Dispose it.</b> A client holds open connections, and while any lifetime or idle limit is set it also runs
+/// a timer to close the idle ones — and a running timer keeps the whole pool reachable, so a client dropped
+/// without being disposed keeps its sockets open for the life of the process rather than being collected. Build
+/// one per endpoint and keep it, rather than one per operation. Disposal closes the idle connections at once
+/// and waits up to <see cref="ClickHouseTcpClientOptions.PoolTimeout"/> for the operations still running, after
+/// which it aborts them.
+/// </para>
 ///
 /// <para>
 /// This type is experimental: its surface may change in a future release. Suppress diagnostic
@@ -47,7 +57,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         Options = options.WithOwnedCustomSettings();
-        source = new SingleConnectionSource(Options);
+        source = new ConnectionPool(Options);
     }
 
     /// <summary>Creates a client from a connection string.</summary>

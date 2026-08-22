@@ -22,8 +22,14 @@ public sealed record ClickHouseTcpClientOptions
     internal const string DefaultUsername = "default";
     internal const string DefaultDatabase = "default";
     internal const int DefaultMaxSendBufferBytes = 10 * 1024 * 1024;
+    internal const int DefaultMinPoolSize = 0;
+    internal const int DefaultMaxPoolSize = 20;
+    internal const ClickHouseTcpPoolReusePolicy DefaultPoolReusePolicy = ClickHouseTcpPoolReusePolicy.Lifo;
     internal static readonly TimeSpan DefaultDialTimeout = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(300);
+    internal static readonly TimeSpan DefaultPoolTimeout = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan DefaultMaxConnectionLifetime = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(5);
 
     /// <summary>The server host name or address. Defaults to <c>localhost</c>.</summary>
     public string Host { get; init; } = DefaultHost;
@@ -73,6 +79,100 @@ public sealed record ClickHouseTcpClientOptions
     public TimeSpan ReadTimeout { get; init; } = DefaultReadTimeout;
 
     /// <summary>
+    /// The number of connections the pool keeps open when it can, counting both idle and in-use ones. Defaults to 0.
+    /// Neither <see cref="MaxConnectionLifetime"/> nor <see cref="IdleTimeout"/> respects this floor: an expired
+    /// connection is retired whatever the count, and the floor is then restored by opening a fresh one. So a quiet
+    /// pool rotates its connections rather than holding the same ones. That is what makes the floor useful, because a
+    /// checkout refuses an expired connection: keeping one to meet the count would hold a socket that serves nobody.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The floor is maintained by the same sweep that closes expired connections, so a pool below it is topped up
+    /// within one sweep period rather than at construction, and a burst arriving before the first sweep still opens
+    /// its own connections. Topping up never takes a slot from a waiting caller: it uses only capacity that is free
+    /// at that moment, so a pool already at <see cref="MaxPoolSize"/> skips it.
+    /// </para>
+    /// <para>
+    /// Because the rotation is what holds the floor, a pool carrying no traffic at all still reconnects: this many
+    /// connections per <see cref="IdleTimeout"/>, indefinitely. At the defaults that is nothing, the floor being 0.
+    /// Raising the floor while lowering <see cref="IdleTimeout"/> multiplies the two, so a floor of 10 against a
+    /// 5-second idle limit is 10 connects, handshakes and authentications every 5 seconds from an application issuing
+    /// no queries. Size the pair together.
+    /// </para>
+    /// </remarks>
+    public int MinPoolSize { get; init; } = DefaultMinPoolSize;
+
+    /// <summary>
+    /// The hard cap on connections the pool opens, and so on operations that run at once, one connection carrying one
+    /// query. Defaults to 20. Further callers queue for up to <see cref="PoolTimeout"/>.
+    /// </summary>
+    /// <remarks>
+    /// Each connection running an insert buffers up to <see cref="MaxSendBufferBytes"/>, so the client's peak
+    /// send-buffer memory is about that times this cap when every connection inserts at once.
+    /// </remarks>
+    public int MaxPoolSize { get; init; } = DefaultMaxPoolSize;
+
+    /// <summary>
+    /// How long an operation waits for a connection when <see cref="MaxPoolSize"/> are already in use, after
+    /// which it throws a <see cref="TimeoutException"/>. Defaults to 30s. Waiters are not served in a
+    /// guaranteed order.
+    /// </summary>
+    /// <remarks>
+    /// This bounds the wait for a free slot only. Opening the connection that follows is bounded separately by
+    /// <see cref="DialTimeout"/>, so a checkout can take up to the sum of the two.
+    /// </remarks>
+    public TimeSpan PoolTimeout { get; init; } = DefaultPoolTimeout;
+
+    /// <summary>
+    /// How long after it was opened a connection may still be handed out, after which the pool retires it.
+    /// Defaults to 30 minutes; <see cref="TimeSpan.Zero"/> disables the limit and lets a connection live until
+    /// it fails.
+    /// </summary>
+    /// <remarks>
+    /// The age is read at checkout and at return, both of which fall between operations, so this never
+    /// interrupts a running query: an operation longer than the limit carries its connection past it, and the
+    /// connection is closed when it comes back rather than reused.
+    /// </remarks>
+    public TimeSpan MaxConnectionLifetime { get; init; } = DefaultMaxConnectionLifetime;
+
+    /// <summary>
+    /// How long a connection may sit unused before the pool retires it. Defaults to 5 minutes;
+    /// <see cref="TimeSpan.Zero"/> keeps idle connections until they expire by age.
+    /// </summary>
+    /// <remarks>
+    /// This releases sockets nobody is using, and it is also the client's defence against a connection killed while
+    /// idle. A proxy or load balancer between client and server drops an idle connection on its own schedule, and
+    /// such a drop can arrive without a FIN, in which case the transport still looks alive and the next operation over
+    /// it stalls until TCP gives up. So a connection past this limit is not handed out, just as an over-age one is
+    /// not. Set it below the shortest idle timeout on the path to the server.
+    /// </remarks>
+    public TimeSpan IdleTimeout { get; init; } = DefaultIdleTimeout;
+
+    /// <summary>
+    /// How often the pool looks for connections to retire and tops itself back up to <see cref="MinPoolSize"/>.
+    /// Null, the default, derives the period from the limits in force. An explicit value is used as given.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The derived period is a quarter of the shorter of <see cref="MaxConnectionLifetime"/> and
+    /// <see cref="IdleTimeout"/>, held between 1 and 30 seconds. The fraction keeps the delay in noticing an
+    /// expiry proportional to the limit being enforced, which one fixed period cannot do for limits that range
+    /// from seconds to hours. The lower bound stops a short limit making the sweep spin; the upper bound still
+    /// releases idle sockets in good time when both limits are long. At the default limits the period is 30
+    /// seconds.
+    /// </para>
+    /// <para>
+    /// Set this only for a workload the derivation does not suit. The value is used unclamped, so a very short period
+    /// costs a wake-up that often for as long as the client lives. It must be positive. When both limits are zero and
+    /// there is no floor to hold, the pool schedules no sweep at all, whatever this says.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? SweepInterval { get; init; }
+
+    /// <summary>Which idle connection the pool hands out next. Defaults to <see cref="ClickHouseTcpPoolReusePolicy.Lifo"/>.</summary>
+    public ClickHouseTcpPoolReusePolicy PoolReusePolicy { get; init; } = DefaultPoolReusePolicy;
+
+    /// <summary>
     /// These options with <see cref="CustomSettings"/> replaced by a private snapshot, or this instance when there
     /// are none to copy. A client holds its options for its lifetime and merges the settings on every operation, so
     /// it must own them: keeping the caller's dictionary would let a later mutation of it fault or partially apply
@@ -80,7 +180,7 @@ public sealed record ClickHouseTcpClientOptions
     /// </summary>
     /// <remarks>
     /// The <c>with</c> expression carries every other property across, so a property added later needs no change
-    /// here. Keep it that way — a hand-written copy is what silently drops a new property.
+    /// here. Keep it that way: a hand-written copy is what silently drops a new property.
     /// </remarks>
     internal ClickHouseTcpClientOptions WithOwnedCustomSettings()
         => CustomSettings is null
@@ -122,19 +222,51 @@ public sealed record ClickHouseTcpClientOptions
             throw new ArgumentOutOfRangeException(nameof(Port), Port, "Port must be between 1 and 65535.");
         }
 
-        if (DialTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(DialTimeout), DialTimeout, "DialTimeout must be positive.");
-        }
+        RequireUsableTimeout(DialTimeout, nameof(DialTimeout));
 
-        if (ReadTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(ReadTimeout), ReadTimeout, "ReadTimeout must be positive.");
-        }
+        RequireUsableTimeout(ReadTimeout, nameof(ReadTimeout));
 
         if (MaxSendBufferBytes <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(MaxSendBufferBytes), MaxSendBufferBytes, "MaxSendBufferBytes must be positive.");
+        }
+
+        RequireUsableTimeout(PoolTimeout, nameof(PoolTimeout));
+
+        if (MaxConnectionLifetime < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxConnectionLifetime), MaxConnectionLifetime, "MaxConnectionLifetime must not be negative; use TimeSpan.Zero to disable the limit.");
+        }
+
+        if (IdleTimeout < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(IdleTimeout), IdleTimeout, "IdleTimeout must not be negative; use TimeSpan.Zero to disable idle closing.");
+        }
+
+        // Only when set. Null is not a value here but a request to derive the period, which cannot be out of range.
+        if (SweepInterval is { } sweepInterval)
+        {
+            RequireUsableTimeout(sweepInterval, nameof(SweepInterval));
+        }
+
+        if (MaxPoolSize < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxPoolSize), MaxPoolSize, "MaxPoolSize must be at least 1.");
+        }
+
+        if (MinPoolSize < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MinPoolSize), MinPoolSize, "MinPoolSize must not be negative.");
+        }
+
+        if (MinPoolSize > MaxPoolSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MinPoolSize), MinPoolSize, $"MinPoolSize must not exceed MaxPoolSize ({MaxPoolSize}).");
+        }
+
+        if (!Enum.IsDefined(PoolReusePolicy))
+        {
+            throw new ArgumentOutOfRangeException(nameof(PoolReusePolicy), PoolReusePolicy, "PoolReusePolicy is not a defined value.");
         }
 
         if (CustomSettings is not null)
@@ -153,6 +285,26 @@ public sealed record ClickHouseTcpClientOptions
                     throw new ArgumentException($"Custom setting '{setting.Key}' has a null value; use an empty string for a flag-style setting.", nameof(CustomSettings));
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Rejects a deadline that cannot be armed. The timer APIs these feed (<c>CancelAfter</c>,
+    /// <c>SemaphoreSlim.WaitAsync</c>) take a millisecond count as an <see cref="int"/>, so a span beyond about
+    /// 24.85 days would throw from inside every operation instead of at construction.
+    /// </summary>
+    /// <param name="value">The configured deadline.</param>
+    /// <param name="name">The option's name, for the exception.</param>
+    private static void RequireUsableTimeout(TimeSpan value, string name)
+    {
+        if (value <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(name, value, $"{name} must be positive.");
+        }
+
+        if (value.TotalMilliseconds > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(name, value, $"{name} must not exceed {TimeSpan.FromMilliseconds(int.MaxValue)} (about 24.8 days).");
         }
     }
 
