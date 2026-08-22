@@ -68,6 +68,59 @@ public class PocoReadPlanTests
         Assert.That(rows[0].UserId, Is.EqualTo(42));
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public void Materialize_WindowStartingPastTheFirstRow_ReadsThatWindowIntoTheFirstRows(bool spanTier)
+    {
+        PocoScatterTier tier = spanTier ? PocoScatterTier.Span : PocoScatterTier.Indexer;
+        // The window's start has to rebase the column read while leaving the destination at 0, and a start of 0
+        // would not show that: a scatter ignoring the parameter passes. Both tiers source a value differently, so
+        // proving one says nothing about the other.
+        Block block = BlockOf(5, Ints("value", 10, 11, 12, 13, 14));
+        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, tier);
+        var rows = new Row<int>[2];
+
+        plan.Materialize(block, rows, start: 2, count: 2, rowOffset: 2);
+
+        Assert.That(Values(rows), Is.EqualTo(new[] { 12, 13 }));
+    }
+
+    [Test]
+    public void Materialize_WholeBlockInWindows_ProducesTheSameRowsAsOnePass()
+    {
+        // What the client's windowed loop does, against the single pass it replaced. A window that does not divide
+        // the block evenly is the interesting case: the last one is short.
+        Block block = BlockOf(7, Ints("value", 0, 1, 2, 3, 4, 5, 6));
+        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, null);
+        var windowed = new Row<int>[7];
+        var window = new Row<int>[3];
+
+        for (int start = 0; start < block.RowCount; start += window.Length)
+        {
+            int count = Math.Min(window.Length, block.RowCount - start);
+            plan.Materialize(block, window, start, count, start);
+            Array.Copy(window, 0, windowed, start, count);
+        }
+
+        Assert.That(Values(windowed), Is.EqualTo(Values(Materialize<Row<int>>(block))));
+    }
+
+    [Test]
+    public void Materialize_NullInALaterWindow_NamesTheRowOfTheResultRatherThanOfTheWindow()
+    {
+        // The row a caller counts is rowOffset plus the offset within the window, so a window that starts part-way
+        // into a block of a later block must still name the absolute row. Off-by-one here is invisible in the
+        // first window of the first block, where every candidate expression agrees.
+        Block block = BlockOf(5, new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, 2, 3, null, 5 }));
+        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, null);
+        var rows = new Row<int>[2];
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => plan.Materialize(block, rows, start: 2, count: 2, rowOffset: 1002));
+
+        Assert.That(error.Message, Does.Contain("row 1003").And.Contain("Row`1.Value"));
+    }
+
     [Test]
     public void Materialize_ZeroRows_ConstructsNothing()
     {
@@ -379,28 +432,43 @@ public class PocoReadPlanTests
         PocoColumnScatter<Row<int>> scatter = PocoColumnScatterFactory.Create<Row<int>>(column, codec, member, PocoScatterTier.Indexer, preferInterpretation: true);
         var rows = new[] { new Row<int>(), new Row<int>() };
 
-        scatter(column, rows, rows.Length, rowOffset: 0);
+        scatter(column, rows, start: 0, rows.Length, rowOffset: 0);
 
         Assert.That(Values(rows), Is.EqualTo(new[] { 1, -2 }));
     }
 
     [Test]
-    public void SelectTier_NoForcedTier_PrefersTheSpanTierWhereverTreesCompile()
+    public void SelectTier_StoredValuesColumnAndNoForcedTier_PrefersTheSpanTierWhereverTreesCompile()
     {
         // The interpreter cannot hold a ReadOnlySpan<T>, so the span tier is only offered where a tree becomes IL.
         PocoScatterTier expected = RuntimeFeature.IsDynamicCodeCompiled ? PocoScatterTier.Span : PocoScatterTier.Indexer;
 
-        Assert.That(PocoColumnScatterFactory.SelectTier(null), Is.EqualTo(expected));
+        Assert.That(PocoColumnScatterFactory.SelectTier(null, Ints("value", 1)), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void SelectTier_ColumnThatBuildsItsValuesAndNoForcedTier_PrefersTheIndexerTier()
+    {
+        // Hoisting Values is the point of the span tier, but for a column that builds its values on access that one
+        // read materializes every row of the block and pins it, which is what the windowed materialization avoids.
+        var built = new StringColumn("value", "String", new byte[] { 0x61 }, new[] { 0, 1 }, 1, pooled: false);
+
+        Assert.That(PocoColumnScatterFactory.SelectTier(null, built), Is.EqualTo(PocoScatterTier.Indexer));
     }
 
     [Test]
     public void SelectTier_ForcedTier_IsHonored()
     {
+        // Forced over both column shapes: a forced tier outranks the column's own preference, which is what lets the
+        // parity harness compile the span tier for a column that would otherwise choose the indexer.
+        var built = new StringColumn("value", "String", new byte[] { 0x61 }, new[] { 0, 1 }, 1, pooled: false);
+
         Assert.Multiple(() =>
         {
             foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
             {
-                Assert.That(PocoColumnScatterFactory.SelectTier(tier), Is.EqualTo(tier), tier.ToString());
+                Assert.That(PocoColumnScatterFactory.SelectTier(tier, Ints("value", 1)), Is.EqualTo(tier), $"{tier} over stored values");
+                Assert.That(PocoColumnScatterFactory.SelectTier(tier, built), Is.EqualTo(tier), $"{tier} over built values");
             }
         });
     }

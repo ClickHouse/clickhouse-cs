@@ -23,7 +23,7 @@ internal delegate void ColumnValueFill<T>(ReadOnlySpan<byte> source, Span<T> des
 /// borrowed view over the array.
 /// </summary>
 /// <typeparam name="T">The CLR element type.</typeparam>
-internal sealed class ArrayColumn<T> : IColumn<T>, ISpanColumn<T>
+internal sealed class ArrayColumn<T> : IColumn<T>, ISpanColumn<T>, IStoredValuesColumn
 {
     /// <summary>
     /// The backing array may be rented from <see cref="ArrayPool{T}"/> (via <see cref="ReadAsync"/>) and returned on
