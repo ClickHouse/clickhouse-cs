@@ -73,18 +73,6 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     public ClickHouseTcpClientOptions Options { get; }
 
     /// <summary>
-    /// Forces every POCO read on this client to compile at one <see cref="PocoScatterTier"/> instead of the tier the
-    /// runtime would choose. A test seam: production leaves it null.
-    ///
-    /// <para>
-    /// The runtime picks the tier, and a host that compiles expression trees always picks the span tier, so the
-    /// indexer tier a NativeAOT host falls back to would never run in CI. A test sets this to read one query at each
-    /// tier and check that the rows match.
-    /// </para>
-    /// </summary>
-    internal PocoScatterTier? ForcedPocoScatterTier { get; init; }
-
-    /// <summary>
     /// Runs a query and streams its result as a sequence of <see cref="Block"/>s — the low-level columnar tier,
     /// with no per-row materialization.
     /// </summary>
@@ -210,7 +198,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
             // check also covers the header changing mid-enumeration, which the cache then serves.
             if (plan is null || !plan.MatchesHeader(block))
             {
-                plan = pocoTypes.ReadPlanFor<T>(block, ForcedPocoScatterTier);
+                plan = pocoTypes.ReadPlanFor<T>(block, forcedTier: null);
             }
 
             T[] rows = ArrayPool<T>.Shared.Rent(block.RowCount);

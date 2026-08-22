@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
@@ -266,25 +267,37 @@ public class PocoReadIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_EveryScatterTier_ReadsTheSameRows()
+    public async Task Materialize_EveryScatterTier_ReadsTheSameRows()
     {
         // The tiers are compared here as well as in the unit tests because these values come off a real server: the
-        // span tier's zero-copy read and the two per-row tiers have to agree on decoded storage, not just on columns
-        // a test built.
+        // span tier's zero-copy read and the per-row tier have to agree on decoded storage, not just on columns a
+        // test built. QueryAsync<T> leaves the tier to the runtime, so the plan is built directly to name one; each
+        // tier reads its own block, since materializing one block twice would let the first tier fill the caches
+        // the second reads.
         const string sql = "SELECT toUInt64(number) AS Id, toString(number) AS Name FROM numbers(3)";
+        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options());
         var byTier = new Dictionary<PocoScatterTier, List<Numbered>>();
+
         foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
         {
-            await using var client = new ClickHouseTcpClient(TcpServerFixture.Options()) { ForcedPocoScatterTier = tier };
-            byTier[tier] = await client.QueryAsync<Numbered>(sql, cancellationToken: None).ToListAsync();
+            var read = new List<Numbered>();
+            await foreach (Block block in client.StreamAsync(sql, cancellationToken: None))
+            {
+                var rows = new Numbered[block.RowCount];
+                PocoReadPlan<Numbered>.Build(PocoTypeDescriptor<Numbered>.Build(), block, tier)
+                    .Materialize(block, rows, read.Count);
+                read.AddRange(rows);
+            }
+
+            byTier[tier] = read;
         }
 
         Assert.Multiple(() =>
         {
             foreach ((PocoScatterTier tier, List<Numbered> rows) in byTier)
             {
-                Assert.That(Array.ConvertAll(rows.ToArray(), row => row.Id), Is.EqualTo(new ulong[] { 0, 1, 2 }), $"{tier}: Id");
-                Assert.That(Array.ConvertAll(rows.ToArray(), row => row.Name), Is.EqualTo(new[] { "0", "1", "2" }), $"{tier}: Name");
+                Assert.That(rows.ConvertAll(row => row.Id), Is.EqualTo(new ulong[] { 0, 1, 2 }), $"{tier}: Id");
+                Assert.That(rows.ConvertAll(row => row.Name), Is.EqualTo(new[] { "0", "1", "2" }), $"{tier}: Name");
             }
         });
     }
