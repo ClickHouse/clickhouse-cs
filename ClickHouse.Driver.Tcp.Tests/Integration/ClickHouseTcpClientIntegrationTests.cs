@@ -19,6 +19,11 @@ public class ClickHouseTcpClientIntegrationTests
 
     private static string UniqueTableName() => $"tcp_client_test_{Guid.NewGuid():N}";
 
+    private sealed class IdRow
+    {
+        public ulong Id { get; set; }
+    }
+
     [Test]
     public async Task StreamAsync_SelectLiteral_ReturnsSingleBlock()
     {
@@ -385,6 +390,7 @@ public class ClickHouseTcpClientIntegrationTests
                 await client.InsertAsync($"INSERT INTO {table} (id) VALUES", columns, cancellationToken: None);
 
                 var rows = await client.QueryAsync($"SELECT id FROM {table} ORDER BY id").ToListAsync();
+                var typed = await client.QueryAsync<IdRow>($"SELECT id FROM {table} ORDER BY id").ToListAsync();
 
                 var streamed = new List<ulong>();
                 await foreach (Block block in client.StreamAsync($"SELECT id FROM {table} ORDER BY id"))
@@ -395,6 +401,7 @@ public class ClickHouseTcpClientIntegrationTests
                 Assert.Multiple(() =>
                 {
                     CollectionAssert.AreEqual(ids, rows.Select(r => (ulong)r[0]));
+                    CollectionAssert.AreEqual(ids, typed.Select(row => row.Id));
                     CollectionAssert.AreEqual(ids, streamed);
                 });
             }
