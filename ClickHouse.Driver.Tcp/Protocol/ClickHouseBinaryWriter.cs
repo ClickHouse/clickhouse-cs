@@ -17,6 +17,7 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 internal sealed class ClickHouseBinaryWriter : IDisposable
 {
     private readonly Stream stream;
+    private readonly int initialBufferSize;
     private byte[] buffer;
     private int position;
     private bool disposed;
@@ -34,11 +35,43 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
             throw new ArgumentOutOfRangeException(nameof(bufferSize), "Buffer must hold at least one 32-byte value.");
         }
 
+        initialBufferSize = bufferSize;
         buffer = ArrayPool<byte>.Shared.Rent(bufferSize);
     }
 
     /// <summary>The number of bytes buffered and not yet flushed.</summary>
     public int BufferedBytes => position;
+
+    /// <summary>The number of bytes a VarUInt encoding of <paramref name="value"/> occupies (1–10).</summary>
+    /// <param name="value">The value that would be written with <see cref="WriteVarUInt"/>.</param>
+    /// <returns>The encoded length in bytes.</returns>
+    public static int MeasureVarUInt(ulong value)
+    {
+        int bytes = 1;
+        while (value >= 0x80)
+        {
+            bytes++;
+            value >>= 7;
+        }
+
+        return bytes;
+    }
+
+    /// <summary>
+    /// Returns the working buffer to its initial size if a large write grew it, so a connection that streamed
+    /// one big block does not retain the peak-sized pooled buffer for the rest of its life. Must be called with
+    /// nothing buffered (after a flush); a no-op when the buffer is already at or below its initial size.
+    /// </summary>
+    public void TrimBuffer()
+    {
+        if (disposed || position != 0 || buffer.Length <= initialBufferSize)
+        {
+            return;
+        }
+
+        ArrayPool<byte>.Shared.Return(buffer);
+        buffer = ArrayPool<byte>.Shared.Rent(initialBufferSize);
+    }
 
     /// <summary>Writes a single byte.</summary>
     /// <param name="value">The byte to write.</param>
