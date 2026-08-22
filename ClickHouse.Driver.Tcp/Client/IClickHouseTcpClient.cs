@@ -63,6 +63,30 @@ public interface IClickHouseTcpClient : IAsyncDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Runs a query and streams its result one row at a time as <typeparamref name="T"/>, filling each property
+    /// from the column of the same name (ignoring case, and then underscores). A column no property maps to is
+    /// skipped, and a property no column maps to keeps its default.
+    /// </summary>
+    /// <remarks>
+    /// Unlike a <see cref="Block"/>, the rows are <b>owned</b>: an instance stays valid after the enumeration moves
+    /// on, because no value borrows the block's storage. An implementation must honor that, since a consumer has no
+    /// way to copy what it is handed. Two rows may still share one element instance where the column's own
+    /// representation does (see <see cref="ClickHouseTcpClient.QueryAsync{T}"/>).
+    /// </remarks>
+    /// <typeparam name="T">The row type.</typeparam>
+    /// <param name="sql">The SQL text.</param>
+    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>An async stream of result rows.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
+    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot be mapped to the result.</exception>
+    IAsyncEnumerable<T> QueryAsync<T>(
+        string sql,
+        ClickHouseTcpQueryOptions options = null,
+        CancellationToken cancellationToken = default)
+        where T : class;
+
+    /// <summary>
     /// Runs a statement that produces no result rows (DDL, or DML other than an <c>INSERT ... VALUES</c>) and
     /// returns once the server acknowledges it. Any result blocks are drained and discarded.
     /// </summary>
