@@ -41,6 +41,10 @@ public enum TcpFeature
     [SinceVersion("25.11")]
     Geometry = 1 << 5,
 
+    /// <summary>The <c>Int8</c> element type of <c>QBit</c>, which arrived later than the type itself.</summary>
+    [SinceVersion("26.7")]
+    QBitInt8 = 1 << 6,
+
     /// <summary>Every capability. What an unrecognised or unpinned server version resolves to.</summary>
     All = ~None,
 }
