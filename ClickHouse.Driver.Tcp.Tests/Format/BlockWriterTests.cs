@@ -39,7 +39,7 @@ public class BlockWriterTests
             w, Negotiated, columns, rowCount: 3, ColumnCodecRegistry.Default, BlockWriter.DefaultFlushThresholdBytes, None));
 
         using var reader = new ClickHouseBinaryReader(new MemoryStream(bytes));
-        using Block block = await BlockReader.ReadBlockAsync(reader, Negotiated, ColumnCodecRegistry.Default, None);
+        using Block block = await BlockReader.ReadBlockAsync(reader, Negotiated, ColumnCodecRegistry.Default, default, None);
 
         Assert.Multiple(() =>
         {
@@ -63,15 +63,15 @@ public class BlockWriterTests
         var name = new ArrayColumn<string>("name", "String", new[] { "a", "bb", "ccc", "dddd", "eeeee" });
         InsertColumn[] columns =
         {
-            new("id", "Int32", ColumnCodecRegistry.Default.Resolve("Int32"), id),
-            new("name", "String", ColumnCodecRegistry.Default.Resolve("String"), name),
+            new("id", "Int32", ColumnCodecRegistry.Default.Resolve("Int32", ResolveContext.ForWrite), id),
+            new("name", "String", ColumnCodecRegistry.Default.Resolve("String", ResolveContext.ForWrite), name),
         };
 
         byte[] bytes = await WriteAsync(w => BlockWriter.WriteDataBlockAsync(
             w, Negotiated, columns, start: 1, rowCount: 3, BlockWriter.DefaultFlushThresholdBytes, None));
 
         using var reader = new ClickHouseBinaryReader(new MemoryStream(bytes));
-        using Block block = await BlockReader.ReadBlockAsync(reader, Negotiated, ColumnCodecRegistry.Default, None);
+        using Block block = await BlockReader.ReadBlockAsync(reader, Negotiated, ColumnCodecRegistry.Default, ResolveContext.ForWrite, None);
 
         Assert.Multiple(() =>
         {
