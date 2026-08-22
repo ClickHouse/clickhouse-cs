@@ -22,6 +22,12 @@ public class ClickHouseTcpClientOptionsTests
             Assert.That(options.DialTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
             Assert.That(options.ReadTimeout, Is.EqualTo(TimeSpan.FromSeconds(300)));
             Assert.That(options.MaxSendBufferBytes, Is.EqualTo(10 * 1024 * 1024));
+            Assert.That(options.MinPoolSize, Is.Zero);
+            Assert.That(options.MaxPoolSize, Is.EqualTo(20));
+            Assert.That(options.PoolTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
+            Assert.That(options.MaxConnectionLifetime, Is.EqualTo(TimeSpan.FromMinutes(30)));
+            Assert.That(options.IdleTimeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
+            Assert.That(options.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Lifo));
         });
     }
 
@@ -49,6 +55,22 @@ public class ClickHouseTcpClientOptionsTests
         Assert.Throws<ArgumentException>(() => options.Validate());
     }
 
+    [Test]
+    public void Validate_EmptyDatabase_ThrowsArgumentException()
+    {
+        var options = new ClickHouseTcpClientOptions { Database = "" };
+
+        Assert.Throws<ArgumentException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NonPositiveReadTimeout_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { ReadTimeout = TimeSpan.Zero };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
     [TestCase(0)]
     [TestCase(-1)]
     [TestCase(65536)]
@@ -71,6 +93,154 @@ public class ClickHouseTcpClientOptionsTests
     public void Validate_NonPositiveMaxSendBufferBytes_ThrowsArgumentOutOfRangeException()
     {
         var options = new ClickHouseTcpClientOptions { MaxSendBufferBytes = 0 };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NonPositivePoolTimeout_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { PoolTimeout = TimeSpan.Zero };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_MaxPoolSizeBelowOne_ThrowsArgumentOutOfRangeException(int maxPoolSize)
+    {
+        var options = new ClickHouseTcpClientOptions { MaxPoolSize = maxPoolSize };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NegativeMinPoolSize_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { MinPoolSize = -1 };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NoSweepInterval_DoesNotThrow()
+    {
+        // Null is not a value out of range but a request to derive the period, so it must pass validation.
+        var options = new ClickHouseTcpClientOptions { SweepInterval = null };
+
+        Assert.Multiple(() =>
+        {
+            Assert.DoesNotThrow(() => options.Validate());
+            Assert.That(new ClickHouseTcpClientOptions().SweepInterval, Is.Null, "deriving the period is the default");
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_NonPositiveSweepInterval_ThrowsArgumentOutOfRangeException(int seconds)
+    {
+        // Zero does not mean "no sweep" here, unlike the two limits: that is what leaving it null does.
+        var options = new ClickHouseTcpClientOptions { SweepInterval = TimeSpan.FromSeconds(seconds) };
+
+        var thrown = Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+
+        Assert.That(thrown.Message, Does.Contain("SweepInterval"));
+    }
+
+    [Test]
+    public void Validate_SweepIntervalTooLargeToArm_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { SweepInterval = TimeSpan.FromDays(30) };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_MinPoolSizeAboveMaxPoolSize_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { MinPoolSize = 5, MaxPoolSize = 4 };
+
+        var thrown = Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+
+        Assert.That(thrown.Message, Does.Contain("MaxPoolSize (4)"));
+    }
+
+    [Test]
+    public void Validate_MinPoolSizeEqualToMaxPoolSize_DoesNotThrow()
+    {
+        var options = new ClickHouseTcpClientOptions { MinPoolSize = 4, MaxPoolSize = 4 };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NegativeMaxConnectionLifetime_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { MaxConnectionLifetime = TimeSpan.FromSeconds(-1) };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_NegativeIdleTimeout_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { IdleTimeout = TimeSpan.FromSeconds(-1) };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_LifetimeAndIdleTimeoutDisabled_DoesNotThrow()
+    {
+        var options = new ClickHouseTcpClientOptions { MaxConnectionLifetime = TimeSpan.Zero, IdleTimeout = TimeSpan.Zero };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_ShortMaxConnectionLifetime_IsAccepted()
+    {
+        // Nothing forbids rotating connections quickly; the pool never interrupts a running operation for age,
+        // so a short lifetime only means a connection is retired sooner once it comes back.
+        var options = new ClickHouseTcpClientOptions { MaxConnectionLifetime = TimeSpan.FromSeconds(10) };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [TestCase(nameof(ClickHouseTcpClientOptions.DialTimeout))]
+    [TestCase(nameof(ClickHouseTcpClientOptions.ReadTimeout))]
+    [TestCase(nameof(ClickHouseTcpClientOptions.PoolTimeout))]
+    public void Validate_TimeoutBeyondWhatATimerCanHold_ThrowsAtConstructionNotAtEveryOperation(string property)
+    {
+        // These feed CancelAfter / SemaphoreSlim.WaitAsync, which take an int millisecond count. Past ~24.8 days
+        // the failure would otherwise surface from inside every operation instead of here.
+        var tooLong = TimeSpan.FromMilliseconds(int.MaxValue) + TimeSpan.FromSeconds(1);
+        var options = property switch
+        {
+            nameof(ClickHouseTcpClientOptions.DialTimeout) => new ClickHouseTcpClientOptions { DialTimeout = tooLong },
+            nameof(ClickHouseTcpClientOptions.ReadTimeout) => new ClickHouseTcpClientOptions { ReadTimeout = tooLong },
+            _ => new ClickHouseTcpClientOptions { PoolTimeout = tooLong },
+        };
+
+        var thrown = Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+
+        Assert.That(thrown.ParamName, Is.EqualTo(property));
+    }
+
+    [Test]
+    public void Validate_TimeoutAtExactlyWhatATimerCanHold_IsAccepted()
+    {
+        // The boundary itself: rejecting it too would be an off-by-one that only shows up at an absurd setting.
+        var atLimit = TimeSpan.FromMilliseconds(int.MaxValue);
+        var options = new ClickHouseTcpClientOptions { DialTimeout = atLimit, ReadTimeout = atLimit, PoolTimeout = atLimit };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_UndefinedPoolReusePolicy_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new ClickHouseTcpClientOptions { PoolReusePolicy = (ClickHouseTcpPoolReusePolicy)42 };
 
         Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
     }
@@ -142,6 +312,13 @@ public class ClickHouseTcpClientOptionsTests
             MaxSendBufferBytes = 4096,
             DialTimeout = TimeSpan.FromSeconds(3),
             ReadTimeout = TimeSpan.FromSeconds(4),
+            MinPoolSize = 1,
+            MaxPoolSize = 7,
+            PoolTimeout = TimeSpan.FromSeconds(5),
+            MaxConnectionLifetime = TimeSpan.FromSeconds(6),
+            IdleTimeout = TimeSpan.FromSeconds(7),
+            SweepInterval = TimeSpan.FromSeconds(8),
+            PoolReusePolicy = ClickHouseTcpPoolReusePolicy.Fifo,
         };
         var defaults = new ClickHouseTcpClientOptions();
 
@@ -214,6 +391,12 @@ public class ClickHouseTcpClientOptionsTests
             MaxSendBufferBytes = 4096,
             DialTimeout = TimeSpan.FromSeconds(3),
             ReadTimeout = TimeSpan.FromSeconds(4),
+            MinPoolSize = 1,
+            MaxPoolSize = 7,
+            PoolTimeout = TimeSpan.FromSeconds(5),
+            MaxConnectionLifetime = TimeSpan.FromSeconds(6),
+            IdleTimeout = TimeSpan.FromSeconds(7),
+            PoolReusePolicy = ClickHouseTcpPoolReusePolicy.Fifo,
         };
 
         var derived = original with { Port = 9440 };
