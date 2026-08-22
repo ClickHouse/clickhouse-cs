@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
@@ -122,6 +123,101 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(nullMapLength, Is.EqualTo(rowCount));
             Assert.That(innerRowCount, Is.EqualTo(rowCount));
             Assert.That(materialized, Is.EqualTo(new[] { "v0", null, "v2" }));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_ArrayColumn_ExposesFlatElementsAndOffsetsThroughIArrayColumn()
+    {
+        // An Array(T) column's wire layout is every row's elements concatenated into one flat run plus the per-row
+        // offsets that delimit them. The materialized IColumn<T[]> surface allocates a fresh array per row;
+        // IArrayColumn<TElement> is the allocation-free alternative, so the test walks the rows through the spans
+        // and checks they reconstruct what the materialized surface produced.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool matched = false;
+        int rowCount = 0;
+        int[] offsets = null;
+        int[] innerValues = null;
+        int innerRowCount = 0;
+        var slices = new List<int[]>();
+        int[][] materialized = null;
+
+        // Rows: [], [0], [0, 1], [0, 1, 2] — an empty leading row makes a zero-length slice part of the check.
+        await foreach (Block block in connection.QueryAsync(
+            "SELECT CAST(range(number), 'Array(Int32)') FROM system.numbers LIMIT 4",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IArrayColumn<int>;
+
+            var array = (IArrayColumn<int>)column;
+            rowCount = array.RowCount;
+            offsets = array.Offsets.ToArray();
+            innerValues = array.InnerValues.ToArray();
+            innerRowCount = array.Inner.RowCount;
+            materialized = ((IColumn<int[]>)column).Values.ToArray();
+
+            for (int row = 0; row < array.RowCount; row++)
+            {
+                slices.Add(array.InnerValues.Slice(array.Offsets[row], array.Offsets[row + 1] - array.Offsets[row]).ToArray());
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(rowCount, Is.EqualTo(4));
+            Assert.That(offsets, Is.EqualTo(new[] { 0, 0, 1, 3, 6 }), "one more entry than rows; [0] is 0");
+            Assert.That(offsets.Length, Is.EqualTo(rowCount + 1), "sliced to the row count, not the pooled buffer length");
+            Assert.That(innerValues, Is.EqualTo(new[] { 0, 0, 1, 0, 1, 2 }), "every row's elements end-to-end");
+            Assert.That(innerRowCount, Is.EqualTo(6), "the inner column is flat: one entry per element, not per row");
+            Assert.That(slices, Is.EqualTo(materialized), "the zero-copy slices reconstruct the materialized rows");
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_NestedArrayColumn_ExposesInnerAsAnotherArrayColumnForRecursion()
+    {
+        // Why IArrayColumn exposes Inner as a column and not just InnerValues as a span: when the element type is
+        // itself composite, the span's element type is the *materialized* form (here int[]), so reading it defeats
+        // the point. Inner hands back the flat inner column instead, which pattern-matches to the element type's own
+        // view — so a nested composite can be walked to the bottom without materializing an intermediate level.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool outerMatched = false;
+        bool innerMatched = false;
+        int[] outerOffsets = null;
+        int[] innerOffsets = null;
+        int[] leafValues = null;
+        int[][][] materialized = null;
+
+        // Rows: [[0], [0, 1]] and [[1], [1, 2]].
+        await foreach (Block block in connection.QueryAsync(
+            "SELECT [[toInt32(number)], [toInt32(number), toInt32(number + 1)]] FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            outerMatched = column is IArrayColumn<int[]>;
+
+            var outer = (IArrayColumn<int[]>)column;
+            outerOffsets = outer.Offsets.ToArray();
+            materialized = ((IColumn<int[][]>)column).Values.ToArray();
+
+            innerMatched = outer.Inner is IArrayColumn<int>;
+            var inner = (IArrayColumn<int>)outer.Inner;
+            innerOffsets = inner.Offsets.ToArray();
+            leafValues = inner.InnerValues.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outerMatched, Is.True, "the outer view's element type is the materialized inner array");
+            Assert.That(innerMatched, Is.True, "and Inner re-enters the columnar surface one level down");
+            Assert.That(outerOffsets, Is.EqualTo(new[] { 0, 2, 4 }), "two inner arrays per outer row");
+            Assert.That(innerOffsets, Is.EqualTo(new[] { 0, 1, 3, 4, 6 }), "four inner arrays, of lengths 1, 2, 1, 2");
+            Assert.That(leafValues, Is.EqualTo(new[] { 0, 0, 1, 1, 1, 2 }), "the leaf run, reached without materializing a level");
+            Assert.That(materialized, Is.EqualTo(new[] { new[] { new[] { 0 }, new[] { 0, 1 } }, new[] { new[] { 1 }, new[] { 1, 2 } } }));
         });
     }
 }
