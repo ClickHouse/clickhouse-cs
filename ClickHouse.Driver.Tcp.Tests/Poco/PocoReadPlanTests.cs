@@ -347,7 +347,7 @@ public class PocoReadPlanTests
     [Test]
     public void Materialize_EveryTier_ProducesTheSameRows()
     {
-        // The three tiers differ only in how one value is sourced, so they must agree — including on the
+        // The tiers differ only in how one value is sourced, so they must agree — including on the
         // conversions, which is why the block mixes a raw type, a projected one, a nullable and a composite. This
         // doubles as the proof that the span-free tier a runtime without dynamic code falls back to is equivalent.
         Assert.Multiple(() =>
@@ -367,7 +367,7 @@ public class PocoReadPlanTests
     }
 
     [Test]
-    public void Create_SpanFreeTiers_AlsoRunUnderTheExpressionInterpreter()
+    public void Create_IndexerTier_AlsoRunsUnderTheExpressionInterpreter()
     {
         // Why the indexer tier exists at all: a runtime without dynamic code interprets the tree instead of
         // compiling it, and an interpreted tree cannot hold a ReadOnlySpan<T>. A test host that has dynamic code
@@ -376,19 +376,12 @@ public class PocoReadPlanTests
         IColumn column = Ints("value", 1, -2);
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve("Int32", new ResolveContext());
         PocoMember member = PocoTypeDescriptor<Row<int>>.Build().Members[0];
+        PocoColumnScatter<Row<int>> scatter = PocoColumnScatterFactory.Create<Row<int>>(column, codec, member, PocoScatterTier.Indexer, preferInterpretation: true);
+        var rows = new[] { new Row<int>(), new Row<int>() };
 
-        Assert.Multiple(() =>
-        {
-            foreach (PocoScatterTier tier in new[] { PocoScatterTier.Indexer, PocoScatterTier.Boxed })
-            {
-                PocoColumnScatter<Row<int>> scatter = PocoColumnScatterFactory.Create<Row<int>>(column, codec, member, tier, preferInterpretation: true);
-                var rows = new[] { new Row<int>(), new Row<int>() };
+        scatter(column, rows, rows.Length, rowOffset: 0);
 
-                scatter(column, rows, rows.Length, rowOffset: 0);
-
-                Assert.That(Values(rows), Is.EqualTo(new[] { 1, -2 }), tier.ToString());
-            }
-        });
+        Assert.That(Values(rows), Is.EqualTo(new[] { 1, -2 }));
     }
 
     [Test]
@@ -397,44 +390,31 @@ public class PocoReadPlanTests
         // The interpreter cannot hold a ReadOnlySpan<T>, so the span tier is only offered where a tree becomes IL.
         PocoScatterTier expected = RuntimeFeature.IsDynamicCodeCompiled ? PocoScatterTier.Span : PocoScatterTier.Indexer;
 
-        Assert.That(PocoColumnScatterFactory.SelectTier(null, columnSurfacesElementType: true), Is.EqualTo(expected));
+        Assert.That(PocoColumnScatterFactory.SelectTier(null), Is.EqualTo(expected));
     }
 
     [Test]
-    public void SelectTier_ForcedTier_IsHonoredForATypedColumn()
+    public void SelectTier_ForcedTier_IsHonored()
     {
         Assert.Multiple(() =>
         {
             foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
             {
-                Assert.That(PocoColumnScatterFactory.SelectTier(tier, columnSurfacesElementType: true), Is.EqualTo(tier), tier.ToString());
+                Assert.That(PocoColumnScatterFactory.SelectTier(tier), Is.EqualTo(tier), tier.ToString());
             }
         });
     }
 
     [Test]
-    public void SelectTier_ColumnNotSurfacingItsElementType_FallsBackToBoxed()
+    public void Build_ColumnNotSurfacingItsElementType_ReportsTheCodecMismatch()
     {
-        Assert.Multiple(() =>
-        {
-            Assert.That(PocoColumnScatterFactory.SelectTier(null, columnSurfacesElementType: false), Is.EqualTo(PocoScatterTier.Boxed), "unforced");
-            foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
-            {
-                Assert.That(PocoColumnScatterFactory.SelectTier(tier, columnSurfacesElementType: false), Is.EqualTo(PocoScatterTier.Boxed), tier.ToString());
-            }
-        });
-    }
-
-    [Test]
-    public void Materialize_ColumnNotSurfacingItsElementType_ReadsItThroughGetValue()
-    {
-        // No decoded column has this shape, but the plan must not assume otherwise: the typed tiers would fail their
-        // cast, so the boxed path is what keeps such a column readable.
+        // No shipped codec produces such a column, but both tiers cast to IColumn<T>, so one would fail that cast
+        // inside compiled code on the first block. Reported at plan build, naming the column and the codec.
         Block block = BlockOf(2, new UntypedColumn("value", "Int32", 1, -2));
 
-        Row<int>[] rows = Materialize<Row<int>>(block);
+        var error = Assert.Throws<InvalidOperationException>(() => Materialize<Row<int>>(block));
 
-        Assert.That(Values(rows), Is.EqualTo(new[] { 1, -2 }));
+        Assert.That(error.Message, Does.Contain("value").And.Contain("IColumn<System.Int32>"));
     }
 
     [Test]
@@ -521,9 +501,9 @@ public class PocoReadPlanTests
         Block block = BlockOf(1, Ints("value", 1));
 
         PocoReadPlan<Row<int>> span = registry.ReadPlanFor<Row<int>>(block, PocoScatterTier.Span);
-        PocoReadPlan<Row<int>> boxed = registry.ReadPlanFor<Row<int>>(block, PocoScatterTier.Boxed);
+        PocoReadPlan<Row<int>> indexer = registry.ReadPlanFor<Row<int>>(block, PocoScatterTier.Indexer);
 
-        Assert.That(boxed, Is.Not.SameAs(span));
+        Assert.That(indexer, Is.Not.SameAs(span));
     }
 
     [Test]
@@ -584,7 +564,7 @@ public class PocoReadPlanTests
 
     private static TValue[] Values<TValue>(Row<TValue>[] rows) => Array.ConvertAll(rows, row => row.Value);
 
-    /// <summary>A column that surfaces its values only boxed, which forces the boxed tier.</summary>
+    /// <summary>A column that surfaces its values only boxed, which no tier can source through.</summary>
     private sealed class UntypedColumn : IColumn
     {
         private readonly object[] values;
