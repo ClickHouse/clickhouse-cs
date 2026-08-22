@@ -6,7 +6,8 @@
     <IsTestProject>true</IsTestProject>
     <LangVersion>latest</LangVersion>
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
-    <NoWarn>CS8002</NoWarn>
+    <!-- CHTCP0001: the native-TCP client is experimental; the tests opt in to exercising it. -->
+    <NoWarn>CS8002;CHTCP0001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
