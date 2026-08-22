@@ -67,6 +67,31 @@ public class QueryPacketTests
         Assert.That(ms.Length, Is.GreaterThan(0));
     }
 
+    [Test]
+    public async Task Write_WithParameters_EndsWithTheNameFlagsValueTripleAndTerminator()
+    {
+        // The parameter list is the packet's last field, so the expected triple can be matched at the tail:
+        // name, the Custom flag (0x02), the value, then the empty key that ends the list.
+        using var ms = new MemoryStream();
+        using (var writer = new ClickHouseBinaryWriter(ms))
+        {
+            var parameters = new Dictionary<string, string> { ["id"] = "'42'" };
+            Query.Write(writer, new NegotiatedProtocol(54460), Client, "qid", "SELECT {id:Int32}", settings: null, parameters);
+            await writer.FlushAsync(None);
+        }
+
+        byte[] expected =
+        [
+            2, (byte)'i', (byte)'d',                                        // name, length-prefixed
+            0x02,                                                           // flags: Custom
+            4, (byte)'\'', (byte)'4', (byte)'2', (byte)'\'',                // value, length-prefixed
+            0,                                                              // empty key ends the list
+        ];
+
+        byte[] packet = ms.ToArray();
+        Assert.That(packet[^expected.Length..], Is.EqualTo(expected));
+    }
+
     private static async Task<byte[]> WriteQueryAsync(IReadOnlyDictionary<string, string> settings)
     {
         using var ms = new MemoryStream();
