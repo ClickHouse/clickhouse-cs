@@ -4,7 +4,6 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
-using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
@@ -29,8 +28,6 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </summary>
 internal sealed class Time64Column : IColumn<long>
 {
-    private const int DotNetTickScale = 7; // .NET tick = 100 ns = 10^-7 s.
-
     private readonly int scale;
     private readonly int length;
     private readonly bool pooled;
@@ -152,7 +149,5 @@ internal sealed class Time64Column : IColumn<long>
         return new Time64Column(name, typeName, scale, rented, byteCount, pooled: true);
     }
 
-    // Scales a raw count to .NET's 100 ns ticks. Sub-100 ns digits at scale 8/9 are truncated toward zero; the
-    // exact value stays in Values.
-    private TimeSpan ToTimeSpan(long count) => TimeSpan.FromTicks(FixedPointScaling.ShiftDecimalPlaces(count, DotNetTickScale - scale));
+    private TimeSpan ToTimeSpan(long count) => ColumnValueProjections.Time64ToTimeSpan(count, scale);
 }
