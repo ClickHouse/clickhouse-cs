@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -165,6 +166,67 @@ public class PocoReadIntegrationTests
             Assert.That(rows[rowCount - 1].Id, Is.EqualTo((ulong)(rowCount - 1)));
             Assert.That(rows[rowCount - 1].Name, Is.EqualTo((rowCount - 1).ToString()));
         });
+    }
+
+    [Test]
+    public async Task QueryAsync_BlockLargerThanTheMaterializationWindow_YieldsEveryRowOnceInOrder()
+    {
+        // A block is materialized a window of rows at a time, not all at once, so a block that spans several
+        // windows is the case where a window could drop, repeat or misorder rows. The multi-block test above cannot
+        // reach it: there, every block boundary is also a window boundary.
+        const int rowCount = 5_000;
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Settings = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                // One block holding every row: the row count is under max_block_size, and the byte-based cap that
+                // would otherwise split it first is disabled.
+                ["max_block_size"] = "8192",
+                ["preferred_block_size_bytes"] = "0",
+                ["max_threads"] = "1",
+            },
+        };
+
+        string sql = $"SELECT number AS Id, toString(number) AS Name FROM numbers({rowCount})";
+        await using var client = TcpServerFixture.CreateClient();
+
+        // The premise, asserted rather than assumed: if the server ever splits this differently, the row assertions
+        // below would still pass while no longer testing a window boundary inside a block.
+        int blocks = 0;
+        await foreach (Block _ in client.StreamAsync(sql, options, None))
+        {
+            blocks++;
+        }
+
+        List<Numbered> rows = await client.QueryAsync<Numbered>(sql, options, None).ToListAsync();
+
+        Assert.That(blocks, Is.EqualTo(1), "the query has to produce one block for this to test a window boundary");
+        Assert.That(rows, Has.Count.EqualTo(rowCount));
+        Assert.Multiple(() =>
+        {
+            for (int i = 0; i < rowCount; i++)
+            {
+                Assert.That(rows[i].Id, Is.EqualTo((ulong)i), $"Id at row {i}");
+                Assert.That(rows[i].Name, Is.EqualTo(i.ToString(CultureInfo.InvariantCulture)), $"Name at row {i}");
+            }
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_NullPastTheFirstWindow_NamesTheRowOfTheResult()
+    {
+        // The row a failure names is counted across the whole result. Reported from inside a window, so the offset
+        // of the window within its block has to be carried into the message.
+        const int nullAtRow = 1_500;
+        await using var client = TcpServerFixture.CreateClient();
+
+        InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(async () => await client
+            .QueryAsync<Numbered>(
+                $"SELECT if(number = {nullAtRow}, NULL, number) AS Id FROM numbers(3000)",
+                cancellationToken: None)
+            .ToListAsync());
+
+        Assert.That(error.Message, Does.Contain($"row {nullAtRow}").And.Contain("Numbered.Id"));
     }
 
     [Test]
