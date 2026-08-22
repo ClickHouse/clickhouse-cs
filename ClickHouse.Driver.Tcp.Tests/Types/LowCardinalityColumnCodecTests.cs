@@ -504,4 +504,23 @@ public class LowCardinalityColumnCodecTests
 
         Assert.That(column[0], Is.SameAs(column[2]));
     }
+
+    [Test]
+    public void NullableReferenceIndexer_RowsSharingADictionaryEntry_GetTheSameInstanceAndKeepNullNull()
+    {
+        // The nullable-reference shape reads its dictionary the same way, and a round trip asserting equal values
+        // would still pass if it regressed to rebuilding an entry per row. Key 0 is the NULL marker here (two
+        // reserved slots), so the null has to survive the sharing.
+        using var dictionary = new StringColumn("c", "String", "alphabeta"u8.ToArray(), new[] { 0, 0, 0, 5, 9 }, rowCount: 4, pooled: false);
+        using var column = new NullableLowCardinalityReferenceColumn<string>(
+            "c", "LowCardinality(Nullable(String))", dictionary, new[] { 2, 0, 3, 2 }, rowCount: 4, pooledKeys: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[0], Is.EqualTo("alpha"));
+            Assert.That(column[1], Is.Null, "key 0 is the NULL marker");
+            Assert.That(column[2], Is.EqualTo("beta"));
+            Assert.That(column[3], Is.SameAs(column[0]), "both rows hold the same dictionary entry");
+        });
+    }
 }
