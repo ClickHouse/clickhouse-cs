@@ -18,7 +18,7 @@ namespace ClickHouse.Driver.Tcp.Poco;
 ///
 /// <para>
 /// Neither level evicts, which has two consequences worth stating. The descriptors are bounded by the POCO types a
-/// program has, but the plans are bounded by the distinct result <em>shapes</em> it queries, and a shape is
+/// program has, but the plans are bounded by the distinct <em>shapes</em> it reads and writes, and a shape is
 /// caller-controlled (aliases, ad-hoc column lists): a long-lived client issuing endlessly varied shapes for one type
 /// accumulates a plan per shape. And both levels hold their <see cref="Type"/> keys — plus compiled delegates over
 /// that type's members — for as long as the client lives, so a POCO loaded into a collectible
@@ -31,6 +31,8 @@ internal sealed class PocoTypeRegistry
     private readonly ConcurrentDictionary<Type, PocoTypeDescriptor> descriptors = new();
 
     private readonly ConcurrentDictionary<(Type PocoType, string Signature, PocoScatterTier? ForcedTier), object> readPlans = new();
+
+    private readonly ConcurrentDictionary<(Type PocoType, string Signature), object> writePlans = new();
 
     /// <summary>
     /// Gets the descriptor for <typeparamref name="T"/>, building it on first use.
@@ -65,5 +67,25 @@ internal sealed class PocoTypeRegistry
         return (PocoReadPlan<T>)readPlans.GetOrAdd(
             (typeof(T), PocoReadPlan.SignatureOf(block), forcedTier),
             _ => PocoReadPlan<T>.Build(descriptor, block, forcedTier));
+    }
+
+    /// <summary>
+    /// Gets the write plan for <typeparamref name="T"/> over <paramref name="schema"/>'s target columns, compiling it
+    /// on first use. Keyed by the sample block's signature, so one type inserted into several tables — or into one
+    /// table through several column lists — keeps a plan per target shape.
+    /// </summary>
+    /// <typeparam name="T">The row type.</typeparam>
+    /// <param name="schema">The server's sample block for the INSERT.</param>
+    /// <returns>The cached plan.</returns>
+    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot fill the target — see
+    /// <see cref="PocoWritePlan{T}.Build"/>. Nothing is cached in that case, so every caller is told, not just the
+    /// first.</exception>
+    public PocoWritePlan<T> WritePlanFor<T>(Block schema)
+        where T : class
+    {
+        PocoTypeDescriptor<T> descriptor = DescriptorFor<T>();
+        return (PocoWritePlan<T>)writePlans.GetOrAdd(
+            (typeof(T), PocoWritePlan.SignatureOf(schema)),
+            _ => PocoWritePlan<T>.Build(descriptor, schema));
     }
 }
