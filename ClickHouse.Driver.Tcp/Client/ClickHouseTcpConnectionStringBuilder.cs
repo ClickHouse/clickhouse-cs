@@ -207,6 +207,17 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["PoolReusePolicy"] = value.ToString();
     }
 
+    /// <summary>
+    /// Frame codec for the native protocol: <c>lz4</c>, <c>zstd</c>, or <c>none</c>. Defaults to
+    /// <c>lz4</c>, so compression is on unless this key turns it off. Maps to
+    /// <see cref="ClickHouseTcpClientOptions.Compressor"/>.
+    /// </summary>
+    public string Compression
+    {
+        get => GetStringOrDefault("Compression", ClickHouseTcpClientOptions.DefaultCompression);
+        set => this["Compression"] = value;
+    }
+
     /// <summary>Materializes these keys into a <see cref="ClickHouseTcpClientOptions"/>, folding <c>set_*</c> keys into <see cref="ClickHouseTcpClientOptions.CustomSettings"/>.</summary>
     /// <returns>The equivalent options.</returns>
     public ClickHouseTcpClientOptions ToOptions()
@@ -250,6 +261,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             IdleTimeout = IdleTimeout,
             SweepInterval = SweepInterval,
             PoolReusePolicy = PoolReusePolicy,
+            Compressor = ClickHouseTcpClientOptions.ResolveCompressor(Compression),
             CustomSettings = customSettings,
         };
     }
