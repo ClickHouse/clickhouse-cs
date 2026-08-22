@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
@@ -6,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Poco;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp;
@@ -31,6 +33,10 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     private static readonly ClickHouseTcpInsertOptions DefaultInsertOptions = new();
 
     private readonly IConnectionSource source;
+
+    // Per-client, as HTTP's registry is: the client is meant to be a singleton, so the reflection and the compiles
+    // are amortized anyway, and a per-client cache cannot pin a type whose AssemblyLoadContext the caller unloads.
+    private readonly PocoTypeRegistry pocoTypes = new();
 
     /// <summary>Creates a client from options.</summary>
     /// <param name="options">The client configuration (endpoint, credentials, timeouts, client-level settings).</param>
@@ -142,6 +148,75 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 }
 
                 yield return values;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs a query and streams its result one row at a time as <typeparamref name="T"/>, filling each property
+    /// from the column of the same name. Matching ignores case, and then underscores, so a <c>user_id</c> column
+    /// reaches a <c>UserId</c> property; <c>[ClickHouseTcpColumn]</c> renames a property and
+    /// <c>[ClickHouseTcpNotMapped]</c> excludes one. A column no property maps to is skipped, and a property no
+    /// column maps to keeps its default.
+    /// </summary>
+    /// <remarks>
+    /// Unlike a <see cref="Block"/>, the rows are <b>owned</b>: no value borrows the block's storage, so an instance
+    /// stays valid after the enumeration moves on. One caveat on <em>sharing</em>, as opposed to lifetime: a
+    /// <c>LowCardinality</c> column may hand the same element instance to every row holding that dictionary entry, so
+    /// do not mutate an array-valued property in place — with a <c>LowCardinality(FixedString(N))</c> the
+    /// <c>byte[]</c> may be another row's too.
+    ///
+    /// <para>
+    /// The reading itself is box-free — the values go from the decoded column into the property through a compiled
+    /// per-column loop, with no boxed intermediate — for every property whose type the column reads as.
+    /// <typeparamref name="T"/> needs a public parameterless constructor and public setters; the mapping is compiled
+    /// from the first block of the result, so a mismatch is reported before the first row is handed out. A result with
+    /// no rows carries no block, and so yields nothing and reports nothing: use the block-level API if a shape has to
+    /// be validated against an empty result.
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="T">The row type.</typeparam>
+    /// <param name="sql">The SQL text.</param>
+    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>An async stream of result rows.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
+    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot be mapped to the result: it has
+    /// nothing to map or cannot be constructed, no column maps to a property, or a column cannot be read as its
+    /// property's type.</exception>
+    public async IAsyncEnumerable<T> QueryAsync<T>(
+        string sql,
+        ClickHouseTcpQueryOptions options = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        where T : class
+    {
+        PocoReadPlan<T> plan = null;
+        long produced = 0;
+        await foreach (Block block in StreamAsync(sql, options, cancellationToken).ConfigureAwait(false))
+        {
+            // The blocks of one result share a header, so the plan is resolved once per result in practice; the
+            // check also covers the header changing mid-enumeration, which the cache then serves.
+            if (plan is null || !plan.MatchesHeader(block))
+            {
+                plan = pocoTypes.ReadPlanFor<T>(block, forcedTier: null);
+            }
+
+            T[] rows = ArrayPool<T>.Shared.Rent(block.RowCount);
+            try
+            {
+                // Materializing in one synchronous call is what lets the scatters hold a span: an iterator method
+                // cannot. The rows are handed out afterwards, when no span is live.
+                plan.Materialize(block, rows, produced);
+                produced += block.RowCount;
+                for (int i = 0; i < block.RowCount; i++)
+                {
+                    yield return rows[i];
+                }
+            }
+            finally
+            {
+                // Cleared, so the pool does not keep the rows it just handed to the caller alive.
+                ArrayPool<T>.Shared.Return(rows, clearArray: true);
             }
         }
     }
