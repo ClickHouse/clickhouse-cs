@@ -10,8 +10,8 @@ namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// The contract of a ClickHouse client that speaks the native TCP protocol: run queries and stream results,
-/// execute statements, and insert columnar data. <see cref="ClickHouseTcpClient"/> is the implementation; code
-/// against this interface to substitute a test double.
+/// execute statements, and insert data columnwise or row by row. <see cref="ClickHouseTcpClient"/> is the
+/// implementation; code against this interface to substitute a test double.
 ///
 /// <para>
 /// This type is experimental: its surface may change in a future release. Suppress diagnostic
@@ -120,6 +120,58 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     ValueTask InsertAsync(
         string sql,
         IReadOnlyList<IColumn> columns,
+        ClickHouseTcpInsertOptions options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Inserts rows of <typeparamref name="T"/>, reading each target column from the property of the same name —
+    /// the write mirror of <see cref="QueryAsync{T}"/>. Every target column must map to a property, so name the
+    /// columns to insert in the statement when the type covers only some of the table. With no rows nothing is
+    /// written, though the statement is still sent and the mapping still checked.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="rows"/> is fully enumerated before any row data goes out: the target types arrive only after
+    /// the statement has been sent, so the rows must be in hand to be transposed into columns. A mapping failure is
+    /// therefore reported with the INSERT already under way, having written no rows, and leaves the client usable.
+    /// A property's type must be one its target column can be written from, which is a shorter list than the one a
+    /// query can read into — see the implementation's remarks.
+    /// </remarks>
+    /// <typeparam name="T">The row type.</typeparam>
+    /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
+    /// <param name="rows">The rows to insert, each non-null.</param>
+    /// <param name="options">Per-insert options (query id, settings, block sizing), or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>A task that completes when the server acknowledges the insert.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="rows"/> is null.</exception>
+    /// <exception cref="ArgumentException">A row is null, or <typeparamref name="T"/> is a column type.</exception>
+    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot fill the target, or a property is
+    /// null for a column that cannot hold null.</exception>
+    ValueTask InsertAsync<T>(
+        string sql,
+        IEnumerable<T> rows,
+        ClickHouseTcpInsertOptions options = null,
+        CancellationToken cancellationToken = default)
+        where T : class;
+
+    /// <summary>
+    /// Inserts untyped rows: each <c>object[]</c> holds one value per target column, <b>by position</b>. The
+    /// dynamic counterpart of <see cref="QueryAsync(string, ClickHouseTcpQueryOptions, CancellationToken)"/>, and
+    /// the one insert tier that boxes every value. With no rows nothing is written, though the statement is still
+    /// sent.
+    /// </summary>
+    /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
+    /// <param name="rows">The rows to insert, each non-null and one value long per target column.</param>
+    /// <param name="options">Per-insert options (query id, settings, block sizing), or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>A task that completes when the server acknowledges the insert.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="rows"/> is null.</exception>
+    /// <exception cref="ArgumentException">A row is null or has the wrong number of values.</exception>
+    /// <exception cref="InvalidOperationException">A value's CLR type is not one its target column accepts, a column
+    /// holds values of more than one type, a value is null for a column that cannot hold null, or a target column's
+    /// type cannot be built from rows at all (<c>Nested</c>) and needs the columnar overload.</exception>
+    ValueTask InsertAsync(
+        string sql,
+        IEnumerable<object[]> rows,
         ClickHouseTcpInsertOptions options = null,
         CancellationToken cancellationToken = default);
 

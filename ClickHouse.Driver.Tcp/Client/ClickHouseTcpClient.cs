@@ -14,7 +14,7 @@ namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// A high-level client for a ClickHouse server over the native TCP protocol: run queries and stream results,
-/// execute statements, and insert columnar data. Build one from a <see cref="ClickHouseTcpClientOptions"/> or a
+/// execute statements, and insert data columnwise or row by row. Build one from a <see cref="ClickHouseTcpClientOptions"/> or a
 /// connection string and reuse it — it is safe to share across threads. Operations are serialized onto the
 /// underlying connection today (one in flight at a time); a future connection pool lifts that transparently.
 ///
@@ -296,6 +296,145 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         await lease.Connection.InsertAsync(
             sql,
             columns,
+            settings,
+            parameters: null,
+            options?.QueryId,
+            ResolveMaxRowsPerBlock(options),
+            Options.MaxSendBufferBytes,
+            handlers: null,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Inserts rows of <typeparamref name="T"/>, reading each target column from the property of the same name.
+    /// Matching is the mirror of <see cref="QueryAsync{T}(string, ClickHouseTcpQueryOptions, CancellationToken)"/>'s:
+    /// case- and then underscore-insensitive, with <c>[ClickHouseTcpColumn]</c> renaming a property and
+    /// <c>[ClickHouseTcpNotMapped]</c> excluding one. With no rows nothing is written, though the statement is still
+    /// sent and the mapping still checked.
+    /// </summary>
+    /// <remarks>
+    /// Every target column must map to a property, so name the columns to insert in the statement
+    /// (<c>INSERT INTO t (a, b) VALUES</c>) when the POCO covers only some of the table — the server then fills the
+    /// rest from their defaults. A property no target column maps to is not inserted. <typeparamref name="T"/> needs
+    /// public getters but no constructor of ours, so a read-only POCO inserts even though it cannot be queried into.
+    ///
+    /// <para>
+    /// The gathering is box-free — each property goes into the buffer its column is written from through a compiled
+    /// per-column loop — except for a <c>Variant</c> or <c>Dynamic</c> target, which is written from a column of
+    /// <see cref="object"/> and so boxes a value-typed property per row. The mapping is compiled against the target's
+    /// own types, which the server sends after the statement, so a mismatch is reported once the INSERT is under way,
+    /// having written no rows, and leaves the client usable. <paramref name="rows"/> is fully enumerated before any
+    /// row data goes out, so <see cref="ClickHouseTcpInsertOptions.MaxRowsPerBlock"/> bounds the wire blocks, not
+    /// client memory.
+    /// </para>
+    ///
+    /// <para>
+    /// A property's type must be one its target column can be written from, which is a shorter list than the one a
+    /// query can read into: an <see cref="object"/> property reads any column but fills only a <c>Variant</c> or
+    /// <c>Dynamic</c> target, and a <c>LowCardinality(DateTime)</c> column reads as <see cref="DateTime"/> but is
+    /// written only from the raw epoch seconds. Declare the property as the type the column is written from, or
+    /// insert that column through the columnar overload.
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="T">The row type.</typeparam>
+    /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
+    /// <param name="rows">The rows to insert, each non-null.</param>
+    /// <param name="options">Per-insert options (query id, settings, block sizing), or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>A task that completes when the server acknowledges the insert.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="rows"/> is null.</exception>
+    /// <exception cref="ArgumentException">A row is null, or <typeparamref name="T"/> is a column type — pass columns
+    /// to the columnar overload instead.</exception>
+    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot fill the target: it has nothing to
+    /// map, a target column maps to no property or to one that cannot be read, or a property's type cannot be written
+    /// as its target's type. Also when a property is null for a column that cannot hold null.</exception>
+    public async ValueTask InsertAsync<T>(
+        string sql,
+        IEnumerable<T> rows,
+        ClickHouseTcpInsertOptions options = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        ArgumentNullException.ThrowIfNull(rows);
+
+        // Reached by handing over a sequence of columns that is not a list — the result of a LINQ operator over
+        // one, typically. Mapping IColumn as a POCO would "work" as far as reflecting over Name and RowCount, so
+        // say what was meant instead.
+        if (typeof(IColumn).IsAssignableFrom(typeof(T)))
+        {
+            throw new ArgumentException(
+                $"An insert of {typeof(T).Name} rows would map that type's properties to columns. To insert columnar data, call the overload taking IReadOnlyList<IColumn> — materialize the sequence (for example with ToList()) if it is not already a list.",
+                nameof(rows));
+        }
+
+        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+
+        // Materialized before the connection is rented: the target types arrive mid-INSERT, so the rows have to be
+        // in hand by then, and enumerating a slow source should not hold a connection open.
+        using var buffer = PocoRowBuffer<T>.Materialize(rows, nameof(rows), cancellationToken);
+
+        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        await lease.Connection.InsertAsync(
+            sql,
+            buffer.Count,
+            schema => pocoTypes.WritePlanFor<T>(schema).BuildColumns(buffer.Rows, buffer.Count),
+            settings,
+            parameters: null,
+            options?.QueryId,
+            ResolveMaxRowsPerBlock(options),
+            Options.MaxSendBufferBytes,
+            handlers: null,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Inserts untyped rows: each <c>object[]</c> holds one value per target column, <b>by position</b> — the order
+    /// of the statement's column list, or the table's own order when the statement names none. The dynamic
+    /// counterpart of <see cref="QueryAsync(string, ClickHouseTcpQueryOptions, CancellationToken)"/>, for a schema
+    /// known only at run time. With no rows nothing is written, though the statement is still sent.
+    /// </summary>
+    /// <remarks>
+    /// The CLR type each column is written in is taken from the first row that has a value there, so a column takes
+    /// either the calendar type (<see cref="DateTime"/> for a <c>DateTime</c> column) or the raw wire value the
+    /// untyped read produces — a read-then-reinsert needs no conversion — but every value of one column must then be
+    /// of that one type. The exception is a <c>Variant</c> or <c>Dynamic</c> target, which is written from
+    /// <see cref="object"/> and so takes a mixture. A null is inserted as NULL, which a column that is not
+    /// <c>Nullable</c> reports, naming the row.
+    ///
+    /// <para>
+    /// This tier boxes every value by construction. For bulk data prefer the columnar overload or
+    /// <see cref="InsertAsync{T}(string, IEnumerable{T}, ClickHouseTcpInsertOptions, CancellationToken)"/>, both of
+    /// which are box-free.
+    /// </para>
+    /// </remarks>
+    /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
+    /// <param name="rows">The rows to insert, each non-null and one value long per target column.</param>
+    /// <param name="options">Per-insert options (query id, settings, block sizing), or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>A task that completes when the server acknowledges the insert.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="rows"/> is null.</exception>
+    /// <exception cref="ArgumentException">A row is null or has the wrong number of values.</exception>
+    /// <exception cref="InvalidOperationException">A value's CLR type is not one its target column accepts, a column
+    /// holds values of more than one type, a value is null for a column that cannot hold null, or a target column's
+    /// type cannot be built from rows at all (<c>Nested</c>) and needs the columnar overload.</exception>
+    public async ValueTask InsertAsync(
+        string sql,
+        IEnumerable<object[]> rows,
+        ClickHouseTcpInsertOptions options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        ArgumentNullException.ThrowIfNull(rows);
+
+        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        using var buffer = PocoRowBuffer<object[]>.Materialize(rows, nameof(rows), cancellationToken);
+
+        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        await lease.Connection.InsertAsync(
+            sql,
+            buffer.Count,
+            schema => PocoUntypedColumns.Build(schema, buffer.Rows, buffer.Count),
             settings,
             parameters: null,
             options?.QueryId,

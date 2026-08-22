@@ -1,56 +1,20 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// The header identity a <see cref="PocoReadPlan{T}"/> is built against. Only the wire shape lives here, so it is
-/// shared by every POCO type rather than compiled once per type.
+/// The header identity a <see cref="PocoReadPlan{T}"/> is built against: the block shape, keyed by
+/// <see cref="PocoBlockSignature"/>, resolved in the context the read decoded the block with.
 /// </summary>
 internal static class PocoReadPlan
 {
-    /// <summary>
-    /// The cache key for a block's shape: the resolution context, then each column's name and ClickHouse type. The
-    /// type string is the server's own header text, so two types that print alike cannot collide.
-    ///
-    /// <para>
-    /// Every part is length-prefixed rather than merely separated, because a column name is arbitrary text — a
-    /// backtick- or double-quoted alias may itself contain any separator character. Joined on a delimiter alone, the
-    /// header <c>[a Int32, b Int32]</c> and a single column named with that delimiter sequence produce the same key,
-    /// and the cache then hands one shape's plan to the other: columns silently unread, or an index past the block's
-    /// columns. Length prefixes make the key injective, so the shape a plan was compiled for is the only shape that
-    /// can find it.
-    /// </para>
-    /// </summary>
+    /// <summary>The cache key for the shape of a result block. See <see cref="PocoBlockSignature.Of"/>.</summary>
     /// <param name="block">The block whose header to key on.</param>
     /// <returns>The key.</returns>
-    public static string SignatureOf(Block block)
-    {
-        var key = new StringBuilder();
-        Append(key, ContextKey(block.Context));
-        for (int i = 0; i < block.ColumnCount; i++)
-        {
-            IColumn column = block[i];
-            Append(key, column.Name);
-            Append(key, column.TypeName);
-        }
-
-        return key.ToString();
-    }
-
-    /// <summary>
-    /// The part of the key that is not in the header. A <c>DateTime</c> column whose type string names no timezone
-    /// resolves against the session timezone, so a plan built for one session timezone must not be reused for
-    /// another — the header alone cannot tell the two apart.
-    /// </summary>
-    /// <param name="context">The context the block's codecs were resolved with.</param>
-    /// <returns>The key part.</returns>
-    public static string ContextKey(in ResolveContext context) => context.ServerTimezone ?? string.Empty;
-
-    private static void Append(StringBuilder key, string part) => key.Append(part.Length).Append(':').Append(part);
+    public static string SignatureOf(Block block) => PocoBlockSignature.Of(block, block.Context);
 }
 
 /// <summary>
@@ -139,11 +103,11 @@ internal sealed class PocoReadPlan<T>
         if (claimedBy.Count == 0)
         {
             throw new InvalidOperationException(
-                $"No column of the result maps to a property of '{typeof(T).Name}': the result has {Describe(names)}, and the type has {Describe(descriptor)}. " +
+                $"No column of the result maps to a property of '{typeof(T).Name}': the result has {Describe(names)}, and the type has {descriptor.DescribeMappedColumns()}. " +
                 $"Every row would be left at its defaults, so this is reported rather than returned.");
         }
 
-        return new PocoReadPlan<T>(activator, names, types, PocoReadPlan.ContextKey(block.Context), scatters);
+        return new PocoReadPlan<T>(activator, names, types, PocoBlockSignature.ContextKey(block.Context), scatters);
     }
 
     /// <summary>
@@ -157,7 +121,7 @@ internal sealed class PocoReadPlan<T>
     public bool MatchesHeader(Block block)
     {
         if (block.ColumnCount != columnNames.Length
-            || !string.Equals(contextKey, PocoReadPlan.ContextKey(block.Context), StringComparison.Ordinal))
+            || !string.Equals(contextKey, PocoBlockSignature.ContextKey(block.Context), StringComparison.Ordinal))
         {
             return false;
         }
@@ -221,14 +185,4 @@ internal sealed class PocoReadPlan<T>
     private static string Describe(string[] columnNames)
         => columnNames.Length == 0 ? "no columns" : $"columns {string.Join(", ", columnNames)}";
 
-    private static string Describe(PocoTypeDescriptor descriptor)
-    {
-        var names = new string[descriptor.Members.Count];
-        for (int i = 0; i < names.Length; i++)
-        {
-            names[i] = descriptor.Members[i].ColumnName;
-        }
-
-        return $"properties mapping to {string.Join(", ", names)}";
-    }
 }
