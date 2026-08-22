@@ -9,28 +9,35 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
-/// A codec for a fixed-width integer column. ClickHouse writes these values little-endian and contiguously, so
-/// the whole column is read in one bulk transfer into a byte buffer that becomes the column's storage — no
-/// per-element decoding, and the values are reinterpreted from those bytes on access. Covers the 8- through
-/// 256-bit signed and unsigned widths.
+/// A codec for any fixed-width column whose CLR type is a direct little-endian reinterpret of the wire bytes —
+/// the integers (8- through 256-bit, signed and unsigned), the IEEE-754 floats (<c>Float32</c>/<c>Float64</c>),
+/// <c>Bool</c>, and the <c>Interval*</c> family (a raw <c>Int64</c> count). ClickHouse writes these values
+/// little-endian and contiguously, so the whole column is read in one bulk transfer into a byte buffer that
+/// becomes the column's storage — no per-element decoding, and the values are reinterpreted from those bytes on
+/// access.
 ///
 /// <para>
 /// Little-endian only: the buffer's bytes are the wire bytes, reinterpreted as <typeparamref name="T"/>. Every
-/// runtime .NET targets is little-endian; that invariant is assumed here (not re-checked per column). TODO: a
-/// single big-endian guard at the client entry point is not yet in place — until it lands, running on a
-/// big-endian host would silently mis-decode rather than fail fast.
+/// runtime .NET targets is little-endian; the connection refuses to open on a big-endian host, so that invariant
+/// holds by the time any column is read and is not re-checked per column.
 /// </para>
 /// </summary>
-/// <typeparam name="T">The CLR type the ClickHouse integer maps to.</typeparam>
-internal sealed class IntegerColumnCodec<T> : IColumnCodec, ISpanWritableCodec<T>
+/// <typeparam name="T">The CLR type the ClickHouse value maps to.</typeparam>
+internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCodec<T>
     where T : unmanaged
 {
-    /// <summary>Initializes a new instance of the <see cref="IntegerColumnCodec{T}"/> class.</summary>
-    /// <param name="typeName">The canonical ClickHouse type name (e.g. <c>Int32</c>).</param>
-    public IntegerColumnCodec(string typeName) => TypeName = typeName;
+    /// <summary>Initializes a new instance of the <see cref="FixedWidthColumnCodec{T}"/> class.</summary>
+    /// <param name="typeName">The canonical ClickHouse type name (e.g. <c>Int32</c>, <c>Float64</c>).</param>
+    public FixedWidthColumnCodec(string typeName) => TypeName = typeName;
 
     /// <inheritdoc/>
     public string TypeName { get; }
+
+    /// <inheritdoc/>
+    public Type ElementType => typeof(T);
+
+    /// <inheritdoc/>
+    public object NullPlaceholder => default(T);
 
     /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
