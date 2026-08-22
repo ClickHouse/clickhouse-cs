@@ -30,8 +30,6 @@ internal static class PocoColumnScatterFactory
 {
     private static readonly MethodInfo SpanAt = typeof(PocoSpan).GetMethod(nameof(PocoSpan.At), BindingFlags.Public | BindingFlags.Static);
 
-    private static readonly MethodInfo ColumnGetValue = typeof(IColumn).GetMethod(nameof(IColumn.GetValue));
-
     /// <summary>
     /// Compiles the scatter for one column into one property.
     /// </summary>
@@ -42,15 +40,21 @@ internal static class PocoColumnScatterFactory
     /// <param name="forcedTier">A tier to compile regardless of the runtime, or null to choose one.</param>
     /// <param name="preferInterpretation">Compiles the tree to an interpreter rather than to IL. Not used in
     /// production — the runtime decides that — but it is the only way to exercise the path a runtime without dynamic
-    /// code takes, which is the whole reason the span-free tiers exist.</param>
+    /// code takes, which is the whole reason the indexer tier exists.</param>
     /// <returns>The compiled scatter.</returns>
-    /// <exception cref="InvalidOperationException">The column's values cannot be read as the property's type.</exception>
+    /// <exception cref="InvalidOperationException">The column's values cannot be read as the property's type, or the
+    /// column does not surface its codec's element type.</exception>
     public static PocoColumnScatter<T> Create<T>(IColumn column, IColumnCodec codec, PocoMember member, PocoScatterTier? forcedTier, bool preferInterpretation = false)
         where T : class
     {
         Type elementType = codec.ElementType;
         Type typedColumn = typeof(IColumn<>).MakeGenericType(elementType);
-        PocoScatterTier tier = SelectTier(forcedTier, typedColumn.IsInstanceOfType(column));
+        if (!typedColumn.IsInstanceOfType(column))
+        {
+            throw NotSurfacingItsElementType(column, codec);
+        }
+
+        PocoScatterTier tier = SelectTier(forcedTier);
 
         ParameterExpression columnParameter = Expression.Parameter(typeof(IColumn), "column");
         ParameterExpression rows = Expression.Parameter(typeof(T[]), "rows");
@@ -100,20 +104,10 @@ internal static class PocoColumnScatterFactory
     /// holding a <c>ReadOnlySpan&lt;T&gt;</c> compiles but cannot be <em>interpreted</em>, which is the path taken
     /// when the runtime has no dynamic code (NativeAOT), so the span tier is not offered there.
     /// </summary>
-    /// <param name="forcedTier">A tier to use in place of the choice, or null to choose. A column that does not
-    /// surface its element type overrides it: neither typed tier can read one.</param>
-    /// <param name="columnSurfacesElementType">Whether the column implements <see cref="IColumn{T}"/> over its
-    /// codec's element type, which both typed tiers rely on.</param>
+    /// <param name="forcedTier">A tier to use in place of the choice, or null to choose.</param>
     /// <returns>The tier to compile.</returns>
-    internal static PocoScatterTier SelectTier(PocoScatterTier? forcedTier, bool columnSurfacesElementType)
-    {
-        if (!columnSurfacesElementType)
-        {
-            return PocoScatterTier.Boxed;
-        }
-
-        return forcedTier ?? (RuntimeFeature.IsDynamicCodeCompiled ? PocoScatterTier.Span : PocoScatterTier.Indexer);
-    }
+    internal static PocoScatterTier SelectTier(PocoScatterTier? forcedTier)
+        => forcedTier ?? (RuntimeFeature.IsDynamicCodeCompiled ? PocoScatterTier.Span : PocoScatterTier.Indexer);
 
     /// <summary>
     /// Builds the expression that yields the value at <paramref name="row"/>, adding whatever the tier hoists out
@@ -124,8 +118,8 @@ internal static class PocoColumnScatterFactory
     /// <param name="typedColumn">The <see cref="IColumn{T}"/> type over the codec's element type.</param>
     /// <param name="elementType">The codec's element type.</param>
     /// <param name="row">The loop counter.</param>
-    /// <param name="locals">The enclosing block's locals, added to by the typed tiers.</param>
-    /// <param name="prologue">The statements before the loop, added to by the typed tiers.</param>
+    /// <param name="locals">The enclosing block's locals, added to by both tiers.</param>
+    /// <param name="prologue">The statements before the loop, added to by both tiers.</param>
     /// <returns>An expression of type <paramref name="elementType"/>.</returns>
     private static Expression SourceOneValue(
         PocoScatterTier tier,
@@ -148,16 +142,27 @@ internal static class PocoColumnScatterFactory
                 prologue.Add(Expression.Assign(values, Expression.Property(Expression.Convert(column, typedColumn), "Values")));
                 return Expression.Call(SpanAt.MakeGenericMethod(elementType), values, row);
 
-            case PocoScatterTier.Indexer:
+            default:
                 ParameterExpression typed = Expression.Variable(typedColumn, "typed");
                 locals.Add(typed);
                 prologue.Add(Expression.Assign(typed, Expression.Convert(column, typedColumn)));
                 return Expression.MakeIndex(typed, typedColumn.GetProperty("Item", elementType, new[] { typeof(int) }), new[] { row });
-
-            default:
-                return Expression.Convert(Expression.Call(column, ColumnGetValue, row), elementType);
         }
     }
+
+    /// <summary>
+    /// The failure for a column that does not implement <see cref="IColumn{T}"/> over its own codec's element type.
+    /// Both tiers cast to that interface, so such a column would otherwise fail the cast inside compiled code, on
+    /// the first block rather than at plan build. No shipped codec produces one — a codec and the column it reads
+    /// are written together — so this reports the codec bug rather than the cast that follows from it.
+    /// </summary>
+    /// <param name="column">The column.</param>
+    /// <param name="codec">The column's codec.</param>
+    /// <returns>The exception to throw.</returns>
+    private static Exception NotSurfacingItsElementType(IColumn column, IColumnCodec codec)
+        => new InvalidOperationException(
+            $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which does not implement IColumn<{codec.ElementType}> " +
+            $"as its codec {codec.GetType()} declares. A POCO read sources every value through that interface, so the column cannot be read into a property.");
 
     /// <summary>
     /// The failure for a property the column cannot be read as (D6d): raised at plan build, so it names the shape
