@@ -272,4 +272,23 @@ public class DateTime64ColumnCodecTests
     [Test]
     public void Create_ScaleOutOfRange_Throws()
         => Assert.Throws<FormatException>(() => Codec("DateTime64(10)"));
+
+    [Test]
+    public void WritableElementTypes_ListsLongThenOffsetThenDateTime()
+        => Assert.That(
+            Codec("DateTime64(3)").WritableElementTypes,
+            Is.EqualTo(new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) }));
+
+    [Test]
+    public void NullPlaceholderAs_ReturnsEpochInRequestedSpelling_ThrowsForOthers()
+    {
+        DateTime64ColumnCodec codec = Codec("DateTime64(3)");
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.NullPlaceholderAs(typeof(long)), Is.EqualTo(0L));
+            Assert.That(codec.NullPlaceholderAs(typeof(DateTimeOffset)), Is.EqualTo(DateTimeOffset.UnixEpoch));
+            Assert.That(codec.NullPlaceholderAs(typeof(DateTime)), Is.EqualTo(DateTime.UnixEpoch));
+            Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(string)));
+        });
+    }
 }
