@@ -105,10 +105,11 @@ internal sealed class LowCardinalityColumn<T> : IColumn<T>, ILowCardinalityColum
     }
 
     /// <inheritdoc/>
-    // Index through the RowCount-sliced keys, not the raw buffer: the buffer is usually a pooled array longer than
-    // the column, and a stale key left in its tail by a previous read is a perfectly valid dictionary index — so an
-    // out-of-range row would quietly return a real value from the dictionary instead of throwing.
-    public T this[int row] => cache is not null ? cache[row] : dictionary[Keys[row]];
+    // Keys, not the raw buffer: the buffer is usually pooled and longer than the column, and a stale key in its tail
+    // is a valid dictionary index, so an out-of-range row would return a real value instead of throwing.
+    // The dictionary's Values, not its indexer: a dictionary that builds values on access (a String one decodes
+    // UTF-8) would otherwise rebuild an entry per row rather than share it across the rows holding that key.
+    public T this[int row] => cache is not null ? cache[row] : dictionary.Values[Keys[row]];
 
     /// <inheritdoc/>
     public object GetValue(int row) => this[row];

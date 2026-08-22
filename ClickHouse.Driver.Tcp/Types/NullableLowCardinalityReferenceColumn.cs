@@ -114,8 +114,10 @@ internal sealed class NullableLowCardinalityReferenceColumn<T> : IColumn<T>, IDe
                 return cache[row];
             }
 
+            // Through Values rather than the dictionary's indexer, so an entry built on access (a decoded string)
+            // is shared by every row holding it instead of rebuilt per row. See LowCardinalityColumn.
             int key = Keys[row];
-            return key == 0 ? null : dictionary[key];
+            return key == 0 ? null : dictionary.Values[key];
         }
     }
 

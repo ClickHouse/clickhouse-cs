@@ -176,25 +176,45 @@ internal sealed class PocoReadPlan<T>
     }
 
     /// <summary>
-    /// Materializes a block's rows into <paramref name="rows"/>: one instance per row, then one scatter per mapped
-    /// column. Synchronous by necessity — the span tier holds a <see cref="ReadOnlySpan{T}"/>, which no async or
-    /// iterator method may.
+    /// A whole block in one pass. Convenient where the row count is known to be small, or where all of a block's
+    /// rows are wanted at once; a reader streaming a result of any size wants the windowed overload instead, so
+    /// that the rows it has handed on can be collected while it reads the rest.
     /// </summary>
     /// <param name="block">The block to materialize; must have the shape this plan was built for.</param>
     /// <param name="rows">The destination, at least <see cref="Block.RowCount"/> long.</param>
     /// <param name="rowOffset">How many rows of the result precede this block, so a failure names the row the caller
     /// counts. Only ever read on a failure path.</param>
     public void Materialize(Block block, T[] rows, long rowOffset)
+        => Materialize(block, rows, 0, block.RowCount, rowOffset);
+
+    /// <summary>
+    /// Materializes rows <c>[start, start + count)</c> of a block into <c>rows[0, count)</c>: one instance per row,
+    /// then one scatter per mapped column. Synchronous by necessity — the span tier holds a
+    /// <see cref="ReadOnlySpan{T}"/>, which no async or iterator method may.
+    ///
+    /// <para>
+    /// Taking a block in windows rather than whole bounds how many rows are reachable at once, which is otherwise
+    /// however many rows the server chose to put in a block. That matters because a generational collector charges
+    /// for what survives a collection rather than for what it frees, so rows held for a whole block are copied
+    /// forward instead of being dropped.
+    /// </para>
+    /// </summary>
+    /// <param name="block">The block to materialize; must have the shape this plan was built for.</param>
+    /// <param name="rows">The destination, at least <paramref name="count"/> long.</param>
+    /// <param name="start">The first row of the block to take.</param>
+    /// <param name="count">How many rows to take.</param>
+    /// <param name="rowOffset">How many rows of the result precede <c>rows[0]</c>, so a failure names the row the
+    /// caller counts. Only ever read on a failure path.</param>
+    public void Materialize(Block block, T[] rows, int start, int count, long rowOffset)
     {
-        int rowCount = block.RowCount;
-        for (int i = 0; i < rowCount; i++)
+        for (int i = 0; i < count; i++)
         {
             rows[i] = activator();
         }
 
         for (int i = 0; i < scatters.Length; i++)
         {
-            scatters[i]?.Invoke(block[i], rows, rowCount, rowOffset);
+            scatters[i]?.Invoke(block[i], rows, start, count, rowOffset);
         }
     }
 
