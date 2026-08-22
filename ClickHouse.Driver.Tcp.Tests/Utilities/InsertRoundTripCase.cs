@@ -863,6 +863,109 @@ public sealed class InsertRoundTripCase
                 new byte[] { 1, 2, 3, 4 },
                 new byte[] { 0xFF, 0, 0xFF, 0 },
             }));
+
+        // Variant(...): a discriminated union — each row is a value of one alternative or NULL. The ergonomic
+        // insert source is a flat IColumn<object>; each value's runtime CLR type picks its alternative, and null
+        // marks a NULL row. Like Array/Tuple/Map/Nested, the server rejects Nullable(Variant(...)) — NULL is the
+        // discriminator's job — so there is no Nullable(...) case; NULL rides inside the variant instead. The
+        // alternatives arrive server-canonicalized (sorted by name), so the type strings here are already in
+        // discriminator order. A present value equal to a type's default (0, empty string) rides alongside NULL to
+        // prove the two are distinct.
+        yield return Same(
+            "Variant(String, UInt64)",
+            "Variant(String, UInt64)",
+            name => new ArrayColumn<object>(name, "Variant(String, UInt64)", new object[] { 42UL, "hi", null, 0UL, string.Empty, null }),
+            VariantSettings);
+
+        // Three alternatives, exercising more than one non-null discriminator interleaved with NULL.
+        yield return Same(
+            "Variant(Bool, Int32, String)",
+            "Variant(Bool, Int32, String)",
+            name => new ArrayColumn<object>(name, "Variant(Bool, Int32, String)", new object[] { true, 42, "x", null, false, -1 }),
+            VariantSettings);
+
+        // A composite alternative: an Array as one of the variant types. A row selecting it carries the inner
+        // element array (ulong[]); the other rows carry a String or NULL.
+        yield return Same(
+            "Variant(Array(UInt64), String)",
+            "Variant(Array(UInt64), String)",
+            name => new ArrayColumn<object>(name, "Variant(Array(UInt64), String)", new object[] { "hello", new ulong[] { 1, 2, 3 }, null, Array.Empty<ulong>() }),
+            VariantSettings);
+
+        // A Tuple alternative: the variant projects the rows that selected it into a column of its own, which the
+        // tuple codec then distributes across its per-element children. A row selecting it carries the ValueTuple.
+        yield return Same(
+            "Variant(String, Tuple(UInt8, String))",
+            "Variant(String, Tuple(UInt8, String))",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(String, Tuple(UInt8, String))",
+                new object[] { "hi", ((byte)1, "x"), null, ((byte)0, string.Empty) }),
+            VariantSettings);
+
+        // The same shape, but with an element inside the tuple that carries its own state prefix, so LowCardinality's
+        // dictionary prefix has to travel two composites down to reach the wire. Losing it desyncs the block
+        // mid-stream instead of failing cleanly.
+        yield return Same(
+            "Variant(String, Tuple(LowCardinality(String), UInt8))",
+            "Variant(String, Tuple(LowCardinality(String), UInt8))",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(String, Tuple(LowCardinality(String), UInt8))",
+                new object[] { "hi", ("lc", (byte)7), null, (string.Empty, (byte)0) }),
+            VariantSettings);
+
+        // A Map alternative, whose value in turn carries a state prefix. The map is the composite whose own write
+        // state is most easily bypassed — it reaches its key and value codecs through a shape object rather than
+        // directly — so this pins that a map nested in a variant still emits its offsets, keys, and the value
+        // stream's dictionary prefix.
+        yield return Same(
+            "Variant(Map(String, LowCardinality(String)), UInt64)",
+            "Variant(Map(String, LowCardinality(String)), UInt64)",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(Map(String, LowCardinality(String)), UInt64)",
+                new object[]
+                {
+                    1UL,
+                    Pairs<string, string>(("a", "x"), ("b", "x")),
+                    null,
+                    Array.Empty<KeyValuePair<string, string>>(),
+                }),
+            VariantSettings);
+
+        // An alternative that carries a state prefix but is selected by no row in the block. The variant's
+        // alternatives are fixed by its type, not by the data, so every alternative's prefix belongs on the wire
+        // whether or not any row picks it — here LowCardinality's dictionary prefix, with every row a UInt64 or
+        // NULL. Omitting it desyncs the block, so the server rejects the insert rather than storing bad data.
+        yield return Same(
+            "Variant(LowCardinality(String), UInt64) [absent alternative]",
+            "Variant(LowCardinality(String), UInt64)",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(LowCardinality(String), UInt64)",
+                new object[] { 1UL, null, 2UL, null }),
+            VariantSettings);
+
+        // The same, one level deeper: the absent alternative is a Tuple whose own element carries the prefix, so the
+        // tuple's children have to be walked over an empty slice for that prefix to be emitted at all.
+        yield return Same(
+            "Variant(Tuple(LowCardinality(String), UInt8), UInt64) [absent alternative]",
+            "Variant(Tuple(LowCardinality(String), UInt8), UInt64)",
+            name => new ArrayColumn<object>(
+                name,
+                "Variant(Tuple(LowCardinality(String), UInt8), UInt64)",
+                new object[] { 7UL, null, 9UL }),
+            VariantSettings);
+
+        // Array(Variant(...)) composition: the array flattens its elements into one Variant value stream, so each
+        // element is a variant value (or NULL) and empty rows ride along.
+        yield return Arrays(
+            "Variant(String, UInt64)",
+            VariantSettings,
+            new object[] { 1UL, "a" },
+            Array.Empty<object>(),
+            new object[] { "b", 2UL, null });
     }
 
     // Map(K, V) inserts and reads back the ergonomic jagged column of KeyValuePair arrays, which doubles as expected.
@@ -1059,5 +1162,12 @@ public sealed class InsertRoundTripCase
     private static readonly IReadOnlyDictionary<string, string> LowCardinalitySettings = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["allow_suspicious_low_cardinality_types"] = "1",
+    };
+
+    /// <summary>Enables the experimental <c>Variant</c> type (and allows the suspicious combinations the tests use).</summary>
+    private static readonly IReadOnlyDictionary<string, string> VariantSettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["allow_experimental_variant_type"] = "1",
+        ["allow_suspicious_variant_types"] = "1",
     };
 }
