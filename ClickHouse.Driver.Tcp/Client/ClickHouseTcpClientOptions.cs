@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net.Security;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp;
@@ -10,15 +11,17 @@ namespace ClickHouse.Driver.Tcp;
 /// <see cref="FromConnectionString"/>, or derive a variant of an existing instance with a <c>with</c> expression.
 /// </summary>
 /// <remarks>
-/// Being a record, two instances compare equal when every property does. <see cref="CustomSettings"/> is compared
-/// by reference, not by content, because the declared type is an interface with no value-equality contract: two
-/// options that hold equal-but-distinct dictionaries are <b>not</b> equal. Do not use these options as a cache or
-/// pool key; use a purpose-built key type.
+/// Being a record, two instances compare equal when every property does. <see cref="CustomSettings"/> and
+/// <see cref="ConfigureTls"/> are compared by reference, not by content: the first is an interface with no
+/// value-equality contract, the second a delegate. Two options that hold equal-but-distinct dictionaries, or
+/// equivalent-but-distinct lambdas, are <b>not</b> equal. Do not use these options as a cache or pool key; use a
+/// purpose-built key type.
 /// </remarks>
 public sealed record ClickHouseTcpClientOptions
 {
     internal const string DefaultHost = "localhost";
     internal const int DefaultPort = 9000;
+    internal const int DefaultTlsPort = 9440;
     internal const string DefaultUsername = "default";
     internal const string DefaultDatabase = "default";
     internal const int DefaultMaxSendBufferBytes = 10 * 1024 * 1024;
@@ -34,18 +37,97 @@ public sealed record ClickHouseTcpClientOptions
     /// <summary>The server host name or address. Defaults to <c>localhost</c>.</summary>
     public string Host { get; init; } = DefaultHost;
 
-    /// <summary>The server's native-protocol port. Defaults to <c>9000</c>.</summary>
-    public int Port { get; init; } = DefaultPort;
+    /// <summary>
+    /// The server's native-protocol port. Null, the default, derives the port from <see cref="UseTls"/>:
+    /// <c>9440</c> for the secure native port, <c>9000</c> for the plaintext one. An explicit value is always
+    /// used as given, so a server on a non-standard port needs no other change.
+    /// </summary>
+    public int? Port { get; init; }
+
+    /// <summary>The port a connection actually dials: <see cref="Port"/> when set, otherwise derived from <see cref="UseTls"/>.</summary>
+    internal int ResolvedPort => Port ?? (UseTls ? DefaultTlsPort : DefaultPort);
 
     /// <summary>The user to authenticate as. Defaults to <c>default</c>.</summary>
     public string Username { get; init; } = DefaultUsername;
 
     /// <summary>
-    /// The password, sent to the server in plaintext during the handshake. This client's native-protocol
-    /// transport is not encrypted, so the password (and all data) travels in the clear — use it only over a
-    /// trusted network. Defaults to empty.
+    /// The password, sent to the server in plaintext during the handshake. Without <see cref="UseTls"/> the
+    /// native-protocol transport is not encrypted, so the password (and all data) travels in the clear — over an
+    /// untrusted network, enable TLS. Defaults to empty.
     /// </summary>
     public string Password { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Whether to encrypt the transport with TLS, negotiated before the handshake. Defaults to false. The
+    /// protocol bytes are identical either way, so this changes nothing above the transport — but the handshake
+    /// carries <see cref="Password"/> in plaintext, so TLS is the only thing protecting credentials in transit.
+    /// </summary>
+    /// <remarks>
+    /// The server must be listening for secure native connections (<c>tcp_port_secure</c>, conventionally 9440);
+    /// TLS is not negotiated in-band, so pointing a TLS client at a plaintext port fails the TLS handshake rather
+    /// than falling back. With <see cref="Port"/> left null the correct port is chosen for you.
+    /// </remarks>
+    public bool UseTls { get; init; }
+
+    /// <summary>
+    /// The host name to present as SNI and to match the server certificate against. Null, the default, uses
+    /// <see cref="Host"/>. Set it when <see cref="Host"/> is an address or an internal alias that the certificate
+    /// does not name.
+    /// </summary>
+    public string TlsServerName { get; init; }
+
+    /// <summary>
+    /// Whether to accept a server certificate that fails validation — an expired or self-signed certificate, or
+    /// one naming another host. Defaults to false, and should stay false outside development.
+    /// </summary>
+    /// <remarks>
+    /// This stops the client from making sure the peer is the server it asked for. An attacker who can intercept
+    /// the connection can then present any certificate and read the handshake password. To trust a private
+    /// certificate authority and keep that check, use <see cref="TlsCaCertificatePath"/>.
+    /// </remarks>
+    public bool TlsAllowInvalidCertificates { get; init; }
+
+    /// <summary>
+    /// Path to a PEM file of certificate authorities to validate the server against, instead of the host's trust
+    /// store. Null, the default, uses the host's trust store. The file may hold several certificates; the host
+    /// name is still matched either way.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Instead of, not as well as: the server must chain to one of these authorities, and a certificate the
+    /// host's trust store would accept on its own is refused. That is the point of naming an authority — an
+    /// additive check would still take a certificate mis-issued by any public authority.
+    /// </para>
+    /// <para>
+    /// The file is read once, when the client is constructed, so a missing or malformed file fails there rather
+    /// than on the first connection. Cannot be combined with <see cref="TlsAllowInvalidCertificates"/>.
+    /// </para>
+    /// </remarks>
+    public string TlsCaCertificatePath { get; init; }
+
+    /// <summary>
+    /// A hook to adjust the TLS client options before the handshake, applied last and so able to override
+    /// everything the properties above set. Null, the default, leaves them as configured.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the escape hatch for anything the declarative properties do not cover — client certificates, a
+    /// protocol-version floor, cipher suites, a bespoke validation callback. It runs once per connection.
+    /// </para>
+    /// <para>
+    /// Because it runs last it can also weaken the transport, and in two ways that are easy to miss: replacing
+    /// <c>RemoteCertificateValidationCallback</c> drops the check configured above, and clearing
+    /// <c>TargetHost</c> stops the server name being matched at all while chain validation still appears to run.
+    /// </para>
+    /// <para>
+    /// With <see cref="TlsCaCertificatePath"/> set, a <c>CertificateChainPolicy</c> is already in place, and the
+    /// hook receives it and may edit it. Revocation checking can be asked for either way — on
+    /// <c>CertificateRevocationCheckMode</c> or on the policy's own <c>RevocationMode</c> — because a value set on
+    /// the former is carried into the latter, which is the only one the handshake reads once a policy exists. A
+    /// value set directly on the policy takes precedence.
+    /// </para>
+    /// </remarks>
+    public Action<SslClientAuthenticationOptions> ConfigureTls { get; init; }
 
     /// <summary>The default database for queries. Defaults to <c>default</c>.</summary>
     public string Database { get; init; } = DefaultDatabase;
@@ -217,9 +299,26 @@ public sealed record ClickHouseTcpClientOptions
             throw new ArgumentException("Database must not be null or empty.", nameof(Database));
         }
 
-        if (Port is < 1 or > 65535)
+        // Only when set. Null is not a value here but a request to derive the port, which cannot be out of range.
+        if (Port is { } port && port is < 1 or > 65535)
         {
-            throw new ArgumentOutOfRangeException(nameof(Port), Port, "Port must be between 1 and 65535.");
+            throw new ArgumentOutOfRangeException(nameof(Port), port, "Port must be between 1 and 65535.");
+        }
+
+        // The emptiness tests match what the connection factory treats as set, so a value it would ignore is not
+        // rejected here (and one it would honour is never let through).
+        RequireTlsFor(!string.IsNullOrEmpty(TlsServerName), nameof(TlsServerName));
+        RequireTlsFor(TlsAllowInvalidCertificates, nameof(TlsAllowInvalidCertificates));
+        RequireTlsFor(!string.IsNullOrEmpty(TlsCaCertificatePath), nameof(TlsCaCertificatePath));
+        RequireTlsFor(ConfigureTls is not null, nameof(ConfigureTls));
+
+        // Contradictory: with validation off no certificate is checked against anything, so the authority would
+        // be read from disk and never consulted. Refusing beats a precedence rule nobody reads.
+        if (TlsAllowInvalidCertificates && !string.IsNullOrEmpty(TlsCaCertificatePath))
+        {
+            throw new ArgumentException(
+                $"{nameof(TlsAllowInvalidCertificates)} and {nameof(TlsCaCertificatePath)} cannot both be set: with certificate validation off the authority is never consulted.",
+                nameof(TlsCaCertificatePath));
         }
 
         RequireUsableTimeout(DialTimeout, nameof(DialTimeout));
@@ -289,6 +388,21 @@ public sealed record ClickHouseTcpClientOptions
     }
 
     /// <summary>
+    /// Rejects a TLS property configured on a client that does not use TLS. Such a property has no effect, and
+    /// silently ignoring it would let a connection meant to be encrypted run in the clear — the exact mistake a
+    /// forgotten <see cref="UseTls"/> makes, with a configured certificate authority as the evidence.
+    /// </summary>
+    /// <param name="isSet">Whether the property carries a value.</param>
+    /// <param name="name">The property's name, for the exception.</param>
+    private void RequireTlsFor(bool isSet, string name)
+    {
+        if (isSet && !UseTls)
+        {
+            throw new ArgumentException($"{name} is set but {nameof(UseTls)} is false, so the connection would not be encrypted. Set {nameof(UseTls)} to true, or remove {name}.", name);
+        }
+    }
+
+    /// <summary>
     /// Rejects a deadline that cannot be armed. The timer APIs these feed (<c>CancelAfter</c>,
     /// <c>SemaphoreSlim.WaitAsync</c>) take a millisecond count as an <see cref="int"/>, so a span beyond about
     /// 24.85 days would throw from inside every operation instead of at construction.
@@ -322,8 +436,9 @@ public sealed record ClickHouseTcpClientOptions
     /// <remarks>
     /// A record's generated <c>ToString</c> prints every property, which would put the plaintext password into any
     /// log line that formats these options. This override names the safe properties explicitly instead, so a secret
-    /// added later is left out until someone chooses to include it.
+    /// added later is left out until someone chooses to include it. The port shown is the resolved one, which is
+    /// what a connection dials.
     /// </remarks>
     public override string ToString()
-        => $"{nameof(ClickHouseTcpClientOptions)} {{ Host = {Host}, Port = {Port}, Username = {Username}, Database = {Database} }}";
+        => $"{nameof(ClickHouseTcpClientOptions)} {{ Host = {Host}, Port = {ResolvedPort}, Username = {Username}, Database = {Database}, UseTls = {UseTls} }}";
 }
