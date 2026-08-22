@@ -104,6 +104,33 @@ public class TupleColumnCodecTests
     }
 
     [Test]
+    public void CanWrite_NestedChildWithoutDenseNamedFieldColumn_ReturnsFalse()
+    {
+        const string type = "Tuple(Nested(a UInt8), String)";
+        const string nestedType = "Nested(a UInt8)";
+        IColumnCodec codec = Resolve(type);
+
+        // Both forms expose the right CLR ValueTuple, but neither retains Nested's named field column.
+        var ergonomic = new ArrayColumn<(object[][], string)>("c", type, Array.Empty<(object[][], string)>());
+        var wrongDense = new TupleColumn<object[][], string>(
+            "c",
+            type,
+            new IColumn[]
+            {
+                new ArrayColumn<object[][]>("c", nestedType, Array.Empty<object[][]>()),
+                new ArrayColumn<string>("c", "String", Array.Empty<string>()),
+            },
+            fieldNames: null,
+            ownsChildren: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWrite(ergonomic), Is.False, "the row-oriented projection has lost the named fields");
+            Assert.That(codec.CanWrite(wrongDense), Is.False, "a dense tuple still needs a real NestedColumn child");
+        });
+    }
+
+    [Test]
     public void ElementType_IsTheValueTupleOfElementTypes()
     {
         Assert.Multiple(() =>
