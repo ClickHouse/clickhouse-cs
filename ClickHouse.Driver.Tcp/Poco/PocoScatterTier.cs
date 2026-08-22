@@ -6,11 +6,20 @@ namespace ClickHouse.Driver.Tcp.Poco;
 /// the parity tests assert.
 ///
 /// <para>
-/// Equal <em>values</em>, not identical references: a <c>LowCardinality</c> column's
-/// <see cref="Types.IColumn{T}.Values"/> hands every row sharing a dictionary entry the same element instance, while
-/// its indexer materializes one per row. That is observable only for a mutable element type, i.e. the
-/// <c>byte[]</c> of a <c>LowCardinality(FixedString(N))</c> — see the remarks on
-/// <see cref="ClickHouseTcpClient.QueryAsync{T}"/>.
+/// Equal <em>values</em>, not identical references, and the two are not the same claim for a reference-typed
+/// element. A <c>FixedString(N)</c> column builds a fresh <c>byte[]</c> per row either way, but not the
+/// <em>same</em> one: <see cref="Types.IColumn{T}.Values"/> caches the array it built, while the indexer copies the
+/// row's bytes out again on each access. So the two tiers hand out arrays with equal contents and different
+/// identities, which is why parity is asserted on values.
+/// </para>
+///
+/// <para>
+/// Within one <c>LowCardinality</c> column the opposite holds, on both tiers: every row sharing a dictionary entry
+/// gets that entry's own instance, because both the indexer and <see cref="Types.IColumn{T}.Values"/> read the
+/// dictionary through its <c>Values</c>. That is deliberate (it is what stops a <c>String</c> dictionary being
+/// decoded once per row) and it is observable for a mutable element type, i.e. the <c>byte[]</c> of a
+/// <c>LowCardinality(FixedString(N))</c> — see the remarks on <see cref="ClickHouseTcpClient.QueryAsync{T}"/> and
+/// on <see cref="ClickHouseTcpClient.QueryAsync(string, ClickHouseTcpQueryOptions, System.Threading.CancellationToken)"/>.
 /// </para>
 /// </summary>
 internal enum PocoScatterTier
