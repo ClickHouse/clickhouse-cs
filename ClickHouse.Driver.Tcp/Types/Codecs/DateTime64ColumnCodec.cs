@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -38,6 +39,9 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) };
+
+    /// <inheritdoc/>
+    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) };
 
     /// <inheritdoc/>
     public object NullPlaceholder => 0L;
@@ -88,6 +92,33 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => DateTime64Column.ReadAsync(reader, columnName, columnType, scale, timeZone, rowCount, cancellationToken);
+
+    /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, typeof(long), TypeName);
+
+        if (targetType == typeof(long))
+        {
+            projected = value;
+            return true;
+        }
+
+        if (targetType == typeof(DateTimeOffset))
+        {
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToOffset), value, scale, timeZone);
+            return true;
+        }
+
+        if (targetType == typeof(DateTime))
+        {
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToDateTime), value, scale, timeZone);
+            return true;
+        }
+
+        projected = null;
+        return false;
+    }
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => column is IColumn<long> or IColumn<DateTimeOffset> or IColumn<DateTime>;
