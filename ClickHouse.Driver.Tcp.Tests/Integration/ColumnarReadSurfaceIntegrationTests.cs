@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
@@ -218,6 +219,87 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(innerOffsets, Is.EqualTo(new[] { 0, 1, 3, 4, 6 }), "four inner arrays, of lengths 1, 2, 1, 2");
             Assert.That(leafValues, Is.EqualTo(new[] { 0, 0, 1, 1, 1, 2 }), "the leaf run, reached without materializing a level");
             Assert.That(materialized, Is.EqualTo(new[] { new[] { new[] { 0 }, new[] { 0, 1 } }, new[] { new[] { 1 }, new[] { 1, 2 } } }));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_NamedTupleColumn_ExposesPerElementChildColumnsThroughITupleColumn()
+    {
+        // A Tuple(...) is stored as its N element columns side by side, each as tall as the tuple. Reading one
+        // element through the materialized ValueTuple surface forces every other element to be decoded and boxed
+        // into the tuple too; ITupleColumn.Children hands back the element columns directly, so a caller that wants
+        // one field pays for one field. FieldNames carries the declared names, which the wire layout does not.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool matched = false;
+        int childCount = 0;
+        string[] fieldNames = null;
+        int[] childRowCounts = null;
+        int[] firstElement = null;
+        string[] secondElement = null;
+        (int, string)[] materialized = null;
+
+        await foreach (Block block in connection.QueryAsync(
+            "SELECT CAST((toInt32(number), concat('n', toString(number))), 'Tuple(a Int32, b String)') FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is ITupleColumn;
+
+            var tuple = (ITupleColumn)column;
+            childCount = tuple.Children.Count;
+            fieldNames = tuple.FieldNames?.ToArray();
+            childRowCounts = new[] { tuple.Children[0].RowCount, tuple.Children[1].RowCount };
+            firstElement = ((IColumn<int>)tuple.Children[0]).Values.ToArray();
+            secondElement = ((IColumn<string>)tuple.Children[1]).Values.ToArray();
+            materialized = ((IColumn<(int, string)>)column).Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(childCount, Is.EqualTo(2), "one child per tuple element, in declaration order");
+            Assert.That(fieldNames, Is.EqualTo(new[] { "a", "b" }), "the declared names, aligned with Children");
+            Assert.That(childRowCounts, Is.EqualTo(new[] { 3, 3 }), "every child is exactly as tall as the tuple");
+            Assert.That(firstElement, Is.EqualTo(new[] { 0, 1, 2 }), "one element read without decoding the other");
+            Assert.That(secondElement, Is.EqualTo(new[] { "n0", "n1", "n2" }));
+            Assert.That(materialized, Is.EqualTo(new[] { (0, "n0"), (1, "n1"), (2, "n2") }));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_UnnamedTupleWithCompositeElement_OmitsFieldNamesAndAllowsChildRecursion()
+    {
+        // Two things the named case cannot show: an unnamed tuple carries no names at all (FieldNames is null, not
+        // a list of nulls), and a child that is itself a composite pattern-matches to its own columnar view — so a
+        // Tuple(Array(Int32), ...) can be walked into without materializing the tuple or the array rows.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool hasFieldNames = true;
+        bool childIsArray = false;
+        int[] childOffsets = null;
+        int[] childInnerValues = null;
+
+        // Rows: ([], 'r0'), ([0], 'r1'), ([0, 1], 'r2').
+        await foreach (Block block in connection.QueryAsync(
+            "SELECT tuple(CAST(range(number), 'Array(Int32)'), concat('r', toString(number))) FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            var tuple = (ITupleColumn)block[0];
+            hasFieldNames = tuple.FieldNames is not null;
+
+            childIsArray = tuple.Children[0] is IArrayColumn<int>;
+            var child = (IArrayColumn<int>)tuple.Children[0];
+            childOffsets = child.Offsets.ToArray();
+            childInnerValues = child.InnerValues.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hasFieldNames, Is.False, "an unnamed tuple reports no names rather than a list of nulls");
+            Assert.That(childIsArray, Is.True, "a composite child re-enters the columnar surface");
+            Assert.That(childOffsets, Is.EqualTo(new[] { 0, 0, 1, 3 }), "the child array's own per-row offsets");
+            Assert.That(childInnerValues, Is.EqualTo(new[] { 0, 0, 1 }));
         });
     }
 }
