@@ -67,7 +67,7 @@ public class ClickHouseTcpConnectionIntegrationTests
             await ClickHouseTcpConnection.ConnectAsync(
                 TcpServerFixture.Host,
                 1,
-                new ClientHandshakeParameters { ClientName = "test", Username = "default" },
+                new ClientHandshakeParameters { Username = "default" },
                 None));
     }
 }

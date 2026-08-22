@@ -13,6 +13,14 @@ internal readonly struct NegotiatedProtocol
     /// </summary>
     public const int ClientTcpProtocolVersion = 54460;
 
+    /// <summary>
+    /// The lowest negotiated version this client can talk to. The Query packet always serializes settings as
+    /// string triples (the form introduced at this version); below it the server expects the legacy binary
+    /// encoding, which this client does not emit — so a lower negotiation would silently desync the stream.
+    /// Negotiating below this floor is rejected at the handshake rather than left to corrupt the connection.
+    /// </summary>
+    public const int MinimumTcpProtocolVersion = 54429;
+
     /// <summary>Computes the negotiated version from the revision the server reported in ServerHello.</summary>
     /// <param name="serverRevision">The server's protocol revision (ServerHello field 4).</param>
     public NegotiatedProtocol(int serverRevision) => Version = Math.Min(ClientTcpProtocolVersion, serverRevision);
