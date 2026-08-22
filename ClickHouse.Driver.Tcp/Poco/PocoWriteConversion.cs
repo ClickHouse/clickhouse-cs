@@ -14,17 +14,11 @@ namespace ClickHouse.Driver.Tcp.Poco;
 /// <para>
 /// The read side has to ask the codec for its conversions, because a column decodes into the raw wire value (a
 /// <c>DateTime</c> column reads as epoch seconds). The write side does not: a codec already accepts the
-/// calendar types directly — <see cref="IColumnCodec.WritableElementTypes"/> lists them and
+/// calendar types directly — <see cref="IColumnCodec.CanWriteElementType"/> answers which, and
 /// <see cref="IColumnCodec.WriteColumn"/> does the arithmetic — so the only conversions left here are the CLR-level
-/// ones a C# cast would do anyway.
-/// </para>
-///
-/// <para>
-/// One wrapper is asymmetric today, which a caller sees as a property that reads but does not insert:
-/// <c>LowCardinality</c> re-offers its inner codec's readable types but not its writable ones, so a
-/// <c>LowCardinality(DateTime)</c> column reads into a <see cref="DateTime"/> property and is written only from the
-/// raw epoch seconds. That is the wrapper's gap, not this class's — <c>Nullable</c> lifts both lists — and closing
-/// it means giving the <c>LowCardinality</c> write path a shape per write type, as <c>Nullable</c> has.
+/// ones a C# cast would do anyway. That holds at depth: a composite answers for a lifted element type by asking its
+/// children, so an <c>Array(DateTime)</c> column takes a <see cref="DateTime"/><c>[]</c> property with no conversion
+/// emitted here at all.
 /// </para>
 ///
 /// <para>
@@ -53,15 +47,20 @@ internal static class PocoWriteConversion
 
     /// <summary>
     /// The CLR types a row-oriented insert can actually build a column of for this codec, in the codec's own
-    /// preference order: its <see cref="IColumnCodec.WritableElementTypes"/>, minus those it turns down when offered
-    /// as an array-backed column.
+    /// preference order: its <see cref="IColumnCodec.WritableElementTypes"/>, minus those the codec turns down.
     ///
     /// <para>
     /// The list names the CLR element types the write path understands, but a codec whose writer needs a particular
-    /// column implementation — <c>Nested</c> wants its own column — refuses a plain array-backed one whatever its
-    /// element type. Probing with the empty column the plan would build runs the same test the insert itself runs,
-    /// so such a column is reported at plan build rather than after the INSERT has gone out. An empty result means
-    /// the type is reachable only through the columnar API.
+    /// column implementation — <c>Nested</c> wants its own column — cannot be filled from any element type at all, and
+    /// says so through <see cref="IColumnCodec.CanWriteElementType"/>. Asking it here reports such a column at plan
+    /// build rather than after the INSERT has gone out. An empty result means the type is reachable only through the
+    /// columnar API.
+    /// </para>
+    ///
+    /// <para>
+    /// Not exhaustive for a composite, whose accepted set is its children's product; it is what a failure message
+    /// names. <see cref="IColumnCodec.CanWriteElementType"/> is the authority, and
+    /// <see cref="TryChooseWriteType"/> falls back to it.
     /// </para>
     /// </summary>
     /// <param name="codec">The target column's codec.</param>
@@ -99,6 +98,17 @@ internal static class PocoWriteConversion
                 writeType = accepted[i];
                 return true;
             }
+        }
+
+        // Nothing the codec lists fits, so ask whether it can be written from the property's own type. This is what
+        // reaches a composite's lifted element types: an Array(DateTime) column lists only uint[], but its element
+        // codec accepts a DateTime, so a DateTime[] row is writable and needs no conversion here at all — the inner
+        // codec does the arithmetic as it writes. Second, because the listed types are the ones a caller already holds
+        // in the shape the writer wants.
+        if (codec.CanWriteElementType(memberType))
+        {
+            writeType = memberType;
+            return true;
         }
 
         writeType = null;
@@ -220,16 +230,7 @@ internal static class PocoWriteConversion
     /// <param name="codec">The target column's codec.</param>
     /// <param name="writeType">The candidate write type.</param>
     /// <returns>Whether the codec accepts such a column.</returns>
-    private static bool Accepts(IColumnCodec codec, Type writeType)
-    {
-        var probe = (IColumn)Activator.CreateInstance(
-            typeof(ArrayColumn<>).MakeGenericType(writeType),
-            string.Empty,
-            codec.TypeName,
-            Array.CreateInstance(writeType, 0));
-
-        return codec.CanWrite(probe);
-    }
+    private static bool Accepts(IColumnCodec codec, Type writeType) => codec.CanWriteElementType(writeType);
 
     private static Expression Lift(Expression value, Type target)
         => value.Type == target ? value : Expression.Convert(value, target);
