@@ -46,9 +46,9 @@ public class PocoWriteIntegrationTests
             // column type (flat field columns behind shared offsets), which no property can hold. It has to say so
             // rather than fail once the values are on the wire.
             //
-            // Contains, not StartsWith: a Nested inside a composite is just as ungatherable, because the composite
-            // can only hand its child the column shape a row yields. Array(Nested(...)), Tuple(Nested(...), String)
-            // and both Map positions are corpus cases, and each one refuses for exactly this reason.
+            // Contains, not StartsWith: a Nested inside a composite — Array(Nested(...)), Tuple(Nested(...), ...),
+            // Map(..., Nested(...)) — cannot be gathered either, for the same reason. Matching only the top level
+            // let those corpus cases fall through to the happy path and fail on the refusal this branch expects.
             if (testCase.ClickHouseType.Contains("Nested(", StringComparison.Ordinal))
             {
                 InvalidOperationException refusal = Assert.ThrowsAsync<InvalidOperationException>(

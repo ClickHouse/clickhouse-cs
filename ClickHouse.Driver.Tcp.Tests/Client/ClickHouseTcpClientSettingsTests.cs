@@ -7,33 +7,41 @@ namespace ClickHouse.Driver.Tcp.Tests.Client;
 public class ClickHouseTcpClientSettingsTests
 {
     private const string FlattenedSetting = "output_format_native_use_flattened_dynamic_and_json_serialization";
+    private const string JsonAsStringSetting = "output_format_native_write_json_as_string";
 
-    [Test]
-    public void MergeSettings_NoSettings_InjectsFlattenedSerializationByDefault()
+    // The client injects both serialization settings so a caller never has to know about them: the flattened one
+    // for Dynamic, the text one for JSON. Each is overridable at either level — turning one off is how a caller
+    // asks for an encoding this client does not decode, so the override has to reach the server rather than being
+    // silently forced back on.
+    [TestCase(FlattenedSetting)]
+    [TestCase(JsonAsStringSetting)]
+    public void MergeSettings_NoSettings_InjectsTheSerializationSettingByDefault(string setting)
     {
         var merged = ClickHouseTcpClient.MergeSettings(clientSettings: null, perQuerySettings: null);
 
-        Assert.That(merged[FlattenedSetting], Is.EqualTo("1"));
+        Assert.That(merged[setting], Is.EqualTo("1"));
     }
 
-    [Test]
-    public void MergeSettings_CallerSetsFlattened_CallerValueWins()
+    [TestCase(FlattenedSetting)]
+    [TestCase(JsonAsStringSetting)]
+    public void MergeSettings_PerQuerySetsTheSerializationSetting_CallerValueWins(string setting)
     {
-        var perQuery = new Dictionary<string, string> { [FlattenedSetting] = "0" };
+        var perQuery = new Dictionary<string, string> { [setting] = "0" };
 
         var merged = ClickHouseTcpClient.MergeSettings(clientSettings: null, perQuery);
 
-        Assert.That(merged[FlattenedSetting], Is.EqualTo("0"));
+        Assert.That(merged[setting], Is.EqualTo("0"));
     }
 
-    [Test]
-    public void MergeSettings_ClientSetsFlattened_ClientValueNotOverwritten()
+    [TestCase(FlattenedSetting)]
+    [TestCase(JsonAsStringSetting)]
+    public void MergeSettings_ClientSetsTheSerializationSetting_ClientValueNotOverwritten(string setting)
     {
-        var client = new Dictionary<string, string> { [FlattenedSetting] = "0" };
+        var client = new Dictionary<string, string> { [setting] = "0" };
 
         var merged = ClickHouseTcpClient.MergeSettings(client, perQuerySettings: null);
 
-        Assert.That(merged[FlattenedSetting], Is.EqualTo("0"));
+        Assert.That(merged[setting], Is.EqualTo("0"));
     }
 
     [Test]

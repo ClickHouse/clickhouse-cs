@@ -161,6 +161,11 @@ internal sealed class ColumnCodecRegistry
         // the registry and context. NULL rides a discriminator, so it is never wrapped in Nullable.
         AddFactory("Dynamic", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => DynamicColumnCodec.Create(node, context, registry));
 
+        // JSON is read and written in its String serialization: a version marker, then the values as compact JSON
+        // text. The type string's arguments (typed paths, max_dynamic_paths, SKIP hints) do not change that layout,
+        // so every JSON spelling resolves to the same codec and the arguments ride along in the type name only.
+        AddFactory("JSON", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => JsonStringColumnCodec.Create(node));
+
         return new ColumnCodecRegistry(byName);
     }
 }
