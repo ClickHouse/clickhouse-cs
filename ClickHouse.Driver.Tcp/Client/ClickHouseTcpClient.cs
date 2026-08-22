@@ -30,6 +30,16 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     // enables it on every operation so callers never have to know about it. A caller-supplied value wins.
     private const string FlattenedSerializationSetting = "output_format_native_use_flattened_dynamic_and_json_serialization";
 
+    // How many rows QueryAsync<T> materializes at once. A whole block would otherwise be alive together, and a
+    // block is server-sized: 65,409 rows by default, more if a caller raises max_block_size. Bounding it keeps the
+    // rows a streaming consumer drops inside gen0 instead of promoting them.
+    //
+    // Measured flat from 64 to 4096 rows and slower outside that, so this sits mid-plateau rather than at a
+    // measured optimum. Erring small on purpose: the cost of a smaller window is a per-window cast and loop setup
+    // per column, which did not register even on a two-column row of fixed-width values, while the cost of too
+    // large a window is the promotion this is here to avoid, against a gen0 budget that varies by host and GC mode.
+    private const int MaterializationWindowRows = 256;
+
     private static readonly ClickHouseTcpInsertOptions DefaultInsertOptions = new();
 
     private readonly IConnectionSource source;
@@ -201,17 +211,24 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 plan = pocoTypes.ReadPlanFor<T>(block, forcedTier: null);
             }
 
-            T[] rows = ArrayPool<T>.Shared.Rent(block.RowCount);
+            T[] rows = ArrayPool<T>.Shared.Rent(Math.Min(MaterializationWindowRows, block.RowCount));
             try
             {
-                // Materializing in one synchronous call is what lets the scatters hold a span: an iterator method
-                // cannot. The rows are handed out afterwards, when no span is live.
-                plan.Materialize(block, rows, produced);
-                produced += block.RowCount;
-                for (int i = 0; i < block.RowCount; i++)
+                // Strides by the constant rather than by the rented length, so the loop advances even for an empty
+                // block and cannot depend on how much the pool handed back.
+                for (int start = 0; start < block.RowCount; start += MaterializationWindowRows)
                 {
-                    yield return rows[i];
+                    // Materializing in one synchronous call is what lets the scatters hold a span: an iterator
+                    // method cannot. The rows are handed out afterwards, when no span is live.
+                    int count = Math.Min(MaterializationWindowRows, block.RowCount - start);
+                    plan.Materialize(block, rows, start, count, produced + start);
+                    for (int i = 0; i < count; i++)
+                    {
+                        yield return rows[i];
+                    }
                 }
+
+                produced += block.RowCount;
             }
             finally
             {

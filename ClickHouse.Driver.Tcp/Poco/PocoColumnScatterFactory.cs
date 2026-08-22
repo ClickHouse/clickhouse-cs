@@ -16,10 +16,12 @@ namespace ClickHouse.Driver.Tcp.Poco;
 /// <typeparam name="T">The POCO type.</typeparam>
 /// <param name="column">The column to read, already known to the plan that built this delegate.</param>
 /// <param name="rows">The rows to scatter into; at least <paramref name="rowCount"/> long, each already constructed.</param>
+/// <param name="start">The first row of <paramref name="column"/> to read. <c>rows[i]</c> takes column row
+/// <c>start + i</c>, so a block can be materialized in several passes without the rows moving.</param>
 /// <param name="rowCount">The number of rows to fill.</param>
-/// <param name="rowOffset">How many rows of the result precede this block, so a failure can name the row a caller
+/// <param name="rowOffset">How many rows of the result precede <c>rows[0]</c>, so a failure can name the row a caller
 /// counts rather than the row within a block they never see. Read only on the failure path.</param>
-internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int rowCount, long rowOffset);
+internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int start, int rowCount, long rowOffset);
 
 /// <summary>
 /// Compiles the per-column scatter delegates a <see cref="PocoReadPlan{T}"/> is made of. One delegate handles one
@@ -54,10 +56,11 @@ internal static class PocoColumnScatterFactory
             throw NotSurfacingItsElementType(column, codec);
         }
 
-        PocoScatterTier tier = SelectTier(forcedTier);
+        PocoScatterTier tier = SelectTier(forcedTier, column);
 
         ParameterExpression columnParameter = Expression.Parameter(typeof(IColumn), "column");
         ParameterExpression rows = Expression.Parameter(typeof(T[]), "rows");
+        ParameterExpression start = Expression.Parameter(typeof(int), "start");
         ParameterExpression rowCount = Expression.Parameter(typeof(int), "rowCount");
         ParameterExpression rowOffset = Expression.Parameter(typeof(long), "rowOffset");
         ParameterExpression row = Expression.Variable(typeof(int), "row");
@@ -79,7 +82,7 @@ internal static class PocoColumnScatterFactory
 
         var locals = new List<ParameterExpression>(3) { row };
         var body = new List<Expression>(4);
-        Expression source = SourceOneValue(tier, columnParameter, typedColumn, elementType, row, locals, body);
+        Expression source = SourceOneValue(tier, columnParameter, typedColumn, elementType, Expression.Add(start, row), locals, body);
 
         // row = 0; while (row < rowCount) { value = <source>; rows[row].P = <projected>; row++; }
         LabelTarget done = Expression.Label("done");
@@ -95,19 +98,29 @@ internal static class PocoColumnScatterFactory
                 Expression.Break(done)),
             done));
 
-        return Expression.Lambda<PocoColumnScatter<T>>(Expression.Block(locals, body), columnParameter, rows, rowCount, rowOffset)
+        return Expression.Lambda<PocoColumnScatter<T>>(Expression.Block(locals, body), columnParameter, rows, start, rowCount, rowOffset)
             .Compile(preferInterpretation);
     }
 
     /// <summary>
-    /// Picks the tier to compile: the caller's, or the span tier wherever expression trees compile to IL. A tree
-    /// holding a <c>ReadOnlySpan&lt;T&gt;</c> compiles but cannot be <em>interpreted</em>, which is the path taken
-    /// when the runtime has no dynamic code (NativeAOT), so the span tier is not offered there.
+    /// Picks the tier to compile: the caller's, or one chosen from the runtime and the column.
+    ///
+    /// <para>
+    /// Two conditions have to hold for the span tier. A tree holding a <c>ReadOnlySpan&lt;T&gt;</c> compiles but
+    /// cannot be <em>interpreted</em>, which is the path taken when the runtime has no dynamic code (NativeAOT), so
+    /// the span tier is not offered there at all. And the column's <see cref="IColumn{T}.Values"/> has to be free to
+    /// read (<see cref="IStoredValuesColumn"/>): hoisting it out of the loop is the point of the tier, but for a
+    /// column that builds its values on access that one read materializes the whole block and pins it for the
+    /// block's lifetime, which is exactly what a windowed materialization is trying to avoid.
+    /// </para>
     /// </summary>
     /// <param name="forcedTier">A tier to use in place of the choice, or null to choose.</param>
+    /// <param name="column">The column to be read, consulted for whether its values are stored or built.</param>
     /// <returns>The tier to compile.</returns>
-    internal static PocoScatterTier SelectTier(PocoScatterTier? forcedTier)
-        => forcedTier ?? (RuntimeFeature.IsDynamicCodeCompiled ? PocoScatterTier.Span : PocoScatterTier.Indexer);
+    internal static PocoScatterTier SelectTier(PocoScatterTier? forcedTier, IColumn column)
+        => forcedTier ?? (RuntimeFeature.IsDynamicCodeCompiled && column is IStoredValuesColumn
+            ? PocoScatterTier.Span
+            : PocoScatterTier.Indexer);
 
     /// <summary>
     /// Builds the expression that yields the value at <paramref name="row"/>, adding whatever the tier hoists out
@@ -117,7 +130,7 @@ internal static class PocoColumnScatterFactory
     /// <param name="column">The scatter's column parameter.</param>
     /// <param name="typedColumn">The <see cref="IColumn{T}"/> type over the codec's element type.</param>
     /// <param name="elementType">The codec's element type.</param>
-    /// <param name="row">The loop counter.</param>
+    /// <param name="columnRow">The row of the column to read: the loop counter rebased by the scatter's start.</param>
     /// <param name="locals">The enclosing block's locals, added to by both tiers.</param>
     /// <param name="prologue">The statements before the loop, added to by both tiers.</param>
     /// <returns>An expression of type <paramref name="elementType"/>.</returns>
@@ -126,7 +139,7 @@ internal static class PocoColumnScatterFactory
         ParameterExpression column,
         Type typedColumn,
         Type elementType,
-        ParameterExpression row,
+        Expression columnRow,
         List<ParameterExpression> locals,
         List<Expression> prologue)
     {
@@ -140,13 +153,13 @@ internal static class PocoColumnScatterFactory
                 ParameterExpression values = Expression.Variable(typeof(ReadOnlySpan<>).MakeGenericType(elementType), "values");
                 locals.Add(values);
                 prologue.Add(Expression.Assign(values, Expression.Property(Expression.Convert(column, typedColumn), "Values")));
-                return Expression.Call(SpanAt.MakeGenericMethod(elementType), values, row);
+                return Expression.Call(SpanAt.MakeGenericMethod(elementType), values, columnRow);
 
             default:
                 ParameterExpression typed = Expression.Variable(typedColumn, "typed");
                 locals.Add(typed);
                 prologue.Add(Expression.Assign(typed, Expression.Convert(column, typedColumn)));
-                return Expression.MakeIndex(typed, typedColumn.GetProperty("Item", elementType, new[] { typeof(int) }), new[] { row });
+                return Expression.MakeIndex(typed, typedColumn.GetProperty("Item", elementType, new[] { typeof(int) }), new[] { columnRow });
         }
     }
 
