@@ -73,10 +73,14 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     public ClickHouseTcpClientOptions Options { get; }
 
     /// <summary>
-    /// Compiles the POCO scatters at one tier instead of the one the runtime calls for (except for a column that
-    /// surfaces no typed view, which is always read boxed). The parity harness: the three tiers differ only in how
-    /// they source a value, so the same query read at each must produce equal rows — which is also the proof that the
-    /// span-free tier a runtime without dynamic code falls back to behaves like the span tier it replaces.
+    /// Forces every POCO read on this client to compile at one <see cref="PocoScatterTier"/> instead of the tier the
+    /// runtime would choose. A test seam: production leaves it null.
+    ///
+    /// <para>
+    /// The runtime picks the tier, and a host that compiles expression trees always picks the span tier, so the
+    /// indexer tier a NativeAOT host falls back to would never run in CI. A test sets this to read one query at each
+    /// tier and check that the rows match.
+    /// </para>
     /// </summary>
     internal PocoScatterTier? ForcedPocoScatterTier { get; init; }
 

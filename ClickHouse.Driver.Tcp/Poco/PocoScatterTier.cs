@@ -1,7 +1,7 @@
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// How a compiled scatter sources one value from a column. The three tiers differ only in that sourcing step — the
+/// How a compiled scatter sources one value from a column. The two tiers differ only in that sourcing step — the
 /// value conversion and the property assignment are identical — so they must produce equal values, which is what
 /// the parity tests assert.
 ///
@@ -28,11 +28,4 @@ internal enum PocoScatterTier
     /// friends), where a tree is interpreted rather than compiled and cannot hold a <c>ReadOnlySpan&lt;T&gt;</c>.
     /// </summary>
     Indexer,
-
-    /// <summary>
-    /// Reads <see cref="Types.IColumn.GetValue"/> per row and unboxes: one box per cell, so it is not chosen for a
-    /// column that surfaces its element type generically. It is the fallback for a column that does not implement
-    /// <see cref="Types.IColumn{T}"/> over its codec's element type, and the third leg of the parity harness.
-    /// </summary>
-    Boxed,
 }
