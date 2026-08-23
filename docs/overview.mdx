@@ -1505,16 +1505,20 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 // "Host=localhost;JsonReadMode=String"
 ```
 
-##### Overlapping typed paths
+##### Overlapping paths
 
 ClickHouse accepts a column which declares a path both as a value and as the parent of another
 path, for example `JSON(a Int64, a.b Int64)`. Both paths are present in every row, so the server
 renders the row with a duplicate key: `{"a":0,"a":{"b":7}}`. A `JsonObject` cannot hold two values
-for one key, so `JsonReadMode.Binary` throws a `SerializationException` naming the two paths.
+for one key, so `JsonReadMode.Binary` throws a `SerializationException` naming the two paths. The
+same holds where the value is a `Map`, as in `JSON(a Map(String, Int64))` read from a row which
+also has a dynamic `a.b`.
 
-This applies only where both paths hold a value in that row. Where the overlap is declared with
-`Nullable` types, the row usually fills in one side only — `JSON(a Nullable(Int64), a.b
-Nullable(Int64))` reads `{"a":5}` and `{"a":{"b":7}}` normally — so nothing throws.
+This applies only where both sides hold a value in that row. A side which holds nothing — a null,
+an empty object, or a subtree whose values are all null — gives way to the side which has the data.
+An overlap declared with `Nullable` types therefore fills in one side per row and reads without
+error: `JSON(a Nullable(Int64), a.b Nullable(Int64))` gives `{"a":5}` and `{"a":{"b":7}}` as
+expected.
 
 Read such a column with `JsonReadMode.String` to get the server's JSON text unchanged, duplicate
 key included.

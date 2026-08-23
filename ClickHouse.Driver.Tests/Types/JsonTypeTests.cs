@@ -1277,6 +1277,20 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // The same collision with no hints at all: `a` and `a.b` are both dynamic paths.
         yield return new TestCaseData("JSON", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b")
             .SetName("OverlappingDynamicPathsWithDuplicateKeyDocument");
+
+        // A Map path decodes to a JsonObject, which looks exactly like a subtree built for a
+        // deeper path. The map's entries are a value of `a` all the same, and the server sends
+        // them under a key of their own, so merging `a.b` into them would drop one of the two.
+        yield return new TestCaseData("JSON(a Map(String, Int64))", "{\"a\": {\"x\": 1}, \"a.b\": 7}", "a.b")
+            .SetName("OverlappingMapPathAndDeeperPathWithDisjointKeys");
+
+        // The same, where the map's own key is the one the deeper path would take.
+        yield return new TestCaseData("JSON(a Map(String, Int64))", "{\"a\": {\"b\": 1}, \"a.b\": 7}", "a.b")
+            .SetName("OverlappingMapPathAndDeeperPathWithTheSameKey");
+
+        // An array value cannot hold a subtree at all.
+        yield return new TestCaseData("JSON(a Array(Int64))", "{\"a\": [1, 2], \"a.b\": 7}", "a.b")
+            .SetName("OverlappingArrayPathAndDeeperPath");
     }
 
     [Test]
@@ -1298,6 +1312,29 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(exception.Message, Does.Contain("'a'"), exception.Message);
         Assert.That(exception.Message, Does.Contain($"'{expectedNestedPath}'"), exception.Message);
         Assert.That(exception.Message, Does.Contain("JsonReadMode.String"), exception.Message);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Read_WithOverlappingEmptyObjectValue_ShouldKeepTheSubtree()
+    {
+        var targetTable = CreateTableName();
+
+        // Every key of the document is routed to a path of its own — `a.b` typed, `a.x` dynamic —
+        // so the map at `a` is empty in every row.
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(a Map(String, Int64), `a.b` Int64)) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a\": {{\"b\": 7, \"x\": 1}}}}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        // An empty map holds no value, so it neither collides with the subtree nor erases it.
+        var a = (JsonObject)result["a"];
+        Assert.That((long)a["b"], Is.EqualTo(7L));
+        Assert.That((long)a["x"], Is.EqualTo(1L));
     }
 
     [Test]

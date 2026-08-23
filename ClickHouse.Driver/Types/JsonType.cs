@@ -64,6 +64,12 @@ internal class JsonType : ParameterizedType
     {
         JsonObject root = new();
 
+        // A Map path, or a Dynamic one holding an object, decodes to a JsonObject which is that
+        // path's value — not a container built here to hold deeper paths. The two are the same
+        // type, so the values are tracked by reference. Allocated only where such a path exists,
+        // which a column of plain scalar paths never has.
+        HashSet<object> objectValues = null;
+
         var nfields = reader.Read7BitEncodedInt();
         for (int i = 0; i < nfields; i++)
         {
@@ -86,44 +92,55 @@ internal class JsonType : ParameterizedType
             foreach (var part in pathParts.SkipLast1(1))
             {
                 depth++;
-                switch (current[part])
+                var occupant = current[part];
+
+                if (occupant is JsonObject subtree && !IsObjectValue(objectValues, subtree))
                 {
-                    case JsonObject existing:
-                        current = existing;
-                        break;
-
-                    case null:
-                        // Either the parent is not there yet, or it holds the null of an overlapping
-                        // leaf path (ClickHouse allows both `a` and `a.b` to be declared); the
-                        // subtree replaces that null so the deeper path stays readable.
-                        var newCurrent = new JsonObject();
-                        current[part] = newCurrent;
-                        current = newCurrent;
-                        break;
-
-                    default:
-                        // The parent holds a value of its own, so this row needs both a value and a
-                        // subtree under one key. Nothing can be dropped without losing data.
-                        throw OverlappingPathsException(string.Join(".", pathParts.Take(depth)), name);
+                    // A container built earlier in this row for an overlapping deeper path.
+                    current = subtree;
+                }
+                else if (occupant is null || (occupant is JsonObject empty && IsAllNull(empty, out _)))
+                {
+                    // Nothing is there yet, or what is there holds no value — the null of an
+                    // overlapping leaf path, or an empty object value. ClickHouse allows both `a`
+                    // and `a.b` to be declared; the subtree replaces it so the deeper path stays
+                    // readable.
+                    var newCurrent = new JsonObject();
+                    current[part] = newCurrent;
+                    current = newCurrent;
+                }
+                else
+                {
+                    // The parent holds a value of its own, so this row needs both a value and a
+                    // subtree under one key. Nothing can be dropped without losing data.
+                    throw OverlappingPathsException(string.Join(".", pathParts.Take(depth)), name);
                 }
             }
 
             var leaf = pathParts.Last();
-            if (current[leaf] is JsonObject occupant)
+            if (current[leaf] is JsonObject occupied)
             {
                 // A deeper overlapping path was read first and put its subtree here.
-                if (jsonNode is null)
+                if (jsonNode is null || (jsonNode is JsonObject incoming && IsAllNull(incoming, out _)))
                 {
-                    // The null of the leaf path must not erase that subtree.
+                    // This path holds no value — a null, or an empty object value — so it must not
+                    // erase the subtree.
                     continue;
                 }
 
-                if (!IsAllNull(occupant, out var occupiedPath))
+                if (!IsAllNull(occupied, out var occupiedPath))
                 {
                     throw OverlappingPathsException(name, $"{name}.{occupiedPath}");
                 }
 
-                // The subtree carries no value, so the leaf's value replaces it.
+                // The subtree carries no value either, so this path's value replaces it.
+            }
+
+            if (jsonNode is JsonObject objectValue)
+            {
+                // Mark it as a value so that an overlapping deeper path read later throws instead
+                // of descending into it and merging the two.
+                (objectValues ??= new HashSet<object>(ObjectReferenceEqualityComparer.Instance)).Add(objectValue);
             }
 
             current[leaf] = jsonNode;
@@ -131,6 +148,13 @@ internal class JsonType : ParameterizedType
 
         return root;
     }
+
+    /// <summary>
+    /// Reports whether the object is a path's own value rather than a container built to hold
+    /// deeper paths.
+    /// </summary>
+    private static bool IsObjectValue(HashSet<object> objectValues, JsonObject value) =>
+        objectValues is not null && objectValues.Contains(value);
 
     /// <summary>
     /// Reports whether every value the object holds, at any depth, is a JSON null. An empty object
