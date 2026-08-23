@@ -1188,6 +1188,14 @@ public class JsonTypeTests : AbstractConnectionTestFixture
                 "{\"a\":5}")
             .SetName("TypedLeafPathOverlappingTypedSubtreeWithLeafValue");
 
+        // Same, with the overlapping subtree two levels deep: it is all-null throughout, so the
+        // leaf's value still replaces it.
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b.c Nullable(Int64)",
+                "{\"a\": 5}",
+                "{\"a\":5}")
+            .SetName("TypedLeafPathOverlappingDeeperTypedSubtreeWithLeafValue");
+
         // Both `a` and `a.b` are typed and the value belongs to the subtree. Descending into an
         // object at a path that overlaps a typed leaf was added after 25.8: 26.3 and later route
         // the value to `a.b`, while 25.8 parses `{"b":7}` against `a Nullable(Int64)` and rejects
@@ -1250,26 +1258,31 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // A non-Nullable typed path is never absent — an absent path materializes as 0 — so `a`
         // always holds a value and always collides with the `a.b` subtree, whichever of the two
         // the document fills in.
-        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a\": {\"b\": 7}}")
+        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a\": {\"b\": 7}}", "a.b")
             .SetName("OverlappingNonNullableTypedPathsWithValueInSubtree");
 
-        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a\": 5}")
+        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a\": 5}", "a.b")
             .SetName("OverlappingNonNullableTypedPathsWithValueInLeaf");
+
+        // The value is deeper than the path it collides with, so the error has to walk down to it
+        // rather than name the first key under `a`.
+        yield return new TestCaseData("JSON(a Int64, a.b.c Int64)", "{\"a\": {\"b\": {\"c\": 7}}}", "a.b.c")
+            .SetName("OverlappingNonNullableTypedPathsWithValueInDeeperSubtree");
 
         // Nullable typed paths only collide where the document itself carries both, which needs a
         // duplicate key. ClickHouse accepts the document and keeps both values.
-        yield return new TestCaseData("JSON(a Nullable(Int64), a.b Nullable(Int64))", "{\"a\": 5, \"a\": {\"b\": 7}}")
+        yield return new TestCaseData("JSON(a Nullable(Int64), a.b Nullable(Int64))", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b")
             .SetName("OverlappingNullableTypedPathsWithDuplicateKeyDocument");
 
         // The same collision with no hints at all: `a` and `a.b` are both dynamic paths.
-        yield return new TestCaseData("JSON", "{\"a\": 5, \"a\": {\"b\": 7}}")
+        yield return new TestCaseData("JSON", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b")
             .SetName("OverlappingDynamicPathsWithDuplicateKeyDocument");
     }
 
     [Test]
     [RequiredFeature(Feature.Json)]
     [TestCaseSource(nameof(OverlappingPathsHoldingValuesTestCases))]
-    public async Task Read_WithOverlappingPathsHoldingValues_ShouldThrow(string columnType, string jsonData)
+    public async Task Read_WithOverlappingPathsHoldingValues_ShouldThrow(string columnType, string jsonData, string expectedNestedPath)
     {
         var targetTable = CreateTableName();
 
@@ -1283,7 +1296,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         var exception = Assert.Throws<SerializationException>(() => reader.Read());
 
         Assert.That(exception.Message, Does.Contain("'a'"), exception.Message);
-        Assert.That(exception.Message, Does.Contain("'a.b'"), exception.Message);
+        Assert.That(exception.Message, Does.Contain($"'{expectedNestedPath}'"), exception.Message);
         Assert.That(exception.Message, Does.Contain("JsonReadMode.String"), exception.Message);
     }
 
