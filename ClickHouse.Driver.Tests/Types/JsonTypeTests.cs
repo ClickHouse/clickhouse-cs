@@ -1255,10 +1255,16 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
     public static IEnumerable<TestCaseData> OverlappingPathsHoldingValuesTestCases()
     {
+        // The documents below reach a path under `a` through a flattened key rather than a nested
+        // object, because 25.8 parses `{"b": 7}` against the overlapping `a Int64` and rejects the
+        // insert with INCORRECT_DATA. The two forms are indistinguishable once stored — both give
+        // `{"a":0,"a":{"b":7}}` — so the read path under test is the same either way. See
+        // TypedPathNullValueTestCases for the same limitation.
+
         // A non-Nullable typed path is never absent — an absent path materializes as 0 — so `a`
         // always holds a value and always collides with the `a.b` subtree, whichever of the two
         // the document fills in.
-        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a\": {\"b\": 7}}", "a.b")
+        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a.b\": 7}", "a.b")
             .SetName("OverlappingNonNullableTypedPathsWithValueInSubtree");
 
         yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a\": 5}", "a.b")
@@ -1266,17 +1272,22 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         // The value is deeper than the path it collides with, so the error has to walk down to it
         // rather than name the first key under `a`.
-        yield return new TestCaseData("JSON(a Int64, a.b.c Int64)", "{\"a\": {\"b\": {\"c\": 7}}}", "a.b.c")
+        yield return new TestCaseData("JSON(a Int64, a.b.c Int64)", "{\"a.b.c\": 7}", "a.b.c")
             .SetName("OverlappingNonNullableTypedPathsWithValueInDeeperSubtree");
 
         // Nullable typed paths only collide where the document itself carries both, which needs a
-        // duplicate key. ClickHouse accepts the document and keeps both values.
-        yield return new TestCaseData("JSON(a Nullable(Int64), a.b Nullable(Int64))", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b")
-            .SetName("OverlappingNullableTypedPathsWithDuplicateKeyDocument");
+        // duplicate key. 26.3 and later accept the document and keep both values; 25.8 rejects it
+        // with INCORRECT_DATA unless duplicated paths are skipped, which would drop one of the two
+        // values and so remove the very thing under test.
+        if (TestUtilities.ServerVersion >= Version.Parse("26.3"))
+        {
+            yield return new TestCaseData("JSON(a Nullable(Int64), a.b Nullable(Int64))", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b")
+                .SetName("OverlappingNullableTypedPathsWithDuplicateKeyDocument");
 
-        // The same collision with no hints at all: `a` and `a.b` are both dynamic paths.
-        yield return new TestCaseData("JSON", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b")
-            .SetName("OverlappingDynamicPathsWithDuplicateKeyDocument");
+            // The same collision with no hints at all: `a` and `a.b` are both dynamic paths.
+            yield return new TestCaseData("JSON", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b")
+                .SetName("OverlappingDynamicPathsWithDuplicateKeyDocument");
+        }
 
         // A Map path decodes to a JsonObject, which looks exactly like a subtree built for a
         // deeper path. The map's entries are a value of `a` all the same, and the server sends
@@ -1320,11 +1331,11 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     {
         var targetTable = CreateTableName();
 
-        // Every key of the document is routed to a path of its own — `a.b` typed, `a.x` dynamic —
-        // so the map at `a` is empty in every row.
+        // The row fills in the typed `a.b` and leaves the map at `a` empty, so the server renders
+        // it as `{"a":{},"a":{"b":7}}` — an overlap where only one side holds a value.
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (data JSON(a Map(String, Int64), `a.b` Int64)) ENGINE = Memory;");
-        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a\": {{\"b\": 7, \"x\": 1}}}}')");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a.b\": 7}}')");
 
         using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
@@ -1332,9 +1343,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         var result = (JsonObject)reader.GetValue(0);
 
         // An empty map holds no value, so it neither collides with the subtree nor erases it.
-        var a = (JsonObject)result["a"];
-        Assert.That((long)a["b"], Is.EqualTo(7L));
-        Assert.That((long)a["x"], Is.EqualTo(1L));
+        Assert.That(result.ToJsonString(), Is.EqualTo("{\"a\":{\"b\":7}}"));
     }
 
     [Test]
@@ -1345,7 +1354,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         await connection.ExecuteStatementAsync(
             $"CREATE OR REPLACE TABLE {targetTable} (data JSON(a Int64, a.b Int64)) ENGINE = Memory;");
-        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a\": {{\"b\": 7}}}}')");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a.b\": 7}}')");
 
         using var stringClient = TestUtilities.GetTestClickHouseClient(jsonReadMode: JsonReadMode.String);
 
