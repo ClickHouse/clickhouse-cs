@@ -1180,6 +1180,14 @@ public class JsonTypeTests : AbstractConnectionTestFixture
                 "{\"a\":{\"b\":null}}")
             .SetName("TypedLeafPathOverlappingTypedSubtreeWithNullValues");
 
+        // Mirror of the case above: the value belongs to the leaf, and the overlapping subtree
+        // (`{"b":null}`) carries none, so the leaf's value replaces it.
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b Nullable(Int64)",
+                "{\"a\": 5}",
+                "{\"a\":5}")
+            .SetName("TypedLeafPathOverlappingTypedSubtreeWithLeafValue");
+
         // Both `a` and `a.b` are typed and the value belongs to the subtree. Descending into an
         // object at a path that overlaps a typed leaf was added after 25.8: 26.3 and later route
         // the value to `a.b`, while 25.8 parses `{"b":7}` against `a Nullable(Int64)` and rejects
@@ -1235,6 +1243,92 @@ public class JsonTypeTests : AbstractConnectionTestFixture
 
         Assert.That(result.ContainsKey("x"), Is.False);
         Assert.That(result.ToJsonString(), Is.EqualTo("{}"));
+    }
+
+    public static IEnumerable<TestCaseData> OverlappingPathsHoldingValuesTestCases()
+    {
+        // A non-Nullable typed path is never absent — an absent path materializes as 0 — so `a`
+        // always holds a value and always collides with the `a.b` subtree, whichever of the two
+        // the document fills in.
+        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a\": {\"b\": 7}}")
+            .SetName("OverlappingNonNullableTypedPathsWithValueInSubtree");
+
+        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a\": 5}")
+            .SetName("OverlappingNonNullableTypedPathsWithValueInLeaf");
+
+        // Nullable typed paths only collide where the document itself carries both, which needs a
+        // duplicate key. ClickHouse accepts the document and keeps both values.
+        yield return new TestCaseData("JSON(a Nullable(Int64), a.b Nullable(Int64))", "{\"a\": 5, \"a\": {\"b\": 7}}")
+            .SetName("OverlappingNullableTypedPathsWithDuplicateKeyDocument");
+
+        // The same collision with no hints at all: `a` and `a.b` are both dynamic paths.
+        yield return new TestCaseData("JSON", "{\"a\": 5, \"a\": {\"b\": 7}}")
+            .SetName("OverlappingDynamicPathsWithDuplicateKeyDocument");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCaseSource(nameof(OverlappingPathsHoldingValuesTestCases))]
+    public async Task Read_WithOverlappingPathsHoldingValues_ShouldThrow(string columnType, string jsonData)
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data {columnType}) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{jsonData}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+
+        // The column is decoded by Read, so the throw lands there rather than on GetValue.
+        var exception = Assert.Throws<SerializationException>(() => reader.Read());
+
+        Assert.That(exception.Message, Does.Contain("'a'"), exception.Message);
+        Assert.That(exception.Message, Does.Contain("'a.b'"), exception.Message);
+        Assert.That(exception.Message, Does.Contain("JsonReadMode.String"), exception.Message);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Read_WithOverlappingPathsHoldingValues_ShouldBeReadableAsString()
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(a Int64, a.b Int64)) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a\": {{\"b\": 7}}}}')");
+
+        using var stringClient = TestUtilities.GetTestClickHouseClient(jsonReadMode: JsonReadMode.String);
+
+        using var reader = await stringClient.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        Assert.That(reader.GetValue(0), Is.EqualTo("{\"a\":0,\"a\":{\"b\":7}}"));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Read_WithNestedPathsThatDoNotOverlap_ShouldReadEveryPath()
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} " +
+            "(data JSON(a.b Int64, a.c Nullable(Int64), a.d.e String, f Int64)) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync(
+            $"INSERT INTO {targetTable} VALUES ('{{\"a\": {{\"b\": 1, \"d\": {{\"e\": \"x\"}}}}, \"f\": 2}}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        // The server sends the paths in its own order, so assert per path rather than on the
+        // rendered document.
+        var a = (JsonObject)result["a"];
+        Assert.That((long)a["b"], Is.EqualTo(1L));
+        Assert.That(a["c"], Is.Null);
+        Assert.That((string)((JsonObject)a["d"])["e"], Is.EqualTo("x"));
+        Assert.That((long)result["f"], Is.EqualTo(2L));
     }
 
     private class NullableHintedData

@@ -1,6 +1,9 @@
 Unreleased
 ---
 
+**Bug Fixes:**
+* **Breaking Change**: Fixed a `JSON` column with overlapping typed paths silently losing data. ClickHouse accepts a column which declares a path both as a value and as the parent of another path — for example `JSON(a Int64, a.b Int64)` — and sends both paths in every row, so the row renders as a document with a duplicate key (`{"a":0,"a":{"b":7}}`). A `JsonObject` cannot hold two values for one key, so the driver silently kept whichever path the server sent last: reading `{"a":{"b":7}}` back out of that column returned `{"a":0}` and the `7` was gone. Such a row now throws a `SerializationException` naming the two paths. With non-`Nullable` paths the driver cannot tell a stored `0` from an absent path, so no rule can recover the real value — the choice is between a wrong answer and a clear failure. Where the overlap is declared `Nullable`, the row normally fills in one side only and continues to read as before. Use `JsonReadMode.String` to read such a column as the server's JSON text, duplicate key included.
+
 v1.4.0
 ---
 
