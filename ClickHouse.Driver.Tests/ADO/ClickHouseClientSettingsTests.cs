@@ -629,6 +629,9 @@ public class ClickHouseClientSettingsTests
             HttpClientName = "test-client",
             LoggerFactory = logger,
             AcceptEncoding = "lz4, gzip",
+            // A property left at its default value passes the comparison below even when the copy
+            // constructor forgets it, so every property this test is to guard has to be set here.
+            JsonNullPathMode = JsonNullPathMode.Omit,
         };
 
         var copy = new ClickHouseClientSettings(original);

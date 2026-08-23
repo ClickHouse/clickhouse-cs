@@ -209,7 +209,7 @@ public static class TestUtilities
         }
     }
 
-    public static ClickHouseClientSettings GetTestClickHouseClientSettings(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
+    public static ClickHouseClientSettings GetTestClickHouseClientSettings(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String, JsonNullPathMode jsonNullPathMode = JsonNullPathMode.Include)
     {
         var builder = GetConnectionStringBuilder();
         builder.Compression = compression;
@@ -217,6 +217,7 @@ public static class TestUtilities
         builder.UseCustomDecimals = customDecimals;
         builder.JsonReadMode = jsonReadMode;
         builder.JsonWriteMode = jsonWriteMode;
+        builder.JsonNullPathMode = jsonNullPathMode;
 
         if (password is not null)
         {
@@ -264,9 +265,9 @@ public static class TestUtilities
         };
     }
 
-    public static ClickHouseClient GetTestClickHouseClient(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
+    public static ClickHouseClient GetTestClickHouseClient(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String, JsonNullPathMode jsonNullPathMode = JsonNullPathMode.Include)
     {
-        var settings = GetTestClickHouseClientSettings(compression, session, customDecimals, password, useFormDataParameters, jsonReadMode, jsonWriteMode);
+        var settings = GetTestClickHouseClientSettings(compression, session, customDecimals, password, useFormDataParameters, jsonReadMode, jsonWriteMode, jsonNullPathMode);
         return new ClickHouseClient(settings);
     }
 

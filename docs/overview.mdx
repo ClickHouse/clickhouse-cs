@@ -109,6 +109,7 @@ Below is a full list of all the settings, their default values, and their effect
 | ReadValueConverter | `IReadValueConverter` | `null` | — | Custom transform applied to values returned by the data reader; see [Custom read value conversion](#read-value-conversion) |
 | JsonReadMode | `JsonReadMode` | `Binary` | `JsonReadMode` | How JSON data is returned: `Binary` (returns `JsonObject`) or `String` (returns raw JSON string) |
 | JsonWriteMode | `JsonWriteMode` | `String` | `JsonWriteMode` | How JSON data is sent: `String` (serializes via `JsonSerializer`, accepts all inputs) or `Binary` (registered POCOs only with type hints) |
+| JsonNullPathMode | `JsonNullPathMode` | `Include` | `JsonNullPathMode` | Whether a typed JSON path whose value is NULL is present in the returned `JsonObject`: `Include` (present, holding a JSON null, as the server renders it) or `Omit` (left out). Does not apply to `JsonReadMode.String`. See [JSON type](#type-map-reading-json) |
 | MapReadMode | `MapReadMode` | `Dictionary` | `MapReadMode` | How `Map(K, V)` data is returned: `Dictionary` (returns `Dictionary<K, V>`; a repeated key keeps only its last value) or `KeyValuePairs` (returns `List<KeyValuePair<K, V>>`, keeping every pair). See [Map type](#type-map-reading-map) |
 | AllowDuplicateJsonKeys | `bool` | `false` | `AllowDuplicateJsonKeys` | How to read a `JSON` row whose overlapping paths both hold a value. `false` throws, because keeping either value means dropping the other; `true` keeps whichever the row carries last. See [Overlapping paths](#type-map-reading-json) |
 
@@ -1505,6 +1506,51 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 // Or via connection string
 // "Host=localhost;JsonReadMode=String"
 ```
+
+##### Typed paths whose value is NULL
+
+A **typed path** is one the column declares, for example `a` in `JSON(a Nullable(Int64))`. It is
+part of every row, so the server renders it with an explicit null where the row has no value for
+it. A **dynamic path** exists only in the rows which have a value for it, and the server leaves it
+out of a row where it is null.
+
+`JsonNullPathMode` selects what the driver does with a typed path whose value is NULL:
+
+- **`Include` (default)**: the path is present in the `JsonObject`, holding a JSON null. This
+  matches the server, and keeps "the path is not in this row" distinguishable from "the path is
+  null".
+
+- **`Omit`**: the path is left out, as a null dynamic path already is. Where nothing else is left
+  under a parent object, the parent goes too.
+
+```csharp
+// Configure omit mode via settings
+var settings = new ClickHouseClientSettings("Host=localhost")
+{
+    JsonNullPathMode = JsonNullPathMode.Omit
+};
+
+// Or via connection string
+// "Host=localhost;JsonNullPathMode=Omit"
+```
+
+Reading `JSON(sub.a Nullable(Int64))`:
+
+| Row | `Include` (default) | `Omit` |
+|-----|---------------------|--------|
+| `{"sub": {"a": 1, "b": 2}}` | `{"sub":{"a":1,"b":2}}` | `{"sub":{"a":1,"b":2}}` |
+| `{"sub": null}` | `{"sub":{"a":null}}` | `{}` |
+| `{}` | `{"sub":{"a":null}}` | `{}` |
+| `{"sub": {"b": 5}}` | `{"sub":{"a":null,"b":5}}` | `{"sub":{"b":5}}` |
+
+Two limits to keep in mind:
+
+- The setting applies to `JsonReadMode.Binary` and `JsonReadMode.None` only. `JsonReadMode.String`
+  hands back the server's own JSON text, which always spells out a typed null, so a caller who
+  switches to `String` mode loses the setting.
+- `Omit` leaves out a null **path**. A null *inside* a container is untouched:
+  `Array(Nullable(Int32))` still reads as `[1,null,3]`, and `Map(String, Nullable(T))` still holds
+  its null values.
 
 ##### Overlapping paths
 

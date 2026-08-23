@@ -82,12 +82,13 @@ internal class JsonType : ParameterizedType
 
             HintedTypes.TryGetValue(name, out var hintedType);
             var jsonNode = ReadJsonNode(reader, hintedType);
-            if (jsonNode is null && hintedType is null)
+            if (jsonNode is null && (hintedType is null || TypeSettings.jsonNullPathMode == JsonNullPathMode.Omit))
             {
                 // A dynamic path only exists in the rows that have a value for it, and the server
-                // omits it from its own JSON rendering when the value is null. A typed path, in
-                // contrast, is declared by the column type and is rendered with an explicit null,
-                // so it must be materialized to keep "absent" distinguishable from "null".
+                // omits it from its own JSON rendering when the value is null, so it is always
+                // dropped. A typed path is declared by the column type and is rendered with an
+                // explicit null, so it is materialized by default to keep "absent" distinguishable
+                // from "null"; JsonNullPathMode.Omit drops it as well.
                 continue;
             }
 

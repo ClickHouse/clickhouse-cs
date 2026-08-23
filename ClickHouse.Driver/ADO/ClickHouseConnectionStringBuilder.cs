@@ -173,6 +173,17 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
     }
 
     /// <summary>
+    /// Gets or sets whether a typed JSON path whose value is NULL is present in the returned
+    /// JsonObject. Not applicable to <see cref="JsonReadMode.String"/>.
+    /// Default: Include
+    /// </summary>
+    public JsonNullPathMode JsonNullPathMode
+    {
+        get => GetEnumOrDefault("JsonNullPathMode", ClickHouseDefaults.JsonNullPathMode);
+        set => this["JsonNullPathMode"] = value.ToString();
+    }
+
+    /// <summary>
     /// Gets or sets how JSON data is sent when writing.
     /// Default: String
     /// </summary>
@@ -265,6 +276,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Roles = settings.Roles,
             JsonReadMode = settings.JsonReadMode,
             JsonWriteMode = settings.JsonWriteMode,
+            JsonNullPathMode = settings.JsonNullPathMode,
             MapReadMode = settings.MapReadMode,
             AllowDuplicateJsonKeys = settings.AllowDuplicateJsonKeys,
             AcceptEncoding = settings.AcceptEncoding,
