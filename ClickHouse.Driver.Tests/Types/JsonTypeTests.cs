@@ -1253,7 +1253,12 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(result.ToJsonString(), Is.EqualTo("{}"));
     }
 
-    public static IEnumerable<TestCaseData> OverlappingPathsHoldingValuesTestCases()
+    /// <param name="whenAllowed">
+    /// Document read when <c>AllowDuplicateJsonKeys</c> is set, which keeps whichever of the two
+    /// values the row carries last; <c>null</c> where the overlap stays unreadable because the
+    /// parent holds a scalar or an array, which no subtree can be placed under.
+    /// </param>
+    private static IEnumerable<(string Name, string ColumnType, string JsonData, string NestedPath, string WhenAllowed)> OverlappingPathShapes()
     {
         // The documents below reach a path under `a` through a flattened key rather than a nested
         // object, because 25.8 parses `{"b": 7}` against the overlapping `a Int64` and rejects the
@@ -1264,16 +1269,16 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // A non-Nullable typed path is never absent — an absent path materializes as 0 — so `a`
         // always holds a value and always collides with the `a.b` subtree, whichever of the two
         // the document fills in.
-        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a.b\": 7}", "a.b")
-            .SetName("OverlappingNonNullableTypedPathsWithValueInSubtree");
+        yield return ("OverlappingNonNullableTypedPathsWithValueInSubtree",
+            "JSON(a Int64, a.b Int64)", "{\"a.b\": 7}", "a.b", "{\"a\":0}");
 
-        yield return new TestCaseData("JSON(a Int64, a.b Int64)", "{\"a\": 5}", "a.b")
-            .SetName("OverlappingNonNullableTypedPathsWithValueInLeaf");
+        yield return ("OverlappingNonNullableTypedPathsWithValueInLeaf",
+            "JSON(a Int64, a.b Int64)", "{\"a\": 5}", "a.b", "{\"a\":5}");
 
         // The value is deeper than the path it collides with, so the error has to walk down to it
         // rather than name the first key under `a`.
-        yield return new TestCaseData("JSON(a Int64, a.b.c Int64)", "{\"a.b.c\": 7}", "a.b.c")
-            .SetName("OverlappingNonNullableTypedPathsWithValueInDeeperSubtree");
+        yield return ("OverlappingNonNullableTypedPathsWithValueInDeeperSubtree",
+            "JSON(a Int64, a.b.c Int64)", "{\"a.b.c\": 7}", "a.b.c", "{\"a\":0}");
 
         // Nullable typed paths only collide where the document itself carries both, which needs a
         // duplicate key. 26.3 and later accept the document and keep both values; 25.8 rejects it
@@ -1281,33 +1286,48 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // values and so remove the very thing under test.
         if (TestUtilities.ServerVersion >= Version.Parse("26.3"))
         {
-            yield return new TestCaseData("JSON(a Nullable(Int64), a.b Nullable(Int64))", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b")
-                .SetName("OverlappingNullableTypedPathsWithDuplicateKeyDocument");
+            yield return ("OverlappingNullableTypedPathsWithDuplicateKeyDocument",
+                "JSON(a Nullable(Int64), a.b Nullable(Int64))", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b", "{\"a\":5}");
 
-            // The same collision with no hints at all: `a` and `a.b` are both dynamic paths.
-            yield return new TestCaseData("JSON", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b")
-                .SetName("OverlappingDynamicPathsWithDuplicateKeyDocument");
+            // The same collision with no hints at all: `a` and `a.b` are both dynamic paths. The
+            // scalar `a` is sent first here, so the subtree has nowhere to go even when duplicate
+            // keys are allowed.
+            yield return ("OverlappingDynamicPathsWithDuplicateKeyDocument",
+                "JSON", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b", null);
         }
 
         // A Map path decodes to a JsonObject, which looks exactly like a subtree built for a
         // deeper path. The map's entries are a value of `a` all the same, and the server sends
         // them under a key of their own, so merging `a.b` into them would drop one of the two.
-        yield return new TestCaseData("JSON(a Map(String, Int64))", "{\"a\": {\"x\": 1}, \"a.b\": 7}", "a.b")
-            .SetName("OverlappingMapPathAndDeeperPathWithDisjointKeys");
+        yield return ("OverlappingMapPathAndDeeperPathWithDisjointKeys",
+            "JSON(a Map(String, Int64))", "{\"a\": {\"x\": 1}, \"a.b\": 7}", "a.b", "{\"a\":{\"x\":1,\"b\":7}}");
 
         // The same, where the map's own key is the one the deeper path would take.
-        yield return new TestCaseData("JSON(a Map(String, Int64))", "{\"a\": {\"b\": 1}, \"a.b\": 7}", "a.b")
-            .SetName("OverlappingMapPathAndDeeperPathWithTheSameKey");
+        yield return ("OverlappingMapPathAndDeeperPathWithTheSameKey",
+            "JSON(a Map(String, Int64))", "{\"a\": {\"b\": 1}, \"a.b\": 7}", "a.b", "{\"a\":{\"b\":7}}");
 
         // An array value cannot hold a subtree at all.
-        yield return new TestCaseData("JSON(a Array(Int64))", "{\"a\": [1, 2], \"a.b\": 7}", "a.b")
-            .SetName("OverlappingArrayPathAndDeeperPath");
+        yield return ("OverlappingArrayPathAndDeeperPath",
+            "JSON(a Array(Int64))", "{\"a\": [1, 2], \"a.b\": 7}", "a.b", null);
+    }
+
+    public static IEnumerable<TestCaseData> OverlappingPathsHoldingValuesTestCases()
+    {
+        foreach (var (name, columnType, jsonData, nestedPath, whenAllowed) in OverlappingPathShapes())
+        {
+            yield return new TestCaseData(columnType, jsonData, false, nestedPath, null)
+                .SetName(name);
+
+            yield return new TestCaseData(columnType, jsonData, true, nestedPath, whenAllowed)
+                .SetName($"{name}_DuplicateKeysAllowed");
+        }
     }
 
     [Test]
     [RequiredFeature(Feature.Json)]
     [TestCaseSource(nameof(OverlappingPathsHoldingValuesTestCases))]
-    public async Task Read_WithOverlappingPathsHoldingValues_ShouldThrow(string columnType, string jsonData, string expectedNestedPath)
+    public async Task Read_WithOverlappingPathsHoldingValues_ShouldThrowUnlessDuplicateKeysAreAllowed(
+        string columnType, string jsonData, bool allowDuplicateJsonKeys, string expectedNestedPath, string expectedJson)
     {
         var targetTable = CreateTableName();
 
@@ -1315,7 +1335,20 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             $"CREATE OR REPLACE TABLE {targetTable} (data {columnType}) ENGINE = Memory;");
         await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{jsonData}')");
 
-        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        var settings = new ClickHouseClientSettings(TestUtilities.GetTestClickHouseClientSettings())
+        {
+            AllowDuplicateJsonKeys = allowDuplicateJsonKeys,
+        };
+        using var overlapClient = new ClickHouseClient(settings);
+
+        using var reader = await overlapClient.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+
+        if (expectedJson is not null)
+        {
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(((JsonObject)reader.GetValue(0)).ToJsonString(), Is.EqualTo(expectedJson));
+            return;
+        }
 
         // The column is decoded by Read, so the throw lands there rather than on GetValue.
         var exception = Assert.Throws<SerializationException>(() => reader.Read());

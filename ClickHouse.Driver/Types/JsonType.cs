@@ -70,6 +70,10 @@ internal class JsonType : ParameterizedType
         // which a column of plain scalar paths never has.
         HashSet<object> objectValues = null;
 
+        // When set, an overlap keeps whichever value the row carries last and drops the other,
+        // rather than reporting that neither can be dropped without losing data.
+        var allowDuplicateKeys = TypeSettings.allowDuplicateJsonKeys;
+
         var nfields = reader.Read7BitEncodedInt();
         for (int i = 0; i < nfields; i++)
         {
@@ -94,9 +98,10 @@ internal class JsonType : ParameterizedType
                 depth++;
                 var occupant = current[part];
 
-                if (occupant is JsonObject subtree && !IsObjectValue(objectValues, subtree))
+                if (occupant is JsonObject subtree && (allowDuplicateKeys || !IsObjectValue(objectValues, subtree)))
                 {
-                    // A container built earlier in this row for an overlapping deeper path.
+                    // A container built earlier in this row for an overlapping deeper path, or —
+                    // when duplicate keys are allowed — an object value this path merges into.
                     current = subtree;
                 }
                 else if (occupant is null || (occupant is JsonObject empty && IsAllNull(empty, out _)))
@@ -128,7 +133,7 @@ internal class JsonType : ParameterizedType
                     continue;
                 }
 
-                if (!IsAllNull(occupied, out var occupiedPath))
+                if (!allowDuplicateKeys && !IsAllNull(occupied, out var occupiedPath))
                 {
                     throw OverlappingPathsException(name, $"{name}.{occupiedPath}");
                 }
@@ -136,10 +141,11 @@ internal class JsonType : ParameterizedType
                 // The subtree carries no value either, so this path's value replaces it.
             }
 
-            if (jsonNode is JsonObject objectValue)
+            if (!allowDuplicateKeys && jsonNode is JsonObject objectValue)
             {
                 // Mark it as a value so that an overlapping deeper path read later throws instead
-                // of descending into it and merging the two.
+                // of descending into it and merging the two. Only the throw consults this set, so
+                // it stays unallocated when duplicate keys are allowed.
                 (objectValues ??= new HashSet<object>(ObjectReferenceEqualityComparer.Instance)).Add(objectValue);
             }
 
