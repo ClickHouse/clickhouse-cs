@@ -176,14 +176,15 @@ jobs:
       with:
         user: ${{ secrets.NUGET_USER }}
 
-    # The key reaches the script through the environment, so its value is never interpolated
-    # into the command line.
+    # The key goes through the environment because a ${{ }} expansion is substituted into the
+    # script text before the shell runs. PowerShell then passes the value as one argument
+    # whatever characters it holds, which cmd's %VAR% expansion does not guarantee.
     - name: Push package
       id: push
-      shell: cmd
+      shell: pwsh
       env:
         NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
-      run: dotnet nuget push ClickHouse.Driver.*.nupkg --skip-duplicate --api-key %NUGET_API_KEY% --source https://api.nuget.org/v3/index.json
+      run: dotnet nuget push ClickHouse.Driver.*.nupkg --skip-duplicate --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json
 
   github_release:
     runs-on: ubuntu-latest
