@@ -110,6 +110,7 @@ Below is a full list of all the settings, their default values, and their effect
 | JsonReadMode | `JsonReadMode` | `Binary` | `JsonReadMode` | How JSON data is returned: `Binary` (returns `JsonObject`) or `String` (returns raw JSON string) |
 | JsonWriteMode | `JsonWriteMode` | `String` | `JsonWriteMode` | How JSON data is sent: `String` (serializes via `JsonSerializer`, accepts all inputs) or `Binary` (registered POCOs only with type hints) |
 | MapReadMode | `MapReadMode` | `Dictionary` | `MapReadMode` | How `Map(K, V)` data is returned: `Dictionary` (returns `Dictionary<K, V>`; a repeated key keeps only its last value) or `KeyValuePairs` (returns `List<KeyValuePair<K, V>>`, keeping every pair). See [Map type](#type-map-reading-map) |
+| AllowDuplicateJsonKeys | `bool` | `false` | `AllowDuplicateJsonKeys` | How to read a `JSON` row whose overlapping paths both hold a value. `false` throws, because keeping either value means dropping the other; `true` keeps whichever the row carries last. See [Overlapping paths](#type-map-reading-json) |
 
 ### Session management {#session-management}
 
@@ -1503,6 +1504,39 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 
 // Or via connection string
 // "Host=localhost;JsonReadMode=String"
+```
+
+##### Overlapping paths
+
+ClickHouse accepts a column which declares a path both as a value and as the parent of another
+path, for example `JSON(a Int64, a.b Int64)`. Both paths are present in every row, so the server
+renders the row with a duplicate key: `{"a":0,"a":{"b":7}}`. A `JsonObject` cannot hold two values
+for one key, so `JsonReadMode.Binary` throws a `SerializationException` naming the two paths. The
+same holds where the value is a `Map`, as in `JSON(a Map(String, Int64))` read from a row which
+also has a dynamic `a.b`.
+
+This applies only where both sides hold a value in that row. A side which holds nothing — a null,
+an empty object, or a subtree whose values are all null — gives way to the side which has the data.
+An overlap declared with `Nullable` types therefore fills in one side per row and reads without
+error: `JSON(a Nullable(Int64), a.b Nullable(Int64))` gives `{"a":5}` and `{"a":{"b":7}}` as
+expected.
+
+Read such a column with `JsonReadMode.String` to get the server's JSON text unchanged, duplicate
+key included.
+
+Set `AllowDuplicateJsonKeys` to keep reading the column as a `JsonObject` instead of throwing. The
+driver then keeps whichever of the two values the row carries last and drops the other, so the
+result is lossy: `JSON(a Int64, a.b Int64)` holding `{"a.b":7}` reads as `{"a":0}`. A path whose
+parent holds a scalar or an array still throws, because a subtree cannot be placed under either.
+
+```csharp
+var settings = new ClickHouseClientSettings("Host=localhost")
+{
+    AllowDuplicateJsonKeys = true
+};
+
+// Or via connection string
+// "Host=localhost;AllowDuplicateJsonKeys=true"
 ```
 
 ---

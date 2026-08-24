@@ -64,6 +64,16 @@ internal class JsonType : ParameterizedType
     {
         JsonObject root = new();
 
+        // A Map path, or a Dynamic one holding an object, decodes to a JsonObject which is that
+        // path's value — not a container built here to hold deeper paths. The two are the same
+        // type, so the values are tracked by reference. Allocated only where such a path exists,
+        // which a column of plain scalar paths never has.
+        HashSet<object> objectValues = null;
+
+        // When set, an overlap keeps whichever value the row carries last and drops the other,
+        // rather than reporting that neither can be dropped without losing data.
+        var allowDuplicateKeys = TypeSettings.allowDuplicateJsonKeys;
+
         var nfields = reader.Read7BitEncodedInt();
         for (int i = 0; i < nfields; i++)
         {
@@ -82,29 +92,61 @@ internal class JsonType : ParameterizedType
             }
 
             var pathParts = name.Split('.');
+            var depth = 0;
             foreach (var part in pathParts.SkipLast1(1))
             {
-                if (current[part] is { } existing)
+                depth++;
+                var occupant = current[part];
+
+                if (occupant is JsonObject subtree && (allowDuplicateKeys || !IsObjectValue(objectValues, subtree)))
                 {
-                    current = (JsonObject)existing;
+                    // A container built earlier in this row for an overlapping deeper path, or —
+                    // when duplicate keys are allowed — an object value this path merges into.
+                    current = subtree;
                 }
-                else
+                else if (occupant is null || (occupant is JsonObject empty && IsAllNull(empty, out _)))
                 {
-                    // Either the parent is not there yet, or it holds the null of an overlapping
-                    // typed leaf path (ClickHouse allows both `a` and `a.b` to be typed); the
-                    // subtree replaces that null so the deeper path stays readable.
+                    // Nothing is there yet, or what is there holds no value — the null of an
+                    // overlapping leaf path, or an empty object value. ClickHouse allows both `a`
+                    // and `a.b` to be declared; the subtree replaces it so the deeper path stays
+                    // readable.
                     var newCurrent = new JsonObject();
                     current[part] = newCurrent;
                     current = newCurrent;
                 }
+                else
+                {
+                    // The parent holds a value of its own, so this row needs both a value and a
+                    // subtree under one key. Nothing can be dropped without losing data.
+                    throw OverlappingPathsException(string.Join(".", pathParts.Take(depth)), name);
+                }
             }
 
             var leaf = pathParts.Last();
-            if (jsonNode is null && current[leaf] is JsonObject)
+            if (current[leaf] is JsonObject occupied)
             {
-                // Mirror of the walk above for the opposite path order: a typed leaf path's null
-                // must not erase the subtree an overlapping deeper typed path already filled in.
-                continue;
+                // A deeper overlapping path was read first and put its subtree here.
+                if (jsonNode is null || (jsonNode is JsonObject incoming && IsAllNull(incoming, out _)))
+                {
+                    // This path holds no value — a null, or an empty object value — so it must not
+                    // erase the subtree.
+                    continue;
+                }
+
+                if (!allowDuplicateKeys && !IsAllNull(occupied, out var occupiedPath))
+                {
+                    throw OverlappingPathsException(name, $"{name}.{occupiedPath}");
+                }
+
+                // The subtree carries no value either, so this path's value replaces it.
+            }
+
+            if (!allowDuplicateKeys && jsonNode is JsonObject objectValue)
+            {
+                // Mark it as a value so that an overlapping deeper path read later throws instead
+                // of descending into it and merging the two. Only the throw consults this set, so
+                // it stays unallocated when duplicate keys are allowed.
+                (objectValues ??= new HashSet<object>(ObjectReferenceEqualityComparer.Instance)).Add(objectValue);
             }
 
             current[leaf] = jsonNode;
@@ -112,6 +154,62 @@ internal class JsonType : ParameterizedType
 
         return root;
     }
+
+    /// <summary>
+    /// Reports whether the object is a path's own value rather than a container built to hold
+    /// deeper paths.
+    /// </summary>
+    private static bool IsObjectValue(HashSet<object> objectValues, JsonObject value) =>
+        objectValues is not null && objectValues.Contains(value);
+
+    /// <summary>
+    /// Reports whether every value the object holds, at any depth, is a JSON null. An empty object
+    /// holds no value, so it counts as all-null. An array counts as a value.
+    /// </summary>
+    /// <param name="valuePath">
+    /// Dotted path of the first value which is not null, relative to <paramref name="value"/>;
+    /// <c>null</c> when the object is all-null.
+    /// </param>
+    private static bool IsAllNull(JsonObject value, out string valuePath)
+    {
+        foreach (var property in value)
+        {
+            if (property.Value is null)
+            {
+                continue;
+            }
+
+            if (property.Value is JsonObject nested)
+            {
+                if (IsAllNull(nested, out var nestedPath))
+                {
+                    continue;
+                }
+
+                valuePath = $"{property.Key}.{nestedPath}";
+                return false;
+            }
+
+            valuePath = property.Key;
+            return false;
+        }
+
+        valuePath = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Builds the error for a row where one path holds a value and is also the parent of another
+    /// path which holds a value. ClickHouse accepts such a column (for example
+    /// <c>JSON(a Int64, a.b Int64)</c>) and renders the row with a duplicate key, which a
+    /// <see cref="JsonObject"/> cannot hold.
+    /// </summary>
+    private static SerializationException OverlappingPathsException(string path, string nestedPath) =>
+        new SerializationException(
+            $"JSON paths '{path}' and '{nestedPath}' overlap and both hold a value in this row. " +
+            $"'{path}' is a value and is also the parent of '{nestedPath}', so the server sends the row with a " +
+            $"duplicate '{path}' key, which a JsonObject cannot hold. " +
+            $"Read this column with JsonReadMode.String to get the server's JSON text unchanged.");
 
     public override ParameterizedType Parse(
         SyntaxTreeNode node,

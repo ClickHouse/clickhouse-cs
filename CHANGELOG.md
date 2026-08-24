@@ -1,6 +1,9 @@
 Unreleased
 ---
 
+**Bug Fixes:**
+* **Breaking Change**: Fixed a `JSON` column with overlapping paths silently losing data. ClickHouse accepts a column which declares a path both as a value and as the parent of another path — for example `JSON(a Int64, a.b Int64)` — and sends both paths in every row, so the row renders as a document with a duplicate key (`{"a":0,"a":{"b":7}}`). A `JsonObject` cannot hold two values for one key, so the driver silently kept whichever path the server sent last: reading `{"a":{"b":7}}` back out of that column returned `{"a":0}` and the `7` was gone. The same loss hit a `Map` path overlapped by a deeper path (`JSON(a Map(String, Int64))` holding `{"a":{"b":1},"a.b":7}` returned `{"a":{"b":7}}`, dropping the map's own entry), except that there the two values were merged into one object rather than one replacing the other. A row where both sides of such an overlap hold a value now throws a `SerializationException` naming the two paths. With non-`Nullable` paths the driver cannot tell a stored `0` from an absent path, so no rule can recover the real value — the choice is between a wrong answer and a clear failure. A side which holds nothing is not a collision: a null, an empty object, and an all-null subtree all give way to the side which has the data, so `Nullable` overlaps continue to read as before. Use `JsonReadMode.String` to read such a column as the server's JSON text, duplicate key included. To restore the previous behavior and keep reading the column as a `JsonObject`, set the new `AllowDuplicateJsonKeys` setting (connection string key `AllowDuplicateJsonKeys=true`, or `ClickHouseClientSettings.AllowDuplicateJsonKeys`); the driver then keeps whichever value the row carries last, with the data loss described above. An overlap whose parent holds a scalar or an array still throws — that shape raised `InvalidCastException` before and is now a `SerializationException`.
+
 v1.4.0
 ---
 
