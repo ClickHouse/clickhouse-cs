@@ -232,6 +232,7 @@ var reader = await client.ExecuteReaderAsync(
 | MaxDegreeOfParallelism | `int` | 1 | Number of parallel batch uploads |
 | Format | `RowBinaryFormat` | `RowBinary` | Binary format: `RowBinary` or `RowBinaryWithDefaults` |
 | Compressor | `IClickHouseCompressor` | `ZstdCompressor.Default` | Codec applied to the insert body (`Content-Encoding`). `null` sends it uncompressed. See [Insert compression](#insert-compression) |
+| QueryPlacement | `InsertQueryPlacement` | `Body` | Where the `INSERT INTO ... FORMAT ...` statement is sent: `Body` (ahead of the rows) or `Url` (as the `query` URL parameter). See [Insert query placement](#insert-query-placement) |
 | ColumnTypes | `IReadOnlyDictionary<string, string>` | `null` | Column name → ClickHouse type string. Skips the schema probe query when set. |
 | UseSchemaCache | `bool` | `false` | Cache full table schema per (database, table) for the client's lifetime. |
 
@@ -507,6 +508,19 @@ If `ColumnTypes` is set in `InsertOptions`, they will override the POCO attribut
 #### Schema evolution {#poco-insert-schema-evolution}
 
 POCO inserts work seamlessly when columns are added to the target table after the type is registered. Because the driver only inserts the columns mapped by the POCO, any new columns with `DEFAULT` (or other default expressions) are filled in by the server automatically. No code changes or re-registration are needed.
+
+#### Insert query placement {#insert-query-placement}
+
+A binary insert writes its `INSERT INTO ... FORMAT ...` statement as the first line of the request body, ahead of the rows. The body is compressed by default, so routing and logging that inspect only the URL do not see the statement. Set `InsertOptions.QueryPlacement` to `InsertQueryPlacement.Url` to send the statement as the `query` URL parameter instead, leaving the body to the rows alone:
+
+```csharp
+var options = new InsertOptions { QueryPlacement = InsertQueryPlacement.Url };
+await client.InsertBinaryAsync("events", columns, rows, options);
+```
+
+Use it when a proxy, load balancer or gateway routes or inspects on the `query` parameter, or when you want the statement in access logs and observability tooling. It is opt-in because the statement then counts towards the URL length. The effective limit is the lowest imposed by the .NET runtime, an intermediary and the server. On .NET 6 through .NET 9, `System.Uri` limits the complete encoded request URI to 65,519 characters; the driver throws an `InvalidOperationException` that directs you back to `InsertQueryPlacement.Body` when this limit is exceeded. ClickHouse's `http_max_uri_size` is 1 MiB by default, while an intermediary may impose a lower limit. In body mode, the statement and rows have no such URL-length limit; other request options can still appear in the URL.
+
+The setting is independent of `Compressor`: the body is encoded the same way in both modes.
 
 ---
 

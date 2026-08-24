@@ -9,6 +9,7 @@ v1.4.0
 * **Reading a column value from `ClickHouseDataReader` with no current row now throws `InvalidOperationException`** — that is, before the first `Read()` or after `Read()` has returned `false`.
 
 **New Features:**
+* Added `InsertOptions.QueryPlacement`. Set it to `InsertQueryPlacement.Url` to send a binary insert's `INSERT` statement as the `query` URL parameter, where proxies and access logs can read it, instead of in the request body; body placement remains the default. If the .NET runtime rejects an oversized URL, the error directs callers back to body placement. (#580)
 * Pluggable binary-insert compression via `InsertOptions.Compressor` (`IClickHouseCompressor`). The presence of a compressor is the on/off switch: set it to `null` to send the payload uncompressed (useful over fast/local links where the compression CPU outweighs the bandwidth savings). GZip, Brotli, LZ4, and ZStd compressors are available.
   - **Tuning guidance:** the best codec depends on where the server is. Over a fast/local link, compression is pure overhead, so `Compressor = null` is worth trying. Over a remote/cloud connection the payload reduction dominates, depending on bandwidth.
 * Built-in LZ4 codec for binary inserts (`Lz4Compressor`; HTTP `Content-Encoding: lz4` plus the native-protocol block path). LZ4 now ships **in the core driver with no third-party runtime dependency**.

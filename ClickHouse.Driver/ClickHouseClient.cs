@@ -496,17 +496,22 @@ public sealed class ClickHouseClient : IClickHouseClient
             // first materializing the whole payload into a rented MemoryStream and seeking back to the
             // start. A serialization failure is captured and rethrown so callers still observe the
             // original ClickHouseBulkCopySerializationException rather than a transport-level wrapper.
+            // With InsertQueryPlacement.Url the statement travels as the query URL parameter, where
+            // proxies and access logs can read it, and the serializer leaves it out of the body.
+            var queryPlacement = insertOptions.QueryPlacement;
+            var urlQuery = queryPlacement == InsertQueryPlacement.Url ? batch.Query : null;
+
             ExceptionDispatchInfo serializationError = null;
             try
             {
                 using var response = await PostStreamAsync(
-                    null,
+                    urlQuery,
                     (stream, ct) =>
                     {
                         ct.ThrowIfCancellationRequested();
                         try
                         {
-                            serializer.Serialize(batch, stream, compressor);
+                            serializer.Serialize(batch, stream, compressor, queryPlacement);
                         }
                         catch (Exception ex)
                         {
@@ -655,6 +660,12 @@ public sealed class ClickHouseClient : IClickHouseClient
             throw new ArgumentOutOfRangeException(nameof(options), "BatchSize must be greater than zero");
         if (options.MaxDegreeOfParallelism <= 0)
             throw new ArgumentOutOfRangeException(nameof(options), "MaxDegreeOfParallelism must be greater than zero");
+        // A cast or a configuration binding can put a value outside the enum into QueryPlacement. Both
+        // send paths derive the URL parameter and the body framing from it separately, so a value that
+        // is neither Body nor Url would leave the statement out of both. Reject it here, where every
+        // insert passes, rather than sending a request the server cannot read.
+        if (options.QueryPlacement is not InsertQueryPlacement.Body and not InsertQueryPlacement.Url)
+            throw new ArgumentOutOfRangeException(nameof(options), options.QueryPlacement, "QueryPlacement must be InsertQueryPlacement.Body or InsertQueryPlacement.Url");
 
         var useSession = options.UseSession ?? Settings.UseSession;
         if (useSession && options.MaxDegreeOfParallelism > 1)
@@ -757,18 +768,21 @@ public sealed class ClickHouseClient : IClickHouseClient
             logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
 
             // Stream the (optionally compressed) batch straight into the request stream (see
-            // SendBatchAsync for the serialization-error capture rationale).
+            // SendBatchAsync for the serialization-error capture and query-placement rationale).
+            var queryPlacement = insertOptions.QueryPlacement;
+            var urlQuery = queryPlacement == InsertQueryPlacement.Url ? batch.Query : null;
+
             ExceptionDispatchInfo serializationError = null;
             try
             {
                 using var response = await PostStreamAsync(
-                    null,
+                    urlQuery,
                     (stream, ct) =>
                     {
                         ct.ThrowIfCancellationRequested();
                         try
                         {
-                            serializer.Serialize(batch, getters, writers, stream, compressor);
+                            serializer.Serialize(batch, getters, writers, stream, compressor, queryPlacement);
                         }
                         catch (Exception ex)
                         {
@@ -922,7 +936,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         var builder = CreateUriBuilder(sql, queryOptions);
 
-        using var postMessage = new HttpRequestMessage(HttpMethod.Post, builder.ToString());
+        using var postMessage = CreatePostStreamRequest(builder, queryOptions);
         // rawBody: this method returns the HttpResponseMessage itself — PostStreamAsync and
         // InsertRawStreamAsync are public — so its body belongs to the caller, exactly like a raw result,
         // so it advertises no codec rather than one the caller never asked for and nothing would decode.
@@ -951,6 +965,22 @@ public sealed class ClickHouseClient : IClickHouseClient
             response?.Dispose();
             GetLogger(ClickHouseLogCategories.Transport)?.LogError(ex, "Streamed request to {Endpoint} failed.", serverUri);
             throw;
+        }
+    }
+
+    private static HttpRequestMessage CreatePostStreamRequest(ClickHouseUriBuilder builder, QueryOptions queryOptions)
+    {
+        try
+        {
+            return new HttpRequestMessage(HttpMethod.Post, builder.ToString());
+        }
+        catch (UriFormatException ex) when (queryOptions is InsertOptions { QueryPlacement: InsertQueryPlacement.Url })
+        {
+            throw new InvalidOperationException(
+                $"The INSERT statement could not be sent in the request URL because the encoded URI is too long for this .NET runtime. " +
+                $"Set {nameof(InsertOptions)}.{nameof(InsertOptions.QueryPlacement)} to {nameof(InsertQueryPlacement)}.{nameof(InsertQueryPlacement.Body)}, " +
+                "or shorten the table, column names, and other URL parameters.",
+                ex);
         }
     }
 
