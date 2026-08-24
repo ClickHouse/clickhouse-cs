@@ -93,6 +93,7 @@ internal class JsonType : ParameterizedType
 
             var pathParts = name.Split('.');
             var depth = 0;
+            var givesWay = false;
             foreach (var part in pathParts.SkipLast1(1))
             {
                 depth++;
@@ -114,6 +115,16 @@ internal class JsonType : ParameterizedType
                     current[part] = newCurrent;
                     current = newCurrent;
                 }
+                else if (HoldsNoValue(jsonNode))
+                {
+                    // The parent holds a value, but this path holds none — a null, or an empty
+                    // object value — so it gives way instead of colliding with it, the same rule
+                    // the leaf applies to a subtree it lands on. Nothing is lost by dropping it,
+                    // and no container was built for it: a part which reaches this branch has an
+                    // occupant, so it was already there before this path was walked.
+                    givesWay = true;
+                    break;
+                }
                 else
                 {
                     // The parent holds a value of its own, so this row needs both a value and a
@@ -122,11 +133,16 @@ internal class JsonType : ParameterizedType
                 }
             }
 
+            if (givesWay)
+            {
+                continue;
+            }
+
             var leaf = pathParts.Last();
             if (current[leaf] is JsonObject occupied)
             {
                 // A deeper overlapping path was read first and put its subtree here.
-                if (jsonNode is null || (jsonNode is JsonObject incoming && IsAllNull(incoming, out _)))
+                if (HoldsNoValue(jsonNode))
                 {
                     // This path holds no value — a null, or an empty object value — so it must not
                     // erase the subtree.
@@ -154,6 +170,14 @@ internal class JsonType : ParameterizedType
 
         return root;
     }
+
+    /// <summary>
+    /// Reports whether the node holds no value — a JSON null, or an object which is empty or
+    /// all-null. Such a path gives way to an overlapping one instead of colliding with it,
+    /// whichever of the two the wire puts first.
+    /// </summary>
+    private static bool HoldsNoValue(JsonNode node) =>
+        node is null || (node is JsonObject value && IsAllNull(value, out _));
 
     /// <summary>
     /// Reports whether the object is a path's own value rather than a container built to hold
