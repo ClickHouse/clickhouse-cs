@@ -13,7 +13,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
-      - uses: Vampire/setup-wsl@887f39deb6c0976365e546926fe66f41b77d65ff # v6
+      - uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364 # v6
         with:
           distribution: Ubuntu-24.04
 
