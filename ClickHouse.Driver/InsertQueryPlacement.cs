@@ -14,9 +14,9 @@ public enum InsertQueryPlacement
     /// <summary>
     /// The statement is sent as the <c>query</c> URL parameter and the body carries only rows. This
     /// makes the statement readable by proxies, gateways and access logs, which cannot see into a
-    /// compressed body. The URL grows with the statement, so a long column list can exceed the
-    /// server's <c>max_uri_size</c> (1 MiB by default), which the server rejects with
-    /// <c>400 Bad Request</c>, or a lower limit of an intermediary.
+    /// compressed body. The effective URL limit is the lowest imposed by the .NET runtime, an
+    /// intermediary, and the server. On .NET 6 through .NET 9, the complete encoded URI cannot exceed
+    /// 65,519 characters; the server's <c>max_uri_size</c> is 1 MiB by default.
     /// </summary>
     Url = 1,
 }

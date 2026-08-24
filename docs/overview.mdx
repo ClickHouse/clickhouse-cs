@@ -518,7 +518,7 @@ var options = new InsertOptions { QueryPlacement = InsertQueryPlacement.Url };
 await client.InsertBinaryAsync("events", columns, rows, options);
 ```
 
-Use it when a proxy, load balancer or gateway routes or inspects on the `query` parameter, or when you want the statement in access logs and observability tooling. It is opt-in because the statement then counts towards the URL length: a long column list can exceed the server's `max_uri_size` (1 MiB by default), which the server rejects with `400 Bad Request` (`HTTP request URI invalid or too long`), or a lower limit of an intermediary. The body has no such limit.
+Use it when a proxy, load balancer or gateway routes or inspects on the `query` parameter, or when you want the statement in access logs and observability tooling. It is opt-in because the statement then counts towards the URL length. The effective limit is the lowest imposed by the .NET runtime, an intermediary and the server. On .NET 6 through .NET 9, `System.Uri` limits the complete encoded request URI to 65,519 characters; the driver throws an `InvalidOperationException` that directs you back to `InsertQueryPlacement.Body` when this limit is exceeded. ClickHouse's `max_uri_size` is 1 MiB by default, while an intermediary may impose a lower limit. The body has no such limit.
 
 The setting is independent of `Compressor`: the body is encoded the same way in both modes.
 

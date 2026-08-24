@@ -47,10 +47,12 @@ public sealed class InsertOptions : QueryOptions
     /// <see cref="InsertQueryPlacement.Body"/>, which writes it ahead of the rows in the request body.
     /// Set <see cref="InsertQueryPlacement.Url"/> to send it as the <c>query</c> URL parameter instead,
     /// so that proxies, gateways and access logs can read it — they cannot see into the body, which
-    /// <see cref="Compressor"/> compresses by default. The statement then counts towards the URL length:
-    /// a long column list can exceed the server's <c>max_uri_size</c> (1 MiB by default), which the server
-    /// rejects with <c>400 Bad Request</c>, or a lower limit of an intermediary. This is independent of
-    /// <see cref="Compressor"/>, which governs the body encoding only.
+    /// <see cref="Compressor"/> compresses by default. The statement then counts towards the URL length,
+    /// whose effective limit is the lowest imposed by the .NET runtime, an intermediary, and the server.
+    /// On .NET 6 through .NET 9, the complete encoded URI cannot exceed 65,519 characters; the driver
+    /// reports an <see cref="System.InvalidOperationException"/> suggesting <see cref="InsertQueryPlacement.Body"/>
+    /// if that limit is exceeded. The server's <c>max_uri_size</c> is 1 MiB by default. This setting is
+    /// independent of <see cref="Compressor"/>, which governs the body encoding only.
     /// </summary>
     public InsertQueryPlacement QueryPlacement { get; init; } = InsertQueryPlacement.Body;
 

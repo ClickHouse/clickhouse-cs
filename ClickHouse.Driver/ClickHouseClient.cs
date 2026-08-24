@@ -936,7 +936,7 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         var builder = CreateUriBuilder(sql, queryOptions);
 
-        using var postMessage = new HttpRequestMessage(HttpMethod.Post, builder.ToString());
+        using var postMessage = CreatePostStreamRequest(builder, queryOptions);
         // rawBody: this method returns the HttpResponseMessage itself — PostStreamAsync and
         // InsertRawStreamAsync are public — so its body belongs to the caller, exactly like a raw result,
         // so it advertises no codec rather than one the caller never asked for and nothing would decode.
@@ -965,6 +965,22 @@ public sealed class ClickHouseClient : IClickHouseClient
             response?.Dispose();
             GetLogger(ClickHouseLogCategories.Transport)?.LogError(ex, "Streamed request to {Endpoint} failed.", serverUri);
             throw;
+        }
+    }
+
+    private static HttpRequestMessage CreatePostStreamRequest(ClickHouseUriBuilder builder, QueryOptions queryOptions)
+    {
+        try
+        {
+            return new HttpRequestMessage(HttpMethod.Post, builder.ToString());
+        }
+        catch (UriFormatException ex) when (queryOptions is InsertOptions { QueryPlacement: InsertQueryPlacement.Url })
+        {
+            throw new InvalidOperationException(
+                $"The INSERT statement could not be sent in the request URL because the encoded URI is too long for this .NET runtime. " +
+                $"Set {nameof(InsertOptions)}.{nameof(InsertOptions.QueryPlacement)} to {nameof(InsertQueryPlacement)}.{nameof(InsertQueryPlacement.Body)}, " +
+                "or shorten the table, column names, and other URL parameters.",
+                ex);
         }
     }
 
