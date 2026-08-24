@@ -1530,8 +1530,8 @@ same holds where the value is a `Map`, as in `JSON(a Map(String, Int64))` read f
 also has a dynamic `a.b`.
 
 This applies only where both sides hold a value in that row. A side which holds nothing — a null,
-an empty object, or a subtree whose values are all null — gives way to the side which has the data.
-An overlap declared with `Nullable` types therefore fills in one side per row and reads without
+an empty object, or a subtree whose values are all null — gives way to the side which has the data,
+whichever of the two paths the server sends first. An overlap declared with `Nullable` types therefore fills in one side per row and reads without
 error: `JSON(a Nullable(Int64), a.b Nullable(Int64))` gives `{"a":5}` and `{"a":{"b":7}}` as
 expected.
 
@@ -1540,8 +1540,9 @@ key included.
 
 Set `AllowDuplicateJsonKeys` to keep reading the column as a `JsonObject` instead of throwing. The
 driver then keeps whichever of the two values the row carries last and drops the other, so the
-result is lossy: `JSON(a Int64, a.b Int64)` holding `{"a.b":7}` reads as `{"a":0}`. A path whose
-parent holds a scalar or an array still throws, because a subtree cannot be placed under either.
+result is lossy: `JSON(a Int64, a.b Int64)` holding `{"a.b":7}` reads as `{"a":0}`. A path which
+holds a value and whose parent holds a scalar or an array still throws, because a subtree cannot be
+placed under either.
 
 ```csharp
 var settings = new ClickHouseClientSettings("Host=localhost")
