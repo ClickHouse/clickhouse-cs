@@ -152,20 +152,39 @@ jobs:
         name: package
         path: ${{ github.workspace }}/package/ClickHouse.Driver.*nupkg
 
+  # Publishes with NuGet.org trusted publishing: GitHub issues an OIDC token for this job,
+  # NuGet.org matches it against a policy naming this owner, repository and workflow file, and
+  # returns an API key that is valid for one hour. No long-lived key is stored in the repository.
   push_nuget_org:
     runs-on: windows-latest
     needs: [sign]
     name: Upload to NuGet.org
+    permissions:
+      id-token: write # request the OIDC token that NuGet.org exchanges for an API key
+      contents: read
     steps:
     - name: Download Artifact
       uses: actions/download-artifact@v8
       with:
         name: package
-      
+
+    # NUGET_USER is the NuGet.org username of the account that created the trusted publishing
+    # policy, which is not necessarily the account that owns the packages.
+    - name: Get a short-lived NuGet API key
+      id: login
+      uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+      with:
+        user: ${{ secrets.NUGET_USER }}
+
+    # The key goes through the environment because a ${{ }} expansion is substituted into the
+    # script text before the shell runs. PowerShell then passes the value as one argument
+    # whatever characters it holds, which cmd's %VAR% expansion does not guarantee.
     - name: Push package
       id: push
-      shell: cmd
-      run: dotnet nuget push ClickHouse.Driver.*.nupkg --skip-duplicate --api-key ${{ secrets.NUGET_TOKEN }} --source https://api.nuget.org/v3/index.json
+      shell: pwsh
+      env:
+        NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+      run: dotnet nuget push ClickHouse.Driver.*.nupkg --skip-duplicate --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json
 
   github_release:
     runs-on: ubuntu-latest
