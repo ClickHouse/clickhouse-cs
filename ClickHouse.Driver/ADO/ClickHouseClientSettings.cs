@@ -90,6 +90,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         // Copy JSON mode settings
         JsonReadMode = other.JsonReadMode;
         JsonWriteMode = other.JsonWriteMode;
+        JsonNullPathMode = other.JsonNullPathMode;
 
         MapReadMode = other.MapReadMode;
         AllowDuplicateJsonKeys = other.AllowDuplicateJsonKeys;
@@ -358,6 +359,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public JsonWriteMode JsonWriteMode { get; init; } = JsonWriteMode.String;
 
     /// <summary>
+    /// Gets or sets whether a typed JSON path whose value is NULL is present in the returned JsonObject.
+    /// Include (default): The path is present, holding a JSON null, matching the server's own JSON rendering
+    /// Omit: The path is left out, as a dynamic path whose value is null already is
+    /// Applies to JsonReadMode.Binary and JsonReadMode.None. JsonReadMode.String returns the server's
+    /// JSON text, which always spells out a typed null, so this setting does not apply to it.
+    /// </summary>
+    public JsonNullPathMode JsonNullPathMode { get; init; } = ClickHouseDefaults.JsonNullPathMode;
+
+    /// <summary>
     /// Gets or sets how Map columns are returned when reading data.
     /// Dictionary (default): Returns Dictionary&lt;TKey, TValue&gt;; a repeated key keeps only its last value
     /// KeyValuePairs: Returns List&lt;KeyValuePair&lt;TKey, TValue&gt;&gt;, preserving every pair the server sent
@@ -472,6 +482,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Roles = builder.Roles,
             JsonReadMode = builder.JsonReadMode,
             JsonWriteMode = builder.JsonWriteMode,
+            JsonNullPathMode = builder.JsonNullPathMode,
             MapReadMode = builder.MapReadMode,
             AllowDuplicateJsonKeys = builder.AllowDuplicateJsonKeys,
             AcceptEncoding = builder.AcceptEncoding,
@@ -523,6 +534,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                EnableDebugMode == other.EnableDebugMode &&
                JsonReadMode == other.JsonReadMode &&
                JsonWriteMode == other.JsonWriteMode &&
+               JsonNullPathMode == other.JsonNullPathMode &&
                MapReadMode == other.MapReadMode &&
                AllowDuplicateJsonKeys == other.AllowDuplicateJsonKeys &&
                ParameterTypeResolver == other.ParameterTypeResolver &&
@@ -568,6 +580,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(EnableDebugMode);
         hash.Add(JsonReadMode);
         hash.Add(JsonWriteMode);
+        hash.Add(JsonNullPathMode);
         hash.Add(MapReadMode);
         hash.Add(AllowDuplicateJsonKeys);
         hash.Add(ParameterTypeResolver);
@@ -622,6 +635,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s;" +
                $"ReadBufferSize={ReadBufferSize};" +
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode};" +
+               $"JsonNullPathMode={JsonNullPathMode};" +
                $"MapReadMode={MapReadMode};" +
                $"AllowDuplicateJsonKeys={AllowDuplicateJsonKeys};" +
                $"UseFormDataParameters={UseFormDataParameters}";

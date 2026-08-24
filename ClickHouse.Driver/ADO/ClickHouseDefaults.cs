@@ -78,6 +78,11 @@ public static class ClickHouseDefaults
     public const bool AllowDuplicateJsonKeys = false;
 
     /// <summary>
+    /// Default handling of a typed JSON path whose value is NULL when reading (Include)
+    /// </summary>
+    public const JsonNullPathMode JsonNullPathMode = ClickHouse.Driver.JsonNullPathMode.Include;
+
+    /// <summary>
     /// Default setting for server certificate validation (false = validate certificates)
     /// </summary>
     public const bool SkipServerCertificateValidation = false;

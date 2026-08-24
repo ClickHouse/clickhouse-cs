@@ -1253,6 +1253,198 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(result.ToJsonString(), Is.EqualTo("{}"));
     }
 
+    public static IEnumerable<TestCaseData> TypedPathNullValueOmitTestCases()
+    {
+        yield return new TestCaseData("x Nullable(Int64)", "{\"x\": null}", "{}")
+            .SetName("OmittedTypedNullableInt64PathWithNullValue");
+
+        yield return new TestCaseData("s Nullable(String)", "{\"s\": null}", "{}")
+            .SetName("OmittedTypedNullableStringPathWithNullValue");
+
+        yield return new TestCaseData("x Nullable(Int64)", "{}", "{}")
+            .SetName("OmittedTypedNullablePathAbsentFromDocument");
+
+        // A nested path takes its parent object with it: nothing is left to put the object under.
+        yield return new TestCaseData("a.b Nullable(Int64)", "{\"a\": {\"b\": null}}", "{}")
+            .SetName("OmittedNestedTypedNullablePathWithNullValue");
+
+        yield return new TestCaseData("a.b.c Nullable(Int64)", "{\"a\": {\"b\": {\"c\": null}}}", "{}")
+            .SetName("OmittedDeeplyNestedTypedNullablePathWithNullValue");
+
+        yield return new TestCaseData("x Dynamic", "{\"x\": null}", "{}")
+            .SetName("OmittedTypedDynamicPathWithNullValue");
+
+        // A sibling which holds a value keeps the parent object; only the null path goes.
+        yield return new TestCaseData(
+                "a.b Nullable(Int64), a.c Nullable(Int64)",
+                "{\"a\": {\"b\": 1}}",
+                "{\"a\":{\"b\":1}}")
+            .SetName("OmittedNestedTypedNullablePathBesideSiblingWithValue");
+
+        // A path which holds a value is untouched by the setting.
+        yield return new TestCaseData("x Nullable(Int64)", "{\"x\": 42}", "{\"x\":42}")
+            .SetName("OmittedModeKeepsTypedNullablePathWithNonNullValue");
+
+        // Scope limit: the setting drops a null *path*, not a null inside a container. Both of
+        // these read the same in either mode.
+        yield return new TestCaseData("arr Array(Nullable(Int32))", "{\"arr\": [1, null, 3]}", "{\"arr\":[1,null,3]}")
+            .SetName("OmittedModeKeepsNullElementInsideArray");
+
+        yield return new TestCaseData("m Map(String, Nullable(Int64))", "{\"m\": {\"k\": null}}", "{\"m\":{\"k\":null}}")
+            .SetName("OmittedModeKeepsNullValueInsideMap");
+
+        // Overlapping paths whose value is representable read the same in either mode, because
+        // whichever side holds the value survives.
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b Nullable(Int64)",
+                "{\"a\": null}",
+                "{}")
+            .SetName("OmittedTypedLeafPathOverlappingTypedSubtreeWithNullValues");
+
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b Nullable(Int64)",
+                "{\"a\": 5}",
+                "{\"a\":5}")
+            .SetName("OmittedTypedLeafPathOverlappingTypedSubtreeWithLeafValue");
+
+        // See TypedPathNullValueTestCases for why the flattened key stands in before 26.3.
+        var overlappingSubtreeDocument = TestUtilities.ServerVersion >= Version.Parse("26.3")
+            ? "{\"a\": {\"b\": 7}}"
+            : "{\"a.b\": 7}";
+
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b Nullable(Int64)",
+                overlappingSubtreeDocument,
+                "{\"a\":{\"b\":7}}")
+            .SetName("OmittedTypedLeafPathOverlappingTypedSubtreeWithValue");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCaseSource(nameof(TypedPathNullValueOmitTestCases))]
+    public async Task Read_WithJsonNullPathModeOmit_ShouldLeaveOutTypedNullPath(string jsonDefinition, string jsonData, string expectedJson)
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON({jsonDefinition})) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{jsonData}')");
+
+        using var omitClient = TestUtilities.GetTestClickHouseClient(jsonNullPathMode: JsonNullPathMode.Omit);
+        using var reader = await omitClient.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That(result.ToJsonString(), Is.EqualTo(expectedJson));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Read_WithJsonNullPathModeOmitAndOverlappingPathsHoldingValues_ShouldThrow()
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(a Int64, a.b Int64)) ENGINE = Memory;");
+
+        // Flattened key: see OverlappingPathsHoldingValuesTestCases for why the nested form is
+        // not used here.
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a.b\": 7}}')");
+
+        using var omitClient = TestUtilities.GetTestClickHouseClient(jsonNullPathMode: JsonNullPathMode.Omit);
+        using var reader = await omitClient.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+
+        // Neither path is null, so there is nothing for the setting to leave out and the row stays
+        // unrepresentable in either mode.
+        Assert.Throws<SerializationException>(() => reader.Read());
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCase(JsonNullPathMode.Include)]
+    [TestCase(JsonNullPathMode.Omit)]
+    public async Task Read_WithJsonNullPathMode_ShouldShapeAnOptionalSubObject(JsonNullPathMode nullPathMode)
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (id UInt8, data JSON(sub.a Nullable(Int64))) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync(
+            $"INSERT INTO {targetTable} VALUES " +
+            "(1, '{\"sub\": {\"a\": 1, \"b\": 2}}'), " +
+            "(2, '{\"sub\": null}'), " +
+            "(3, '{}'), " +
+            "(4, '{\"sub\": {\"b\": 5}}')");
+
+        using var modeClient = TestUtilities.GetTestClickHouseClient(jsonNullPathMode: nullPathMode);
+        using var reader = await modeClient.ExecuteReaderAsync($"SELECT data FROM {targetTable} ORDER BY id");
+
+        var rows = new List<JsonObject>();
+        while (reader.Read())
+        {
+            rows.Add((JsonObject)reader.GetValue(0));
+        }
+
+        Assert.That(rows, Has.Count.EqualTo(4));
+
+        // The typed path holds a value, so both modes agree.
+        Assert.That((long)rows[0]["sub"]["a"], Is.EqualTo(1L));
+        Assert.That((long)rows[0]["sub"]["b"], Is.EqualTo(2L));
+
+        if (nullPathMode == JsonNullPathMode.Omit)
+        {
+            // Nothing is left under `sub`, so `sub` itself goes too — the shape a caller
+            // deserializing into a POCO reads back as a null sub-object.
+            Assert.That(rows[1].ToJsonString(), Is.EqualTo("{}"));
+            Assert.That(rows[2].ToJsonString(), Is.EqualTo("{}"));
+
+            // A dynamic sibling keeps `sub`; only the null typed path is left out.
+            Assert.That(((JsonObject)rows[3]["sub"]).ContainsKey("a"), Is.False);
+            Assert.That((long)rows[3]["sub"]["b"], Is.EqualTo(5L));
+        }
+        else
+        {
+            Assert.That(rows[1].ToJsonString(), Is.EqualTo("{\"sub\":{\"a\":null}}"));
+            Assert.That(rows[2].ToJsonString(), Is.EqualTo("{\"sub\":{\"a\":null}}"));
+
+            Assert.That(rows[3]["sub"]["a"], Is.Null);
+            Assert.That((long)rows[3]["sub"]["b"], Is.EqualTo(5L));
+        }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCase(JsonNullPathMode.Include)]
+    [TestCase(JsonNullPathMode.Omit)]
+    public async Task Read_WithJsonReadModeString_ShouldIgnoreJsonNullPathMode(JsonNullPathMode nullPathMode)
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(x Nullable(Int64))) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"x\": null}}')");
+
+        using var stringClient = TestUtilities.GetTestClickHouseClient(
+            jsonReadMode: JsonReadMode.String,
+            jsonNullPathMode: nullPathMode);
+        using var reader = await stringClient.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        // String mode hands back the server's own JSON text, which always spells out a typed null.
+        Assert.That(reader.GetValue(0), Is.EqualTo("{\"x\":null}"));
+    }
+
+    [Test]
+    public void JsonNullPathMode_ConnectionString_IsReadAndWritten()
+    {
+        Assert.That(new ClickHouseConnectionStringBuilder("Host=localhost").JsonNullPathMode, Is.EqualTo(JsonNullPathMode.Include));
+        Assert.That(new ClickHouseConnectionStringBuilder("Host=localhost;JsonNullPathMode=Omit").JsonNullPathMode, Is.EqualTo(JsonNullPathMode.Omit));
+
+        var settings = new ClickHouseClientSettings("Host=localhost") { JsonNullPathMode = JsonNullPathMode.Omit };
+        Assert.That(ClickHouseConnectionStringBuilder.FromSettings(settings).ToSettings().JsonNullPathMode, Is.EqualTo(JsonNullPathMode.Omit));
+    }
+
     /// <param name="whenAllowed">
     /// Document read when <c>AllowDuplicateJsonKeys</c> is set, which keeps whichever of the two
     /// values the row carries last; <c>null</c> where the overlap stays unreadable because the

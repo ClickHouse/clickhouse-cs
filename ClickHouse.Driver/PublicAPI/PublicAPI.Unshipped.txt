@@ -263,3 +263,11 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.AllowDuplicateJsonKeys.init -> vo
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AllowDuplicateJsonKeys.get -> bool
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AllowDuplicateJsonKeys.set -> void
 const ClickHouse.Driver.ADO.ClickHouseDefaults.AllowDuplicateJsonKeys = false -> bool
+ClickHouse.Driver.JsonNullPathMode
+ClickHouse.Driver.JsonNullPathMode.Include = 0 -> ClickHouse.Driver.JsonNullPathMode
+ClickHouse.Driver.JsonNullPathMode.Omit = 1 -> ClickHouse.Driver.JsonNullPathMode
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonNullPathMode.get -> ClickHouse.Driver.JsonNullPathMode
+ClickHouse.Driver.ADO.ClickHouseClientSettings.JsonNullPathMode.init -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonNullPathMode.get -> ClickHouse.Driver.JsonNullPathMode
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonNullPathMode.set -> void
+const ClickHouse.Driver.ADO.ClickHouseDefaults.JsonNullPathMode = ClickHouse.Driver.JsonNullPathMode.Include -> ClickHouse.Driver.JsonNullPathMode
