@@ -50,6 +50,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     // NullReferenceException instead of the intended InvalidOperationException.
     private ColumnSlot[] slots;
     private bool hasCurrentRow;
+    private bool isClosed;
 
     private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, PooledReadBufferStream pooledReadBuffer, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null, Stream decompressor = null)
     {
@@ -197,7 +198,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override int FieldCount => RawTypes?.Length ?? throw new InvalidOperationException();
 
-    public override bool IsClosed => false;
+    public override bool IsClosed => isClosed;
 
     public sealed override bool HasRows => true;
 
@@ -744,6 +745,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 #pragma warning disable CA2215 // Dispose methods should call base class dispose
     protected override void Dispose(bool disposing)
     {
+        isClosed = true;
+
         if (disposing)
         {
             httpResponse?.Dispose();
