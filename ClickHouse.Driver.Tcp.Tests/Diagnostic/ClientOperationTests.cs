@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using ClickHouse.Driver.Tcp.Diagnostic;
 using ClickHouse.Driver.Tcp.Logging;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -59,12 +60,33 @@ public class ClientOperationTests
     }
 
     [Test]
-    public void Succeeded_WriteCounters_ReportsWhatWasWrittenInsteadOfZeroRowsRead()
+    public void Succeeded_RowsSentAndNoProgressPacket_ReportsTheRowsSentInsteadOfZeroRowsRead()
     {
+        // The shape every insert takes. The server sends no Progress for the rows a client streams to it, so a
+        // line chosen from the Progress counters would report every insert as a read of nothing.
         using var factory = new CapturingLoggerFactory();
         CapturingLogger logger = factory.Logger(ClickHouseTcpDiagnostics.ClientLogCategory);
 
         using (ClientOperation operation = ClientOperation.Start(Options, logger, "INSERT INTO t VALUES", queryId: null, callbacks: null))
+        {
+            operation.Succeeded(rowsSent: 5);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(logger.WithEventId(1004).Single().Message, Does.Contain("writing 5 rows"));
+            Assert.That(logger.WithEventId(1001), Is.Empty, "and not a read line of zeroes");
+        });
+    }
+
+    [Test]
+    public void Succeeded_ServerReportedWriteCounters_ReportsThem()
+    {
+        // Reached by an INSERT ... SELECT, which the client runs as a statement and so sends no rows for.
+        using var factory = new CapturingLoggerFactory();
+        CapturingLogger logger = factory.Logger(ClickHouseTcpDiagnostics.ClientLogCategory);
+
+        using (ClientOperation operation = ClientOperation.Start(Options, logger, "INSERT INTO t SELECT 1", queryId: null, callbacks: null))
         {
             operation.Handlers.OnProgress(new ClickHouseTcpProgress(0, 0, 0, 5, 40, 1));
             operation.Succeeded();
@@ -72,8 +94,8 @@ public class ClientOperationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(logger.WithEventId(1004), Is.Not.Empty, "an insert reports what it wrote");
-            Assert.That(logger.WithEventId(1001), Is.Empty, "and not a read line of zeroes");
+            Assert.That(logger.WithEventId(1004).Single().Message, Does.Contain("writing 5 rows"));
+            Assert.That(logger.WithEventId(1001), Is.Empty);
         });
     }
 

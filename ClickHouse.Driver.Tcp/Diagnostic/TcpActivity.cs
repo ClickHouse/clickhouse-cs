@@ -17,6 +17,10 @@ namespace ClickHouse.Driver.Tcp.Diagnostic;
 /// <c>db.system</c>/<c>db.statement</c>/<c>peer.service</c> set the HTTP transport still emits. Two are outside
 /// that set: <c>db.user</c>, which the conventions dropped without a replacement and the HTTP transport also
 /// emits, and the <c>db.clickhouse.*</c> counters, which are shared with it.
+/// <para>
+/// The counters come from the server's Progress packets except for <c>db.clickhouse.written_rows</c> on an
+/// insert, which is what the client sent: the server sends no Progress for rows streamed to it.
+/// </para>
 /// </remarks>
 internal static class TcpActivity
 {
@@ -113,13 +117,27 @@ internal static class TcpActivity
         return activity;
     }
 
-    /// <summary>Records the accumulated progress counters for the operation.</summary>
+    /// <summary>Records the operation's row and byte counters.</summary>
     /// <param name="activity">The span, or null.</param>
     /// <param name="totals">The sum of the operation's progress increments.</param>
-    public static void SetProgressTotals(this Activity activity, ClickHouseTcpProgress totals)
+    /// <param name="rowsSent">The rows the client sent, for an insert; null for a statement that only reads.</param>
+    public static void SetCounters(this Activity activity, ClickHouseTcpProgress totals, ulong? rowsSent)
     {
         if (activity is null || !activity.IsAllDataRequested)
         {
+            return;
+        }
+
+        // An insert gets no Progress packet at all: the server does not count the rows a client streams to it back
+        // to that client. Reporting the read counters as zero would then claim it read nothing and spent no time,
+        // when the truth is that it said nothing, so the only counter to set is the client's own row count.
+        if (totals == default)
+        {
+            if (rowsSent.HasValue)
+            {
+                activity.SetTag(TagWrittenRows, rowsSent.Value);
+            }
+
             return;
         }
 
@@ -127,11 +145,16 @@ internal static class TcpActivity
         activity.SetTag(TagReadBytes, totals.Bytes);
         activity.SetTag(TagElapsedNs, totals.ElapsedNs);
 
-        // Only reported for an INSERT, and a zero tag on every SELECT would be noise.
+        // The statements the server does count writes for, an INSERT ... SELECT among them. A zero pair on every
+        // SELECT would be noise, so they are reported only once there is something to report.
         if (totals.WroteRows != 0 || totals.WroteBytes != 0)
         {
             activity.SetTag(TagWrittenRows, totals.WroteRows);
             activity.SetTag(TagWrittenBytes, totals.WroteBytes);
+        }
+        else if (rowsSent.HasValue)
+        {
+            activity.SetTag(TagWrittenRows, rowsSent.Value);
         }
     }
 

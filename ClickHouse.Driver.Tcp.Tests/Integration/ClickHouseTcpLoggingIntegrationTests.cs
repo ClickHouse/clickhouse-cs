@@ -114,7 +114,7 @@ public class ClickHouseTcpLoggingIntegrationTests
     public async Task InsertAsync_WithALoggerFactory_LogsTheInsertAsItsOwnOperation()
     {
         await using ClickHouseTcpClient client = CreateClient();
-        string table = $"tcp_logging_test_{Guid.NewGuid():N}";
+        string table = UniqueTableName();
         await client.ExecuteAsync($"CREATE TABLE {table} (id Int32) ENGINE = Memory", cancellationToken: None);
 
         try
@@ -132,6 +132,52 @@ public class ClickHouseTcpLoggingIntegrationTests
             await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
         }
     }
+
+    [Test]
+    public async Task InsertAsync_WithALoggerFactory_ReportsTheRowsSentRatherThanAnEmptyRead()
+    {
+        // Against a real server, because the counters an insert has are not the ones a query has: the server sends
+        // no Progress packet for rows streamed to it, whatever the size, so a completion line taken from the
+        // Progress counters reports every insert as a read of nothing.
+        await using ClickHouseTcpClient client = CreateClient();
+        string table = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TABLE {table} (id Int32) ENGINE = Memory", cancellationToken: None);
+
+        try
+        {
+            await client.InsertAsync(
+                $"INSERT INTO {table} (id) VALUES",
+                new IColumn[] { PrimitiveColumn<int>.FromValues("id", "Int32", [1, 2, 3]) },
+                cancellationToken: None);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ClientLogger.WithEventId(1004).Single().Message, Does.Contain("writing 3 rows"));
+                Assert.That(
+                    ClientLogger.WithEventId(1001).Where(e => e.Message.Contains("INSERT", StringComparison.Ordinal)),
+                    Is.Empty,
+                    "an insert is not also reported as a completed read");
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task StreamAsync_ThrowingLogger_RunsTheStatementAnyway()
+    {
+        // A logger is infrastructure, so losing a log line beats losing the query. This is the opposite of the
+        // rule for a caller callback, which is documented to propagate and end the operation.
+        await using ClickHouseTcpClient client = new(TcpServerFixture.Options() with { LoggerFactory = new ThrowingLoggerFactory() });
+
+        List<object[]> rows = await client.QueryAsync("SELECT 1", cancellationToken: None).ToListAsync();
+
+        Assert.That((byte)rows[0][0], Is.EqualTo((byte)1));
+    }
+
+    private static string UniqueTableName() => $"tcp_logging_test_{Guid.NewGuid():N}";
 
     [Test]
     public async Task StreamAsync_LoggerFactoryBelowDebug_LogsNothingForASuccessfulStatement()

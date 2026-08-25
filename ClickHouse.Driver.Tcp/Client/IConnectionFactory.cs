@@ -47,7 +47,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
     {
         this.options = options;
         tls = BuildTlsParameters(options);
-        logger = options.LoggerFactory?.CreateLogger(ClickHouseTcpDiagnostics.ConnectionLogCategory);
+        logger = DiagnosticLogger.Create(options.LoggerFactory, ClickHouseTcpDiagnostics.ConnectionLogCategory);
     }
 
     /// <inheritdoc/>
