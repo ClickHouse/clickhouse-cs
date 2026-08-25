@@ -166,6 +166,29 @@ public class ClickHouseTcpLoggingIntegrationTests
     }
 
     [Test]
+    public async Task ExecuteAsync_InsertSelect_ReportsTheRowsTheServerCounted()
+    {
+        // The other half of the write line, and the half that does come from the server: an INSERT ... SELECT sends
+        // no rows from the client, and the server reports what it wrote in a Progress packet. Asserted against a
+        // real server because the counters an insert has are a server behaviour, not a client one.
+        await using ClickHouseTcpClient client = CreateClient();
+        string table = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = Memory", cancellationToken: None);
+
+        try
+        {
+            await client.ExecuteAsync($"INSERT INTO {table} SELECT number FROM numbers(1000)", cancellationToken: None);
+
+            LogEntry wrote = ClientLogger.WithEventId(1004).Single();
+            Assert.That(wrote.Message, Does.Contain("writing 1000 rows"));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
     public async Task StreamAsync_ThrowingLogger_RunsTheStatementAnyway()
     {
         // A logger is infrastructure, so losing a log line beats losing the query. This is the opposite of the
