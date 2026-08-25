@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net.Security;
 using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Tcp.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.Tcp;
 
@@ -12,11 +13,11 @@ namespace ClickHouse.Driver.Tcp;
 /// <see cref="FromConnectionString"/>, or derive a variant of an existing instance with a <c>with</c> expression.
 /// </summary>
 /// <remarks>
-/// Being a record, two instances compare equal when every property does. <see cref="CustomSettings"/> and
-/// <see cref="ConfigureTls"/> are compared by reference, not by content: the first is an interface with no
-/// value-equality contract, the second a delegate. Two options that hold equal-but-distinct dictionaries, or
-/// equivalent-but-distinct lambdas, are <b>not</b> equal. Do not use these options as a cache or pool key; use a
-/// purpose-built key type.
+/// Being a record, two instances compare equal when every property does. <see cref="CustomSettings"/>,
+/// <see cref="Compressor"/>, <see cref="LoggerFactory"/> and <see cref="ConfigureTls"/> are compared by
+/// reference, not by content: the first three are interfaces with no value-equality contract, the last a
+/// delegate. Two options that hold equal-but-distinct dictionaries, or equivalent-but-distinct lambdas, are
+/// <b>not</b> equal. Do not use these options as a cache or pool key; use a purpose-built key type.
 /// </remarks>
 public sealed record ClickHouseTcpClientOptions
 {
@@ -29,6 +30,7 @@ public sealed record ClickHouseTcpClientOptions
     internal const int DefaultMinPoolSize = 0;
     internal const int DefaultMaxPoolSize = 20;
     internal const ClickHouseTcpPoolReusePolicy DefaultPoolReusePolicy = ClickHouseTcpPoolReusePolicy.Lifo;
+    internal const int DefaultStatementMaxLength = 300;
 
     /// <summary>
     /// The <c>Compression</c> connection-string value used when the key is absent. LZ4 is what
@@ -293,6 +295,43 @@ public sealed record ClickHouseTcpClientOptions
     public IClickHouseCompressor Compressor { get; init; } = ResolveCompressor(DefaultCompression);
 
     /// <summary>
+    /// Where the client gets its loggers, or null to log nothing. Cannot be set from a connection string.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The client logs its own lifecycle — connects, handshakes, pool checkouts and retirements, operation
+    /// outcomes — under the <c>ClickHouse.Driver.Tcp.*</c> categories. It does <b>not</b> log what the
+    /// <i>server</i> reports: server log lines go to
+    /// <see cref="ClickHouseTcpQueryCallbacks.OnServerLog"/>, where the caller decides whether they are worth
+    /// logging. Nothing is formatted while the matching category and level are disabled.
+    /// </para>
+    /// <para>
+    /// <b>At Debug the statement text is logged in full.</b> That is deliberate — a driver log without the
+    /// statement is hard to use — but it is not the same policy as
+    /// <see cref="IncludeSqlInActivityTags"/>, which keeps the statement out of traces unless asked. Enable
+    /// Debug on <c>ClickHouse.Driver.Tcp.Client</c> only where the statements may be recorded.
+    /// </para>
+    /// </remarks>
+    public ILoggerFactory LoggerFactory { get; init; }
+
+    /// <summary>
+    /// Whether to put the statement text in the <c>db.query.text</c> span attribute. Defaults to false, because
+    /// a statement can carry data a trace is not meant to hold.
+    /// </summary>
+    public bool IncludeSqlInActivityTags { get; init; }
+
+    /// <summary>
+    /// How much of the statement may leave the client as telemetry, in characters; longer text is truncated.
+    /// Defaults to 300.
+    /// </summary>
+    /// <remarks>
+    /// It caps both channels — the <c>db.query.text</c> span attribute and the <c>Debug</c> log line — so zero
+    /// or less keeps the statement text out of telemetry altogether, whatever
+    /// <see cref="IncludeSqlInActivityTags"/> says.
+    /// </remarks>
+    public int StatementMaxLength { get; init; } = DefaultStatementMaxLength;
+
+    /// <summary>
     /// These options with <see cref="CustomSettings"/> replaced by a private snapshot, or this instance when there
     /// are none to copy. A client holds its options for its lifetime and merges the settings on every operation, so
     /// it must own them: keeping the caller's dictionary would let a later mutation of it fault or partially apply
@@ -302,6 +341,22 @@ public sealed record ClickHouseTcpClientOptions
     /// The <c>with</c> expression carries every other property across, so a property added later needs no change
     /// here. Keep it that way: a hand-written copy is what silently drops a new property.
     /// </remarks>
+    /// <summary>
+    /// The statement text as telemetry may carry it: truncated to <see cref="StatementMaxLength"/>, or empty
+    /// when that allows none.
+    /// </summary>
+    /// <param name="sql">The statement.</param>
+    /// <returns>The text to report, possibly empty, never null.</returns>
+    internal string StatementForTelemetry(string sql)
+    {
+        if (sql is null || StatementMaxLength <= 0)
+        {
+            return string.Empty;
+        }
+
+        return sql.Length <= StatementMaxLength ? sql : sql[..StatementMaxLength];
+    }
+
     internal ClickHouseTcpClientOptions WithOwnedCustomSettings()
         => CustomSettings is null
             ? this

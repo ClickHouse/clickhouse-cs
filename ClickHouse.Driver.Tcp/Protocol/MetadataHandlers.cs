@@ -25,10 +25,10 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 internal sealed class MetadataHandlers
 {
     /// <summary>Invoked for each Progress packet, which the server sends repeatedly as work advances.</summary>
-    public Action<Progress> OnProgress { get; init; }
+    public Action<ClickHouseTcpProgress> OnProgress { get; init; }
 
     /// <summary>Invoked for the ProfileInfo summary (rows/blocks/bytes read, limit application).</summary>
-    public Action<ProfileInfo> OnProfileInfo { get; init; }
+    public Action<ClickHouseTcpProfileInfo> OnProfileInfo { get; init; }
 
     /// <summary>Invoked with the borrowed Totals block (the WITH TOTALS row). Valid only for the call.</summary>
     public Action<Block> OnTotals { get; init; }

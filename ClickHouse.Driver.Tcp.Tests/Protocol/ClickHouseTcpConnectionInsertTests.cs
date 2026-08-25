@@ -64,7 +64,7 @@ public class ClickHouseTcpConnectionInsertTests
             EndOfStreamPacket());
         using var connection = await ConnectedAsync(script);
 
-        var progresses = new List<Progress>();
+        var progresses = new List<ClickHouseTcpProgress>();
         await connection.InsertAsync(
             "INSERT INTO t VALUES",
             Columns(UInt64Column(1, 2, 3)),
