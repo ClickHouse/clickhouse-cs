@@ -115,7 +115,7 @@ public class ClickHouseTcpConnectionInsertTests
         byte[] script = Concat(await ServerHelloBytesAsync(54476), EndOfStreamPacket());
         using var connection = await ConnectedAsync(script);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () =>
             await connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1)), cancellationToken: None));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
@@ -128,12 +128,12 @@ public class ClickHouseTcpConnectionInsertTests
             await ExceptionPacketAsync(60, "unknown table"));
         using var connection = await ConnectedAsync(script);
 
-        var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
             await connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1)), cancellationToken: None));
 
         Assert.Multiple(() =>
         {
-            Assert.That(thrown.Code, Is.EqualTo(60));
+            Assert.That(thrown.Code, Is.EqualTo(ClickHouseErrorCode.UnknownTable));
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
         });
     }
@@ -147,12 +147,12 @@ public class ClickHouseTcpConnectionInsertTests
             await ExceptionPacketAsync(241, "memory limit exceeded"));
         using var connection = await ConnectedAsync(script);
 
-        var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
             await connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1, 2)), cancellationToken: None));
 
         Assert.Multiple(() =>
         {
-            Assert.That(thrown.Code, Is.EqualTo(241));
+            Assert.That(thrown.Code, Is.EqualTo(ClickHouseErrorCode.MemoryLimitExceeded));
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
         });
     }
@@ -166,7 +166,7 @@ public class ClickHouseTcpConnectionInsertTests
             await BytesAsync(w => w.WriteVarUInt((ulong)ServerPacketType.Data)));
         using var connection = await ConnectedAsync(script);
 
-        Assert.ThrowsAsync<EndOfStreamException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () =>
             await connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1)), cancellationToken: None));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }

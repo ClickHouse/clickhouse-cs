@@ -70,7 +70,7 @@ public class ClickHouseTcpClientIntegrationTests
         await using var client = TcpServerFixture.CreateClient();
 
         // A server exception leaves the stream at a packet boundary, so the connection stays Ready and reusable.
-        Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
         {
             await foreach (Block _ in client.StreamAsync("SELECT * FROM table_that_does_not_exist_xyz", cancellationToken: None))
             {
@@ -140,7 +140,7 @@ public class ClickHouseTcpClientIntegrationTests
     [Test]
     public void ExecuteAsync_InvalidStatement_ThrowsServerException()
     {
-        Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
         {
             await using var client = TcpServerFixture.CreateClient();
             await client.ExecuteAsync("THIS IS NOT VALID SQL");

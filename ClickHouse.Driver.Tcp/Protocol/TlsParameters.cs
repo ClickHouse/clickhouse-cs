@@ -79,44 +79,61 @@ internal sealed class TlsParameters : IDisposable
     }
 
     /// <summary>
-    /// Wraps a transport stream in TLS and completes the handshake. The wrapper owns <paramref name="inner"/>
-    /// from the moment it is built, either way: on success disposing the returned stream disposes both, and on
-    /// failure both are disposed here before the exception propagates.
+    /// Builds the handshake options: the declarative settings first, then the caller's <see cref="Configure"/>
+    /// hook.
     /// </summary>
-    /// <param name="inner">The plaintext transport stream to encrypt.</param>
-    /// <param name="cancellationToken">A token to observe while handshaking.</param>
-    /// <returns>The encrypted stream.</returns>
-    internal async ValueTask<Stream> WrapAsync(Stream inner, CancellationToken cancellationToken)
+    /// <remarks>
+    /// Separate from <see cref="WrapAsync"/>, and called before any socket work, so that the hook's failures
+    /// stay the hook's. Run inside the connect, anything it threw would be read as the connection failing —
+    /// and an <see cref="IOException"/> from it (loading a client certificate off disk, say) would be reported
+    /// as a transient network error the caller should retry.
+    /// </remarks>
+    /// <returns>The options to hand to <see cref="WrapAsync"/>.</returns>
+    internal SslClientAuthenticationOptions BuildAuthenticationOptions()
     {
         // Refused rather than continued: the pinned authorities are gone once this is disposed. Carrying on could
         // otherwise negotiate with certificates whose native resources were already released.
         ObjectDisposedException.ThrowIf(disposed, this);
 
+        var authentication = new SslClientAuthenticationOptions { TargetHost = TargetHost };
+
+        if (AllowInvalidCertificates)
+        {
+            // CA5359 is exactly what this option asks for, and the property that sets it documents the cost.
+            // The analyzer cannot tell an opt-in development switch from an accident, so the suppression is
+            // kept to this one statement rather than the file.
+#pragma warning disable CA5359 // Do Not Disable Certificate Validation
+            authentication.RemoteCertificateValidationCallback = static (_, _, _, _) => true;
+#pragma warning restore CA5359
+        }
+        else if (CaCertificates is { } roots)
+        {
+            authentication.CertificateChainPolicy = PinnedRootPolicy(roots);
+        }
+
+        // Last, so a caller can override any of the above. The pinned roots are expressed as a chain policy
+        // rather than a validation callback partly for this: the hook receives that policy and can adjust it —
+        // the verification time, the revocation mode, the flags — and every change takes effect, because this
+        // is the policy the handshake builds the chain with.
+        Configure?.Invoke(authentication);
+
+        return authentication;
+    }
+
+    /// <summary>
+    /// Wraps a transport stream in TLS and completes the handshake. The wrapper owns <paramref name="inner"/>
+    /// from the moment it is built, either way: on success disposing the returned stream disposes both, and on
+    /// failure both are disposed here before the exception propagates.
+    /// </summary>
+    /// <param name="inner">The plaintext transport stream to encrypt.</param>
+    /// <param name="authentication">The options from <see cref="BuildAuthenticationOptions"/>.</param>
+    /// <param name="cancellationToken">A token to observe while handshaking.</param>
+    /// <returns>The encrypted stream.</returns>
+    internal static async ValueTask<Stream> WrapAsync(Stream inner, SslClientAuthenticationOptions authentication, CancellationToken cancellationToken)
+    {
         var ssl = new SslStream(inner, leaveInnerStreamOpen: false);
         try
         {
-            var authentication = new SslClientAuthenticationOptions { TargetHost = TargetHost };
-
-            if (AllowInvalidCertificates)
-            {
-                // CA5359 is exactly what this option asks for, and the property that sets it documents the cost.
-                // The analyzer cannot tell an opt-in development switch from an accident, so the suppression is
-                // kept to this one statement rather than the file.
-#pragma warning disable CA5359 // Do Not Disable Certificate Validation
-                authentication.RemoteCertificateValidationCallback = static (_, _, _, _) => true;
-#pragma warning restore CA5359
-            }
-            else if (CaCertificates is { } authorities)
-            {
-                authentication.CertificateChainPolicy = PinnedRootPolicy(authorities);
-            }
-
-            // Last, so a caller can override any of the above. The pinned roots are expressed as a chain policy
-            // rather than a validation callback partly for this: the hook receives that policy and can adjust it —
-            // the verification time, the revocation mode, the flags — and every change takes effect, because this
-            // is the policy the handshake builds the chain with.
-            Configure?.Invoke(authentication);
-
             await ssl.AuthenticateAsClientAsync(authentication, cancellationToken).ConfigureAwait(false);
             return ssl;
         }
@@ -130,8 +147,8 @@ internal sealed class TlsParameters : IDisposable
 
     /// <summary>
     /// Releases the loaded certificate authorities, which hold native key handles. Idempotent, and a no-op when
-    /// none were loaded. The owner calls this once nothing can still be handshaking: <see cref="WrapAsync"/>
-    /// refuses afterwards rather than negotiating without them.
+    /// none were loaded. The owner calls this once no operation can still be building or using handshake options;
+    /// <see cref="BuildAuthenticationOptions"/> refuses afterwards rather than negotiating without them.
     /// </summary>
     public void Dispose()
     {

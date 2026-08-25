@@ -87,7 +87,7 @@ public class ClickHouseTcpSessionIntegrationTests
         // table. This is the pinning itself: without it the client could land on the session's connection.
         Assert.That(
             async () => await client.ExecuteAsync($"SELECT * FROM {table}", cancellationToken: None),
-            Throws.TypeOf<ClickHouseServerException>());
+            Throws.TypeOf<ClickHouseTcpServerException>());
     }
 
     [Test]
@@ -126,7 +126,7 @@ public class ClickHouseTcpSessionIntegrationTests
         // still have the temporary table on it; a closed one is replaced by a dial to a server that never saw it.
         Assert.That(
             async () => await client.ExecuteAsync($"SELECT * FROM {table}", cancellationToken: None),
-            Throws.TypeOf<ClickHouseServerException>());
+            Throws.TypeOf<ClickHouseTcpServerException>());
     }
 
     [Test]
@@ -292,7 +292,7 @@ public class ClickHouseTcpSessionIntegrationTests
         await session.ExecuteAsync($"CREATE TEMPORARY TABLE {table} (value UInt64)", cancellationToken: None);
         Assert.That(
             async () => await session.ExecuteAsync("SELECT * FROM no_such_table_here", cancellationToken: None),
-            Throws.TypeOf<ClickHouseServerException>());
+            Throws.TypeOf<ClickHouseTcpServerException>());
 
         // An error the server raised over a connection it still owns costs nothing but the query: the session's
         // temporary table is still there, so the session is still worth keeping.

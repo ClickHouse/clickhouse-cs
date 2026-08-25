@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
+using System.Net.Security;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
@@ -189,10 +190,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="cancellationToken">A token to observe for cancellation (and to bound the connect).</param>
     /// <returns>A connected, handshaken connection ready to accept a request.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="host"/> or <paramref name="handshake"/> is null.</exception>
-    /// <exception cref="SocketException">The socket could not connect to the server.</exception>
-    /// <exception cref="System.Security.Authentication.AuthenticationException">The TLS handshake failed (certificate rejected, or the port is not a TLS port).</exception>
-    /// <exception cref="ClickHouseServerException">The server rejected the handshake (e.g. authentication failure).</exception>
-    /// <exception cref="ClickHouseProtocolException">The server's handshake reply was neither Hello nor Exception.</exception>
+    /// <exception cref="ClickHouseTcpTransportException">The socket could not connect, or the TLS handshake failed (certificate rejected, or the port is not a TLS port). The cause is the inner exception.</exception>
+    /// <exception cref="ClickHouseTcpServerException">The server rejected the handshake (e.g. authentication failure).</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The server's handshake reply was neither Hello nor Exception.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     public static async ValueTask<ClickHouseTcpConnection> ConnectAsync(
         string host,
@@ -214,6 +214,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 "The ClickHouse native-protocol client requires a little-endian host: column values are transferred as raw little-endian bytes without byte-swapping.");
         }
 
+        // Before the socket exists, and outside the try below: this runs the caller's ConfigureTls hook, whose
+        // failures are its own rather than the transport's, and it fails fast without spending a connection.
+        SslClientAuthenticationOptions tlsOptions = tls?.BuildAuthenticationOptions();
+
         var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         Stream transport;
         try
@@ -225,8 +229,13 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             transport = new NetworkStream(socket, ownsSocket: false);
             if (tls is not null)
             {
-                transport = await tls.WrapAsync(transport, cancellationToken).ConfigureAwait(false);
+                transport = await TlsParameters.WrapAsync(transport, tlsOptions, cancellationToken).ConfigureAwait(false);
             }
+        }
+        catch (Exception e) when (TransportFailure.IsTransportFailure(e))
+        {
+            socket.Dispose();
+            throw TransportFailure.Connect(host, port, e);
         }
         catch
         {
@@ -250,8 +259,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <returns>A task that completes when Pong is received.</returns>
     /// <exception cref="InvalidOperationException">The connection is busy with another operation.</exception>
     /// <exception cref="ObjectDisposedException">The connection has been terminated.</exception>
-    /// <exception cref="ClickHouseServerException">The server replied with an Exception.</exception>
-    /// <exception cref="ClickHouseProtocolException">The server replied with something other than Pong or Exception.</exception>
+    /// <exception cref="ClickHouseTcpServerException">The server replied with an Exception.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The server replied with something other than Pong or Exception.</exception>
+    /// <exception cref="ClickHouseTcpTransportException">The connection failed while the ping was in flight.</exception>
     public async ValueTask PingAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -282,10 +292,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 return;
 
             case ServerPacketType.Exception:
-                ClickHouseServerException exception;
+                ClickHouseTcpServerException exception;
                 try
                 {
-                    exception = await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+                    exception = await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -300,7 +310,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
             default:
                 Terminate();
-                throw new ClickHouseProtocolException(
+                throw new ClickHouseTcpProtocolException(
                     $"Unexpected packet type {reply} ({(ulong)reply}) in response to Ping; expected Pong or Exception.");
         }
     }
@@ -344,8 +354,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <returns>An async stream of the result's row-bearing blocks, each valid only for its own iteration.</returns>
     /// <exception cref="InvalidOperationException">The connection is busy with another operation.</exception>
     /// <exception cref="ObjectDisposedException">The connection has been terminated.</exception>
-    /// <exception cref="ClickHouseServerException">The server reported an error while executing the query.</exception>
-    /// <exception cref="ClickHouseProtocolException">The server sent an unexpected packet.</exception>
+    /// <exception cref="ClickHouseTcpServerException">The server reported an error while executing the query.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The server sent an unexpected packet.</exception>
+    /// <exception cref="ClickHouseTcpTransportException">The connection failed while the response was being read.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     internal async IAsyncEnumerable<Block> QueryAsync(
         string sql,
@@ -364,7 +375,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
         ResolveContext readContext = ReadContextFor(settings);
         NegotiatedProtocol negotiated = server.Negotiated;
-        ClickHouseServerException pending = null;
+        ClickHouseTcpServerException pending = null;
         Block current = null;
         bool completed = false;
 
@@ -411,7 +422,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
                 if (packet == ServerPacketType.Exception)
                 {
-                    pending = await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+                    pending = await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
                     completed = true;
                     break;
                 }
@@ -504,8 +515,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxRowsPerBlock"/> is zero or negative, or <paramref name="maxSendBufferBytes"/> is not positive.</exception>
     /// <exception cref="InvalidOperationException">The connection is busy with another operation.</exception>
     /// <exception cref="ObjectDisposedException">The connection has been terminated.</exception>
-    /// <exception cref="ClickHouseServerException">The server reported an error while executing the insert.</exception>
-    /// <exception cref="ClickHouseProtocolException">The server sent an unexpected packet, or no schema block.</exception>
+    /// <exception cref="ClickHouseTcpServerException">The server reported an error while executing the insert.</exception>
+    /// <exception cref="ClickHouseTcpTransportException">The connection failed while the blocks were being sent or the response read.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The server sent an unexpected packet, or no schema block.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     internal ValueTask InsertAsync(
         string sql,
@@ -578,7 +590,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         NegotiatedProtocol negotiated = server.Negotiated;
         // Decode metadata blocks with the operation's session timezone.
         ResolveContext readContext = ReadContextFor(settings);
-        ClickHouseServerException pending = null;
+        ClickHouseTcpServerException pending = null;
         Exception buildFailure = null;
         IReadOnlyList<IColumn> values = null;
         bool completed = false;
@@ -592,7 +604,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             // Drain metadata until the schema block (the first Data packet) or a terminal packet.
-            (Block schema, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, readContext, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
+            (Block schema, ClickHouseTcpServerException error) = await ReadToNextDataBlockAsync(negotiated, readContext, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
             if (schema is null)
             {
                 if (error is null)
@@ -600,7 +612,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     // Clean end-of-stream with no schema: the server never opened the row-stream phase (e.g.
                     // inline VALUES, or INSERT … SELECT). That breaks the INSERT contract, so terminate rather
                     // than pool a spent connection.
-                    throw new ClickHouseProtocolException("The server ended the INSERT response without sending a schema block.");
+                    throw new ClickHouseTcpProtocolException("The server ended the INSERT response without sending a schema block.");
                 }
 
                 // Server Exception instead of the schema: the stream is at a packet boundary, so rethrow once
@@ -787,7 +799,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="callbacks">The caller's metadata callbacks for the interleaved packets, or null to discard them.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The parked server exception, or null if the stream ended cleanly.</returns>
-    private async ValueTask<ClickHouseServerException> DrainToEndOfStreamAsync(
+    private async ValueTask<ClickHouseTcpServerException> DrainToEndOfStreamAsync(
         NegotiatedProtocol negotiated,
         ResolveContext context,
         ClickHouseTcpQueryCallbacks telemetry,
@@ -796,7 +808,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     {
         while (true)
         {
-            (Block block, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, context, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
+            (Block block, ClickHouseTcpServerException error) = await ReadToNextDataBlockAsync(negotiated, context, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
             if (block is null)
             {
                 return error;
@@ -1194,7 +1206,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="callbacks">The caller's metadata callbacks for the interleaved packets, or null to discard them.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The next Data block, or a null block plus the parked terminal exception (if any).</returns>
-    private async ValueTask<(Block block, ClickHouseServerException error)> ReadToNextDataBlockAsync(
+    private async ValueTask<(Block block, ClickHouseTcpServerException error)> ReadToNextDataBlockAsync(
         NegotiatedProtocol negotiated,
         ResolveContext context,
         ClickHouseTcpQueryCallbacks telemetry,
@@ -1210,7 +1222,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     return (null, null);
 
                 case ServerPacketType.Exception:
-                    return (null, await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false));
+                    return (null, await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false));
 
                 case ServerPacketType.Data:
                     return (await ReadBlockAsync(ServerPacketType.Data, negotiated, context, cancellationToken).ConfigureAwait(false), null);
@@ -1233,7 +1245,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="telemetry">The client's own metadata observers, run before the caller's, or null.</param>
     /// <param name="callbacks">The caller's metadata callbacks, or null to discard every packet.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
-    /// <exception cref="ClickHouseProtocolException"><paramref name="packet"/> is not a valid interleaved packet.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException"><paramref name="packet"/> is not a valid interleaved packet.</exception>
     private async ValueTask ConsumeMetadataAsync(
         ServerPacketType packet,
         NegotiatedProtocol negotiated,
@@ -1291,7 +1303,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             default:
                 // Anything else (e.g. TimezoneUpdate, a read-task request) is not valid interleaved in a query or
                 // insert response at this protocol target.
-                throw new ClickHouseProtocolException($"Unexpected packet type {packet} ({(ulong)packet}) in server response.");
+                throw new ClickHouseTcpProtocolException($"Unexpected packet type {packet} ({(ulong)packet}) in server response.");
         }
     }
 

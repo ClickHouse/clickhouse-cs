@@ -74,7 +74,7 @@ public class ClickHouseTcpConnectionQueryTests
         using var connection = await ConnectedAsync(script);
 
         var rows = new List<ulong[]>();
-        var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
         {
             await foreach (Block block in connection.QueryAsync("SELECT 1", cancellationToken: None))
             {
@@ -84,7 +84,7 @@ public class ClickHouseTcpConnectionQueryTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(thrown.Code, Is.EqualTo(241));
+            Assert.That(thrown.Code, Is.EqualTo(ClickHouseErrorCode.MemoryLimitExceeded));
             Assert.That(thrown.Message, Is.EqualTo("memory limit exceeded"));
             Assert.That(rows, Has.Count.EqualTo(1)); // the block before the exception was still surfaced
             CollectionAssert.AreEqual(new ulong[] { 7 }, rows[0]);
@@ -100,7 +100,7 @@ public class ClickHouseTcpConnectionQueryTests
             PacketBytes(ServerPacketType.Pong)); // never valid in a query response
         using var connection = await ConnectedAsync(script);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await DrainAsync(connection));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await DrainAsync(connection));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
 
@@ -113,7 +113,7 @@ public class ClickHouseTcpConnectionQueryTests
             await BytesAsync(w => w.WriteVarUInt((ulong)ServerPacketType.Data)));
         using var connection = await ConnectedAsync(script);
 
-        Assert.ThrowsAsync<EndOfStreamException>(async () => await DrainAsync(connection));
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () => await DrainAsync(connection));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
 
@@ -256,7 +256,7 @@ public class ClickHouseTcpConnectionQueryTests
             }));
         using var connection = await ConnectedAsync(script);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await DrainAsync(connection));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await DrainAsync(connection));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
 

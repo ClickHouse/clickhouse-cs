@@ -97,14 +97,14 @@ public class ClickHouseTcpConnectionQueryIntegrationTests
     {
         await using var connection = await TcpServerFixture.ConnectAsync(None);
 
-        var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
         {
             await foreach (Block block in connection.QueryAsync("SELECT * FROM table_that_does_not_exist_xyz", cancellationToken: None))
             {
                 _ = block;
             }
         });
-        Assert.That(thrown.Code, Is.GreaterThan(0));
+        Assert.That(thrown.RawCode, Is.GreaterThan(0));
 
         // The Exception is a complete response, so the same connection can run another query.
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));

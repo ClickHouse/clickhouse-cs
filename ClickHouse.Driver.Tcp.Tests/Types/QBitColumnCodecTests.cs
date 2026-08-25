@@ -415,7 +415,7 @@ public class QBitColumnCodecTests
     }
 
     [Test]
-    public void ReadColumnAsync_TruncatedPlaneBody_ThrowsEndOfStream()
+    public void ReadColumnAsync_TruncatedPlaneBody_ThrowsTransportException()
     {
         // A body shorter than BitWidth * rows * BytesPerRow must fail rather than decode whatever the rented blob
         // happened to contain. This also drives the catch that hands the rent back before rethrowing — that half
@@ -425,7 +425,7 @@ public class QBitColumnCodecTests
 
         Assert.That(
             async () => await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None),
-            Throws.InstanceOf<EndOfStreamException>());
+            Throws.InstanceOf<ClickHouseTcpTransportException>());
     }
 
     [TestCase("QBit(Float32)", TestName = "one argument")]

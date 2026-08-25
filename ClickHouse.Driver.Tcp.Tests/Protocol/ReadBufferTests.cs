@@ -115,7 +115,7 @@ public class ReadBufferTests
     public void EnsureAsync_StreamEndsEarly_Throws()
     {
         using var buffer = new ReadBuffer(new MemoryStream(new byte[] { 1, 2, 3 }), 64);
-        Assert.ThrowsAsync<EndOfStreamException>(async () => await buffer.EnsureAsync(8, None));
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () => await buffer.EnsureAsync(8, None));
     }
 
     [Test]
@@ -125,6 +125,58 @@ public class ReadBufferTests
         cts.Cancel();
         using var buffer = new ReadBuffer(new ChunkedStream(Pattern(64), honorCancellation: true), 64);
         Assert.CatchAsync<OperationCanceledException>(async () => await buffer.EnsureAsync(8, cts.Token));
+    }
+
+    [Test]
+    public void EnsureAsync_SocketFails_WrapsTheCauseAsATransportFailure()
+    {
+        using var buffer = new ReadBuffer(new ThrowingStream(new IOException("connection reset by peer")), 64);
+
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () => await buffer.EnsureAsync(8, None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.InnerException, Is.InstanceOf<IOException>());
+            Assert.That(thrown.InnerException!.Message, Is.EqualTo("connection reset by peer"));
+        });
+    }
+
+    // Tearing the transport down under a live read is how the pool aborts a connection and how a session
+    // disposes with an operation in flight. Both are this process's own doing, so the failure must not be
+    // relabelled as a transport failure the caller should retry.
+    [Test]
+    public void EnsureAsync_TransportDisposedUnderTheRead_PropagatesTheDisposalUnwrapped()
+    {
+        using var buffer = new ReadBuffer(new ThrowingStream(new ObjectDisposedException("transport")), 64);
+
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await buffer.EnsureAsync(8, None));
+    }
+
+    private sealed class ThrowingStream(Exception failure) : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken) => throw failure;
+
+        public override int Read(byte[] buffer, int offset, int count) => throw failure;
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     // ---- ReadByte -----------------------------------------------------------------------------
@@ -286,7 +338,7 @@ public class ReadBufferTests
     public void ReadIntoAsync_StreamEndsEarly_Throws()
     {
         using var buffer = new ReadBuffer(new MemoryStream(new byte[] { 1, 2, 3 }), 64);
-        Assert.ThrowsAsync<EndOfStreamException>(async () => await buffer.ReadIntoAsync(new byte[8], None));
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () => await buffer.ReadIntoAsync(new byte[8], None));
     }
 
     [Test]
