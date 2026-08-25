@@ -60,4 +60,15 @@ public record ClickHouseTcpQueryOptions
     /// </para>
     /// </remarks>
     public ClickHouseTcpParameterCollection Parameters { get; init; }
+
+    /// <summary>
+    /// Callbacks for the metadata the server interleaves into this operation's response — progress, the
+    /// execution summary, server log lines, performance counters, WITH TOTALS and extremes. Null means none, and
+    /// costs nothing.
+    /// </summary>
+    /// <remarks>
+    /// The callbacks run synchronously on the thread draining the response, and one that throws terminates the
+    /// connection. See <see cref="ClickHouseTcpQueryCallbacks"/> for the full contract.
+    /// </remarks>
+    public ClickHouseTcpQueryCallbacks Callbacks { get; init; }
 }

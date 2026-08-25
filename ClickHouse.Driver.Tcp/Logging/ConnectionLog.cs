@@ -1,0 +1,35 @@
+using System;
+using Microsoft.Extensions.Logging;
+
+namespace ClickHouse.Driver.Tcp.Logging;
+
+/// <summary>
+/// The messages written under <see cref="ClickHouseTcpDiagnostics.ConnectionLogCategory"/>. Source-generated, so a
+/// disabled level formats nothing.
+/// </summary>
+internal static partial class ConnectionLog
+{
+    [LoggerMessage(
+        EventId = 2000,
+        Level = LogLevel.Debug,
+        Message = "Connecting to {Host}:{Port} as {Username} (TLS {Tls})")]
+    public static partial void Opening(ILogger logger, string host, int port, string username, bool tls);
+
+    [LoggerMessage(
+        EventId = 2001,
+        Level = LogLevel.Debug,
+        Message = "Connected to {ServerName} {VersionMajor}.{VersionMinor}.{VersionPatch} in {ElapsedMs:0.###} ms: protocol revision {Revision}, server timezone {Timezone}")]
+    public static partial void Opened(ILogger logger, string serverName, int versionMajor, int versionMinor, int versionPatch, double elapsedMs, int revision, string timezone);
+
+    [LoggerMessage(
+        EventId = 2002,
+        Level = LogLevel.Warning,
+        Message = "Connecting to {Host}:{Port} failed after {ElapsedMs:0.###} ms")]
+    public static partial void OpenFailed(ILogger logger, string host, int port, double elapsedMs, Exception exception);
+
+    [LoggerMessage(
+        EventId = 2003,
+        Level = LogLevel.Debug,
+        Message = "Connecting to {Host}:{Port} was cancelled after {ElapsedMs:0.###} ms")]
+    public static partial void OpenCancelled(ILogger logger, string host, int port, double elapsedMs);
+}

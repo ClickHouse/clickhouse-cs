@@ -1249,14 +1249,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
             case ServerPacketType.Progress:
             {
-                Progress progress = await Progress.ReadAsync(reader, negotiated, cancellationToken).ConfigureAwait(false);
+                ClickHouseTcpProgress progress = await ClickHouseTcpProgress.ReadAsync(reader, negotiated, cancellationToken).ConfigureAwait(false);
                 handlers?.OnProgress?.Invoke(progress);
                 break;
             }
 
             case ServerPacketType.ProfileInfo:
             {
-                ProfileInfo profileInfo = await ProfileInfo.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+                ClickHouseTcpProfileInfo profileInfo = await ClickHouseTcpProfileInfo.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
                 handlers?.OnProfileInfo?.Invoke(profileInfo);
                 break;
             }

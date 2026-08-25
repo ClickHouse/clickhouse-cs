@@ -271,7 +271,7 @@ public class ClickHouseTcpConnectionQueryTests
             EndOfStreamPacket());
         using var connection = await ConnectedAsync(script);
 
-        var progresses = new List<Progress>();
+        var progresses = new List<ClickHouseTcpProgress>();
         await DrainAsync(connection, new MetadataHandlers { OnProgress = progresses.Add });
 
         Assert.Multiple(() =>
@@ -294,7 +294,7 @@ public class ClickHouseTcpConnectionQueryTests
             EndOfStreamPacket());
         using var connection = await ConnectedAsync(script);
 
-        var captured = new List<ProfileInfo>();
+        var captured = new List<ClickHouseTcpProfileInfo>();
         await DrainAsync(connection, new MetadataHandlers { OnProfileInfo = captured.Add });
 
         Assert.Multiple(() =>
