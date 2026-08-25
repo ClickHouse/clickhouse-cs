@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Logging;
 using ClickHouse.Driver.Tcp.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.Tcp.Client;
 
@@ -50,6 +52,7 @@ internal sealed class ConnectionPool : IConnectionSource
 
     private readonly ClickHouseTcpClientOptions options;
     private readonly IConnectionFactory factory;
+    private readonly ILogger logger;
     private readonly TimeProvider time;
     private readonly SemaphoreSlim permits;
     private readonly ITimer sweeper;
@@ -116,6 +119,7 @@ internal sealed class ConnectionPool : IConnectionSource
         this.options = options;
         this.factory = factory;
         this.time = time;
+        logger = options.LoggerFactory?.CreateLogger(ClickHouseTcpDiagnostics.PoolLogCategory);
         permits = new SemaphoreSlim(options.MaxPoolSize, options.MaxPoolSize);
 
         TimeSpan period = SweepInterval(options);
@@ -164,10 +168,27 @@ internal sealed class ConnectionPool : IConnectionSource
             // Disposal may have started while this caller waited for the permit.
             ThrowIfDisposed();
 
-            PooledConnection connection = TakeReusableIdle()
-                ?? new PooledConnection(await DialAsync(cancellationToken).ConfigureAwait(false), time);
+            PooledConnection connection = TakeReusableIdle();
+            bool reused = connection is not null;
+            if (!reused)
+            {
+                if (logger is not null)
+                {
+                    PoolLog.Dialing(logger);
+                }
+
+                connection = new PooledConnection(await DialAsync(cancellationToken).ConfigureAwait(false), time);
+            }
 
             connection.OnRented();
+
+            // Logged after OnRented, which is what makes UsageCount this operation's number rather than the
+            // previous one's.
+            if (reused && logger is not null)
+            {
+                PoolLog.Reused(logger, connection.UsageCount, connection.Age.TotalMilliseconds);
+            }
+
             lock (gate)
             {
                 // The slot gives way to the entry in `leased` under one lock, so the total this checkout
@@ -254,7 +275,20 @@ internal sealed class ConnectionPool : IConnectionSource
         // Nothing can re-enter the idle set after this: `Return` re-reads `disposed` under `gate`, and the
         // Interlocked.Exchange above happens before this lock is taken, so a returner either added before the
         // drain (and is closed by it) or observes the flag and closes its own connection.
-        CloseAll(TakeAllIdle());
+        List<PooledConnection> closing = TakeAllIdle();
+        int inFlight;
+        lock (gate)
+        {
+            inFlight = leased.Count;
+        }
+
+        // Closed before the line is written: these connections are already out of the idle set, so nothing else
+        // can reach them, and a logger that threw first would leak every one of their sockets.
+        CloseAll(closing);
+        if (logger is not null)
+        {
+            PoolLog.Draining(logger, closing?.Count ?? 0, inFlight);
+        }
 
         // Wait for the operations still running to give their connections back, by acquiring every permit. Each one
         // finds the pool disposed and closes its connection rather than pooling it. Bounded by PoolTimeout for the
@@ -361,8 +395,7 @@ internal sealed class ConnectionPool : IConnectionSource
     /// <summary>
     /// Runs a sweep and swallows anything it throws. This is what the timer calls. A timer callback runs on a
     /// thread-pool thread with no one to catch for it, so an escaping exception would end the process, which is too
-    /// high a price for a sweep that failed to close one socket. There is nothing to log to yet; observability
-    /// lands in Epic P.
+    /// high a price for a sweep that failed to close one socket. The logger is the only place it is reported.
     /// </summary>
     internal void SweepQuietly()
     {
@@ -372,6 +405,19 @@ internal sealed class ConnectionPool : IConnectionSource
         }
         catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
         {
+            // Reporting the failure must not become one. This runs in a catch block, so anything thrown here
+            // propagates out of a timer callback with nobody to catch it, which is the very outcome this method
+            // exists to prevent — and a logger is caller code.
+            try
+            {
+                if (logger is not null)
+                {
+                    PoolLog.SweepFailed(logger, e);
+                }
+            }
+            catch (Exception logFailure) when (logFailure is not OutOfMemoryException and not StackOverflowException)
+            {
+            }
         }
     }
 
@@ -413,6 +459,11 @@ internal sealed class ConnectionPool : IConnectionSource
                         idle.RemoveAt(i);
                     }
                 }
+            }
+
+            if (reaped.Count != 0 && logger is not null)
+            {
+                PoolLog.Retired(logger, reaped.Count);
             }
 
             CloseAll(reaped);
@@ -464,8 +515,8 @@ internal sealed class ConnectionPool : IConnectionSource
     /// also reserves a slot against the checkouts and dials already in flight.
     /// </para>
     /// <para>
-    /// A dial that fails ends the round silently. Nobody is waiting on it, there is nothing to report it to until
-    /// Epic P, and the next sweep tries again, so a server that is down costs one failed connect per sweep rather
+    /// A dial that fails ends the round silently. Nobody is waiting on it, so the logger is the only place it is
+    /// reported, and the next sweep tries again — a server that is down costs one failed connect per sweep rather
     /// than a spin.
     /// </para>
     /// </remarks>
@@ -528,7 +579,18 @@ internal sealed class ConnectionPool : IConnectionSource
         }
         catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
         {
-            // A failed dial, or disposal cancelling one. Either way the next sweep reassesses.
+            // A failed dial, or disposal cancelling one. Either way the next sweep reassesses. Disposal is not
+            // reported: cancelling a top-up is what disposal is meant to do.
+            try
+            {
+                if (logger is not null && Volatile.Read(ref disposed) == 0)
+                {
+                    PoolLog.RefillFailed(logger, e);
+                }
+            }
+            catch (Exception logFailure) when (logFailure is not OutOfMemoryException and not StackOverflowException)
+            {
+            }
         }
         finally
         {
@@ -726,6 +788,11 @@ internal sealed class ConnectionPool : IConnectionSource
         // Disposal takes every permit and keeps them, so it is a likelier cause than genuine exhaustion here.
         ThrowIfDisposed();
 
+        if (logger is not null)
+        {
+            PoolLog.Exhausted(logger, options.MaxPoolSize, options.PoolTimeout.TotalSeconds);
+        }
+
         throw new TimeoutException(
             string.Format(
                 CultureInfo.InvariantCulture,
@@ -772,6 +839,12 @@ internal sealed class ConnectionPool : IConnectionSource
 
             if (!pooled)
             {
+                // Reusable but not pooled means disposal got there first, and the drain line already reports that.
+                if (!reusable && logger is not null)
+                {
+                    PoolLog.Discarded(logger, connection.UsageCount);
+                }
+
                 connection.Close();
             }
         }

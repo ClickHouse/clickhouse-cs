@@ -1,16 +1,20 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
+using ClickHouse.Driver.Tcp.Diagnostic;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Logging;
 using ClickHouse.Driver.Tcp.Parameters;
 using ClickHouse.Driver.Tcp.Poco;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
+using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.Tcp;
 
@@ -68,6 +72,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     private static readonly ClickHouseTcpInsertOptions DefaultInsertOptions = new();
 
     private readonly IConnectionSource source;
+    private readonly ILogger logger;
 
     /// <summary>Creates a client from options.</summary>
     /// <param name="options">The client configuration (endpoint, credentials, timeouts, client-level settings).</param>
@@ -78,6 +83,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         Options = options.WithOwnedCustomSettings();
+        logger = Options.LoggerFactory?.CreateLogger(ClickHouseTcpDiagnostics.ClientLogCategory);
         source = new ConnectionPool(Options);
     }
 
@@ -106,6 +112,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         this.source = source;
         ClickHouseTcpClientOptions resolved = options ?? new ClickHouseTcpClientOptions();
         Options = optionsAreOwned ? resolved : resolved.WithOwnedCustomSettings();
+        logger = Options.LoggerFactory?.CreateLogger(ClickHouseTcpDiagnostics.ClientLogCategory);
     }
 
     /// <summary>
@@ -150,24 +157,86 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
         string queryId = options?.QueryId;
 
-        IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        // Started before the rent, so the span covers waiting for a connection, and so the Query packet's
+        // trace-context field picks it up from Activity.Current.
+        ClientOperation operation = ClientOperation.Start(Options, logger, sql, queryId, options?.Callbacks);
+        IConnectionLease lease = null;
+        IAsyncEnumerator<Block> blocks = null;
         try
         {
-            // The connection's own enumerator owns each block's storage and, in its finally, returns the
-            // connection to Ready or terminates it. We pass the blocks straight through without disposing them.
-            await foreach (Block block in lease.Connection
-                .QueryAsync(sql, settings, parameters, queryId, handlers: null, cancellationToken)
-                .ConfigureAwait(false))
+            try
             {
+                lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+
+                // The connection's own enumerator owns each block's storage and, in its finally, returns the
+                // connection to Ready or terminates it. We pass the blocks straight through without disposing them.
+                // Enumerated by hand rather than with `await foreach` because a yield cannot sit inside a try that
+                // has a catch, and a failed query whose span carries no error is the one thing a trace must not do.
+                blocks = lease.Connection
+                    .QueryAsync(sql, settings, parameters, queryId, operation?.Handlers, cancellationToken)
+                    .GetAsyncEnumerator(cancellationToken);
+            }
+            catch (Exception e)
+            {
+                operation?.Failed(e);
+                throw;
+            }
+
+            while (true)
+            {
+                Block block;
+                try
+                {
+                    if (!await blocks.MoveNextAsync().ConfigureAwait(false))
+                    {
+                        break;
+                    }
+
+                    block = blocks.Current;
+                }
+                catch (Exception e)
+                {
+                    operation?.Failed(e);
+                    throw;
+                }
+
                 yield return block;
             }
+
+            operation?.Succeeded();
         }
         finally
         {
-            // Runs on natural completion, early break / enumerator disposal (which cascades disposal into the
-            // inner iterator so its finally runs first), and exceptions. Disposing the lease returns the
-            // connection to the source exactly once; the source reuses it if Ready or redials if terminated.
-            await lease.DisposeAsync().ConfigureAwait(false);
+            // Runs on natural completion, early break / enumerator disposal, and exceptions. Disposing the
+            // enumerator first settles the connection to Ready or terminated; disposing the lease then returns it
+            // to the source exactly once, which reuses it if Ready or redials if terminated.
+            //
+            // Nested, not three statements in a row: the enumerator's own disposal closes a socket and returns
+            // pooled buffers, none of which is guaranteed not to throw, and a throw there must not cost the pool
+            // the lease's permit for the rest of the client's life.
+            try
+            {
+                if (blocks is not null)
+                {
+                    await blocks.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (lease is not null)
+                    {
+                        await lease.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    // Also the path an abandoned enumeration takes, where the span ends with no status at all:
+                    // neither successful nor failed is the honest report of a result the caller stopped reading.
+                    operation?.Dispose();
+                }
+            }
         }
     }
 
@@ -318,17 +387,27 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
         IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
 
-        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
-        await lease.Connection.InsertAsync(
-            sql,
-            columns,
-            settings,
-            parameters,
-            options?.QueryId,
-            ResolveMaxRowsPerBlock(options),
-            Options.MaxSendBufferBytes,
-            handlers: null,
-            cancellationToken).ConfigureAwait(false);
+        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId, options?.Callbacks);
+        try
+        {
+            await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+            await lease.Connection.InsertAsync(
+                sql,
+                columns,
+                settings,
+                parameters,
+                options?.QueryId,
+                ResolveMaxRowsPerBlock(options),
+                Options.MaxSendBufferBytes,
+                operation?.Handlers,
+                cancellationToken).ConfigureAwait(false);
+            operation?.Succeeded();
+        }
+        catch (Exception e)
+        {
+            operation?.Failed(e);
+            throw;
+        }
     }
 
     /// <inheritdoc/>
@@ -357,18 +436,28 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
         using var buffer = PocoRowBuffer<T>.Create(rows, nameof(rows), blockRows, cancellationToken);
 
-        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
-        await lease.Connection.InsertAsync(
-            sql,
-            buffer.Count,
-            schema => PocoTypes.WritePlanFor<T>(schema).CreateSource(buffer, blockRows),
-            settings,
-            parameters,
-            options?.QueryId,
-            maxRowsPerBlock,
-            Options.MaxSendBufferBytes,
-            handlers: null,
-            cancellationToken).ConfigureAwait(false);
+        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId, options?.Callbacks);
+        try
+        {
+            await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+            await lease.Connection.InsertAsync(
+                sql,
+                buffer.Count,
+                schema => PocoTypes.WritePlanFor<T>(schema).CreateSource(buffer, blockRows),
+                settings,
+                parameters,
+                options?.QueryId,
+                maxRowsPerBlock,
+                Options.MaxSendBufferBytes,
+                operation?.Handlers,
+                cancellationToken).ConfigureAwait(false);
+            operation?.Succeeded();
+        }
+        catch (Exception e)
+        {
+            operation?.Failed(e);
+            throw;
+        }
     }
 
     /// <inheritdoc/>
@@ -387,18 +476,28 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
         using var buffer = PocoRowBuffer<object[]>.Create(rows, nameof(rows), blockRows, cancellationToken);
 
-        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
-        await lease.Connection.InsertAsync(
-            sql,
-            buffer.Count,
-            schema => UntypedRowColumns.CreateSource(schema, buffer, blockRows),
-            settings,
-            parameters,
-            options?.QueryId,
-            maxRowsPerBlock,
-            Options.MaxSendBufferBytes,
-            handlers: null,
-            cancellationToken).ConfigureAwait(false);
+        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId, options?.Callbacks);
+        try
+        {
+            await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+            await lease.Connection.InsertAsync(
+                sql,
+                buffer.Count,
+                schema => UntypedRowColumns.CreateSource(schema, buffer, blockRows),
+                settings,
+                parameters,
+                options?.QueryId,
+                maxRowsPerBlock,
+                Options.MaxSendBufferBytes,
+                operation?.Handlers,
+                cancellationToken).ConfigureAwait(false);
+            operation?.Succeeded();
+        }
+        catch (Exception e)
+        {
+            operation?.Failed(e);
+            throw;
+        }
     }
 
     /// <summary>
@@ -463,8 +562,18 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <returns>A task that completes when the server answers.</returns>
     public async ValueTask PingAsync(CancellationToken cancellationToken = default)
     {
-        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
-        await lease.Connection.PingAsync(cancellationToken).ConfigureAwait(false);
+        using Activity activity = TcpActivity.StartPing(Options);
+        try
+        {
+            await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+            await lease.Connection.PingAsync(cancellationToken).ConfigureAwait(false);
+            activity?.SetSuccess();
+        }
+        catch (Exception e)
+        {
+            activity?.SetError(e);
+            throw;
+        }
     }
 
     /// <inheritdoc/>
