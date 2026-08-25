@@ -62,6 +62,64 @@ public class ClickHouseTcpTracingIntegrationTests
     }
 
     [Test]
+    public async Task InsertAsync_WithAListener_ReportsTheRowsSentAndNoReadCounters()
+    {
+        // The server sends no Progress packet for rows a client streams to it, at any size, so an insert's span has
+        // only the count the client itself knows. Read counters of zero would claim the server reported reading
+        // nothing rather than reporting nothing at all, and a zero elapsed_ns would claim it took no time.
+        await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TABLE {table} (id Int32) ENGINE = Memory", cancellationToken: None);
+
+        try
+        {
+            finished.Clear();
+            await client.InsertAsync(
+                $"INSERT INTO {table} (id) VALUES",
+                new IColumn[] { PrimitiveColumn<int>.FromValues("id", "Int32", [1, 2, 3]) },
+                cancellationToken: None);
+
+            Activity span = finished.Single(a => a.OperationName == "INSERT");
+            Assert.Multiple(() =>
+            {
+                Assert.That(span.GetTagItem("db.clickhouse.written_rows"), Is.EqualTo(3UL));
+                Assert.That(span.GetTagItem("db.clickhouse.read_rows"), Is.Null);
+                Assert.That(span.GetTagItem("db.clickhouse.elapsed_ns"), Is.Null);
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_InsertSelect_ReportsTheCountersTheServerSent()
+    {
+        await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = Memory", cancellationToken: None);
+
+        try
+        {
+            finished.Clear();
+            await client.ExecuteAsync($"INSERT INTO {table} SELECT number FROM numbers(1000)", cancellationToken: None);
+
+            Activity span = finished.Single(a => a.OperationName == "INSERT");
+            Assert.Multiple(() =>
+            {
+                Assert.That(span.GetTagItem("db.clickhouse.written_rows"), Is.EqualTo(1000UL));
+                Assert.That(span.GetTagItem("db.clickhouse.written_bytes"), Is.Not.Null, "only the server reports these");
+                Assert.That(span.GetTagItem("db.clickhouse.read_rows"), Is.EqualTo(1000UL), "the SELECT half is read as well as written");
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
     public async Task StreamAsync_ServerRejectsTheStatement_MarksTheSpanFailedWithTheServerErrorCode()
     {
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
@@ -182,6 +240,8 @@ public class ClickHouseTcpTracingIntegrationTests
             Assert.That(finished, Is.Empty, "no listener, no spans");
         });
     }
+
+    private static string UniqueTableName() => $"tcp_tracing_test_{Guid.NewGuid():N}";
 
     private static async Task<bool> SpanLogExistsAsync(ClickHouseTcpClient client)
     {
