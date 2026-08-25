@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Diagnostic;
 using ClickHouse.Driver.Tcp.Logging;
 using ClickHouse.Driver.Tcp.Protocol;
 using Microsoft.Extensions.Logging;
@@ -119,7 +120,7 @@ internal sealed class ConnectionPool : IConnectionSource
         this.options = options;
         this.factory = factory;
         this.time = time;
-        logger = options.LoggerFactory?.CreateLogger(ClickHouseTcpDiagnostics.PoolLogCategory);
+        logger = DiagnosticLogger.Create(options.LoggerFactory, ClickHouseTcpDiagnostics.PoolLogCategory);
         permits = new SemaphoreSlim(options.MaxPoolSize, options.MaxPoolSize);
 
         TimeSpan period = SweepInterval(options);

@@ -146,3 +146,30 @@ internal sealed class CapturingLoggerFactory : ILoggerFactory
     {
     }
 }
+
+/// <summary>
+/// A logger factory whose loggers throw from every member, for asserting that a broken logger cannot break the
+/// operation it was reporting on.
+/// </summary>
+internal sealed class ThrowingLoggerFactory : ILoggerFactory
+{
+    public ILogger CreateLogger(string categoryName) => new ThrowingLogger();
+
+    public void AddProvider(ILoggerProvider provider) => throw new NotSupportedException();
+
+    public void Dispose()
+    {
+    }
+
+    private sealed class ThrowingLogger : ILogger
+    {
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull
+            => throw new InvalidOperationException("from BeginScope");
+
+        public bool IsEnabled(LogLevel logLevel) => throw new InvalidOperationException("from IsEnabled");
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+            => throw new InvalidOperationException("from Log");
+    }
+}
