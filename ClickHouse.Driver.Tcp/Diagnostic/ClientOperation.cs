@@ -25,6 +25,7 @@ internal sealed class ClientOperation : IDisposable
     private readonly string queryId;
     private readonly long startedAt;
     private ClickHouseTcpProgress totals;
+    private ulong? rowsSent;
     private bool ended;
 
     private ClientOperation(Activity activity, ILogger logger, string operationName, string queryId)
@@ -82,9 +83,14 @@ internal sealed class ClientOperation : IDisposable
     }
 
     /// <summary>Records that the operation ran to completion.</summary>
-    public void Succeeded()
+    /// <param name="rowsSent">
+    /// The rows the client sent, for an insert; null for a statement that only reads. The server sends no Progress
+    /// packet for rows a client streams to it, so this is the only count an insert has.
+    /// </param>
+    public void Succeeded(ulong? rowsSent = null)
     {
         ended = true;
+        this.rowsSent = rowsSent;
         activity?.SetSuccess();
 
         if (logger is null)
@@ -92,11 +98,11 @@ internal sealed class ClientOperation : IDisposable
             return;
         }
 
-        // An insert reports what it wrote and a query what it read, so the line carries whichever the server
-        // counted rather than a row of zeroes for the other.
-        if (totals.WroteRows != 0 || totals.WroteBytes != 0)
+        // An insert reports the rows it wrote and a query the rows it read. Two messages rather than one, so
+        // neither has to carry a field of zeroes for the other.
+        if (rowsSent.HasValue || totals.WroteRows != 0)
         {
-            ClientLog.StatementWrote(logger, operationName, queryId, Elapsed(), totals.WroteRows, totals.WroteBytes);
+            ClientLog.StatementWrote(logger, operationName, queryId, Elapsed(), rowsSent ?? totals.WroteRows);
         }
         else
         {
@@ -131,7 +137,7 @@ internal sealed class ClientOperation : IDisposable
     /// <summary>Writes the accumulated counters and ends the span.</summary>
     public void Dispose()
     {
-        activity?.SetProgressTotals(totals);
+        activity?.SetCounters(totals, rowsSent);
         activity?.Dispose();
 
         // Neither succeeded nor failed means the caller stopped reading a result part-way. Worth a line, because

@@ -299,10 +299,11 @@ public sealed record ClickHouseTcpClientOptions
     /// logging. Nothing is formatted while the matching category and level are disabled.
     /// </para>
     /// <para>
-    /// <b>At Debug the statement text is logged in full.</b> That is deliberate — a driver log without the
-    /// statement is hard to use — but it is not the same policy as
+    /// <b>At Debug the statement text is logged</b>, up to <see cref="StatementMaxLength"/> characters. That is
+    /// deliberate — a driver log without the statement is hard to use — but it is not the same policy as
     /// <see cref="IncludeSqlInActivityTags"/>, which keeps the statement out of traces unless asked. Enable
-    /// Debug on <c>ClickHouse.Driver.Tcp.Client</c> only where the statements may be recorded.
+    /// Debug on <c>ClickHouse.Driver.Tcp.Client</c> only where the statements may be recorded, or set
+    /// <see cref="StatementMaxLength"/> to zero to keep them out of both channels.
     /// </para>
     /// </remarks>
     public ILoggerFactory LoggerFactory { get; init; }

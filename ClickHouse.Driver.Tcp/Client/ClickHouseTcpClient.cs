@@ -83,7 +83,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         Options = options.WithOwnedCustomSettings();
-        logger = Options.LoggerFactory?.CreateLogger(ClickHouseTcpDiagnostics.ClientLogCategory);
+        logger = DiagnosticLogger.Create(Options.LoggerFactory, ClickHouseTcpDiagnostics.ClientLogCategory);
         source = new ConnectionPool(Options);
     }
 
@@ -112,7 +112,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         this.source = source;
         ClickHouseTcpClientOptions resolved = options ?? new ClickHouseTcpClientOptions();
         Options = optionsAreOwned ? resolved : resolved.WithOwnedCustomSettings();
-        logger = Options.LoggerFactory?.CreateLogger(ClickHouseTcpDiagnostics.ClientLogCategory);
+        logger = DiagnosticLogger.Create(Options.LoggerFactory, ClickHouseTcpDiagnostics.ClientLogCategory);
     }
 
     /// <summary>
@@ -401,7 +401,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 Options.MaxSendBufferBytes,
                 operation?.Handlers,
                 cancellationToken).ConfigureAwait(false);
-            operation?.Succeeded();
+            operation?.Succeeded(columns.Count == 0 ? 0UL : (ulong)columns[0].RowCount);
         }
         catch (Exception e)
         {
@@ -449,7 +449,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 Options.MaxSendBufferBytes,
                 operation?.Handlers,
                 cancellationToken).ConfigureAwait(false);
-            operation?.Succeeded();
+            operation?.Succeeded((ulong)buffer.Count);
         }
         catch (Exception e)
         {
@@ -487,7 +487,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 Options.MaxSendBufferBytes,
                 operation?.Handlers,
                 cancellationToken).ConfigureAwait(false);
-            operation?.Succeeded();
+            operation?.Succeeded((ulong)buffer.Count);
         }
         catch (Exception e)
         {
