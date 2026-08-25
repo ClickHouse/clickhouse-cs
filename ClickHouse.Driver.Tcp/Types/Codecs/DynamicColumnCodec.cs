@@ -101,7 +101,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         ulong version = await reader.ReadUInt64Async(cancellationToken).ConfigureAwait(false);
         if (version != FlattenedVersion)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"Dynamic column '{TypeName}' uses serialization version {version}; this client supports only the flattened version {FlattenedVersion}. " +
                 "Enable it with the query setting output_format_native_use_flattened_dynamic_and_json_serialization=1.");
         }
@@ -109,7 +109,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         ulong rawTypeCount = await reader.ReadVarUIntAsync(cancellationToken).ConfigureAwait(false);
         if (rawTypeCount > MaxTypes)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"Dynamic column '{TypeName}' declares {rawTypeCount} runtime types, exceeding the supported maximum of {MaxTypes} (corrupt stream).");
         }
 
@@ -149,7 +149,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         prefixChildren = null;
         if (names is null || children is null)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"Dynamic column '{columnName}' ({columnType}) has {rowCount} row(s) but its state prefix was not read.");
         }
 

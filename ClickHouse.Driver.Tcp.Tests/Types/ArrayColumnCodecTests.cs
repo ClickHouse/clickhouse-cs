@@ -144,7 +144,7 @@ public class ArrayColumnCodecTests
         BitConverter.TryWriteBytes(wire.AsSpan(8, 8), 1UL);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(wire);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () =>
             await codec.ReadColumnAsync(reader, "c", "Array(UInt32)", 2, CodecTestHarness.None));
     }
 
@@ -157,7 +157,7 @@ public class ArrayColumnCodecTests
         BitConverter.TryWriteBytes(wire.AsSpan(0, 8), (ulong)int.MaxValue + 1);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(wire);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () =>
             await codec.ReadColumnAsync(reader, "c", "Array(UInt32)", 1, CodecTestHarness.None));
     }
 

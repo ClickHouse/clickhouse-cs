@@ -124,7 +124,7 @@ public class ClickHouseTcpTracingIntegrationTests
     {
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
 
-        Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
         {
             await foreach (Block block in client.StreamAsync("SELECT * FROM no_such_table_here", cancellationToken: None))
             {
@@ -136,7 +136,7 @@ public class ClickHouseTcpTracingIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(span.Status, Is.EqualTo(ActivityStatusCode.Error));
-            Assert.That(span.GetTagItem("error.type"), Is.EqualTo(typeof(ClickHouseServerException).FullName));
+            Assert.That(span.GetTagItem("error.type"), Is.EqualTo(typeof(ClickHouseTcpServerException).FullName));
             Assert.That(span.GetTagItem("db.response.status_code"), Is.Not.Null, "the server's error code reaches the span");
             Assert.That(span.Events.Any(e => e.Name == "exception"));
         });

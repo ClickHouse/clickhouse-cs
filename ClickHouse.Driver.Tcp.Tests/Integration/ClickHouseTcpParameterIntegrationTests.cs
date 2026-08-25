@@ -323,7 +323,7 @@ public class ClickHouseTcpParameterIntegrationTests
         {
             Assert.That(await ScalarAsync(client, sql, options), Is.EqualTo(3UL));
         }
-        catch (ClickHouseServerException)
+        catch (ClickHouseTcpServerException)
         {
             Assert.Pass($"The server applied '{name}' as a setting and rejected the query, which is the older behaviour.");
         }
@@ -558,7 +558,7 @@ public class ClickHouseTcpParameterIntegrationTests
             Parameters = new ClickHouseTcpParameterCollection { { "p", "not-a-number" } },
         };
 
-        Assert.ThrowsAsync<ClickHouseServerException>(
+        Assert.ThrowsAsync<ClickHouseTcpServerException>(
             async () => await ScalarAsync(client, "SELECT {p:Int32}", options));
     }
 
