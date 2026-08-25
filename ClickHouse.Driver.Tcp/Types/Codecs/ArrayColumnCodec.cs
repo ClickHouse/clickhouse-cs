@@ -138,7 +138,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         long offsetBytes = (long)rowCount * sizeof(ulong);
         if (offsetBytes > Array.MaxLength)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"Array column '{columnName}' declares {rowCount} rows, whose offsets stream exceeds the maximum this client can buffer.");
         }
 
@@ -178,7 +178,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     /// <param name="offsets">The destination, sized for <paramref name="rowCount"/> + 1 entries.</param>
     /// <param name="rowCount">The number of rows (and offsets on the wire).</param>
     /// <param name="columnName">The column name, for diagnostics.</param>
-    /// <exception cref="ClickHouseProtocolException">An offset goes backwards, or exceeds <see cref="int.MaxValue"/>.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">An offset goes backwards, or exceeds <see cref="int.MaxValue"/>.</exception>
     private static void DecodeOffsets(ReadOnlySpan<byte> offsetBytes, Span<int> offsets, int rowCount, string columnName)
     {
         // Offsets are little-endian UInt64 (this client is little-endian only, like every fixed-width codec).
@@ -190,13 +190,13 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             ulong end = wire[i];
             if (end < previous)
             {
-                throw new ClickHouseProtocolException(
+                throw new ClickHouseTcpProtocolException(
                     $"Array column '{columnName}' has a non-monotonic offset at row {i} ({end} < {previous}); the stream is corrupt.");
             }
 
             if (end > int.MaxValue)
             {
-                throw new ClickHouseProtocolException(
+                throw new ClickHouseTcpProtocolException(
                     $"Array column '{columnName}' declares {end} total elements, exceeding the maximum this client can address.");
             }
 

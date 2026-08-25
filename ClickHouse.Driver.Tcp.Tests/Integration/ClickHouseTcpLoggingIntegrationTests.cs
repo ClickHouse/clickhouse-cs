@@ -83,13 +83,13 @@ public class ClickHouseTcpLoggingIntegrationTests
     {
         await using ClickHouseTcpClient client = CreateClient();
 
-        Assert.ThrowsAsync<ClickHouseServerException>(async () => await DrainAsync(client, "SELECT * FROM no_such_table_here"));
+        Assert.ThrowsAsync<ClickHouseTcpServerException>(async () => await DrainAsync(client, "SELECT * FROM no_such_table_here"));
 
         LogEntry failed = ClientLogger.WithEventId(1002).Single();
         Assert.Multiple(() =>
         {
             Assert.That(failed.Level, Is.EqualTo(LogLevel.Error));
-            Assert.That(failed.Exception, Is.TypeOf<ClickHouseServerException>());
+            Assert.That(failed.Exception, Is.TypeOf<ClickHouseTcpServerException>());
             Assert.That(ClientLogger.WithEventId(1001), Is.Empty, "a failed statement is not also reported as completed");
         });
     }

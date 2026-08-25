@@ -146,7 +146,7 @@ public class DynamicColumnCodecTests
         byte[] bytes = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None));
     }
 
     [Test]

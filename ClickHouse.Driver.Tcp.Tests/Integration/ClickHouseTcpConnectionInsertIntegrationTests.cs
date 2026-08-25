@@ -385,9 +385,9 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
 
         IColumn column = PrimitiveColumn<int>.FromValues("value", "Int32", new[] { 1 });
 
-        var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
             await connection.InsertAsync("INSERT INTO table_that_does_not_exist_xyz (value) VALUES", new[] { column }, cancellationToken: None));
-        Assert.That(thrown.Code, Is.GreaterThan(0));
+        Assert.That(thrown.RawCode, Is.GreaterThan(0));
 
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
         Assert.ThrowsAsync<ObjectDisposedException>(async () =>

@@ -80,7 +80,7 @@ public class ClickHouseTcpSessionIntegrationTests
         // Client operations must not reuse the session's pinned connection.
         Assert.That(
             async () => await client.ExecuteAsync($"SELECT * FROM {table}", cancellationToken: None),
-            Throws.TypeOf<ClickHouseServerException>());
+            Throws.TypeOf<ClickHouseTcpServerException>());
     }
 
     [Test]
@@ -117,7 +117,7 @@ public class ClickHouseTcpSessionIntegrationTests
         // With one pool slot, reusing the session's connection would expose its temporary table.
         Assert.That(
             async () => await client.ExecuteAsync($"SELECT * FROM {table}", cancellationToken: None),
-            Throws.TypeOf<ClickHouseServerException>());
+            Throws.TypeOf<ClickHouseTcpServerException>());
     }
 
     [Test]
@@ -270,7 +270,7 @@ public class ClickHouseTcpSessionIntegrationTests
         await session.ExecuteAsync($"CREATE TEMPORARY TABLE {table} (value UInt64)", cancellationToken: None);
         Assert.That(
             async () => await session.ExecuteAsync("SELECT * FROM no_such_table_here", cancellationToken: None),
-            Throws.TypeOf<ClickHouseServerException>());
+            Throws.TypeOf<ClickHouseTcpServerException>());
 
         // A server exception retires the connection; the session must fail rather than reconnect without its state.
         Assert.Multiple(() =>

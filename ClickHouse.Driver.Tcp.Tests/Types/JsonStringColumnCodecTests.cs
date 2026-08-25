@@ -70,7 +70,7 @@ public class JsonStringColumnCodecTests
         byte[] bytes = await CodecTestHarness.WriteAsync(w => w.WriteUInt64(version));
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
-        var exception = Assert.ThrowsAsync<ClickHouseProtocolException>(
+        var exception = Assert.ThrowsAsync<ClickHouseTcpProtocolException>(
             async () => await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None));
 
         Assert.That(exception.Message, Does.Contain($"version {version}"));

@@ -200,7 +200,7 @@ public class TcpActivityTests
     [Test]
     public void SetError_ServerException_SetsTheErrorStatusAndTheServerErrorCode()
     {
-        var failure = new ClickHouseServerException(60, "UNKNOWN_TABLE", "Table missing", "stack");
+        var failure = new ClickHouseTcpServerException(60, "UNKNOWN_TABLE", "Table missing", "stack");
 
         using (Activity activity = TcpActivity.StartStatement(Options, "SELECT 1", "SELECT", queryId: null))
         {
@@ -212,7 +212,7 @@ public class TcpActivityTests
         {
             Assert.That(span.Status, Is.EqualTo(ActivityStatusCode.Error));
             Assert.That(span.StatusDescription, Is.EqualTo("Table missing"));
-            Assert.That(span.GetTagItem("error.type"), Is.EqualTo(typeof(ClickHouseServerException).FullName));
+            Assert.That(span.GetTagItem("error.type"), Is.EqualTo(typeof(ClickHouseTcpServerException).FullName));
             Assert.That(span.GetTagItem("db.response.status_code"), Is.EqualTo("60"), "the server's own error code");
         });
     }
