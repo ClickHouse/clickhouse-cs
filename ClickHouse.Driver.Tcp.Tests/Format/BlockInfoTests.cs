@@ -56,7 +56,7 @@ public class BlockInfoTests
         byte[] bytes = await WriteAsync(w => w.WriteVarUInt(3)); // no field id 3 is defined
         using var reader = ReaderOver(bytes);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await BlockReader.ReadBlockInfoAsync(reader, None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await BlockReader.ReadBlockInfoAsync(reader, None));
     }
 
     private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)

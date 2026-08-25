@@ -154,7 +154,7 @@ public class CompressedFrameStreamingTests
         var partial = new byte[100];
         await reader.Reader.ReadBytesAsync(partial, None);
 
-        var failure = Assert.Throws<ClickHouseProtocolException>(() => reader.EndBlock());
+        var failure = Assert.Throws<ClickHouseTcpProtocolException>(() => reader.EndBlock());
         Assert.That(failure.Message, Does.Contain("unread"));
     }
 
@@ -203,7 +203,7 @@ public class CompressedFrameStreamingTests
         var destination = new byte[500];
         Assert.That(
             async () => await reader.Reader.ReadBytesAsync(destination, None),
-            Throws.TypeOf<InvalidDataException>().With.Message.Contains("checksum mismatch"));
+            Throws.TypeOf<ClickHouseTcpProtocolException>().With.Message.Contains("checksum mismatch"));
     }
 
     [Test]

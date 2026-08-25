@@ -31,7 +31,7 @@ public interface IClickHouseTcpSession : IClickHouseTcpOperations
     /// </summary>
     /// <remarks>
     /// Once false, it remains false; open a new session to continue. True does not guarantee the next operation
-    /// will succeed. Transport, protocol, or server errors, cancellation, and incomplete result streams can make
+    /// will succeed. Connection, protocol, or server errors, cancellation, and incomplete result streams can make
     /// the connection unusable. Connection health is checked between operations, not while one is running.
     /// </remarks>
     bool IsOpen { get; }

@@ -363,19 +363,32 @@ public class TlsParametersTests
 
         var tls = new TlsParameters { TargetHost = ServerName, AllowInvalidCertificates = true };
 
-        Assert.That(async () => await tls.WrapAsync(inner, CancellationToken.None), Throws.Exception);
+        Assert.That(
+            async () => await TlsParameters.WrapAsync(inner, tls.BuildAuthenticationOptions(), CancellationToken.None),
+            Throws.Exception);
         Assert.That(inner.Disposed, Is.True);
 
         await server;
     }
 
     [Test]
-    public void WrapAsync_AfterDispose_RefusesInsteadOfFallingBackToTheHostTrustStore()
+    public void BuildAuthenticationOptions_EmptyAuthorityCollection_RefusesInsteadOfFallingBackToHostTrustStore()
     {
-        // Disposing releases the configured authorities' native handles. A later handshake must be refused before
-        // it can try to build a policy from those disposed certificates.
+        using var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = new X509Certificate2Collection(),
+        };
+
+        Assert.Throws<InvalidOperationException>(() => tls.BuildAuthenticationOptions());
+    }
+
+    [Test]
+    public void BuildAuthenticationOptions_AfterDispose_RefusesInsteadOfFallingBackToTheHostTrustStore()
+    {
+        // Disposing releases the configured authorities' native handles. A later build must be refused before it
+        // can try to construct a policy from those disposed certificates.
         using X509Certificate2 authority = TestCertificates.CreateAuthority();
-        using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
 
         var tls = new TlsParameters
         {
@@ -385,7 +398,30 @@ public class TlsParametersTests
 
         tls.Dispose();
 
-        Assert.ThrowsAsync<ObjectDisposedException>(async () => await RoundTripThroughTlsAsync(server, tls));
+        Assert.Throws<ObjectDisposedException>(() => tls.BuildAuthenticationOptions());
+    }
+
+    [Test]
+    public void ConnectAsync_ConfigureHookThrowsAnIoError_ReportsTheHookRatherThanTheNetwork()
+    {
+        // The hook is the caller's code, and loading a client certificate off disk is the obvious thing to do in
+        // it. FileNotFoundException is an IOException, so running the hook inside the connect would report a
+        // missing file as a transient network failure and invite a pointless retry.
+        using var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            Configure = _ => throw new FileNotFoundException("client certificate is missing"),
+        };
+
+        var thrown = Assert.ThrowsAsync<FileNotFoundException>(async () =>
+            await ClickHouseTcpConnection.ConnectAsync(
+                "localhost",
+                9440,
+                new ClientHandshakeParameters { Username = "default" },
+                tls,
+                CancellationToken.None));
+
+        Assert.That(thrown.Message, Is.EqualTo("client certificate is missing"));
     }
 
     [Test]
@@ -472,7 +508,8 @@ public class TlsParametersTests
             await socket.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
 
             // WrapAsync owns the NetworkStream from here, and disposing the returned stream closes both.
-            using Stream encrypted = await tls.WrapAsync(new NetworkStream(socket, ownsSocket: false), CancellationToken.None);
+            using Stream encrypted = await TlsParameters.WrapAsync(
+                new NetworkStream(socket, ownsSocket: false), tls.BuildAuthenticationOptions(), CancellationToken.None);
             await encrypted.WriteAsync(Payload);
             await encrypted.FlushAsync();
 

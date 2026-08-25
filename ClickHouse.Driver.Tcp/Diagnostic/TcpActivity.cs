@@ -194,9 +194,9 @@ internal static class TcpActivity
         }
 
         activity.SetTag(TagErrorType, exception.GetType().FullName);
-        if (exception is ClickHouseServerException server)
+        if (exception is ClickHouseTcpServerException server)
         {
-            activity.SetTag(TagResponseStatusCode, server.Code.ToString(CultureInfo.InvariantCulture));
+            activity.SetTag(TagResponseStatusCode, server.RawCode.ToString(CultureInfo.InvariantCulture));
         }
 
         activity.AddEvent(new ActivityEvent(
