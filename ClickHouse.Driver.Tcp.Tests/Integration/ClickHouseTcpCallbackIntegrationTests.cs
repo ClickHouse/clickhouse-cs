@@ -203,7 +203,7 @@ public class ClickHouseTcpCallbackIntegrationTests
         // callbacks reached the write path. Which counters appear is not asserted — the set differs by server
         // version — only that they decode.
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
-        string table = $"tcp_callback_test_{Guid.NewGuid():N}";
+        string table = UniqueTableName();
         await client.ExecuteAsync($"CREATE TABLE {table} (id Int32) ENGINE = Memory", cancellationToken: None);
 
         try
@@ -261,4 +261,6 @@ public class ClickHouseTcpCallbackIntegrationTests
 
         Assert.That(survived, Is.EqualTo(1));
     }
+
+    private static string UniqueTableName() => $"tcp_callback_test_{Guid.NewGuid():N}";
 }

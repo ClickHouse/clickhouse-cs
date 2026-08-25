@@ -41,8 +41,8 @@ internal static partial class ClientLog
     [LoggerMessage(
         EventId = 1004,
         Level = LogLevel.Debug,
-        Message = "{Operation} (query id {QueryId}) completed in {ElapsedMs:0.###} ms, writing {WrittenRows} rows / {WrittenBytes} bytes")]
-    public static partial void StatementWrote(ILogger logger, string operation, string queryId, double elapsedMs, ulong writtenRows, ulong writtenBytes);
+        Message = "{Operation} (query id {QueryId}) completed in {ElapsedMs:0.###} ms, writing {WrittenRows} rows")]
+    public static partial void StatementWrote(ILogger logger, string operation, string queryId, double elapsedMs, ulong writtenRows);
 
     [LoggerMessage(
         EventId = 1005,

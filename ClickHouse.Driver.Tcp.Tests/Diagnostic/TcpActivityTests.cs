@@ -146,11 +146,11 @@ public class TcpActivityTests
     }
 
     [Test]
-    public void SetProgressTotals_ReadCounters_SetsTheReadAttributesAndOmitsTheWriteOnes()
+    public void SetCounters_ReadCounters_SetsTheReadAttributesAndOmitsTheWriteOnes()
     {
         using (Activity activity = TcpActivity.StartStatement(Options, "SELECT 1", "SELECT", queryId: null))
         {
-            activity.SetProgressTotals(new ClickHouseTcpProgress(rows: 12, bytes: 96, totalRows: 12, wroteRows: 0, wroteBytes: 0, elapsedNs: 5000));
+            activity.SetCounters(new ClickHouseTcpProgress(rows: 12, bytes: 96, totalRows: 12, wroteRows: 0, wroteBytes: 0, elapsedNs: 5000), rowsSent: null);
         }
 
         Activity span = Single();
@@ -165,11 +165,12 @@ public class TcpActivityTests
     }
 
     [Test]
-    public void SetProgressTotals_WriteCounters_SetsTheWriteAttributes()
+    public void SetCounters_WriteCountersFromTheServer_SetsTheWriteAttributes()
     {
-        using (Activity activity = TcpActivity.StartStatement(Options, "INSERT INTO t VALUES", "INSERT", queryId: null))
+        // Reached by an INSERT ... SELECT, the case the server does report write counters for.
+        using (Activity activity = TcpActivity.StartStatement(Options, "INSERT INTO t SELECT 1", "INSERT", queryId: null))
         {
-            activity.SetProgressTotals(new ClickHouseTcpProgress(rows: 0, bytes: 0, totalRows: 0, wroteRows: 7, wroteBytes: 56, elapsedNs: 1));
+            activity.SetCounters(new ClickHouseTcpProgress(rows: 9, bytes: 72, totalRows: 9, wroteRows: 7, wroteBytes: 56, elapsedNs: 1), rowsSent: null);
         }
 
         Activity span = Single();
@@ -177,6 +178,43 @@ public class TcpActivityTests
         {
             Assert.That(span.GetTagItem("db.clickhouse.written_rows"), Is.EqualTo(7UL));
             Assert.That(span.GetTagItem("db.clickhouse.written_bytes"), Is.EqualTo(56UL));
+        });
+    }
+
+    [Test]
+    public void SetCounters_NoProgressPacket_ReportsOnlyTheRowsTheClientSent()
+    {
+        // The shape every insert takes: the server counts nothing back to the client, so zero read counters would
+        // claim it reported reading nothing rather than reporting nothing at all.
+        using (Activity activity = TcpActivity.StartStatement(Options, "INSERT INTO t VALUES", "INSERT", queryId: null))
+        {
+            activity.SetCounters(default, rowsSent: 3);
+        }
+
+        Activity span = Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(span.GetTagItem("db.clickhouse.written_rows"), Is.EqualTo(3UL));
+            Assert.That(span.GetTagItem("db.clickhouse.read_rows"), Is.Null);
+            Assert.That(span.GetTagItem("db.clickhouse.read_bytes"), Is.Null);
+            Assert.That(span.GetTagItem("db.clickhouse.elapsed_ns"), Is.Null, "a span claiming zero server time is worse than one claiming none");
+        });
+    }
+
+    [Test]
+    public void SetCounters_ProgressWithoutWriteCounters_StillReportsTheRowsTheClientSent()
+    {
+        using (Activity activity = TcpActivity.StartStatement(Options, "INSERT INTO t VALUES", "INSERT", queryId: null))
+        {
+            activity.SetCounters(new ClickHouseTcpProgress(rows: 0, bytes: 0, totalRows: 0, wroteRows: 0, wroteBytes: 0, elapsedNs: 4000), rowsSent: 3);
+        }
+
+        Activity span = Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(span.GetTagItem("db.clickhouse.written_rows"), Is.EqualTo(3UL));
+            Assert.That(span.GetTagItem("db.clickhouse.elapsed_ns"), Is.EqualTo(4000UL));
+            Assert.That(span.GetTagItem("db.clickhouse.written_bytes"), Is.Null, "nothing reported it");
         });
     }
 

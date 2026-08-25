@@ -194,4 +194,27 @@ public class ConnectionPoolLoggingTests
         LogEntry draining = Log.WithEventId(3007).Single();
         Assert.That(draining.Message, Does.Contain("closing 1 idle"));
     }
+
+    [Test]
+    public async Task RentAsync_ThrowingLogger_StillHandsOverTheConnection()
+    {
+        // The pool logs at the points a connection is between owners: taken out of the idle list but not yet
+        // leased, or out of the leased set but not yet closed. An exception from any of those calls would leave a
+        // socket with nobody left to close it, so a broken logger would read as the client leaking connections.
+        var connections = new FakeConnectionFactory();
+        var pool = new ConnectionPool(Options() with { LoggerFactory = new ThrowingLoggerFactory() }, connections, new ControlledTimeProvider());
+
+        await using (IConnectionLease first = await pool.RentAsync(None))
+        {
+        }
+
+        await using (IConnectionLease reused = await pool.RentAsync(None))
+        {
+            Assert.That(connections.CreateCount, Is.EqualTo(1), "the reuse path survived its log call");
+        }
+
+        await pool.DisposeAsync();
+
+        Assert.That(connections.Disposed, Is.True, "and teardown ran to the end");
+    }
 }
