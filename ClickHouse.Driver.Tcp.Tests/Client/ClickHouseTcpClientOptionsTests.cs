@@ -73,11 +73,20 @@ public class ClickHouseTcpClientOptionsTests
     }
 
     [Test]
-    public void Validate_NonPositiveReadTimeout_ThrowsArgumentOutOfRangeException()
+    public void Validate_NegativeReadTimeout_ThrowsArgumentOutOfRangeException()
     {
-        var options = new ClickHouseTcpClientOptions { ReadTimeout = TimeSpan.Zero };
+        var options = new ClickHouseTcpClientOptions { ReadTimeout = TimeSpan.FromSeconds(-1) };
 
         Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_ZeroReadTimeout_IsAccepted()
+    {
+        // Zero disables the read timeout.
+        var options = new ClickHouseTcpClientOptions { ReadTimeout = TimeSpan.Zero };
+
+        Assert.DoesNotThrow(() => options.Validate());
     }
 
     [TestCase(0)]
