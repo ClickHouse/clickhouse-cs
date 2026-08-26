@@ -72,6 +72,9 @@ jobs:
     # Cloud service. Landing on an integration branch, or asking for it by hand, is enough.
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/tests-cloud-tcp.yml
-    secrets: inherit
+    secrets:
+      CLICKHOUSE_CLOUD_HOST: ${{ secrets.CLICKHOUSE_CLOUD_HOST }}
+      CLICKHOUSE_CLOUD_USER: ${{ secrets.CLICKHOUSE_CLOUD_USER }}
+      CLICKHOUSE_CLOUD_PASSWORD: ${{ secrets.CLICKHOUSE_CLOUD_PASSWORD }}
     with:
       ref: ${{ inputs.ref }}

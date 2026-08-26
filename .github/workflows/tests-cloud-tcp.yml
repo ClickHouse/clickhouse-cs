@@ -8,6 +8,15 @@ on:
       ref:
         required: false
         type: string
+    # Named one by one instead of taking `secrets: inherit` from the caller, so this job gets the
+    # three Cloud credentials it uses and nothing else.
+    secrets:
+      CLICKHOUSE_CLOUD_HOST:
+        required: true
+      CLICKHOUSE_CLOUD_USER:
+        required: true
+      CLICKHOUSE_CLOUD_PASSWORD:
+        required: true
 
 permissions:
   contents: read
@@ -27,6 +36,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
+          # No step here talks to git again, so the job token does not need to stay in .git/config
+          # where the test process could read it.
+          persist-credentials: false
 
       - uses: actions/cache@v6
         name: Cache NuGet
@@ -37,7 +49,7 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Setup .NET Core
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             10.x
