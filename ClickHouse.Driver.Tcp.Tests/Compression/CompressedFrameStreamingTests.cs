@@ -244,6 +244,26 @@ public class CompressedFrameStreamingTests
         });
     }
 
+    // The frame writer compresses with the codec the caller configured, and a custom IClickHouseCompressor is
+    // supported. A codec that fails is the caller's own component failing, so its exception reaches them intact.
+    [Test]
+    public void EndBlockAsync_ACustomCodecFailsToEncode_SurfacesTheCodecFailureRatherThanATransportFailure()
+    {
+        var stream = new MemoryStream();
+        using var rawWriter = new ClickHouseBinaryWriter(stream);
+        using var frames = new CompressedFrameWriter(rawWriter, new ThrowingCodec(new IOException("the codec's own failure")));
+
+        frames.Writer.WriteBytes(Pattern(64));
+
+        var thrown = Assert.ThrowsAsync<IOException>(async () => await frames.EndBlockAsync(None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.Not.InstanceOf<ClickHouseTcpException>());
+            Assert.That(thrown.Message, Is.EqualTo("the codec's own failure"));
+        });
+    }
+
     private static byte[] Pattern(int length)
     {
         var data = new byte[length];
@@ -253,5 +273,19 @@ public class CompressedFrameStreamingTests
         }
 
         return data;
+    }
+
+    /// <summary>A block codec that fails every encode, standing in for a caller-supplied codec that breaks.</summary>
+    private sealed class ThrowingCodec(Exception failure) : IClickHouseCompressor
+    {
+        public string ContentEncoding => "throwing";
+
+        public byte MethodByte => CompressionFrame.MethodLz4;
+
+        public int MaxEncodedLength(int sourceLength) => sourceLength + 32;
+
+        public int Encode(ReadOnlySpan<byte> source, Span<byte> target) => throw failure;
+
+        public Stream Compress(Stream destination, bool leaveOpen) => throw new NotSupportedException();
     }
 }

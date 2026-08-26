@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -78,7 +79,18 @@ internal static class BlockReader
                     }
                 }
 
-                IColumnCodec codec = registry.Resolve(columnType, in context);
+                // The type name came off the wire, so a name this client cannot resolve is a disagreement with
+                // the server, not a caller error. Resolution reports that as a parse or support failure.
+                IColumnCodec codec;
+                try
+                {
+                    codec = registry.Resolve(columnType, in context);
+                }
+                catch (Exception e) when (e is FormatException or NotSupportedException)
+                {
+                    throw new ClickHouseTcpProtocolException(
+                        $"Column '{columnName}' has type '{columnType}', which this client cannot read: {e.Message}", e);
+                }
 
                 // A zero-row block (a schema header, or an end-of-input marker) carries no state prefix and no
                 // body — this holds for dictionary-bearing types too: LowCardinality emits its version prefix only

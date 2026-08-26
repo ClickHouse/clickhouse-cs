@@ -129,7 +129,7 @@ internal static class Handshake
         // instead of corrupting the connection.
         if (server.Negotiated.Version < NegotiatedProtocol.MinimumTcpProtocolVersion)
         {
-            throw new NotSupportedException(
+            throw new ClickHouseTcpProtocolException(
                 $"The ClickHouse server's protocol revision {server.Revision} is older than the minimum " +
                 $"{NegotiatedProtocol.MinimumTcpProtocolVersion} this client supports.");
         }
