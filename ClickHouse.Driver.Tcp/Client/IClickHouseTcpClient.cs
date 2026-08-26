@@ -53,9 +53,7 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// column in header order. Each returned array is owned and safe to retain past the enumeration.
     /// </summary>
     /// <remarks>
-    /// Owned, but not unshared: a <c>LowCardinality</c> column hands each row its dictionary entry rather than a copy,
-    /// so an array-valued entry must not be mutated in place — with a <c>LowCardinality(FixedString(N))</c> the
-    /// <c>byte[]</c> may be another row's too. An implementation must honor that, since a consumer cannot tell.
+    /// <c>LowCardinality</c> values may be shared within a block; array-valued entries must not be mutated in place.
     /// </remarks>
     /// <param name="sql">The SQL text.</param>
     /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
@@ -73,10 +71,8 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// skipped, and a property no column maps to keeps its default.
     /// </summary>
     /// <remarks>
-    /// Unlike a <see cref="Block"/>, the rows are <b>owned</b>: an instance stays valid after the enumeration moves
-    /// on, because no value borrows the block's storage. An implementation must honor that, since a consumer has no
-    /// way to copy what it is handed. Two rows may still share one element instance where the column's own
-    /// representation does (see <see cref="ClickHouseTcpClient.QueryAsync{T}"/>).
+    /// Rows remain valid after enumeration advances. Element instances may still be shared where the column's
+    /// representation does; see <see cref="ClickHouseTcpClient.QueryAsync{T}"/>.
     /// </remarks>
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="sql">The SQL text.</param>

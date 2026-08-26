@@ -45,10 +45,7 @@ public sealed class Block : IDisposable
     internal BlockInfo Info { get; }
 
     /// <summary>
-    /// How to re-resolve a column's codec from its <see cref="IColumn.TypeName"/>, which the POCO read plan has to
-    /// do to reach the codec's read projections. Carried on the block, rather than assumed, so the plan resolves a
-    /// codec the way the read did — a <c>DateTime</c> column whose type string names no timezone otherwise projects
-    /// against the wrong zone.
+    /// The registry used to resolve this block's codecs, retained for POCO read projections.
     /// </summary>
     internal ColumnCodecRegistry Codecs { get; }
 

@@ -8,11 +8,7 @@ namespace ClickHouse.Driver.Tcp.Poco;
 internal static class PocoSpan
 {
     /// <summary>
-    /// Reads one element of a span. An expression tree cannot consume <see cref="ReadOnlySpan{T}"/>'s indexer
-    /// directly, because it returns <c>ref readonly T</c> and a tree has no way to express a managed reference
-    /// (<c>Expression of type 'System.Int32&amp;' cannot be used for return type 'System.Int32'</c>). Routing the
-    /// index through this method returns the element by value instead; the JIT inlines it away, so the compiled
-    /// scatter still reads straight out of the column's borrowed storage.
+    /// Reads a span element by value, which expression trees can represent unlike the span's ref-returning indexer.
     /// </summary>
     /// <typeparam name="T">The element type.</typeparam>
     /// <param name="span">The span to read from.</param>
