@@ -152,6 +152,18 @@ public class ReadBufferTests
         Assert.ThrowsAsync<ObjectDisposedException>(async () => await buffer.EnsureAsync(8, None));
     }
 
+    // A buffer over an adapter stream reads through a layer that types its own failures. Translating there
+    // would relabel that layer's errors, including a caller-supplied compressor's, as a network failure.
+    [Test]
+    public void EnsureAsync_NotReadingFromTheTransport_LeavesTheFailureForTheLayerBelowToType()
+    {
+        using var buffer = new ReadBuffer(new ThrowingStream(new IOException("codec failed")), 64, readsFromTransport: false);
+
+        var thrown = Assert.ThrowsAsync<IOException>(async () => await buffer.EnsureAsync(8, None));
+
+        Assert.That(thrown.Message, Is.EqualTo("codec failed"));
+    }
+
     private sealed class ThrowingStream(Exception failure) : Stream
     {
         public override bool CanRead => true;

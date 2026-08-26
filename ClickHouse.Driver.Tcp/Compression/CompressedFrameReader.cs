@@ -44,7 +44,10 @@ internal sealed class CompressedFrameReader : IDisposable
         prefix = ArrayPool<byte>.Shared.Rent(CompressionFrame.PrefixSize);
         headerAndBody = ArrayPool<byte>.Shared.Rent(CompressionFrame.HeaderSize);
         plaintext = ArrayPool<byte>.Shared.Rent(1);
-        Reader = new ClickHouseBinaryReader(new ReadBuffer(new PlaintextStream(this), bufferSize), ownsBuffer: true);
+        // The stream is an adapter onto this reader, not the connection. The frame pulls below it read through
+        // `raw`, which reports a failed read itself; the codec's own failures are not the transport's.
+        var decoded = new ReadBuffer(new PlaintextStream(this), bufferSize, readsFromTransport: false);
+        Reader = new ClickHouseBinaryReader(decoded, ownsBuffer: true);
     }
 
     /// <summary>Reads the decoded block body. Everything after the packet's table name comes from here.</summary>

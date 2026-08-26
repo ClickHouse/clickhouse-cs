@@ -119,7 +119,18 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         for (int i = 0; i < typeCount; i++)
         {
             names[i] = await reader.ReadStringAsync(cancellationToken).ConfigureAwait(false);
-            children[i] = registry.Resolve(names[i], in context);
+
+            // The runtime type names come off the wire, so one this client cannot resolve is a disagreement
+            // with the server, not a caller error.
+            try
+            {
+                children[i] = registry.Resolve(names[i], in context);
+            }
+            catch (Exception e) when (e is FormatException or NotSupportedException)
+            {
+                throw new ClickHouseTcpProtocolException(
+                    $"Dynamic column '{TypeName}' carries runtime type '{names[i]}', which this client cannot read: {e.Message}", e);
+            }
         }
 
         // Each runtime type contributes its own state prefix after the type-name list; a leaf type's is empty, a
@@ -173,7 +184,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
 
                 if ((uint)d > (uint)typeCount)
                 {
-                    throw new FormatException(
+                    throw new ClickHouseTcpProtocolException(
                         $"Dynamic column '{columnName}' ({columnType}) has discriminator {d} at row {row}, but the block declares only {typeCount} runtime type(s).");
                 }
 

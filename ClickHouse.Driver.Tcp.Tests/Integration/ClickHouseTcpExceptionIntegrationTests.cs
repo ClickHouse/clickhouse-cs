@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -61,6 +63,27 @@ public class ClickHouseTcpExceptionIntegrationTests
             async () => await client.ExecuteAsync("SELECT * FROM table_that_does_not_exist_xyz", cancellationToken: None));
 
         Assert.That(thrown, Is.InstanceOf<ClickHouseTcpException>());
+    }
+
+    // A column type the client cannot resolve arrives as a type name in the block header, so the refusal is a
+    // disagreement with the server and belongs under the same base as the rest. AggregateFunction is the one
+    // type a real server produces that the client deliberately declines, so it is the only way to reach this
+    // path without hand-building a block.
+    [Test]
+    public async Task QueryAsync_ColumnTypeTheClientCannotRead_ReportsAProtocolFailureKeepingTheHint()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpProtocolException>(
+            async () => await client.QueryAsync("SELECT sumState(number) AS s FROM numbers(3)").ToListAsync());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.InstanceOf<ClickHouseTcpException>());
+            Assert.That(thrown.Message, Does.Contain("'s'"), "the failing column is named.");
+            Assert.That(thrown.Message, Does.Contain("sumMerge(column)"), "the actionable hint survives the wrapping.");
+            Assert.That(thrown.InnerException, Is.InstanceOf<NotSupportedException>());
+        });
     }
 
     [Test]

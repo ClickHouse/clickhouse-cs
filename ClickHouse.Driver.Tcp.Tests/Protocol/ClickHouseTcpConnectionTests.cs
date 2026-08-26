@@ -109,7 +109,7 @@ public class ClickHouseTcpConnectionTests
     }
 
     [Test]
-    public async Task HandshakeAsync_ServerBelowMinimumProtocol_ThrowsNotSupportedAndTerminates()
+    public async Task HandshakeAsync_ServerBelowMinimumProtocol_ThrowsProtocolExceptionAndTerminates()
     {
         // A revision below the floor the write path assumes: the settings triples we always send would desync
         // it, so the handshake must refuse rather than proceed. The revision still sits above the timezone,
@@ -127,7 +127,7 @@ public class ClickHouseTcpConnectionTests
         });
         using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(script), socket: null);
 
-        Assert.ThrowsAsync<NotSupportedException>(async () => await connection.HandshakeAsync(Handshake, None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await connection.HandshakeAsync(Handshake, None));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
 
