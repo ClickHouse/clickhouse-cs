@@ -12,11 +12,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// <c>QueryAsync&lt;T&gt;</c> against a real server. Per-type coverage rides the round-trip corpus: each case
-/// already knows its ClickHouse type and the CLR type it reads back as, so it becomes a
-/// <see cref="Row{TValue}"/> assertion with no corpus of its own. The rest are the shapes the corpus cannot state —
-/// the calendar and enum readings a property asks for instead of the raw wire value, the session timezone, the
-/// attributes, and rows outliving the blocks they came from.
+/// Real-server coverage for <c>QueryAsync&lt;T&gt;</c>, including every round-trip corpus type and POCO-specific
+/// projections, mapping and lifetime behavior.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -55,6 +52,229 @@ public class PocoReadIntegrationTests
             {
                 Assert.That(read[row], Is.EqualTo(expected.GetValue(row)), $"row {row}");
             }
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_OnePocoWithDeepCompositeColumns_MaterializesEveryProperty()
+    {
+        // The corpus proves these codecs and their constituent shapes one column at a time through Row<T>. This puts
+        // deeper compositions together in one plan, with independent offsets, state prefixes and null sentinels.
+        const string deepBytesType = "Array(Array(Array(Array(Array(UInt8)))))";
+        const string nullableDeepType = "Array(Array(Array(Nullable(UInt32))))";
+        const string mixedTupleType = "Tuple(Array(Nullable(Int32)), Map(String, Array(UInt16)), Tuple())";
+        const string mapOfTupleArraysType = "Map(String, Array(Tuple(Nullable(Int32), Array(String))))";
+        const string arrayOfMapsType = "Array(Map(String, Array(UInt64)))";
+        const string variantArrayType = "Array(Variant(Array(UInt64), String))";
+        const string dynamicTupleType = "Tuple(Dynamic, Array(Tuple(Dynamic, String)))";
+        const string nestedRecordsType = "Nested(label String, values Array(Nullable(Int32)), marker Tuple(UInt8, String))";
+
+        byte[][][][][][] deepBytes =
+        {
+            new byte[][][][][]
+            {
+                new byte[][][][]
+                {
+                    new byte[][][]
+                    {
+                        new byte[][] { new byte[] { 1, 2 }, Array.Empty<byte>() },
+                        Array.Empty<byte[]>(),
+                    },
+                    Array.Empty<byte[][]>(),
+                },
+                Array.Empty<byte[][][]>(),
+            },
+            Array.Empty<byte[][][][]>(),
+            new byte[][][][][]
+            {
+                new byte[][][][]
+                {
+                    new byte[][][]
+                    {
+                        new byte[][] { Array.Empty<byte>(), new byte[] { 3, 4, 5 } },
+                    },
+                },
+            },
+        };
+
+        uint?[][][][] nullableDeep =
+        {
+            new uint?[][][]
+            {
+                new uint?[][] { new uint?[] { 1, null }, Array.Empty<uint?>() },
+                Array.Empty<uint?[]>(),
+            },
+            Array.Empty<uint?[][]>(),
+            new uint?[][][]
+            {
+                new uint?[][] { new uint?[] { null, uint.MaxValue } },
+            },
+        };
+
+        (int?[] Numbers, KeyValuePair<string, ushort[]>[] Lookup, ValueTuple Empty)[] mixedTuples =
+        {
+            (
+                new int?[] { 1, null },
+                Pairs<string, ushort[]>(("filled", new ushort[] { 1, ushort.MaxValue }), ("empty", Array.Empty<ushort>())),
+                default),
+            (Array.Empty<int?>(), Array.Empty<KeyValuePair<string, ushort[]>>(), default),
+            (
+                new int?[] { int.MinValue, null },
+                Pairs<string, ushort[]>(("zero", new ushort[] { 0 })),
+                default),
+        };
+
+        KeyValuePair<string, (int?, string[])[]>[][] mapOfTupleArrays =
+        {
+            Pairs<string, (int?, string[])[]>(
+                ("filled", new (int?, string[])[] { (1, new[] { "a", string.Empty }), (null, Array.Empty<string>()) }),
+                ("empty", Array.Empty<(int?, string[])>())),
+            Array.Empty<KeyValuePair<string, (int?, string[])[]>>(),
+            Pairs<string, (int?, string[])[]>(
+                ("unicode", new (int?, string[])[] { (null, new[] { "héllo✓" }) })),
+        };
+
+        KeyValuePair<string, ulong[]>[][][] arrayOfMaps =
+        {
+            new KeyValuePair<string, ulong[]>[][]
+            {
+                Pairs<string, ulong[]>(("a", new ulong[] { 1, 2 })),
+                Array.Empty<KeyValuePair<string, ulong[]>>(),
+            },
+            Array.Empty<KeyValuePair<string, ulong[]>[]>(),
+            new KeyValuePair<string, ulong[]>[][]
+            {
+                Pairs<string, ulong[]>(("empty", Array.Empty<ulong>()), ("max", new[] { ulong.MaxValue })),
+            },
+        };
+
+        object[][] variantArrays =
+        {
+            new object[] { new ulong[] { 1, 2 }, "x", null, Array.Empty<ulong>() },
+            Array.Empty<object>(),
+            new object[] { string.Empty, null, new[] { ulong.MaxValue } },
+        };
+
+        (object Head, (object Value, string Label)[] Tail)[] dynamicTuples =
+        {
+            (42UL, new (object, string)[] { ("inner", "text"), (null, string.Empty) }),
+            (null, Array.Empty<(object, string)>()),
+            (
+                Pairs<string, uint>(("key", 7)),
+                new (object, string)[] { (new ulong[] { 1, 2 }, "array"), (7UL, "number") }),
+        };
+
+        object[][][] nestedRecords =
+        {
+            new object[][]
+            {
+                new object[] { "first", new int?[] { 1, null }, ((byte)1, "a") },
+                new object[] { "second", Array.Empty<int?>(), ((byte)2, string.Empty) },
+            },
+            Array.Empty<object[]>(),
+            new object[][]
+            {
+                new object[] { "third", new int?[] { null, int.MinValue }, ((byte)3, "héllo✓") },
+            },
+        };
+
+        IColumn[] columns =
+        {
+            PrimitiveColumn<byte>.FromValues("Id", "UInt8", new byte[] { 0, 1, 2 }),
+            new ArrayColumn<byte[][][][][]>("DeepBytes", deepBytesType, deepBytes),
+            new ArrayColumn<uint?[][][]>("NullableDeep", nullableDeepType, nullableDeep),
+            new ArrayColumn<(int?[], KeyValuePair<string, ushort[]>[], ValueTuple)>("MixedTuple", mixedTupleType, mixedTuples),
+            new ArrayColumn<KeyValuePair<string, (int?, string[])[]>[]>("MapOfTupleArrays", mapOfTupleArraysType, mapOfTupleArrays),
+            new ArrayColumn<KeyValuePair<string, ulong[]>[][]>("ArrayOfMaps", arrayOfMapsType, arrayOfMaps),
+            new ArrayColumn<object[]>("VariantArray", variantArrayType, variantArrays),
+            new ArrayColumn<(object, (object, string)[])>("DynamicTuple", dynamicTupleType, dynamicTuples),
+            new NestedColumn(
+                "NestedRecords",
+                nestedRecordsType,
+                new[] { "label", "values", "marker" },
+                new IColumn[]
+                {
+                    new ArrayColumn<string>("NestedRecords", "String", new[] { "first", "second", "third" }),
+                    new ArrayColumn<int?[]>("NestedRecords", "Array(Nullable(Int32))", new[]
+                    {
+                        new int?[] { 1, null },
+                        Array.Empty<int?>(),
+                        new int?[] { null, int.MinValue },
+                    }),
+                    new ArrayColumn<(byte, string)>("NestedRecords", "Tuple(UInt8, String)", new[]
+                    {
+                        ((byte)1, "a"),
+                        ((byte)2, string.Empty),
+                        ((byte)3, "héllo✓"),
+                    }),
+                },
+                new[] { 0, 2, 2, 3 },
+                rowCount: 3,
+                pooledOffsets: false,
+                ownsFields: false),
+        };
+
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["flatten_nested"] = "0",
+            ["allow_experimental_variant_type"] = "1",
+            ["allow_suspicious_variant_types"] = "1",
+            ["allow_experimental_dynamic_type"] = "1",
+            ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
+        };
+        var queryOptions = new ClickHouseTcpQueryOptions { Settings = settings };
+        var insertOptions = new ClickHouseTcpInsertOptions { Settings = settings };
+        string table = UniqueTableName();
+        string schema = string.Join(", ", new[]
+        {
+            "Id UInt8",
+            $"DeepBytes {deepBytesType}",
+            $"NullableDeep {nullableDeepType}",
+            $"MixedTuple {mixedTupleType}",
+            $"MapOfTupleArrays {mapOfTupleArraysType}",
+            $"ArrayOfMaps {arrayOfMapsType}",
+            $"VariantArray {variantArrayType}",
+            $"DynamicTuple {dynamicTupleType}",
+            $"NestedRecords {nestedRecordsType}",
+        });
+
+        await using var client = TcpServerFixture.CreateClient();
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} ({schema}) ENGINE = Memory", queryOptions, None);
+            await client.InsertAsync(
+                $"INSERT INTO {table} (Id, DeepBytes, NullableDeep, MixedTuple, MapOfTupleArrays, ArrayOfMaps, VariantArray, DynamicTuple, NestedRecords) VALUES",
+                columns,
+                insertOptions,
+                None);
+
+            List<CompositeStressRow> rows = await client
+                .QueryAsync<CompositeStressRow>($"SELECT * FROM {table} ORDER BY Id", queryOptions, None)
+                .ToListAsync();
+
+            Assert.That(rows, Has.Count.EqualTo(3));
+            Assert.Multiple(() =>
+            {
+                for (int row = 0; row < rows.Count; row++)
+                {
+                    Assert.That(rows[row].Id, Is.EqualTo((byte)row), $"row {row}: Id");
+                    Assert.That(rows[row].DeepBytes, Is.EqualTo(deepBytes[row]), $"row {row}: DeepBytes");
+                    Assert.That(rows[row].NullableDeep, Is.EqualTo(nullableDeep[row]), $"row {row}: NullableDeep");
+                    Assert.That(rows[row].MixedTuple.Item1, Is.EqualTo(mixedTuples[row].Numbers), $"row {row}: MixedTuple.Item1");
+                    Assert.That(rows[row].MixedTuple.Item2, Is.EqualTo(mixedTuples[row].Lookup), $"row {row}: MixedTuple.Item2");
+                    Assert.That(rows[row].MixedTuple.Item3, Is.EqualTo(mixedTuples[row].Empty), $"row {row}: MixedTuple.Item3");
+                    Assert.That(rows[row].MapOfTupleArrays, Is.EqualTo(mapOfTupleArrays[row]), $"row {row}: MapOfTupleArrays");
+                    Assert.That(rows[row].ArrayOfMaps, Is.EqualTo(arrayOfMaps[row]), $"row {row}: ArrayOfMaps");
+                    Assert.That(rows[row].VariantArray, Is.EqualTo(variantArrays[row]), $"row {row}: VariantArray");
+                    Assert.That(rows[row].DynamicTuple.Item1, Is.EqualTo(dynamicTuples[row].Head), $"row {row}: DynamicTuple.Item1");
+                    Assert.That(rows[row].DynamicTuple.Item2, Is.EqualTo(dynamicTuples[row].Tail), $"row {row}: DynamicTuple.Item2");
+                    Assert.That(rows[row].NestedRecords, Is.EqualTo(nestedRecords[row]), $"row {row}: NestedRecords");
+                }
+            });
         }
         finally
         {
@@ -409,6 +629,17 @@ public class PocoReadIntegrationTests
         throw new InvalidOperationException($"Column '{column.Name}' ({column.TypeName}) surfaces no IColumn<T>.");
     }
 
+    private static KeyValuePair<TKey, TValue>[] Pairs<TKey, TValue>(params (TKey Key, TValue Value)[] pairs)
+    {
+        var result = new KeyValuePair<TKey, TValue>[pairs.Length];
+        for (int i = 0; i < pairs.Length; i++)
+        {
+            result[i] = new KeyValuePair<TKey, TValue>(pairs[i].Key, pairs[i].Value);
+        }
+
+        return result;
+    }
+
     private static string UniqueTableName() => $"tcp_poco_test_{Guid.NewGuid():N}";
 
     private enum Level : sbyte
@@ -444,6 +675,27 @@ public class PocoReadIntegrationTests
         public DateTime Stamp { get; set; }
 
         public DateTimeOffset Offset { get; set; }
+    }
+
+    private sealed class CompositeStressRow
+    {
+        public byte Id { get; set; }
+
+        public byte[][][][][] DeepBytes { get; set; }
+
+        public uint?[][][] NullableDeep { get; set; }
+
+        public (int?[], KeyValuePair<string, ushort[]>[], ValueTuple) MixedTuple { get; set; }
+
+        public KeyValuePair<string, (int?, string[])[]>[] MapOfTupleArrays { get; set; }
+
+        public KeyValuePair<string, ulong[]>[][] ArrayOfMaps { get; set; }
+
+        public object[] VariantArray { get; set; }
+
+        public (object, (object, string)[]) DynamicTuple { get; set; }
+
+        public object[][] NestedRecords { get; set; }
     }
 
     private sealed class SeparatorRow

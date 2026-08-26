@@ -8,16 +8,7 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Poco;
 
 /// <summary>
-/// The compiled read plan: which tier a column is scattered through, which (column type, property type) pairs are
-/// accepted, and which are refused. Per-type value coverage lives in the integration suite, driven off the
-/// round-trip corpus; what is here is what a server round trip cannot reach — the refusals, the tier choice and the
-/// parity between tiers, the plan cache key, and the shapes a real result cannot produce.
-///
-/// <para>
-/// A plan only needs a column's <see cref="IColumn.TypeName"/> and its <see cref="IColumn{T}"/> shape, so the
-/// blocks here are built from plain columns stamped with the type string under test — the same shape a decoded
-/// block presents.
-/// </para>
+/// Unit coverage for POCO read-plan validation, tier selection and parity, cache keys, and synthetic column shapes.
 /// </summary>
 [TestFixture]
 public class PocoReadPlanTests

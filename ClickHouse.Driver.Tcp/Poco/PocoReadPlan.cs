@@ -7,23 +7,13 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// The header identity a <see cref="PocoReadPlan{T}"/> is built against. Only the wire shape lives here, so it is
-/// shared by every POCO type rather than compiled once per type.
+/// Builds cache keys for result shapes used by <see cref="PocoReadPlan{T}"/>.
 /// </summary>
 internal static class PocoReadPlan
 {
     /// <summary>
-    /// The cache key for a block's shape: the resolution context, then each column's name and ClickHouse type. The
-    /// type string is the server's own header text, so two types that print alike cannot collide.
-    ///
-    /// <para>
-    /// Every part is length-prefixed rather than merely separated, because a column name is arbitrary text — a
-    /// backtick- or double-quoted alias may itself contain any separator character. Joined on a delimiter alone, the
-    /// header <c>[a Int32, b Int32]</c> and a single column named with that delimiter sequence produce the same key,
-    /// and the cache then hands one shape's plan to the other: columns silently unread, or an index past the block's
-    /// columns. Length prefixes make the key injective, so the shape a plan was compiled for is the only shape that
-    /// can find it.
-    /// </para>
+    /// Builds a length-prefixed key from the resolution context and each column's name and type. Length prefixes
+    /// prevent aliases containing separator characters from colliding with another header.
     /// </summary>
     /// <param name="block">The block whose header to key on.</param>
     /// <returns>The key.</returns>
@@ -42,9 +32,7 @@ internal static class PocoReadPlan
     }
 
     /// <summary>
-    /// The part of the key that is not in the header. A <c>DateTime</c> column whose type string names no timezone
-    /// resolves against the session timezone, so a plan built for one session timezone must not be reused for
-    /// another — the header alone cannot tell the two apart.
+    /// Builds the context part of the key, including the session timezone used by timezone-less types.
     /// </summary>
     /// <param name="context">The context the block's codecs were resolved with.</param>
     /// <returns>The key part.</returns>
@@ -54,14 +42,8 @@ internal static class PocoReadPlan
 }
 
 /// <summary>
-/// The compiled read plan for one POCO type over one block shape: a scatter per mapped column, plus the
-/// constructor the rows come from. Built once per (type, block shape) and cached, because the column types come
-/// from the server and so cannot be known from the type alone.
-///
-/// <para>
-/// A column that maps to no property is left with no scatter and never read — nothing has to be consumed to stay
-/// aligned, the block being already decoded. A property no column maps to keeps its default.
-/// </para>
+/// A compiled constructor and per-column scatter set for one POCO type and result shape. Unmapped columns are
+/// skipped; properties without columns retain their defaults.
 /// </summary>
 /// <typeparam name="T">The POCO type.</typeparam>
 internal sealed class PocoReadPlan<T>
@@ -83,8 +65,7 @@ internal sealed class PocoReadPlan<T>
     }
 
     /// <summary>
-    /// Compiles the plan for <paramref name="block"/>'s shape. Everything that can fail — an unsettable or
-    /// unreadable property, a type that cannot be constructed — fails here rather than part-way through a result.
+    /// Compiles the plan for <paramref name="block"/>'s shape, validating construction, mapping and conversions.
     /// </summary>
     /// <param name="descriptor">The POCO type's mapping.</param>
     /// <param name="block">A block of the shape to plan for; only its header and its columns' runtime shapes are read.</param>
@@ -147,10 +128,7 @@ internal sealed class PocoReadPlan<T>
     }
 
     /// <summary>
-    /// Whether <paramref name="block"/> has the shape this plan was compiled for, so an enumeration can reuse the
-    /// plan across the blocks of one result without going back to the cache. Compared column by column rather than
-    /// by the cache key, since every block builds its own header strings and no key has to be materialized to say
-    /// no.
+    /// Whether <paramref name="block"/> matches this plan's column names, types and resolution context.
     /// </summary>
     /// <param name="block">The block to check.</param>
     /// <returns>Whether the plan applies to it.</returns>
@@ -176,9 +154,7 @@ internal sealed class PocoReadPlan<T>
     }
 
     /// <summary>
-    /// A whole block in one pass. Convenient where the row count is known to be small, or where all of a block's
-    /// rows are wanted at once; a reader streaming a result of any size wants the windowed overload instead, so
-    /// that the rows it has handed on can be collected while it reads the rest.
+    /// Materializes a whole block into <paramref name="rows"/>.
     /// </summary>
     /// <param name="block">The block to materialize; must have the shape this plan was built for.</param>
     /// <param name="rows">The destination, at least <see cref="Block.RowCount"/> long.</param>
@@ -188,16 +164,8 @@ internal sealed class PocoReadPlan<T>
         => Materialize(block, rows, 0, block.RowCount, rowOffset);
 
     /// <summary>
-    /// Materializes rows <c>[start, start + count)</c> of a block into <c>rows[0, count)</c>: one instance per row,
-    /// then one scatter per mapped column. Synchronous by necessity — the span tier holds a
-    /// <see cref="ReadOnlySpan{T}"/>, which no async or iterator method may.
-    ///
-    /// <para>
-    /// Taking a block in windows rather than whole bounds how many rows are reachable at once, which is otherwise
-    /// however many rows the server chose to put in a block. That matters because a generational collector charges
-    /// for what survives a collection rather than for what it frees, so rows held for a whole block are copied
-    /// forward instead of being dropped.
-    /// </para>
+    /// Materializes block rows <c>[start, start + count)</c> into <c>rows[0, count)</c>. Keeping this synchronous
+    /// allows span-based scatters; callers may invoke it in windows to bound live rows.
     /// </summary>
     /// <param name="block">The block to materialize; must have the shape this plan was built for.</param>
     /// <param name="rows">The destination, at least <paramref name="count"/> long.</param>

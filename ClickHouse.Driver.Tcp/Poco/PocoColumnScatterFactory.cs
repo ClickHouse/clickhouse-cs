@@ -9,24 +9,18 @@ using ClickHouse.Driver.Tcp.Types.Codecs;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// Copies one decoded column into one property of every row of a materialized block — the compiled unit of a POCO
-/// read. Column-major rather than row-major: the block is already decoded, so the loop is taken over one column's
-/// values, which keeps the cast and the span access out of the per-row work.
+/// Copies one decoded column into one property across a range of POCO rows.
 /// </summary>
 /// <typeparam name="T">The POCO type.</typeparam>
-/// <param name="column">The column to read, already known to the plan that built this delegate.</param>
+/// <param name="column">The column to read.</param>
 /// <param name="rows">The rows to scatter into; at least <paramref name="rowCount"/> long, each already constructed.</param>
-/// <param name="start">The first row of <paramref name="column"/> to read. <c>rows[i]</c> takes column row
-/// <c>start + i</c>, so a block can be materialized in several passes without the rows moving.</param>
+/// <param name="start">The first column row to read; destination rows start at zero.</param>
 /// <param name="rowCount">The number of rows to fill.</param>
-/// <param name="rowOffset">How many rows of the result precede <c>rows[0]</c>, so a failure can name the row a caller
-/// counts rather than the row within a block they never see. Read only on the failure path.</param>
+/// <param name="rowOffset">The result-wide index of <c>rows[0]</c>, used in failures.</param>
 internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int start, int rowCount, long rowOffset);
 
 /// <summary>
-/// Compiles the per-column scatter delegates a <see cref="PocoReadPlan{T}"/> is made of. One delegate handles one
-/// (column, property) pair for a whole block, with the value conversion (<see cref="PocoValueProjection"/>) inlined
-/// into the loop rather than called through a delegate per row.
+/// Compiles a per-column loop with <see cref="PocoValueProjection"/> inlined into each assignment.
 /// </summary>
 internal static class PocoColumnScatterFactory
 {
@@ -40,9 +34,7 @@ internal static class PocoColumnScatterFactory
     /// <param name="codec">The column's codec, resolved the way the read resolved it.</param>
     /// <param name="member">The property the column maps to; must be settable.</param>
     /// <param name="forcedTier">A tier to compile regardless of the runtime, or null to choose one.</param>
-    /// <param name="preferInterpretation">Compiles the tree to an interpreter rather than to IL. Not used in
-    /// production — the runtime decides that — but it is the only way to exercise the path a runtime without dynamic
-    /// code takes, which is the whole reason the indexer tier exists.</param>
+    /// <param name="preferInterpretation">Whether to interpret the expression tree; used to test dynamic-code-free runtimes.</param>
     /// <returns>The compiled scatter.</returns>
     /// <exception cref="InvalidOperationException">The column's values cannot be read as the property's type, or the
     /// column does not surface its codec's element type.</exception>
@@ -103,16 +95,7 @@ internal static class PocoColumnScatterFactory
     }
 
     /// <summary>
-    /// Picks the tier to compile: the caller's, or one chosen from the runtime and the column.
-    ///
-    /// <para>
-    /// Two conditions have to hold for the span tier. A tree holding a <c>ReadOnlySpan&lt;T&gt;</c> compiles but
-    /// cannot be <em>interpreted</em>, which is the path taken when the runtime has no dynamic code (NativeAOT), so
-    /// the span tier is not offered there at all. And the column's <see cref="IColumn{T}.Values"/> has to be free to
-    /// read (<see cref="IStoredValuesColumn"/>): hoisting it out of the loop is the point of the tier, but for a
-    /// column that builds its values on access that one read materializes the whole block and pins it for the
-    /// block's lifetime, which is exactly what a windowed materialization is trying to avoid.
-    /// </para>
+    /// Uses the forced tier, or selects spans only when dynamic code is compiled and values are already stored.
     /// </summary>
     /// <param name="forcedTier">A tier to use in place of the choice, or null to choose.</param>
     /// <param name="column">The column to be read, consulted for whether its values are stored or built.</param>
@@ -123,8 +106,7 @@ internal static class PocoColumnScatterFactory
             : PocoScatterTier.Indexer);
 
     /// <summary>
-    /// Builds the expression that yields the value at <paramref name="row"/>, adding whatever the tier hoists out
-    /// of the loop (the span, or the cast column) to the enclosing block.
+    /// Builds one indexed read and adds its hoisted locals and prologue to the enclosing expression block.
     /// </summary>
     /// <param name="tier">The tier to source through.</param>
     /// <param name="column">The scatter's column parameter.</param>
@@ -164,10 +146,7 @@ internal static class PocoColumnScatterFactory
     }
 
     /// <summary>
-    /// The failure for a column that does not implement <see cref="IColumn{T}"/> over its own codec's element type.
-    /// Both tiers cast to that interface, so such a column would otherwise fail the cast inside compiled code, on
-    /// the first block rather than at plan build. No shipped codec produces one — a codec and the column it reads
-    /// are written together — so this reports the codec bug rather than the cast that follows from it.
+    /// Reports a column that does not implement <see cref="IColumn{T}"/> for its codec's element type.
     /// </summary>
     /// <param name="column">The column.</param>
     /// <param name="codec">The column's codec.</param>
@@ -178,8 +157,7 @@ internal static class PocoColumnScatterFactory
             $"as its codec {codec.GetType()} declares. A POCO read sources every value through that interface, so the column cannot be read into a property.");
 
     /// <summary>
-    /// The failure for a property the column cannot be read as (D6d): raised at plan build, so it names the shape
-    /// rather than surfacing as a cast failure part-way through a result.
+    /// Reports a property type the column cannot be read as.
     /// </summary>
     /// <param name="column">The column.</param>
     /// <param name="codec">The column's codec, for the types it can be read as.</param>
@@ -208,11 +186,7 @@ internal static class PocoColumnScatterFactory
     }
 
     /// <summary>
-    /// Whether a parsed type names <c>Nothing</c> anywhere in its tree. Walked as a tree, and matched exactly,
-    /// because a type <em>string</em> also carries arbitrary caller text: the label of an
-    /// <c>Enum8('Nothing' = 1)</c> and the field name of a named <c>Tuple</c> both live in it, so searching the text
-    /// would diagnose a perfectly well-typed column as an untyped NULL. A label arrives as one childless node whose
-    /// name is its raw token (quotes and ordinal included), so only a real type node matches.
+    /// Whether a parsed type contains a real <c>Nothing</c> node, excluding labels or field names with that text.
     /// </summary>
     /// <param name="node">The parsed column type.</param>
     /// <returns>Whether the type is, or contains, <c>Nothing</c>.</returns>
