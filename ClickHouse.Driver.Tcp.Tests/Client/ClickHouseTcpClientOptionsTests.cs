@@ -133,6 +133,33 @@ public class ClickHouseTcpClientOptionsTests
         Assert.DoesNotThrow(() => options.Validate());
     }
 
+    [TestCase("")]
+    [TestCase("   ")]
+    public void Validate_EmptyTlsCaCertificatePath_ThrowsArgumentException(string path)
+    {
+        var options = new ClickHouseTcpClientOptions
+        {
+            UseTls = true,
+            TlsCaCertificatePath = path,
+        };
+
+        var thrown = Assert.Throws<ArgumentException>(() => options.Validate());
+
+        Assert.That(thrown.ParamName, Is.EqualTo(nameof(ClickHouseTcpClientOptions.TlsCaCertificatePath)));
+    }
+
+    [Test]
+    public void Validate_NullTlsCaCertificatePath_UsesHostTrustAndDoesNotThrow()
+    {
+        var options = new ClickHouseTcpClientOptions
+        {
+            UseTls = true,
+            TlsCaCertificatePath = null,
+        };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
     [Test]
     public void Validate_TlsWithValidationTurnedOff_DoesNotThrow()
     {

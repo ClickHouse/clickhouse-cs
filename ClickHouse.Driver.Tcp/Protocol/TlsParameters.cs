@@ -47,17 +47,35 @@ internal sealed class TlsParameters : IDisposable
     /// </summary>
     /// <param name="path">Path to a PEM file holding one or more certificates.</param>
     /// <returns>The certificates in the file.</returns>
-    /// <exception cref="ArgumentException">The file holds no certificate.</exception>
+    /// <exception cref="ArgumentException">The file holds no certificate, or holds no self-issued root.</exception>
     internal static X509Certificate2Collection LoadCaCertificates(string path)
     {
         var certificates = new X509Certificate2Collection();
-        certificates.ImportFromPemFile(path);
-        if (certificates.Count == 0)
+        try
         {
-            throw new ArgumentException($"The certificate authority file '{path}' contains no PEM certificate.", nameof(path));
-        }
+            certificates.ImportFromPemFile(path);
+            if (certificates.Count == 0)
+            {
+                throw new ArgumentException($"The certificate authority file '{path}' contains no PEM certificate.", nameof(path));
+            }
 
-        return certificates;
+            foreach (X509Certificate2 certificate in certificates)
+            {
+                if (IsSelfIssued(certificate))
+                {
+                    return certificates;
+                }
+            }
+
+            throw new ArgumentException(
+                $"The certificate authority file '{path}' contains no self-issued root certificate.",
+                nameof(path));
+        }
+        catch
+        {
+            DisposeCertificates(certificates);
+            throw;
+        }
     }
 
     /// <summary>
@@ -70,9 +88,8 @@ internal sealed class TlsParameters : IDisposable
     /// <returns>The encrypted stream.</returns>
     internal async ValueTask<Stream> WrapAsync(Stream inner, CancellationToken cancellationToken)
     {
-        // Refused rather than continued: the pinned authorities are gone once this is disposed, and the branch
-        // below that selects them tests for a non-empty collection. Carrying on would fall through to the host
-        // trust store, quietly turning exclusive pinning into whatever the machine happens to trust.
+        // Refused rather than continued: the pinned authorities are gone once this is disposed. Carrying on could
+        // otherwise negotiate with certificates whose native resources were already released.
         ObjectDisposedException.ThrowIf(disposed, this);
 
         var ssl = new SslStream(inner, leaveInnerStreamOpen: false);
@@ -89,9 +106,9 @@ internal sealed class TlsParameters : IDisposable
                 authentication.RemoteCertificateValidationCallback = static (_, _, _, _) => true;
 #pragma warning restore CA5359
             }
-            else if (CaCertificates is { Count: > 0 } roots)
+            else if (CaCertificates is { } authorities)
             {
-                authentication.CertificateChainPolicy = PinnedRootPolicy(roots);
+                authentication.CertificateChainPolicy = PinnedRootPolicy(authorities);
             }
 
             // Last, so a caller can override any of the above. The pinned roots are expressed as a chain policy
@@ -99,8 +116,6 @@ internal sealed class TlsParameters : IDisposable
             // the verification time, the revocation mode, the flags — and every change takes effect, because this
             // is the policy the handshake builds the chain with.
             Configure?.Invoke(authentication);
-
-            NormalizeRevocationMode(authentication);
 
             await ssl.AuthenticateAsClientAsync(authentication, cancellationToken).ConfigureAwait(false);
             return ssl;
@@ -110,27 +125,6 @@ internal sealed class TlsParameters : IDisposable
             // Built with leaveInnerStreamOpen false, so this closes the inner stream as well.
             ssl.Dispose();
             throw;
-        }
-    }
-
-    /// <summary>
-    /// Carries a revocation mode set on the options into the chain policy, which is the only place the handshake
-    /// reads it from once a policy is present.
-    /// </summary>
-    /// <remarks>
-    /// The platform copies <c>CertificateRevocationCheckMode</c> into the chain policy it builds, but only when it
-    /// builds one. Once a policy is supplied — which pinning does — the top-level property is ignored, so
-    /// <c>ConfigureTls</c> setting the obvious property would silently do nothing and a revoked certificate would
-    /// be accepted. Both values start at <c>NoCheck</c>, so a change to either is visible; a nested edit wins,
-    /// because a caller who reached into the policy meant that policy.
-    /// </remarks>
-    /// <param name="authentication">The options about to be handed to the handshake.</param>
-    private static void NormalizeRevocationMode(SslClientAuthenticationOptions authentication)
-    {
-        if (authentication.CertificateChainPolicy is { RevocationMode: X509RevocationMode.NoCheck } policy
-            && authentication.CertificateRevocationCheckMode != X509RevocationMode.NoCheck)
-        {
-            policy.RevocationMode = authentication.CertificateRevocationCheckMode;
         }
     }
 
@@ -146,7 +140,7 @@ internal sealed class TlsParameters : IDisposable
             return;
         }
 
-        // Set first, so a use racing this disposal is refused rather than handed certificates being freed.
+        // Mark disposed before releasing the certificates so any later use is refused.
         disposed = true;
 
         if (CaCertificates is not { } certificates)
@@ -154,13 +148,10 @@ internal sealed class TlsParameters : IDisposable
             return;
         }
 
-        foreach (X509Certificate2 certificate in certificates)
-        {
-            certificate.Dispose();
-        }
+        DisposeCertificates(certificates);
 
-        // The collection is deliberately left populated. Clearing it would make the pinned-roots branch in
-        // WrapAsync see an empty set and skip, which is the fall-through to host trust the flag above prevents.
+        // The collection is deliberately left populated so a concurrent use cannot observe a different policy;
+        // the disposed flag above makes every later use fail before it reaches the certificates.
     }
 
     /// <summary>
@@ -168,13 +159,13 @@ internal sealed class TlsParameters : IDisposable
     /// the chain with this policy, so the host-name match it always applies is unaffected.
     /// </summary>
     /// <remarks>
-    /// Pinning replaces the host's trust store rather than adding to it: the server must chain to one of these
-    /// authorities, and a certificate the host would accept on its own is refused. An additive check would still
-    /// take a certificate mis-issued by any public authority, which is what pinning a private root prevents.
+    /// Pinning replaces the host's trust store rather than adding to it: the server must chain to one of the
+    /// self-issued roots. Other certificates in the bundle are available only as intermediates while building
+    /// that chain. A certificate the host would accept on its own is refused.
     /// </remarks>
-    /// <param name="roots">The certificate authorities to trust.</param>
+    /// <param name="authorities">The root and intermediate certificate authorities to use.</param>
     /// <returns>The policy to hand the handshake.</returns>
-    private static X509ChainPolicy PinnedRootPolicy(X509Certificate2Collection roots)
+    private static X509ChainPolicy PinnedRootPolicy(X509Certificate2Collection authorities)
     {
         var policy = new X509ChainPolicy
         {
@@ -185,7 +176,22 @@ internal sealed class TlsParameters : IDisposable
             RevocationMode = X509RevocationMode.NoCheck,
         };
 
-        policy.CustomTrustStore.AddRange(roots);
+        foreach (X509Certificate2 certificate in authorities)
+        {
+            if (IsSelfIssued(certificate))
+            {
+                policy.CustomTrustStore.Add(certificate);
+            }
+            else
+            {
+                policy.ExtraStore.Add(certificate);
+            }
+        }
+
+        if (policy.CustomTrustStore.Count == 0)
+        {
+            throw new InvalidOperationException("The configured certificate authorities contain no self-issued root certificate.");
+        }
 
         // A server certificate must not exclude server authentication, so that a private authority which also
         // issues client certificates cannot let the holder of one impersonate a host its name covers. The
@@ -193,5 +199,18 @@ internal sealed class TlsParameters : IDisposable
         // policy a caller can read and does not leave it resting on that behaviour.
         policy.ApplicationPolicy.Add(ServerAuthentication);
         return policy;
+    }
+
+    // Match the classification used by .NET's OpenSSL and Apple chain PALs: a self-issued certificate is a
+    // configured trust anchor, while every other certificate is only available to build the chain.
+    private static bool IsSelfIssued(X509Certificate2 certificate)
+        => certificate.SubjectName.RawData.AsSpan().SequenceEqual(certificate.IssuerName.RawData);
+
+    private static void DisposeCertificates(X509Certificate2Collection certificates)
+    {
+        foreach (X509Certificate2 certificate in certificates)
+        {
+            certificate.Dispose();
+        }
     }
 }
