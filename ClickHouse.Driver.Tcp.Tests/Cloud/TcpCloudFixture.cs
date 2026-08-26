@@ -35,12 +35,25 @@ internal static class TcpCloudFixture
 
         var options = ClickHouseTcpClientOptions.FromConnectionString(connectionString);
 
-        // Without this the whole fixture would keep passing over a plaintext connection, proving nothing about
-        // the transport it exists to cover.
-        Assert.That(
-            options.UseTls,
-            Is.True,
-            $"{ConnectionVariable} must set UseTls=true; these tests exist to exercise the TLS transport.");
+        // These tests prove both the TLS transport and validation through the host's public trust store. Letting
+        // the connection string bypass validation or supply a private authority would make that proof vacuous.
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.UseTls,
+                Is.True,
+                $"{ConnectionVariable} must set UseTls=true; these tests exist to exercise the TLS transport.");
+            Assert.That(
+                options.TlsAllowInvalidCertificates,
+                Is.False,
+                $"{ConnectionVariable} must not set TlsAllowInvalidCertificates=true; these tests must " +
+                "validate the service certificate.");
+            Assert.That(
+                options.TlsCaCertificatePath,
+                Is.Null,
+                $"{ConnectionVariable} must not set TlsCaCertificatePath; these tests must use the host's " +
+                "public trust store.");
+        });
 
         return options;
     }

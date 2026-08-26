@@ -29,6 +29,37 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         ConnectionString = connectionString;
     }
 
+    /// <inheritdoc/>
+    public override object this[string keyword]
+    {
+        get => base[keyword];
+        set
+        {
+            if (IsRequiredSecurityValue(keyword)
+                && (value is null || (value is string text && string.IsNullOrWhiteSpace(text))))
+            {
+                throw EmptySecurityValue(keyword);
+            }
+
+            base[keyword] = value;
+        }
+    }
+
+    /// <inheritdoc/>
+    public override bool Remove(string keyword)
+    {
+        // DbConnectionStringBuilder represents an unquoted empty value by calling Remove rather than retaining
+        // the key. Intercept that virtual call so UseTls= cannot disappear and become the plaintext default, and
+        // an empty CA path cannot disappear and silently switch to the host trust store. This also reaches a
+        // ConnectionString setter invoked through a DbConnectionStringBuilder reference.
+        if (IsRequiredSecurityValue(keyword))
+        {
+            throw EmptySecurityValue(keyword);
+        }
+
+        return base.Remove(keyword);
+    }
+
     /// <summary>The server host name or address. Defaults to <c>localhost</c>.</summary>
     public string Host
     {
@@ -111,10 +142,26 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
     }
 
     /// <summary>Path to a PEM file of certificate authorities to validate the server against. Absent uses the host's trust store.</summary>
+    /// <remarks>
+    /// At least one self-issued root is required. Other certificates in the file are used only to build a chain
+    /// to one of those roots.
+    /// </remarks>
     public string TlsCaCertificatePath
     {
         get => GetStringOrDefault("TlsCaCertificatePath", null);
-        set => this["TlsCaCertificatePath"] = value;
+        set
+        {
+            if (value is null)
+            {
+                // Null on the typed property deliberately means "use the host trust store". Call the base
+                // implementation directly so it is not confused with an empty value erased by the parser.
+                base.Remove("TlsCaCertificatePath");
+            }
+            else
+            {
+                this["TlsCaCertificatePath"] = value;
+            }
+        }
     }
 
     /// <summary>The connect-plus-handshake deadline, in seconds. Defaults to 30.</summary>
@@ -323,6 +370,19 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
                 $"Connection-string key '{name}' has value '{value}', which is not a boolean. Use true, false, 1, or 0."),
         };
     }
+
+    private static bool IsRequiredSecurityValue(string keyword)
+        => string.Equals(keyword, "UseTls", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(keyword, "TlsCaCertificatePath", StringComparison.OrdinalIgnoreCase);
+
+    private static ArgumentException EmptySecurityValue(string keyword)
+        => string.Equals(keyword, "UseTls", StringComparison.OrdinalIgnoreCase)
+            ? new ArgumentException(
+                $"Connection-string key '{keyword}' must be true, false, 1, or 0; an empty value could silently select a plaintext connection.",
+                keyword)
+            : new ArgumentException(
+                $"Connection-string key '{keyword}' must name a PEM certificate file; omit it from the connection string to use the host trust store.",
+                keyword);
 
     // An enum value read back is normally the name a connection string carried (the typed setter stores a name
     // too); a boxed enum arrives only through the untyped indexer. Names are matched case-insensitively, as

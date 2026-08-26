@@ -89,8 +89,9 @@ public sealed record ClickHouseTcpClientOptions
 
     /// <summary>
     /// Path to a PEM file of certificate authorities to validate the server against, instead of the host's trust
-    /// store. Null, the default, uses the host's trust store. The file may hold several certificates; the host
-    /// name is still matched either way.
+    /// store. Null, the default, uses the host's trust store. The file must contain at least one self-issued root;
+    /// it may also contain intermediate certificates needed to build the server's chain. The host name is still
+    /// matched either way.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -100,7 +101,9 @@ public sealed record ClickHouseTcpClientOptions
     /// </para>
     /// <para>
     /// The file is read once, when the client is constructed, so a missing or malformed file fails there rather
-    /// than on the first connection. Cannot be combined with <see cref="TlsAllowInvalidCertificates"/>.
+    /// than on the first connection. Self-issued certificates are the trust anchors; other certificates in the
+    /// file are available only to build a chain to one of those anchors. Cannot be combined with
+    /// <see cref="TlsAllowInvalidCertificates"/>.
     /// </para>
     /// </remarks>
     public string TlsCaCertificatePath { get; init; }
@@ -121,10 +124,8 @@ public sealed record ClickHouseTcpClientOptions
     /// </para>
     /// <para>
     /// With <see cref="TlsCaCertificatePath"/> set, a <c>CertificateChainPolicy</c> is already in place, and the
-    /// hook receives it and may edit it. Revocation checking can be asked for either way — on
-    /// <c>CertificateRevocationCheckMode</c> or on the policy's own <c>RevocationMode</c> — because a value set on
-    /// the former is carried into the latter, which is the only one the handshake reads once a policy exists. A
-    /// value set directly on the policy takes precedence.
+    /// hook receives it and may edit it. In that case .NET ignores <c>CertificateRevocationCheckMode</c>; configure
+    /// revocation through the policy's own <c>RevocationMode</c> property instead.
     /// </para>
     /// </remarks>
     public Action<SslClientAuthenticationOptions> ConfigureTls { get; init; }
@@ -305,16 +306,21 @@ public sealed record ClickHouseTcpClientOptions
             throw new ArgumentOutOfRangeException(nameof(Port), port, "Port must be between 1 and 65535.");
         }
 
-        // The emptiness tests match what the connection factory treats as set, so a value it would ignore is not
-        // rejected here (and one it would honour is never let through).
+        if (TlsCaCertificatePath is not null && string.IsNullOrWhiteSpace(TlsCaCertificatePath))
+        {
+            throw new ArgumentException(
+                $"{nameof(TlsCaCertificatePath)} must be null or a non-empty path.",
+                nameof(TlsCaCertificatePath));
+        }
+
         RequireTlsFor(!string.IsNullOrEmpty(TlsServerName), nameof(TlsServerName));
         RequireTlsFor(TlsAllowInvalidCertificates, nameof(TlsAllowInvalidCertificates));
-        RequireTlsFor(!string.IsNullOrEmpty(TlsCaCertificatePath), nameof(TlsCaCertificatePath));
+        RequireTlsFor(TlsCaCertificatePath is not null, nameof(TlsCaCertificatePath));
         RequireTlsFor(ConfigureTls is not null, nameof(ConfigureTls));
 
         // Contradictory: with validation off no certificate is checked against anything, so the authority would
         // be read from disk and never consulted. Refusing beats a precedence rule nobody reads.
-        if (TlsAllowInvalidCertificates && !string.IsNullOrEmpty(TlsCaCertificatePath))
+        if (TlsAllowInvalidCertificates && TlsCaCertificatePath is not null)
         {
             throw new ArgumentException(
                 $"{nameof(TlsAllowInvalidCertificates)} and {nameof(TlsCaCertificatePath)} cannot both be set: with certificate validation off the authority is never consulted.",
