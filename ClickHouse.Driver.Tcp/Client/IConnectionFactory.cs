@@ -68,7 +68,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
         try
         {
             ClickHouseTcpConnection connection = await ClickHouseTcpConnection.ConnectAsync(
-                options.Host, options.ResolvedPort, options.ToHandshakeParameters(), tls, linked.Token, options.Compressor).ConfigureAwait(false);
+                options.Host, options.ResolvedPort, options.ToHandshakeParameters(), tls, linked.Token, options.Compressor, options.ReadTimeout).ConfigureAwait(false);
 
             activity?.SetSuccess();
             if (logger is not null)
