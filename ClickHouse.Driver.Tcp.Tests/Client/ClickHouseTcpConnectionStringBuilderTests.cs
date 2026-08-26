@@ -1,4 +1,5 @@
 using System;
+using System.Data.Common;
 
 namespace ClickHouse.Driver.Tcp.Tests.Client;
 
@@ -360,8 +361,36 @@ public class ClickHouseTcpConnectionStringBuilderTests
         Assert.That(options.UseTls, Is.EqualTo(expected));
     }
 
-    // 'UseTls=' with nothing after it is not covered: DbConnectionStringBuilder drops a key with an empty value
-    // while parsing, so it never reaches the getter and reads as absent, exactly like omitting the key.
+    [TestCase("Host=h;UseTls=")]
+    [TestCase("Host=h;UseTls=   ")]
+    [TestCase("Host=h;UseTls=\"\"")]
+    [TestCase("Host=h;UseTls=\"   \"")]
+    [TestCase("Host=h;UseTls=true;UseTls=")]
+    public void Constructor_UseTlsWithAnEmptyValue_ThrowsRatherThanSelectingPlaintext(string connectionString)
+    {
+        Assert.Throws<ArgumentException>(() => new ClickHouseTcpConnectionStringBuilder(connectionString));
+    }
+
+    [Test]
+    public void ConnectionString_SetThroughBaseTypeWithAnEmptyUseTls_ThrowsRatherThanSelectingPlaintext()
+    {
+        DbConnectionStringBuilder builder = new ClickHouseTcpConnectionStringBuilder();
+
+        Assert.Throws<ArgumentException>(() => builder.ConnectionString = "Host=h;UseTls=");
+    }
+
+    [Test]
+    public void FromConnectionString_EmptyUseTls_ThrowsRatherThanSelectingPlaintext()
+    {
+        Assert.Throws<ArgumentException>(() => ClickHouseTcpClientOptions.FromConnectionString("Host=h;UseTls="));
+    }
+
+    [Test]
+    public void ClickHouseTcpClient_EmptyUseTls_ThrowsAtConstructionRatherThanSelectingPlaintext()
+    {
+        Assert.Throws<ArgumentException>(() => new ClickHouseTcpClient("Host=h;UseTls="));
+    }
+
     [TestCase("yes")]
     [TestCase("on")]
     [TestCase("2")]
@@ -418,6 +447,50 @@ public class ClickHouseTcpConnectionStringBuilderTests
             Assert.That(reparsed.TlsAllowInvalidCertificates, Is.True);
             Assert.That(reparsed.TlsCaCertificatePath, Is.EqualTo("/tmp/rt-ca.pem"));
         });
+    }
+
+    [TestCase("Host=h;UseTls=true;TlsCaCertificatePath=")]
+    [TestCase("Host=h;UseTls=true;TlsCaCertificatePath=   ")]
+    [TestCase("Host=h;UseTls=true;TlsCaCertificatePath=\"\"")]
+    [TestCase("Host=h;UseTls=true;TlsCaCertificatePath=\"   \"")]
+    [TestCase("Host=h;UseTls=true;TlsCaCertificatePath=/tmp/ca.pem;TlsCaCertificatePath=")]
+    public void Constructor_TlsCaCertificatePathWithAnEmptyValue_ThrowsRatherThanUsingHostTrust(string connectionString)
+    {
+        Assert.Throws<ArgumentException>(() => new ClickHouseTcpConnectionStringBuilder(connectionString));
+    }
+
+    [Test]
+    public void TlsCaCertificatePath_SetToNull_RemovesTheKeyAndUsesHostTrust()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder
+        {
+            Host = "h",
+            UseTls = true,
+            TlsCaCertificatePath = "/tmp/ca.pem",
+        };
+
+        builder.TlsCaCertificatePath = null;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.TlsCaCertificatePath, Is.Null);
+            Assert.That(builder.ConnectionString, Does.Not.Contain(nameof(builder.TlsCaCertificatePath)).IgnoreCase);
+            Assert.That(builder.ToOptions().TlsCaCertificatePath, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Clear_BuilderHoldingSecurityKeys_RemovesThemWithoutTreatingThemAsEmptyValues()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder
+        {
+            Host = "h",
+            UseTls = true,
+            TlsCaCertificatePath = "/tmp/ca.pem",
+        };
+
+        Assert.DoesNotThrow(builder.Clear);
+        Assert.That(builder.ConnectionString, Is.Empty);
     }
 
     [Test]

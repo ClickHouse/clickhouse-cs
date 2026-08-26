@@ -253,6 +253,23 @@ public class TcpConnectionFactoryTests
     }
 
     [Test]
+    public void ClickHouseTcpClient_TlsCaCertificatePathHoldingOnlyAnIntermediate_ThrowsAtConstruction()
+    {
+        using X509Certificate2 root = TestCertificates.CreateAuthority();
+        using X509Certificate2 intermediate = TestCertificates.CreateIntermediate(root);
+        var options = new ClickHouseTcpClientOptions
+        {
+            Host = "127.0.0.1",
+            UseTls = true,
+            TlsCaCertificatePath = TestCertificates.WritePemFile(intermediate),
+        };
+
+        var thrown = Assert.Throws<ArgumentException>(() => new ClickHouseTcpClient(options));
+
+        Assert.That(thrown.Message, Does.Contain("root certificate"));
+    }
+
+    [Test]
     public void Constructor_NoTls_DoesNotThrow()
     {
         // A plaintext factory must not touch any TLS machinery, so constructing one reads no certificate file.

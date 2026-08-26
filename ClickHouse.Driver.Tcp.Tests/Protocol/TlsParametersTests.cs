@@ -144,6 +144,33 @@ public class TlsParametersTests
     }
 
     [Test]
+    public async Task WrapAsync_RootAndIntermediateInBundleWithServerSendingOnlyLeaf_CompletesHandshake()
+    {
+        // Self-issued certificates in the configured bundle are trust anchors. The intermediate belongs in
+        // ExtraStore, where it can complete a chain even when the server sends only its leaf certificate.
+        using X509Certificate2 root = TestCertificates.CreateAuthority();
+        using X509Certificate2 intermediate = TestCertificates.CreateIntermediate(root);
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(intermediate, ServerName);
+        X509ChainPolicy observed = null;
+
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(root, intermediate)),
+            Configure = options => observed = options.CertificateChainPolicy,
+        };
+
+        byte[] echoed = await RoundTripThroughTlsAsync(server, tls);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(echoed, Is.EqualTo(Payload));
+            Assert.That(observed?.CustomTrustStore, Has.Count.EqualTo(1));
+            Assert.That(observed?.ExtraStore, Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void WrapAsync_ConfigureHookRejects_OverridesTheDeclarativeSettings()
     {
         // The hook is documented as applied last, so it must be able to override even AllowInvalidCertificates.
@@ -208,12 +235,10 @@ public class TlsParametersTests
     }
 
     [Test]
-    public void WrapAsync_ConfigureHookSetsTheTopLevelRevocationMode_TheHandshakeStillHonoursIt()
+    public async Task WrapAsync_PinnedPolicyAndHookSetsOnlyTopLevelRevocationMode_ThePolicyRemainsAuthoritative()
     {
-        // The trap this covers: the platform reads CertificateRevocationCheckMode only when it builds the chain
-        // policy itself. Pinning supplies one, so setting the obvious top-level property was silently ignored and
-        // a revoked certificate would have been accepted. Neither test certificate names a revocation list, so a
-        // handshake that honours the request cannot establish revocation status and refuses.
+        // A supplied CertificateChainPolicy supersedes CertificateRevocationCheckMode in .NET. The hook is applied
+        // last, so the driver must not translate the top-level value into the policy after the hook returns.
         using X509Certificate2 authority = TestCertificates.CreateAuthority();
         using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
 
@@ -224,13 +249,38 @@ public class TlsParametersTests
             Configure = options => options.CertificateRevocationCheckMode = X509RevocationMode.Online,
         };
 
-        Assert.ThrowsAsync<AuthenticationException>(async () => await RoundTripThroughTlsAsync(server, tls));
+        Assert.That(await RoundTripThroughTlsAsync(server, tls), Is.EqualTo(Payload));
     }
 
-    // Both revocation modes reject a certificate that names no revocation list, so the handshake outcome cannot say
-    // which value was applied. The policy object can: the hook captures the instance, and normalization mutates that
-    // same instance, so reading it afterwards shows the value the handshake was given.
-    [TestCase(X509RevocationMode.NoCheck, X509RevocationMode.Online, TestName = "{m}(nested left default, top-level carried in)")]
+    [Test]
+    public async Task WrapAsync_NoSuppliedPolicyAndHookSetsTopLevelRevocationMode_TheGeneratedPolicyUsesIt()
+    {
+        // Without a supplied CertificateChainPolicy, .NET carries CertificateRevocationCheckMode into the policy
+        // it builds. The callback accepts the private certificate but observes that generated policy directly.
+        using X509Certificate2 server = TestCertificates.CreateSelfSignedServerCertificate(ServerName);
+        X509RevocationMode? observed = null;
+
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            Configure = options =>
+            {
+                options.CertificateRevocationCheckMode = X509RevocationMode.Online;
+                options.RemoteCertificateValidationCallback = (_, _, chain, _) =>
+                {
+                    observed = chain?.ChainPolicy.RevocationMode;
+                    return true;
+                };
+            },
+        };
+
+        Assert.That(await RoundTripThroughTlsAsync(server, tls), Is.EqualTo(Payload));
+        Assert.That(observed, Is.EqualTo(X509RevocationMode.Online));
+    }
+
+    // The policy object records the authoritative value even when the handshake fails because the test certificates
+    // carry no revocation information.
+    [TestCase(X509RevocationMode.NoCheck, X509RevocationMode.NoCheck, TestName = "{m}(nested NoCheck remains authoritative)")]
     [TestCase(X509RevocationMode.Offline, X509RevocationMode.Offline, TestName = "{m}(nested set explicitly, nested kept)")]
     public async Task WrapAsync_HookSetsRevocationOnBothForms_ThePolicyEndsUpWithTheRightValue(
         X509RevocationMode nested,
@@ -258,7 +308,7 @@ public class TlsParametersTests
         }
         catch (AuthenticationException)
         {
-            // Expected either way: neither certificate names a revocation list. The value is the subject here.
+            // Offline cannot establish revocation status for these certificates. The policy value is the subject.
         }
 
         Assert.That(captured?.RevocationMode, Is.EqualTo(expected));
@@ -322,11 +372,8 @@ public class TlsParametersTests
     [Test]
     public void WrapAsync_AfterDispose_RefusesInsteadOfFallingBackToTheHostTrustStore()
     {
-        // The pinned-roots branch tests for a non-empty collection, so roots that were disposed and emptied would
-        // skip it and leave the handshake validating against the host trust store instead. This certificate is
-        // from a private authority, so that fall-through happens to fail here too — but against a publicly
-        // trusted certificate, which is exactly what pinning a private authority is meant to exclude, it would
-        // succeed. Hence a refusal rather than a fall-through.
+        // Disposing releases the configured authorities' native handles. A later handshake must be refused before
+        // it can try to build a policy from those disposed certificates.
         using X509Certificate2 authority = TestCertificates.CreateAuthority();
         using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
 
@@ -382,6 +429,18 @@ public class TlsParametersTests
         string path = Path.Combine(Path.GetTempPath(), $"tcp-tls-absent-{Guid.NewGuid():N}.pem");
 
         Assert.Throws<FileNotFoundException>(() => TlsParameters.LoadCaCertificates(path));
+    }
+
+    [Test]
+    public void LoadCaCertificates_PemFileHoldingOnlyAnIntermediate_ThrowsArgumentException()
+    {
+        using X509Certificate2 root = TestCertificates.CreateAuthority();
+        using X509Certificate2 intermediate = TestCertificates.CreateIntermediate(root);
+        string path = TestCertificates.WritePemFile(intermediate);
+
+        var thrown = Assert.Throws<ArgumentException>(() => TlsParameters.LoadCaCertificates(path));
+
+        Assert.That(thrown.Message, Does.Contain("root certificate"));
     }
 
     [Test]

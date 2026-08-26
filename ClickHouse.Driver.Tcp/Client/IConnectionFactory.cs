@@ -81,9 +81,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
                 // names something else (an internal alias, or a Host given as an address).
                 TargetHost = string.IsNullOrEmpty(options.TlsServerName) ? options.Host : options.TlsServerName,
                 AllowInvalidCertificates = options.TlsAllowInvalidCertificates,
-                // IsNullOrEmpty, matching Validate: an empty path is not a configured authority there, so reading
-                // it as one here would fail construction for a client that validation just accepted.
-                CaCertificates = string.IsNullOrEmpty(options.TlsCaCertificatePath)
+                CaCertificates = options.TlsCaCertificatePath is null
                     ? null
                     : TlsParameters.LoadCaCertificates(options.TlsCaCertificatePath),
                 Configure = options.ConfigureTls,

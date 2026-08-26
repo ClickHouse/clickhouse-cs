@@ -1247,6 +1247,9 @@ public class ConnectionPoolTests
         // The factory owns what outlives a single connection — the TLS certificate authorities — so the pool has to
         // release it, and only once nothing can still be handshaking against it.
         var factory = new FakeConnectionFactory();
+        bool everyConnectionWasClosed = false;
+        factory.OnDispose = () => everyConnectionWasClosed = factory.Created
+            .All(c => c.State == TcpConnectionState.Terminated);
         var pool = new ConnectionPool(Options(maxPoolSize: 3), factory, new ControlledTimeProvider());
         await ReturnConcurrentLeasesAsync(pool, 3);
 
@@ -1255,58 +1258,130 @@ public class ConnectionPoolTests
         Assert.Multiple(() =>
         {
             Assert.That(factory.Disposed, Is.True);
+            Assert.That(factory.DisposeCount, Is.EqualTo(1));
             Assert.That(
-                factory.Created.Select(c => c.State),
-                Is.All.EqualTo(TcpConnectionState.Terminated),
+                everyConnectionWasClosed,
+                Is.True,
                 "the connections are closed before the factory goes, not after");
         });
     }
 
     [Test]
-    public async Task DisposeAsync_ADialStillRunningPastTheDrainDeadline_LeavesTheFactoryUndisposed()
+    public async Task DisposeAsync_DeferredFactoryDisposalThrows_DoesNotReplaceTheDialFailure()
     {
-        // The dial is the one caller disposal cannot reach: it holds a permit but is not in `leased`, so the abort
-        // after the drain deadline does not see it. Disposing the factory anyway would free the TLS certificate
-        // authorities under a live handshake, which surfaces as a cryptographic error from inside the platform.
-        // Holding every permit is the only proof that no dial is running, so a drain that timed out must not.
-        var gate = new TaskCompletionSource();
-        var factory = new FakeConnectionFactory { BeforeCreate = _ => gate.Task };
+        var dialFailure = new InvalidOperationException("dial failed");
+        FakeConnectionFactory factory = GatedDialFactory(out SemaphoreSlim dialing, out TaskCompletionSource finishDial);
+        factory.FailNextWith = dialFailure;
+        factory.OnDispose = () => throw new InvalidOperationException("factory disposal failed");
         var pool = new ConnectionPool(
             Options(maxPoolSize: 1, poolTimeout: TimeSpan.FromMilliseconds(150)),
             factory,
             new ControlledTimeProvider());
 
-        // Started and left running: BeforeCreate never completes, so this dial ignores the shutdown token the way a
-        // slow ConfigureTls callback or an uncancellable name resolution would.
-        Task<IConnectionLease> stuck = pool.RentAsync(CancellationToken.None).AsTask();
-        await Task.Delay(50);
+        Task<IConnectionLease> stuck = Task.Run(async () => await pool.RentAsync(None));
+        Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the dial should be in the factory");
+        await pool.DisposeAsync();
+
+        finishDial.SetResult();
+        InvalidOperationException thrown = Assert.ThrowsAsync<InvalidOperationException>(async () => await stuck);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.SameAs(dialFailure), "factory disposal must not replace the dial's own result");
+            Assert.That(factory.DisposeCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task DisposeAsync_ADialStillRunningPastTheDrainDeadline_DisposesTheFactoryWhenTheDialFinishes()
+    {
+        // The dial is the one caller disposal cannot reach: it holds a permit but is not in `leased`, so the abort
+        // after the drain deadline does not see it. Disposing the factory anyway would free the TLS certificate
+        // authorities under a live handshake. It still has to be disposed once that handshake leaves the factory.
+        FakeConnectionFactory factory = GatedDialFactory(out SemaphoreSlim dialing, out TaskCompletionSource finishDial);
+        var pool = new ConnectionPool(
+            Options(maxPoolSize: 1, poolTimeout: TimeSpan.FromMilliseconds(150)),
+            factory,
+            new ControlledTimeProvider());
+
+        Task<IConnectionLease> stuck = Task.Run(async () => await pool.RentAsync(None));
+        Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the dial should be in the factory");
 
         await pool.DisposeAsync();
 
         Assert.That(
             factory.Disposed,
             Is.False,
-            "the drain timed out, so a dial may still be inside the factory and its certificates must survive");
+            "the certificates must survive while the dial is still using them");
 
-        // Release the dial so the test leaves nothing running.
-        gate.SetResult();
-        try
+        finishDial.SetResult();
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await stuck);
+
+        Assert.Multiple(() =>
         {
-            await (await stuck).DisposeAsync();
-        }
-        catch (Exception e) when (e is ObjectDisposedException or OperationCanceledException)
+            Assert.That(factory.Disposed, Is.True, "the last dial out performs the deferred disposal");
+            Assert.That(factory.DisposeCount, Is.EqualTo(1));
+            Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
+    public async Task DisposeAsync_TwoDialsOutliveTheDrain_DisposesTheFactoryOnlyAfterBothFinish()
+    {
+        var dialing = new SemaphoreSlim(0);
+        var finishFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource[] finishes = [finishFirst, finishSecond];
+        int dialIndex = -1;
+        var factory = new FakeConnectionFactory
         {
-            // Either is a correct outcome for a checkout that raced disposal; which one is not this test's subject.
-        }
+            IgnoresCancellation = true,
+            BeforeCreate = async _ =>
+            {
+                int index = Interlocked.Increment(ref dialIndex);
+                dialing.Release();
+                await finishes[index].Task;
+            },
+        };
+        var pool = new ConnectionPool(
+            Options(maxPoolSize: 2, poolTimeout: TimeSpan.FromMilliseconds(150)),
+            factory,
+            new ControlledTimeProvider());
+
+        Task<IConnectionLease> first = Task.Run(async () => await pool.RentAsync(None));
+        Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the first dial should be active");
+        Task<IConnectionLease> second = Task.Run(async () => await pool.RentAsync(None));
+        Assert.That(await dialing.WaitAsync(TimeSpan.FromSeconds(30)), Is.True, "the second dial should be active");
+
+        await pool.DisposeAsync();
+        Assert.That(factory.Disposed, Is.False, "both dials still retain the factory");
+
+        finishFirst.SetResult();
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await first);
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.Disposed, Is.False, "the second dial still retains the factory");
+            Assert.That(factory.DisposeCount, Is.Zero);
+        });
+
+        finishSecond.SetResult();
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await second);
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.Disposed, Is.True, "the last dial out performs the deferred disposal");
+            Assert.That(factory.DisposeCount, Is.EqualTo(1));
+        });
     }
 
     [Test]
     public async Task DisposeAsync_CalledTwice_IsNoOp()
     {
-        var pool = new ConnectionPool(Options(), new FakeConnectionFactory(), new ControlledTimeProvider());
+        var factory = new FakeConnectionFactory();
+        var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
         await pool.DisposeAsync();
 
         Assert.DoesNotThrowAsync(async () => await pool.DisposeAsync());
+        Assert.That(factory.DisposeCount, Is.EqualTo(1));
     }
 
     [Test]
@@ -1346,6 +1421,47 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task RentAsync_DisposedAfterTheLastPreDialCheck_DoesNotEnterTheFactory()
+    {
+        var clock = new ControlledTimeProvider();
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(
+            Options(
+                maxPoolSize: 1,
+                maxConnectionLifetime: TimeSpan.FromMinutes(1),
+                idleTimeout: TimeSpan.Zero),
+            factory,
+            clock);
+
+        await using (await pool.RentAsync(None))
+        {
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        int createAttempts = 0;
+        factory.BeforeCreate = _ =>
+        {
+            Interlocked.Increment(ref createAttempts);
+            return Task.CompletedTask;
+        };
+
+        Task disposing = null;
+        clock.OnNextTimestamp = () => disposing = pool.DisposeAsync().AsTask();
+
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await pool.RentAsync(None));
+        Assert.That(clock.OnNextTimestamp, Is.Null, "the checkout must have reached the post-check clock seam");
+        Assert.That(disposing, Is.Not.Null, "the clock seam must have started disposal");
+        await disposing;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(createAttempts, Is.Zero, "the raced checkout must not enter the factory");
+            Assert.That(factory.CreateCount, Is.EqualTo(1), "only the connection opened before disposal exists");
+            Assert.That(factory.DisposeCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void RentAsync_PreCancelledToken_ThrowsWithoutOpeningAConnection()
     {
         var factory = new FakeConnectionFactory();
@@ -1374,14 +1490,13 @@ public class ConnectionPoolTests
     }
 
     [Test]
-    public async Task DisposeAsync_WithALeaseNeverReturned_GivesUpAfterPoolTimeout()
+    public async Task DisposeAsync_WithALeaseHeldPastPoolTimeout_DisposesTheFactoryBeforeTheLeaseReturns()
     {
         var factory = new FakeConnectionFactory();
         var pool = new ConnectionPool(
             Options(maxPoolSize: 1, poolTimeout: TimeSpan.FromMilliseconds(150)), factory, new ControlledTimeProvider());
 
-        // Rented and deliberately never disposed: the caller abandoned the operation.
-        await pool.RentAsync(None);
+        IConnectionLease held = await pool.RentAsync(None);
 
         var elapsed = Stopwatch.StartNew();
         await pool.DisposeAsync();
@@ -1395,7 +1510,15 @@ public class ConnectionPoolTests
             // transport is aborted rather than fully torn down, because the operation may still hold buffers.
             Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Terminated));
             Assert.That(factory.Created[0].IsReusable, Is.False);
+            Assert.That(factory.Disposed, Is.True, "an established connection no longer uses the factory");
+            Assert.That(factory.DisposeCount, Is.EqualTo(1));
         });
+
+        Assert.DoesNotThrowAsync(async () => await held.DisposeAsync());
+        Assert.That(
+            factory.DisposeCount,
+            Is.EqualTo(1),
+            "returning the timed-out lease cannot dispose the factory twice");
     }
 
     [Test]
