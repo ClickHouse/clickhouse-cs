@@ -193,6 +193,101 @@ public class ClickHouseTcpConnectionInsertTests
     }
 
     [Test]
+    public async Task InsertAsync_CancelledWhileAwaitingTheSchemaBlock_SendsCancelBeforeTerminating()
+    {
+        // The Query and the end-of-input block are written, then the read for the schema blocks. The server has
+        // consumed everything the client sent, so a Cancel lands on a packet boundary.
+        var transport = new ScriptedDuplexStream(await ServerHelloBytesAsync(54476), blockWhenExhausted: true);
+        using var connection = new ClickHouseTcpConnection(transport, socket: null);
+        await connection.HandshakeAsync(Handshake, None);
+
+        using var cts = new CancellationTokenSource();
+        Task insert = connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1)), cancellationToken: cts.Token).AsTask();
+        await cts.CancelAsync();
+
+        Assert.CatchAsync<OperationCanceledException>(async () => await insert);
+        Assert.Multiple(() =>
+        {
+            Assert.That(transport.Written[^1], Is.EqualTo((byte)ClientPacketType.Cancel));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
+    public async Task InsertAsync_ServerGoesSilentAwaitingTheSchemaBlock_ThrowsTimeoutAndSendsCancel()
+    {
+        // The schema read has to carry the deadline's token. With the caller's it is unbounded, and an insert
+        // against a server that stopped answering waits for TCP rather than for ReadTimeout.
+        var transport = new ScriptedDuplexStream(await ServerHelloBytesAsync(54476), blockWhenExhausted: true);
+        using var connection = new ClickHouseTcpConnection(transport, socket: null, readTimeout: TimeSpan.FromMilliseconds(200));
+        await connection.HandshakeAsync(Handshake, None);
+
+        var thrown = Assert.CatchAsync<TimeoutException>(
+            async () => await connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1)), cancellationToken: None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            Assert.That(transport.Written[^1], Is.EqualTo((byte)ClientPacketType.Cancel));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
+    public async Task InsertAsync_ServerGoesSilentDrainingTheAcknowledgement_ThrowsTimeout()
+    {
+        // The other read the insert makes: the drain to end-of-stream, after every row has gone out. A regression
+        // that bounds only the schema read leaves this one waiting for TCP.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")));
+        var transport = new ScriptedDuplexStream(script, blockWhenExhausted: true);
+        using var connection = new ClickHouseTcpConnection(transport, socket: null, readTimeout: TimeSpan.FromMilliseconds(200));
+        await connection.HandshakeAsync(Handshake, None);
+
+        var thrown = Assert.CatchAsync<TimeoutException>(
+            async () => await connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1)), cancellationToken: None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
+    public async Task InsertAsync_CancelledWhileStreamingRows_LeavesTheTruncatedBlockWithoutAppendingCancel()
+    {
+        // Cancelling from the column factory takes the insert down inside the row stream, where a block is
+        // part-written. A Cancel appended there is read as more block bytes rather than as a packet, so none is
+        // sent and the connection is simply closed.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")),
+            EndOfStreamPacket());
+        var transport = new ScriptedDuplexStream(script);
+        using var connection = new ClickHouseTcpConnection(transport, socket: null);
+        await connection.HandshakeAsync(Handshake, None);
+
+        using var cts = new CancellationTokenSource();
+        Assert.CatchAsync<OperationCanceledException>(async () => await connection.InsertAsync(
+            "INSERT INTO t VALUES",
+            rowCount: 1,
+            buildColumns: _ =>
+            {
+                cts.Cancel();
+                return new StubInsertColumnSource(UInt64Column(1));
+            },
+            cancellationToken: cts.Token));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(transport.Written[^1], Is.Not.EqualTo((byte)ClientPacketType.Cancel));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
     public async Task InsertAsync_ColumnCountDisagreesWithSchema_ThrowsArgumentButStaysReady()
     {
         byte[] script = Concat(

@@ -175,10 +175,24 @@ public sealed record ClickHouseTcpClientOptions
     public TimeSpan DialTimeout { get; init; } = DefaultDialTimeout;
 
     /// <summary>
-    /// The idle deadline for reading a response — reset each time a packet arrives — so a long streaming query
-    /// is not killed for taking a long time overall. Defaults to 300s. <b>Stored but not yet enforced</b>; the
-    /// idle-deadline read loop lands in a later change.
+    /// How long the server may stay silent while a response is being read, after which the operation fails with a
+    /// <see cref="TimeoutException"/> and the connection is discarded. Defaults to 300s;
+    /// <see cref="TimeSpan.Zero"/> leaves the caller's own <see cref="System.Threading.CancellationToken"/> as the
+    /// only bound.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This measures silence, not duration. The clock runs only while the client is waiting on the transport and
+    /// is reset by every byte that arrives, so a query that streams for an hour never trips it, and neither does a
+    /// consumer that holds a block for longer than the deadline before asking for the next one. What it catches is
+    /// a server, or a path to one, that has stopped answering — including a connection dropped without a FIN,
+    /// which no client-side probe can see and which TCP alone takes about fifteen minutes to give up on.
+    /// </para>
+    /// <para>
+    /// It bounds the response only. Opening a connection is bounded separately by <see cref="DialTimeout"/>, which
+    /// also covers the handshake, so the two never apply to the same exchange.
+    /// </para>
+    /// </remarks>
     public TimeSpan ReadTimeout { get; init; } = DefaultReadTimeout;
 
     /// <summary>
@@ -447,7 +461,17 @@ public sealed record ClickHouseTcpClientOptions
 
         RequireUsableTimeout(DialTimeout, nameof(DialTimeout));
 
-        RequireUsableTimeout(ReadTimeout, nameof(ReadTimeout));
+        // Zero is the opt-out, as it is for the pool's limits: a caller reading a stream that is legitimately
+        // silent for arbitrarily long has to be able to say so.
+        if (ReadTimeout < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ReadTimeout), ReadTimeout, "ReadTimeout must not be negative; use TimeSpan.Zero to disable the deadline.");
+        }
+
+        if (ReadTimeout.TotalMilliseconds > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ReadTimeout), ReadTimeout, $"ReadTimeout must not exceed {TimeSpan.FromMilliseconds(int.MaxValue)} (about 24.8 days).");
+        }
 
         if (MaxSendBufferBytes <= 0)
         {

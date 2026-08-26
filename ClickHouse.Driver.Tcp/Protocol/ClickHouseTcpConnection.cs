@@ -58,10 +58,18 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     // for timezone-less DateTime/DateTime64 result columns.
     private const string SessionTimezoneSetting = "session_timezone";
 
+    // How long to spend delivering the Cancel packet before giving up on it. Short and not configurable: the
+    // connection is closed either way, so all this bounds is how long a cancelling caller waits on a server that
+    // has stopped reading.
+    private static readonly TimeSpan CancelSendTimeout = TimeSpan.FromSeconds(2);
+
     private readonly Socket socket;
     private readonly Stream stream;
     private readonly ClickHouseBinaryReader reader;
     private readonly ClickHouseBinaryWriter writer;
+
+    // Bounds how long the server may stay silent mid-response. Null when the caller's token is the only bound.
+    private readonly IdleReadDeadline readDeadline;
 
     // Null means every query on this connection is uncompressed. Compression is per-query on the wire, but the
     // codec is a client-level option today, so it is fixed for a connection's life; a per-query override would
@@ -85,12 +93,20 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="stream">The duplex transport stream (a network stream in production).</param>
     /// <param name="socket">The underlying socket, closed on termination; null when the stream owns teardown.</param>
     /// <param name="compressor">Frame codec for this connection's queries, or null to run them uncompressed.</param>
-    internal ClickHouseTcpConnection(Stream stream, Socket socket, IClickHouseCompressor compressor = null)
+    /// <param name="readTimeout">
+    /// How long the server may stay silent mid-response before the operation fails. <see cref="TimeSpan.Zero"/>
+    /// leaves the caller's token as the only bound, which is the default for the scripted-stream seam.
+    /// </param>
+    internal ClickHouseTcpConnection(Stream stream, Socket socket, IClickHouseCompressor compressor = null, TimeSpan readTimeout = default)
     {
         this.stream = stream;
         this.socket = socket;
         this.compressor = compressor;
-        reader = new ClickHouseBinaryReader(stream);
+        readDeadline = readTimeout == TimeSpan.Zero ? null : new IdleReadDeadline(readTimeout);
+
+        // The deadline belongs to this buffer alone: it is the one that reads the socket. The frame decoder's
+        // buffer is served from bytes that already arrived through here, so it can never stall on the network.
+        reader = new ClickHouseBinaryReader(new ReadBuffer(stream, deadline: readDeadline), ownsBuffer: true);
         writer = new ClickHouseBinaryWriter(stream);
         state = TcpConnectionState.Handshaking;
     }
@@ -122,9 +138,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// up, which on Linux takes about fifteen minutes. That is inherent to a client-side check, so the pool does not
     /// rely on this alone: it also refuses a connection that has sat idle past <c>IdleTimeout</c>, which covers the
     /// common case of an intermediary dropping a connection nobody was using. Neither catches a drop that strikes a
-    /// connection in active use. The answer to that is an idle read deadline rather than a stricter probe, and
-    /// <b>that deadline does not exist yet</b>: <c>ReadTimeout</c> is parsed and stored but nothing enforces it, so a
-    /// caller's own <see cref="System.Threading.CancellationToken"/> is currently the only bound on such a stall.
+    /// connection in active use; the answer to that is <c>ReadTimeout</c>, the idle deadline every read of an
+    /// operation runs under, rather than a stricter probe here.
     /// </para>
     /// </remarks>
     internal bool IsReusable
@@ -217,7 +232,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         ClientHandshakeParameters handshake,
         TlsParameters tls,
         CancellationToken cancellationToken,
-        IClickHouseCompressor compressor = null)
+        IClickHouseCompressor compressor = null,
+        TimeSpan readTimeout = default)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(handshake);
@@ -261,8 +277,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
 
         // HandshakeAsync terminates the connection (closing this socket) on any failure, so a throw here needs
-        // no extra cleanup.
-        var connection = new ClickHouseTcpConnection(transport, socket, compressor);
+        // no extra cleanup. The handshake itself runs under the caller's connect deadline rather than
+        // readTimeout, so the two never stack on the one exchange.
+        var connection = new ClickHouseTcpConnection(transport, socket, compressor, readTimeout);
         await connection.HandshakeAsync(handshake, cancellationToken).ConfigureAwait(false);
         return connection;
     }
@@ -278,54 +295,63 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <exception cref="ClickHouseTcpServerException">The server replied with an Exception.</exception>
     /// <exception cref="ClickHouseTcpProtocolException">The server replied with something other than Pong or Exception.</exception>
     /// <exception cref="ClickHouseTcpTransportException">The connection failed while the ping was in flight.</exception>
+    /// <exception cref="TimeoutException">The server stayed silent for longer than the connection's ReadTimeout.</exception>
     public async ValueTask PingAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         BeginOperation();
 
-        ServerPacketType reply;
+        CancellationToken io = BeginRead(cancellationToken);
         try
         {
-            writer.WriteClientPacketType(ClientPacketType.Ping);
-            await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+            ServerPacketType reply;
+            try
+            {
+                writer.WriteClientPacketType(ClientPacketType.Ping);
+                await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
 
-            // A Ping is only ever sent on an idle connection, never mid-query, so no Progress or other
-            // interleaved packet can precede the reply — unlike a query response, which the read loop drains.
-            // A single read therefore suffices; anything but Pong or a (complete) Exception is a violation.
-            reply = await reader.ReadServerPacketTypeAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // The failed/cancelled I/O has unwound, but the stream position is unknown; discard the connection.
-            Terminate();
-            throw;
-        }
+                // A Ping is only ever sent on an idle connection, never mid-query, so no Progress or other
+                // interleaved packet can precede the reply — unlike a query response, which the read loop drains.
+                // A single read therefore suffices; anything but Pong or a (complete) Exception is a violation.
+                reply = await reader.ReadServerPacketTypeAsync(io).ConfigureAwait(false);
+            }
+            catch
+            {
+                // The failed/cancelled I/O has unwound, but the stream position is unknown; discard the connection.
+                Terminate();
+                throw;
+            }
 
-        switch (reply)
-        {
-            case ServerPacketType.Pong:
-                state = TcpConnectionState.Ready;
-                return;
+            switch (reply)
+            {
+                case ServerPacketType.Pong:
+                    state = TcpConnectionState.Ready;
+                    return;
 
-            case ServerPacketType.Exception:
-                ClickHouseTcpServerException exception;
-                try
-                {
-                    exception = await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
-                }
-                catch
-                {
+                case ServerPacketType.Exception:
+                    ClickHouseTcpServerException exception;
+                    try
+                    {
+                        exception = await ClickHouseTcpServerException.ReadAsync(reader, io).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        Terminate();
+                        throw;
+                    }
+
                     Terminate();
-                    throw;
-                }
+                    throw exception;
 
-                Terminate();
-                throw exception;
-
-            default:
-                Terminate();
-                throw new ClickHouseTcpProtocolException(
-                    $"Unexpected packet type {reply} ({(ulong)reply}) in response to Ping; expected Pong or Exception.");
+                default:
+                    Terminate();
+                    throw new ClickHouseTcpProtocolException(
+                        $"Unexpected packet type {reply} ({(ulong)reply}) in response to Ping; expected Pong or Exception.");
+            }
+        }
+        finally
+        {
+            EndRead();
         }
     }
 
@@ -357,6 +383,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// }
     /// </code>
     /// </example>
+    /// <para>
+    /// Dispose the enumerator. Everything this method owns is released from one finally, so a consumer that stops
+    /// advancing without disposing keeps the connection, the last block's buffers, and the read deadline's
+    /// registration on the caller's token for as long as the caller's token source lives.
+    /// </para>
     /// </remarks>
     /// <param name="sql">The SQL text.</param>
     /// <param name="settings">Per-query settings as textual values, or null for none.</param>
@@ -371,6 +402,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <exception cref="ClickHouseTcpServerException">The server reported an error while executing the query.</exception>
     /// <exception cref="ClickHouseTcpProtocolException">The server sent an unexpected packet.</exception>
     /// <exception cref="ClickHouseTcpTransportException">The connection failed while the response was being read.</exception>
+    /// <exception cref="TimeoutException">The server stayed silent for longer than the connection's ReadTimeout.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     internal async IAsyncEnumerable<Block> QueryAsync(
         string sql,
@@ -391,7 +423,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         NegotiatedProtocol negotiated = server.Negotiated;
         ClickHouseTcpServerException pending = null;
         Block current = null;
-        bool completed = false;
+        bool responseCompleted = false;
+        bool reusable = false;
+        bool flushedWholePackets = false;
 
         // Encode the Query packet into the write buffer before any of it reaches the socket. A failure here is a
         // client-side error (e.g. parameters on a protocol revision that predates them): nothing has been sent,
@@ -407,6 +441,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             throw;
         }
 
+        CancellationToken io = BeginRead(cancellationToken);
         try
         {
             // The end-of-input marker is written here rather than above, because framing it is not buffer-only
@@ -415,6 +450,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             // looking reusable — the reusable path above holds only work that cannot have sent anything.
             await WriteEndOfInputBlockAsync(cancellationToken).ConfigureAwait(false);
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+            // The whole request is on the wire and the client writes nothing more, so from here every exit
+            // short of end-of-stream leaves a query the server is still running and can still be cancelled.
+            flushedWholePackets = true;
 
             while (true)
             {
@@ -426,23 +465,25 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     current = null;
                 }
 
-                ServerPacketType packet = await reader.ReadServerPacketTypeAsync(cancellationToken).ConfigureAwait(false);
+                ServerPacketType packet = await reader.ReadServerPacketTypeAsync(io).ConfigureAwait(false);
 
                 if (packet == ServerPacketType.EndOfStream)
                 {
-                    completed = true;
+                    responseCompleted = true;
+                    reusable = true;
                     break;
                 }
 
                 if (packet == ServerPacketType.Exception)
                 {
-                    pending = await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+                    pending = await ClickHouseTcpServerException.ReadAsync(reader, io).ConfigureAwait(false);
+                    responseCompleted = true;
                     break;
                 }
 
                 if (packet == ServerPacketType.Data)
                 {
-                    Block block = await ReadBlockAsync(ServerPacketType.Data, negotiated, readContext, cancellationToken).ConfigureAwait(false);
+                    Block block = await ReadBlockAsync(ServerPacketType.Data, negotiated, readContext, io).ConfigureAwait(false);
                     if (block.RowCount != 0)
                     {
                         // Held as the current block so it is released when the consumer advances or stops.
@@ -458,21 +499,31 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 {
                     // Everything else is interleaved metadata: consumed to stay stream-aligned, surfaced to the
                     // callbacks when set. An unexpected packet throws from here.
-                    await ConsumeMetadataAsync(packet, negotiated, readContext, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
+                    await ConsumeMetadataAsync(packet, negotiated, readContext, telemetry, callbacks, io).ConfigureAwait(false);
                 }
             }
         }
         finally
         {
+            // First, so that nothing below can throw past it and leave the deadline holding a registration on the
+            // caller's token. Nothing below reads from the transport, so none of it needs the deadline.
+            EndRead();
+
             // Release the last yielded block (still current) on end-of-stream, early disposal, or error.
             current?.Dispose();
 
-            if (completed)
+            if (reusable)
             {
                 state = TcpConnectionState.Ready;
             }
             else
             {
+                // A response that has not reached a terminal packet may still be running on the server.
+                if (!responseCompleted)
+                {
+                    await TrySendCancelAsync(flushedWholePackets).ConfigureAwait(false);
+                }
+
                 Terminate();
             }
         }
@@ -536,6 +587,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <exception cref="ClickHouseTcpServerException">The server reported an error while executing the insert.</exception>
     /// <exception cref="ClickHouseTcpTransportException">The connection failed while the blocks were being sent or the response read.</exception>
     /// <exception cref="ClickHouseTcpProtocolException">The server sent an unexpected packet, or no schema block.</exception>
+    /// <exception cref="TimeoutException">The server stayed silent for longer than the connection's ReadTimeout.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     internal ValueTask InsertAsync(
         string sql,
@@ -614,8 +666,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         Exception buildFailure = null;
         IReadOnlyList<IColumn> values = null;
         IInsertColumnSource source = null;
-        bool completed = false;
+        bool responseCompleted = false;
+        bool reusable = false;
+        bool flushedWholePackets = false;
         string mismatchError = null;
+        CancellationToken io = BeginRead(cancellationToken);
         try
         {
             // The empty end-of-input block must follow the Query: the server waits for it before sending the
@@ -623,11 +678,13 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             Query.Write(writer, negotiated, clientMetadata, queryId, sql, settings, parameters, compressor is not null);
             await WriteEndOfInputBlockAsync(cancellationToken).ConfigureAwait(false);
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+            flushedWholePackets = true;
 
             // Drain metadata until the schema block (the first Data packet) or a terminal packet.
-            (Block schema, ClickHouseTcpServerException error) = await ReadToNextDataBlockAsync(negotiated, readContext, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
+            (Block schema, ClickHouseTcpServerException error) = await ReadToNextDataBlockAsync(negotiated, readContext, telemetry, callbacks, io).ConfigureAwait(false);
             if (schema is null)
             {
+                responseCompleted = true;
                 if (error is null)
                 {
                     // Clean end-of-stream with no schema: the server never opened the row-stream phase (e.g.
@@ -637,7 +694,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 }
 
                 // The Exception packet does not say whether the server accepted the query and returned to its
-                // request loop, so leave completed false and retire the connection in the finally below.
+                // request loop, so leave reusable false and retire the connection in the finally below.
                 pending = error;
             }
             else
@@ -675,29 +732,46 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     }
                 }
 
-                // Always run, even after a factory failure: the row stream has to be closed for the server to
-                // finish the insert. A gather failure is deferred the same way, so the stream still closes cleanly.
+                // A row stream flushes each block as it is built, so an exit part-way through leaves a truncated
+                // Data packet on the wire. A Cancel appended to that is read as more block bytes, not as a
+                // packet, so the row phase is the one stretch where there is nothing useful to send.
+                //
+                // The call always runs, even after a factory failure: the row stream has to be closed for the
+                // server to finish the insert. A gather failure is deferred the same way, so it still closes
+                // cleanly and this stays a whole-packet boundary.
+                flushedWholePackets = false;
                 Exception gatherFailure = await StreamInsertRowsAsync(plan, source, rowCount, maxRowsPerBlock, maxSendBufferBytes, negotiated, cancellationToken).ConfigureAwait(false);
+                flushedWholePackets = true;
                 buildFailure ??= gatherFailure;
 
                 // A clean acknowledgement leaves the connection reusable. A server Exception is parked for the
                 // caller but retires the connection, because its packet does not prove the server will accept
                 // another request.
-                pending = await DrainToEndOfStreamAsync(negotiated, readContext, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
-                completed = pending is null;
+                pending = await DrainToEndOfStreamAsync(negotiated, readContext, telemetry, callbacks, io).ConfigureAwait(false);
+                responseCompleted = true;
+                reusable = pending is null;
             }
         }
         finally
         {
+            // First, so that nothing below can throw past it and leave the deadline holding a registration on the
+            // caller's token. Nothing below reads from the transport, so none of it needs the deadline.
+            EndRead();
+
             // Only the factory's source is ours to release; a caller's own columns outlive the insert.
             source?.Dispose();
 
-            if (completed)
+            if (reusable)
             {
                 state = TcpConnectionState.Ready;
             }
             else
             {
+                if (!responseCompleted)
+                {
+                    await TrySendCancelAsync(flushedWholePackets).ConfigureAwait(false);
+                }
+
                 Terminate();
             }
         }
@@ -1382,6 +1456,69 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             default:
                 throw new InvalidOperationException(
                     $"The connection is busy ({state}); a single connection carries one in-flight operation at a time.");
+        }
+    }
+
+    /// <summary>
+    /// Opens the idle read deadline over an operation's token, and returns the token the operation must pass to
+    /// every <b>read</b> it makes. Pair with <see cref="EndRead"/> in a finally.
+    /// </summary>
+    /// <remarks>
+    /// Writes keep the caller's token, deliberately. A deadline that elapses just as a read completes cannot be
+    /// recalled — disarming does not stop a timer callback already running — so giving this token to a write
+    /// would let it fail as cancelled for a token the caller never cancelled.
+    /// </remarks>
+    /// <param name="cancellationToken">The caller's token for this operation.</param>
+    /// <returns>The token to use for the operation's reads.</returns>
+    private CancellationToken BeginRead(CancellationToken cancellationToken)
+        => readDeadline?.Begin(cancellationToken) ?? cancellationToken;
+
+    /// <summary>Closes the idle read deadline opened by <see cref="BeginRead"/>.</summary>
+    private void EndRead() => readDeadline?.End();
+
+    /// <summary>
+    /// Tells the server to stop the query this connection is running, so it does not keep working and writing
+    /// into a socket nobody will read. Best effort: the connection is closed next whatever happens here, so a
+    /// failure to deliver the packet must not replace the failure that brought us here.
+    /// </summary>
+    /// <remarks>
+    /// The server reads this between the blocks it sends, so a result large enough to fill the socket blocks it in
+    /// a write where it reads nothing, and the close that follows stops the query instead. Verified against a real
+    /// server: a slow result ends with QUERY_WAS_CANCELLED_BY_CLIENT, a saturating one with a broken pipe. Both
+    /// stop it, so this is what turns a silent abandonment into an explicit one rather than the only way out.
+    /// </remarks>
+    /// <param name="flushedWholePackets">
+    /// Whether everything the client has flushed ended a packet. False leaves the Cancel unsent, because a
+    /// server part-way through reading a packet takes the next byte as more of that packet, not as a new one.
+    /// Only a caller that has completed a flush may pass true: a flush that fails part-way through leaves bytes
+    /// on the wire that <c>writer.Reset()</c> cannot take back.
+    /// </param>
+    /// <returns>A task that completes once the packet has been sent, or given up on.</returns>
+    private async ValueTask TrySendCancelAsync(bool flushedWholePackets)
+    {
+        // Terminated means the socket is already gone, from a concurrent AbortTransport. Checked rather than
+        // left to the flush to discover, which only fails safely because a disposed writer holds an empty array.
+        if (!flushedWholePackets || state == TcpConnectionState.Terminated)
+        {
+            return;
+        }
+
+        try
+        {
+            // Discard anything the interrupted operation left buffered, so Cancel is the whole of what goes out.
+            writer.Reset();
+            writer.WriteClientPacketType(ClientPacketType.Cancel);
+
+            // Not the operation's token: it is usually the cancelled one that brought us here, and flushing on it
+            // would send nothing. The separate deadline stops a server that has also stopped reading from holding
+            // the caller here — one byte, so it only elapses against a peer whose receive window is shut. It runs
+            // before the pool lease is given back, so it is also how long the next caller can wait for the slot.
+            using var deadline = new CancellationTokenSource(CancelSendTimeout);
+            await writer.FlushAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            // A connection too broken to carry one byte needs no cancelling.
         }
     }
 }
