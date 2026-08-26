@@ -139,12 +139,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// address by name). Each returned array is owned and safe to retain past the enumeration.
     /// </summary>
     /// <remarks>
-    /// One caveat on <em>sharing</em>, as opposed to lifetime: a <c>LowCardinality</c> column holds a dictionary of
-    /// distinct values and one key per row, and hands each row that dictionary entry rather than a copy of it. So do
-    /// not mutate an array-valued entry in place — with a <c>LowCardinality(FixedString(N))</c> the <c>byte[]</c> may
-    /// be another row's too. The aliasing is bounded to one block, since each block ships its own dictionary, which
-    /// makes it harder to catch rather than easier: a small result is a single block and aliases throughout, while a
-    /// large one aliases only within each block.
+    /// <c>LowCardinality</c> values may be shared within a block. In particular, do not mutate a
+    /// <c>LowCardinality(FixedString(N))</c> <c>byte[]</c> in place because another row may reference it.
     /// </remarks>
     /// <param name="sql">The SQL text.</param>
     /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
@@ -180,20 +176,11 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// column maps to keeps its default.
     /// </summary>
     /// <remarks>
-    /// Unlike a <see cref="Block"/>, the rows are <b>owned</b>: no value borrows the block's storage, so an instance
-    /// stays valid after the enumeration moves on. One caveat on <em>sharing</em>, as opposed to lifetime: a
-    /// <c>LowCardinality</c> column may hand the same element instance to every row holding that dictionary entry, so
-    /// do not mutate an array-valued property in place — with a <c>LowCardinality(FixedString(N))</c> the
-    /// <c>byte[]</c> may be another row's too.
-    ///
-    /// <para>
-    /// The reading itself is box-free — the values go from the decoded column into the property through a compiled
-    /// per-column loop, with no boxed intermediate — for every property whose type the column reads as.
-    /// <typeparamref name="T"/> needs a public parameterless constructor and public setters; the mapping is compiled
-    /// from the first block of the result, so a mismatch is reported before the first row is handed out. A result with
-    /// no rows carries no block, and so yields nothing and reports nothing: use the block-level API if a shape has to
-    /// be validated against an empty result.
-    /// </para>
+    /// Rows own their values and remain valid after enumeration advances. <c>LowCardinality</c> elements may still
+    /// be shared within a block; do not mutate an array-valued property in place. <typeparamref name="T"/> must be
+    /// concrete with a public parameterless constructor; every property reached by a result column must have a
+    /// public, non-init setter. Mapping is validated on the first block, so an empty result yields nothing without
+    /// validating <typeparamref name="T"/>.
     /// </remarks>
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="sql">The SQL text.</param>
