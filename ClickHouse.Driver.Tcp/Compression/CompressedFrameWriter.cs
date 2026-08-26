@@ -50,7 +50,9 @@ internal sealed class CompressedFrameWriter : IDisposable
 
         this.frameTarget = frameTarget;
         frame = ArrayPool<byte>.Shared.Rent(CompressionFrame.MaxFrameSize(codec, frameTarget));
-        Writer = new ClickHouseBinaryWriter(new PlaintextSink(this), bufferSize);
+        // The sink is an adapter onto this writer, not the connection. The frame emits below it write through
+        // `raw`, which reports a failed send itself; the codec's own failures are not the transport's.
+        Writer = new ClickHouseBinaryWriter(new PlaintextSink(this), bufferSize, writesToTransport: false);
     }
 
     /// <summary>Writes the block body. Everything after the packet's table name goes here.</summary>
