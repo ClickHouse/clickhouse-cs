@@ -174,6 +174,25 @@ public class ClickHouseTcpConnectionTests
     }
 
     [Test]
+    public async Task PingAsync_ServerNeverAnswersWithinReadTimeout_ThrowsTimeoutAndTerminates()
+    {
+        // The reply read has to carry the deadline's token, not the caller's; with the caller's it is unbounded
+        // and a ping to a wedged server hangs until TCP gives up.
+        byte[] script = await ServerHelloBytesAsync(54476);
+        using var connection = new ClickHouseTcpConnection(
+            new ScriptedDuplexStream(script, blockWhenExhausted: true), socket: null, readTimeout: TimeSpan.FromMilliseconds(200));
+        await connection.HandshakeAsync(Handshake, None);
+
+        var thrown = Assert.CatchAsync<TimeoutException>(async () => await connection.PingAsync(None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
     public async Task PingAsync_AfterTerminate_ThrowsObjectDisposed()
     {
         byte[] script = Concat(await ServerHelloBytesAsync(54476), PacketBytes(ServerPacketType.Pong));

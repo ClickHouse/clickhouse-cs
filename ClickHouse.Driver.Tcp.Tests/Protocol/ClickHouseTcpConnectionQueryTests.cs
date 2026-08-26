@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -134,6 +135,211 @@ public class ClickHouseTcpConnectionQueryTests
         }
 
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+    }
+
+    [Test]
+    public async Task QueryAsync_EnumerationAbandonedBeforeEndOfStream_SendsCancelBeforeTerminating()
+    {
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await DataPacketAsync(new ulong[] { 1 }),
+            await DataPacketAsync(new ulong[] { 2 }),
+            EndOfStreamPacket());
+        var transport = new ScriptedDuplexStream(script);
+        using var connection = new ClickHouseTcpConnection(transport, socket: null);
+        await connection.HandshakeAsync(Handshake, None);
+
+        var writtenBeforeAbandoning = 0;
+        await foreach (Block block in connection.QueryAsync("SELECT 1", cancellationToken: None))
+        {
+            _ = block;
+            writtenBeforeAbandoning = transport.Written.Length;
+            break;
+        }
+
+        // The server is still producing a result nobody will read, so it is told to stop before the socket goes.
+        // Cancel carries no body, so exactly one byte follows the request.
+        Assert.Multiple(() =>
+        {
+            Assert.That(transport.Written, Has.Length.EqualTo(writtenBeforeAbandoning + 1));
+            AssertCancelSent(transport);
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_CancelledWhileReadingResponse_SendsCancelBeforeTerminating()
+    {
+        // The Query is written, then the read for the first packet blocks (as against a server still working).
+        var transport = new ScriptedDuplexStream(await ServerHelloBytesAsync(54476), blockWhenExhausted: true);
+        using var connection = new ClickHouseTcpConnection(transport, socket: null);
+        await connection.HandshakeAsync(Handshake, None);
+
+        using var cts = new CancellationTokenSource();
+        Task drain = DrainAsync(connection, cts.Token);
+        await cts.CancelAsync();
+
+        Assert.CatchAsync<OperationCanceledException>(async () => await drain);
+        Assert.Multiple(() =>
+        {
+            AssertCancelSent(transport);
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_ServerGoesSilentPastReadTimeout_ThrowsTimeoutAndSendsCancel()
+    {
+        var transport = new ScriptedDuplexStream(await ServerHelloBytesAsync(54476), blockWhenExhausted: true);
+        using var connection = new ClickHouseTcpConnection(transport, socket: null, readTimeout: TimeSpan.FromMilliseconds(200));
+        await connection.HandshakeAsync(Handshake, None);
+
+        var thrown = Assert.CatchAsync<TimeoutException>(async () => await DrainAsync(connection));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            AssertCancelSent(transport);
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_CompressedAndTheServerStopsInsideABlock_ThrowsTimeoutNamingReadTimeout()
+    {
+        // A compressed block body is decoded through the frame reader, whose own buffer carries no deadline: it
+        // is served from bytes the transport already handed over. A stall part-way through a frame therefore has
+        // to be caught by the transport buffer underneath it, and the timeout has to come back out through the
+        // decoder rather than be mistaken for a malformed frame.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await BytesAsync(w =>
+            {
+                w.WriteVarUInt((ulong)ServerPacketType.Data);
+                w.WriteString(string.Empty); // The envelope is never framed; the frames begin after the table name.
+            }));
+        var transport = new ScriptedDuplexStream(script, blockWhenExhausted: true);
+        using var connection = new ClickHouseTcpConnection(transport, socket: null, Lz4Compressor.Default, readTimeout: TimeSpan.FromMilliseconds(200));
+        await connection.HandshakeAsync(Handshake, None);
+
+        var thrown = Assert.CatchAsync<TimeoutException>(async () => await DrainAsync(connection));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_CallerCancelsWhileTheDeadlineIsArmed_ReportsCancellationNotTimeout()
+    {
+        // Both are live and both cancel the same linked token, so the two have to be told apart by which one
+        // fired. A generous deadline, so only the caller can have caused this.
+        var transport = new ScriptedDuplexStream(await ServerHelloBytesAsync(54476), blockWhenExhausted: true);
+        using var connection = new ClickHouseTcpConnection(transport, socket: null, readTimeout: TimeSpan.FromSeconds(30));
+        await connection.HandshakeAsync(Handshake, None);
+
+        using var cts = new CancellationTokenSource();
+        Task drain = DrainAsync(connection, cts.Token);
+        await cts.CancelAsync();
+
+        Assert.CatchAsync<OperationCanceledException>(async () => await drain);
+    }
+
+    [Test]
+    public async Task HandshakeAsync_SlowerThanReadTimeout_CompletesBecauseTheDeadlineCoversResponsesOnly()
+    {
+        // Connecting is bounded by DialTimeout, which covers the handshake. Arming ReadTimeout here as well
+        // would stack two deadlines on the one exchange and fail a connect the caller's own bound allowed.
+        var transport = new ScriptedDuplexStream(await ServerHelloBytesAsync(54476), maxChunk: 2, readDelay: TimeSpan.FromMilliseconds(20));
+        using var connection = new ClickHouseTcpConnection(transport, socket: null, readTimeout: TimeSpan.FromMilliseconds(50));
+
+        await connection.HandshakeAsync(Handshake, None);
+
+        Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+    }
+
+    [Test]
+    public async Task QueryAsync_SecondQueryOnTheSameConnection_RearmsTheDeadlineForItsOwnReads()
+    {
+        // A pooled connection carries many operations, so the deadline is opened and closed repeatedly. A source
+        // left over from the first query would either be disposed under the second or already cancelled by it.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await DataPacketAsync(new ulong[] { 1 }),
+            EndOfStreamPacket(),
+            await DataPacketAsync(new ulong[] { 2 }),
+            EndOfStreamPacket());
+        using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(script, maxChunk: 1), socket: null, readTimeout: TimeSpan.FromMilliseconds(200));
+        await connection.HandshakeAsync(Handshake, None);
+
+        List<ulong[]> first = await MaterializeAsync(connection);
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        List<ulong[]> second = await MaterializeAsync(connection);
+
+        Assert.Multiple(() =>
+        {
+            CollectionAssert.AreEqual(new ulong[] { 1 }, first[0]);
+            CollectionAssert.AreEqual(new ulong[] { 2 }, second[0]);
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_ResponseSlowerOverallThanReadTimeout_CompletesBecauseTheDeadlineMeasuresSilence()
+    {
+        // Two bytes every 20ms. The query's own share of that is about two dozen reads, so it runs well past the
+        // 250ms deadline in total while no single gap comes near it, and the deadline must be rearmed by each
+        // arriving chunk rather than left to run for the response's duration. Only the reads after the handshake
+        // count towards this: the handshake is deliberately outside the deadline.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await DataPacketAsync(new ulong[] { 1, 2, 3 }),
+            EndOfStreamPacket());
+        var transport = new ScriptedDuplexStream(script, maxChunk: 2, readDelay: TimeSpan.FromMilliseconds(20));
+        using var connection = new ClickHouseTcpConnection(transport, socket: null, readTimeout: TimeSpan.FromMilliseconds(250));
+        await connection.HandshakeAsync(Handshake, None);
+
+        var rows = await MaterializeAsync(connection);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows, Has.Count.EqualTo(1));
+            CollectionAssert.AreEqual(new ulong[] { 1, 2, 3 }, rows[0]);
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_ConsumerHoldsABlockPastReadTimeout_IsNotTreatedAsASilentServer()
+    {
+        // The deadline must not run while the iterator is parked at its yield, or a slow consumer reads as a
+        // server that stopped answering.
+        //
+        // One byte per read, or the handshake's first fill swallows the whole script — the buffer is 16 KiB and
+        // this is under a hundred bytes — and the query then reads from memory, arming nothing and proving
+        // nothing.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await DataPacketAsync(new ulong[] { 1 }),
+            await DataPacketAsync(new ulong[] { 2 }),
+            EndOfStreamPacket());
+        using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(script, maxChunk: 1), socket: null, readTimeout: TimeSpan.FromMilliseconds(150));
+        await connection.HandshakeAsync(Handshake, None);
+
+        var blocks = 0;
+        await foreach (Block block in connection.QueryAsync("SELECT 1", cancellationToken: None))
+        {
+            _ = block;
+            blocks++;
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blocks, Is.EqualTo(2));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
     }
 
     [Test]
@@ -403,6 +609,10 @@ public class ClickHouseTcpConnectionQueryTests
         Assert.ThrowsAsync<ObjectDisposedException>(async () => await DrainAsync(connection));
     }
 
+    // Cancel is a bare uvarint with no body, so a sent one is the single trailing byte of the client's writes.
+    private static void AssertCancelSent(ScriptedDuplexStream transport)
+        => Assert.That(transport.Written[^1], Is.EqualTo((byte)ClientPacketType.Cancel), "the Cancel packet should be the last thing written");
+
     private static async Task<ClickHouseTcpConnection> ConnectedAsync(byte[] script)
     {
         var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(script), socket: null);
@@ -424,9 +634,9 @@ public class ClickHouseTcpConnectionQueryTests
     }
 
     // Enumerates the response without reading block contents (for tests that assert an exception or state).
-    private static async Task DrainAsync(ClickHouseTcpConnection connection)
+    private static async Task DrainAsync(ClickHouseTcpConnection connection, CancellationToken cancellationToken = default)
     {
-        await foreach (Block block in connection.QueryAsync("SELECT 1", cancellationToken: None))
+        await foreach (Block block in connection.QueryAsync("SELECT 1", cancellationToken: cancellationToken))
         {
             _ = block;
         }
