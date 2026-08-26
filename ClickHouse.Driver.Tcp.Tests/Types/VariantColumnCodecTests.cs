@@ -82,7 +82,7 @@ public class VariantColumnCodecTests
     }
 
     [Test]
-    public void ReadStatePrefix_CompactDiscriminatorsMode_Throws()
+    public void ReadStatePrefix_CompactDiscriminatorsMode_ThrowsProtocolException()
     {
         IColumnCodec codec = Resolve(StringUInt64);
 
@@ -90,11 +90,11 @@ public class VariantColumnCodecTests
         byte[] compactPrefix = { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(compactPrefix);
 
-        Assert.ThrowsAsync<NotSupportedException>(async () => await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None));
     }
 
     [Test]
-    public void ReadColumn_DiscriminatorPastAlternativeCount_Throws()
+    public void ReadColumn_DiscriminatorPastAlternativeCount_ThrowsProtocolException()
     {
         IColumnCodec codec = Resolve(StringUInt64);
 
@@ -102,7 +102,7 @@ public class VariantColumnCodecTests
         byte[] bytes = { 0x05 };
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
 
-        Assert.ThrowsAsync<FormatException>(async () => await codec.ReadColumnAsync(reader, "v", StringUInt64, 1, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadColumnAsync(reader, "v", StringUInt64, 1, CodecTestHarness.None));
     }
 
     [Test]

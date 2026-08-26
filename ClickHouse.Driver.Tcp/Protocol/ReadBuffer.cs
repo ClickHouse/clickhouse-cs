@@ -26,6 +26,7 @@ internal sealed class ReadBuffer : IDisposable
     public const int MaxContiguous = 32;
 
     private readonly Stream stream;
+    private readonly bool readsFromTransport;
     private byte[] buffer;
     private int capacity;
     private int head;      // index of the first valid byte
@@ -37,9 +38,13 @@ internal sealed class ReadBuffer : IDisposable
     /// </summary>
     /// <param name="stream">The source stream (a network stream in production, any stream in tests).</param>
     /// <param name="capacity">Requested capacity in bytes; must be at least <see cref="MaxContiguous"/>.</param>
+    /// <param name="readsFromTransport">
+    /// Whether <paramref name="stream"/> is the connection itself, so that a failed read is the transport failing.
+    /// False for an adapter stream, whose own layer decides what its failures mean.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="capacity"/> is below <see cref="MaxContiguous"/>.</exception>
-    public ReadBuffer(Stream stream, int capacity = 16384)
+    public ReadBuffer(Stream stream, int capacity = 16384, bool readsFromTransport = true)
     {
         this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
         if (capacity < MaxContiguous)
@@ -47,6 +52,7 @@ internal sealed class ReadBuffer : IDisposable
             throw new ArgumentOutOfRangeException(nameof(capacity), $"Capacity must be at least {MaxContiguous} bytes.");
         }
 
+        this.readsFromTransport = readsFromTransport;
         buffer = ArrayPool<byte>.Shared.Rent(capacity);
         this.capacity = buffer.Length; // Rent may return a larger array; use all of it.
     }
@@ -149,7 +155,7 @@ internal sealed class ReadBuffer : IDisposable
             {
                 read = await stream.ReadAsync(destination, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception e) when (TransportFailure.IsTransportFailure(e))
+            catch (Exception e) when (readsFromTransport && TransportFailure.IsTransportFailure(e))
             {
                 throw TransportFailure.Read(e);
             }
@@ -203,7 +209,7 @@ internal sealed class ReadBuffer : IDisposable
         {
             read = await stream.ReadAsync(buffer.AsMemory(writeStart, capacity - writeStart), cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception e) when (TransportFailure.IsTransportFailure(e))
+        catch (Exception e) when (readsFromTransport && TransportFailure.IsTransportFailure(e))
         {
             throw TransportFailure.Read(e);
         }

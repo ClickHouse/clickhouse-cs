@@ -17,8 +17,8 @@ namespace ClickHouse.Driver.Tcp;
 /// when the caller cancels.
 /// </para>
 /// <para>
-/// The hierarchy is closed: the constructors are not visible outside this assembly, so the three types
-/// above are the only ones a caller has to consider.
+/// The hierarchy is closed: the constructors are not visible outside this assembly, so a caught
+/// <see cref="ClickHouseTcpException"/> is always one of the three types above.
 /// </para>
 /// </remarks>
 public abstract class ClickHouseTcpException : DbException
