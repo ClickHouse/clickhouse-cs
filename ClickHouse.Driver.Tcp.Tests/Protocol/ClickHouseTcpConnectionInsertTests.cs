@@ -68,7 +68,7 @@ public class ClickHouseTcpConnectionInsertTests
         await connection.InsertAsync(
             "INSERT INTO t VALUES",
             Columns(UInt64Column(1, 2, 3)),
-            handlers: new MetadataHandlers { OnProgress = progresses.Add },
+            callbacks: new ClickHouseTcpQueryCallbacks { OnProgress = progresses.Add },
             cancellationToken: None);
 
         Assert.Multiple(() =>

@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Logging;
-using ClickHouse.Driver.Tcp.Protocol;
 using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.Tcp.Diagnostic;
@@ -37,26 +36,29 @@ internal sealed class ClientOperation : IDisposable
         startedAt = Stopwatch.GetTimestamp();
     }
 
-    /// <summary>The handlers the operation's response drains into, or null when nothing needs them.</summary>
-    public MetadataHandlers Handlers { get; private set; }
+    /// <summary>The client's own metadata observers, or null when nothing needs them.</summary>
+    public ClickHouseTcpQueryCallbacks Telemetry { get; private set; }
 
     /// <summary>Starts the span and the log line for a statement, and builds its handlers.</summary>
     /// <param name="options">The client options the span's endpoint attributes come from.</param>
     /// <param name="logger">The client-category logger, or null when none is configured.</param>
     /// <param name="sql">The statement.</param>
     /// <param name="queryId">The caller's query id, or null to let the server assign one.</param>
-    /// <param name="callbacks">The caller's metadata callbacks, or null.</param>
     /// <returns>The operation, or null when nothing is observing it.</returns>
+    /// <remarks>
+    /// The caller's own callbacks are not this type's concern: the connection invokes them alongside
+    /// <see cref="Telemetry"/> rather than through it, so a caller who wants progress and no tracing starts no
+    /// operation at all.
+    /// </remarks>
     public static ClientOperation Start(
         ClickHouseTcpClientOptions options,
         ILogger logger,
         string sql,
-        string queryId,
-        ClickHouseTcpQueryCallbacks callbacks)
+        string queryId)
     {
         // Tested before the statement is scanned: reading the leading keyword allocates, and an unconfigured
         // client must not pay for it on every operation.
-        if (!TcpActivity.Source.HasListeners() && logger is null && callbacks is null)
+        if (!TcpActivity.Source.HasListeners() && logger is null)
         {
             return null;
         }
@@ -66,11 +68,13 @@ internal sealed class ClientOperation : IDisposable
         var operation = new ClientOperation(activity, logger, operationName ?? TcpActivity.UnknownOperation, queryId);
 
         // The counters feed both the span's attributes and the completion log line, so either one alone is reason
-        // enough to accumulate them.
-        operation.Handlers = MetadataCallbackBridge.Build(
-            callbacks,
-            activity is null && logger is null ? null : operation.Accumulate,
-            activity is null ? null : activity.SetProfileInfo);
+        // enough to accumulate them. These run before the caller's callbacks, so a caller callback that throws
+        // cannot rob the client of telemetry it already had.
+        operation.Telemetry = new ClickHouseTcpQueryCallbacks
+        {
+            OnProgress = operation.Accumulate,
+            OnProfileInfo = activity is null ? null : activity.SetProfileInfo,
+        };
 
         if (logger is not null)
         {
