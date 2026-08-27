@@ -159,7 +159,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
 
         // Started before the rent, so the span covers waiting for a connection, and so the Query packet's
         // trace-context field picks it up from Activity.Current.
-        ClientOperation operation = ClientOperation.Start(Options, logger, sql, queryId, options?.Callbacks);
+        ClientOperation operation = ClientOperation.Start(Options, logger, sql, queryId);
         IConnectionLease lease = null;
         IAsyncEnumerator<Block> blocks = null;
         try
@@ -173,7 +173,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 // Enumerated by hand rather than with `await foreach` because a yield cannot sit inside a try that
                 // has a catch, and a failed query whose span carries no error is the one thing a trace must not do.
                 blocks = lease.Connection
-                    .QueryAsync(sql, settings, parameters, queryId, operation?.Handlers, cancellationToken)
+                    .QueryAsync(sql, settings, parameters, queryId, operation?.Telemetry, options?.Callbacks, cancellationToken)
                     .GetAsyncEnumerator(cancellationToken);
             }
             catch (Exception e)
@@ -387,7 +387,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
         IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
 
-        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId, options?.Callbacks);
+        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId);
         try
         {
             await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
@@ -399,7 +399,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 options?.QueryId,
                 ResolveMaxRowsPerBlock(options),
                 Options.MaxSendBufferBytes,
-                operation?.Handlers,
+                operation?.Telemetry,
+                options?.Callbacks,
                 cancellationToken).ConfigureAwait(false);
             operation?.Succeeded(columns.Count == 0 ? 0UL : (ulong)columns[0].RowCount);
         }
@@ -436,7 +437,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
         using var buffer = PocoRowBuffer<T>.Create(rows, nameof(rows), blockRows, cancellationToken);
 
-        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId, options?.Callbacks);
+        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId);
         try
         {
             await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
@@ -449,7 +450,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 options?.QueryId,
                 maxRowsPerBlock,
                 Options.MaxSendBufferBytes,
-                operation?.Handlers,
+                operation?.Telemetry,
+                options?.Callbacks,
                 cancellationToken).ConfigureAwait(false);
             operation?.Succeeded((ulong)buffer.Count);
         }
@@ -476,7 +478,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
         using var buffer = PocoRowBuffer<object[]>.Create(rows, nameof(rows), blockRows, cancellationToken);
 
-        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId, options?.Callbacks);
+        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId);
         try
         {
             await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
@@ -489,7 +491,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
                 options?.QueryId,
                 maxRowsPerBlock,
                 Options.MaxSendBufferBytes,
-                operation?.Handlers,
+                operation?.Telemetry,
+                options?.Callbacks,
                 cancellationToken).ConfigureAwait(false);
             operation?.Succeeded((ulong)buffer.Count);
         }
