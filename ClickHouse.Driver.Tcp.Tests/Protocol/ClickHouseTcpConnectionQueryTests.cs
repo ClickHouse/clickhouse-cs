@@ -272,7 +272,7 @@ public class ClickHouseTcpConnectionQueryTests
         using var connection = await ConnectedAsync(script);
 
         var progresses = new List<ClickHouseTcpProgress>();
-        await DrainAsync(connection, new MetadataHandlers { OnProgress = progresses.Add });
+        await DrainAsync(connection, new ClickHouseTcpQueryCallbacks { OnProgress = progresses.Add });
 
         Assert.Multiple(() =>
         {
@@ -295,7 +295,7 @@ public class ClickHouseTcpConnectionQueryTests
         using var connection = await ConnectedAsync(script);
 
         var captured = new List<ClickHouseTcpProfileInfo>();
-        await DrainAsync(connection, new MetadataHandlers { OnProfileInfo = captured.Add });
+        await DrainAsync(connection, new ClickHouseTcpQueryCallbacks { OnProfileInfo = captured.Add });
 
         Assert.Multiple(() =>
         {
@@ -318,7 +318,7 @@ public class ClickHouseTcpConnectionQueryTests
 
         var totals = new List<ulong[]>();
         // Copy out inside the call, since the block is released as soon as the handler returns.
-        await DrainAsync(connection, new MetadataHandlers
+        await DrainAsync(connection, new ClickHouseTcpQueryCallbacks
         {
             OnTotals = block => totals.Add(((IColumn<ulong>)block[0]).Values.ToArray()),
         });
@@ -332,7 +332,7 @@ public class ClickHouseTcpConnectionQueryTests
     }
 
     [Test]
-    public async Task QueryAsync_AllMetadataHandlers_EachInvokedForItsPacket()
+    public async Task QueryAsync_AllMetadataCallbacks_EachInvokedForItsPacket()
     {
         byte[] script = Concat(
             await ServerHelloBytesAsync(54476),
@@ -347,7 +347,7 @@ public class ClickHouseTcpConnectionQueryTests
         int extremes = 0;
         int log = 0;
         int profileEvents = 0;
-        await DrainAsync(connection, new MetadataHandlers
+        await DrainAsync(connection, new ClickHouseTcpQueryCallbacks
         {
             OnExtremes = _ => extremes++,
             OnLog = _ => log++,
@@ -377,7 +377,7 @@ public class ClickHouseTcpConnectionQueryTests
 
         var boom = new InvalidOperationException("handler failed");
         var thrown = Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await DrainAsync(connection, new MetadataHandlers { OnProgress = _ => throw boom }));
+            await DrainAsync(connection, new ClickHouseTcpQueryCallbacks { OnProgress = _ => throw boom }));
 
         Assert.Multiple(() =>
         {
@@ -433,9 +433,9 @@ public class ClickHouseTcpConnectionQueryTests
     }
 
     // Enumerates the response with metadata handlers attached, ignoring the row-bearing blocks themselves.
-    private static async Task DrainAsync(ClickHouseTcpConnection connection, MetadataHandlers handlers)
+    private static async Task DrainAsync(ClickHouseTcpConnection connection, ClickHouseTcpQueryCallbacks handlers)
     {
-        await foreach (Block block in connection.QueryAsync("SELECT 1", handlers: handlers, cancellationToken: None))
+        await foreach (Block block in connection.QueryAsync("SELECT 1", callbacks: handlers, cancellationToken: None))
         {
             _ = block;
         }

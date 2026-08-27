@@ -15,27 +15,9 @@ public class ClientOperationTests
     private static readonly ClickHouseTcpClientOptions Options = new();
 
     [Test]
-    public void Start_NoListenerNoLoggerNoCallbacks_ReturnsNull()
+    public void Start_NoListenerAndNoLogger_ReturnsNull()
     {
-        Assert.That(ClientOperation.Start(Options, logger: null, "SELECT 1", queryId: null, callbacks: null), Is.Null);
-    }
-
-    [Test]
-    public void Start_CallbacksOnly_BuildsAnOperationWithHandlersAndNoSpan()
-    {
-        using ClientOperation operation = ClientOperation.Start(
-            Options,
-            logger: null,
-            "SELECT 1",
-            queryId: null,
-            new ClickHouseTcpQueryCallbacks { OnProgress = _ => { } });
-
-        Assert.That(operation, Is.Not.Null);
-        Assert.Multiple(() =>
-        {
-            Assert.That(operation.Handlers, Is.Not.Null);
-            Assert.That(Activity.Current, Is.Null, "no listener means no span, callbacks or not");
-        });
+        Assert.That(ClientOperation.Start(Options, logger: null, "SELECT 1", queryId: null), Is.Null);
     }
 
     [Test]
@@ -46,11 +28,11 @@ public class ClientOperationTests
         using var factory = new CapturingLoggerFactory();
         CapturingLogger logger = factory.Logger(ClickHouseTcpDiagnostics.ClientLogCategory);
 
-        using (ClientOperation operation = ClientOperation.Start(Options, logger, "SELECT 1", queryId: null, callbacks: null))
+        using (ClientOperation operation = ClientOperation.Start(Options, logger, "SELECT 1", queryId: null))
         {
             Assert.That(operation, Is.Not.Null);
-            operation.Handlers.OnProgress(new ClickHouseTcpProgress(4, 32, 4, 0, 0, 1));
-            operation.Handlers.OnProgress(new ClickHouseTcpProgress(6, 48, 6, 0, 0, 1));
+            operation.Telemetry.OnProgress(new ClickHouseTcpProgress(4, 32, 4, 0, 0, 1));
+            operation.Telemetry.OnProgress(new ClickHouseTcpProgress(6, 48, 6, 0, 0, 1));
             operation.Succeeded();
         }
 
@@ -64,7 +46,7 @@ public class ClientOperationTests
         using var factory = new CapturingLoggerFactory();
         CapturingLogger logger = factory.Logger(ClickHouseTcpDiagnostics.ClientLogCategory);
 
-        using (ClientOperation operation = ClientOperation.Start(Options, logger, "SELECT 1", queryId: null, callbacks: null))
+        using (ClientOperation operation = ClientOperation.Start(Options, logger, "SELECT 1", queryId: null))
         {
         }
 
@@ -81,7 +63,7 @@ public class ClientOperationTests
         using var factory = new CapturingLoggerFactory();
         CapturingLogger logger = factory.Logger(ClickHouseTcpDiagnostics.ClientLogCategory);
 
-        using (ClientOperation operation = ClientOperation.Start(Options, logger, "SELECT 1", "my-query-id", callbacks: null))
+        using (ClientOperation operation = ClientOperation.Start(Options, logger, "SELECT 1", "my-query-id"))
         {
             operation.Succeeded();
         }
@@ -102,7 +84,7 @@ public class ClientOperationTests
         CapturingLogger logger = factory.Logger(ClickHouseTcpDiagnostics.ClientLogCategory);
         ClickHouseTcpClientOptions options = Options with { StatementMaxLength = 6 };
 
-        using (ClientOperation operation = ClientOperation.Start(options, logger, "SELECT 'a very long literal'", queryId: null, callbacks: null))
+        using (ClientOperation operation = ClientOperation.Start(options, logger, "SELECT 'a very long literal'", queryId: null))
         {
         }
 
@@ -116,7 +98,7 @@ public class ClientOperationTests
         CapturingLogger logger = factory.Logger(ClickHouseTcpDiagnostics.ClientLogCategory);
         ClickHouseTcpClientOptions options = Options with { StatementMaxLength = 0 };
 
-        using (ClientOperation operation = ClientOperation.Start(options, logger, "SELECT 'secret'", queryId: null, callbacks: null))
+        using (ClientOperation operation = ClientOperation.Start(options, logger, "SELECT 'secret'", queryId: null))
         {
         }
 
@@ -131,7 +113,7 @@ public class ClientOperationTests
         using var factory = new CapturingLoggerFactory();
         CapturingLogger logger = factory.Logger(ClickHouseTcpDiagnostics.ClientLogCategory);
 
-        using (ClientOperation operation = ClientOperation.Start(Options, logger, "SELECT 1", queryId: null, callbacks: null))
+        using (ClientOperation operation = ClientOperation.Start(Options, logger, "SELECT 1", queryId: null))
         {
             operation.Failed(new System.OperationCanceledException());
         }

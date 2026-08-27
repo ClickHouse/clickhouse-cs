@@ -20,9 +20,9 @@ public class ClickHouseTcpConnectionMetadataIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
 
-    private static async Task DrainAsync(ClickHouseTcpConnection connection, string sql, MetadataHandlers handlers, IReadOnlyDictionary<string, string> settings = null)
+    private static async Task DrainAsync(ClickHouseTcpConnection connection, string sql, ClickHouseTcpQueryCallbacks handlers, IReadOnlyDictionary<string, string> settings = null)
     {
-        await foreach (Block block in connection.QueryAsync(sql, settings: settings, handlers: handlers, cancellationToken: None))
+        await foreach (Block block in connection.QueryAsync(sql, settings: settings, callbacks: handlers, cancellationToken: None))
         {
             _ = block.RowCount;
         }
@@ -35,7 +35,7 @@ public class ClickHouseTcpConnectionMetadataIntegrationTests
 
         int progressCount = 0;
         ulong maxRows = 0;
-        await DrainAsync(connection, "SELECT sum(number) FROM numbers(2000000)", new MetadataHandlers
+        await DrainAsync(connection, "SELECT sum(number) FROM numbers(2000000)", new ClickHouseTcpQueryCallbacks
         {
             OnProgress = p =>
             {
@@ -62,7 +62,7 @@ public class ClickHouseTcpConnectionMetadataIntegrationTests
 
         int count = 0;
         ulong rows = 0;
-        await DrainAsync(connection, "SELECT number FROM numbers(10)", new MetadataHandlers
+        await DrainAsync(connection, "SELECT number FROM numbers(10)", new ClickHouseTcpQueryCallbacks
         {
             OnProfileInfo = info =>
             {
@@ -85,7 +85,7 @@ public class ClickHouseTcpConnectionMetadataIntegrationTests
         await using var connection = await TcpServerFixture.ConnectAsync(None);
 
         int blocks = 0;
-        await DrainAsync(connection, "SELECT number FROM numbers(10)", new MetadataHandlers
+        await DrainAsync(connection, "SELECT number FROM numbers(10)", new ClickHouseTcpQueryCallbacks
         {
             OnProfileEvents = block =>
             {
@@ -114,7 +114,7 @@ public class ClickHouseTcpConnectionMetadataIntegrationTests
         await DrainAsync(
             connection,
             "SELECT number % 3 AS k, count() AS c FROM numbers(100) GROUP BY k WITH TOTALS",
-            new MetadataHandlers
+            new ClickHouseTcpQueryCallbacks
             {
                 OnTotals = block =>
                 {
@@ -143,7 +143,7 @@ public class ClickHouseTcpConnectionMetadataIntegrationTests
         await DrainAsync(
             connection,
             "SELECT number FROM numbers(10)",
-            new MetadataHandlers
+            new ClickHouseTcpQueryCallbacks
             {
                 OnExtremes = block =>
                 {
@@ -170,7 +170,7 @@ public class ClickHouseTcpConnectionMetadataIntegrationTests
         await DrainAsync(
             connection,
             "SELECT sum(number) FROM numbers(100000)",
-            new MetadataHandlers
+            new ClickHouseTcpQueryCallbacks
             {
                 OnLog = block => logRows += block.RowCount,
             },

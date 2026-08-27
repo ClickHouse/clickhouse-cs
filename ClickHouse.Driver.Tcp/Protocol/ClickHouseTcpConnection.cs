@@ -309,7 +309,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// Runs a query and streams its result as a sequence of <see cref="Block"/>s. Sends the Query and the
     /// empty end-of-input marker, then drains the response, yielding each row-bearing Data block. The
     /// interleaved metadata packets (Progress, ProfileInfo, ProfileEvents, Log, TableColumns, Totals,
-    /// Extremes) are always consumed to keep the stream aligned; supply <paramref name="handlers"/> to
+    /// Extremes) are always consumed to keep the stream aligned; supply <paramref name="callbacks"/> to
     /// observe them, otherwise their contents are discarded.
     /// </summary>
     /// <remarks>
@@ -338,7 +338,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="settings">Per-query settings as textual values, or null for none.</param>
     /// <param name="parameters">Query parameter values in SQL representation, or null for none.</param>
     /// <param name="queryId">The query id, or null to let the server assign one.</param>
-    /// <param name="handlers">Optional callbacks for the interleaved metadata packets, or null to discard them.</param>
+    /// <param name="telemetry">The client's own metadata observers, run before the caller's, or null.</param>
+    /// <param name="callbacks">The caller's callbacks for the interleaved metadata packets, or null to discard them.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>An async stream of the result's row-bearing blocks, each valid only for its own iteration.</returns>
     /// <exception cref="InvalidOperationException">The connection is busy with another operation.</exception>
@@ -351,7 +352,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         IReadOnlyDictionary<string, string> settings = null,
         IReadOnlyDictionary<string, string> parameters = null,
         string queryId = null,
-        MetadataHandlers handlers = null,
+        ClickHouseTcpQueryCallbacks telemetry = null,
+        ClickHouseTcpQueryCallbacks callbacks = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(sql);
@@ -431,8 +433,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 else
                 {
                     // Everything else is interleaved metadata: consumed to stay stream-aligned, surfaced to the
-                    // handlers when set. An unexpected packet throws from here.
-                    await ConsumeMetadataAsync(packet, negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
+                    // callbacks when set. An unexpected packet throws from here.
+                    await ConsumeMetadataAsync(packet, negotiated, readContext, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -490,9 +492,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// written — the write memory backstop bounding peak client memory during a large insert (a single column
     /// larger than the cap still buffers in full). Independent of the row-based block split. Defaults to
     /// <see cref="BlockWriter.DefaultFlushThresholdBytes"/>.</param>
-    /// <param name="handlers">Optional callbacks for the metadata the server interleaves into the insert
-    /// acknowledgement (notably <see cref="MetadataHandlers.OnProgress"/> for rows written and
-    /// <see cref="MetadataHandlers.OnProfileEvents"/>), or null to discard it.</param>
+    /// <param name="telemetry">The client's own metadata observers, run before the caller's, or null.</param>
+    /// <param name="callbacks">The caller's callbacks for the metadata the server interleaves into the insert
+    /// acknowledgement (notably <see cref="ClickHouseTcpQueryCallbacks.OnProgress"/> for rows written and
+    /// <see cref="ClickHouseTcpQueryCallbacks.OnProfileEvents"/>), or null to discard it.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server acknowledges the insert with end-of-stream.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="columns"/> is null.</exception>
@@ -512,11 +515,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         string queryId = null,
         int? maxRowsPerBlock = DefaultMaxRowsPerBlock,
         int maxSendBufferBytes = BlockWriter.DefaultFlushThresholdBytes,
-        MetadataHandlers handlers = null,
+        ClickHouseTcpQueryCallbacks telemetry = null,
+        ClickHouseTcpQueryCallbacks callbacks = null,
         CancellationToken cancellationToken = default)
     {
         ValidateInsertArguments(sql, columns, maxRowsPerBlock, maxSendBufferBytes, out int rowCount);
-        return InsertCoreAsync(sql, columns, buildColumns: null, rowCount, settings, parameters, queryId, maxRowsPerBlock, maxSendBufferBytes, handlers, cancellationToken);
+        return InsertCoreAsync(sql, columns, buildColumns: null, rowCount, settings, parameters, queryId, maxRowsPerBlock, maxSendBufferBytes, telemetry, callbacks, cancellationToken);
     }
 
     /// <summary>
@@ -535,7 +539,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         string queryId = null,
         int? maxRowsPerBlock = DefaultMaxRowsPerBlock,
         int maxSendBufferBytes = BlockWriter.DefaultFlushThresholdBytes,
-        MetadataHandlers handlers = null,
+        ClickHouseTcpQueryCallbacks telemetry = null,
+        ClickHouseTcpQueryCallbacks callbacks = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(sql);
@@ -546,7 +551,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
 
         ValidateInsertGeometry(maxRowsPerBlock, maxSendBufferBytes);
-        return InsertCoreAsync(sql, columns: null, buildColumns, rowCount, settings, parameters, queryId, maxRowsPerBlock, maxSendBufferBytes, handlers, cancellationToken);
+        return InsertCoreAsync(sql, columns: null, buildColumns, rowCount, settings, parameters, queryId, maxRowsPerBlock, maxSendBufferBytes, telemetry, callbacks, cancellationToken);
     }
 
     /// <summary>
@@ -562,7 +567,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         string queryId,
         int? maxRowsPerBlock,
         int maxSendBufferBytes,
-        MetadataHandlers handlers,
+        ClickHouseTcpQueryCallbacks telemetry,
+        ClickHouseTcpQueryCallbacks callbacks,
         CancellationToken cancellationToken)
     {
         // Bail on cancellation before claiming the connection, so a pre-cancelled call leaves it idle.
@@ -586,7 +592,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             // Drain metadata until the schema block (the first Data packet) or a terminal packet.
-            (Block schema, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
+            (Block schema, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, readContext, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
             if (schema is null)
             {
                 if (error is null)
@@ -637,7 +643,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 await StreamInsertRowsAsync(plan, rowCount, maxRowsPerBlock, maxSendBufferBytes, negotiated, cancellationToken).ConfigureAwait(false);
 
                 // Rethrow any server error once the state is back to Ready.
-                pending = await DrainToEndOfStreamAsync(negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
+                pending = await DrainToEndOfStreamAsync(negotiated, readContext, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
                 completed = true;
             }
         }
@@ -777,18 +783,20 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// </summary>
     /// <param name="negotiated">The negotiated protocol.</param>
     /// <param name="context">The codec-resolution context (timezone) for decoding blocks.</param>
-    /// <param name="handlers">Optional metadata callbacks for the interleaved packets, or null to discard them.</param>
+    /// <param name="telemetry">The client's own metadata observers, run before the caller's, or null.</param>
+    /// <param name="callbacks">The caller's metadata callbacks for the interleaved packets, or null to discard them.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The parked server exception, or null if the stream ended cleanly.</returns>
     private async ValueTask<ClickHouseServerException> DrainToEndOfStreamAsync(
         NegotiatedProtocol negotiated,
         ResolveContext context,
-        MetadataHandlers handlers,
+        ClickHouseTcpQueryCallbacks telemetry,
+        ClickHouseTcpQueryCallbacks callbacks,
         CancellationToken cancellationToken)
     {
         while (true)
         {
-            (Block block, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, context, handlers, cancellationToken).ConfigureAwait(false);
+            (Block block, ClickHouseServerException error) = await ReadToNextDataBlockAsync(negotiated, context, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
             if (block is null)
             {
                 return error;
@@ -1011,13 +1019,15 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         ServerPacketType packet,
         NegotiatedProtocol negotiated,
         ResolveContext context,
-        Action<Block> handler,
+        Action<Block> first,
+        Action<Block> second,
         CancellationToken cancellationToken)
     {
         Block block = await ReadBlockAsync(packet, negotiated, context, cancellationToken).ConfigureAwait(false);
         try
         {
-            handler?.Invoke(block);
+            first?.Invoke(block);
+            second?.Invoke(block);
         }
         finally
         {
@@ -1180,13 +1190,15 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// </summary>
     /// <param name="negotiated">The negotiated protocol, for version-gated fields.</param>
     /// <param name="context">The codec-resolution context (timezone) for decoding blocks.</param>
-    /// <param name="handlers">Optional metadata callbacks for the interleaved packets, or null to discard them.</param>
+    /// <param name="telemetry">The client's own metadata observers, run before the caller's, or null.</param>
+    /// <param name="callbacks">The caller's metadata callbacks for the interleaved packets, or null to discard them.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The next Data block, or a null block plus the parked terminal exception (if any).</returns>
     private async ValueTask<(Block block, ClickHouseServerException error)> ReadToNextDataBlockAsync(
         NegotiatedProtocol negotiated,
         ResolveContext context,
-        MetadataHandlers handlers,
+        ClickHouseTcpQueryCallbacks telemetry,
+        ClickHouseTcpQueryCallbacks callbacks,
         CancellationToken cancellationToken)
     {
         while (true)
@@ -1204,7 +1216,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     return (await ReadBlockAsync(ServerPacketType.Data, negotiated, context, cancellationToken).ConfigureAwait(false), null);
 
                 default:
-                    await ConsumeMetadataAsync(packet, negotiated, context, handlers, cancellationToken).ConfigureAwait(false);
+                    await ConsumeMetadataAsync(packet, negotiated, context, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
                     break;
             }
         }
@@ -1212,52 +1224,56 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Consumes one interleaved metadata packet to keep the stream aligned, handing it to the matching callback
-    /// in <paramref name="handlers"/> when one is set and discarding it otherwise. Shared by the query and insert
+    /// to each set callback in turn, the client's own first, and discarding it otherwise. Shared by the query and insert
     /// response drains. Any packet type not valid mid-response at this protocol target is a violation.
     /// </summary>
     /// <param name="packet">The packet type just read (never Data, Exception, or EndOfStream).</param>
     /// <param name="negotiated">The negotiated protocol, for version-gated fields.</param>
     /// <param name="context">The codec-resolution context (timezone) for decoding block-bearing packets.</param>
-    /// <param name="handlers">Optional metadata callbacks, or null to discard every packet.</param>
+    /// <param name="telemetry">The client's own metadata observers, run before the caller's, or null.</param>
+    /// <param name="callbacks">The caller's metadata callbacks, or null to discard every packet.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <exception cref="ClickHouseProtocolException"><paramref name="packet"/> is not a valid interleaved packet.</exception>
     private async ValueTask ConsumeMetadataAsync(
         ServerPacketType packet,
         NegotiatedProtocol negotiated,
         ResolveContext context,
-        MetadataHandlers handlers,
+        ClickHouseTcpQueryCallbacks telemetry,
+        ClickHouseTcpQueryCallbacks callbacks,
         CancellationToken cancellationToken)
     {
         switch (packet)
         {
-            // Block-bearing packets lend the borrowed block to the handler for the call, then release it.
+            // Block-bearing packets lend the borrowed block to each set handler for the call, then release it.
             case ServerPacketType.Totals:
-                await ReadMetadataBlockAsync(ServerPacketType.Totals, negotiated, context, handlers?.OnTotals, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(ServerPacketType.Totals, negotiated, context, telemetry?.OnTotals, callbacks?.OnTotals, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.Extremes:
-                await ReadMetadataBlockAsync(ServerPacketType.Extremes, negotiated, context, handlers?.OnExtremes, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(ServerPacketType.Extremes, negotiated, context, telemetry?.OnExtremes, callbacks?.OnExtremes, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.ProfileEvents:
-                await ReadMetadataBlockAsync(ServerPacketType.ProfileEvents, negotiated, context, handlers?.OnProfileEvents, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(ServerPacketType.ProfileEvents, negotiated, context, telemetry?.OnProfileEvents, callbacks?.OnProfileEvents, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.Log:
-                await ReadMetadataBlockAsync(ServerPacketType.Log, negotiated, context, handlers?.OnLog, cancellationToken).ConfigureAwait(false);
+                await ReadMetadataBlockAsync(ServerPacketType.Log, negotiated, context, telemetry?.OnLog, callbacks?.OnLog, cancellationToken).ConfigureAwait(false);
                 break;
 
             case ServerPacketType.Progress:
             {
                 ClickHouseTcpProgress progress = await ClickHouseTcpProgress.ReadAsync(reader, negotiated, cancellationToken).ConfigureAwait(false);
-                handlers?.OnProgress?.Invoke(progress);
+                telemetry?.OnProgress?.Invoke(progress);
+                callbacks?.OnProgress?.Invoke(progress);
                 break;
             }
 
             case ServerPacketType.ProfileInfo:
             {
                 ClickHouseTcpProfileInfo profileInfo = await ClickHouseTcpProfileInfo.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
-                handlers?.OnProfileInfo?.Invoke(profileInfo);
+                telemetry?.OnProfileInfo?.Invoke(profileInfo);
+                callbacks?.OnProfileInfo?.Invoke(profileInfo);
                 break;
             }
 

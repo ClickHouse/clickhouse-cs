@@ -295,7 +295,7 @@ public sealed record ClickHouseTcpClientOptions
     /// The client logs its own lifecycle — connects, handshakes, pool checkouts and retirements, operation
     /// outcomes — under the <c>ClickHouse.Driver.Tcp.*</c> categories. It does <b>not</b> log what the
     /// <i>server</i> reports: server log lines go to
-    /// <see cref="ClickHouseTcpQueryCallbacks.OnServerLog"/>, where the caller decides whether they are worth
+    /// <see cref="ClickHouseTcpQueryCallbacks.OnLog"/>, where the caller decides whether they are worth
     /// logging. Nothing is formatted while the matching category and level are disabled.
     /// </para>
     /// <para>
@@ -326,16 +326,6 @@ public sealed record ClickHouseTcpClientOptions
     public int StatementMaxLength { get; init; } = DefaultStatementMaxLength;
 
     /// <summary>
-    /// These options with <see cref="CustomSettings"/> replaced by a private snapshot, or this instance when there
-    /// are none to copy. A client holds its options for its lifetime and merges the settings on every operation, so
-    /// it must own them: keeping the caller's dictionary would let a later mutation of it fault or partially apply
-    /// mid-merge. Every other property is init-only and so cannot change after construction.
-    /// </summary>
-    /// <remarks>
-    /// The <c>with</c> expression carries every other property across, so a property added later needs no change
-    /// here. Keep it that way: a hand-written copy is what silently drops a new property.
-    /// </remarks>
-    /// <summary>
     /// The statement text as telemetry may carry it: truncated to <see cref="StatementMaxLength"/>, or empty
     /// when that allows none.
     /// </summary>
@@ -351,6 +341,16 @@ public sealed record ClickHouseTcpClientOptions
         return sql.Length <= StatementMaxLength ? sql : sql[..StatementMaxLength];
     }
 
+    /// <summary>
+    /// These options with <see cref="CustomSettings"/> replaced by a private snapshot, or this instance when there
+    /// are none to copy. A client holds its options for its lifetime and merges the settings on every operation, so
+    /// it must own them: keeping the caller's dictionary would let a later mutation of it fault or partially apply
+    /// mid-merge. Every other property is init-only and so cannot change after construction.
+    /// </summary>
+    /// <remarks>
+    /// The <c>with</c> expression carries every other property across, so a property added later needs no change
+    /// here. Keep it that way: a hand-written copy is what silently drops a new property.
+    /// </remarks>
     internal ClickHouseTcpClientOptions WithOwnedCustomSettings()
         => CustomSettings is null
             ? this
