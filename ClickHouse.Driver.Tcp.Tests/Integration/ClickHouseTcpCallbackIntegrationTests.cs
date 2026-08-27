@@ -9,8 +9,9 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 // The public callback surface, driven end to end through the client. The connection-level fan-out is covered by
-// ClickHouseTcpConnectionMetadataIntegrationTests; what these add is the projection into owned rows and the fact
-// that ClickHouseTcpQueryOptions.Callbacks reaches the read path at all.
+// ClickHouseTcpConnectionMetadataIntegrationTests; what these add is that ClickHouseTcpQueryOptions.Callbacks
+// reaches the read path at all, and that the Log and ProfileEvents blocks carry the schema the callback docs
+// promise — a caller reads them by column name, so a rename on the server has to fail here.
 [TestFixture]
 [Category("Integration")]
 public class ClickHouseTcpCallbackIntegrationTests
@@ -72,12 +73,19 @@ public class ClickHouseTcpCallbackIntegrationTests
     }
 
     [Test]
-    public async Task StreamAsync_OnServerLog_ProjectsTheServerRowsForThisQuery()
+    public async Task StreamAsync_OnLog_LendsBlocksCarryingTheDocumentedLogSchema()
     {
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
         string queryId = Guid.NewGuid().ToString();
 
-        var rows = new List<ClickHouseTcpServerLogRow>();
+        // Copied out inside the callback: the block is borrowed and released as soon as it returns.
+        var queryIds = new List<string>();
+        var texts = new List<string>();
+        var sources = new List<string>();
+        var priorities = new List<sbyte>();
+        var threadIds = new List<ulong>();
+        var instants = new List<DateTimeOffset>();
+
         await DrainAsync(
             client,
             "SELECT sum(number) FROM numbers(100000)",
@@ -85,64 +93,110 @@ public class ClickHouseTcpCallbackIntegrationTests
             {
                 QueryId = queryId,
                 Settings = new Dictionary<string, string> { ["send_logs_level"] = "trace" },
-                Callbacks = new ClickHouseTcpQueryCallbacks { OnServerLog = rows.Add },
+                Callbacks = new ClickHouseTcpQueryCallbacks
+                {
+                    OnLog = block =>
+                    {
+                        ReadOnlySpan<uint> seconds = block.Column<uint>("event_time").Values;
+                        ReadOnlySpan<uint> micros = block.Column<uint>("event_time_microseconds").Values;
+                        ReadOnlySpan<sbyte> priority = block.Column<sbyte>("priority").Values;
+                        ReadOnlySpan<ulong> threadId = block.Column<ulong>("thread_id").Values;
+                        IColumn<string> id = block.Column<string>("query_id");
+                        IColumn<string> source = block.Column<string>("source");
+                        IColumn<string> text = block.Column<string>("text");
+
+                        for (int row = 0; row < block.RowCount; row++)
+                        {
+                            queryIds.Add(id[row]);
+                            texts.Add(text[row]);
+                            sources.Add(source[row]);
+                            priorities.Add(priority[row]);
+                            threadIds.Add(threadId[row]);
+                            instants.Add(DateTimeOffset.FromUnixTimeSeconds(seconds[row])
+                                .AddTicks(micros[row] * TimeSpan.TicksPerMicrosecond));
+                        }
+                    },
+                },
             });
 
-        Assert.That(rows, Is.Not.Empty, "the server streams trace-level log rows");
+        Assert.That(texts, Is.Not.Empty, "the server streams trace-level log rows");
         Assert.Multiple(() =>
         {
-            Assert.That(rows.Select(r => r.QueryId), Is.All.EqualTo(queryId), "every row belongs to the query that asked for them");
-            Assert.That(rows.Select(r => r.Text), Is.All.Not.Empty);
-            Assert.That(rows.Select(r => r.Level), Is.All.Not.EqualTo(ClickHouseTcpServerLogLevel.Unknown), "the priority column decodes to a known level");
-            Assert.That(rows.Select(r => r.Source), Is.All.Not.Null);
-            Assert.That(rows.Select(r => r.HostName), Is.All.Not.Null);
-            Assert.That(rows.Select(r => r.EventTime), Is.All.GreaterThan(DateTimeOffset.UnixEpoch), "the two time columns combine into a real instant");
-            Assert.That(rows.Any(r => r.ThreadId != 0), "at least one row names its thread");
+            Assert.That(queryIds, Is.All.EqualTo(queryId), "every row belongs to the query that asked for them");
+            Assert.That(texts, Is.All.Not.Empty);
+            Assert.That(sources, Is.All.Not.Null);
+            Assert.That(priorities, Is.All.InRange((sbyte)1, (sbyte)9), "a Poco severity, lower being more severe");
+            Assert.That(threadIds.Any(id => id != 0), "at least one row names its thread");
+            Assert.That(instants, Is.All.GreaterThan(DateTimeOffset.UnixEpoch), "the two time columns combine into a real instant");
         });
     }
 
     [Test]
-    public async Task StreamAsync_OnServerLog_WithoutSendLogsLevel_ReportsNothing()
+    public async Task StreamAsync_OnLog_WithoutSendLogsLevel_ReportsNothing()
     {
         // The callback alone changes nothing on the wire: the server's default log level is effectively silent, so
         // asking for server logs is a two-part act and this is the half the client does not do for you.
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
 
-        var rows = new List<ClickHouseTcpServerLogRow>();
+        int blocks = 0;
         await DrainAsync(
             client,
             "SELECT sum(number) FROM numbers(100000)",
             new ClickHouseTcpQueryOptions
             {
-                Callbacks = new ClickHouseTcpQueryCallbacks { OnServerLog = rows.Add },
+                Callbacks = new ClickHouseTcpQueryCallbacks { OnLog = _ => blocks++ },
             });
 
-        Assert.That(rows, Is.Empty);
+        Assert.That(blocks, Is.Zero);
     }
 
     [Test]
-    public async Task StreamAsync_OnProfileEvent_ProjectsNamedCounters()
+    public async Task StreamAsync_OnProfileEvents_LendsBlocksCarryingTheDocumentedCounterSchema()
     {
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
 
-        var events = new List<ClickHouseTcpProfileEvent>();
+        var names = new List<string>();
+        var types = new List<sbyte>();
+        var hosts = new List<string>();
+        var instants = new List<DateTimeOffset>();
+
         await DrainAsync(
             client,
             "SELECT sum(number) FROM numbers(100000)",
             new ClickHouseTcpQueryOptions
             {
-                Callbacks = new ClickHouseTcpQueryCallbacks { OnProfileEvent = events.Add },
+                Callbacks = new ClickHouseTcpQueryCallbacks { OnProfileEvents = block => Collect(block) },
             });
 
-        Assert.That(events, Is.Not.Empty, "the server sends performance counters");
+        Assert.That(names, Is.Not.Empty, "the server sends performance counters");
         Assert.Multiple(() =>
         {
-            Assert.That(events.Select(e => e.Name), Is.All.Not.Empty);
-            Assert.That(events.Select(e => e.Type), Is.All.Not.EqualTo(ClickHouseTcpProfileEventType.Unknown), "the type column decodes to a known kind");
-            Assert.That(events.Select(e => e.CurrentTime), Is.All.GreaterThan(DateTimeOffset.UnixEpoch));
-            Assert.That(events.Select(e => e.HostName), Is.All.Not.Null);
-            Assert.That(events.Any(e => e.Name == "SelectedRows"), "a counter every SELECT reports");
+            Assert.That(names, Is.All.Not.Empty);
+            Assert.That(types, Is.All.InRange((sbyte)1, (sbyte)2), "1 increment, 2 gauge");
+            Assert.That(hosts, Is.All.Not.Null);
+            Assert.That(instants, Is.All.GreaterThan(DateTimeOffset.UnixEpoch));
+            Assert.That(names, Does.Contain("SelectedRows"), "a counter every SELECT reports");
         });
+
+        void Collect(Block block)
+        {
+            ReadOnlySpan<uint> currentTime = block.Column<uint>("current_time").Values;
+            ReadOnlySpan<sbyte> type = block.Column<sbyte>("type").Values;
+            IColumn<string> host = block.Column<string>("host_name");
+            IColumn<string> name = block.Column<string>("name");
+
+            // Bound as a span to pin the width the docs promise: a server sending another integer type throws.
+            ReadOnlySpan<long> value = block.Column<long>("value").Values;
+
+            for (int row = 0; row < block.RowCount; row++)
+            {
+                names.Add(name[row]);
+                types.Add(type[row]);
+                hosts.Add(host[row]);
+                instants.Add(DateTimeOffset.FromUnixTimeSeconds(currentTime[row]));
+                _ = value[row];
+            }
+        }
     }
 
     [Test]
@@ -208,24 +262,37 @@ public class ClickHouseTcpCallbackIntegrationTests
 
         try
         {
-            var events = new List<ClickHouseTcpProfileEvent>();
+            var names = new List<string>();
+            var types = new List<sbyte>();
             await client.InsertAsync(
                 $"INSERT INTO {table} (id) VALUES",
                 new IColumn[] { PrimitiveColumn<int>.FromValues("id", "Int32", [1, 2, 3, 4, 5]) },
                 new ClickHouseTcpInsertOptions
                 {
-                    Callbacks = new ClickHouseTcpQueryCallbacks { OnProfileEvent = events.Add },
+                    Callbacks = new ClickHouseTcpQueryCallbacks
+                    {
+                        OnProfileEvents = block =>
+                        {
+                            ReadOnlySpan<sbyte> type = block.Column<sbyte>("type").Values;
+                            IColumn<string> name = block.Column<string>("name");
+                            for (int row = 0; row < block.RowCount; row++)
+                            {
+                                names.Add(name[row]);
+                                types.Add(type[row]);
+                            }
+                        },
+                    },
                 },
                 None);
 
             List<object[]> stored = await client.QueryAsync($"SELECT count() FROM {table}", cancellationToken: None).ToListAsync();
 
-            Assert.That(events, Is.Not.Empty, "the insert path passes the callbacks through");
+            Assert.That(names, Is.Not.Empty, "the insert path passes the callbacks through");
             Assert.Multiple(() =>
             {
                 Assert.That((ulong)stored[0][0], Is.EqualTo(5UL), "observing the insert did not stop it inserting");
-                Assert.That(events.Select(e => e.Name), Is.All.Not.Empty);
-                Assert.That(events.Select(e => e.Type), Is.All.Not.EqualTo(ClickHouseTcpProfileEventType.Unknown));
+                Assert.That(names, Is.All.Not.Empty);
+                Assert.That(types, Is.All.InRange((sbyte)1, (sbyte)2));
             });
         }
         finally
