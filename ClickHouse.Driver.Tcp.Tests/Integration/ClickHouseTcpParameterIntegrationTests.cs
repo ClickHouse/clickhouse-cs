@@ -507,12 +507,12 @@ public class ClickHouseTcpParameterIntegrationTests
         }
     }
 
-    // InsertAsync takes its own options type and its own call path, so the test above — which goes through
-    // ExecuteAsync — proves nothing about it. A dropped parameters argument in these overloads would have
+    // The insert methods take their own options type and their own call paths, so the test above — which goes
+    // through ExecuteAsync — proves nothing about them. A dropped parameters argument here would have
     // passed the whole suite. The target table is the parameter, which is the only place one fits in an
     // INSERT whose values arrive as a data block.
     [Test]
-    public async Task InsertAsync_RowsWithAParameterizedTarget_WritesToTheNamedTable()
+    public async Task InsertRowsAsync_ParameterizedTarget_WritesToTheNamedTable()
     {
         await using var client = TcpServerFixture.CreateClient();
         string table = $"tcp_param_rows_{Guid.NewGuid():N}";
@@ -525,7 +525,7 @@ public class ClickHouseTcpParameterIntegrationTests
             };
             object[][] rows = [[1], [2], [3]];
 
-            await client.InsertAsync("INSERT INTO {target:Identifier} (id) VALUES", rows, options, None);
+            await client.InsertRowsAsync("INSERT INTO {target:Identifier} (id) VALUES", rows, options, None);
 
             object sum = await ScalarAsync(client, $"SELECT sum(id) FROM {table}", null);
             Assert.That(Convert.ToInt64(sum), Is.EqualTo(6));
