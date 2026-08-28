@@ -85,21 +85,47 @@ public class PublicSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task ExecuteScalarAsync_AbandonsALargeResult_LeavesTheConnectionReusable()
+    public async Task ExecuteScalarAsync_OnASession_KeepsTheConnectionAndItsTemporaryTables()
     {
-        // Stopping after the first row cancels the rest of the result. The connection goes back to the pool, so
-        // the next operation on the same client must succeed rather than trip over leftover bytes.
+        // The server scopes a temporary table to the connection that made it, so reading one back after a
+        // scalar query is the only proof that the scalar did not cost the session its pinned connection.
+        // Returning early from the stream would take the abandon path, which cancels and terminates.
         await using var client = TcpServerFixture.CreateClient();
+        await using IClickHouseTcpSession session = await client.OpenSessionAsync(None);
 
-        object first = await client.ExecuteScalarAsync(
-            "SELECT number FROM numbers(5000000) ORDER BY number",
+        await session.ExecuteAsync("CREATE TEMPORARY TABLE scalar_session_marker (id UInt8)", cancellationToken: None);
+        await session.ExecuteAsync("INSERT INTO scalar_session_marker VALUES (1), (2)", cancellationToken: None);
+
+        object viaScalar = await session.ExecuteScalarAsync("SELECT count() FROM scalar_session_marker", cancellationToken: None);
+        object stillThere = await session.ExecuteScalarAsync("SELECT sum(id) FROM scalar_session_marker", cancellationToken: None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(viaScalar, Is.EqualTo(2UL));
+            Assert.That(stillThere, Is.EqualTo(3UL));
+        });
+    }
+
+    [Test]
+    public async Task ExecuteScalarAsync_ResultWithManyRows_ReadsThemAllAndKeepsTheConnection()
+    {
+        // Reading the whole result, rather than stopping at the first value, is what leaves the connection
+        // reusable: the abandon path terminates it. A temporary table on a session is the marker, since the
+        // pool would otherwise hide a termination by redialling.
+        await using var client = TcpServerFixture.CreateClient();
+        await using IClickHouseTcpSession session = await client.OpenSessionAsync(None);
+
+        await session.ExecuteAsync("CREATE TEMPORARY TABLE scalar_many_rows (id UInt8)", cancellationToken: None);
+
+        object first = await session.ExecuteScalarAsync(
+            "SELECT number FROM numbers(100000) ORDER BY number",
             cancellationToken: None);
-        object second = await client.ExecuteScalarAsync("SELECT 42", cancellationToken: None);
+        object markerSurvived = await session.ExecuteScalarAsync("SELECT count() FROM scalar_many_rows", cancellationToken: None);
 
         Assert.Multiple(() =>
         {
             Assert.That(first, Is.EqualTo(0UL));
-            Assert.That(second, Is.EqualTo((byte)42));
+            Assert.That(markerSurvived, Is.EqualTo(0UL));
         });
     }
 
