@@ -1,15 +1,17 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Protocol;
-using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
-// Drives each interleaved metadata packet from a real server and asserts its handler fires, validating the
-// decoders against real server output rather than only hand-authored bytes. A yielded Block is borrowed, and so
-// is a block handed to a block handler — everything needed is copied out inside the callback.
+// Drives each interleaved metadata packet from a real server at the connection level, where the packet dispatcher
+// sits, and asserts two things a fully-drained query does not: that the packet's callback fires, and that the
+// connection is left reusable. A decoder consuming the wrong byte count can still let the query finish while
+// leaving the connection unusable. What the packets carry, and the schema of the Log and ProfileEvents blocks,
+// belongs to ClickHouseTcpCallbackIntegrationTests.
 //
 // Not covered here: TableColumns (the server sends it for external-table/defaults scenarios that a plain query
 // does not create, and the client discards it anyway) and PartUUIDs (needs part-level query deduplication on a
@@ -20,166 +22,65 @@ public class ClickHouseTcpConnectionMetadataIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
 
-    private static async Task DrainAsync(ClickHouseTcpConnection connection, string sql, ClickHouseTcpQueryCallbacks handlers, IReadOnlyDictionary<string, string> settings = null)
+    /// <summary>The metadata packets a plain query can be made to produce.</summary>
+    public enum MetadataPacket
     {
-        await foreach (Block block in connection.QueryAsync(sql, settings: settings, callbacks: handlers, cancellationToken: None))
+        Progress,
+        ProfileInfo,
+        ProfileEvents,
+        Totals,
+        Extremes,
+        Log,
+    }
+
+    [TestCase(MetadataPacket.Progress, "SELECT sum(number) FROM numbers(2000000)", null, null)]
+    [TestCase(MetadataPacket.ProfileInfo, "SELECT number FROM numbers(10)", null, null)]
+    [TestCase(MetadataPacket.ProfileEvents, "SELECT number FROM numbers(10)", null, null)]
+    [TestCase(MetadataPacket.Totals, "SELECT number % 3 AS k, count() AS c FROM numbers(100) GROUP BY k WITH TOTALS", null, null)]
+    [TestCase(MetadataPacket.Extremes, "SELECT number FROM numbers(10)", "extremes", "1")]
+    [TestCase(MetadataPacket.Log, "SELECT sum(number) FROM numbers(100000)", "send_logs_level", "trace")]
+    public async Task QueryAsync_MetadataPacket_InvokesItsCallbackAndLeavesTheConnectionReady(
+        MetadataPacket packet,
+        string sql,
+        string settingKey,
+        string settingValue)
+    {
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+
+        int invocations = 0;
+        ClickHouseTcpQueryCallbacks callbacks = packet switch
+        {
+            MetadataPacket.Progress => new ClickHouseTcpQueryCallbacks { OnProgress = _ => invocations++ },
+            MetadataPacket.ProfileInfo => new ClickHouseTcpQueryCallbacks { OnProfileInfo = _ => invocations++ },
+            MetadataPacket.ProfileEvents => new ClickHouseTcpQueryCallbacks { OnProfileEvents = WhenRows },
+            MetadataPacket.Totals => new ClickHouseTcpQueryCallbacks { OnTotals = WhenRows },
+            MetadataPacket.Extremes => new ClickHouseTcpQueryCallbacks { OnExtremes = WhenRows },
+            MetadataPacket.Log => new ClickHouseTcpQueryCallbacks { OnLog = WhenRows },
+            _ => throw new ArgumentOutOfRangeException(nameof(packet), packet, "unhandled packet"),
+        };
+
+        IReadOnlyDictionary<string, string> settings = settingKey is null
+            ? null
+            : new Dictionary<string, string> { [settingKey] = settingValue };
+
+        await foreach (Block block in connection.QueryAsync(sql, settings: settings, callbacks: callbacks, cancellationToken: None))
         {
             _ = block.RowCount;
         }
-    }
-
-    [Test]
-    public async Task QueryAsync_ScanningManyRows_InvokesProgressWithRowsRead()
-    {
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
-
-        int progressCount = 0;
-        ulong maxRows = 0;
-        await DrainAsync(connection, "SELECT sum(number) FROM numbers(2000000)", new ClickHouseTcpQueryCallbacks
-        {
-            OnProgress = p =>
-            {
-                progressCount++;
-                if (p.Rows > maxRows)
-                {
-                    maxRows = p.Rows;
-                }
-            },
-        });
 
         Assert.Multiple(() =>
         {
-            Assert.That(progressCount, Is.GreaterThan(0), "at least one Progress packet");
-            Assert.That(maxRows, Is.GreaterThan(0UL), "Progress reports rows read");
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+            Assert.That(invocations, Is.GreaterThan(0), "the packet reached its callback");
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready), "and was consumed whole, leaving the connection reusable");
         });
-    }
 
-    [Test]
-    public async Task QueryAsync_AnyQuery_InvokesProfileInfo()
-    {
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
-
-        int count = 0;
-        ulong rows = 0;
-        await DrainAsync(connection, "SELECT number FROM numbers(10)", new ClickHouseTcpQueryCallbacks
+        // A block-shaped packet counts only when it carries rows, an empty one proving nothing was decoded out of it.
+        void WhenRows(Block block)
         {
-            OnProfileInfo = info =>
+            if (block.RowCount > 0)
             {
-                count++;
-                rows = info.Rows;
-            },
-        });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(count, Is.GreaterThan(0), "ProfileInfo summary is sent");
-            Assert.That(rows, Is.EqualTo(10UL));
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
-        });
-    }
-
-    [Test]
-    public async Task QueryAsync_AnyQuery_InvokesProfileEvents()
-    {
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
-
-        int blocks = 0;
-        await DrainAsync(connection, "SELECT number FROM numbers(10)", new ClickHouseTcpQueryCallbacks
-        {
-            OnProfileEvents = block =>
-            {
-                if (block.RowCount > 0)
-                {
-                    blocks++;
-                }
-            },
-        });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(blocks, Is.GreaterThan(0), "the server sends a ProfileEvents block");
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
-        });
-    }
-
-    [Test]
-    public async Task QueryAsync_GroupByWithTotals_InvokesTotalsOnce()
-    {
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
-
-        int totalsCount = 0;
-        int totalsRows = 0;
-        ulong totalCount = 0;
-        await DrainAsync(
-            connection,
-            "SELECT number % 3 AS k, count() AS c FROM numbers(100) GROUP BY k WITH TOTALS",
-            new ClickHouseTcpQueryCallbacks
-            {
-                OnTotals = block =>
-                {
-                    totalsCount++;
-                    totalsRows = block.RowCount;
-                    totalCount = ((IColumn<ulong>)block[1]).Values[0];
-                },
-            });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(totalsCount, Is.EqualTo(1), "exactly one Totals block");
-            Assert.That(totalsRows, Is.EqualTo(1), "the totals row");
-            Assert.That(totalCount, Is.EqualTo(100UL), "the grand total count");
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
-        });
-    }
-
-    [Test]
-    public async Task QueryAsync_ExtremesSetting_InvokesExtremesWithMinAndMax()
-    {
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
-
-        int extremesCount = 0;
-        ulong[] rows = null;
-        await DrainAsync(
-            connection,
-            "SELECT number FROM numbers(10)",
-            new ClickHouseTcpQueryCallbacks
-            {
-                OnExtremes = block =>
-                {
-                    extremesCount++;
-                    rows = ((IColumn<ulong>)block[0]).Values.ToArray();
-                },
-            },
-            settings: new Dictionary<string, string> { ["extremes"] = "1" });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(extremesCount, Is.EqualTo(1), "exactly one Extremes block");
-            Assert.That(rows, Is.EqualTo(new ulong[] { 0, 9 }), "min then max");
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
-        });
-    }
-
-    [Test]
-    public async Task QueryAsync_TraceLogsSetting_InvokesLog()
-    {
-        await using var connection = await TcpServerFixture.ConnectAsync(None);
-
-        int logRows = 0;
-        await DrainAsync(
-            connection,
-            "SELECT sum(number) FROM numbers(100000)",
-            new ClickHouseTcpQueryCallbacks
-            {
-                OnLog = block => logRows += block.RowCount,
-            },
-            settings: new Dictionary<string, string> { ["send_logs_level"] = "trace" });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(logRows, Is.GreaterThan(0), "the server streams trace-level log rows");
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
-        });
+                invocations++;
+            }
+        }
     }
 }

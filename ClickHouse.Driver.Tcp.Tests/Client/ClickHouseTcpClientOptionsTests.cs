@@ -35,6 +35,8 @@ public class ClickHouseTcpClientOptionsTests
             Assert.That(options.MaxConnectionLifetime, Is.EqualTo(TimeSpan.FromMinutes(30)));
             Assert.That(options.IdleTimeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
             Assert.That(options.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Lifo));
+            Assert.That(options.IncludeSqlInActivityTags, Is.False);
+            Assert.That(options.StatementMaxLength, Is.EqualTo(5), "a stub, so statement text has to be asked for");
         });
     }
 
