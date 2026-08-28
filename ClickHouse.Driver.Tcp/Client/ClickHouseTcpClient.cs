@@ -78,8 +78,10 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <param name="options">The client configuration (endpoint, credentials, timeouts, client-level settings).</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
     /// <exception cref="ArgumentException">An option value is invalid (see <see cref="ClickHouseTcpClientOptions"/>).</exception>
+    /// <exception cref="PlatformNotSupportedException">The host is big-endian.</exception>
     public ClickHouseTcpClient(ClickHouseTcpClientOptions options)
     {
+        HostEndianness.RequireLittleEndian();
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         Options = options.WithOwnedCustomSettings();
@@ -363,6 +365,26 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         }
     }
 
+    /// <inheritdoc/>
+    public async ValueTask<object> ExecuteScalarAsync(
+        string sql,
+        ClickHouseTcpQueryOptions options = null,
+        CancellationToken cancellationToken = default)
+    {
+        await foreach (Block block in StreamAsync(sql, options, cancellationToken).ConfigureAwait(false))
+        {
+            if (block.RowCount == 0 || block.ColumnCount == 0)
+            {
+                continue;
+            }
+
+            // Read before returning: the block is borrowed and StreamAsync disposes it as the loop unwinds.
+            return block[0].GetValue(0);
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Inserts columnar data. The columns are matched to the target's schema <b>by name</b> (order is free, and
     /// a named subset inserts only those columns, the server filling the rest from their defaults); values are
@@ -573,6 +595,23 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
             activity?.SetError(e);
             throw;
         }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<ClickHouseTcpServerInfo> GetServerInfoAsync(CancellationToken cancellationToken = default)
+    {
+        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        ServerHandshake server = lease.Connection.Server;
+        return new ClickHouseTcpServerInfo
+        {
+            Name = server.ServerName,
+            VersionMajor = server.VersionMajor,
+            VersionMinor = server.VersionMinor,
+            VersionPatch = server.VersionPatch,
+            ProtocolRevision = server.Negotiated.Version,
+            Timezone = server.Timezone,
+            DisplayName = server.DisplayName,
+        };
     }
 
     /// <inheritdoc/>

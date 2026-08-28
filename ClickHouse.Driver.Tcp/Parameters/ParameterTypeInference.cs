@@ -4,7 +4,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Parameters;
@@ -48,7 +47,7 @@ internal static class ParameterTypeInference
 
             // The scale is the value's own, so a round trip keeps every digit the caller supplied.
             case decimal d: return $"Decimal128({(decimal.GetBits(d)[3] >> 16) & 0x7F})";
-            case ClickHouseDecimal chd: return $"Decimal128({chd.Scale})";
+            case ClickHouseTcpDecimal chd: return $"Decimal128({chd.Scale})";
 
             case string or char or byte[]: return "String";
             case Guid: return "UUID";
@@ -129,7 +128,7 @@ internal static class ParameterTypeInference
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
             string or char => node.Name is "String" or "FixedString" or "Enum8" or "Enum16" ? node.Name : "String",
             DateTime or DateTimeOffset => node.Name is "DateTime" or "DateTime64" or "Date" or "Date32" ? node.Name : "DateTime64",
-            decimal or ClickHouseDecimal => node.Name.StartsWith("Decimal", StringComparison.Ordinal) ? node.Name : "Decimal128",
+            decimal or ClickHouseTcpDecimal => node.Name.StartsWith("Decimal", StringComparison.Ordinal) ? node.Name : "Decimal128",
             not string and IEnumerable => "Array",
             _ => InferOrNothing(value),
         };

@@ -1,6 +1,6 @@
 using System;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// The columnar read surface of a decoded <c>QBit(T, N)</c> column. A QBit row is an <c>N</c>-element vector

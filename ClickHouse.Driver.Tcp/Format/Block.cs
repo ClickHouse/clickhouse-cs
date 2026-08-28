@@ -1,9 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
 
-namespace ClickHouse.Driver.Tcp.Format;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// A decoded block: the columnar unit exchanged for Data, Totals, Extremes, Log, and ProfileEvents. Carries an

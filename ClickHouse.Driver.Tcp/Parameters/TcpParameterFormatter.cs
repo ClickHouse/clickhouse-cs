@@ -6,7 +6,6 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 
@@ -264,7 +263,7 @@ internal static class TcpParameterFormatter
 
     private static string FormatDecimal(object value) => value switch
     {
-        ClickHouseDecimal chd => chd.ToString(null, CultureInfo.InvariantCulture),
+        ClickHouseTcpDecimal chd => chd.ToString(null, CultureInfo.InvariantCulture),
         string s => ParseDecimalText(s).ToString(null, CultureInfo.InvariantCulture),
         _ => Convert.ToDecimal(value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
     };
@@ -281,11 +280,11 @@ internal static class TcpParameterFormatter
     /// <see cref="BigInteger"/>, because a decimal caps at 29 digits and the wider ClickHouse decimals exceed
     /// that; only the plain form reaches that path, which is the only form that can be that wide.
     /// </remarks>
-    private static ClickHouseDecimal ParseDecimalText(string text)
+    private static ClickHouseTcpDecimal ParseDecimalText(string text)
     {
         if (decimal.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal narrow))
         {
-            return ClickHouseDecimal.FromDecimal(narrow);
+            return ClickHouseTcpDecimal.FromDecimal(narrow);
         }
 
         string trimmed = text.Trim();
@@ -298,7 +297,7 @@ internal static class TcpParameterFormatter
             throw new ArgumentException($"Cannot convert value '{text}' to a ClickHouse decimal");
         }
 
-        return new ClickHouseDecimal(mantissa, scale);
+        return new ClickHouseTcpDecimal(mantissa, scale);
     }
 
     private static string FormatDate(object value, bool quote)

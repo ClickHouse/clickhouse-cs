@@ -1,7 +1,6 @@
 using System;
 using System.Numerics;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 using static ClickHouse.Driver.Tcp.Tests.Utilities.CodecTestHarness;
@@ -24,7 +23,7 @@ public class DecimalColumnCodecTests
         IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
         IColumn column = bytesPerValue <= 8
             ? new ArrayColumn<decimal>("c", type, new[] { 1m })
-            : new ArrayColumn<ClickHouseDecimal>("c", type, new[] { new ClickHouseDecimal(BigInteger.One, 0) });
+            : new ArrayColumn<ClickHouseTcpDecimal>("c", type, new[] { new ClickHouseTcpDecimal(BigInteger.One, 0) });
 
         byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
 
@@ -62,10 +61,10 @@ public class DecimalColumnCodecTests
         // InsertRoundTripCase. Two's complement: -2^200 is 2^256 - 2^200 = (2^56 - 1) << 200, so every bit from
         // 200 up is set, i.e. bytes 0..24 are zero and bytes 25..31 are 0xFF in the little-endian 32-byte limb.
         const string type = "Decimal(76, 0)";
-        var value = new ClickHouseDecimal(-BigInteger.Pow(2, 200), 0);
+        var value = new ClickHouseTcpDecimal(-BigInteger.Pow(2, 200), 0);
         IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
 
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<ClickHouseDecimal>("c", type, new[] { value })));
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<ClickHouseTcpDecimal>("c", type, new[] { value })));
 
         var expected = new byte[32];
         expected.AsSpan(25).Fill(0xFF);
@@ -114,8 +113,8 @@ public class DecimalColumnCodecTests
         const string type = "Decimal(19, 2)";
         IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
         BigInteger boundary = BigInteger.Pow(10, 19) - BigInteger.One;
-        var value = new ClickHouseDecimal(boundary * 10, 3);
-        var column = new ArrayColumn<ClickHouseDecimal>("c", type, new[] { value });
+        var value = new ClickHouseTcpDecimal(boundary * 10, 3);
+        var column = new ArrayColumn<ClickHouseTcpDecimal>("c", type, new[] { value });
 
         byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
 
@@ -127,8 +126,8 @@ public class DecimalColumnCodecTests
     {
         const string type = "Decimal(19, 2)";
         IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
-        var value = new ClickHouseDecimal(BigInteger.Pow(10, 20), 3);
-        var column = new ArrayColumn<ClickHouseDecimal>("c", type, new[] { value });
+        var value = new ClickHouseTcpDecimal(BigInteger.Pow(10, 20), 3);
+        var column = new ArrayColumn<ClickHouseTcpDecimal>("c", type, new[] { value });
 
         Assert.ThrowsAsync<OverflowException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
     }
@@ -138,8 +137,8 @@ public class DecimalColumnCodecTests
     {
         const string type = "Decimal(19, 2)";
         IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
-        var value = new ClickHouseDecimal(BigInteger.One, 3);
-        var column = new ArrayColumn<ClickHouseDecimal>("c", type, new[] { value });
+        var value = new ClickHouseTcpDecimal(BigInteger.One, 3);
+        var column = new ArrayColumn<ClickHouseTcpDecimal>("c", type, new[] { value });
 
         Assert.ThrowsAsync<ArgumentException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
     }
@@ -151,8 +150,8 @@ public class DecimalColumnCodecTests
     {
         IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
         BigInteger mantissa = BigInteger.Pow(10, precision);
-        var positive = new ArrayColumn<ClickHouseDecimal>("c", type, new[] { new ClickHouseDecimal(mantissa, 0) });
-        var negative = new ArrayColumn<ClickHouseDecimal>("c", type, new[] { new ClickHouseDecimal(-mantissa, 0) });
+        var positive = new ArrayColumn<ClickHouseTcpDecimal>("c", type, new[] { new ClickHouseTcpDecimal(mantissa, 0) });
+        var negative = new ArrayColumn<ClickHouseTcpDecimal>("c", type, new[] { new ClickHouseTcpDecimal(-mantissa, 0) });
 
         Assert.Multiple(() =>
         {
@@ -182,10 +181,10 @@ public class DecimalColumnCodecTests
     {
         IColumnCodec codec = DecimalColumnCodec.Create(TypeParser.Parse(type));
         BigInteger boundary = BigInteger.Pow(10, precision) - BigInteger.One;
-        var column = new ArrayColumn<ClickHouseDecimal>(
+        var column = new ArrayColumn<ClickHouseTcpDecimal>(
             "c",
             type,
-            new[] { new ClickHouseDecimal(boundary, 0), new ClickHouseDecimal(-boundary, 0) });
+            new[] { new ClickHouseTcpDecimal(boundary, 0), new ClickHouseTcpDecimal(-boundary, 0) });
 
         byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
 
@@ -201,8 +200,8 @@ public class DecimalColumnCodecTests
         Assert.Multiple(() =>
         {
             Assert.That(small.CanWrite(new ArrayColumn<decimal>("c", "Decimal(9, 2)", Array.Empty<decimal>())), Is.True);
-            Assert.That(small.CanWrite(new ArrayColumn<ClickHouseDecimal>("c", "Decimal(9, 2)", Array.Empty<ClickHouseDecimal>())), Is.False);
-            Assert.That(wide.CanWrite(new ArrayColumn<ClickHouseDecimal>("c", "Decimal(38, 2)", Array.Empty<ClickHouseDecimal>())), Is.True);
+            Assert.That(small.CanWrite(new ArrayColumn<ClickHouseTcpDecimal>("c", "Decimal(9, 2)", Array.Empty<ClickHouseTcpDecimal>())), Is.False);
+            Assert.That(wide.CanWrite(new ArrayColumn<ClickHouseTcpDecimal>("c", "Decimal(38, 2)", Array.Empty<ClickHouseTcpDecimal>())), Is.True);
             Assert.That(wide.CanWrite(new ArrayColumn<decimal>("c", "Decimal(38, 2)", Array.Empty<decimal>())), Is.False);
         });
     }

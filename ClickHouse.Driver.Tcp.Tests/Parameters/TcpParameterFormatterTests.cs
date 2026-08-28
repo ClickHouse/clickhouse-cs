@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Parameters;
 
 namespace ClickHouse.Driver.Tcp.Tests.Parameters;
@@ -114,7 +113,7 @@ public class TcpParameterFormatterTests
     [Test]
     public void FormatSqlText_ClickHouseDecimal_UsesItsOwnScale()
     {
-        var value = new ClickHouseDecimal(12345, 4);
+        var value = new ClickHouseTcpDecimal(12345, 4);
 
         Assert.That(TcpParameterFormatter.FormatSqlText(value, "Decimal64(4)", "p"), Is.EqualTo("1.2345"));
     }

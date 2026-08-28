@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Text;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Parameters;
 
 namespace ClickHouse.Driver.Tcp.Tests.Parameters;
@@ -514,7 +513,7 @@ public class ParameterTypeInferenceTests
     [Test]
     public void Infer_ClickHouseDecimal_KeepsItsOwnScale()
     {
-        Assert.That(ParameterTypeInference.Infer(new ClickHouseDecimal(12345, 4), "p"), Is.EqualTo("Decimal128(4)"));
+        Assert.That(ParameterTypeInference.Infer(new ClickHouseTcpDecimal(12345, 4), "p"), Is.EqualTo("Decimal128(4)"));
     }
 
     [Test]

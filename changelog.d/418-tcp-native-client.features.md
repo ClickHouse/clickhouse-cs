@@ -1,0 +1,4 @@
+* Added `ClickHouseTcpClient`, a client that speaks ClickHouse's native TCP protocol instead of HTTP (issue #418). It reads results either columnwise as borrowed `Block`s or row by row as `object[]` or a mapped POCO, inserts columnwise or row by row, pools connections, and offers sessions pinned to one connection for temporary tables and `SET`. TLS, query parameters, named server error codes, OpenTelemetry tracing and `ILogger` output are all supported.
+  - **Compression is on by default, using LZ4.** Set `Compression=none` in the connection string, or `ClickHouseTcpClientOptions.Compressor`, to change or disable it. This matches `clickhouse-client`.
+  - The client ships in the same `ClickHouse.Driver` package, but targets `net8.0` and newer, so it is absent from the package's `net6.0` build.
+  - The client, session and data source types are marked `[Experimental("CHTCP0001")]`: the surface may change in a future release. Suppress that diagnostic to acknowledge it.

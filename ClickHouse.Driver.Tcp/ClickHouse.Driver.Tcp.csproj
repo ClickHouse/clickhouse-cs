@@ -9,13 +9,28 @@
     <AnalysisMode>Recommended</AnalysisMode>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
-    <!-- SA0001: doc comments are present but the XML doc file isn't generated yet (deferred). -->
+    <!-- SA0001: StyleCop cannot check doc comments without a generated XML doc file, and no project in this
+         repository generates one. Every public member here is documented; build with
+         -p:GenerateDocumentationFile=true to check that. -->
     <NoWarn>$(NoWarn);SA0001</NoWarn>
     <!-- Not published on its own; its assembly is packed into the ClickHouse.Driver package. -->
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The analyzer only reads files it is handed; it does not glob for them. Both files are required:
+         given only one, it reports RS0048 and stops checking the surface altogether. Shipped is empty until
+         the first release, when the Unshipped entries move into it. Exactly one pair, too - a second pair
+         also silently disables RS0016. -->
+    <AdditionalFiles Include="PublicAPI/PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI/PublicAPI.Unshipped.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" />
     <PackageReference Include="StyleCop.Analyzers">
