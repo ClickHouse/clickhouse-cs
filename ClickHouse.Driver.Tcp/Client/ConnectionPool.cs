@@ -124,9 +124,17 @@ internal sealed class ConnectionPool : IConnectionSource
         permits = new SemaphoreSlim(options.MaxPoolSize, options.MaxPoolSize);
 
         TimeSpan period = SweepInterval(options);
-        sweeper = period == TimeSpan.Zero
-            ? null
-            : time.CreateTimer(static state => ((ConnectionPool)state).SweepQuietly(), this, period, period);
+
+        // The timer captures the execution context here and restores it for every callback, so a pool built inside
+        // an ambient Activity would give each background dial's connect span that Activity as its parent — for the
+        // pool's whole life, long after the operation it belonged to ended. Suppressing the capture covers the
+        // whole sweep chain: the callback runs without one, so the top-up it starts captures nothing either.
+        using (ExecutionContext.SuppressFlow())
+        {
+            sweeper = period == TimeSpan.Zero
+                ? null
+                : time.CreateTimer(static state => ((ConnectionPool)state).SweepQuietly(), this, period, period);
+        }
     }
 
     /// <summary>
