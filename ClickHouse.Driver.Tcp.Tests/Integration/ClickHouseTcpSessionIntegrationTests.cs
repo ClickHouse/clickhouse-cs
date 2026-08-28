@@ -351,8 +351,8 @@ public class ClickHouseTcpSessionIntegrationTests
 
         IColumn[] columns = [PrimitiveColumn<ulong>.FromValues("value", "UInt64", [1UL])];
         await session.InsertAsync($"INSERT INTO {table} (value) VALUES", columns, cancellationToken: None);
-        await session.InsertAsync($"INSERT INTO {table} (value) VALUES", [new ValueRow { Value = 2 }], cancellationToken: None);
-        await session.InsertAsync($"INSERT INTO {table} (value) VALUES", [new object[] { 3UL }], cancellationToken: None);
+        await session.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", [new ValueRow { Value = 2 }], cancellationToken: None);
+        await session.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", [new object[] { 3UL }], cancellationToken: None);
 
         var untyped = new List<ulong>();
         await foreach (object[] row in session.QueryAsync($"SELECT value FROM {table} ORDER BY value", cancellationToken: None))
