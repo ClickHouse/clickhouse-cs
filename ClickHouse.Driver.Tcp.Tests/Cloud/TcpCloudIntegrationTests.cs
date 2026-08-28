@@ -92,7 +92,7 @@ public class TcpCloudIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_MergeTreeTable_RoundTripsThroughSelect()
+    public async Task InsertRowsAsync_MergeTreeTable_RoundTripsThroughSelect()
     {
         // MergeTree, not Memory: Cloud turns it into SharedMergeTree, whose data every replica can read, so the
         // read-back does not depend on landing on the connection that inserted.
@@ -100,9 +100,9 @@ public class TcpCloudIntegrationTests
         string table = UniqueTableName();
         await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, name String) ENGINE = MergeTree ORDER BY id", cancellationToken: None);
 
-        await client.InsertAsync(
+        await client.InsertRowsAsync(
             $"INSERT INTO {table} (id, name) VALUES",
-            Enumerable.Range(0, 1000).Select(i => new object[] { (ulong)i, $"row-{i}" }),
+            Enumerable.Range(0, 1000).Select(i => new object[] { (ulong)i, $"row-{i}" }).ToArray(),
             cancellationToken: None);
 
         var rows = new List<(ulong Id, string Name)>();
