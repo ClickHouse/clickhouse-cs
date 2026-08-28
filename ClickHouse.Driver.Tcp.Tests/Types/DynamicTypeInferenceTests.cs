@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
@@ -78,12 +77,12 @@ public class DynamicTypeInferenceTests
     {
         (string typeName, object canonical) = DynamicTypeInference.Infer(12.340m);
         Assert.That(typeName, Is.EqualTo("Decimal(38, 3)"));
-        Assert.That(canonical, Is.InstanceOf<ClickHouseDecimal>());
+        Assert.That(canonical, Is.InstanceOf<ClickHouseTcpDecimal>());
     }
 
     [Test]
     public void Infer_ClickHouseDecimal_MapsToDecimal256AtItsScale()
-        => Assert.That(DynamicTypeInference.Infer(new ClickHouseDecimal(new System.Numerics.BigInteger(12345), 2)).TypeName, Is.EqualTo("Decimal(76, 2)"));
+        => Assert.That(DynamicTypeInference.Infer(new ClickHouseTcpDecimal(new System.Numerics.BigInteger(12345), 2)).TypeName, Is.EqualTo("Decimal(76, 2)"));
 
     [Test]
     public void Infer_Array_RecursesIntoElementType()
@@ -98,11 +97,11 @@ public class DynamicTypeInferenceTests
         => Assert.That(DynamicTypeInference.Infer(new[] { new KeyValuePair<string, uint>("a", 1) }).TypeName, Is.EqualTo("Map(String, UInt32)"));
 
     // A Map key or value whose ClickHouse type only its value can settle — an IPAddress's family, a
-    // ClickHouseDecimal's scale — resolves from the pairs, the same way an Array element or a Tuple element does.
+    // ClickHouseTcpDecimal's scale — resolves from the pairs, the same way an Array element or a Tuple element does.
     [Test]
     public void Infer_MapWithValueDisambiguatedKeyAndValue_ReadsThePairs()
         => Assert.That(
-            DynamicTypeInference.Infer(new[] { new KeyValuePair<IPAddress, ClickHouseDecimal>(IPAddress.Parse("::1"), new ClickHouseDecimal(new System.Numerics.BigInteger(12345), 2)) }).TypeName,
+            DynamicTypeInference.Infer(new[] { new KeyValuePair<IPAddress, ClickHouseTcpDecimal>(IPAddress.Parse("::1"), new ClickHouseTcpDecimal(new System.Numerics.BigInteger(12345), 2)) }).TypeName,
             Is.EqualTo("Map(IPv6, Decimal(76, 2))"));
 
     [Test]

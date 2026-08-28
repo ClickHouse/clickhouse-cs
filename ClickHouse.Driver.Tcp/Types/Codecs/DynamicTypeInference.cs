@@ -5,7 +5,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using ClickHouse.Driver.Tcp.Numerics;
 
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
@@ -57,7 +56,7 @@ internal static class DynamicTypeInference
     /// The canonical ClickHouse type string and the value coerced to that codec's CLR element type — so the write
     /// path can bucket it as the element type the codec reads back. For most types the value is returned as-is; a
     /// <see cref="DateTimeOffset"/>/<see cref="DateTime"/> becomes a raw <see cref="long"/> nanosecond count
-    /// (<c>DateTime64(9)</c>'s element type) and a <see cref="decimal"/> a <see cref="ClickHouseDecimal"/>.
+    /// (<c>DateTime64(9)</c>'s element type) and a <see cref="decimal"/> a <see cref="ClickHouseTcpDecimal"/>.
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is null.</exception>
     /// <exception cref="NotSupportedException">No ClickHouse type is inferred for the value's CLR type.</exception>
@@ -72,7 +71,7 @@ internal static class DynamicTypeInference
 
         // Types whose ClickHouse mapping depends on the value (scale) or that map to a canonical read-back type
         // wider than the input CLR type. The value is coerced to that codec's element type so it round-trips:
-        //  - a decimal maps to Decimal128 (element type ClickHouseDecimal), a ClickHouseDecimal to Decimal256;
+        //  - a decimal maps to Decimal128 (element type ClickHouseTcpDecimal), a ClickHouseTcpDecimal to Decimal256;
         //  - a DateTimeOffset/DateTime maps to DateTime64 at nanosecond scale, coerced to the codec's Int64 count
         //    element type (exact for either — both hold at most 100 ns ticks). A raw Int64 is Int64, not
         //    DateTime64: there is no distinct CLR carrier to key on, so date-time semantics require a
@@ -83,10 +82,10 @@ internal static class DynamicTypeInference
                 return ("DateTime64(9)", ToNanosecondCount(dateTimeOffset));
             case DateTime dateTime:
                 return ("DateTime64(9)", ToNanosecondCount(new DateTimeOffset(dateTime.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dateTime, DateTimeKind.Utc) : dateTime)));
-            case ClickHouseDecimal wideDecimal:
+            case ClickHouseTcpDecimal wideDecimal:
                 return (FormattableString.Invariant($"Decimal(76, {wideDecimal.Scale})"), value);
             case decimal value128:
-                return (FormattableString.Invariant($"Decimal(38, {ScaleOf(value128)})"), ClickHouseDecimal.FromDecimal(value128));
+                return (FormattableString.Invariant($"Decimal(38, {ScaleOf(value128)})"), ClickHouseTcpDecimal.FromDecimal(value128));
         }
 
         Type type = value.GetType();
@@ -133,7 +132,7 @@ internal static class DynamicTypeInference
     }
 
     // A Map's key and value types are inferred from the present pairs, the same way an Array's element type is, so
-    // that a value-disambiguated type (an IPAddress's family, a ClickHouseDecimal's scale) resolves as a Map key or
+    // that a value-disambiguated type (an IPAddress's family, a ClickHouseTcpDecimal's scale) resolves as a Map key or
     // value too. The scan runs through a cached per-pair-type delegate, over the typed pairs, so it neither boxes
     // each pair nor reflects over Key/Value once per entry.
     private static (string Key, string Value) ScanPairs<TKey, TValue>(Array pairs)
@@ -207,7 +206,7 @@ internal static class DynamicTypeInference
         if (canonical.GetType() != element.GetType())
         {
             throw new NotSupportedException(
-                $"A Dynamic composite element of CLR type '{element.GetType()}' would be coerced to '{canonical.GetType()}', which is not supported inside a composite. Use the canonical element type directly (e.g. a raw long count for a DateTime64, ClickHouseDecimal for a decimal).");
+                $"A Dynamic composite element of CLR type '{element.GetType()}' would be coerced to '{canonical.GetType()}', which is not supported inside a composite. Use the canonical element type directly (e.g. a raw long count for a DateTime64, ClickHouseTcpDecimal for a decimal).");
         }
 
         return typeName;

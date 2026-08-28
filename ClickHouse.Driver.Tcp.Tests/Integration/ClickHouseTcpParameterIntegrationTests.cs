@@ -6,7 +6,6 @@ using System.Numerics;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
@@ -49,8 +48,8 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Decimal64(4)", 1.2345m).Returns("1.2345").SetName("Decimal64");
         yield return new TestCaseData("Decimal32(2)", 1.25m).Returns("1.25").SetName("Decimal32");
         yield return new TestCaseData("Decimal(10, 2)", 1.25m).Returns("1.25").SetName("Decimal with a precision and a scale");
-        yield return new TestCaseData("Decimal64(4)", new ClickHouseDecimal(12345, 4)).Returns("1.2345")
-            .SetName("Decimal from a ClickHouseDecimal");
+        yield return new TestCaseData("Decimal64(4)", new ClickHouseTcpDecimal(12345, 4)).Returns("1.2345")
+            .SetName("Decimal from a ClickHouseTcpDecimal");
 
         // Wider than a CLR decimal and carrying a fraction, so the BigInteger text path must keep the scale.
         yield return new TestCaseData("Decimal256(4)", "12345678901234567890123456789012345.6789")

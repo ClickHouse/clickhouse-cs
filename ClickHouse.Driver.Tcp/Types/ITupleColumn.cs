@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// The read surface of a decoded <c>Tuple(...)</c> column. A tuple is stored on the wire — and here — as its N

@@ -91,6 +91,17 @@ internal sealed class ClickHouseTcpSession : IClickHouseTcpSession
     public ValueTask PingAsync(CancellationToken cancellationToken = default)
         => operations.PingAsync(cancellationToken);
 
+    /// <inheritdoc/>
+    public ValueTask<ClickHouseTcpServerInfo> GetServerInfoAsync(CancellationToken cancellationToken = default)
+        => operations.GetServerInfoAsync(cancellationToken);
+
+    /// <inheritdoc/>
+    public ValueTask<object> ExecuteScalarAsync(
+        string sql,
+        ClickHouseTcpQueryOptions options = null,
+        CancellationToken cancellationToken = default)
+        => operations.ExecuteScalarAsync(sql, options, cancellationToken);
+
     /// <summary>
     /// Ends the session and closes its connection without disposing the parent client.
     /// </summary>
