@@ -46,7 +46,7 @@ public class CompressionIntegrationTests
     }
 
     [TestCaseSource(nameof(Codecs))]
-    public async Task InsertAsync_Compressed_RoundTripsThroughSelect(IClickHouseCompressor codec)
+    public async Task InsertRowsAsync_Compressed_RoundTripsThroughSelect(IClickHouseCompressor codec)
     {
         await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { Compressor = codec });
         string table = UniqueTableName();
@@ -57,7 +57,7 @@ public class CompressionIntegrationTests
             object[][] rows = Enumerable.Range(0, 2000)
                 .Select(i => new object[] { (ulong)i, $"name-{i}" })
                 .ToArray();
-            await client.InsertAsync($"INSERT INTO {table} (id, name) VALUES", rows, null, None);
+            await client.InsertRowsAsync($"INSERT INTO {table} (id, name) VALUES", rows, null, None);
 
             var readBack = new List<(ulong Id, string Name)>();
             await foreach (object[] row in client.QueryAsync($"SELECT id, name FROM {table} ORDER BY id", null, None))
@@ -101,7 +101,7 @@ public class CompressionIntegrationTests
     }
 
     [TestCaseSource(nameof(Codecs))]
-    public async Task InsertAsync_ABlockLargerThanOneFrame_RoundTripsThroughSelect(IClickHouseCompressor codec)
+    public async Task InsertRowsAsync_ABlockLargerThanOneFrame_RoundTripsThroughSelect(IClickHouseCompressor codec)
     {
         // The write side's mirror: one block whose plaintext exceeds the frame target, so the client emits
         // several frames for it and the server must accept every one.
@@ -112,7 +112,7 @@ public class CompressionIntegrationTests
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = Memory", null, None);
 
             object[][] rows = Enumerable.Range(0, 200000).Select(i => new object[] { (ulong)i }).ToArray();
-            await client.InsertAsync($"INSERT INTO {table} (id) VALUES", rows, null, None);
+            await client.InsertRowsAsync($"INSERT INTO {table} (id) VALUES", rows, null, None);
 
             var stored = new List<ulong>();
             await foreach (object[] row in client.QueryAsync($"SELECT count(), sum(id) FROM {table}", null, None))
