@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// The columnar read surface of a decoded <c>Map(K, V)</c> column. A map column materializes each row as a freshly

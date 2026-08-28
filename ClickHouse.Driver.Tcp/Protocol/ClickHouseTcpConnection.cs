@@ -95,8 +95,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// Timeout per transport read during an operation. <see cref="TimeSpan.Zero"/> disables it;
     /// scripted streams use this default.
     /// </param>
+    /// <exception cref="PlatformNotSupportedException">The host is big-endian.</exception>
     internal ClickHouseTcpConnection(Stream stream, Socket socket, IClickHouseCompressor compressor = null, TimeSpan readTimeout = default)
     {
+        HostEndianness.RequireLittleEndian();
+
         this.stream = stream;
         this.socket = socket;
         this.compressor = compressor;

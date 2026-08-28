@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
 
-namespace ClickHouse.Driver.Tcp.Numerics;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// A signed 256-bit integer (two's complement), the CLR representation of ClickHouse <c>Int256</c>.
@@ -140,15 +140,39 @@ public readonly struct Int256 : IEquatable<Int256>, IComparable<Int256>
     /// <inheritdoc/>
     public override string ToString() => ToBigInteger().ToString(CultureInfo.InvariantCulture);
 
+    /// <summary>Compares two values for equality.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when they are the same number.</returns>
     public static bool operator ==(Int256 left, Int256 right) => left.Equals(right);
 
+    /// <summary>Compares two values for inequality.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when they are different numbers.</returns>
     public static bool operator !=(Int256 left, Int256 right) => !left.Equals(right);
 
+    /// <summary>Orders two values as signed numbers.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is the smaller number.</returns>
     public static bool operator <(Int256 left, Int256 right) => left.CompareTo(right) < 0;
 
+    /// <summary>Orders two values as signed numbers.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is the larger number.</returns>
     public static bool operator >(Int256 left, Int256 right) => left.CompareTo(right) > 0;
 
+    /// <summary>Orders two values as signed numbers.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is not the larger number.</returns>
     public static bool operator <=(Int256 left, Int256 right) => left.CompareTo(right) <= 0;
 
+    /// <summary>Orders two values as signed numbers.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is not the smaller number.</returns>
     public static bool operator >=(Int256 left, Int256 right) => left.CompareTo(right) >= 0;
 }

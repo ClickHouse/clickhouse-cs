@@ -4,7 +4,6 @@ using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
