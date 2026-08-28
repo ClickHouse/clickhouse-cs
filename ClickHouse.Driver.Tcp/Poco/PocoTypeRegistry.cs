@@ -44,16 +44,12 @@ internal sealed class PocoTypeRegistry
     }
 
     /// <summary>
-    /// Gets the write plan for <typeparamref name="T"/> over <paramref name="schema"/>'s target columns, compiling it
-    /// on first use. Keyed by the sample block's signature, so one type inserted into several tables — or into one
-    /// table through several column lists — keeps a plan per target shape.
+    /// Gets or builds the write plan for <typeparamref name="T"/> and the target schema.
     /// </summary>
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="schema">The server's sample block for the INSERT.</param>
     /// <returns>The cached plan.</returns>
-    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot fill the target — see
-    /// <see cref="PocoWritePlan{T}.Build"/>. Nothing is cached in that case, so every caller is told, not just the
-    /// first.</exception>
+    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot fill the target schema.</exception>
     public PocoWritePlan<T> WritePlanFor<T>(Block schema)
         where T : class
     {

@@ -12,16 +12,7 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Protocol;
 
 /// <summary>
-/// Builds the columns of one INSERT from the server's sample block — the seam a row-oriented insert needs, since
-/// the target types arrive only once the statement has been sent and rows cannot be transposed into typed columns
-/// before then.
-///
-/// <para>
-/// The columns it returns are owned by the insert: they are disposed once the row data has been written, so a
-/// factory is free to hand over columns backed by pooled buffers. It runs while the connection is mid-INSERT, so a
-/// factory that throws does not fail the connection — the insert closes its row stream with no rows and the
-/// exception surfaces afterwards.
-/// </para>
+/// Builds row-oriented columns after the server supplies the INSERT schema. The insert owns the returned columns.
 /// </summary>
 /// <param name="schema">The server's sample block, naming and typing the target columns. Valid only for the call.</param>
 /// <returns>The columns to insert, matched to the target by name.</returns>
@@ -429,28 +420,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Runs an INSERT whose columns are built from the server's sample block, for a caller holding rows rather than
-    /// columns: the target types are known only mid-INSERT, so the transposition happens there.
+    /// Runs an INSERT whose columns are built from the server's sample block.
     /// </summary>
     /// <remarks>
-    /// Behaves in every other way like the column-taking overload — see it for how columns are matched to the target
-    /// and how large inserts are split. The columns <paramref name="buildColumns"/> returns are disposed once they
-    /// have been written. A factory that throws writes no rows and leaves the connection usable, and its exception
-    /// is rethrown once the server has acknowledged the empty insert.
+    /// The returned columns are disposed after writing. A factory failure sends no rows and leaves the connection
+    /// reusable.
     /// </remarks>
-    /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
-    /// <param name="rowCount">The number of rows the factory's columns will hold.</param>
-    /// <param name="buildColumns">Builds the row data from the target schema.</param>
-    /// <param name="settings">Per-query settings as textual values, or null for none.</param>
-    /// <param name="parameters">Query parameter values in SQL representation, or null for none.</param>
-    /// <param name="queryId">The query id, or null to let the server assign one.</param>
-    /// <param name="maxRowsPerBlock">A cap on the rows per wire block, or null for a single block.</param>
-    /// <param name="maxSendBufferBytes">The buffered-byte cap that triggers a between-column flush.</param>
-    /// <param name="handlers">Optional callbacks for the metadata interleaved into the acknowledgement.</param>
-    /// <param name="cancellationToken">A token to observe for cancellation.</param>
-    /// <returns>A task that completes when the server acknowledges the insert with end-of-stream.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="buildColumns"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="rowCount"/> is negative, <paramref name="maxRowsPerBlock"/> is zero or negative, or <paramref name="maxSendBufferBytes"/> is not positive.</exception>
     internal ValueTask InsertAsync(
         string sql,
         int rowCount,
@@ -475,15 +450,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Runs the INSERT both overloads share: the statement, the sample block, the row stream, and the
-    /// acknowledgement. Exactly one of <paramref name="columns"/> and <paramref name="buildColumns"/> is supplied;
-    /// the factory's columns are owned here and disposed once written, the caller's are not.
-    ///
-    /// <para>
-    /// Every failure that leaves the connection usable is parked until the row stream has been closed and the
-    /// response drained, then thrown in cause order: the column build first, then anything the server reported,
-    /// then a schema mismatch.
-    /// </para>
+    /// Runs the shared INSERT flow. Factory-built columns are owned here; caller-supplied columns are not.
     /// </summary>
     private async ValueTask InsertCoreAsync(
         string sql,
@@ -503,9 +470,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         BeginOperation();
 
         NegotiatedProtocol negotiated = server.Negotiated;
-        // The server interleaves metadata blocks (ProfileEvents, Logs, Totals, Extremes) into the insert
-        // acknowledgement, some of which carry timezone-bearing DateTime/DateTime64 columns. Decode them with the
-        // same session/server timezone a query would use, so a metadata handler sees consistent offsets.
+        // Decode metadata blocks with the operation's session timezone.
         ResolveContext readContext = ReadContextFor(settings);
         ClickHouseServerException pending = null;
         Exception buildFailure = null;
@@ -551,9 +516,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     }
                     else
                     {
-                        // The first point the target types are known, so the first point rows can become columns.
-                        // A failure here is the caller's shape, not the connection's: park it and close the row
-                        // stream cleanly, exactly as a schema mismatch does.
+                        // Defer caller errors until the row stream is closed cleanly.
                         try
                         {
                             values = buildColumns(schema);
@@ -600,8 +563,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             }
         }
 
-        // A failure to build the columns comes first: it is the cause, and anything the server then said about an
-        // insert that carried no rows is a consequence of it.
+        // Prefer the build failure over the server's response to the resulting empty insert.
         if (buildFailure is not null)
         {
             ExceptionDispatchInfo.Capture(buildFailure).Throw();
@@ -619,10 +581,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Validates the arguments that need no server round-trip — non-null inputs, a positive
-    /// <paramref name="maxRowsPerBlock"/>, a consistent row count, and unique column names — and reports that row
-    /// count. Runs before the connection is claimed, so a malformed call leaves it idle. Name-to-schema
-    /// alignment and per-column writability need the sample block and are checked after the query round-trip.
+    /// Validates caller-supplied columns before claiming the connection.
     /// </summary>
     /// <param name="rowCount">Set to the row count every column must share (zero when there are no columns).</param>
     private static void ValidateInsertArguments(
@@ -639,8 +598,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         rowCount = 0;
         for (int i = 0; i < columns.Count; i++)
         {
-            // Reject a null element with a clear error before the connection is claimed, rather than NREing
-            // mid-validation on its RowCount/Name.
+            // Reject null before reading its row count or name.
             IColumn column = columns[i]
                 ?? throw new ArgumentException($"Column at index {i} is null; every supplied column must be non-null.", nameof(columns));
 
@@ -668,9 +626,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Validates the block geometry both insert overloads take, before the connection is claimed.
-    /// </summary>
+    /// <summary>Validates block limits before claiming the connection.</summary>
     /// <param name="maxRowsPerBlock">The cap on the rows per wire block, or null for a single block.</param>
     /// <param name="maxSendBufferBytes">The buffered-byte cap that triggers a between-column flush.</param>
     private static void ValidateInsertGeometry(int? maxRowsPerBlock, int maxSendBufferBytes)
@@ -687,10 +643,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Writes the INSERT row stream: the rows as bounded wire blocks (each read straight from the columns'
-    /// spans), then the empty terminator that closes it. A null <paramref name="plan"/> or zero
-    /// <paramref name="rowCount"/> writes only the terminator — a no-op insert. Trims the writer's pooled buffer
-    /// once everything is flushed.
+    /// Writes the row blocks and terminating empty block. A null plan or zero rows writes only the terminator.
     /// </summary>
     /// <param name="plan">The per-column write plan in schema order, or null to write only the terminator.</param>
     /// <param name="flushThresholdBytes">The buffered-byte cap that triggers a between-column flush while a block is written.</param>
@@ -704,9 +657,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     {
         if (rowCount > 0 && plan is not null)
         {
-            // Split into wire blocks by row count alone (each column is written straight from its ergonomic form,
-            // so there is no intermediate dense buffer to build first). The flush threshold — the write memory
-            // backstop the caller's send-buffer cap tunes — is what bounds peak client memory while a block streams.
+            // Row count controls block splitting; the flush threshold bounds buffered output within each block.
             foreach ((int start, int length) in PlanInsertBlocks(rowCount, maxRowsPerBlock))
             {
                 writer.WriteClientPacketType(ClientPacketType.Data);
@@ -725,9 +676,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Reads and releases blocks until the response ends, returning the server
-    /// <see cref="ClickHouseServerException"/> that terminated it, or null on a clean end-of-stream. Either way
-    /// the stream is left at a packet boundary, so the connection stays usable.
+    /// Drains the response and returns its server error, if any, while leaving the connection reusable.
     /// </summary>
     /// <param name="negotiated">The negotiated protocol.</param>
     /// <param name="context">The codec-resolution context (timezone) for decoding blocks.</param>
@@ -753,11 +702,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Splits <paramref name="rowCount"/> rows into contiguous wire-block ranges of at most
-    /// <paramref name="maxRowsPerBlock"/> rows each — the block geometry is bounded by row count alone. With no
-    /// <paramref name="maxRowsPerBlock"/> the whole insert is a single block; peak client memory while it is
-    /// written is instead bounded by the between-column flush backstop
-    /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>), not by splitting the block.
+    /// Splits rows into contiguous ranges of at most <paramref name="maxRowsPerBlock"/> rows.
     /// </summary>
     /// <param name="rowCount">The number of rows to split (assumed greater than zero).</param>
     /// <param name="maxRowsPerBlock">The cap on the rows per block, or null for a single block.</param>
@@ -775,10 +720,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Aligns the caller's columns to the schema by name, returning one descriptor per schema column (in schema
-    /// order) that pairs the target's name, resolved type, and codec with the caller's values — the caller's own
-    /// type string is ignored. With <paramref name="validateWritable"/> set, a value column whose CLR type the
-    /// target cannot serialize is rejected. Returns null and sets <paramref name="error"/> on any mismatch.
+    /// Aligns columns to the server schema and resolves the target codecs.
     /// </summary>
     /// <param name="columns">The caller's value columns; names are unique (validated earlier).</param>
     /// <param name="schema">The server's sample block describing the target columns.</param>
@@ -795,8 +737,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             byName[column.Name] = column;
         }
 
-        // Align by name: every schema column must be supplied and every supplied column must exist in the schema.
-        // Both directions are reported so a wrong column set is actionable, not just a count mismatch.
+        // Report both missing and unexpected columns.
         var plan = new InsertColumn[schema.ColumnCount];
         List<string> missing = null;
         int matched = 0;
@@ -820,10 +761,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             return null;
         }
 
-        // Names line up one-to-one; resolve each target type through the same registry and context that decoded the
-        // sample block (the target type, not the caller's), then confirm the value column is writable as it. A
-        // timezone-less DateTime/DateTime64 target needs the session zone to turn an Unspecified wall clock into
-        // the instant the server expects.
+        // Resolve target codecs with the sample block's context, including its session timezone.
         for (int i = 0; i < plan.Length; i++)
         {
             InsertColumn slot = plan[i];

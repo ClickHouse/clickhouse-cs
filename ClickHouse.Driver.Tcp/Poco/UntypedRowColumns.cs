@@ -7,25 +7,15 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// Transposes boxed <c>object[]</c> rows into the insert's target columns — the dynamic tier, positional by the
-/// sample block's order, which is the order of the statement's column list (D6e).
-///
-/// <para>
-/// Unlike the POCO path there is no plan to cache: nothing here is compiled, and the CLR type each column is
-/// written in is decided by the values rather than by a type's properties. That choice is what lets one
-/// <c>object[]</c> row source serve two callers whose rows mean the same thing in different spellings — a
-/// <c>DateTime</c> column takes hand-written <see cref="DateTime"/> values as readily as the raw epoch seconds the
-/// untyped <em>read</em> produces, so a read-then-reinsert round trip needs no conversion by the caller.
-/// </para>
+/// Transposes positional <c>object[]</c> rows into typed columns. Values select the codec's CLR write type, allowing
+/// both convenience values such as <see cref="DateTime"/> and canonical values returned by an untyped read.
 /// </summary>
-internal static class PocoUntypedColumns
+internal static class UntypedRowColumns
 {
     private static readonly MethodInfo CreateBuilderMethod =
-        typeof(PocoUntypedColumns).GetMethod(nameof(CreateBuilder), BindingFlags.NonPublic | BindingFlags.Static);
+        typeof(UntypedRowColumns).GetMethod(nameof(CreateBuilder), BindingFlags.NonPublic | BindingFlags.Static);
 
-    /// <summary>
-    /// Builds one column per target, each filled from its own position in every row.
-    /// </summary>
+    /// <summary>Builds one column per target from the corresponding value in each row.</summary>
     /// <param name="schema">The server's sample block, naming and typing the target columns.</param>
     /// <param name="rows">The rows, each non-null; at least <paramref name="rowCount"/> long.</param>
     /// <param name="rowCount">The number of rows to insert.</param>
@@ -57,8 +47,7 @@ internal static class PocoUntypedColumns
                 IColumnCodec codec = schema.Codecs.Resolve(target.TypeName, schema.Context);
                 Type writeType = ChooseWriteType(codec, target, rows, rowCount, built);
 
-                // Reflection constructs the builder and no more: the fill runs outside the Invoke, so a bad value
-                // surfaces as its own exception rather than wrapped in a TargetInvocationException.
+                // Invoke only constructs the builder, so fill errors are not reflection-wrapped.
                 var builder = (PocoColumnBuilder<object[]>)CreateBuilderMethod
                     .MakeGenericMethod(writeType)
                     .Invoke(null, new object[] { target.Name, target.TypeName, built, PocoWriteConversion.TakesNull(codec) });
@@ -80,15 +69,8 @@ internal static class PocoUntypedColumns
     }
 
     /// <summary>
-    /// Picks the CLR type a column is written in: the one the values themselves are in, matched against the types
-    /// the target accepts.
-    ///
-    /// <para>
-    /// Decided by the first row that has a value, because a boxed value knows its own type and nothing else here
-    /// does. A column of nothing but nulls falls back to the target's canonical type, which is right either way — a
-    /// <c>Nullable</c> target takes the nulls, and a non-nullable one has to report them, which the fill does
-    /// naming the row.
-    /// </para>
+    /// Chooses the target's compatible CLR write type from the first non-null value. An all-null column uses the
+    /// target's preferred type.
     /// </summary>
     /// <param name="codec">The target column's codec.</param>
     /// <param name="target">The target column, for diagnostics.</param>
@@ -119,8 +101,7 @@ internal static class PocoUntypedColumns
 
         for (int i = 0; i < accepted.Count; i++)
         {
-            // A boxed value is never a boxed Nullable<T> — the CLR boxes the underlying value — so a nullable write
-            // type is matched by the type it wraps.
+            // Nullable<T> boxes as T, so compare the underlying type.
             if ((Nullable.GetUnderlyingType(accepted[i]) ?? accepted[i]).IsAssignableFrom(present))
             {
                 return accepted[i];
@@ -138,10 +119,7 @@ internal static class PocoUntypedColumns
             $"It accepts {string.Join(" or ", offered)}.");
     }
 
-    /// <summary>
-    /// Builds the column builder for one position of every row, now that the write type is a type argument. The
-    /// same builder the POCO path uses, over an unboxing fill rather than a compiled gather.
-    /// </summary>
+    /// <summary>Builds the typed column gather for one position in each row.</summary>
     /// <typeparam name="TWrite">The CLR type the target column is written in.</typeparam>
     /// <param name="name">The target column's name.</param>
     /// <param name="typeName">The target column's ClickHouse type.</param>
@@ -150,14 +128,10 @@ internal static class PocoUntypedColumns
     /// <returns>The builder.</returns>
     private static PocoColumnBuilder<object[]> CreateBuilder<TWrite>(string name, string typeName, int index, bool targetTakesNull)
     {
-        // Both halves are needed. A target with no NULL of its own cannot take one however the write type spells it
-        // — a String column rejects a null string, which would otherwise reach the codec and fault mid-block — and a
-        // bare value type has nowhere to put one even where the target would accept it.
+        // Both the target and the CLR write type must represent null.
         bool acceptsNull = targetTakesNull && default(TWrite) is null;
 
-        // A boxed value is never a boxed Nullable<T>, so a value is tested against the type the write type wraps —
-        // the same rule that chose the write type. The cast itself is fine either way: unboxing to Nullable<T> from
-        // a boxed T is exactly what unbox.any does.
+        // Nullable<T> values arrive boxed as T but can still be unboxed into Nullable<T>.
         Type expected = Nullable.GetUnderlyingType(typeof(TWrite)) ?? typeof(TWrite);
         return new PocoColumnBuilder<object[], TWrite>(name, typeName, (source, count, destination) =>
         {
@@ -174,8 +148,7 @@ internal static class PocoUntypedColumns
                     continue;
                 }
 
-                // The write type was chosen from the first row that had a value, so a later row in another type is
-                // the caller mixing types in one column. Reported by row rather than left to an unbox failure.
+                // Report mixed types with the offending row instead of a bare unbox failure.
                 if (!expected.IsInstanceOfType(value))
                 {
                     throw new InvalidOperationException(

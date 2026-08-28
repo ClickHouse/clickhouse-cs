@@ -10,11 +10,7 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// <c>InsertRowsAsync&lt;T&gt;</c> and the untyped <c>object[]</c> insert against a real server. Per-type coverage rides
-/// the round-trip corpus, as the read side's does: each case's insert column names the CLR type a property would
-/// hold, so it becomes a <see cref="Row{TValue}"/> insert and a read-back with no corpus of its own. The rest are
-/// the shapes the corpus cannot state — a POCO over several columns, the calendar types a property declares instead
-/// of the raw wire value, and what a mapping failure does to the connection it happens on.
+/// Exercises typed and untyped row inserts against a real server, including mapping failures and connection reuse.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -47,13 +43,7 @@ public class PocoWriteIntegrationTests
             IColumn insert = testCase.BuildInsertColumn("value");
             string sql = $"INSERT INTO {table} (value) VALUES";
 
-            // A Nested target is the one corpus shape rows cannot be gathered into: its codec writes from its own
-            // column type (flat field columns behind shared offsets), which no property can hold. It has to say so
-            // rather than fail once the values are on the wire.
-            //
-            // Contains, not StartsWith: a Nested inside a composite is just as ungatherable, because the composite
-            // can only hand its child the column shape a row yields. Array(Nested(...)), Tuple(Nested(...), String)
-            // and both Map positions are corpus cases, and each one refuses for exactly this reason.
+            // Nested and composites containing it require a specialized column shape that row gathering cannot build.
             if (testCase.ClickHouseType.Contains("Nested(", StringComparison.Ordinal))
             {
                 InvalidOperationException refusal = Assert.ThrowsAsync<InvalidOperationException>(
@@ -83,15 +73,14 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_PocoOverSeveralColumns_RoundTripsThroughQueryAsync()
     {
-        // The POCO-to-POCO round trip: one type inserted and read back through both compiled paths. The property
-        // order deliberately differs from the column order, since both directions match by name.
+        // Property order differs from column order to verify name-based mapping in both directions.
         await using var client = TcpServerFixture.CreateClient();
         string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, user_name String, score Nullable(Float64)) ENGINE = Memory", cancellationToken: None);
 
-            var written = new[]
+            var written = new List<Account>
             {
                 new Account { UserName = "ada", Id = 1, Score = 99.5 },
                 new Account { UserName = "grace", Id = 2, Score = null },
@@ -117,8 +106,7 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_CalendarAndEnumProperties_WriteThroughTheCodecsConversions()
     {
-        // The corpus inserts these columns as their raw wire values; a POCO declares the type a caller would, and
-        // the conversion is the codec's own — the same one the columnar path uses for a DateTime column.
+        // Use caller-facing calendar types to exercise the codecs' conversions.
         await using var client = TcpServerFixture.CreateClient();
         var options = new ClickHouseTcpQueryOptions { Settings = TimeSettings };
         string table = CreateTableName();
@@ -143,8 +131,7 @@ public class PocoWriteIntegrationTests
                     Clock = new TimeSpan(10, 30, 0),
                     Level = Level.High,
 
-                    // The nullable calendar spellings: a Nullable(DateTime) column accepts DateTime? only because
-                    // the codec lifts its inner's write types, so a present row and a null row both have to survive.
+                    // Exercise both present and null calendar values.
                     MaybeStamp = stamp,
                     MaybePrecise = precise,
                 },
@@ -231,8 +218,7 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_NamedColumnSubset_LeavesTheRestToTheirDefaults()
     {
-        // A property no target column maps to is simply not inserted, which is what lets one POCO fill part of a
-        // table: the statement names the columns, and the server defaults the others.
+        // The INSERT column list controls which properties are used.
         await using var client = TcpServerFixture.CreateClient();
         string table = CreateTableName();
         try
@@ -260,9 +246,7 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_TargetColumnWithNoProperty_ThrowsAndLeavesTheClientUsable()
     {
-        // The mapping is compiled from the sample block, so this failure lands with the INSERT already open. The
-        // insert has to close its row stream with no rows and hand the connection back, or every mapping mistake
-        // would cost a redial.
+        // A mapping failure after the sample block must leave the connection reusable.
         await using var client = TcpServerFixture.CreateClient();
         string table = CreateTableName();
         try
@@ -311,9 +295,7 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_NullStringPropertyIntoANonNullableColumn_ThrowsAndLeavesTheClientUsable()
     {
-        // The commonest way a row arrives incomplete, and the one that used to be worst: a null reference reaching
-        // the codec faults part-way through writing the block, which terminates the connection. It has to fail like
-        // any other unwritable value — before anything is sent, naming the row, connection intact.
+        // Reject the null before writing so the insert remains atomic and the connection reusable.
         await using var client = TcpServerFixture.CreateClient();
         string table = CreateTableName();
         try
@@ -358,10 +340,9 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertRowsAsync_LazyRowSourceAcrossSeveralBlocks_WritesEveryRow()
+    public async Task InsertRowsAsync_MaterializedListAcrossSeveralBlocks_WritesEveryRow()
     {
-        // Two things at once: a source with no count, which the row buffer has to grow into, and more rows than one
-        // wire block holds, which is the slice path the columns are read through.
+        // Exercise list normalization and multi-block slicing together.
         const int rowCount = 5_000;
         await using var client = TcpServerFixture.CreateClient();
         string table = CreateTableName();
@@ -371,7 +352,7 @@ public class PocoWriteIntegrationTests
 
             await client.InsertRowsAsync(
                 $"INSERT INTO {table} (value) VALUES",
-                Counting(rowCount),
+                new List<Row<int>>(Counting(rowCount)),
                 new ClickHouseTcpInsertOptions { MaxRowsPerBlock = 1_000 },
                 None);
 
@@ -442,9 +423,7 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_TypeThatCannotBeMaterialized_StillInserts()
     {
-        // An insert needs getters and no constructor of ours, so an immutable POCO — the shape a query refuses,
-        // since there is nothing to construct — is a perfectly good insert source. The read plan asks the
-        // descriptor for its activator first and this one has none; the write plan must never ask.
+        // Writes need getters but do not need a constructor.
         await using var client = TcpServerFixture.CreateClient();
         string table = CreateTableName();
         try
@@ -473,12 +452,11 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertRowsAsync_ColumnSequenceThatIsNotAList_SaysToUseTheColumnarOverload()
+    public async Task InsertRowsAsync_ColumnList_SaysToUseInsertAsync()
     {
-        // The plausible explicit misuse: a LINQ operator over columns passed to the row API would otherwise map
-        // IColumn's own properties to target columns.
+        // A column list should direct the caller to InsertAsync.
         await using var client = TcpServerFixture.CreateClient();
-        IEnumerable<IColumn> columns = new List<IColumn> { new ArrayColumn<int>("value", "Int32", new[] { 1 }) };
+        IReadOnlyList<IColumn> columns = new List<IColumn> { new ArrayColumn<int>("value", "Int32", new[] { 1 }) };
 
         ArgumentException error = Assert.ThrowsAsync<ArgumentException>(
             async () => await client.InsertRowsAsync("INSERT INTO nowhere (value) VALUES", columns, cancellationToken: None));
@@ -489,8 +467,7 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_UntypedRows_RoundTripPositionally()
     {
-        // The dynamic tier: no type, values matched to the target columns by position. The DateTime column is given
-        // a DateTime rather than the raw epoch seconds, which is the spelling a caller writing rows by hand has.
+        // Use a caller-facing DateTime to verify positional conversion.
         await using var client = TcpServerFixture.CreateClient();
         string table = CreateTableName();
         try
@@ -528,8 +505,7 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_UntypedRowsFromAnUntypedRead_ReinsertWithoutConversion()
     {
-        // The property that makes the untyped tier usable as a pipe: what QueryAsync hands out is what InsertRowsAsync
-        // takes, raw wire values (a DateTime column's epoch seconds) included.
+        // Verify that untyped query rows can be inserted without reshaping their values.
         await using var client = TcpServerFixture.CreateClient();
         string source = CreateTableName();
         string copy = CreateTableName();
@@ -625,15 +601,8 @@ public class PocoWriteIntegrationTests
     }
 
     /// <summary>
-    /// Inserts a one-column corpus case as <c>Row&lt;TValue&gt;</c> rows for a CLR type only known at runtime — the
-    /// write mirror of the read fixture's reader, and what lets the corpus drive the POCO write path.
+    /// Invokes the generic row insert for a column type known only at runtime.
     /// </summary>
-    /// <param name="client">The client to insert with.</param>
-    /// <param name="sql">The INSERT statement.</param>
-    /// <param name="options">The per-insert options the case needs.</param>
-    /// <param name="column">The case's insert column, read row by row into the property.</param>
-    /// <param name="valueType">The CLR type of the column's values.</param>
-    /// <returns>A task that completes when the insert is acknowledged.</returns>
     private static Task InsertColumnAsRowsAsync(IClickHouseTcpClient client, string sql, ClickHouseTcpInsertOptions options, IColumn column, Type valueType)
     {
         MethodInfo writer = typeof(PocoWriteIntegrationTests)
@@ -770,9 +739,7 @@ public class PocoWriteIntegrationTests
         public DateTimeOffset? MaybePrecise { get; set; }
     }
 
-    /// <summary>
-    /// Getter-only, with no parameterless constructor: insertable, but nothing a query could materialize into.
-    /// </summary>
+    /// <summary>A getter-only type that can be inserted but not materialized.</summary>
     private sealed class ImmutableAccount
     {
         public ImmutableAccount(ulong id, string userName)
@@ -796,8 +763,7 @@ public class PocoWriteIntegrationTests
     }
 
     /// <summary>
-    /// A public-surface-only column implementation, matching what a caller outside the assembly can provide. Its
-    /// concrete array used to make the columnar and generic row overloads equally good candidates (CS0121).
+    /// A public-only column used to exercise overload resolution from a caller's perspective.
     /// </summary>
     private sealed class ExternalColumn<T> : IColumn<T>
     {
