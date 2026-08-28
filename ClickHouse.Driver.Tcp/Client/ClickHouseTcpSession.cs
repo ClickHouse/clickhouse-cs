@@ -76,21 +76,21 @@ internal sealed class ClickHouseTcpSession : IClickHouseTcpSession
         => operations.InsertAsync(sql, columns, options, cancellationToken);
 
     /// <inheritdoc/>
-    public ValueTask InsertAsync<T>(
+    public ValueTask InsertRowsAsync<T>(
         string sql,
-        IEnumerable<T> rows,
+        IReadOnlyList<T> rows,
         ClickHouseTcpInsertOptions options = null,
         CancellationToken cancellationToken = default)
         where T : class
-        => operations.InsertAsync(sql, rows, options, cancellationToken);
+        => operations.InsertRowsAsync(sql, rows, options, cancellationToken);
 
     /// <inheritdoc/>
-    public ValueTask InsertAsync(
+    public ValueTask InsertRowsAsync(
         string sql,
-        IEnumerable<object[]> rows,
+        IReadOnlyList<object[]> rows,
         ClickHouseTcpInsertOptions options = null,
         CancellationToken cancellationToken = default)
-        => operations.InsertAsync(sql, rows, options, cancellationToken);
+        => operations.InsertRowsAsync(sql, rows, options, cancellationToken);
 
     /// <inheritdoc/>
     public ValueTask PingAsync(CancellationToken cancellationToken = default)
