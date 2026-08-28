@@ -16,22 +16,30 @@ internal sealed class ValueNullableShape<T> : INullableShape
         => new NullableValueColumn<T>(name, typeName, (IColumn<T>)inner, nullMap, pooledMap);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<T?>;
+    public bool CanWrite(IColumnCodec inner, IColumn column)
+        => column is NullableValueColumn<T> dense
+            ? inner.CanWrite(dense.Inner)
+            : column is IColumn<T?> && inner.CanWriteElementType(typeof(T));
 
     /// <inheritdoc/>
-    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWriteElementType(typeof(T));
+    public IColumn GetInnerColumn(IColumnCodec inner, IColumn column)
+    {
+        if (column is NullableValueColumn<T> dense)
+        {
+            return dense.Inner;
+        }
+
+        var source = (IColumn<T?>)column;
+        var placeholder = (T)inner.NullPlaceholderAs(typeof(T));
+        return new SubstituteValueColumn<T>(inner.TypeName, source, placeholder);
+    }
 
     /// <inheritdoc/>
-    // A dense column (inner column + null-map) writes both directly with no copy. The ergonomic T? column writes
-    // the null-map from each row's HasValue, then hands the inner codec a substitute view that reads the present
-    // value or the inner placeholder per row — no flat placeholder buffer is built; the null positions the wire
-    // ignores are still written from the placeholder so the inner codec never sees a null.
-    public void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteNullMap(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         if (column is NullableValueColumn<T> dense)
         {
             writer.WriteBytes(dense.NullMap.Slice(start, length));
-            inner.WriteColumn(writer, dense.Inner, start, length);
             return;
         }
 
@@ -40,8 +48,5 @@ internal sealed class ValueNullableShape<T> : INullableShape
         {
             writer.WriteBool(!source[start + i].HasValue);
         }
-
-        var placeholder = (T)inner.NullPlaceholderAs(typeof(T));
-        inner.WriteColumn(writer, new SubstituteValueColumn<T>(inner.TypeName, source, placeholder), start, length);
     }
 }

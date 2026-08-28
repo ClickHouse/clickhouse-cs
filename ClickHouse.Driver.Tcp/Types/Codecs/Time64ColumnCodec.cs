@@ -46,6 +46,12 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     public object NullPlaceholder => 0L;
 
     /// <inheritdoc/>
+    public Type CanonicalWriteElementType => typeof(long);
+
+    /// <inheritdoc/>
+    public object CanonicalWritePlaceholder => 0L;
+
+    /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
         if (writeType == typeof(long))
@@ -109,41 +115,59 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<long> or IColumn<TimeSpan>;
 
     /// <inheritdoc/>
+    public IColumn ToCanonicalWriteColumn(IColumn column)
+    {
+        if (column is IColumn<long>)
+        {
+            return column;
+        }
+
+        if (column is IColumn<TimeSpan> spans)
+        {
+            return new ProjectedColumn<TimeSpan, long>(TypeName, spans, ToCount);
+        }
+
+        throw new ArgumentException($"A Time64 column must hold long or TimeSpan values, not {column.GetType()}.", nameof(column));
+    }
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         switch (column)
         {
             case IColumn<long> counts:
-                // Raw counts are assumed already at the column's scale (the wire representation), so they are
-                // written verbatim.
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteInt64(counts[start + i]);
-                }
-
+                WriteCanonicalColumn(writer, counts, start, length);
                 break;
-
             case IColumn<TimeSpan> spans:
-                int shift = scale - DotNetTickScale;
                 for (int i = 0; i < length; i++)
                 {
-                    TimeSpan value = spans[start + i];
-
-                    // Reject durations outside ClickHouse's range up front (mirrors Time), rather than emitting a
-                    // count the server rejects or wraps. Precision finer than the column scale is truncated toward zero.
-                    long secondsValue = value.Ticks / TimeSpan.TicksPerSecond;
-                    if (secondsValue is < MinSeconds or > MaxSeconds)
-                    {
-                        throw new ArgumentOutOfRangeException(nameof(column), value, "Time64 is outside the range ClickHouse Time64 can hold ([-999:59:59, 999:59:59]).");
-                    }
-
-                    writer.WriteInt64(FixedPointScaling.ShiftDecimalPlaces(value.Ticks, shift));
+                    writer.WriteInt64(ToCount(spans[start + i]));
                 }
 
                 break;
-
             default:
                 throw new ArgumentException($"A Time64 column must hold long or TimeSpan values, not {column.GetType()}.", nameof(column));
         }
+    }
+
+    /// <inheritdoc/>
+    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        var counts = (IColumn<long>)column;
+        for (int i = 0; i < length; i++)
+        {
+            writer.WriteInt64(counts[start + i]);
+        }
+    }
+
+    private long ToCount(TimeSpan value)
+    {
+        long seconds = value.Ticks / TimeSpan.TicksPerSecond;
+        if (seconds is < MinSeconds or > MaxSeconds)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Time64 is outside the range ClickHouse Time64 can hold ([-999:59:59, 999:59:59]).");
+        }
+
+        return FixedPointScaling.ShiftDecimalPlaces(value.Ticks, scale - DotNetTickScale);
     }
 }

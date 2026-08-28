@@ -20,17 +20,15 @@ internal interface INullableShape
     /// </summary>
     IColumn Wrap(string name, string typeName, IColumn inner, byte[] nullMap, bool pooledMap);
 
-    /// <summary>Whether <paramref name="column"/> is a nullable column of this element type, writable by the codec.</summary>
-    bool CanWrite(IColumn column);
-
-    /// <summary>Whether the inner codec can write an inner-typed column at all (e.g. <c>Nothing</c> cannot).</summary>
-    bool CanInnerWrite(IColumnCodec inner);
+    /// <summary>Whether the inner codec can write <paramref name="column"/> through this nullable shape.</summary>
+    bool CanWrite(IColumnCodec inner, IColumn column);
 
     /// <summary>
-    /// Writes the full nullable body for rows [<paramref name="start"/>, start + length): the null-map, then the
-    /// inner-type values with a placeholder at each null row. A dense nullable column (inner column + null-map) is
-    /// written with no intermediate copy; the ergonomic <c>T?</c> / nullable-reference form writes the null-map from
-    /// each row's nullness and hands the inner codec a substitute view (the inner placeholder at the null rows).
+    /// Returns the inner column to use for this write. Dense columns expose their stored inner column; row-oriented
+    /// columns return a lazy view that replaces nulls with a valid inner value.
     /// </summary>
-    void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length);
+    IColumn GetInnerColumn(IColumnCodec inner, IColumn column);
+
+    /// <summary>Writes the null map for the requested rows.</summary>
+    void WriteNullMap(ClickHouseBinaryWriter writer, IColumn column, int start, int length);
 }

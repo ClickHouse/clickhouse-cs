@@ -3,18 +3,10 @@ using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
-/// <summary>
-/// Covers <see cref="IColumn.ElementType"/>, the default interface member a codec uses to interrogate a column whose
-/// <c>T</c> it does not know statically. Everything here is API surface: the resolution is reflection over the
-/// implemented interface, so the cases that matter are the ones no real column reaches.
-/// </summary>
+/// <summary>Tests <see cref="IColumn.ElementType"/> resolution.</summary>
 [TestFixture]
 public class ColumnElementTypeTests
 {
-    /// <summary>
-    /// Read through <see cref="IColumn"/>, which is how every codec reaches it: a default interface member is not
-    /// visible on the implementing class without a cast.
-    /// </summary>
     [Test]
     public void ElementType_ArrayBackedColumn_IsItsGenericArgument()
     {
@@ -30,7 +22,6 @@ public class ColumnElementTypeTests
         });
     }
 
-    /// <summary>The answer is cached per column type, so asking twice must not change it.</summary>
     [Test]
     public void ElementType_AskedTwice_IsTheSameAnswer()
     {
@@ -39,10 +30,6 @@ public class ColumnElementTypeTests
         Assert.That(column.ElementType, Is.EqualTo(column.ElementType).And.EqualTo(typeof(string)));
     }
 
-    /// <summary>
-    /// A class surfacing two element types has no single one, so it is refused rather than resolved to whichever
-    /// interface reflection happened to list first — that would make a codec silently write the wrong column.
-    /// </summary>
     [Test]
     public void ElementType_ColumnSurfacingTwoElementTypes_Throws()
         => Assert.That(
