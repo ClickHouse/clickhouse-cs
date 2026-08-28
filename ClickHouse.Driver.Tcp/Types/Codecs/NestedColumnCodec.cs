@@ -201,9 +201,7 @@ internal sealed class NestedColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // A Nested column is written only from its own wire-shaped NestedColumn, which carries the per-field columns this
-    // writer needs. That is a column class, not an element type, so no element type can describe it — which is what
-    // makes a row-oriented insert report that no property type can fill the column.
+    // Nested requires its specialized column shape.
     public bool CanWriteElementType(Type elementType) => false;
 
     /// <inheritdoc/>

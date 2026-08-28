@@ -45,6 +45,12 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     public object NullPlaceholder => 0L;
 
     /// <inheritdoc/>
+    public Type CanonicalWriteElementType => typeof(long);
+
+    /// <inheritdoc/>
+    public object CanonicalWritePlaceholder => 0L;
+
+    /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
         if (writeType == typeof(long))
@@ -122,20 +128,36 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<long> or IColumn<DateTimeOffset> or IColumn<DateTime>;
 
     /// <inheritdoc/>
+    public IColumn ToCanonicalWriteColumn(IColumn column)
+    {
+        if (column is IColumn<long>)
+        {
+            return column;
+        }
+
+        if (column is IColumn<DateTimeOffset> offsets)
+        {
+            return new ProjectedColumn<DateTimeOffset, long>(TypeName, offsets, CountFromDateTimeOffset);
+        }
+
+        if (column is IColumn<DateTime> dateTimes)
+        {
+            return new ProjectedColumn<DateTime, long>(TypeName, dateTimes, CountFromDateTime);
+        }
+
+        throw new ArgumentException(
+            $"A DateTime64 column must hold long, DateTimeOffset, or DateTime values, not {column.GetType()}.",
+            nameof(column));
+    }
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         switch (column)
         {
             case IColumn<long> counts:
-                // Raw counts are assumed already at the column's scale (the wire representation), so they are
-                // written verbatim.
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteInt64(counts[start + i]);
-                }
-
+                WriteCanonicalColumn(writer, counts, start, length);
                 break;
-
             case IColumn<DateTimeOffset> offsets:
                 for (int i = 0; i < length; i++)
                 {
@@ -143,19 +165,27 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
                 }
 
                 break;
-
             case IColumn<DateTime> dateTimes:
                 for (int i = 0; i < length; i++)
                 {
-                    writer.WriteInt64(CountFromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(dateTimes[start + i], timeZone))));
+                    writer.WriteInt64(CountFromDateTime(dateTimes[start + i]));
                 }
 
                 break;
-
             default:
                 throw new ArgumentException(
                     $"A DateTime64 column must hold long, DateTimeOffset, or DateTime values, not {column.GetType()}.",
                     nameof(column));
+        }
+    }
+
+    /// <inheritdoc/>
+    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        var counts = (IColumn<long>)column;
+        for (int i = 0; i < length; i++)
+        {
+            writer.WriteInt64(counts[start + i]);
         }
     }
 
@@ -174,9 +204,12 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         long factor = FixedPointScaling.Pow10(-places);
         if (dotNetTicksSinceEpoch % factor != 0)
         {
-            throw new ArgumentException($"{value:o} cannot be written to {TypeName} (scale {scale}) without losing precision.", "column");
+            throw new ArgumentException($"{value:o} cannot be written to {TypeName} (scale {scale}) without losing precision.", nameof(value));
         }
 
         return dotNetTicksSinceEpoch / factor;
     }
+
+    private long CountFromDateTime(DateTime value)
+        => CountFromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(value, timeZone)));
 }

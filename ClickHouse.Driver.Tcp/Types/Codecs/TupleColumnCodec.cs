@@ -62,10 +62,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
         typeof(TupleColumn<,,,,,,>),
     };
 
-    // The per-field projection builders for a source tuple type other than this codec's canonical one, built on
-    // demand. Keyed by the tuple type alone, since the builders depend only on its field types -- so a shape is built
-    // once for the whole process rather than once per codec, and the cartesian set of accepted tuples is never
-    // materialized: only the tuples actually written get an entry.
+    // Cache projection builders only for tuple shapes that are used.
     private static readonly ConcurrentDictionary<Type, Func<string, IColumn, int, IColumn>[]> LiftedProjectionBuilders = new();
 
     private readonly IColumnCodec[] children;
@@ -73,6 +70,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
     private readonly ConstructorInfo columnConstructor;
     private readonly Type icolumnOfTupleType;
     private readonly Func<string, IColumn, int, IColumn>[] childProjectionBuilders;
+    private object nullPlaceholder;
 
     private TupleColumnCodec(string typeName, IColumnCodec[] children, string[] fieldNames)
     {
@@ -89,10 +87,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
         ElementType = ValueTupleDefinitions[arity].MakeGenericType(elementTypes);
         icolumnOfTupleType = typeof(IColumn<>).MakeGenericType(ElementType);
-
-        // A tuple is never nested inside Nullable (the server rejects Nullable(Tuple(...))), so this placeholder
-        // is a formality the interface requires: the default ValueTuple of the element types.
-        NullPlaceholder = Activator.CreateInstance(ElementType);
 
         // Cache the arity-specific column's constructor once. The parameter-type array is the exact signature of
         // the children-based constructor, disambiguating it from the ValueTuple[] convenience one; NonPublic is
@@ -127,7 +121,11 @@ internal sealed class TupleColumnCodec : IColumnCodec
     public Type ElementType { get; }
 
     /// <inheritdoc/>
-    public object NullPlaceholder { get; }
+    public object NullPlaceholder => nullPlaceholder ??= BuildNullPlaceholder(ElementType);
+
+    /// <inheritdoc/>
+    public object NullPlaceholderAs(Type writeType)
+        => writeType == ElementType ? NullPlaceholder : BuildNullPlaceholder(writeType);
 
     /// <summary>Builds a <c>Tuple(...)</c> codec, resolving each element's codec through the registry.</summary>
     /// <param name="node">The parsed <c>Tuple</c> node; its arguments are the element types (each optionally name-prefixed).</param>
@@ -225,23 +223,20 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
         projected = null;
 
-        // Only a ValueTuple of this same arity can hold the row. Arity is part of the shape, not something a child
-        // could absorb, so a wider or narrower tuple is refused rather than being filled or truncated.
+        // Tuple arity must match before fields can be projected.
         int arity = children.Length;
         if (!targetType.IsGenericType || targetType.GetGenericTypeDefinition() != ValueTupleDefinitions[arity])
         {
             return false;
         }
 
-        // Bound to a local: every field is read off it, so splicing the source expression per field would evaluate it
-        // up to MaxArity times.
+        // Evaluate the source once for all field projections.
         ParameterExpression source = Expression.Variable(ElementType, "tuple");
         Type[] targetArguments = targetType.GetGenericArguments();
         var fieldProjections = new Expression[arity];
         for (int i = 0; i < arity; i++)
         {
-            // ValueTuple's elements are fields, not properties. Each child is asked for its own field's target, so a
-            // caller may lift one field and leave the rest canonical.
+            // Each child projects its field independently.
             if (!children[i].TryProjectRead(Expression.Field(source, "Item" + (i + 1).ToString(CultureInfo.InvariantCulture)), targetArguments[i], out fieldProjections[i]))
             {
                 return false;
@@ -266,8 +261,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
             return false;
         }
 
-        // Each field is asked of its own child, so one field may be lifted while the rest stay canonical. Arity is part
-        // of the shape and no child can absorb it, so a wider or narrower tuple was already refused above.
         Type[] arguments = elementType.GetGenericArguments();
         for (int i = 0; i < arity; i++)
         {
@@ -280,11 +273,29 @@ internal sealed class TupleColumnCodec : IColumnCodec
         return true;
     }
 
+    private object BuildNullPlaceholder(Type writeType)
+    {
+        if (!CanWriteElementType(writeType))
+        {
+            throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+        }
+
+        Type[] arguments = writeType.GetGenericArguments();
+        var values = new object[arguments.Length];
+        for (int i = 0; i < arguments.Length; i++)
+        {
+            values[i] = children[i].NullPlaceholderAs(arguments[i]);
+        }
+
+        ConstructorInfo constructor = writeType.GetConstructor(arguments)
+            ?? throw new InvalidOperationException($"The tuple type '{writeType}' is missing its all-element constructor.");
+        return constructor.Invoke(values);
+    }
+
     /// <inheritdoc/>
     public bool CanWrite(IColumn column)
     {
-        // A dense tuple column is the wire's own shape: check it against its real child columns, which is what lets a
-        // Tuple(Nested(...)) re-insert the wire-shaped NestedColumn child a read yields.
+        // Dense tuples must be writable through their actual child columns.
         if (column is ITupleColumn dense)
         {
             if (!icolumnOfTupleType.IsInstanceOfType(column) || dense.Children.Count != children.Length)
@@ -306,9 +317,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
         return CanWriteElementType(column.ElementType);
     }
 
-    // The per-field projection builders for the CLR tuple type this column's rows hold. The canonical tuple keeps the
-    // builders closed at construction; any other gets builders closed over its own field types, so a
-    // Tuple(DateTime, String) column takes a (DateTime, string) row with the field codecs converting as they write.
+    // Resolve builders for the canonical or child-lifted tuple shape.
     private Func<string, IColumn, int, IColumn>[] ProjectionBuildersFor(Type tupleType)
     {
         if (tupleType == ElementType)
@@ -326,8 +335,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
         return LiftedProjectionBuilders.GetOrAdd(tupleType, BuildProjectionBuilders);
     }
 
-    // Closes BuildProjection<T> over each of a tuple type's field types, matching what the constructor does for the
-    // canonical tuple.
+    // Close one projection builder over each field type.
     private static Func<string, IColumn, int, IColumn>[] BuildProjectionBuilders(Type tupleType)
     {
         MethodInfo template = typeof(TupleColumnCodec).GetMethod(nameof(BuildProjection), BindingFlags.NonPublic | BindingFlags.Static)
@@ -346,9 +354,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // Project each element position into its own child column once (dense children as-is, a flat tuple column
-    // distributed into per-child buffers), and create each child's own write state over it, so a data-dependent
-    // child (Dynamic) sees its real values at prefix time and the projection is not repeated between phases.
+    // Prepare one column and write state per tuple field.
     public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
 
     /// <inheritdoc/>
@@ -365,9 +371,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // Each child writes its own element column through its own codec and pre-built state. Which column that is
-    // depends on the shape BuildState was handed: a dense TupleColumn exposes its children directly, while a flat
-    // ValueTuple column is projected into one lazy per-element view per child.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         using TupleWriteState state = BuildState(column, start, length);
@@ -396,10 +399,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
         }
     }
 
-    // Builds the per-element write state for a slice. A dense tuple column exposes each child column directly; an
-    // ergonomic flat ValueTuple column is projected into one lazy per-element view per child (strided through the
-    // tuples, no per-child buffer materialized). Each child's own BeginWrite runs over its column so a data-
-    // dependent child (Dynamic) sees its real values at prefix time.
+    // Dense tuples reuse child columns; flat tuples use lazy field projections.
     private TupleWriteState BuildState(IColumn column, int start, int length)
     {
         int arity = children.Length;
@@ -430,8 +430,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
         return new TupleWriteState { ChildColumns = childColumns, ChildStart = start, Length = length, ChildStates = childStates };
     }
 
-    // Disposes the first count child write states after a mid-construction failure, so their pooled buffers are
-    // returned rather than leaked.
+    // Dispose states created before a later child failed.
     private static void DisposeStates(IColumnWriteState[] states, int count)
     {
         for (int i = 0; i < count; i++)
@@ -440,13 +439,10 @@ internal sealed class TupleColumnCodec : IColumnCodec
         }
     }
 
-    // Builds the lazy per-element projection view the ergonomic write path hands each child codec (reached through
-    // the cached childProjectionBuilders delegates).
     private static IColumn BuildProjection<T>(string typeName, IColumn source, int fieldIndex)
         => new TupleFieldColumn<T>(typeName, source, fieldIndex);
 
-    // The per-element write state of one slice, shared across the prefix and body phases: each element's dense
-    // child column plus the child codec's own state.
+    // Per-field columns and states shared by the prefix and body.
     private sealed class TupleWriteState : IColumnWriteState
     {
         public IColumn[] ChildColumns;

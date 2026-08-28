@@ -40,6 +40,18 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
     public object NullPlaceholder => default(T);
 
     /// <inheritdoc/>
+    public Type CanonicalWriteElementType
+        => typeof(T) == typeof(float) ? typeof(int)
+            : typeof(T) == typeof(double) ? typeof(long)
+            : typeof(T);
+
+    /// <inheritdoc/>
+    public object CanonicalWritePlaceholder
+        => typeof(T) == typeof(float) ? 0
+            : typeof(T) == typeof(double) ? 0L
+            : default(T);
+
+    /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         if (rowCount == 0)
@@ -67,6 +79,28 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
     public bool CanWrite(IColumn column) => column is IColumn<T>;
 
     /// <inheritdoc/>
+    public IColumn ToCanonicalWriteColumn(IColumn column)
+    {
+        if (typeof(T) == typeof(float))
+        {
+            return new ProjectedColumn<float, int>(
+                TypeName,
+                (IColumn<float>)column,
+                BitConverter.SingleToInt32Bits);
+        }
+
+        if (typeof(T) == typeof(double))
+        {
+            return new ProjectedColumn<double, long>(
+                TypeName,
+                (IColumn<double>)column,
+                BitConverter.DoubleToInt64Bits);
+        }
+
+        return column;
+    }
+
+    /// <inheritdoc/>
     // A contiguous column (the dense read-back, or a caller's array-backed column) blits its whole slice in one
     // copy; a scattered write-path view (Nullable's substitute, a Tuple field, a Variant alternative) has no span,
     // so each value is written on its own — the per-element cost the scattered fixed-width positions accept.
@@ -79,6 +113,12 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
             return;
         }
 
+        if (typeof(T) == typeof(float) || typeof(T) == typeof(double))
+        {
+            WriteCanonicalColumn(writer, ToCanonicalWriteColumn(column), start, length);
+            return;
+        }
+
         for (int i = 0; i < length; i++)
         {
             T value = typed[start + i];
@@ -87,7 +127,41 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
     }
 
     /// <inheritdoc/>
+    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        if (typeof(T) == typeof(float))
+        {
+            WriteRaw(writer, (IColumn<int>)column, start, length);
+            return;
+        }
+
+        if (typeof(T) == typeof(double))
+        {
+            WriteRaw(writer, (IColumn<long>)column, start, length);
+            return;
+        }
+
+        WriteRaw(writer, (IColumn<T>)column, start, length);
+    }
+
+    /// <inheritdoc/>
     // The wire form is the raw little-endian bytes, so a run of values is one contiguous blit.
     public void WriteValues(ClickHouseBinaryWriter writer, ReadOnlySpan<T> values)
         => writer.WriteBytes(MemoryMarshal.AsBytes(values));
+
+    private static void WriteRaw<TValue>(ClickHouseBinaryWriter writer, IColumn<TValue> column, int start, int length)
+        where TValue : unmanaged
+    {
+        if (column is ISpanColumn<TValue> contiguous)
+        {
+            writer.WriteBytes(MemoryMarshal.AsBytes(contiguous.Span.Slice(start, length)));
+            return;
+        }
+
+        for (int i = 0; i < length; i++)
+        {
+            TValue value = column[start + i];
+            writer.WriteBytes(MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1)));
+        }
+    }
 }

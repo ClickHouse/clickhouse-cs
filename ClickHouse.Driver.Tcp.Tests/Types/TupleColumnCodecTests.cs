@@ -144,8 +144,8 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void NullPlaceholder_IsTheDefaultValueTuple()
-        => Assert.That(Resolve("Tuple(Int32, String)").NullPlaceholder, Is.EqualTo((0, (string)null)));
+    public void NullPlaceholder_UsesWritableChildPlaceholders()
+        => Assert.That(Resolve("Tuple(Int32, String)").NullPlaceholder, Is.EqualTo((0, string.Empty)));
 
     [Test]
     public void Resolve_UnnamedTuple_StampsFullTypeName()
@@ -358,10 +358,6 @@ public class TupleColumnCodecTests
                 async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, wrong, 0, 2)));
         });
     }
-    /// <summary>
-    /// A dense tuple column of a different arity cannot fill this codec, however its children look. Refused on the
-    /// column's own CLR tuple type before any child is consulted, so a mismatched dense column is never part-written.
-    /// </summary>
     [Test]
     public void CanWrite_DenseTupleColumnOfADifferentArity_ReturnsFalse()
     {
@@ -376,11 +372,6 @@ public class TupleColumnCodecTests
         Assert.That(codec.CanWrite(narrower), Is.False);
     }
 
-    /// <summary>
-    /// Writing a flat tuple column whose field types no child accepts fails naming the tuple type. Reachable only by
-    /// calling the codec directly — an insert asks CanWrite first — so it is the guard behind that check rather than
-    /// the message a caller normally sees.
-    /// </summary>
     [Test]
     public async Task WriteColumn_FlatTupleColumnOfUnacceptableFieldTypes_ThrowsNamingTheTupleType()
     {

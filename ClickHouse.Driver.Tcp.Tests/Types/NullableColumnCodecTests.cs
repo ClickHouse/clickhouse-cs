@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -155,6 +156,58 @@ public class NullableColumnCodecTests
             Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(DateTime)));
         });
     }
+
+    [Test]
+    public async Task WriteFull_NullableTupleWithLiftedFields_RoundTrips()
+    {
+        const string type = "Nullable(Tuple(DateTime('UTC'), String))";
+        IColumnCodec codec = Resolve(type);
+        var input = new (DateTime, string)?[]
+        {
+            (DateTime.UnixEpoch.AddSeconds(60), "present"),
+            null,
+        };
+        var column = new ArrayColumn<(DateTime, string)?>("c", type, input);
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteFull(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, input.Length, CodecTestHarness.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWrite(column), Is.True);
+            Assert.That(
+                ((IColumn<(uint, string)?>)read).Values.ToArray(),
+                Is.EqualTo(new (uint, string)?[] { (60u, "present"), null }));
+        });
+    }
+
+    [Test]
+    public void NullPlaceholderAs_LiftedCompositeTypes_ReturnsAssignableValues()
+    {
+        IColumnCodec tuple = Resolve("Tuple(DateTime('UTC'), String)");
+        IColumnCodec array = Resolve("Array(DateTime('UTC'))");
+        IColumnCodec map = Resolve("Map(String, DateTime('UTC'))");
+        IColumnCodec lowCardinality = Resolve("LowCardinality(DateTime('UTC'))");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tuple.NullPlaceholderAs(typeof((DateTime, string))), Is.EqualTo((DateTime.UnixEpoch, string.Empty)));
+            Assert.That(array.NullPlaceholderAs(typeof(DateTime[])), Is.InstanceOf<DateTime[]>().And.Empty);
+            Assert.That(
+                map.NullPlaceholderAs(typeof(KeyValuePair<string, DateTime>[])),
+                Is.InstanceOf<KeyValuePair<string, DateTime>[]>().And.Empty);
+            Assert.That(lowCardinality.NullPlaceholderAs(typeof(DateTime)), Is.EqualTo(DateTime.UnixEpoch));
+        });
+    }
+
+    [TestCase("Array(DateTime('UTC'))", typeof(Guid[]))]
+    [TestCase("Map(String, DateTime('UTC'))", typeof(KeyValuePair<string, Guid>[]))]
+    [TestCase("Tuple(DateTime('UTC'), String)", typeof(ValueTuple<Guid, string>))]
+    [TestCase("LowCardinality(DateTime('UTC'))", typeof(Guid))]
+    public void NullPlaceholderAs_UnwritableCompositeType_Throws(string type, Type writeType)
+        => Assert.Throws<NotSupportedException>(() => Resolve(type).NullPlaceholderAs(writeType));
 
     [Test]
     public void CanWrite_NullableDateTime_AcceptsBothOffsetAndDateTimeSpellings()

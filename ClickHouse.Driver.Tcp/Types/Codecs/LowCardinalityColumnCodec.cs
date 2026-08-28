@@ -106,9 +106,8 @@ internal static class LowCardinalityWire
 ///
 /// <para>
 /// Each Native block ships a self-contained, block-local dictionary — there is no cross-block dictionary state,
-/// so the codec instance holds none and stays a shared singleton. The codec is non-generic; the generic work —
-/// building the typed column and deduplicating values on write — is delegated to a cached, per-element-type
-/// <see cref="ILowCardinalityShape"/>.
+/// so the codec keeps none. Cached <see cref="ILowCardinalityShape"/> instances handle typed columns and write-time
+/// deduplication.
 /// </para>
 /// </summary>
 internal sealed class LowCardinalityColumnCodec : IColumnCodec
@@ -160,6 +159,17 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// so this is not exercised by a nullable wrapper.
     /// </summary>
     public object NullPlaceholder => nullable ? null : inner.NullPlaceholder;
+
+    /// <inheritdoc/>
+    public object NullPlaceholderAs(Type writeType)
+    {
+        if (!TryInnerWriteType(writeType, out Type innerType) || !inner.CanWriteElementType(innerType))
+        {
+            throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+        }
+
+        return nullable ? null : inner.NullPlaceholderAs(innerType);
+    }
 
     /// <summary>Builds a <c>LowCardinality(T)</c> codec, resolving the inner type <c>T</c> through the registry.</summary>
     /// <param name="node">The parsed <c>LowCardinality</c> type node; its single argument is the inner type.</param>
@@ -389,8 +399,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
 
         projected = null;
 
-        // A nullable inner wraps the inner spelling exactly as Nullable(T) does, so the same unwrap applies — see
-        // NullableColumnCodec.TryProjectRead.
+        // Nullable LowCardinality uses the same CLR surface as Nullable(T).
         Type innerTarget = Nullable.GetUnderlyingType(targetType);
         if (innerTarget is null)
         {
@@ -412,20 +421,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => WriteShapeFor(column) is not null;
 
-    /// <summary>
-    /// Undoes this codec's surface rule on a candidate element type to recover the inner codec's own spelling. A
-    /// non-nullable <c>LowCardinality</c> is transparent, so the surface <em>is</em> the inner type; a nullable one
-    /// wraps it exactly as <c>Nullable(T)</c> does.
-    ///
-    /// <para>
-    /// A nullable surface refuses a bare value type: such a column has null rows and the type has nowhere to put one.
-    /// That refusal is what keeps the write side inside the read side — every element type accepted here is one
-    /// <see cref="TryProjectRead"/> also offers, so a property that inserts can be read back.
-    /// </para>
-    /// </summary>
-    /// <param name="elementType">The candidate surface element type.</param>
-    /// <param name="innerType">The inner codec's spelling of it, or null.</param>
-    /// <returns>Whether the surface rule can be undone.</returns>
+    /// <summary>Maps a LowCardinality CLR type to the type expected by its inner codec.</summary>
     private bool TryInnerWriteType(Type elementType, out Type innerType)
     {
         if (!nullable)
@@ -449,9 +445,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
         return true;
     }
 
-    // The shape for the CLR type this column's rows hold, or null when the inner codec cannot encode them. The
-    // canonical surface keeps this codec's own shape; any other resolves the shape for the lifted inner type, so a
-    // LowCardinality(DateTime) column takes a DateTime column with the inner codec converting as it writes.
+    // Resolve the canonical or child-lifted write shape.
     private ILowCardinalityShape WriteShapeFor(IColumn column)
     {
         Type elementType = column.ElementType;
@@ -470,7 +464,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // The prefix is a fixed version marker, independent of the data; the column/slice is unused.
+    // The prefix is a fixed version marker.
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
         => writer.WriteInt64(LowCardinalityWire.StatePrefixVersion);
 

@@ -161,11 +161,7 @@ public class ArrayColumnCodecTests
             await codec.ReadColumnAsync(reader, "c", "Array(UInt32)", 1, CodecTestHarness.None));
     }
 
-    /// <summary>
-    /// An Array(T) row is not nullable on the wire, so a null row is refused with a message naming the column, the row
-    /// and the two ways out. Asserted for a lifted element type as well as the canonical one: the offsets are computed
-    /// by a shape resolved from the row's own type, and the diagnosis has to survive that indirection.
-    /// </summary>
+    /// <summary>Null Array(T) rows are rejected for canonical and lifted element types.</summary>
     [TestCase("Array(UInt32)", false)]
     [TestCase("Array(DateTime('UTC'))", true)]
     public async Task WriteColumn_ErgonomicColumnWithANullRow_ThrowsNamingTheRowAndTheRemedy(string type, bool lifted)
