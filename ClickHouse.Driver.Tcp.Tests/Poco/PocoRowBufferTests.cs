@@ -8,58 +8,56 @@ using ClickHouse.Driver.Tcp.Tests.Utilities;
 namespace ClickHouse.Driver.Tcp.Tests.Poco;
 
 /// <summary>
-/// The row buffer a row-oriented insert materializes its source into. Not reachable from a server round trip beyond
-/// "the rows arrived": what is here is the sizing (a counted source rents once, a lazy one grows), the null-row
-/// refusal — which has to name the row rather than surface as a NullReferenceException from compiled code — and
-/// cancellation, this being the one stretch of an insert that runs before any I/O.
+/// Covers row buffering, pooled-array ownership, null validation, and cancellation.
 /// </summary>
 [TestFixture]
 public class PocoRowBufferTests
 {
     [Test]
-    public void Materialize_CountedSource_HoldsEveryRowInOrder()
+    public void Create_ArrayInput_BorrowsTheCallerArray()
     {
-        var source = new List<Row<int>> { new() { Value = 1 }, new() { Value = 2 } };
+        var source = new[] { new Row<int> { Value = 1 }, new Row<int> { Value = 2 } };
 
-        using PocoRowBuffer<Row<int>> buffer = PocoRowBuffer<Row<int>>.Materialize(source, "rows", CancellationToken.None);
+        using PocoRowBuffer<Row<int>> buffer = PocoRowBuffer<Row<int>>.Create(source, "rows", CancellationToken.None);
 
         Assert.Multiple(() =>
         {
             Assert.That(buffer.Count, Is.EqualTo(2));
-            Assert.That(buffer.Rows[0], Is.SameAs(source[0]));
+            Assert.That(buffer.Rows, Is.SameAs(source));
+        });
+    }
+
+    [Test]
+    public void Create_ListInput_CopiesEveryRowInOrder()
+    {
+        var first = new Row<int> { Value = 1 };
+        var source = new List<Row<int>> { first, new() { Value = 2 } };
+
+        using PocoRowBuffer<Row<int>> buffer = PocoRowBuffer<Row<int>>.Create(source, "rows", CancellationToken.None);
+        source[0] = new Row<int> { Value = 3 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(buffer.Count, Is.EqualTo(2));
+            Assert.That(buffer.Rows[0], Is.SameAs(first));
             Assert.That(buffer.Rows[1], Is.SameAs(source[1]));
         });
     }
 
     [Test]
-    public void Materialize_LazySource_GrowsPastTheInitialRent()
+    public void Create_EmptyList_HoldsNoRows()
     {
-        const int count = 500;
-
-        using PocoRowBuffer<Row<int>> buffer = PocoRowBuffer<Row<int>>.Materialize(Counting(count), "rows", CancellationToken.None);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(buffer.Count, Is.EqualTo(count));
-            Assert.That(buffer.Rows[0].Value, Is.EqualTo(0));
-            Assert.That(buffer.Rows[count - 1].Value, Is.EqualTo(count - 1));
-        });
-    }
-
-    [Test]
-    public void Materialize_EmptySource_HoldsNoRows()
-    {
-        using PocoRowBuffer<Row<int>> buffer = PocoRowBuffer<Row<int>>.Materialize(Array.Empty<Row<int>>(), "rows", CancellationToken.None);
+        using PocoRowBuffer<Row<int>> buffer = PocoRowBuffer<Row<int>>.Create(new List<Row<int>>(), "rows", CancellationToken.None);
 
         Assert.That(buffer.Count, Is.EqualTo(0));
     }
 
     [Test]
-    public void Materialize_NullRow_ThrowsNamingTheRowAndTheParameter()
+    public void Create_ListContainingNull_ThrowsNamingTheRowAndTheParameter()
     {
         var source = new List<Row<int>> { new() { Value = 1 }, null };
 
-        ArgumentException error = Assert.Throws<ArgumentException>(() => PocoRowBuffer<Row<int>>.Materialize(source, "rows", CancellationToken.None));
+        ArgumentException error = Assert.Throws<ArgumentException>(() => PocoRowBuffer<Row<int>>.Create(source, "rows", CancellationToken.None));
 
         Assert.Multiple(() =>
         {
@@ -69,11 +67,39 @@ public class PocoRowBufferTests
     }
 
     [Test]
-    public void Dispose_Twice_ReturnsTheArrayOnce()
+    public void Create_ArrayContainingNull_ThrowsNamingTheRowAndTheParameter()
     {
-        // Returning a pooled array twice puts one array in the pool twice, which hands the same storage to two
-        // callers — so the second Dispose has to be a no-op rather than a second Return.
-        PocoRowBuffer<Row<int>> buffer = PocoRowBuffer<Row<int>>.Materialize(new[] { new Row<int> { Value = 1 } }, "rows", CancellationToken.None);
+        Row<int>[] source = { new() { Value = 1 }, null };
+
+        ArgumentException error = Assert.Throws<ArgumentException>(() => PocoRowBuffer<Row<int>>.Create(source, "rows", CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(error.Message, Does.Contain("Row 1"));
+            Assert.That(error.ParamName, Is.EqualTo("rows"));
+        });
+    }
+
+    [Test]
+    public void Dispose_BorrowedArray_LeavesTheCallerArrayUntouched()
+    {
+        var row = new Row<int> { Value = 1 };
+        var source = new[] { row };
+        PocoRowBuffer<Row<int>> buffer = PocoRowBuffer<Row<int>>.Create(source, "rows", CancellationToken.None);
+
+        buffer.Dispose();
+
+        Assert.That(source[0], Is.SameAs(row));
+    }
+
+    [Test]
+    public void Dispose_OwnedCopyCalledTwice_ReleasesItOnce()
+    {
+        // A second disposal must not return the same array twice.
+        PocoRowBuffer<Row<int>> buffer = PocoRowBuffer<Row<int>>.Create(
+            new List<Row<int>> { new() { Value = 1 } },
+            "rows",
+            CancellationToken.None);
 
         buffer.Dispose();
 
@@ -82,51 +108,35 @@ public class PocoRowBufferTests
     }
 
     [Test]
-    public void Materialize_TokenCancelledBeforeTheCall_StopsWithoutDrainingTheSource()
+    public void Create_TokenCancelledBeforeTheCall_ThrowsForAnEmptyList()
     {
-        // The source is enumerated before any I/O, and it can be the long part of an insert, so the token has to be
-        // observed here rather than only once the connection is rented.
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
         Assert.Throws<OperationCanceledException>(
-            () => PocoRowBuffer<Row<int>>.Materialize(Counting(500), "rows", cancellation.Token));
+            () => PocoRowBuffer<Row<int>>.Create(Array.Empty<Row<int>>(), "rows", cancellation.Token));
     }
 
     [Test]
-    public void Materialize_TokenCancelledPartWayThroughACountedSource_StopsThere()
+    public void Create_TokenCancelledDuringCopy_StopsThere()
     {
-        // A counted source sizes the rent to fit, so it never reaches a growth point: testing the token only there
-        // would drain a long collection in full however early the caller cancelled.
         using var cancellation = new CancellationTokenSource();
-        var source = new CancellingCollection(cancellation, count: 500, cancelAfter: 3);
+        var source = new CancellingList(cancellation, count: 500, cancelAfter: 3);
 
         Assert.Throws<OperationCanceledException>(
-            () => PocoRowBuffer<Row<int>>.Materialize(source, "rows", cancellation.Token));
+            () => PocoRowBuffer<Row<int>>.Create(source, "rows", cancellation.Token));
 
-        Assert.That(source.Yielded, Is.LessThan(10), "the enumeration stopped where it was cancelled");
+        Assert.That(source.Read, Is.LessThan(10), "copying stopped where it was cancelled");
     }
 
-    private static IEnumerable<Row<int>> Counting(int count)
-    {
-        for (int value = 0; value < count; value++)
-        {
-            yield return new Row<int> { Value = value };
-        }
-    }
-
-    /// <summary>
-    /// A source that reports its count — so the buffer rents once and never grows — and cancels the token part-way
-    /// through yielding. <see cref="ICollection{T}"/> rather than <see cref="IReadOnlyCollection{T}"/> because that
-    /// is the interface a count is read through; the mutators are never called.
-    /// </summary>
-    private sealed class CancellingCollection : ICollection<Row<int>>
+    /// <summary>A list that cancels while its indexer is being read.</summary>
+    private sealed class CancellingList : IReadOnlyList<Row<int>>
     {
         private readonly CancellationTokenSource cancellation;
         private readonly int count;
         private readonly int cancelAfter;
 
-        public CancellingCollection(CancellationTokenSource cancellation, int count, int cancelAfter)
+        public CancellingList(CancellationTokenSource cancellation, int count, int cancelAfter)
         {
             this.cancellation = cancellation;
             this.count = count;
@@ -135,35 +145,25 @@ public class PocoRowBufferTests
 
         public int Count => count;
 
-        public bool IsReadOnly => true;
+        /// <summary>How many rows the indexer returned.</summary>
+        public int Read { get; private set; }
 
-        /// <summary>How many rows the enumeration asked for before it stopped.</summary>
-        public int Yielded { get; private set; }
-
-        public IEnumerator<Row<int>> GetEnumerator()
+        public Row<int> this[int index]
         {
-            for (int value = 0; value < count; value++)
+            get
             {
-                if (value == cancelAfter)
+                Read++;
+                if (Read == cancelAfter)
                 {
                     cancellation.Cancel();
                 }
 
-                Yielded++;
-                yield return new Row<int> { Value = value };
+                return new Row<int> { Value = index };
             }
         }
 
+        public IEnumerator<Row<int>> GetEnumerator() => throw new NotSupportedException();
+
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
-
-        public void Add(Row<int> item) => throw new NotSupportedException();
-
-        public void Clear() => throw new NotSupportedException();
-
-        public bool Contains(Row<int> item) => throw new NotSupportedException();
-
-        public void CopyTo(Row<int>[] array, int arrayIndex) => throw new NotSupportedException();
-
-        public bool Remove(Row<int> item) => throw new NotSupportedException();
     }
 }
