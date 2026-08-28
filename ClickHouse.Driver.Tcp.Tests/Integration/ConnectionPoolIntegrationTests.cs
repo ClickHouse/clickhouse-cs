@@ -98,7 +98,7 @@ public class ConnectionPoolIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_ConcurrentInsertsIntoOneTable_AllRowsLand()
+    public async Task InsertRowsAsync_ConcurrentInsertsIntoOneTable_AllRowsLand()
     {
         await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 4);
         string table = UniqueTableName();
@@ -106,7 +106,7 @@ public class ConnectionPoolIntegrationTests
 
         try
         {
-            await Task.WhenAll(Enumerable.Range(0, 8).Select(batch => client.InsertAsync(
+            await Task.WhenAll(Enumerable.Range(0, 8).Select(batch => client.InsertRowsAsync(
                 $"INSERT INTO {table} (id) VALUES",
                 Enumerable.Range(batch * 50, 50).Select(i => new ValueRow { Id = (ulong)i }).ToList(),
                 cancellationToken: None).AsTask()));
@@ -196,7 +196,7 @@ public class ConnectionPoolIntegrationTests
         string marker = UniqueTableName();
 
         await client.ExecuteAsync($"CREATE TEMPORARY TABLE {marker} (id UInt64)", cancellationToken: None);
-        await client.InsertAsync(
+        await client.InsertRowsAsync(
             $"INSERT INTO {marker} (id) VALUES",
             new List<ValueRow> { new() { Id = 1 }, new() { Id = 2 } },
             cancellationToken: None);
