@@ -139,10 +139,11 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server acknowledges the insert.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="rows"/> is null.</exception>
-    /// <exception cref="ArgumentException">A row is null, or <typeparamref name="T"/> is a column type.</exception>
+    /// <exception cref="ArgumentException">A row is null, or <typeparamref name="T"/> is a column type — pass columns
+    /// to <see cref="InsertAsync"/> instead.</exception>
     /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot fill the target, or a property is
     /// null for a column that cannot hold null.</exception>
-    ValueTask InsertAsync<T>(
+    ValueTask InsertRowsAsync<T>(
         string sql,
         IEnumerable<T> rows,
         ClickHouseTcpInsertOptions options = null,
@@ -164,8 +165,8 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// <exception cref="ArgumentException">A row is null or has the wrong number of values.</exception>
     /// <exception cref="InvalidOperationException">A value's CLR type is not one its target column accepts, a column
     /// holds values of more than one type, a value is null for a column that cannot hold null, or a target column's
-    /// type cannot be built from rows at all (<c>Nested</c>) and needs the columnar overload.</exception>
-    ValueTask InsertAsync(
+    /// type cannot be built from rows at all (<c>Nested</c>) and needs <see cref="InsertAsync"/>.</exception>
+    ValueTask InsertRowsAsync(
         string sql,
         IEnumerable<object[]> rows,
         ClickHouseTcpInsertOptions options = null,

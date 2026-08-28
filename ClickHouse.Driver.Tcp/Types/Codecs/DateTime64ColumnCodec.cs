@@ -13,7 +13,8 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// at 10^-<c>scale</c> seconds since the Unix epoch (may be negative), surfaced as the raw <see cref="long"/>
 /// count that retains the exact wire value at any scale (including scales 8 and 9, which are finer than a .NET
 /// tick). The timezone (explicit or the session's) sets the offset a caller's <see cref="DateTimeOffset"/>
-/// projection is presented with, resolved per instant so daylight-saving transitions are honored.
+/// projection is presented with and the wall clock an <see cref="DateTimeKind.Unspecified"/> value denotes on
+/// write, resolved per instant so daylight-saving transitions are honored.
 /// </summary>
 internal sealed class DateTime64ColumnCodec : IColumnCodec
 {

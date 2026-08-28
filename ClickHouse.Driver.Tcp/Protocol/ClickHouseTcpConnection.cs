@@ -820,16 +820,17 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             return null;
         }
 
-        // Names line up one-to-one; resolve each target type to its codec (the target type, not the caller's) and
-        // confirm the value column is writable as it. Writing a value uses its own instant, so no server timezone
-        // is needed to resolve the codec.
+        // Names line up one-to-one; resolve each target type through the same registry and context that decoded the
+        // sample block (the target type, not the caller's), then confirm the value column is writable as it. A
+        // timezone-less DateTime/DateTime64 target needs the session zone to turn an Unspecified wall clock into
+        // the instant the server expects.
         for (int i = 0; i < plan.Length; i++)
         {
             InsertColumn slot = plan[i];
             IColumnCodec codec;
             try
             {
-                codec = ColumnCodecRegistry.Default.Resolve(slot.TypeName, ResolveContext.ForWrite);
+                codec = schema.Codecs.Resolve(slot.TypeName, schema.Context);
             }
             catch (Exception ex) when (ex is NotSupportedException or FormatException)
             {
