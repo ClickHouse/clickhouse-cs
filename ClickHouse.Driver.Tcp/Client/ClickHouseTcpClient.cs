@@ -371,18 +371,25 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ClickHouseTcpQueryOptions options = null,
         CancellationToken cancellationToken = default)
     {
+        object value = null;
+        bool found = false;
+
+        // Reads to the end rather than returning at the first value. Leaving the stream early is the abandon
+        // path: it cancels the query and terminates the connection, which costs a pooled client a reconnect per
+        // call and costs a session its temporary tables and settings outright.
         await foreach (Block block in StreamAsync(sql, options, cancellationToken).ConfigureAwait(false))
         {
-            if (block.RowCount == 0 || block.ColumnCount == 0)
+            if (found || block.RowCount == 0 || block.ColumnCount == 0)
             {
                 continue;
             }
 
-            // Read before returning: the block is borrowed and StreamAsync disposes it as the loop unwinds.
-            return block[0].GetValue(0);
+            // Read inside the loop: the block is borrowed and StreamAsync disposes it on the next iteration.
+            value = block[0].GetValue(0);
+            found = true;
         }
 
-        return null;
+        return value;
     }
 
     /// <summary>

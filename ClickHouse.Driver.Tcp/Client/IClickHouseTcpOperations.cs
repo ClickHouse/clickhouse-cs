@@ -109,14 +109,15 @@ public interface IClickHouseTcpOperations : IAsyncDisposable
     /// <c>version()</c> or an <c>EXISTS</c>.
     /// </summary>
     /// <remarks>
-    /// The returned value is owned and safe to retain. Rows after the first are not read: the result is abandoned
-    /// as soon as the value is in hand, which tells the server to stop producing it, so this is cheap even against
-    /// a query that would return many rows. A <c>NULL</c> in that cell comes back as null, the same as no rows at
-    /// all — select a non-nullable expression if the two need telling apart.
+    /// The returned value is owned and safe to retain. A <c>NULL</c> in that cell comes back as null, the same as
+    /// no rows at all — select a non-nullable expression if the two need telling apart.
     ///
     /// <para>
-    /// Because the result is abandoned, the query's activity ends with no status set, the same as any other
-    /// enumeration stopped early. Treat a statusless span from this call as a success, not a failure.
+    /// <b>The whole result is read, not just the first row.</b> Values after the first are discarded, but they
+    /// still cross the wire, so write a query that returns one row rather than relying on this to stop early.
+    /// Stopping early is not an option: it would abandon the result, and abandoning cancels the query and closes
+    /// the connection — a reconnect per call on a pooled client, and the loss of a session's temporary tables and
+    /// settings. Use <see cref="StreamAsync"/> when you want to read part of a large result.
     /// </para>
     /// </remarks>
     /// <param name="sql">The SQL text.</param>
