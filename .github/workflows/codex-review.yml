@@ -1,0 +1,169 @@
+name: Review PR with Codex
+
+# Automated PR code review. Codex reads the PR and the code, and returns findings as JSON; a
+# second job turns those into inline review comments plus one sticky summary comment.
+#
+# The split into two jobs is the security model. The `review` job holds the API key and reads
+# untrusted PR content, so it gets no write permission and no network: the sandbox is
+# workspace-write with networking off, the checkout keeps no credentials, and everything the
+# agent needs about the PR is written to disk before it starts. A prompt injection in a PR body
+# therefore has nothing to reach - it cannot comment, label, push, or call out. The `post` job
+# holds `pull-requests: write` but runs no model: it validates the JSON and posts it.
+#
+# Findings are deduplicated across runs by a `key` the agent assigns to each issue, so a push
+# does not repeat comments that are already on the PR. See .github/scripts/codex_review.py.
+#
+# Prerequisite: the `OPENAI_API_KEY` repository secret.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  # Same model and reasoning effort the ClickHouse/ClickHouse review job runs on.
+  CODEX_MODEL: gpt-5.5
+  CODEX_EFFORT: xhigh
+  CODEX_VERSION: 0.150.1
+  CONTEXT_DIR: .codex-review
+
+jobs:
+  review:
+    name: Codex review
+    # Fork PRs get no secrets on `pull_request`, so the agent could not authenticate. A
+    # maintainer can still review one through workflow_dispatch after a look at the diff.
+    # Bot PRs (dependabot and friends) are skipped: nothing to review, and they get no secrets
+    # either. A same-repo branch implies push access, which is what codex-action's own
+    # write-access check wants, so no allow-users list is needed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.type != 'Bot')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: codex-review-${{ github.event.inputs.pr_number || github.event.pull_request.number }}
+      cancel-in-progress: true
+    outputs:
+      review: ${{ steps.codex.outputs.final-message }}
+      pr: ${{ steps.prep.outputs.pr }}
+      head_sha: ${{ steps.prep.outputs.head_sha }}
+    steps:
+      - name: Resolve target PR
+        id: prep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          PR="${INPUT_PR:-}"
+          [ -z "$PR" ] && PR="${EVENT_PR:-}"
+          if [ -z "$PR" ]; then
+            echo "::error::no PR number to review"
+            exit 1
+          fi
+          # Read the head SHA from the API for both trigger paths, so the inline comments are
+          # anchored to a commit that is really in the PR.
+          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "reviewing PR #$PR at $SHA"
+
+      - name: Check for the API key
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::the OPENAI_API_KEY repository secret is not set"
+            exit 1
+          fi
+
+      # `refs/pull/N/head` is the PR head for a fork PR as well as a same-repo one, and it is
+      # what the prompt tells the agent it is looking at. The default `pull_request` checkout
+      # would be the merge commit instead.
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          ref: refs/pull/${{ steps.prep.outputs.pr }}/head
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Before spending a model call: the posting script decides what to comment on and what to
+      # resolve, so a break there is worth catching in a second rather than after the review.
+      - name: Check the review script
+        run: python3 .github/scripts/test_codex_review.py
+
+      # Everything the agent knows about the PR is collected here, while a token is still in
+      # scope. The agent itself runs with no network and no token.
+      - name: Collect PR context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.prep.outputs.pr }}
+          OUT_DIR: ${{ env.CONTEXT_DIR }}
+        run: python3 .github/scripts/codex_review.py build-context
+
+      - name: Review
+        id: codex
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: ${{ env.CODEX_VERSION }}
+          model: ${{ env.CODEX_MODEL }}
+          effort: ${{ env.CODEX_EFFORT }}
+          # Writable workspace, no network. The agent needs to write nothing, but a read-only
+          # filesystem also stops the CLI writing its own scratch state.
+          permission-profile: ":workspace"
+          prompt-file: .github/codex-review-prompt.md
+          output-schema-file: .github/codex-review-schema.json
+
+      - name: Upload context for debugging
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-review-context
+          path: ${{ env.CONTEXT_DIR }}
+          retention-days: 7
+
+  post:
+    name: Post review
+    needs: review
+    if: needs.review.outputs.review != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout the posting script
+        uses: actions/checkout@v7
+        with:
+          ref: refs/pull/${{ needs.review.outputs.pr }}/head
+          fetch-depth: 1
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Post inline comments and summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.review.outputs.pr }}
+          HEAD_SHA: ${{ needs.review.outputs.head_sha }}
+          # Passed through the environment, never interpolated into the script, so model output
+          # cannot inject shell.
+          REVIEW_JSON: ${{ needs.review.outputs.review }}
+        run: python3 .github/scripts/codex_review.py post
