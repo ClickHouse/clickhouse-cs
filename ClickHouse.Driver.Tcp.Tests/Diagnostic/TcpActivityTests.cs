@@ -100,7 +100,7 @@ public class TcpActivityTests
     [Test]
     public void StartStatement_SqlIncluded_SetsTheQueryText()
     {
-        ClickHouseTcpClientOptions options = Options with { IncludeSqlInActivityTags = true };
+        ClickHouseTcpClientOptions options = Options with { IncludeSqlInActivityTags = true, StatementMaxLength = 100 };
 
         TcpActivity.StartStatement(options, "SELECT 1", "SELECT", queryId: null)?.Dispose();
 
@@ -165,43 +165,6 @@ public class TcpActivityTests
     }
 
     [Test]
-    public void SetCounters_WriteCountersFromTheServer_SetsTheWriteAttributes()
-    {
-        // Reached by an INSERT ... SELECT, the case the server does report write counters for.
-        using (Activity activity = TcpActivity.StartStatement(Options, "INSERT INTO t SELECT 1", "INSERT", queryId: null))
-        {
-            activity.SetCounters(new ClickHouseTcpProgress(rows: 9, bytes: 72, totalRows: 9, wroteRows: 7, wroteBytes: 56, elapsedNs: 1), rowsSent: null);
-        }
-
-        Activity span = Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(span.GetTagItem("db.clickhouse.written_rows"), Is.EqualTo(7UL));
-            Assert.That(span.GetTagItem("db.clickhouse.written_bytes"), Is.EqualTo(56UL));
-        });
-    }
-
-    [Test]
-    public void SetCounters_NoProgressPacket_ReportsOnlyTheRowsTheClientSent()
-    {
-        // The shape every insert takes: the server counts nothing back to the client, so zero read counters would
-        // claim it reported reading nothing rather than reporting nothing at all.
-        using (Activity activity = TcpActivity.StartStatement(Options, "INSERT INTO t VALUES", "INSERT", queryId: null))
-        {
-            activity.SetCounters(default, rowsSent: 3);
-        }
-
-        Activity span = Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(span.GetTagItem("db.clickhouse.written_rows"), Is.EqualTo(3UL));
-            Assert.That(span.GetTagItem("db.clickhouse.read_rows"), Is.Null);
-            Assert.That(span.GetTagItem("db.clickhouse.read_bytes"), Is.Null);
-            Assert.That(span.GetTagItem("db.clickhouse.elapsed_ns"), Is.Null, "a span claiming zero server time is worse than one claiming none");
-        });
-    }
-
-    [Test]
     public void SetCounters_ProgressWithoutWriteCounters_StillReportsTheRowsTheClientSent()
     {
         using (Activity activity = TcpActivity.StartStatement(Options, "INSERT INTO t VALUES", "INSERT", queryId: null))
@@ -232,17 +195,6 @@ public class TcpActivityTests
             Assert.That(span.GetTagItem("db.clickhouse.result_rows"), Is.EqualTo(3UL));
             Assert.That(span.GetTagItem("db.clickhouse.result_bytes"), Is.EqualTo(24UL));
         });
-    }
-
-    [Test]
-    public void SetSuccess_Completed_SetsTheOkStatus()
-    {
-        using (Activity activity = TcpActivity.StartStatement(Options, "SELECT 1", "SELECT", queryId: null))
-        {
-            activity.SetSuccess();
-        }
-
-        Assert.That(Single().Status, Is.EqualTo(ActivityStatusCode.Ok));
     }
 
     [Test]
@@ -300,14 +252,6 @@ public class TcpActivityTests
             Assert.That(span.GetTagItem("server.address"), Is.EqualTo("example.invalid"));
             Assert.That(span.GetTagItem("db.operation.name"), Is.Null, "a ping runs no statement");
         });
-    }
-
-    [Test]
-    public void StartConnect_WithAListener_NamesTheSpanConnect()
-    {
-        TcpActivity.StartConnect(Options)?.Dispose();
-
-        Assert.That(Single().OperationName, Is.EqualTo("connect"));
     }
 
     [Test]

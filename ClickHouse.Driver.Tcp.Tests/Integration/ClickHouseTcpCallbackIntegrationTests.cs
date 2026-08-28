@@ -8,10 +8,11 @@ using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
-// The public callback surface, driven end to end through the client. The connection-level fan-out is covered by
-// ClickHouseTcpConnectionMetadataIntegrationTests; what these add is that ClickHouseTcpQueryOptions.Callbacks
-// reaches the read path at all, and that the Log and ProfileEvents blocks carry the schema the callback docs
-// promise — a caller reads them by column name, so a rename on the server has to fail here.
+// The public callback surface, driven end to end through the client: that ClickHouseTcpQueryOptions.Callbacks
+// reaches the read path at all, what each packet carries, and that the Log and ProfileEvents blocks have the
+// schema the callback docs promise — a caller reads those by column name, so a rename on the server has to fail
+// here. ClickHouseTcpConnectionMetadataIntegrationTests covers the layer below, where a packet leaving the
+// connection unusable would show.
 [TestFixture]
 [Category("Integration")]
 public class ClickHouseTcpCallbackIntegrationTests
@@ -205,6 +206,7 @@ public class ClickHouseTcpCallbackIntegrationTests
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
 
         int blocks = 0;
+        int rows = 0;
         ulong grandTotal = 0;
         await DrainAsync(
             client,
@@ -216,6 +218,7 @@ public class ClickHouseTcpCallbackIntegrationTests
                     OnTotals = block =>
                     {
                         blocks++;
+                        rows = block.RowCount;
                         grandTotal = ((IColumn<ulong>)block[1]).Values[0];
                     },
                 },
@@ -224,6 +227,7 @@ public class ClickHouseTcpCallbackIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(blocks, Is.EqualTo(1));
+            Assert.That(rows, Is.EqualTo(1), "the single totals row");
             Assert.That(grandTotal, Is.EqualTo(100UL));
         });
     }
@@ -233,6 +237,7 @@ public class ClickHouseTcpCallbackIntegrationTests
     {
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
 
+        int blocks = 0;
         ulong[] extremes = null;
         await DrainAsync(
             client,
@@ -242,11 +247,19 @@ public class ClickHouseTcpCallbackIntegrationTests
                 Settings = new Dictionary<string, string> { ["extremes"] = "1" },
                 Callbacks = new ClickHouseTcpQueryCallbacks
                 {
-                    OnExtremes = block => extremes = ((IColumn<ulong>)block[0]).Values.ToArray(),
+                    OnExtremes = block =>
+                    {
+                        blocks++;
+                        extremes = ((IColumn<ulong>)block[0]).Values.ToArray();
+                    },
                 },
             });
 
-        Assert.That(extremes, Is.EqualTo(new ulong[] { 0, 9 }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(blocks, Is.EqualTo(1), "exactly one Extremes block");
+            Assert.That(extremes, Is.EqualTo(new ulong[] { 0, 9 }), "the minimum then the maximum");
+        });
     }
 
     [Test]

@@ -30,7 +30,7 @@ public sealed record ClickHouseTcpClientOptions
     internal const int DefaultMinPoolSize = 0;
     internal const int DefaultMaxPoolSize = 20;
     internal const ClickHouseTcpPoolReusePolicy DefaultPoolReusePolicy = ClickHouseTcpPoolReusePolicy.Lifo;
-    internal const int DefaultStatementMaxLength = 300;
+    internal const int DefaultStatementMaxLength = 5;
 
     /// <summary>
     /// The <c>Compression</c> connection-string value used when the key is absent. LZ4 is what
@@ -291,20 +291,11 @@ public sealed record ClickHouseTcpClientOptions
     /// Where the client gets its loggers, or null to log nothing. Cannot be set from a connection string.
     /// </summary>
     /// <remarks>
-    /// <para>
     /// The client logs its own lifecycle — connects, handshakes, pool checkouts and retirements, operation
-    /// outcomes — under the <c>ClickHouse.Driver.Tcp.*</c> categories. It does <b>not</b> log what the
-    /// <i>server</i> reports: server log lines go to
-    /// <see cref="ClickHouseTcpQueryCallbacks.OnLog"/>, where the caller decides whether they are worth
-    /// logging. Nothing is formatted while the matching category and level are disabled.
-    /// </para>
-    /// <para>
-    /// <b>At Debug the statement text is logged</b>, up to <see cref="StatementMaxLength"/> characters. That is
-    /// deliberate — a driver log without the statement is hard to use — but it is not the same policy as
-    /// <see cref="IncludeSqlInActivityTags"/>, which keeps the statement out of traces unless asked. Enable
-    /// Debug on <c>ClickHouse.Driver.Tcp.Client</c> only where the statements may be recorded, or set
-    /// <see cref="StatementMaxLength"/> to zero to keep them out of both channels.
-    /// </para>
+    /// outcomes — under the <c>ClickHouse.Driver.Tcp.*</c> categories, and formats nothing while the matching
+    /// category and level are disabled. It does <b>not</b> log what the <i>server</i> reports: server log lines
+    /// go to <see cref="ClickHouseTcpQueryCallbacks.OnLog"/>. Statement text on the Debug line is capped by
+    /// <see cref="StatementMaxLength"/>, which by default allows only a stub.
     /// </remarks>
     public ILoggerFactory LoggerFactory { get; init; }
 
@@ -316,12 +307,12 @@ public sealed record ClickHouseTcpClientOptions
 
     /// <summary>
     /// How much of the statement may leave the client as telemetry, in characters; longer text is truncated.
-    /// Defaults to 300.
+    /// Defaults to 5, a stub rather than a statement, so recording query text has to be asked for.
     /// </summary>
     /// <remarks>
-    /// It caps both channels — the <c>db.query.text</c> span attribute and the <c>Debug</c> log line — so zero
-    /// or less keeps the statement text out of telemetry altogether, whatever
-    /// <see cref="IncludeSqlInActivityTags"/> says.
+    /// It caps both channels — the <c>db.query.text</c> span attribute and the <c>Debug</c> log line — so raise
+    /// it to record statements, and set it to zero or less to keep them out even where
+    /// <see cref="IncludeSqlInActivityTags"/> is on.
     /// </remarks>
     public int StatementMaxLength { get; init; } = DefaultStatementMaxLength;
 
