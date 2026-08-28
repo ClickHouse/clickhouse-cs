@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -146,7 +145,7 @@ public sealed class InsertRoundTripCase
         yield return IpAddresses("IPv4", "0.0.0.0", "127.0.0.1", "192.168.1.1", "255.255.255.255");
         yield return IpAddresses("IPv6", "::", "::1", "2001:db8::1", "fe80::1");
 
-        // Decimal32/64 surface as System.Decimal; Decimal128/256 as ClickHouseDecimal.
+        // Decimal32/64 surface as System.Decimal; Decimal128/256 as ClickHouseTcpDecimal.
         yield return Decimals("Decimal(9, 2)", 0m, 1.23m, -1.23m, 9999999.99m);
         yield return Decimals("Decimal(18, 4)", 0m, 12345.6789m, -12345.6789m, 99999999999999.9999m);
         yield return WideDecimals("Decimal(38, 10)", "0", "12345.6789", "-98765.4321");
@@ -314,8 +313,8 @@ public sealed class InsertRoundTripCase
 
         yield return Arrays("Decimal(9, 2)", new[] { 0m, 1.23m, -1.23m, 9999999.99m }, Array.Empty<decimal>());
         yield return Arrays("Decimal(18, 4)", new[] { 12345.6789m, -12345.6789m });
-        yield return Arrays<ClickHouseDecimal>("Decimal(38, 10)", new[] { ParseWide("12345.6789"), ParseWide("-98765.4321") });
-        yield return Arrays<ClickHouseDecimal>("Decimal(76, 20)", new[] { ParseWide("1.00000000000000000001"), ParseWide("-1.00000000000000000001") });
+        yield return Arrays<ClickHouseTcpDecimal>("Decimal(38, 10)", new[] { ParseWide("12345.6789"), ParseWide("-98765.4321") });
+        yield return Arrays<ClickHouseTcpDecimal>("Decimal(76, 20)", new[] { ParseWide("1.00000000000000000001"), ParseWide("-1.00000000000000000001") });
 
         yield return Arrays("IntervalSecond", new[] { 0L, 1L, -5L }, Array.Empty<long>());
         yield return Arrays("IntervalDay", new[] { 7L, -30L });
@@ -454,11 +453,11 @@ public sealed class InsertRoundTripCase
                 (IPAddress.Parse("255.255.255.255"), IPAddress.Parse("2001:db8::1")),
             }));
 
-        // Decimal32/64 surface as System.Decimal, Decimal128/256 as ClickHouseDecimal — one tuple spans all four.
+        // Decimal32/64 surface as System.Decimal, Decimal128/256 as ClickHouseTcpDecimal — one tuple spans all four.
         yield return Same(
             "Tuple(Decimal(9, 2), Decimal(18, 4), Decimal(38, 10), Decimal(76, 20))",
             "Tuple(Decimal(9, 2), Decimal(18, 4), Decimal(38, 10), Decimal(76, 20))",
-            name => new TupleColumn<decimal, decimal, ClickHouseDecimal, ClickHouseDecimal>(name, "Tuple(Decimal(9, 2), Decimal(18, 4), Decimal(38, 10), Decimal(76, 20))", new (decimal, decimal, ClickHouseDecimal, ClickHouseDecimal)[]
+            name => new TupleColumn<decimal, decimal, ClickHouseTcpDecimal, ClickHouseTcpDecimal>(name, "Tuple(Decimal(9, 2), Decimal(18, 4), Decimal(38, 10), Decimal(76, 20))", new (decimal, decimal, ClickHouseTcpDecimal, ClickHouseTcpDecimal)[]
             {
                 (0m, 0m, ParseWide("0"), ParseWide("0")),
                 (1.23m, 12345.6789m, ParseWide("12345.6789"), ParseWide("1.00000000000000000001")),
@@ -1035,14 +1034,14 @@ public sealed class InsertRoundTripCase
             DynamicSettings);
 
         // A map whose key and value types only the pair values can settle: an IPAddress picks IPv4 or IPv6 by its
-        // address family, and a ClickHouseDecimal carries its own scale. Inferring from the CLR type alone cannot
+        // address family, and a ClickHouseTcpDecimal carries its own scale. Inferring from the CLR type alone cannot
         // reach either, so this covers the Map slots the Array and Tuple cases above already cover.
         yield return Same(
             "Dynamic [map value, value-disambiguated key and value]",
             "Dynamic",
             name => new ArrayColumn<object>(name, "Dynamic", new object[]
             {
-                Pairs<IPAddress, ClickHouseDecimal>((IPAddress.Parse("10.0.0.1"), ParseWide("12345.6789")), (IPAddress.Parse("10.0.0.2"), ParseWide("-1.0002"))),
+                Pairs<IPAddress, ClickHouseTcpDecimal>((IPAddress.Parse("10.0.0.1"), ParseWide("12345.6789")), (IPAddress.Parse("10.0.0.2"), ParseWide("-1.0002"))),
                 null,
             }),
             DynamicSettings);
@@ -1055,7 +1054,7 @@ public sealed class InsertRoundTripCase
 
         // One Dynamic column holding a value of (basically) every supported type — each row's runtime CLR type is
         // inferred to a distinct ClickHouse type, so the block's type list spans them all at once. Uses the
-        // canonical read-back CLR types (e.g. ClickHouseDecimal) so insert equals read-back; the
+        // canonical read-back CLR types (e.g. ClickHouseTcpDecimal) so insert equals read-back; the
         // DateTimeOffset/DateTime/decimal inputs, whose read-back type differs, are covered separately below.
         yield return Same(
             "Dynamic [every type + composites]",
@@ -1068,7 +1067,7 @@ public sealed class InsertRoundTripCase
                 Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)),
                 1.5f, 3.5d, true, "héllo✓", new Guid("00112233-4455-6677-8899-aabbccddeeff"),
                 new DateOnly(2024, 1, 15), IPAddress.Parse("192.168.1.1"), IPAddress.Parse("2001:db8::1"),
-                new ClickHouseDecimal(System.Numerics.BigInteger.Parse("1234567890123456789012345"), 5),
+                new ClickHouseTcpDecimal(System.Numerics.BigInteger.Parse("1234567890123456789012345"), 5),
                 new ulong[] { 1, 2, 3 },
                 Pairs<string, uint>(("k", 9), ("m", 10)),
                 (1, "t"),
@@ -1078,7 +1077,7 @@ public sealed class InsertRoundTripCase
 
         // Inputs whose inferred ClickHouse type reads back as a different (canonical) CLR type: a DateTimeOffset
         // and a DateTime infer to DateTime64(9) (read back as the raw long nanosecond count), and a System.Decimal
-        // infers to Decimal128 (read back as ClickHouseDecimal, equal by value).
+        // infers to Decimal128 (read back as ClickHouseTcpDecimal, equal by value).
         yield return new InsertRoundTripCase(
             "Dynamic [datetime + decimal inference]",
             "Dynamic",
@@ -1093,7 +1092,7 @@ public sealed class InsertRoundTripCase
             {
                 (new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)).UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks) * 100,
                 (new DateTime(1988, 8, 28, 11, 22, 33, DateTimeKind.Utc).Ticks - DateTime.UnixEpoch.Ticks) * 100,
-                new ClickHouseDecimal(new System.Numerics.BigInteger(123456789), 4),
+                new ClickHouseTcpDecimal(new System.Numerics.BigInteger(123456789), 4),
                 null,
             }),
             DynamicSettings);
@@ -1624,12 +1623,12 @@ public sealed class InsertRoundTripCase
         return Same($"{type} [{counts.Length} rows]", type, name => new ArrayColumn<long?>(name, type, counts));
     }
 
-    // Nullable of a wide decimal (Decimal128/256) surfaces a ClickHouseDecimal?; a null string maps to a null row.
+    // Nullable of a wide decimal (Decimal128/256) surfaces a ClickHouseTcpDecimal?; a null string maps to a null row.
     private static InsertRoundTripCase NullableWideDecimals(string innerType, params string[] values)
     {
         string type = $"Nullable({innerType})";
-        return Same($"{type} [{values.Length} rows]", type, name => new ArrayColumn<ClickHouseDecimal?>(
-            name, type, values.Select(v => v is null ? (ClickHouseDecimal?)null : ParseWide(v)).ToArray()));
+        return Same($"{type} [{values.Length} rows]", type, name => new ArrayColumn<ClickHouseTcpDecimal?>(
+            name, type, values.Select(v => v is null ? (ClickHouseTcpDecimal?)null : ParseWide(v)).ToArray()));
     }
 
     private static InsertRoundTripCase NullableStrings(params string[] values)
@@ -1712,16 +1711,16 @@ public sealed class InsertRoundTripCase
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<decimal>(name, clickHouseType, values));
 
     private static InsertRoundTripCase WideDecimals(string clickHouseType, params string[] values)
-        => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<ClickHouseDecimal>(name, clickHouseType, Array.ConvertAll(values, ParseWide)));
+        => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<ClickHouseTcpDecimal>(name, clickHouseType, Array.ConvertAll(values, ParseWide)));
 
-    private static ClickHouseDecimal ParseWide(string text)
+    private static ClickHouseTcpDecimal ParseWide(string text)
     {
         bool negative = text.StartsWith('-');
         string digits = negative ? text.Substring(1) : text;
         int dot = digits.IndexOf('.');
         int scale = dot < 0 ? 0 : digits.Length - dot - 1;
         System.Numerics.BigInteger mantissa = System.Numerics.BigInteger.Parse(dot < 0 ? digits : digits.Remove(dot, 1), System.Globalization.CultureInfo.InvariantCulture);
-        return new ClickHouseDecimal(negative ? -mantissa : mantissa, scale);
+        return new ClickHouseTcpDecimal(negative ? -mantissa : mantissa, scale);
     }
 
     /// <summary>A case that inserts and reads back the same column — the common shape.</summary>

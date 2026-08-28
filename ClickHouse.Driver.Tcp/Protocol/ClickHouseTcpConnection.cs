@@ -97,8 +97,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// How long the server may stay silent mid-response before the operation fails. <see cref="TimeSpan.Zero"/>
     /// leaves the caller's token as the only bound, which is the default for the scripted-stream seam.
     /// </param>
+    /// <exception cref="PlatformNotSupportedException">The host is big-endian.</exception>
     internal ClickHouseTcpConnection(Stream stream, Socket socket, IClickHouseCompressor compressor = null, TimeSpan readTimeout = default)
     {
+        HostEndianness.RequireLittleEndian();
+
         this.stream = stream;
         this.socket = socket;
         this.compressor = compressor;

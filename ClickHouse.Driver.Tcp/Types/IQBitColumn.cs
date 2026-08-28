@@ -1,6 +1,6 @@
 using System;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// Exposes the transposed bit planes of a decoded <c>QBit(T, N)</c> column without materializing row vectors.

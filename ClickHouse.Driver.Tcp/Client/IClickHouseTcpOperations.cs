@@ -104,6 +104,32 @@ public interface IClickHouseTcpOperations : IAsyncDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Runs a query and returns the first column of its first row, boxed — the one-value counterpart of
+    /// <see cref="QueryAsync(string, ClickHouseTcpQueryOptions, CancellationToken)"/>, for a <c>count()</c>, a
+    /// <c>version()</c> or an <c>EXISTS</c>.
+    /// </summary>
+    /// <remarks>
+    /// The returned value is owned and safe to retain. Rows after the first are not read: the result is abandoned
+    /// as soon as the value is in hand, which tells the server to stop producing it, so this is cheap even against
+    /// a query that would return many rows. A <c>NULL</c> in that cell comes back as null, the same as no rows at
+    /// all — select a non-nullable expression if the two need telling apart.
+    ///
+    /// <para>
+    /// Because the result is abandoned, the query's activity ends with no status set, the same as any other
+    /// enumeration stopped early. Treat a statusless span from this call as a success, not a failure.
+    /// </para>
+    /// </remarks>
+    /// <param name="sql">The SQL text.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The first column of the first row, or null when the result has no rows.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
+    ValueTask<object> ExecuteScalarAsync(
+        string sql,
+        ClickHouseTcpQueryOptions options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Inserts columnar data. The columns are matched to the target's schema <b>by name</b> (order is free, and a
     /// named subset inserts only those columns, the server filling the rest from their defaults); values are
     /// serialized as the target's resolved type. Zero rows is a no-op.
@@ -184,4 +210,18 @@ public interface IClickHouseTcpOperations : IAsyncDisposable
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server answers.</returns>
     ValueTask PingAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports what the server said about itself when the connection was handshaken: version, protocol revision
+    /// and timezone. Use it to branch on a server version rather than parsing <c>SELECT version()</c>.
+    /// </summary>
+    /// <remarks>
+    /// Reads the handshake of a connection rather than querying the server, so it costs no round trip once one is
+    /// open — though it opens one if the pool is empty. A pooled client answers from whichever connection it
+    /// rents; the protocol revision is negotiated per connection, so read it from a
+    /// <see cref="IClickHouseTcpSession"/> if you need the number a specific later operation will run under.
+    /// </remarks>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The server's identity and the negotiated protocol revision.</returns>
+    ValueTask<ClickHouseTcpServerInfo> GetServerInfoAsync(CancellationToken cancellationToken = default);
 }
