@@ -4,78 +4,35 @@ using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
-/// <summary>
-/// The generic half of an <c>Array(T)</c> column's ergonomic write path, closed over the CLR type one row's elements
-/// arrive in. That type is not the codec's own: an <c>Array(DateTime)</c> column decodes as <c>uint[]</c>, but it can be
-/// written from a <c>DateTime[]</c> row, because the inner codec accepts a <see cref="System.DateTime"/> column. So the
-/// per-row work — summing offsets, flattening, blitting a run — is parameterized on the row's element type rather than
-/// the codec's.
-///
-/// <para>
-/// The dense wire-shaped path needs no shape. A dense column is by definition already in the codec's canonical element
-/// type, so it stays on the codec's own type argument.
-/// </para>
-/// </summary>
+/// <summary>Writes <c>Array(T)</c> rows for one CLR element type.</summary>
 internal interface IArrayWriteShape
 {
-    /// <summary>
-    /// Whether the inner codec writes this element type as a flat run of values with no sections of its own, so each
-    /// row can go straight to the writer without a flattening view.
-    /// </summary>
-    /// <param name="inner">The inner codec.</param>
-    /// <returns>Whether the inner is span-writable at this element type.</returns>
+    /// <summary>Whether the inner codec can write each row as one span.</summary>
     bool InnerWritesSpans(IColumnCodec inner);
 
-    /// <summary>
-    /// Sums each row's element count into a slice-relative cumulative offsets array (<c>offsets[0] = 0</c>), rejecting
-    /// null rows and guarding that the run fits one array.
-    /// </summary>
-    /// <param name="column">The ergonomic jagged column.</param>
-    /// <param name="start">The first row of the slice.</param>
-    /// <param name="length">The number of rows in the slice.</param>
-    /// <returns>The cumulative element ends, of length <paramref name="length"/> + 1.</returns>
+    /// <summary>Builds slice-relative offsets and validates each row.</summary>
     int[] ComputeOffsets(IColumn column, int start, int length);
 
-    /// <summary>Creates the lazy flattening view a sectioned inner codec is handed instead of a copied buffer.</summary>
-    /// <param name="typeName">The inner codec's type name, which the view reports.</param>
-    /// <param name="column">The ergonomic jagged column.</param>
-    /// <param name="start">The first row the view flattens.</param>
-    /// <param name="sliceOffsets">The slice-relative cumulative element ends.</param>
-    /// <param name="total">The total element count in the slice.</param>
-    /// <returns>The view, as a column of the row's element type.</returns>
+    /// <summary>Creates a lazy flattened view over the selected rows.</summary>
     IColumn CreateFlatteningView(string typeName, IColumn column, int start, int[] sliceOffsets, int total);
 
-    /// <summary>Writes each row of the slice as its own contiguous run, for a span-writable inner.</summary>
-    /// <param name="inner">The inner codec, span-writable at this element type.</param>
-    /// <param name="writer">The writer to encode into.</param>
-    /// <param name="column">The ergonomic jagged column.</param>
-    /// <param name="start">The first row to write.</param>
-    /// <param name="length">The number of rows to write.</param>
+    /// <summary>Writes each selected row as one span.</summary>
     void WriteRuns(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length);
 }
 
-/// <summary>Resolves and caches the <see cref="IArrayWriteShape"/> for a row element type.</summary>
+/// <summary>Caches array write shapes by CLR element type.</summary>
 internal static class ArrayWriteShapes
 {
     private static readonly ConcurrentDictionary<Type, IArrayWriteShape> Cache = new();
 
-    /// <summary>
-    /// Returns the shape for <paramref name="elementType"/>, building it once and caching it. Built on demand rather
-    /// than one per accepted type up front: a container's accepted set is its children's product, so materializing
-    /// them all would be the blowup the interrogative contract exists to avoid. Only the types actually written get a
-    /// shape.
-    /// </summary>
-    /// <param name="elementType">The CLR type one row's elements arrive in.</param>
-    /// <returns>The shape.</returns>
+    /// <summary>Returns the cached shape for <paramref name="elementType"/>.</summary>
     public static IArrayWriteShape For(Type elementType) => Cache.GetOrAdd(elementType, Build);
 
-    // nonPublic: true so the shape's implicit internal constructor is always reachable here.
     private static IArrayWriteShape Build(Type elementType)
         => (IArrayWriteShape)Activator.CreateInstance(typeof(ArrayWriteShape<>).MakeGenericType(elementType), nonPublic: true);
 }
 
-/// <summary>The shape for rows whose elements arrive as <typeparamref name="TWrite"/>, so a row is <c>TWrite[]</c>.</summary>
-/// <typeparam name="TWrite">The CLR type one row's elements arrive in.</typeparam>
+/// <summary>Writes rows whose CLR type is <typeparamref name="TWrite"/>[].</summary>
 internal sealed class ArrayWriteShape<TWrite> : IArrayWriteShape
 {
     /// <inheritdoc/>

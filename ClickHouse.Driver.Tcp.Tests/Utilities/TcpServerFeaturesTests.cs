@@ -12,6 +12,8 @@ public class TcpServerFeaturesTests
     [TestCase("25.8", TcpFeature.Json, ExpectedResult = true, TestName = "The oldest matrix server has Json")]
     [TestCase("25.11", TcpFeature.QBit, ExpectedResult = true, TestName = "QBit arrives in 25.11")]
     [TestCase("25.10", TcpFeature.QBit, ExpectedResult = false, TestName = "QBit is gated one release later than it shipped")]
+    [TestCase("26.5", TcpFeature.NullableTuple, ExpectedResult = false, TestName = "Nullable Tuple Beta is unavailable before 26.6")]
+    [TestCase("26.6", TcpFeature.NullableTuple, ExpectedResult = true, TestName = "Nullable Tuple Beta arrives in 26.6")]
     [TestCase("26.6", TcpFeature.Geometry, ExpectedResult = true, TestName = "A recent server has Geometry")]
     [TestCase("23.12", TcpFeature.Variant, ExpectedResult = false, TestName = "Variant predates 24.1")]
     public bool Resolve_ForAPinnedVersion_ReportsTheFeatureAsTheReleaseNotesDo(string version, TcpFeature feature)

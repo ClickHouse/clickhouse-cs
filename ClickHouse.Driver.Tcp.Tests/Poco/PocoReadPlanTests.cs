@@ -250,8 +250,6 @@ public class PocoReadPlanTests
     [Test]
     public void Build_CompositePropertyLiftingItsChildsReading_FillsTheLiftedElements()
     {
-        // A container lifts its child's readings, so Array(DateTime) — which decodes as uint[] — fills a DateTime[]
-        // property, the shape a caller would reasonably expect. The timezone is named so the reading is deterministic.
         Block block = BlockOf(1, new ArrayColumn<uint[]>("value", "Array(DateTime('UTC'))", new[] { new uint[] { 0, 60 } }));
 
         Row<DateTime[]>[] rows = Materialize<Row<DateTime[]>>(block);
@@ -266,8 +264,6 @@ public class PocoReadPlanTests
     [Test]
     public void Build_CompositePropertyNeedingAnUnofferedElementReading_ThrowsNamingWhatTheColumnReadsAs()
     {
-        // Lifting reaches only the readings the child actually offers, and Guid is not one of a DateTime's. The
-        // message still has to name what the column does read as.
         Block block = BlockOf(1, new ArrayColumn<uint[]>("value", "Array(DateTime)", new[] { new uint[] { 1, 2 } }));
 
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => Materialize<Row<Guid[]>>(block));

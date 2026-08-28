@@ -173,7 +173,7 @@ internal static class PocoColumnBuilderFactory
             offered[i] = accepted[i].ToString();
         }
 
-        // An empty list means rows cannot provide the required shape; composite lists show canonical shapes only.
+        // Empty means the codec requires a specialized column shape.
         string remedy = accepted.Count == 0
             ? $"No property type can fill a '{column.TypeName}' column: insert it through the columnar API, which can build the column shape it needs."
             : $"It accepts {string.Join(" or ", offered)}, and — for a composite type — rows whose elements are any type its element codecs accept. " +

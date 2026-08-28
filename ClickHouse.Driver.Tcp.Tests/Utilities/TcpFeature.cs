@@ -41,6 +41,10 @@ public enum TcpFeature
     [SinceVersion("25.11")]
     Geometry = 1 << 5,
 
+    /// <summary><c>Nullable(Tuple(...))</c> with its Beta setting enabled.</summary>
+    [SinceVersion("26.6")]
+    NullableTuple = 1 << 6,
+
     /// <summary>Every capability. What an unrecognised or unpinned server version resolves to.</summary>
     All = ~None,
 }

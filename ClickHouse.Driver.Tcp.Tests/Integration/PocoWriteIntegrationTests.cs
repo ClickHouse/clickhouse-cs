@@ -219,8 +219,6 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_ArrayOfDateTimeFromCalendarRows_RoundTripsThroughTheLiftedElements()
     {
-        // The lifted write path: the column decodes as uint[], the property is DateTime[], and the inner codec does
-        // the conversion as it writes. Only a round-trip shows the write and the read agree on the value.
         await using var client = TcpServerFixture.CreateClient();
         string table = CreateTableName();
         try
@@ -249,7 +247,7 @@ public class PocoWriteIntegrationTests
                 Assert.That(read[1].Value, Is.EqualTo(new[] { first, second }));
                 Assert.That(read[0].Value, Is.Empty);
 
-                // The bytes really carry the epoch seconds, not some other reading that happens to round-trip.
+                // Also verify the canonical encoded value.
                 Assert.That(Convert.ToUInt32(raw[1][0]), Is.EqualTo(1_705_314_600u));
             });
         }
@@ -262,8 +260,6 @@ public class PocoWriteIntegrationTests
     [Test]
     public async Task InsertRowsAsync_DeeplyNestedCompositeProperties_RoundTripThroughTheLiftedElements()
     {
-        // Lifting composes, so the calendar conversion happens at whatever depth the child sits. A round-trip is the
-        // only thing that shows the read and write sides agree at depth: either alone would look fine.
         await using var client = TcpServerFixture.CreateClient();
         string table = CreateTableName();
         try
@@ -322,16 +318,48 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
+    [RequiresServerFeature(TcpFeature.NullableTuple)]
+    public async Task InsertRowsAsync_NullableTupleWithLiftedFields_RoundTripsWhenEnabled()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["enable_nullable_tuple_type"] = "1",
+        };
+        var queryOptions = new ClickHouseTcpQueryOptions { Settings = settings };
+        var insertOptions = new ClickHouseTcpInsertOptions { Settings = settings };
+        string table = CreateTableName();
+        try
+        {
+            const string type = "Nullable(Tuple(DateTime('UTC'), String))";
+            await client.ExecuteAsync($"CREATE TABLE {table} (value {type}) ENGINE = Memory", queryOptions, None);
+
+            var present = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+            var written = new[]
+            {
+                new Row<(DateTime, string)?> { Value = (present, "present") },
+                new Row<(DateTime, string)?> { Value = null },
+            };
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", written, insertOptions, None);
+
+            List<Row<(DateTime, string)?>> read = await client
+                .QueryAsync<Row<(DateTime, string)?>>($"SELECT value FROM {table} ORDER BY isNull(value)", queryOptions, None)
+                .ToListAsync();
+
+            Assert.That(read.Select(row => row.Value), Is.EqualTo(written.Select(row => row.Value)));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", queryOptions, None);
+        }
+    }
+
+    [Test]
     public async Task InsertRowsAsync_LowCardinalityOverACalendarInner_RoundTripsFromTheCalendarProperty()
     {
-        // The asymmetry this epic closes: the column read into a DateTime property but could be written only from raw
-        // epoch seconds. A non-nullable LowCardinality surfaces its inner's element type unchanged, so the dictionary
-        // is now built from DateTime values and the inner codec converts them as it writes.
         await using var client = TcpServerFixture.CreateClient();
 
-        // LowCardinality over a fixed-width type is refused by default as a performance foot-gun. It is named here
-        // because it is the exact type whose asymmetry this closes, so the setting is enabled rather than the case
-        // swapped for one the server likes better.
+        // ClickHouse requires this setting for LowCardinality(DateTime).
         var settings = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["allow_suspicious_low_cardinality_types"] = "1",
@@ -348,8 +376,6 @@ public class PocoWriteIntegrationTests
             var repeated = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
             var other = new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc);
 
-            // The repeat matters: it is what makes the dictionary smaller than the row count, so a wrong dictionary
-            // would show up as a wrong value rather than merely a different encoding.
             var written = new[]
             {
                 new Row<DateTime> { Value = repeated },
@@ -376,6 +402,43 @@ public class PocoWriteIntegrationTests
                 Assert.That(Convert.ToUInt64(distinct[0][0]), Is.EqualTo(2ul), "two distinct values, so the dictionary really deduplicated");
                 Assert.That(Convert.ToUInt32(distinct[0][1]), Is.EqualTo(1_705_314_600u), "the wire carries epoch seconds");
             });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task InsertRowsAsync_NullableLowCardinalityDateTimesWithEqualClrTicks_StoresDistinctInstants()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["allow_suspicious_low_cardinality_types"] = "1",
+        };
+        var queryOptions = new ClickHouseTcpQueryOptions { Settings = settings };
+        var insertOptions = new ClickHouseTcpInsertOptions { Settings = settings };
+        string table = CreateTableName();
+        try
+        {
+            const string type = "LowCardinality(Nullable(DateTime('America/New_York')))";
+            await client.ExecuteAsync($"CREATE TABLE {table} (value {type}) ENGINE = Memory", queryOptions, None);
+
+            long ticks = new DateTime(2024, 1, 15, 12, 0, 0).Ticks;
+            var written = new[]
+            {
+                new Row<DateTime?> { Value = new DateTime(ticks, DateTimeKind.Utc) },
+                new Row<DateTime?> { Value = null },
+                new Row<DateTime?> { Value = new DateTime(ticks, DateTimeKind.Unspecified) },
+            };
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", written, insertOptions, None);
+
+            List<object[]> encoded = await client
+                .QueryAsync($"SELECT toUInt32(value) FROM {table} WHERE value IS NOT NULL ORDER BY value", queryOptions, None)
+                .ToListAsync();
+
+            Assert.That(encoded.Select(row => Convert.ToUInt32(row[0])).Distinct().ToArray(), Has.Length.EqualTo(2));
         }
         finally
         {
@@ -907,7 +970,6 @@ public class PocoWriteIntegrationTests
         public DateTimeOffset? MaybePrecise { get; set; }
     }
 
-    /// <summary>Uses caller-facing CLR types inside nested composite columns.</summary>
     private sealed class NestedCompositeRow
     {
         public ValueTuple<DateTime, string>[][] Pairs { get; set; }
