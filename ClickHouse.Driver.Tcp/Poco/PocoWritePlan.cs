@@ -17,14 +17,11 @@ internal static class PocoWritePlan
     /// <param name="schema">The sample block whose target columns to key on.</param>
     /// <returns>The key.</returns>
     /// <remarks>
-    /// Keyed in <see cref="ResolveContext.ForWrite"/> rather than the context the sample block was decoded with,
-    /// because that is the context the plan resolves its codecs in — so two inserts of one target shape share a plan
-    /// whatever the session's timezone is. Note what that means for a <c>DateTime</c> column whose type string names
-    /// no timezone: the write resolves against no session timezone at all and so treats an <c>Unspecified</c>
-    /// <see cref="DateTime"/> as UTC, while the read presents the same column in the session timezone. That
-    /// divergence is the write path's, not this key's, and it predates the POCO layer.
+    /// Includes the context the sample block was decoded with because a timezone-less <c>DateTime</c> or
+    /// <c>DateTime64</c> target resolves against the session timezone. Reusing a plan from another timezone would
+    /// give an <see cref="DateTimeKind.Unspecified"/> property a different instant from the one that session names.
     /// </remarks>
-    public static string SignatureOf(Block schema) => PocoBlockSignature.Of(schema, ResolveContext.ForWrite);
+    public static string SignatureOf(Block schema) => PocoBlockSignature.Of(schema, schema.Context);
 }
 
 /// <summary>
@@ -91,9 +88,10 @@ internal sealed class PocoWritePlan<T>
 
             claimedBy[member.MemberName] = column.Name;
 
-            // Resolved in the write context, which is how the insert's own alignment resolves it. Resolving it any
-            // other way would let the plan choose a write type for one codec and the insert write through another.
-            IColumnCodec codec = schema.Codecs.Resolve(column.TypeName, ResolveContext.ForWrite);
+            // Use the registry and context that decoded the sample block. The insert's final alignment does the
+            // same, so the plan chooses a write type for the exact codec that will serialize it. In particular, a
+            // timezone-less DateTime target must interpret an Unspecified value in this operation's session zone.
+            IColumnCodec codec = schema.Codecs.Resolve(column.TypeName, schema.Context);
             builders[i] = PocoColumnBuilderFactory.Create<T>(column, codec, member);
         }
 

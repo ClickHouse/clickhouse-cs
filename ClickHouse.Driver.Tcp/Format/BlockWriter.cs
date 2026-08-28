@@ -63,7 +63,8 @@ internal static class BlockWriter
             }
         }
 
-        // Writing uses each value's own instant, so the codec needs no server timezone.
+        // A self-described block has no server sample/context to borrow. Explicit type timezones still apply;
+        // timezone-less DateTime types fall back to UTC for an Unspecified wall clock.
         ResolveContext context = ResolveContext.ForWrite;
         var planned = new InsertColumn[columns.Count];
         for (int i = 0; i < columns.Count; i++)
