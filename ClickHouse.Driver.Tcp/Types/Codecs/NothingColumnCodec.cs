@@ -56,7 +56,7 @@ internal sealed class NothingColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => false;
 
     /// <inheritdoc/>
-    // Nothing has no values to encode, so no element type can fill it either.
+    // Nothing accepts no row value type.
     public bool CanWriteElementType(Type elementType) => false;
 
     /// <inheritdoc/>

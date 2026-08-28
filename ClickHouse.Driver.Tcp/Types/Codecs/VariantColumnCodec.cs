@@ -96,7 +96,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
 
             discriminatorByClrType.TryAdd(children[i].ElementType, i);
 
-            // A Variant over a non-writable alternative (e.g. Nothing) is rejected up front rather than mid-write.
+            // Reject variants with unwritable alternatives before writing.
             writable &= children[i].CanWriteElementType(children[i].ElementType);
         }
 
