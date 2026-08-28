@@ -320,7 +320,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// query can read into: an <see cref="object"/> property reads any column but fills only a <c>Variant</c> or
     /// <c>Dynamic</c> target, and a <c>LowCardinality(DateTime)</c> column reads as <see cref="DateTime"/> but is
     /// written only from the raw epoch seconds. Declare the property as the type the column is written from, or
-    /// insert that column through the columnar overload.
+    /// insert that column through the columnar <see cref="InsertAsync"/> method.
     /// </para>
     /// </remarks>
     /// <typeparam name="T">The row type.</typeparam>
@@ -331,11 +331,11 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <returns>A task that completes when the server acknowledges the insert.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="rows"/> is null.</exception>
     /// <exception cref="ArgumentException">A row is null, or <typeparamref name="T"/> is a column type — pass columns
-    /// to the columnar overload instead.</exception>
+    /// to <see cref="InsertAsync"/> instead.</exception>
     /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot fill the target: it has nothing to
     /// map, a target column maps to no property or to one that cannot be read, or a property's type cannot be written
     /// as its target's type. Also when a property is null for a column that cannot hold null.</exception>
-    public async ValueTask InsertAsync<T>(
+    public async ValueTask InsertRowsAsync<T>(
         string sql,
         IEnumerable<T> rows,
         ClickHouseTcpInsertOptions options = null,
@@ -351,7 +351,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         if (typeof(IColumn).IsAssignableFrom(typeof(T)))
         {
             throw new ArgumentException(
-                $"An insert of {typeof(T).Name} rows would map that type's properties to columns. To insert columnar data, call the overload taking IReadOnlyList<IColumn> — materialize the sequence (for example with ToList()) if it is not already a list.",
+                $"An insert of {typeof(T).Name} rows would map that type's properties to columns. To insert columnar data, call InsertAsync with an IReadOnlyList<IColumn> — materialize the sequence (for example with ToList()) if it is not already a list.",
                 nameof(rows));
         }
 
@@ -390,8 +390,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <c>Nullable</c> reports, naming the row.
     ///
     /// <para>
-    /// This tier boxes every value by construction. For bulk data prefer the columnar overload or
-    /// <see cref="InsertAsync{T}(string, IEnumerable{T}, ClickHouseTcpInsertOptions, CancellationToken)"/>, both of
+    /// This tier boxes every value by construction. For bulk data prefer the columnar <see cref="InsertAsync"/> method or
+    /// <see cref="InsertRowsAsync{T}(string, IEnumerable{T}, ClickHouseTcpInsertOptions, CancellationToken)"/>, both of
     /// which are box-free.
     /// </para>
     /// </remarks>
@@ -404,8 +404,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// <exception cref="ArgumentException">A row is null or has the wrong number of values.</exception>
     /// <exception cref="InvalidOperationException">A value's CLR type is not one its target column accepts, a column
     /// holds values of more than one type, a value is null for a column that cannot hold null, or a target column's
-    /// type cannot be built from rows at all (<c>Nested</c>) and needs the columnar overload.</exception>
-    public async ValueTask InsertAsync(
+    /// type cannot be built from rows at all (<c>Nested</c>) and needs <see cref="InsertAsync"/>.</exception>
+    public async ValueTask InsertRowsAsync(
         string sql,
         IEnumerable<object[]> rows,
         ClickHouseTcpInsertOptions options = null,

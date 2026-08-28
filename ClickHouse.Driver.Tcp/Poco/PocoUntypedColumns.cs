@@ -54,7 +54,7 @@ internal static class PocoUntypedColumns
             for (; built < columnCount; built++)
             {
                 IColumn target = schema[built];
-                IColumnCodec codec = schema.Codecs.Resolve(target.TypeName, ResolveContext.ForWrite);
+                IColumnCodec codec = schema.Codecs.Resolve(target.TypeName, schema.Context);
                 Type writeType = ChooseWriteType(codec, target, rows, rowCount, built);
 
                 // Reflection constructs the builder and no more: the fill runs outside the Invoke, so a bad value

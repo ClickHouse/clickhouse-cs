@@ -33,7 +33,8 @@ internal sealed class ColumnCodecRegistry
 
     /// <summary>Resolves the codec for a ClickHouse type string.</summary>
     /// <param name="typeString">The type string from a column header (e.g. <c>UInt64</c>, <c>DateTime('UTC')</c>).</param>
-    /// <param name="context">The resolution context (server timezone, etc.); use <see cref="ResolveContext.ForWrite"/> on the write path.</param>
+    /// <param name="context">The resolution context (server timezone, etc.); use the sample block's context when
+    /// resolving an INSERT target, or <see cref="ResolveContext.ForWrite"/> when no server context exists.</param>
     /// <returns>The codec for that type.</returns>
     /// <exception cref="FormatException"><paramref name="typeString"/> is malformed.</exception>
     /// <exception cref="NotSupportedException">The type is well-formed but not yet supported by this client.</exception>

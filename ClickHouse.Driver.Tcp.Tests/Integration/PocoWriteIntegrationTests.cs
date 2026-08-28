@@ -10,7 +10,7 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// <c>InsertAsync&lt;T&gt;</c> and the untyped <c>object[]</c> insert against a real server. Per-type coverage rides
+/// <c>InsertRowsAsync&lt;T&gt;</c> and the untyped <c>object[]</c> insert against a real server. Per-type coverage rides
 /// the round-trip corpus, as the read side's does: each case's insert column names the CLR type a property would
 /// hold, so it becomes a <see cref="Row{TValue}"/> insert and a read-back with no corpus of its own. The rest are
 /// the shapes the corpus cannot state — a POCO over several columns, the calendar types a property declares instead
@@ -28,13 +28,18 @@ public class PocoWriteIntegrationTests
         ["allow_experimental_time_time64_type"] = "1",
     };
 
+    private static readonly IReadOnlyDictionary<string, string> AmsterdamSessionSettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["session_timezone"] = "Europe/Amsterdam",
+    };
+
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
-    public async Task InsertAsync_EveryCorpusType_WritesThePropertyIntoTheColumn(InsertRoundTripCase testCase)
+    public async Task InsertRowsAsync_EveryCorpusType_WritesThePropertyIntoTheColumn(InsertRoundTripCase testCase)
     {
         await using var client = TcpServerFixture.CreateClient();
         var queryOptions = new ClickHouseTcpQueryOptions { Settings = testCase.Settings };
         var insertOptions = new ClickHouseTcpInsertOptions { Settings = testCase.Settings };
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (value {testCase.ClickHouseType}) ENGINE = Memory", queryOptions, None);
@@ -76,12 +81,12 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_PocoOverSeveralColumns_RoundTripsThroughQueryAsync()
+    public async Task InsertRowsAsync_PocoOverSeveralColumns_RoundTripsThroughQueryAsync()
     {
         // The POCO-to-POCO round trip: one type inserted and read back through both compiled paths. The property
         // order deliberately differs from the column order, since both directions match by name.
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, user_name String, score Nullable(Float64)) ENGINE = Memory", cancellationToken: None);
@@ -92,7 +97,7 @@ public class PocoWriteIntegrationTests
                 new Account { UserName = "grace", Id = 2, Score = null },
             };
 
-            await client.InsertAsync($"INSERT INTO {table} (id, user_name, score) VALUES", written, cancellationToken: None);
+            await client.InsertRowsAsync($"INSERT INTO {table} (id, user_name, score) VALUES", written, cancellationToken: None);
 
             List<Account> read = await client.QueryAsync<Account>($"SELECT id, user_name, score FROM {table} ORDER BY id", cancellationToken: None).ToListAsync();
 
@@ -110,13 +115,13 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_CalendarAndEnumProperties_WriteThroughTheCodecsConversions()
+    public async Task InsertRowsAsync_CalendarAndEnumProperties_WriteThroughTheCodecsConversions()
     {
         // The corpus inserts these columns as their raw wire values; a POCO declares the type a caller would, and
         // the conversion is the codec's own — the same one the columnar path uses for a DateTime column.
         await using var client = TcpServerFixture.CreateClient();
         var options = new ClickHouseTcpQueryOptions { Settings = TimeSettings };
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             const string columns = "stamp, precise, day, clock, level, maybe_stamp, maybe_precise";
@@ -155,7 +160,7 @@ public class PocoWriteIntegrationTests
                 },
             };
 
-            await client.InsertAsync(
+            await client.InsertRowsAsync(
                 $"INSERT INTO {table} ({columns}) VALUES",
                 written,
                 new ClickHouseTcpInsertOptions { Settings = TimeSettings },
@@ -184,19 +189,58 @@ public class PocoWriteIntegrationTests
         }
     }
 
+    [TestCase("DateTime")]
+    [TestCase("DateTime64(3)")]
+    public async Task InsertAsync_CustomGenericColumnArrayWithSessionTimezone_StoresUnspecifiedWallClockInSessionTimezone(string clickHouseType)
+    {
+        await AssertSessionTimezoneInsertAsync(
+            clickHouseType,
+            (client, sql, options, value) => client.InsertAsync(
+                sql,
+                new[] { new ExternalColumn<DateTime>("value", clickHouseType, value) },
+                options,
+                None).AsTask());
+    }
+
+    [TestCase("DateTime")]
+    [TestCase("DateTime64(3)")]
+    public async Task InsertRowsAsync_PocoWithSessionTimezone_StoresUnspecifiedWallClockInSessionTimezone(string clickHouseType)
+    {
+        await AssertSessionTimezoneInsertAsync(
+            clickHouseType,
+            (client, sql, options, value) => client.InsertRowsAsync(
+                sql,
+                new[] { new Row<DateTime> { Value = value } },
+                options,
+                None).AsTask());
+    }
+
+    [TestCase("DateTime")]
+    [TestCase("DateTime64(3)")]
+    public async Task InsertRowsAsync_UntypedRowsWithSessionTimezone_StoresUnspecifiedWallClockInSessionTimezone(string clickHouseType)
+    {
+        await AssertSessionTimezoneInsertAsync(
+            clickHouseType,
+            (client, sql, options, value) => client.InsertRowsAsync(
+                sql,
+                new[] { new object[] { value } },
+                options,
+                None).AsTask());
+    }
+
     [Test]
-    public async Task InsertAsync_NamedColumnSubset_LeavesTheRestToTheirDefaults()
+    public async Task InsertRowsAsync_NamedColumnSubset_LeavesTheRestToTheirDefaults()
     {
         // A property no target column maps to is simply not inserted, which is what lets one POCO fill part of a
         // table: the statement names the columns, and the server defaults the others.
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, user_name String DEFAULT 'unset', score Nullable(Float64)) ENGINE = Memory", cancellationToken: None);
 
             var written = new[] { new Account { Id = 7, UserName = "ada", Score = 1.5 } };
-            await client.InsertAsync($"INSERT INTO {table} (id) VALUES", written, cancellationToken: None);
+            await client.InsertRowsAsync($"INSERT INTO {table} (id) VALUES", written, cancellationToken: None);
 
             List<Account> read = await client.QueryAsync<Account>($"SELECT id, user_name, score FROM {table}", cancellationToken: None).ToListAsync();
 
@@ -214,19 +258,19 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_TargetColumnWithNoProperty_ThrowsAndLeavesTheClientUsable()
+    public async Task InsertRowsAsync_TargetColumnWithNoProperty_ThrowsAndLeavesTheClientUsable()
     {
         // The mapping is compiled from the sample block, so this failure lands with the INSERT already open. The
         // insert has to close its row stream with no rows and hand the connection back, or every mapping mistake
         // would cost a redial.
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, user_name String, score Nullable(Float64), extra String) ENGINE = Memory", cancellationToken: None);
 
             InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(
-                async () => await client.InsertAsync($"INSERT INTO {table} VALUES", new[] { new Account { Id = 1 } }, cancellationToken: None));
+                async () => await client.InsertRowsAsync($"INSERT INTO {table} VALUES", new[] { new Account { Id = 1 } }, cancellationToken: None));
 
             Assert.That(error.Message, Does.Contain("extra").And.Contain("Account"));
 
@@ -240,10 +284,10 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_NullPropertyIntoNonNullableColumn_ThrowsNamingTheRowAndInsertsNothing()
+    public async Task InsertRowsAsync_NullPropertyIntoNonNullableColumn_ThrowsNamingTheRowAndInsertsNothing()
     {
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (value Int32) ENGINE = Memory", cancellationToken: None);
@@ -251,7 +295,7 @@ public class PocoWriteIntegrationTests
             var rows = new[] { new Row<int?> { Value = 1 }, new Row<int?> { Value = null } };
 
             InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(
-                async () => await client.InsertAsync($"INSERT INTO {table} (value) VALUES", rows, cancellationToken: None));
+                async () => await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", rows, cancellationToken: None));
 
             Assert.That(error.Message, Does.Contain("row 1").And.Contain("value"));
 
@@ -265,13 +309,13 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_NullStringPropertyIntoANonNullableColumn_ThrowsAndLeavesTheClientUsable()
+    public async Task InsertRowsAsync_NullStringPropertyIntoANonNullableColumn_ThrowsAndLeavesTheClientUsable()
     {
         // The commonest way a row arrives incomplete, and the one that used to be worst: a null reference reaching
         // the codec faults part-way through writing the block, which terminates the connection. It has to fail like
         // any other unwritable value — before anything is sent, naming the row, connection intact.
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, user_name String, score Nullable(Float64)) ENGINE = Memory", cancellationToken: None);
@@ -279,7 +323,7 @@ public class PocoWriteIntegrationTests
             var rows = new[] { new Account { Id = 1, UserName = "ada" }, new Account { Id = 2, UserName = null } };
 
             InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(
-                async () => await client.InsertAsync($"INSERT INTO {table} (id, user_name, score) VALUES", rows, cancellationToken: None));
+                async () => await client.InsertRowsAsync($"INSERT INTO {table} (id, user_name, score) VALUES", rows, cancellationToken: None));
 
             Assert.That(error.Message, Does.Contain("row 1").And.Contain("user_name"));
             Assert.That(await CountAsync(client, table), Is.EqualTo(0));
@@ -291,10 +335,10 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_UntypedNullIntoANonNullableStringColumn_ThrowsAndLeavesTheClientUsable()
+    public async Task InsertRowsAsync_UntypedNullIntoANonNullableStringColumn_ThrowsAndLeavesTheClientUsable()
     {
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (name String) ENGINE = Memory", cancellationToken: None);
@@ -302,7 +346,7 @@ public class PocoWriteIntegrationTests
             var rows = new[] { new object[] { "ada" }, new object[] { null } };
 
             InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(
-                async () => await client.InsertAsync($"INSERT INTO {table} (name) VALUES", rows, cancellationToken: None));
+                async () => await client.InsertRowsAsync($"INSERT INTO {table} (name) VALUES", rows, cancellationToken: None));
 
             Assert.That(error.Message, Does.Contain("row 1").And.Contain("name"));
             Assert.That(await CountAsync(client, table), Is.EqualTo(0));
@@ -314,18 +358,18 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_LazyRowSourceAcrossSeveralBlocks_WritesEveryRow()
+    public async Task InsertRowsAsync_LazyRowSourceAcrossSeveralBlocks_WritesEveryRow()
     {
         // Two things at once: a source with no count, which the row buffer has to grow into, and more rows than one
         // wire block holds, which is the slice path the columns are read through.
         const int rowCount = 5_000;
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (value Int32) ENGINE = Memory", cancellationToken: None);
 
-            await client.InsertAsync(
+            await client.InsertRowsAsync(
                 $"INSERT INTO {table} (value) VALUES",
                 Counting(rowCount),
                 new ClickHouseTcpInsertOptions { MaxRowsPerBlock = 1_000 },
@@ -347,15 +391,15 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_ZeroRows_IsNoOp()
+    public async Task InsertRowsAsync_ZeroRows_IsNoOp()
     {
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (value Int32) ENGINE = Memory", cancellationToken: None);
 
-            await client.InsertAsync($"INSERT INTO {table} (value) VALUES", Array.Empty<Row<int>>(), cancellationToken: None);
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", Array.Empty<Row<int>>(), cancellationToken: None);
 
             Assert.That(await CountAsync(client, table), Is.EqualTo(0));
         }
@@ -366,10 +410,10 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_AttributedProperties_RenameAndExclude()
+    public async Task InsertRowsAsync_AttributedProperties_RenameAndExclude()
     {
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (event_time DateTime('UTC')) ENGINE = Memory", cancellationToken: None);
@@ -379,7 +423,7 @@ public class PocoWriteIntegrationTests
                 new AttributedRow { Timestamp = new DateTime(2024, 3, 1, 12, 0, 0, DateTimeKind.Utc), Ignored = "not a column" },
             };
 
-            await client.InsertAsync($"INSERT INTO {table} (event_time) VALUES", written, cancellationToken: None);
+            await client.InsertRowsAsync($"INSERT INTO {table} (event_time) VALUES", written, cancellationToken: None);
 
             List<AttributedRow> read = await client.QueryAsync<AttributedRow>($"SELECT event_time FROM {table}", cancellationToken: None).ToListAsync();
 
@@ -396,18 +440,18 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_TypeThatCannotBeMaterialized_StillInserts()
+    public async Task InsertRowsAsync_TypeThatCannotBeMaterialized_StillInserts()
     {
         // An insert needs getters and no constructor of ours, so an immutable POCO — the shape a query refuses,
         // since there is nothing to construct — is a perfectly good insert source. The read plan asks the
         // descriptor for its activator first and this one has none; the write plan must never ask.
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, user_name String) ENGINE = Memory", cancellationToken: None);
 
-            await client.InsertAsync(
+            await client.InsertRowsAsync(
                 $"INSERT INTO {table} (id, user_name) VALUES",
                 new[] { new ImmutableAccount(3, "ada") },
                 cancellationToken: None);
@@ -429,26 +473,26 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_ColumnSequenceThatIsNotAList_SaysToUseTheColumnarOverload()
+    public async Task InsertRowsAsync_ColumnSequenceThatIsNotAList_SaysToUseTheColumnarOverload()
     {
-        // The plausible slip: a LINQ operator over the columns yields IEnumerable<IColumn>, which binds to the POCO
-        // overload and would otherwise map IColumn's own properties to columns.
+        // The plausible explicit misuse: a LINQ operator over columns passed to the row API would otherwise map
+        // IColumn's own properties to target columns.
         await using var client = TcpServerFixture.CreateClient();
         IEnumerable<IColumn> columns = new List<IColumn> { new ArrayColumn<int>("value", "Int32", new[] { 1 }) };
 
         ArgumentException error = Assert.ThrowsAsync<ArgumentException>(
-            async () => await client.InsertAsync("INSERT INTO nowhere (value) VALUES", columns, cancellationToken: None));
+            async () => await client.InsertRowsAsync("INSERT INTO nowhere (value) VALUES", columns, cancellationToken: None));
 
         Assert.That(error.Message, Does.Contain("IReadOnlyList<IColumn>"));
     }
 
     [Test]
-    public async Task InsertAsync_UntypedRows_RoundTripPositionally()
+    public async Task InsertRowsAsync_UntypedRows_RoundTripPositionally()
     {
         // The dynamic tier: no type, values matched to the target columns by position. The DateTime column is given
         // a DateTime rather than the raw epoch seconds, which is the spelling a caller writing rows by hand has.
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, name String, stamp DateTime('UTC'), score Nullable(Float64)) ENGINE = Memory", cancellationToken: None);
@@ -460,7 +504,7 @@ public class PocoWriteIntegrationTests
                 new object[] { 2UL, "grace", stamp.AddHours(1), null },
             };
 
-            await client.InsertAsync($"INSERT INTO {table} (id, name, stamp, score) VALUES", rows, cancellationToken: None);
+            await client.InsertRowsAsync($"INSERT INTO {table} (id, name, stamp, score) VALUES", rows, cancellationToken: None);
 
             List<object[]> read = await client
                 .QueryAsync($"SELECT id, name, stamp, score FROM {table} ORDER BY id", cancellationToken: None)
@@ -482,13 +526,13 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_UntypedRowsFromAnUntypedRead_ReinsertWithoutConversion()
+    public async Task InsertRowsAsync_UntypedRowsFromAnUntypedRead_ReinsertWithoutConversion()
     {
-        // The property that makes the untyped tier usable as a pipe: what QueryAsync hands out is what InsertAsync
+        // The property that makes the untyped tier usable as a pipe: what QueryAsync hands out is what InsertRowsAsync
         // takes, raw wire values (a DateTime column's epoch seconds) included.
         await using var client = TcpServerFixture.CreateClient();
-        string source = UniqueTableName();
-        string copy = UniqueTableName();
+        string source = CreateTableName();
+        string copy = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {source} (id UInt64, stamp DateTime('UTC')) ENGINE = Memory", cancellationToken: None);
@@ -496,7 +540,7 @@ public class PocoWriteIntegrationTests
             await client.ExecuteAsync($"INSERT INTO {source} SELECT number, toDateTime('2024-01-01 00:00:00', 'UTC') + number FROM numbers(3)", cancellationToken: None);
 
             List<object[]> read = await client.QueryAsync($"SELECT id, stamp FROM {source} ORDER BY id", cancellationToken: None).ToListAsync();
-            await client.InsertAsync($"INSERT INTO {copy} (id, stamp) VALUES", read, cancellationToken: None);
+            await client.InsertRowsAsync($"INSERT INTO {copy} (id, stamp) VALUES", read, cancellationToken: None);
 
             List<object[]> reread = await client.QueryAsync($"SELECT id, stamp FROM {copy} ORDER BY id", cancellationToken: None).ToListAsync();
 
@@ -514,10 +558,10 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_UntypedRowOfTheWrongLength_ThrowsAndLeavesTheClientUsable()
+    public async Task InsertRowsAsync_UntypedRowOfTheWrongLength_ThrowsAndLeavesTheClientUsable()
     {
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, name String) ENGINE = Memory", cancellationToken: None);
@@ -525,7 +569,7 @@ public class PocoWriteIntegrationTests
             var rows = new[] { new object[] { 1UL, "ada" }, new object[] { 2UL } };
 
             ArgumentException error = Assert.ThrowsAsync<ArgumentException>(
-                async () => await client.InsertAsync($"INSERT INTO {table} (id, name) VALUES", rows, cancellationToken: None));
+                async () => await client.InsertRowsAsync($"INSERT INTO {table} (id, name) VALUES", rows, cancellationToken: None));
 
             Assert.That(error.Message, Does.Contain("Row 1"));
             Assert.That(await CountAsync(client, table), Is.EqualTo(0));
@@ -537,10 +581,10 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_UntypedValueOfAWrongType_ThrowsNamingTheColumnAndLeavesTheClientUsable()
+    public async Task InsertRowsAsync_UntypedValueOfAWrongType_ThrowsNamingTheColumnAndLeavesTheClientUsable()
     {
         await using var client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = Memory", cancellationToken: None);
@@ -548,7 +592,7 @@ public class PocoWriteIntegrationTests
             var rows = new[] { new object[] { "not a number" } };
 
             InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(
-                async () => await client.InsertAsync($"INSERT INTO {table} (id) VALUES", rows, cancellationToken: None));
+                async () => await client.InsertRowsAsync($"INSERT INTO {table} (id) VALUES", rows, cancellationToken: None));
 
             Assert.That(error.Message, Does.Contain("id").And.Contain("System.String"));
             Assert.That(await CountAsync(client, table), Is.EqualTo(0));
@@ -560,16 +604,16 @@ public class PocoWriteIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_BothRowShapes_UsableThroughTheInterface()
+    public async Task InsertRowsAsync_BothRowShapes_UsableThroughTheInterface()
     {
         IClickHouseTcpClient client = TcpServerFixture.CreateClient();
-        string table = UniqueTableName();
+        string table = CreateTableName();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (value Int32) ENGINE = Memory", cancellationToken: None);
 
-            await client.InsertAsync($"INSERT INTO {table} (value) VALUES", new[] { new Row<int> { Value = 1 } }, cancellationToken: None);
-            await client.InsertAsync($"INSERT INTO {table} (value) VALUES", new[] { new object[] { 2 } }, cancellationToken: None);
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", new[] { new Row<int> { Value = 1 } }, cancellationToken: None);
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", new[] { new object[] { 2 } }, cancellationToken: None);
 
             Assert.That(await CountAsync(client, table), Is.EqualTo(2));
         }
@@ -608,7 +652,7 @@ public class PocoWriteIntegrationTests
             rows[row] = new Row<TValue> { Value = typed[row] };
         }
 
-        await client.InsertAsync(sql, rows, options, None);
+        await client.InsertRowsAsync(sql, rows, options, None);
     }
 
     private static Task<object[]> ReadColumnAsRowsAsync(IClickHouseTcpClient client, string sql, ClickHouseTcpQueryOptions options, Type valueType)
@@ -648,6 +692,34 @@ public class PocoWriteIntegrationTests
         return (int)(ulong)rows[0][0];
     }
 
+    private static async Task AssertSessionTimezoneInsertAsync(
+        string clickHouseType,
+        Func<IClickHouseTcpClient, string, ClickHouseTcpInsertOptions, DateTime, Task> insert)
+    {
+        await using IClickHouseTcpClient client = TcpServerFixture.CreateClient();
+        string table = CreateTableName();
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} (value {clickHouseType}) ENGINE = Memory", cancellationToken: None);
+
+            var wallClock = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Unspecified);
+            var options = new ClickHouseTcpInsertOptions { Settings = AmsterdamSessionSettings };
+            await insert(client, $"INSERT INTO {table} (value) VALUES", options, wallClock);
+
+            List<object[]> read = await client.QueryAsync($"SELECT value FROM {table}", cancellationToken: None).ToListAsync();
+            var expectedInstant = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(1));
+            object expected = clickHouseType == "DateTime"
+                ? (uint)expectedInstant.ToUnixTimeSeconds()
+                : expectedInstant.ToUnixTimeMilliseconds();
+
+            Assert.That(read[0][0], Is.EqualTo(expected));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
     /// <summary>The <c>T</c> of the <see cref="IColumn{T}"/> a column surfaces.</summary>
     /// <param name="column">The column.</param>
     /// <returns>Its CLR element type.</returns>
@@ -664,7 +736,7 @@ public class PocoWriteIntegrationTests
         throw new InvalidOperationException($"Column '{column.Name}' ({column.TypeName}) surfaces no IColumn<T>.");
     }
 
-    private static string UniqueTableName() => $"tcp_poco_write_test_{Guid.NewGuid():N}";
+    private static string CreateTableName() => $"tcp_poco_write_test_{Guid.NewGuid():N}";
 
     private enum Level : sbyte
     {
@@ -721,5 +793,37 @@ public class PocoWriteIntegrationTests
 
         [ClickHouseTcpNotMapped]
         public string Ignored { get; set; }
+    }
+
+    /// <summary>
+    /// A public-surface-only column implementation, matching what a caller outside the assembly can provide. Its
+    /// concrete array used to make the columnar and generic row overloads equally good candidates (CS0121).
+    /// </summary>
+    private sealed class ExternalColumn<T> : IColumn<T>
+    {
+        private readonly T[] values;
+
+        public ExternalColumn(string name, string typeName, params T[] values)
+        {
+            Name = name;
+            TypeName = typeName;
+            this.values = values;
+        }
+
+        public string Name { get; }
+
+        public string TypeName { get; }
+
+        public int RowCount => values.Length;
+
+        public ReadOnlySpan<T> Values => values;
+
+        public T this[int row] => values[row];
+
+        public object GetValue(int row) => values[row];
+
+        public void Dispose()
+        {
+        }
     }
 }

@@ -3,8 +3,9 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// Per-insert overrides passed to <see cref="ClickHouseTcpClient.InsertAsync"/>: the query options (query id,
-/// settings) plus the knobs that only apply when the client writes a data stream.
+/// Per-insert overrides passed to <see cref="ClickHouseTcpClient.InsertAsync"/> or
+/// <see cref="ClickHouseTcpClient.InsertRowsAsync{T}"/>: the query options (query id, settings) plus the knobs that
+/// only apply when the client writes a data stream.
 /// </summary>
 public sealed record ClickHouseTcpInsertOptions : ClickHouseTcpQueryOptions
 {

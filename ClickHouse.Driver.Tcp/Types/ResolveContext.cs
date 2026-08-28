@@ -9,14 +9,14 @@ internal readonly struct ResolveContext
 {
     /// <summary>
     /// The server/session timezone (an IANA id such as <c>UTC</c> or <c>Europe/London</c>), used to resolve the
-    /// offset of a timezone-bearing column whose type string omits an explicit timezone. Empty when unknown or
-    /// on the write path.
+    /// offset of a timezone-bearing column whose type string omits an explicit timezone. Empty when unknown.
     /// </summary>
     public string ServerTimezone { get; init; }
 
     /// <summary>
-    /// The write-path context: no server timezone, because encoding a value uses its own UTC instant rather than
-    /// a display timezone.
+    /// A context with no known server/session timezone. Suitable for self-described writes where no server sample
+    /// block exists; timezone-less columns then fall back to UTC. INSERTs with a sample block use that block's
+    /// context so an <c>Unspecified</c> wall clock is interpreted in the session timezone.
     /// </summary>
     public static ResolveContext ForWrite => default;
 }

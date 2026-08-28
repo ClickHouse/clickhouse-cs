@@ -376,11 +376,10 @@ public class PocoWritePlanTests
     }
 
     [Test]
-    public void WritePlanFor_SameSchemaDifferentSessionTimezone_ReturnsTheCachedPlan()
+    public void WritePlanFor_SameSchemaDifferentSessionTimezone_CompilesItsOwnPlan()
     {
-        // The read plan keys on the session timezone, because a bare DateTime column is *presented* in it. The write
-        // path resolves its codecs in ResolveContext.ForWrite, which carries no session timezone at all, so one
-        // target shape is one plan whatever the session's is.
+        // A bare DateTime target interprets an Unspecified property in the session timezone. The type string does
+        // not carry that context, so the cache key must: a plan compiled for UTC cannot serve Kolkata's wall clock.
         var registry = new PocoTypeRegistry();
         var utc = new ResolveContext { ServerTimezone = "UTC" };
         var kolkata = new ResolveContext { ServerTimezone = "Asia/Kolkata" };
@@ -388,7 +387,7 @@ public class PocoWritePlanTests
         PocoWritePlan<Row<DateTime>> first = registry.WritePlanFor<Row<DateTime>>(SchemaOf(utc, Target("value", "DateTime")));
         PocoWritePlan<Row<DateTime>> second = registry.WritePlanFor<Row<DateTime>>(SchemaOf(kolkata, Target("value", "DateTime")));
 
-        Assert.That(second, Is.SameAs(first));
+        Assert.That(second, Is.Not.SameAs(first));
     }
 
     [Test]
