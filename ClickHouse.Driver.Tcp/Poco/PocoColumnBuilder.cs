@@ -8,9 +8,7 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// Copies one property of every row into the buffer one column is written from — the compiled unit of a POCO
-/// insert, and the mirror of the read path's scatter. Column-major for the same reason: the loop is taken over one
-/// property, which keeps the conversion and the property access out of any per-row dispatch.
+/// Fills one target-column buffer from a property of each row.
 /// </summary>
 /// <typeparam name="T">The row type.</typeparam>
 /// <typeparam name="TWrite">The CLR type the target column is written in.</typeparam>
@@ -20,9 +18,7 @@ namespace ClickHouse.Driver.Tcp.Poco;
 internal delegate void PocoColumnGather<in T, in TWrite>(T[] rows, int rowCount, TWrite[] destination);
 
 /// <summary>
-/// Builds one target column of an insert out of the caller's rows. One builder per column of the server's sample
-/// block, held by the plan and reused across inserts, so it keeps no per-insert state: the buffer is rented inside
-/// <see cref="Build"/> and owned by the column it returns.
+/// Builds one target column from buffered rows. The returned column owns its buffer.
 /// </summary>
 /// <typeparam name="T">The row type.</typeparam>
 internal abstract class PocoColumnBuilder<T>
@@ -43,9 +39,7 @@ internal abstract class PocoColumnBuilder<T>
     /// <summary>The target column's ClickHouse type.</summary>
     protected string TypeName { get; }
 
-    /// <summary>
-    /// Gathers <paramref name="rowCount"/> values into a fresh column.
-    /// </summary>
+    /// <summary>Gathers <paramref name="rowCount"/> values into a new column.</summary>
     /// <param name="rows">The rows, each non-null.</param>
     /// <param name="rowCount">The number of rows to gather.</param>
     /// <returns>The column, owning a pooled buffer it returns when disposed.</returns>
@@ -54,10 +48,8 @@ internal abstract class PocoColumnBuilder<T>
 }
 
 /// <summary>
-/// The typed builder: a rented <typeparamref name="TWrite"/> buffer, filled by the gather and handed to a column
-/// that owns it. <see cref="ArrayColumn{T}"/> is what the column is, because it surfaces both
-/// <see cref="IColumn{T}"/> — which every codec's <c>CanWrite</c> tests for — and a contiguous span, so a
-/// fixed-width column reaches the wire as one blit.
+/// Gathers rows into a rented <typeparamref name="TWrite"/> buffer and transfers ownership to an
+/// <see cref="ArrayColumn{T}"/>.
 /// </summary>
 /// <typeparam name="T">The row type.</typeparam>
 /// <typeparam name="TWrite">The CLR type the target column is written in.</typeparam>
@@ -83,9 +75,7 @@ internal sealed class PocoColumnBuilder<T, TWrite> : PocoColumnBuilder<T>
         }
         catch
         {
-            // The column never took ownership of the rent, so return it rather than leak it on a failed gather.
-            // Cleared unconditionally, unlike ArrayColumn's reference-type test: the gather stopped part-way, so
-            // this is the one path where what the buffer holds is unknown, and it costs nothing on a failure.
+            // No column owns the rent yet; clear any partially gathered references before returning it.
             ArrayPool<TWrite>.Shared.Return(buffer, clearArray: true);
             throw;
         }
@@ -95,18 +85,14 @@ internal sealed class PocoColumnBuilder<T, TWrite> : PocoColumnBuilder<T>
 }
 
 /// <summary>
-/// Compiles the per-column builders a <see cref="PocoWritePlan{T}"/> is made of. One builder handles one (property,
-/// target column) pair for a whole insert, with the value conversion (<see cref="PocoWriteConversion"/>) inlined
-/// into the loop rather than called through a delegate per row.
+/// Compiles a builder for each property-to-column mapping in a <see cref="PocoWritePlan{T}"/>.
 /// </summary>
 internal static class PocoColumnBuilderFactory
 {
     private static readonly MethodInfo CreateTypedMethod =
         typeof(PocoColumnBuilderFactory).GetMethod(nameof(CreateTyped), BindingFlags.NonPublic | BindingFlags.Static);
 
-    /// <summary>
-    /// Compiles the builder for one property into one target column.
-    /// </summary>
+    /// <summary>Compiles the builder for one property and target column.</summary>
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="column">The target column from the server's sample block, for its name and type.</param>
     /// <param name="codec">The target type's codec, resolved as the write path resolves it.</param>
@@ -126,10 +112,7 @@ internal static class PocoColumnBuilderFactory
             .Invoke(null, new object[] { column.Name, column.TypeName, member, PocoWriteConversion.TakesNull(codec) });
     }
 
-    /// <summary>
-    /// Compiles the gather now that the write type is a type argument: <c>for (row) destination[row] =
-    /// convert(rows[row].P);</c>.
-    /// </summary>
+    /// <summary>Compiles the typed property gather.</summary>
     /// <typeparam name="T">The row type.</typeparam>
     /// <typeparam name="TWrite">The CLR type the target column is written in.</typeparam>
     /// <param name="name">The target column's name.</param>
@@ -175,10 +158,7 @@ internal static class PocoColumnBuilderFactory
         return new PocoColumnBuilder<T, TWrite>(name, typeName, gather);
     }
 
-    /// <summary>
-    /// The failure for a property the column cannot be written from: raised at plan build, so it names the shape
-    /// rather than surfacing as a rejected column once the INSERT is already open.
-    /// </summary>
+    /// <summary>Builds the plan-time error for an incompatible property and target column.</summary>
     /// <param name="column">The target column.</param>
     /// <param name="codec">The target type's codec, for the types it accepts.</param>
     /// <param name="member">The property that cannot fill it.</param>
@@ -193,8 +173,7 @@ internal static class PocoColumnBuilderFactory
             offered[i] = accepted[i].ToString();
         }
 
-        // No accepted type at all means the target's writer needs a column shape rows cannot be gathered into
-        // (Nested), so naming property types would send the caller round a loop they cannot win.
+        // An empty list means the codec requires a column shape that rows cannot provide.
         string remedy = accepted.Count == 0
             ? $"No property type can fill a '{column.TypeName}' column: insert it through the columnar API, which can build the column shape it needs."
             : $"It accepts {string.Join(" or ", offered)}. Give the property one of those types, or insert that column through the columnar API.";

@@ -236,8 +236,7 @@ public class ClickHouseTcpConnectionInsertTests
     [Test]
     public async Task InsertAsync_SuppliedColumns_AreLeftForTheCallerToDispose()
     {
-        // The ownership half the factory overload contrasts with: a caller's columns outlive the insert, and may be
-        // inserted again.
+        // Caller-supplied columns remain caller-owned.
         byte[] script = Concat(
             await ServerHelloBytesAsync(54476),
             await SchemaBlockAsync(("x", "UInt64")),
@@ -253,8 +252,7 @@ public class ClickHouseTcpConnectionInsertTests
     [Test]
     public async Task InsertAsync_ColumnFactory_SeesTheTargetSchemaAndOwnsWhatItBuilt()
     {
-        // The row-oriented seam: the factory runs once the target types are known, and the columns it hands over are
-        // the insert's to release — a POCO gather builds them over pooled buffers.
+        // Factory-built columns become insert-owned once the schema is known.
         byte[] script = Concat(
             await ServerHelloBytesAsync(54476),
             await SchemaBlockAsync(("x", "UInt64")),
@@ -288,9 +286,7 @@ public class ClickHouseTcpConnectionInsertTests
     [Test]
     public async Task InsertAsync_ThrowingColumnFactory_RethrowsItAndStaysReady()
     {
-        // A mapping failure lands mid-INSERT, with the server waiting for row data. Terminating the connection for
-        // what is a caller's shape error would cost a redial on every one, so the insert closes its row stream with
-        // no rows and reports afterwards — the same course the schema-mismatch path takes.
+        // A factory failure closes the row stream without terminating the connection.
         byte[] script = Concat(
             await ServerHelloBytesAsync(54476),
             await SchemaBlockAsync(("x", "UInt64")),

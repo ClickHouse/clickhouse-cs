@@ -14,9 +14,7 @@ internal readonly struct ResolveContext
     public string ServerTimezone { get; init; }
 
     /// <summary>
-    /// A context with no known server/session timezone. Suitable for self-described writes where no server sample
-    /// block exists; timezone-less columns then fall back to UTC. INSERTs with a sample block use that block's
-    /// context so an <c>Unspecified</c> wall clock is interpreted in the session timezone.
+    /// A context with no server timezone. Timezone-less writes fall back to UTC.
     /// </summary>
     public static ResolveContext ForWrite => default;
 }
