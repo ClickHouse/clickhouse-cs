@@ -6,34 +6,18 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// The schema identity a <see cref="PocoWritePlan{T}"/> is built against: the INSERT's sample block, keyed by
-/// <see cref="PocoBlockSignature"/>.
+/// Builds cache keys for POCO write plans.
 /// </summary>
 internal static class PocoWritePlan
 {
-    /// <summary>
-    /// The cache key for the shape of an INSERT's sample block. See <see cref="PocoBlockSignature.Of"/>.
-    /// </summary>
+    /// <summary>Returns the sample block's shape and codec-resolution context.</summary>
     /// <param name="schema">The sample block whose target columns to key on.</param>
     /// <returns>The key.</returns>
-    /// <remarks>
-    /// Includes the context the sample block was decoded with because a timezone-less <c>DateTime</c> or
-    /// <c>DateTime64</c> target resolves against the session timezone. Reusing a plan from another timezone would
-    /// give an <see cref="DateTimeKind.Unspecified"/> property a different instant from the one that session names.
-    /// </remarks>
     public static string SignatureOf(Block schema) => PocoBlockSignature.Of(schema, schema.Context);
 }
 
 /// <summary>
-/// The compiled write plan for one POCO type over one INSERT target: a builder per target column, each gathering
-/// one property of every row into the buffer that column is written from. Built once per (type, target shape) and
-/// cached, because the target types come from the server's sample block and so cannot be known from the type alone.
-///
-/// <para>
-/// Every target column must be filled — the server expects a value for each column of the INSERT's column list — so
-/// a target column that maps to no property fails the build. A property no target column maps to is simply not
-/// inserted, which is what lets one POCO insert into a narrower column list.
-/// </para>
+/// A cached set of property gathers, one for each target column in an INSERT sample block.
 /// </summary>
 /// <typeparam name="T">The row type.</typeparam>
 internal sealed class PocoWritePlan<T>
@@ -44,9 +28,7 @@ internal sealed class PocoWritePlan<T>
     private PocoWritePlan(PocoColumnBuilder<T>[] builders) => this.builders = builders;
 
     /// <summary>
-    /// Compiles the plan for <paramref name="schema"/>'s target columns. Everything that can fail — an unreadable
-    /// property, a target no property fills, a property type the target cannot be written from — fails here, before
-    /// any row is gathered.
+    /// Compiles and validates the property mapping for <paramref name="schema"/>.
     /// </summary>
     /// <param name="descriptor">The POCO type's mapping.</param>
     /// <param name="schema">The server's sample block, naming and typing the target columns.</param>
@@ -78,9 +60,7 @@ internal sealed class PocoWritePlan<T>
 
             if (claimedBy.TryGetValue(member.MemberName, out string claimed))
             {
-                // Two target columns reaching one property through the matcher's looser tiers, e.g. 'user_id' and
-                // 'userId'. Writing one property into both is almost certainly not what was meant, and the read side
-                // refuses the mirror of it, so the caller has to say which is which.
+                // Loose name matching must not map one property to two target columns.
                 throw new InvalidOperationException(
                     $"Target columns '{claimed}' and '{column.Name}' both map to property '{typeof(T).Name}.{member.MemberName}'. " +
                     $"Point one of them at a property of its own with [ClickHouseTcpColumn(Name = \"...\")], or insert only one of them.");
@@ -88,9 +68,7 @@ internal sealed class PocoWritePlan<T>
 
             claimedBy[member.MemberName] = column.Name;
 
-            // Use the registry and context that decoded the sample block. The insert's final alignment does the
-            // same, so the plan chooses a write type for the exact codec that will serialize it. In particular, a
-            // timezone-less DateTime target must interpret an Unspecified value in this operation's session zone.
+            // Resolve through the sample context so timezone-less values use this operation's session zone.
             IColumnCodec codec = schema.Codecs.Resolve(column.TypeName, schema.Context);
             builders[i] = PocoColumnBuilderFactory.Create<T>(column, codec, member);
         }
@@ -98,9 +76,7 @@ internal sealed class PocoWritePlan<T>
         return new PocoWritePlan<T>(builders);
     }
 
-    /// <summary>
-    /// Gathers the rows into one column per target, in the sample block's order.
-    /// </summary>
+    /// <summary>Gathers one column per target in sample-block order.</summary>
     /// <param name="rows">The rows, each non-null; at least <paramref name="rowCount"/> long.</param>
     /// <param name="rowCount">The number of rows to insert.</param>
     /// <returns>The columns, each owning a pooled buffer it returns when disposed.</returns>
@@ -118,8 +94,7 @@ internal sealed class PocoWritePlan<T>
         }
         catch
         {
-            // A later column throwing (a null row for a non-nullable target) must not strand the buffers the
-            // earlier ones already rented.
+            // Dispose columns built before a later gather failed.
             for (int i = 0; i < built; i++)
             {
                 columns[i].Dispose();
