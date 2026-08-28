@@ -126,11 +126,18 @@ internal sealed class ConnectionPool : IConnectionSource
         TimeSpan period = SweepInterval(options);
         TimeSpan dueTime = options.MinPoolSize > 0 ? TimeSpan.Zero : period;
 
-        // Created last, after every field the sweep touches is initialized, so an immediate callback sees a fully
-        // built pool even if it runs before this constructor returns.
-        sweeper = period == TimeSpan.Zero
-            ? null
-            : time.CreateTimer(static state => ((ConnectionPool)state).SweepQuietly(), this, dueTime, period);
+        // Every field the sweep touches is initialized before the timer is created, so an immediate callback sees
+        // a fully built pool even if it runs before this constructor returns.
+        // The timer captures the execution context here and restores it for every callback, so a pool built inside
+        // an ambient Activity would give each background dial's connect span that Activity as its parent — for the
+        // pool's whole life, long after the operation it belonged to ended. Suppressing the capture covers the
+        // whole sweep chain: the callback runs without one, so the top-up it starts captures nothing either.
+        using (ExecutionContext.SuppressFlow())
+        {
+            sweeper = period == TimeSpan.Zero
+                ? null
+                : time.CreateTimer(static state => ((ConnectionPool)state).SweepQuietly(), this, dueTime, period);
+        }
     }
 
     /// <summary>
