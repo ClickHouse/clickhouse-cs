@@ -61,7 +61,9 @@ public class ClickHouseTcpLoggingIntegrationTests
     [Test]
     public async Task StreamAsync_WithALoggerFactory_LogsTheStatementAndItsCounters()
     {
-        await using ClickHouseTcpClient client = CreateClient();
+        // The default cap allows a stub only, so reading the statement back out of the log has to lift it.
+        await using ClickHouseTcpClient client =
+            new(TcpServerFixture.Options() with { LoggerFactory = factory, StatementMaxLength = 100 });
 
         await DrainAsync(client, "SELECT sum(number) FROM numbers(1000)");
 

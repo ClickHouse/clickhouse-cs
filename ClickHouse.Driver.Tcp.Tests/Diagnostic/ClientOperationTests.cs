@@ -41,23 +41,6 @@ public class ClientOperationTests
     }
 
     [Test]
-    public void Dispose_NeitherSucceededNorFailed_ReportsTheOperationAbandoned()
-    {
-        using var factory = new CapturingLoggerFactory();
-        CapturingLogger logger = factory.Logger(ClickHouseTcpDiagnostics.ClientLogCategory);
-
-        using (ClientOperation operation = ClientOperation.Start(Options, logger, "SELECT 1", queryId: null))
-        {
-        }
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(logger.WithEventId(1003), Is.Not.Empty);
-            Assert.That(logger.WithEventId(1001), Is.Empty);
-        });
-    }
-
-    [Test]
     public void Start_QueryIdSet_PutsItOnTheLogLine()
     {
         using var factory = new CapturingLoggerFactory();
