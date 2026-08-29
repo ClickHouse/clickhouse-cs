@@ -74,7 +74,7 @@ public static class AsyncInsert
         //
         //   "Host=localhost;set_async_insert=1;set_wait_for_async_insert=1;set_async_insert_busy_timeout_ms=1000"
         //
-        var settings = new ClickHouseClientSettings("Host=localhost");
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString);
         settings.CustomSettings["async_insert"] = 1;
         settings.CustomSettings["wait_for_async_insert"] = 1;
         settings.CustomSettings["async_insert_max_data_size"] = 1_000_000;
@@ -150,7 +150,7 @@ public static class AsyncInsert
     private static async Task Example2_AsyncInsertWithoutWait()
     {
         // Configure async inserts WITHOUT waiting
-        var settings = new ClickHouseClientSettings("Host=localhost");
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString);
         settings.CustomSettings["async_insert"] = 1;
         settings.CustomSettings["wait_for_async_insert"] = 0; // Fire and forget
         settings.CustomSettings["async_insert_max_data_size"] = 1_000_000;

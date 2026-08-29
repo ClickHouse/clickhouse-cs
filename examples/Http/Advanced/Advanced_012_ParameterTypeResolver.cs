@@ -39,7 +39,7 @@ public static class ParameterTypeResolver
     {
         Console.WriteLine("1. DictionaryParameterTypeResolver - DateTime mapped to DateTime64(3):");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string>
             {
@@ -78,7 +78,7 @@ public static class ParameterTypeResolver
     {
         Console.WriteLine("\n2. Custom IParameterTypeResolver - value-aware resolution:");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ParameterTypeResolver = new SmartDecimalResolver(),
         };
@@ -106,7 +106,7 @@ public static class ParameterTypeResolver
     {
         Console.WriteLine("\n3. Explicit ClickHouseType overrides the resolver:");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string>
             {
@@ -141,7 +141,7 @@ public static class ParameterTypeResolver
     {
         Console.WriteLine("\n4. Works with ClickHouseConnection (ADO.NET):");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string>
             {
@@ -169,7 +169,7 @@ public static class ParameterTypeResolver
         Console.WriteLine("\n5. Per-query resolver via QueryOptions:");
 
         // Client-level: int → Int64
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ParameterTypeResolver = new DictionaryParameterTypeResolver(new Dictionary<Type, string>
             {

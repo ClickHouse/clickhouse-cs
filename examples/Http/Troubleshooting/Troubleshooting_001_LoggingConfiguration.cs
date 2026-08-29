@@ -24,7 +24,7 @@ public static class LoggingConfiguration
         Console.WriteLine("Creating client with Trace-level logging enabled...\n");
 
         // Create client settings with logger factory
-        var settings = new ClickHouseClientSettings("Host=localhost;Port=8123;Username=default;Database=default")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             LoggerFactory = loggerFactory,
         };

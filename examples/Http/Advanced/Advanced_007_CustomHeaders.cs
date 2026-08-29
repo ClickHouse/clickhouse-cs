@@ -17,7 +17,7 @@ public static class CustomHeaders
 
         // Add custom headers for proxy authentication
         // Useful when connecting through a proxy that requires specific headers
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             CustomHeaders = new Dictionary<string, string>
             {

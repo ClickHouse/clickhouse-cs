@@ -8,7 +8,7 @@ public static class PocoInsert
 {
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         await BasicPocoInsert(client);
         await AttributeMappingInsert(client);

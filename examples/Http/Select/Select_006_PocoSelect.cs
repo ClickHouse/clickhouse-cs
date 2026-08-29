@@ -9,7 +9,7 @@ public static class PocoSelect
 {
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         await BasicQueryAsync(client);
         await AttributeMappingQuery(client);

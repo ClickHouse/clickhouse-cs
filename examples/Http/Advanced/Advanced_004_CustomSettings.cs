@@ -39,7 +39,7 @@ public static class CustomSettings
     private static async Task Example1_ClientLevelSettings()
     {
         // Settings applied at the client level affect all queries
-        var settings = new ClickHouseClientSettings("Host=localhost");
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString);
 
         // Add custom ClickHouse settings
         settings.CustomSettings.Add("max_threads", 4);
@@ -71,7 +71,7 @@ public static class CustomSettings
 
     private static async Task Example2_QueryLevelSettings()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         Console.WriteLine("   Applying settings to a specific query:");
 
@@ -106,7 +106,7 @@ public static class CustomSettings
 
     private static async Task Example3_ExecutionTimeLimits()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         Console.WriteLine("   Setting max_execution_time to limit query duration:");
 

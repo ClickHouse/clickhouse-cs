@@ -48,7 +48,7 @@ public static class JsonType
         Console.WriteLine("-".PadRight(50, '-'));
 
         // JsonWriteMode.String is the default, so we can omit it
-        using var client = new ClickHouseClient("Host=localhost;set_allow_experimental_json_type=1");
+        using var client = new ClickHouseClient($"{ExampleConfig.HttpConnectionString};set_allow_experimental_json_type=1");
 
         var tableName = "example_insert_string_mode";
         await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
@@ -115,7 +115,7 @@ public static class JsonType
         Console.WriteLine("-".PadRight(50, '-'));
 
         // Must explicitly set Binary mode
-        using var client = new ClickHouseClient("Host=localhost;JsonWriteMode=Binary;set_allow_experimental_json_type=1");
+        using var client = new ClickHouseClient($"{ExampleConfig.HttpConnectionString};JsonWriteMode=Binary;set_allow_experimental_json_type=1");
 
         // Register POCO types before using them
         client.RegisterJsonSerializationType<EventWithCustomPaths>();
@@ -167,7 +167,7 @@ public static class JsonType
         Console.WriteLine("-".PadRight(50, '-'));
 
         // JsonReadMode.Binary is the default, so we can omit it
-        using var connection = new ClickHouseConnection("Host=localhost");
+        using var connection = ExampleConfig.CreateHttpConnection();
         await connection.OpenAsync();
         connection.CustomSettings["allow_experimental_json_type"] = 1;
 
@@ -199,7 +199,7 @@ public static class JsonType
         Console.WriteLine("\n4. READ WITH STRING MODE");
         Console.WriteLine("-".PadRight(50, '-'));
 
-        using var connection = new ClickHouseConnection("Host=localhost;JsonReadMode=String");
+        using var connection = new ClickHouseConnection($"{ExampleConfig.HttpConnectionString};JsonReadMode=String");
         await connection.OpenAsync();
         connection.CustomSettings["allow_experimental_json_type"] = 1;
 
@@ -245,7 +245,7 @@ public static class JsonType
         Console.WriteLine("\n5. QUERYING JSON PATHS");
         Console.WriteLine("-".PadRight(50, '-'));
 
-        using var connection = new ClickHouseConnection("Host=localhost;");
+        using var connection = new ClickHouseConnection(ExampleConfig.HttpConnectionString);
         await connection.OpenAsync();
         connection.CustomSettings["allow_experimental_json_type"] = 1;
 
@@ -269,7 +269,7 @@ public static class JsonType
         Console.WriteLine("        - metadata.created: DateTime");
 
         // Insert data - hints ensure proper type handling
-        using var client = new ClickHouseClient("Host=localhost;set_allow_experimental_json_type=1;set_date_time_input_format=best_effort");
+        using var client = new ClickHouseClient($"{ExampleConfig.HttpConnectionString};set_allow_experimental_json_type=1;set_date_time_input_format=best_effort");
 
         var columns = new[] { "id", "data" };
         var rows = new[]

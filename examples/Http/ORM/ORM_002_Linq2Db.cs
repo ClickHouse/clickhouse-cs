@@ -16,7 +16,7 @@ public static class Linq2DbExample
     public static async Task Run()
     {
         // Connect using linq2db's DataConnection with ClickHouseDriver provider
-        var connectionString = "Host=localhost";
+        var connectionString = ExampleConfig.HttpConnectionString;
         var options = new DataOptions().UseClickHouse(connectionString, ClickHouseProvider.ClickHouseDriver);
 
         await using var db = new DataConnection(options);

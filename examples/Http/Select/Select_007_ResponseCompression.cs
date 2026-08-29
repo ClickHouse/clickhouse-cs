@@ -20,7 +20,7 @@ public static class ResponseCompression
         var tableName = "example_response_compression";
 
         // A default client. No custom HttpClient and no compression settings needed.
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         await client.ExecuteNonQueryAsync($@"
             CREATE TABLE IF NOT EXISTS {tableName}
@@ -83,7 +83,7 @@ public static class ResponseCompression
             // Example 3: overriding the codec client-wide. Brotli is decoded whenever it arrives but is
             // not advertised by default, so it is only used when a caller names it.
             Console.WriteLine("3. Choosing brotli client-wide:");
-            using (var brotliClient = new ClickHouseClient(new ClickHouseClientSettings("Host=localhost")
+            using (var brotliClient = new ClickHouseClient(new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
             {
                 AcceptEncoding = "br",
             }))
@@ -94,7 +94,7 @@ public static class ResponseCompression
 
             // The same thing through a connection string, for ORM users (Dapper, EF Core, linq2db)
             // who never touch ClickHouseClientSettings directly.
-            using (var csClient = new ClickHouseClient("Host=localhost;AcceptEncoding=br"))
+            using (var csClient = new ClickHouseClient($"{ExampleConfig.HttpConnectionString};AcceptEncoding=br"))
             {
                 var count = await csClient.ExecuteScalarAsync($"SELECT count() FROM {tableName}");
                 Console.WriteLine($"   Rows read with AcceptEncoding=br in the connection string: {count}\n");
