@@ -49,6 +49,8 @@ public static class TcpPoco
                 $"INSERT INTO {TableName} (id, full_name, signal_count, recorded_at) VALUES",
                 rows);
 
+            // POCO mapping is usually slower than block iteration: it allocates and fills one object per row.
+            // StreamAsync exposes borrowed column buffers and avoids those per-row object allocations.
             await foreach (Observation row in client.QueryAsync<Observation>(
                 $"SELECT id, full_name, signal_count, recorded_at, internal_notes " +
                 $"FROM {TableName} ORDER BY id"))

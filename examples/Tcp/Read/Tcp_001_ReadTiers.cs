@@ -35,21 +35,21 @@ public static class TcpReadTiers
                     new object[] { 3UL, "Singapore", 28.0 },
                 });
 
-            // Row reads need no model and expose the values in their wire representation.
+            // object[] rows need no model, but allocate an array per row and box value types.
             Console.WriteLine("QueryAsync: flexible object[] rows");
             await foreach (object[] row in client.QueryAsync(Sql))
             {
                 Console.WriteLine($"  {row[0]}: {row[1]}, {row[2]} °C");
             }
 
-            // POCO reads map column names to properties and convert compatible values.
+            // POCO reads map and convert by name, allocating one Reading object per row.
             Console.WriteLine("QueryAsync<T>: strongly typed objects");
             await foreach (Reading row in client.QueryAsync<Reading>(Sql))
             {
                 Console.WriteLine($"  {row.Id}: {row.City}, {row.Temperature} °C");
             }
 
-            // Block reads are best for column-oriented work and avoid materializing each row.
+            // Blocks expose borrowed column buffers without per-row materialization; prefer them for throughput.
             Console.WriteLine("StreamAsync: columnar blocks");
             await foreach (Block block in client.StreamAsync(Sql))
             {
