@@ -118,6 +118,14 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_009_ColumnarInsert.cs](Tcp/Write/Tcp_009_ColumnarInsert.cs) - The columnar insert tier: `ClickHouseTcpColumn.Create` per target column plus `InsertAsync`, matching by name so the order is free, a named subset with the server filling the rest, why no ClickHouse type is ever stated, `MaxRowsPerBlock`, and how it differs from `InsertRowsAsync`
 - [Tcp_010_CompositeWrites.cs](Tcp/Write/Tcp_010_CompositeWrites.cs) - Writing composites: the jagged and dense `Array(T)` shapes, re-inserting a column read out of a block with nothing rebuilt, the non-nullable-row rule, and `Map`, `Tuple`, `Nullable`, `LowCardinality`
 
+### Native Protocol: Data Types
+
+- [Tcp_011_ScalarTypes.cs](Tcp/Types/Tcp_011_ScalarTypes.cs) - The CLR type of every scalar: the integer widths including `Int256`/`UInt256`, `BFloat16`'s lost precision, why the declared precision and not the value decides between `decimal` and `ClickHouseTcpDecimal`, `String` against `FixedString(N)`, and enums as bare ordinals
+- [Tcp_012_DateTimeAndTimezones.cs](Tcp/Types/Tcp_012_DateTimeAndTimezones.cs) - `Date`, `Date32`, `DateTime`, `DateTime64(scale)`, `Time`, `Time64(scale)`: the stored count against the presented calendar value, where the presentation timezone comes from, what `DateTime.Kind` does on an insert, and why a parameter naming an instant needs a declared timezone
+- [Tcp_013_CompositeRead.cs](Tcp/Types/Tcp_013_CompositeRead.cs) - Reading composites through `IArrayColumn<T>`, `IMapColumn<K,V>`, `ITupleColumn`, `INestedColumn`, `INullableColumn<T>` and `ILowCardinalityColumn<T>`, how they nest, and the geo aliases — which surface as `ValueTuple` where the HTTP driver builds `System.Tuple`
+- [Tcp_014_VariantDynamicJson.cs](Tcp/Types/Tcp_014_VariantDynamicJson.cs) - `IVariantColumn` and `IDynamicColumn`: discriminators, local indices, the two different NULL markers, and typed dispatch without boxing — then `JSON`, which travels as text and comes back normalized, so what you write is not what you read
+- [Tcp_015_QBitVectorSearch.cs](Tcp/Types/Tcp_015_QBitVectorSearch.cs) - `QBit(T, N)` and `IQBitColumn`: the transposed bit-plane layout, `GetPlane` and the bitmap byte order, rebuilding a vector from its top planes to match `L2DistanceTransposed`'s precision argument, and the padding a dimension that is not a multiple of 8 costs
+
 ## How to run
 
 ### Prerequisites

@@ -396,6 +396,31 @@ class Program
         await TcpCompositeWrites.Run();
         WaitForUser(isInteractive);
 
+        // Native Protocol: Data Types
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("NATIVE PROTOCOL: DATA TYPES");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(TcpScalarTypes)}");
+        await TcpScalarTypes.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpDateTimeAndTimezones)}");
+        await TcpDateTimeAndTimezones.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpCompositeRead)}");
+        await TcpCompositeRead.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpVariantDynamicJson)}");
+        await TcpVariantDynamicJson.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpQBitVectorSearch)}");
+        await TcpQBitVectorSearch.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ALL EXAMPLES COMPLETED SUCCESSFULLY!");
         Console.WriteLine(new string('=', 70));
