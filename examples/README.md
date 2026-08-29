@@ -113,6 +113,11 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_007_Parameters.cs](Tcp/Read/Tcp_007_Parameters.cs) - `ClickHouseTcpParameterCollection` and `ClickHouseTcpQueryOptions.Parameters`, plus the three traps: `{name:Type}` is required, an instant needs a declared timezone, and a parameter named after a server setting
 - [Tcp_008_Poco.cs](Tcp/Read/Tcp_008_Poco.cs) - `QueryAsync<T>` and `InsertRowsAsync<T>` over one class, the name-matching rules, `[ClickHouseTcpColumn]`, `[ClickHouseTcpNotMapped]`, and what a mapping mismatch reports
 
+### Native Protocol: Writing Data
+
+- [Tcp_009_ColumnarInsert.cs](Tcp/Write/Tcp_009_ColumnarInsert.cs) - The columnar insert tier: `ClickHouseTcpColumn.Create` per target column plus `InsertAsync`, matching by name so the order is free, a named subset with the server filling the rest, why no ClickHouse type is ever stated, `MaxRowsPerBlock`, and how it differs from `InsertRowsAsync`
+- [Tcp_010_CompositeWrites.cs](Tcp/Write/Tcp_010_CompositeWrites.cs) - Writing composites: the jagged and dense `Array(T)` shapes, re-inserting a column read out of a block with nothing rebuilt, the non-nullable-row rule, and `Map`, `Tuple`, `Nullable`, `LowCardinality`
+
 ## How to run
 
 ### Prerequisites
