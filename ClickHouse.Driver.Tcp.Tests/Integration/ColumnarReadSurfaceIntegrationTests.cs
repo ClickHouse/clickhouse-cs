@@ -913,4 +913,180 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(spans[1] - spans[0], Is.EqualTo(TimeSpan.FromSeconds(1)));
         });
     }
+
+    [Test]
+    public async Task StreamAsync_MixedComposites_TraversedThroughTheNonGenericViewsWithNoTypeArgument()
+    {
+        // Code that handles "whatever the server sent" cannot name a closed generic view: it would need one arm per
+        // CLR element type. Each generic view has a non-generic base carrying the untyped children and that view's
+        // own layout spans, so one arm per *shape* is enough, and the child is then matched on its own terms.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool nullableMatched = false;
+        bool arrayMatched = false;
+        bool mapMatched = false;
+        bool lowCardinalityMatched = false;
+        bool sameInnerInstance = false;
+        byte[] nullMap = null;
+        var offsets = Array.Empty<int>();
+        int innerElementCount = 0;
+        object firstElement = null;
+        var mapOffsets = Array.Empty<int>();
+        object firstKey = null;
+        object secondValue = null;
+        int reservedSlots = 0;
+        var keys = Array.Empty<int>();
+        object keyedValue = null;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT if(number = 1, NULL, toDateTime64('2024-06-15 14:00:00.125', 3, 'UTC') + number) AS ts, " +
+            "range(number + 1) AS ids, " +
+            "map('k', toUInt32(number)) AS attrs, " +
+            "CAST(concat('c', toString(number % 2)), 'LowCardinality(String)') AS bucket " +
+            "FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            if (block["ts"] is INullableColumn nullable)
+            {
+                nullableMatched = true;
+                nullMap = nullable.NullMap.ToArray();
+                sameInnerInstance = ReferenceEquals(nullable.Inner, ((INullableColumn<long>)nullable).Inner);
+            }
+
+            if (block["ids"] is IArrayColumn array)
+            {
+                arrayMatched = true;
+                offsets = array.Offsets.ToArray();
+                innerElementCount = array.Inner.RowCount;
+                firstElement = array.Inner.GetValue(0);
+            }
+
+            if (block["attrs"] is IMapColumn map)
+            {
+                mapMatched = true;
+                mapOffsets = map.Offsets.ToArray();
+                firstKey = map.KeyColumn.GetValue(0);
+                secondValue = map.ValueColumn.GetValue(1);
+            }
+
+            if (block["bucket"] is ILowCardinalityColumn lowCardinality)
+            {
+                lowCardinalityMatched = true;
+                reservedSlots = lowCardinality.ReservedSlotCount;
+                keys = lowCardinality.Keys.ToArray();
+                keyedValue = lowCardinality.Dictionary.GetValue(keys[2]);
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(nullableMatched, Is.True);
+            Assert.That(nullMap, Is.EqualTo(new byte[] { 0, 1, 0 }));
+            Assert.That(sameInnerInstance, Is.True, "the untyped Inner forwards to the typed one, it does not wrap it");
+
+            Assert.That(arrayMatched, Is.True);
+            Assert.That(offsets, Is.EqualTo(new[] { 0, 1, 3, 6 }), "range(n + 1) gives rows of 1, 2 and 3 elements");
+            Assert.That(innerElementCount, Is.EqualTo(6), "the inner column is flat: one entry per element of every row");
+            Assert.That(firstElement, Is.EqualTo(0UL));
+
+            Assert.That(mapMatched, Is.True);
+            Assert.That(mapOffsets, Is.EqualTo(new[] { 0, 1, 2, 3 }), "one entry per row");
+            Assert.That(firstKey, Is.EqualTo("k"));
+            Assert.That(secondValue, Is.EqualTo(1U));
+
+            Assert.That(lowCardinalityMatched, Is.True);
+            Assert.That(reservedSlots, Is.EqualTo(1), "a non-nullable inner reserves slot 0 for its default");
+            Assert.That(keys, Has.Length.EqualTo(3));
+            Assert.That(keyedValue, Is.EqualTo("c0"), "row 2 repeats row 0's value, so it repeats its key");
+            Assert.That(keys[2], Is.EqualTo(keys[0]));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_NullableTemporalColumn_ReachesTheCalendarReadingThroughItsInnerColumn()
+    {
+        // The wrapper deliberately does not implement IDateTimeColumn: those accessors return a value for every
+        // row, and a null row has none. The dense inner column does implement it, so the calendar reading is one
+        // level down — and reaching it through the non-generic view needs no knowledge of the storage width
+        // (uint for DateTime, long for DateTime64, int for Time), which is what IDateTimeColumn exists to hide.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool wrapperIsTemporal = false;
+        bool innerIsTemporal = false;
+        int scale = -1;
+        string timeZone = null;
+        var readings = new DateTimeOffset?[3];
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT if(number = 1, NULL, toDateTime64('2024-06-15 14:00:00.125', 3, 'UTC') + number) AS ts " +
+            "FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            IColumn column = block["ts"];
+            wrapperIsTemporal = column is IDateTimeColumn;
+
+            var nullable = (INullableColumn)column;
+            if (nullable.Inner is IDateTimeColumn timestamps)
+            {
+                innerIsTemporal = true;
+                scale = timestamps.Scale;
+                timeZone = timestamps.TimeZone.Id;
+                for (int row = 0; row < nullable.RowCount; row++)
+                {
+                    readings[row] = nullable.NullMap[row] != 0 ? null : timestamps.GetDateTimeOffset(row);
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wrapperIsTemporal, Is.False, "a null row has no calendar reading, so the wrapper offers none");
+            Assert.That(innerIsTemporal, Is.True);
+            Assert.That(scale, Is.EqualTo(3));
+            Assert.That(timeZone, Is.EqualTo("UTC"));
+            Assert.That(readings[1], Is.Null);
+            Assert.That(
+                readings[0]?.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture),
+                Is.EqualTo("2024-06-15 14:00:00.125"));
+            Assert.That(readings[2] - readings[0], Is.EqualTo(TimeSpan.FromSeconds(2)));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_ViewMatchedWithTheWrongTypeArgument_NeverMatchesWhileTheNonGenericViewDoes()
+    {
+        // The trap the non-generic bases exist to avoid. A generic view is parameterized by the *inner* element
+        // type, so the nullable spelling (or any other wrong argument) compiles with no warning, is never true, and
+        // sends the caller down whatever its else branch does — correct answers at the boxed price, silently.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool wrongNullableArgument = true;
+        bool rightNullableArgument = false;
+        bool untypedNullable = false;
+        bool wrongArrayArgument = true;
+        bool untypedArray = false;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT CAST(number, 'Nullable(Int64)') AS n, range(number) AS ids FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            IColumn nullable = block["n"];
+            wrongNullableArgument = nullable is INullableColumn<long?>;
+            rightNullableArgument = nullable is INullableColumn<long>;
+            untypedNullable = nullable is INullableColumn;
+
+            IColumn array = block["ids"];
+            wrongArrayArgument = array is IArrayColumn<string>;
+            untypedArray = array is IArrayColumn;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wrongNullableArgument, Is.False, "the type argument is the inner type, not the nullable one");
+            Assert.That(rightNullableArgument, Is.True);
+            Assert.That(untypedNullable, Is.True, "the non-generic view cannot be got wrong");
+            Assert.That(wrongArrayArgument, Is.False);
+            Assert.That(untypedArray, Is.True);
+        });
+    }
 }

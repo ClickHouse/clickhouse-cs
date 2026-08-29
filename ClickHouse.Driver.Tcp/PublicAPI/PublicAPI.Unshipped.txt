@@ -295,10 +295,12 @@ ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionPatch.get -> int
 ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionPatch.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpTransportException
 ClickHouse.Driver.Tcp.ClickHouseTcpTransportException.ClickHouseTcpTransportException(string message, System.Exception innerException) -> void
+ClickHouse.Driver.Tcp.IArrayColumn
+ClickHouse.Driver.Tcp.IArrayColumn.Inner.get -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.IArrayColumn.Offsets.get -> System.ReadOnlySpan<int>
 ClickHouse.Driver.Tcp.IArrayColumn<TElement>
 ClickHouse.Driver.Tcp.IArrayColumn<TElement>.Inner.get -> ClickHouse.Driver.Tcp.IColumn<TElement>
 ClickHouse.Driver.Tcp.IArrayColumn<TElement>.InnerValues.get -> System.ReadOnlySpan<TElement>
-ClickHouse.Driver.Tcp.IArrayColumn<TElement>.Offsets.get -> System.ReadOnlySpan<int>
 ClickHouse.Driver.Tcp.IColumn
 ClickHouse.Driver.Tcp.IColumn.ElementType.get -> System.Type
 ClickHouse.Driver.Tcp.IColumn.GetValue(int row) -> object
@@ -319,13 +321,18 @@ ClickHouse.Driver.Tcp.IDynamicColumn.GetTypeColumn(int discriminator) -> ClickHo
 ClickHouse.Driver.Tcp.IDynamicColumn.LocalIndices.get -> System.ReadOnlySpan<int>
 ClickHouse.Driver.Tcp.IDynamicColumn.TypeCount.get -> int
 ClickHouse.Driver.Tcp.IDynamicColumn.TypeNames.get -> System.Collections.Generic.IReadOnlyList<string>
+ClickHouse.Driver.Tcp.ILowCardinalityColumn
+ClickHouse.Driver.Tcp.ILowCardinalityColumn.Dictionary.get -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.ILowCardinalityColumn.Keys.get -> System.ReadOnlySpan<int>
+ClickHouse.Driver.Tcp.ILowCardinalityColumn.ReservedSlotCount.get -> int
 ClickHouse.Driver.Tcp.ILowCardinalityColumn<T>
 ClickHouse.Driver.Tcp.ILowCardinalityColumn<T>.Dictionary.get -> ClickHouse.Driver.Tcp.IColumn<T>
-ClickHouse.Driver.Tcp.ILowCardinalityColumn<T>.Keys.get -> System.ReadOnlySpan<int>
-ClickHouse.Driver.Tcp.ILowCardinalityColumn<T>.ReservedSlotCount.get -> int
+ClickHouse.Driver.Tcp.IMapColumn
+ClickHouse.Driver.Tcp.IMapColumn.KeyColumn.get -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.IMapColumn.Offsets.get -> System.ReadOnlySpan<int>
+ClickHouse.Driver.Tcp.IMapColumn.ValueColumn.get -> ClickHouse.Driver.Tcp.IColumn
 ClickHouse.Driver.Tcp.IMapColumn<TKey, TValue>
 ClickHouse.Driver.Tcp.IMapColumn<TKey, TValue>.KeyColumn.get -> ClickHouse.Driver.Tcp.IColumn<TKey>
-ClickHouse.Driver.Tcp.IMapColumn<TKey, TValue>.Offsets.get -> System.ReadOnlySpan<int>
 ClickHouse.Driver.Tcp.IMapColumn<TKey, TValue>.ValueColumn.get -> ClickHouse.Driver.Tcp.IColumn<TValue>
 ClickHouse.Driver.Tcp.INestedColumn
 ClickHouse.Driver.Tcp.INestedColumn.FieldCount.get -> int
@@ -341,9 +348,11 @@ ClickHouse.Driver.Tcp.Int256.Int256(ulong e0, ulong e1, ulong e2, ulong e3) -> v
 ClickHouse.Driver.Tcp.Int256.IsNegative.get -> bool
 ClickHouse.Driver.Tcp.Int256.ToBigInteger() -> System.Numerics.BigInteger
 ClickHouse.Driver.Tcp.Int256.WriteLittleEndian(System.Span<byte> destination) -> void
+ClickHouse.Driver.Tcp.INullableColumn
+ClickHouse.Driver.Tcp.INullableColumn.Inner.get -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.INullableColumn.NullMap.get -> System.ReadOnlySpan<byte>
 ClickHouse.Driver.Tcp.INullableColumn<T>
 ClickHouse.Driver.Tcp.INullableColumn<T>.Inner.get -> ClickHouse.Driver.Tcp.IColumn<T>
-ClickHouse.Driver.Tcp.INullableColumn<T>.NullMap.get -> System.ReadOnlySpan<byte>
 ClickHouse.Driver.Tcp.IQBitColumn
 ClickHouse.Driver.Tcp.IQBitColumn.BitWidth.get -> int
 ClickHouse.Driver.Tcp.IQBitColumn.BytesPerRow.get -> int
