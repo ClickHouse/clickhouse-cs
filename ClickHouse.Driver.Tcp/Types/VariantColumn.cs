@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
@@ -32,6 +33,7 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
     private readonly int[] localIndex;
     private byte[] discriminators;
     private object[] cache;
+    private string[] typeNames;
 
     // When non-null, overrides ownsColumns per type column: Dispose disposes type column i only when
     // columnOwnership[i] is true. Set once by RestrictOwnership immediately after construction so a densified
@@ -114,6 +116,11 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
 
     /// <inheritdoc/>
     public int TypeCount => typeColumns.Length;
+
+    /// <inheritdoc/>
+    // Read off the children rather than carried separately: each was stamped with its own codec's type name when it
+    // was decoded, so this cannot disagree with GetTypeColumn(i).TypeName. Built on first use, like Values.
+    public IReadOnlyList<string> TypeNames => typeNames ??= Array.ConvertAll(typeColumns, column => column.TypeName);
 
     /// <inheritdoc/>
     public ReadOnlySpan<byte> Discriminators => discriminators.AsSpan(0, rowCount);
