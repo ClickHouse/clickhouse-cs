@@ -739,6 +739,51 @@ public class ColumnReadProjectionTests
         });
     }
 
+    /// <summary>
+    /// The projected view materializes its values into an array of its own on the first <c>Values</c>, so the two
+    /// access paths have to agree, and a row past the end has to fail either way round.
+    /// </summary>
+    [Test]
+    public void ReadAs_ProjectedView_AgreesBetweenTheIndexerAndValuesAndBoundsBothWays()
+    {
+        var ordinals = new ArrayColumn<sbyte>("state", "Enum8('a' = 1, 'b' = 2)", new sbyte[] { 1, 2 });
+
+        IColumn<string> beforeValues = ReadAs<string>(ordinals);
+        IColumn<string> afterValues = ReadAs<string>(ordinals);
+        _ = afterValues.Values;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(beforeValues[1], Is.EqualTo("b"), "read per row, nothing materialized");
+            Assert.That(afterValues[1], Is.EqualTo("b"), "read out of the materialized array");
+            Assert.That(beforeValues.Values.ToArray(), Is.EqualTo(new[] { "a", "b" }));
+            Assert.That(beforeValues.RowCount, Is.EqualTo(2));
+            Assert.Throws<IndexOutOfRangeException>(() => _ = beforeValues[2]);
+            Assert.Throws<IndexOutOfRangeException>(() => _ = afterValues[2]);
+        });
+    }
+
+    /// <summary>
+    /// A column built by a caller for an insert carries no type string, so there is nothing to resolve a reading
+    /// from. Not reachable through a <see cref="Block"/>, whose columns all come off a header.
+    /// </summary>
+    [Test]
+    public void ReadAs_ColumnWithNoTypeString_SaysSoRatherThanFailingToParseIt()
+    {
+        IColumn<int> built = ClickHouseTcpColumn.Create("v", new[] { 1, 2 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReadAs<int>(built), Is.SameAs(built), "the requested type is the column's own, so nothing is resolved");
+
+            var thrown = Assert.Throws<InvalidCastException>(() => ReadAs<long>(built));
+            Assert.That(thrown.Message, Does.Contain("carries no ClickHouse type").And.Contain("System.Int32"));
+        });
+    }
+
+    private static IColumn<T> ReadAs<T>(IColumn column)
+        => ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, new ResolveContext { ServerTimezone = "UTC" });
+
     private sealed class EvaluationCounter
     {
         public int Count { get; private set; }
