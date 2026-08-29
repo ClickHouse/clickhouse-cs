@@ -644,6 +644,8 @@ public class ColumnarReadSurfaceIntegrationTests
         bool matched = false;
         int typeCount = 0;
         int rowCount = 0;
+        string[] typeNames = null;
+        string[] childTypeNames = null;
         byte[] discriminators = null;
         int discriminatorLength = 0;
         int[] localIndices = null;
@@ -670,6 +672,8 @@ public class ColumnarReadSurfaceIntegrationTests
             var variant = (IVariantColumn)column;
             typeCount = variant.TypeCount;
             rowCount = variant.RowCount;
+            typeNames = variant.TypeNames.ToArray();
+            childTypeNames = Enumerable.Range(0, variant.TypeCount).Select(i => variant.GetTypeColumn(i).TypeName).ToArray();
             discriminators = variant.Discriminators.ToArray();
             discriminatorLength = variant.Discriminators.Length;
             localIndices = variant.LocalIndices.ToArray();
@@ -704,6 +708,8 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(rowCount, Is.EqualTo(5));
             Assert.That(discriminatorLength, Is.EqualTo(rowCount), "sliced to the row count, not the pooled buffer length");
             Assert.That(discriminators, Is.EqualTo(new byte[] { 1, 0, IVariantColumn.NullDiscriminator, 1, 0 }), "0 = String, 1 = UInt64, 255 = NULL");
+            Assert.That(typeNames, Is.EqualTo(new[] { "String", "UInt64" }), "which is what TypeNames reports, in discriminator order");
+            Assert.That(typeNames, Is.EqualTo(childTypeNames), "and it agrees with each child's own type string");
             Assert.That(localIndices, Is.EqualTo(new[] { 0, 0, -1, 1, 1 }), "per-type running position; a NULL row addresses no child, so -1");
             Assert.That(stringChild, Is.EqualTo(new[] { "a", "b" }), "each child holds only its own rows, contiguously");
             Assert.That(intChild, Is.EqualTo(new ulong[] { 100, 400 }));
