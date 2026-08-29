@@ -114,7 +114,8 @@ public static class TcpBasicUsage
         Console.WriteLine("  StreamAsync     whole Blocks, typed columns, no per-row boxing");
         Console.WriteLine();
         Console.WriteLine("The row tier boxes the value the wire carried, which is not always the CLR type the column");
-        Console.WriteLine("name suggests: a DateTime column arrives as uint epoch seconds. Read date and time columns");
-        Console.WriteLine("through QueryAsync<T> into a DateTime or DateTimeOffset property.");
+        Console.WriteLine("name suggests: a DateTime column arrives as uint epoch seconds. For a calendar value, read");
+        Console.WriteLine("it through QueryAsync<T> into a DateTime or DateTimeOffset property, or on the block tier");
+        Console.WriteLine("match the column to IDateTimeColumn (ITimeColumn for Time) and call GetDateTimeOffset.");
     }
 }
