@@ -94,6 +94,11 @@ public sealed class InsertRoundTripCase
 
         yield return Strings("String", string.Empty, "hello", "héllo✓", "a\0b", new string('x', 500));
 
+        // A String is a byte string, so a byte[] per row is the other write shape; it reads back as the text those
+        // bytes spell. The non-UTF-8 case is in StringBytesIntegrationTests, where the point is that it survives.
+        yield return StringBytes(new[] { new byte[] { 0x61 }, Array.Empty<byte>(), new byte[] { 0x62, 0x63 } }, "a", string.Empty, "bc");
+        yield return NullableStringBytes(new[] { new byte[] { 0x61 }, null, Array.Empty<byte>() }, "a", null, string.Empty);
+
         // FixedString(N): N contiguous bytes per row, surfaced as a per-row byte[] of exactly N bytes. The bytes
         // are byte-oriented, so embedded NULs and non-UTF-8 bytes ride along unchanged. A wider N crosses the
         // stride past a single row so a mis-strided blit could not pass unnoticed.
@@ -1659,6 +1664,24 @@ public sealed class InsertRoundTripCase
 
     private static InsertRoundTripCase NullableStrings(params string[] values)
         => Same($"Nullable(String) [{values.Length} rows]", "Nullable(String)", name => new ArrayColumn<string>(name, "Nullable(String)", values));
+
+    // Written from the bytes, read back as the text they spell.
+    private static InsertRoundTripCase StringBytes(byte[][] rows, params string[] expected)
+        => new(
+            $"String from bytes [{rows.Length} rows]",
+            "String",
+            name => new ArrayColumn<byte[]>(name, "String", rows),
+            name => new ArrayColumn<string>(name, "String", expected),
+            settings: null);
+
+    // As above, and a null row is a NULL rather than a rejected value, because the wrapper carries the nulls.
+    private static InsertRoundTripCase NullableStringBytes(byte[][] rows, params string[] expected)
+        => new(
+            $"Nullable(String) from bytes [{rows.Length} rows]",
+            "Nullable(String)",
+            name => new ArrayColumn<byte[]>(name, "Nullable(String)", rows),
+            name => new ArrayColumn<string>(name, "Nullable(String)", expected),
+            settings: null);
 
     // JSON is inserted and read back as its compact text, so the column is an ArrayColumn<string> like String's.
     // Values must already be canonical for insert to equal read-back; see the normalization case.
