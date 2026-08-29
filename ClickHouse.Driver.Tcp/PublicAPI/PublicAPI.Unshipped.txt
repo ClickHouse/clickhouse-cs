@@ -313,6 +313,7 @@ ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionMinor.get -> int
 ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionMinor.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionPatch.get -> int
 ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionPatch.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpTypes
 ClickHouse.Driver.Tcp.ClickHouseTcpTransportException
 ClickHouse.Driver.Tcp.ClickHouseTcpTransportException.ClickHouseTcpTransportException(string message, System.Exception innerException) -> void
 ClickHouse.Driver.Tcp.IArrayColumn
@@ -481,6 +482,8 @@ static ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.operator !=(ClickHouse.Dr
 static ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions right) -> bool
 static ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo left, ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo right) -> bool
 static ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo left, ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpTypes.CanRead(string clickHouseType, System.Type elementType) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpTypes.CanWrite(string clickHouseType, System.Type elementType) -> bool
 static ClickHouse.Driver.Tcp.Int256.FromBigInteger(System.Numerics.BigInteger value) -> ClickHouse.Driver.Tcp.Int256
 static ClickHouse.Driver.Tcp.Int256.operator !=(ClickHouse.Driver.Tcp.Int256 left, ClickHouse.Driver.Tcp.Int256 right) -> bool
 static ClickHouse.Driver.Tcp.Int256.operator <(ClickHouse.Driver.Tcp.Int256 left, ClickHouse.Driver.Tcp.Int256 right) -> bool
