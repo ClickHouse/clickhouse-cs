@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using ClickHouse.Driver.Tcp.Types;
 
@@ -63,5 +64,76 @@ public static class ClickHouseTcpColumn
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(values);
         return Create(name, values as T[] ?? values.ToArray());
+    }
+
+    /// <summary>
+    /// Builds an <c>Array(T)</c> column in the layout the wire uses: every row's elements concatenated end-to-end
+    /// in one column, plus the per-row offsets into it. This is the shape a read produces (see
+    /// <see cref="IArrayColumn"/>), and the shape the insert writes with no rebuilding — the alternative,
+    /// <c>Create</c> with a <typeparamref name="TElement"/><c>[]</c> per row, costs an array per row and a copy of
+    /// every element.
+    ///
+    /// <para>
+    /// Row <c>i</c> holds the elements of <paramref name="inner"/> from <c>offsets[i]</c> (inclusive) to
+    /// <c>offsets[i + 1]</c> (exclusive), so <paramref name="offsets"/> starts at <c>0</c>, never decreases, ends
+    /// at <paramref name="inner"/>'s row count, and has one more entry than the column has rows. An empty row is
+    /// two equal offsets. Both the inner column and the offsets array are taken over as is, not copied: do not
+    /// modify them until the insert has completed, and note that disposing the column disposes
+    /// <paramref name="inner"/>.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="TElement">The CLR type of one element (not of one row).</typeparam>
+    /// <param name="name">The target column's name.</param>
+    /// <param name="inner">The flat elements of every row, in row order.</param>
+    /// <param name="offsets">The per-row offsets into <paramref name="inner"/>.</param>
+    /// <returns>A column ready to insert.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="offsets"/> is empty, does not start at 0, decreases, or does not end at <paramref name="inner"/>'s row count.</exception>
+    public static IArrayColumn<TElement> CreateArray<TElement>(string name, IColumn<TElement> inner, int[] offsets)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(inner);
+        ArgumentNullException.ThrowIfNull(offsets);
+        ValidateOffsets(offsets, inner.RowCount, name);
+
+        return new ArrayValueColumn<TElement>(name, typeName: null, inner, offsets, offsets.Length - 1, pooledOffsets: false);
+    }
+
+    // Checked here rather than at the first read: a caller's offsets decide which elements each row claims, so a
+    // bad one either reads past the elements or silently sends the server different rows than the caller built.
+    private static void ValidateOffsets(int[] offsets, int elementCount, string name)
+    {
+        if (offsets.Length == 0)
+        {
+            throw new ArgumentException(
+                $"The offsets for column '{name}' are empty; they need one entry per row plus the leading 0.",
+                nameof(offsets));
+        }
+
+        if (offsets[0] != 0)
+        {
+            throw new ArgumentException(
+                $"The offsets for column '{name}' start at {offsets[0].ToString(CultureInfo.InvariantCulture)}; the first entry is the start of row 0 and must be 0.",
+                nameof(offsets));
+        }
+
+        for (int i = 1; i < offsets.Length; i++)
+        {
+            if (offsets[i] < offsets[i - 1])
+            {
+                throw new ArgumentException(
+                    $"The offsets for column '{name}' go backwards at row {(i - 1).ToString(CultureInfo.InvariantCulture)} " +
+                    $"({offsets[i].ToString(CultureInfo.InvariantCulture)} after {offsets[i - 1].ToString(CultureInfo.InvariantCulture)}); each row ends at or after the one before it.",
+                    nameof(offsets));
+            }
+        }
+
+        int end = offsets[offsets.Length - 1];
+        if (end != elementCount)
+        {
+            throw new ArgumentException(
+                $"The offsets for column '{name}' end at {end.ToString(CultureInfo.InvariantCulture)}, but the inner column holds {elementCount.ToString(CultureInfo.InvariantCulture)} elements; the last offset is the total element count.",
+                nameof(offsets));
+        }
     }
 }

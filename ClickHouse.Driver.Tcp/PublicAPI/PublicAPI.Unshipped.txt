@@ -438,6 +438,7 @@ static ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.operator !=(ClickHouse.D
 static ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions right) -> bool
 static ClickHouse.Driver.Tcp.ClickHouseTcpColumn.Create<T>(string name, System.Collections.Generic.IEnumerable<T> values) -> ClickHouse.Driver.Tcp.IColumn<T>
 static ClickHouse.Driver.Tcp.ClickHouseTcpColumn.Create<T>(string name, T[] values) -> ClickHouse.Driver.Tcp.IColumn<T>
+static ClickHouse.Driver.Tcp.ClickHouseTcpColumn.CreateArray<TElement>(string name, ClickHouse.Driver.Tcp.IColumn<TElement> inner, int[] offsets) -> ClickHouse.Driver.Tcp.IArrayColumn<TElement>
 static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.explicit operator ClickHouse.Driver.Tcp.ClickHouseTcpDecimal(decimal value) -> ClickHouse.Driver.Tcp.ClickHouseTcpDecimal
 static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.explicit operator decimal(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal value) -> decimal
 static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.FromDecimal(decimal value) -> ClickHouse.Driver.Tcp.ClickHouseTcpDecimal

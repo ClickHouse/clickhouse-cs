@@ -306,6 +306,10 @@ public sealed class InsertRoundTripCase
         yield return Arrays<long>("DateTime64(3)", new[] { 0L, 1_700_000_000_123L });
         yield return Arrays<long>("DateTime64(9)", new[] { 1_700_000_000_123_456_789L }, Array.Empty<long>());
 
+        // The dense shape built by a caller rather than received from a read: flat elements plus per-row offsets,
+        // which is what the codec writes with no rebuilding. Same rows as the jagged Array(UInt32) case above.
+        yield return DenseArrays("UInt32", new uint[] { 10, 20, 30, 40, 50 }, new[] { 0, 3, 3, 5 });
+
         yield return Arrays("UUID", new[] { Guid.Empty }, new[] { new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff") });
         yield return Arrays<IPAddress>("IPv4", new[] { IPAddress.Parse("0.0.0.0"), IPAddress.Parse("255.255.255.255") }, Array.Empty<IPAddress>());
         yield return Arrays<IPAddress>("IPv6", new[] { IPAddress.Parse("::1"), IPAddress.Parse("2001:db8::1") });
@@ -1598,6 +1602,24 @@ public sealed class InsertRoundTripCase
     {
         string type = $"Array({innerType})";
         return Same($"{type} [{rows.Length} rows]", type, name => new ArrayColumn<T[]>(name, type, rows), settings);
+    }
+
+    // Inserted from the dense shape (flat elements + offsets), read back as the rows those offsets describe.
+    private static InsertRoundTripCase DenseArrays<T>(string innerType, T[] elements, int[] offsets)
+    {
+        string type = $"Array({innerType})";
+        var rows = new T[offsets.Length - 1][];
+        for (int row = 0; row < rows.Length; row++)
+        {
+            rows[row] = elements[offsets[row]..offsets[row + 1]];
+        }
+
+        return new InsertRoundTripCase(
+            $"{type} dense [{rows.Length} rows]",
+            type,
+            name => ClickHouseTcpColumn.CreateArray(name, ClickHouseTcpColumn.Create(name, elements), offsets),
+            name => new ArrayColumn<T[]>(name, type, rows),
+            settings: null);
     }
 
     private static InsertRoundTripCase NullableValues<T>(string innerType, params T?[] values)
