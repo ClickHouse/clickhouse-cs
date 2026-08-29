@@ -459,6 +459,7 @@ virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.PrintMembers(System.Text
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ClickHouseTcpClient(ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions options) -> void
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ClickHouseTcpClient(string connectionString) -> void
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.Dispose() -> void
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.DisposeAsync() -> System.Threading.Tasks.ValueTask
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ExecuteAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ExecuteScalarAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<object>
@@ -496,3 +497,8 @@ virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.PrintMembers(System.Text
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.StreamAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<ClickHouse.Driver.Tcp.Block>
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpSession
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpSession.IsOpen.get -> bool
+[CHTCP0001]Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions
+[CHTCP0001]static Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions.AddClickHouseTcpDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions options, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
+[CHTCP0001]static Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions.AddClickHouseTcpDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, string connectionString, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
+[CHTCP0001]static Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions.AddClickHouseTcpDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Func<System.IServiceProvider, ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions> optionsFactory, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
+[CHTCP0001]static Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions.AddClickHouseTcpDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Func<System.IServiceProvider, object, ClickHouse.Driver.Tcp.ClickHouseTcpDataSource> dataSourceFactory, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
