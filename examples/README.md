@@ -126,6 +126,13 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_014_VariantDynamicJson.cs](Tcp/Types/Tcp_014_VariantDynamicJson.cs) - `IVariantColumn` and `IDynamicColumn`: discriminators, local indices, the two different NULL markers, and typed dispatch without boxing — then `JSON`, which travels as text and comes back normalized, so what you write is not what you read
 - [Tcp_015_QBitVectorSearch.cs](Tcp/Types/Tcp_015_QBitVectorSearch.cs) - `QBit(T, N)` and `IQBitColumn`: the transposed bit-plane layout, `GetPlane` and the bitmap byte order, rebuilding a vector from its top planes to match `L2DistanceTransposed`'s precision argument, and the padding a dimension that is not a multiple of 8 costs
 
+### Native Protocol: Connections and Sessions
+
+- [Tcp_016_Sessions.cs](Tcp/Connection/Tcp_016_Sessions.cs) - `OpenSessionAsync`: one pinned connection, so a temporary table and a `SET` survive from one operation to the next, `IsOpen`, one operation at a time, disposal closing rather than pooling the connection, and `SET ROLE` as the native answer to HTTP's per-query `Roles`
+- [Tcp_017_PoolTuning.cs](Tcp/Connection/Tcp_017_PoolTuning.cs) - `MinPoolSize`, `MaxPoolSize`, `PoolTimeout`, `IdleTimeout`, `MaxConnectionLifetime`, `SweepInterval` and `PoolReusePolicy`, measured: concurrency actually capped, `PoolTimeout` expiring, the sweep retiring and topping up, `Lifo` against `Fifo`, and what a `ClickHouseTcpDataSource` shares
+- [Tcp_018_Tls.cs](Tcp/Connection/Tcp_018_Tls.cs) - `UseTls`, `TlsServerName`, `TlsCaCertificatePath` (which replaces the host trust store rather than adding to it), `TlsAllowInvalidCertificates`, `ConfigureTls`, the default port moving to 9440, and the TLS mistakes the constructor refuses before anything connects
+- [Tcp_019_Timeouts.cs](Tcp/Connection/Tcp_019_Timeouts.cs) - `DialTimeout`, `ReadTimeout` as an idle deadline rather than a time limit, `PoolTimeout`, `StatementMaxLength` in the log line, `MaxSendBufferBytes`, and where a `CancellationToken` takes over
+
 ## How to run
 
 ### Prerequisites
