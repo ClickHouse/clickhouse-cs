@@ -391,6 +391,7 @@ ClickHouse.Driver.Tcp.IVariantColumn.Discriminators.get -> System.ReadOnlySpan<b
 ClickHouse.Driver.Tcp.IVariantColumn.GetTypeColumn(int discriminator) -> ClickHouse.Driver.Tcp.IColumn
 ClickHouse.Driver.Tcp.IVariantColumn.LocalIndices.get -> System.ReadOnlySpan<int>
 ClickHouse.Driver.Tcp.IVariantColumn.TypeCount.get -> int
+ClickHouse.Driver.Tcp.IVariantColumn.TypeNames.get -> System.Collections.Generic.IReadOnlyList<string>
 ClickHouse.Driver.Tcp.UInt256
 ClickHouse.Driver.Tcp.UInt256.CompareTo(ClickHouse.Driver.Tcp.UInt256 other) -> int
 ClickHouse.Driver.Tcp.UInt256.Equals(ClickHouse.Driver.Tcp.UInt256 other) -> bool
