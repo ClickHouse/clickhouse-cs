@@ -362,6 +362,27 @@ class Program
         await TcpMigratingFromHttp.Run();
         WaitForUser(isInteractive);
 
+        // Native Protocol: Reading Data
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("NATIVE PROTOCOL: READING DATA");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(TcpReadTiers)}");
+        await TcpReadTiers.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpBlocksAndColumns)}");
+        await TcpBlocksAndColumns.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpParameters)}");
+        await TcpParameters.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpPoco)}");
+        await TcpPoco.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ALL EXAMPLES COMPLETED SUCCESSFULLY!");
         Console.WriteLine(new string('=', 70));
