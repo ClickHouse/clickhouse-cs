@@ -52,9 +52,11 @@ Reach for the HTTP client instead when you need:
   carries only `QueryId`, `Settings`, `Parameters` and `Callbacks`. Set the database on the client,
   and change roles with `SET ROLE` inside a session.
 
-Also worth knowing before you read a timestamp: a `DateTime`, `DateTime64` or `Time` column reaches
-the row and block tiers as the integer the wire carried, not as a calendar type. `QueryAsync<T>` into
-a POCO is the only tier that converts.
+Also worth knowing before you read a timestamp: a `DateTime`, `DateTime64`, `Time` or `Time64` column
+reaches the **row** tier as the integer the wire carried, not as a calendar type, because that is the
+value the server sent. `QueryAsync<T>` into a POCO converts, and on the block tier the column
+pattern-matches to `IDateTimeColumn` or `ITimeColumn`, which convert and report the timezone and
+scale the column type declared.
 
 ## What only the native client does
 
