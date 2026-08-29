@@ -70,3 +70,6 @@ scale the column type declared.
   `ClickHouseTcpQueryCallbacks`, rather than as headers after the fact.
 - **Block compression** on the wire, LZ4 by default.
 - **Bit-plane access to `QBit` columns**, through `IQBitColumn`.
+- **W3C trace context propagation.** The client sends the current `Activity`'s trace and span ids with
+  each query, so the spans the server records in `system.opentelemetry_span_log` join the same trace as
+  the caller's. The HTTP transport sends no `traceparent`.
