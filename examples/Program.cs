@@ -421,6 +421,27 @@ class Program
         await TcpQBitVectorSearch.Run();
         WaitForUser(isInteractive);
 
+        // Native Protocol: Connections and Sessions
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("NATIVE PROTOCOL: CONNECTIONS AND SESSIONS");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(TcpSessions)}");
+        await TcpSessions.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpPoolTuning)}");
+        await TcpPoolTuning.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpTls)}");
+        await TcpTls.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpTimeouts)}");
+        await TcpTimeouts.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ALL EXAMPLES COMPLETED SUCCESSFULLY!");
         Console.WriteLine(new string('=', 70));
