@@ -4,8 +4,8 @@ using System.Threading.Tasks;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
-// The point of the data source is ownership, and only a live pool can show it: a view that disposes itself
-// must leave the pool usable, and disposing the data source must not.
+// The point of the data source is ownership, and only a live pool can show it: the client it hands out is its
+// own, so whoever disposes that client closes the pool.
 [TestFixture]
 [Category("Integration")]
 public class ClickHouseTcpDataSourceIntegrationTests
@@ -24,21 +24,22 @@ public class ClickHouseTcpDataSourceIntegrationTests
     }
 
     [Test]
-    public async Task GetClient_DisposedByAConsumer_LeavesThePoolWorking()
+    public async Task GetClient_DisposedByAConsumer_ClosesThePoolForEverybody()
     {
-        // A scoped service that disposes what it was injected must not close a pool it does not own.
+        // The data source hands out the client it owns, so a consumer that disposes what it was injected closes
+        // the shared pool. Consumers must leave disposal to the data source.
         await using ClickHouseTcpDataSource source = CreateDataSource();
 
         IClickHouseTcpClient injected = source.GetClient();
         await injected.PingAsync(None);
         await injected.DisposeAsync();
 
-        object value = await source.GetClient().ExecuteScalarAsync("SELECT 1", cancellationToken: None);
-        Assert.That(value, Is.EqualTo((byte)1));
+        Assert.ThrowsAsync<ObjectDisposedException>(
+            async () => await source.GetClient().ExecuteScalarAsync("SELECT 1", cancellationToken: None));
     }
 
     [Test]
-    public async Task DisposeAsync_ClosesThePool_SoTheViewStopsWorking()
+    public async Task DisposeAsync_ClosesThePool_SoTheClientStopsWorking()
     {
         ClickHouseTcpDataSource source = CreateDataSource();
         IClickHouseTcpClient client = source.GetClient();

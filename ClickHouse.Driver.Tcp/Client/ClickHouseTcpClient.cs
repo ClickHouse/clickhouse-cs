@@ -47,7 +47,7 @@ namespace ClickHouse.Driver.Tcp;
 /// </para>
 /// </summary>
 [Experimental("CHTCP0001")]
-public sealed class ClickHouseTcpClient : IClickHouseTcpClient
+public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
 {
     // Reading and writing Dynamic requires the flattened native serialization; the client enables it on every
     // operation so callers never have to know about it. A caller-supplied value wins.
@@ -623,6 +623,14 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync() => source.DisposeAsync();
+
+    /// <summary>
+    /// Closes the pool, blocking until it is closed. Present so a container that tracks this client can dispose it
+    /// synchronously: <c>ServiceProvider.Dispose()</c> rejects a singleton offering only
+    /// <see cref="IAsyncDisposable"/>, and rejects it instead of disposing the rest of its list. Prefer
+    /// <see cref="DisposeAsync"/> wherever the call site can await.
+    /// </summary>
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     private IReadOnlyDictionary<string, string> BuildSettings(ClickHouseTcpQueryOptions options)
         => MergeSettings(Options.CustomSettings, options?.Settings);
