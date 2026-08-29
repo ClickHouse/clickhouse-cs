@@ -95,4 +95,69 @@ public class ClickHouseTcpColumnTests
             Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.Create<int>("id", (IEnumerable<int>)null));
         });
     }
+
+    [Test]
+    public void CreateArray_FlatElementsAndOffsets_PresentsTheRowsThoseOffsetsDescribe()
+    {
+        IArrayColumn<uint> column = ClickHouseTcpColumn.CreateArray(
+            "tags",
+            ClickHouseTcpColumn.Create("tags", new uint[] { 10, 20, 30 }),
+            new[] { 0, 2, 2, 3 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column.RowCount, Is.EqualTo(3), "one row per offset pair");
+            Assert.That(column.TypeName, Is.Null, "the insert takes the type from the target's schema");
+            Assert.That(column.ElementType, Is.EqualTo(typeof(uint[])));
+            Assert.That(column.Offsets.ToArray(), Is.EqualTo(new[] { 0, 2, 2, 3 }));
+            Assert.That(column.InnerValues.ToArray(), Is.EqualTo(new uint[] { 10, 20, 30 }));
+            Assert.That(column.GetValue(0), Is.EqualTo(new uint[] { 10, 20 }));
+            Assert.That(column.GetValue(1), Is.EqualTo(Array.Empty<uint>()), "two equal offsets are an empty row");
+            Assert.That(column.GetValue(2), Is.EqualTo(new uint[] { 30 }));
+        });
+    }
+
+    [Test]
+    public void CreateArray_OneLeadingOffsetAndNoElements_IsAZeroRowColumn()
+    {
+        IArrayColumn<uint> column = ClickHouseTcpColumn.CreateArray(
+            "tags",
+            ClickHouseTcpColumn.Create("tags", Array.Empty<uint>()),
+            new[] { 0 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column.RowCount, Is.EqualTo(0));
+            Assert.That(column.Offsets.ToArray(), Is.EqualTo(new[] { 0 }));
+        });
+    }
+
+    /// <summary>
+    /// The offsets decide which elements each row claims, so a wrong one either reads past the elements or sends
+    /// the server rows the caller did not build. Each message says which rule was broken.
+    /// </summary>
+    [Test]
+    public void CreateArray_OffsetsThatDoNotDescribeTheElements_AreRefusedWithTheRuleTheyBreak()
+    {
+        IColumn<uint> inner = ClickHouseTcpColumn.Create("tags", new uint[] { 10, 20, 30 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, Array.Empty<int>())).Message,
+                Does.Contain("are empty"));
+            Assert.That(
+                Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, new[] { 1, 3 })).Message,
+                Does.Contain("start at 1"));
+            Assert.That(
+                Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, new[] { 0, 2, 1, 3 })).Message,
+                Does.Contain("go backwards at row 1"));
+            Assert.That(
+                Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, new[] { 0, 2 })).Message,
+                Does.Contain("end at 2").And.Contain("holds 3 elements"));
+            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray<uint>("tags", null, new[] { 0 }));
+            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, null));
+            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray(null, inner, new[] { 0, 3 }));
+        });
+    }
 }
