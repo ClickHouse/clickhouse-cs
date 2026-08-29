@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
@@ -84,6 +85,40 @@ public class GeometryIntegrationTests
         {
             await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {table}");
         }
+    }
+
+    [Test]
+    public async Task QueryAsync_GeometryColumn_NamesItsAlternativesThroughTypeNames()
+    {
+        // Geometry is the case that leaves a caller with nothing to parse: the column header is the single word
+        // "Geometry", so the alternatives appear nowhere in the type string, and the discriminator order is the
+        // server's name-sorted one rather than any order a caller declared. TypeNames is the whole answer.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        string headerType = null;
+        string[] typeNames = null;
+        string selectedAlternative = null;
+
+        // Through Point: the server casts to Geometry only from one of the alternatives, not from a bare tuple.
+        await foreach (Block block in connection.QueryAsync("SELECT CAST(CAST((1.5, -2.5), 'Point'), 'Geometry')", cancellationToken: None))
+        {
+            IColumn column = block[0];
+            headerType = column.TypeName;
+
+            var geometry = (IVariantColumn)column;
+            typeNames = geometry.TypeNames.ToArray();
+            selectedAlternative = geometry.TypeNames[geometry.Discriminators[0]];
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(headerType, Is.EqualTo("Geometry"), "the header names the alias, not its alternatives");
+            Assert.That(
+                typeNames,
+                Is.EqualTo(new[] { "LineString", "MultiLineString", "MultiPolygon", "Point", "Polygon", "Ring" }),
+                "the server's canonical name-sorted order, which is the discriminator order");
+            Assert.That(selectedAlternative, Is.EqualTo("Point"), "a coordinate pair selects the Point alternative");
+        });
     }
 
     // A one-row column of the shape the named geo alias surfaces as.
