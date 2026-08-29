@@ -42,6 +42,7 @@ public static class TcpParameters
 
     private static async Task Seed(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName}
             (
@@ -275,8 +276,9 @@ public static class TcpParameters
 
         // A client of its own for the query that is meant to fail. The server rejects this one while it is still
         // reading the settings list, and then closes the socket, so the connection it was on is dead even though
-        // the client saw an ordinary server error. Disposing this client throws that connection away with it;
-        // running the query on the shared client would leave a dead connection in its pool.
+        // the client saw an ordinary server error. The pool checks a connection for a closed socket both on
+        // return and on checkout, so it usually discards this one; a close notice that arrives after both checks
+        // can still be handed out. Disposing a throwaway client keeps that race out of the shared pool.
         await using (ClickHouseTcpClient throwaway = ExampleConfig.CreateTcpClient())
         {
             try

@@ -27,6 +27,9 @@ public static class TcpQBitVectorSearch
     private const string TableName = "example_tcp_qbit";
     private const string WideTable = "example_tcp_qbit_wide";
 
+    // QBit arrived in 25.10 with limitations, so the driver's own suites gate it at 25.11 and so does this.
+    private static readonly Version QBitFrom = new(25, 11);
+
     // Int8 elements and the strided QBit(T, N, stride) form both need a newer server.
     private static readonly Version StridedAndInt8From = new(26, 7);
 
@@ -44,6 +47,13 @@ public static class TcpQBitVectorSearch
     {
         await using var client = ExampleConfig.CreateTcpClient();
         ClickHouseTcpServerInfo server = await client.GetServerInfoAsync();
+
+        if (server.Version < QBitFrom)
+        {
+            Console.WriteLine($"QBit needs ClickHouse {QBitFrom} or newer, and this server is {server.Version}.");
+            Console.WriteLine("Nothing here runs on it: the CREATE TABLE is the first thing that would fail.");
+            return;
+        }
 
         try
         {
@@ -65,6 +75,7 @@ public static class TcpQBitVectorSearch
 
     private static async Task Seed(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName} (word String, vec QBit(Float32, 5))
             ENGINE = MergeTree() ORDER BY word");
@@ -112,8 +123,6 @@ public static class TcpQBitVectorSearch
                 Console.WriteLine("     BitWidth is the width of the STORED element, not of the CLR one: a");
                 Console.WriteLine("     QBit(BFloat16, N) has 16 planes and still reads as float[]. Section 5.");
             }
-
-            break;
         }
     }
 
@@ -195,8 +204,6 @@ public static class TcpQBitVectorSearch
                     }
                 }
             }
-
-            break;
         }
     }
 
@@ -208,6 +215,7 @@ public static class TcpQBitVectorSearch
         Console.WriteLine("   big-endian encoding of a BytesPerRow-byte integer whose bit i is element i. That is");
         Console.WriteLine("   invisible at 5 elements and not at 12:\n");
 
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {WideTable}");
         await client.ExecuteAsync($@"
             CREATE TABLE {WideTable} (v QBit(Float32, 12))
             ENGINE = MergeTree() ORDER BY tuple()");
@@ -238,8 +246,6 @@ public static class TcpQBitVectorSearch
                 Console.WriteLine();
                 Console.WriteLine($"     With Stride not a multiple of 8, the {(wide.BytesPerRow * 8) - wide.Dimension} unused bits are the high bits of byte 0.");
             }
-
-            break;
         }
     }
 
@@ -279,8 +285,6 @@ public static class TcpQBitVectorSearch
                 Console.WriteLine($"   The top row is exact, and equals what the IColumn<float[]> view hands back:");
                 Console.WriteLine($"     [{string.Join(", ", materialized.Select(value => value.ToString("0.####", CultureInfo.InvariantCulture)))}]");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -348,7 +352,6 @@ public static class TcpQBitVectorSearch
                     };
                     Console.WriteLine($"   {block["v"].TypeName,-18}  {qbit.BitWidth,-8}  {Describe(block["v"].ElementType),-9}  {note}");
                     Console.WriteLine($"                                            row 0 = [{string.Join(", ", ((System.Collections.IEnumerable)block["v"].GetValue(0)!).Cast<object>().Select(Number))}]");
-                    break;
                 }
             }
             catch (ClickHouseTcpServerException ex)
@@ -401,9 +404,9 @@ public static class TcpQBitVectorSearch
                 await client.ExecuteAsync($"CREATE TABLE {WideTable}_strided (v QBit(Float32, 8, 4)) ENGINE = MergeTree() ORDER BY tuple()");
                 await client.ExecuteAsync($"INSERT INTO {WideTable}_strided VALUES ([1, 2, 3, 4, 5, 6, 7, 8])");
 
+                // Drained: the read is expected to fail, and the failure is the point.
                 await foreach (Block _ in client.StreamAsync($"SELECT v FROM {WideTable}_strided"))
                 {
-                    break;
                 }
 
                 Console.WriteLine("     read, which this example did not expect");

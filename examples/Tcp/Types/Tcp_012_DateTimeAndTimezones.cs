@@ -66,6 +66,7 @@ public static class TcpDateTimeAndTimezones
 
     private static async Task Seed(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName}
             (
@@ -122,8 +123,6 @@ public static class TcpDateTimeAndTimezones
                 Console.WriteLine(
                     $"   {column.TypeName,-28}  {Describe(column.ElementType),-10}  {Raw(column.GetValue(0)),-19}  {Extra(column)}");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -160,8 +159,6 @@ public static class TcpDateTimeAndTimezones
             Console.WriteLine("   A Time carries no timezone at all, because it is not an instant:");
             Console.WriteLine($"     t       {block["t"].TypeName,-30} Scale {t.Scale}, GetTimeSpan(0) {t.GetTimeSpan(0)}");
             Console.WriteLine($"     dt64_tz {block["dt64_tz"].TypeName,-30} Scale {dt64.Scale}, TimeZone {dt64.TimeZone.Id}");
-
-            break;
         }
     }
 
@@ -188,7 +185,6 @@ public static class TcpDateTimeAndTimezones
                 var declared = (IDateTimeColumn)block["declared"];
                 Console.WriteLine(
                     $"   {(zone.Length == 0 ? "(not set)" : zone),-20}  {block.Column<uint>("bare")[0],-14}  {Format(bare.GetDateTimeOffset(0)),-30}  {Format(declared.GetDateTimeOffset(0))}");
-                break;
             }
         }
 
@@ -231,8 +227,6 @@ public static class TcpDateTimeAndTimezones
                 var instants = (IDateTimeColumn)column;
                 Console.WriteLine($"   {column.TypeName,-20}  {column.GetValue(0),-21}  {instants.GetDateTimeOffset(0):yyyy-MM-dd HH:mm:ss.fffffff}");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -278,7 +272,6 @@ public static class TcpDateTimeAndTimezones
                 {
                     var stored = (IDateTimeColumn)block["t"];
                     Console.WriteLine($"     {what,-22} -> count {block.Column<uint>("t")[0]}, presented {Format(stored.GetDateTimeOffset(0))}");
-                    break;
                 }
 
                 await client.ExecuteAsync($"TRUNCATE TABLE {KindTable}");
@@ -336,16 +329,24 @@ public static class TcpDateTimeAndTimezones
             ("{t:DateTime}", DateTime.SpecifyKind(new DateTime(2026, 6, 1, 12, 0, 0), DateTimeKind.Unspecified), "Kind=Unspecified — a wall clock, so no timezone is needed"),
         })
         {
+            // session_timezone is pinned, because the last case below is read in it and a server left on its
+            // own default would make this comparison say something different on every machine.
             object? epoch = await client.ExecuteScalarAsync(
                 $"SELECT toUnixTimestamp(toDateTime({placeholder}, 'UTC'))",
-                new ClickHouseTcpQueryOptions { Parameters = new ClickHouseTcpParameterCollection { { "t", value } } });
+                new ClickHouseTcpQueryOptions
+                {
+                    Parameters = new ClickHouseTcpParameterCollection { { "t", value } },
+                    Settings = new Dictionary<string, string> { ["session_timezone"] = "UTC" },
+                });
             Console.WriteLine($"     {placeholder,-27} -> {epoch}   {note}");
         }
 
         Console.WriteLine();
         Console.WriteLine("   The last row is the one to notice: with Kind=Unspecified the count is whatever the");
-        Console.WriteLine("   session timezone makes of 12:00, so it agrees with the others only because this session");
-        Console.WriteLine("   is UTC. That is exactly the ambiguity the refusal above protects an instant from.");
+        Console.WriteLine("   session timezone makes of 12:00, so it agrees with the others only because these queries");
+        Console.WriteLine("   set session_timezone=UTC. Without that it follows the server, and the same value means a");
+        Console.WriteLine("   different instant on a differently configured one. That is the ambiguity the refusal");
+        Console.WriteLine("   above protects an instant from.");
         Console.WriteLine();
         Console.WriteLine("   Same rule for DateTime64: {t:DateTime64(3, 'UTC')} declares one, {t:DateTime64(3)} does");
         Console.WriteLine("   not. Date, Date32, Time and Time64 have no timezone to declare, so none of this applies");
@@ -371,8 +372,6 @@ public static class TcpDateTimeAndTimezones
                 var times = (ITimeColumn)column;
                 Console.WriteLine($"   {column.Name,-16}  {column.GetValue(0),-10}  {times.GetTimeSpan(0)}");
             }
-
-            break;
         }
 
         Console.WriteLine();

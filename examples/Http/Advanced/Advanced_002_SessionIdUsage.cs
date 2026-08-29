@@ -16,9 +16,8 @@ public static class SessionIdUsage
         Console.WriteLine("Session ID Usage Examples\n");
 
         // To use temporary tables, you must enable sessions
-        var settings = new ClickHouseClientSettings
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
-            Host = "localhost",
             UseSession = true,
             // If you don't set SessionId, a GUID will be automatically generated
         };

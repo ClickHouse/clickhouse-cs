@@ -34,6 +34,10 @@ public static class TcpServerInfo
 
         // One call, and the answer came from the handshake rather than from a query — there is no round trip
         // beyond opening a connection, so this is cheap enough to do at startup.
+        //
+        // It describes the connection this call borrowed, not the client. Every query below borrows its own, so
+        // behind a load balancer over mixed versions a gate decided here can be wrong for the query it gates.
+        // Open a session when that matters: one session is one connection for its whole life.
         ClickHouseTcpServerInfo server = await client.GetServerInfoAsync();
 
         EveryField(server);
@@ -105,9 +109,9 @@ public static class TcpServerInfo
                 options);
 
             Console.WriteLine($"   So the parameterized query ran: count() = {count}.");
-            Console.WriteLine($"   Below {ParametersRevision} the server has nowhere to read the parameters list from, and rejects");
-            Console.WriteLine("   the query rather than running it unparameterized — which is the right failure, but");
-            Console.WriteLine("   not one to discover in production. Tcp_007 covers parameters themselves.");
+            Console.WriteLine($"   Below {ParametersRevision} the query packet has no field for the parameters list, so the client");
+            Console.WriteLine("   throws NotSupportedException before it sends anything, rather than sending the query");
+            Console.WriteLine("   unparameterized. The connection stays usable. Tcp_007 covers parameters themselves.");
         }
         else
         {
@@ -139,8 +143,9 @@ public static class TcpServerInfo
             try
             {
                 await client.ExecuteAsync($"CREATE TABLE {table} (v QBit(Int8, 8)) ENGINE = MergeTree ORDER BY tuple()");
+                // Qualified by database as well as by name: system.columns spans every database on the server.
                 object declared = await client.ExecuteScalarAsync(
-                    $"SELECT type FROM system.columns WHERE table = '{table}' AND name = 'v'");
+                    $"SELECT type FROM system.columns WHERE database = currentDatabase() AND table = '{table}' AND name = 'v'");
                 Console.WriteLine($"   QBit(Int8, 8) declared as {declared}");
             }
             finally

@@ -239,7 +239,9 @@ public static class TcpLogging
         // back into the pool. The client logs one Error line and rethrows.
         try
         {
-            _ = await client.ExecuteScalarAsync("SELECT * FROM example_tcp_logging_no_such_table");
+            // Unique, so the query fails because the table does not exist rather than because it happens not
+            // to exist: a fixed name is one CREATE TABLE away from making this demonstration succeed.
+            _ = await client.ExecuteScalarAsync($"SELECT * FROM example_tcp_logging_no_such_table_{Guid.NewGuid():N}");
         }
         catch (ClickHouseTcpServerException)
         {

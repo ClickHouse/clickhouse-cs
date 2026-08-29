@@ -8,10 +8,11 @@ namespace ClickHouse.Driver.Examples;
 /// <c>JSON</c>.
 ///
 /// <para>
-/// <c>Variant</c> and <c>Dynamic</c> are discriminated unions. Both read as <c>IColumn&lt;object&gt;</c>, so every
-/// row read that way is boxed, and both expose a columnar view instead — a per-row discriminator plus one typed
-/// child column per alternative. They differ in where the alternative list comes from: a <c>Variant</c> declares
-/// it in the type string, a <c>Dynamic</c> discovers it per block and reports it as
+/// <c>Variant</c> and <c>Dynamic</c> are discriminated unions. Both read as <c>IColumn&lt;object&gt;</c>, which
+/// loses the static type and boxes every row whose alternative is a value type, and both expose a columnar view
+/// instead — a per-row discriminator plus one typed child column per alternative. They differ in where the
+/// alternative list comes from: a <c>Variant</c> declares it in the type string, a <c>Dynamic</c> discovers it per
+/// block and reports it as
 /// <see cref="IDynamicColumn.TypeNames"/>. They also differ in how NULL is marked, which is the one detail that
 /// will bite you.
 /// </para>
@@ -55,14 +56,17 @@ public static class TcpVariantDynamicJson
 
     private static async Task Seed(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {VariantTable}");
         await client.ExecuteAsync($@"
             CREATE TABLE {VariantTable} (id UInt64, v Variant(String, UInt64, Array(Int32)))
             ENGINE = MergeTree() ORDER BY id");
 
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {DynamicTable}");
         await client.ExecuteAsync($@"
             CREATE TABLE {DynamicTable} (id UInt64, d Dynamic)
             ENGINE = MergeTree() ORDER BY id");
 
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {JsonTable}");
         await client.ExecuteAsync($@"
             CREATE TABLE {JsonTable} (id UInt64, doc JSON)
             ENGINE = MergeTree() ORDER BY id");
@@ -159,14 +163,13 @@ public static class TcpVariantDynamicJson
 
             Console.WriteLine();
             Console.WriteLine($"   The materialized surface is IColumn<object>: ElementType is {column.ElementType.Name}, so");
-            Console.WriteLine("   GetValue boxes every row — including the ones whose alternative is a value type:");
+            Console.WriteLine("   the static type is gone and a value-type alternative is boxed. A String or an Array is");
+            Console.WriteLine("   already a reference, so it costs nothing beyond the object[] the caller sees:");
             for (int row = 0; row < column.RowCount; row++)
             {
                 object? value = column.GetValue(row);
                 Console.WriteLine($"     GetValue({row}) -> {(value is null ? "null" : $"{Describe(value.GetType())} {Render(value)}")}");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -225,8 +228,6 @@ public static class TcpVariantDynamicJson
                 Console.WriteLine("     child to, so a caller can bind IColumn<T> per alternative without inspecting a");
                 Console.WriteLine("     single value.");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -286,8 +287,6 @@ public static class TcpVariantDynamicJson
             {
                 Console.WriteLine($"     {column.Name,-11} {column.TypeName,-16} reads as {Describe(column.ElementType),-9} {Render(column.GetValue(0))}");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -305,9 +304,10 @@ public static class TcpVariantDynamicJson
                 Settings = new Dictionary<string, string> { ["output_format_native_write_json_as_string"] = "0" },
             };
 
+            // Drained rather than broken out of: the throw is what this demonstrates, and stopping early
+            // would discard the connection on the way to it.
             await foreach (Block _ in client.StreamAsync(@"SELECT CAST('{""a"":1}', 'JSON') AS j", withoutTheSetting))
             {
-                break;
             }
 
             Console.WriteLine("     accepted, which this example did not expect");

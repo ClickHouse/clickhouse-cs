@@ -242,15 +242,14 @@ public static class TcpSettingsAndQueryId
         long notWaited = clock.ElapsedMilliseconds;
         object immediately = await client.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
 
-        // The only way to make the second batch's visibility deterministic. Without it, the count above is 2 or 4
-        // depending on whether the buffer happened to flush, which is exactly the guarantee being given up.
-        await client.ExecuteAsync("SYSTEM FLUSH ASYNC INSERT QUEUE");
-        object afterFlush = await client.ExecuteScalarAsync($"SELECT count() FROM {TableName}");
+        // Polling this one table, not SYSTEM FLUSH ASYNC INSERT QUEUE: that command flushes every client's
+        // pending async inserts on the server, so an example must not issue it on a shared one.
+        long afterFlush = await CountWhenItReaches(client, 4);
 
         Console.WriteLine($"\n   async_insert=1, wait_for_async_insert=0: returned after {notWaited} ms.");
         Console.WriteLine($"     count() straight afterwards = {immediately}. That number is 2 on one run and 4 on the next:");
         Console.WriteLine("     the buffer flushes on its own schedule and the call no longer waits for it.");
-        Console.WriteLine($"     After SYSTEM FLUSH ASYNC INSERT QUEUE: count() = {afterFlush}.");
+        Console.WriteLine($"     Counting again until the buffer has been written: count() = {afterFlush}.");
         Console.WriteLine();
         Console.WriteLine("   Two things the pair changes, neither of which is visible in the API:");
         Console.WriteLine("     - a returned InsertRowsAsync no longer means the rows are stored, so a failure");
@@ -286,6 +285,25 @@ public static class TcpSettingsAndQueryId
         return "no row appeared in system.query_log after 5 attempts";
     }
 
+    /// <summary>Counts the table until it holds <paramref name="expected"/> rows, or gives up.</summary>
+    private static async Task<long> CountWhenItReaches(ClickHouseTcpClient client, long expected)
+    {
+        long count = 0;
+
+        for (int attempt = 0; attempt < 300; attempt++)
+        {
+            count = Convert.ToInt64(await client.ExecuteScalarAsync($"SELECT count() FROM {TableName}"));
+            if (count >= expected)
+            {
+                return count;
+            }
+
+            await Task.Delay(10);
+        }
+
+        return count;
+    }
+
     /// <summary>Waits until <c>system.processes</c> shows the query, so a race cannot decide the next assertion.</summary>
     private static async Task WaitUntilRunning(ClickHouseTcpClient client, string queryId)
     {
@@ -306,6 +324,9 @@ public static class TcpSettingsAndQueryId
 
             await Task.Delay(10);
         }
+
+        throw new TimeoutException(
+            $"query {queryId} did not appear in system.processes, so the next step's precondition does not hold");
     }
 
     /// <summary>The server's message is one long line with its own detail appended; the first line is the fact.</summary>

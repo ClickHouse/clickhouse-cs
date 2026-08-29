@@ -49,10 +49,14 @@ Take the server from `ExampleConfig`, which resolves environment variables over 
   those would produce a duplicate.
 - `ExampleConfig.HttpBuilder()` to *change* one of those five. It returns a fresh builder each call.
 
-Three examples are exempt, because configuration is their subject or they start their own server:
+Four examples are exempt, because configuration is their subject or they start their own server:
 `Core_002_ConnectionStringConfiguration`, `Core_003_DependencyInjection`,
-`Testing_001_Testcontainers`. A literal connection string inside a comment, shown to teach the
-reader what one looks like, is also fine.
+`Testing_001_Testcontainers`, `Tcp_030_Testcontainers`. A literal connection string inside a comment,
+shown to teach the reader what one looks like, is also fine.
+
+Ask `ExampleConfig` for the endpoint with `HttpEndpoint` or `TcpEndpoint` when an example has to name
+or dial it itself. There are no `Host`/`Port` properties: a whole-string override would not reach
+them, so an example reading one could print an endpoint it did not connect to.
 
 ## Examples deliberately left out of `RunAllExamples`
 
@@ -63,13 +67,23 @@ by explicit filter:
 - `Tables_003_CreateTableCloud` — needs ClickHouse Cloud credentials.
 - `Auth_001_JwtAuthentication` — needs a JWT.
 
-If you add an example of that kind, leave it out of `RunAllExamples` and list it here. Otherwise the
-omission is indistinguishable from having forgotten step 4.
+Their class names are also in `ExampleRunner._optIn`, which is what keeps `--http` and `--tcp` from
+running them: those select by reflection, so leaving an example out of `RunAllExamples` does not on
+its own keep a transport run from picking it up.
+
+If you add an example of that kind, leave it out of `RunAllExamples`, add its class name to
+`_optIn`, and list it here. Otherwise the omission is indistinguishable from having forgotten step 4.
 
 ## Style
 
 - Console output is the teaching surface. Print what you did and what came back, not just "OK".
 - Show one thing well rather than covering an API exhaustively. A reader who wants the full surface
   reads the docs.
-- Drop any table you create.
+- Drop any table you create, in a `finally`, and `DROP TABLE IF EXISTS` it before the `CREATE` as well. The
+  second one is what lets a run survive an earlier run that was interrupted before its `finally`.
+- Name a table `example_<topic>`, fixed, not unique per run. This project is not the test suites: it assumes
+  one suite run at a time against a server, so it does not need `CreateTableName`. Two things do need a
+  per-run `Guid`: a name the example needs the server *not* to have (a deliberately missing table), and a
+  marker an example counts in `system.processes` or `system.query_log`. A second run would otherwise make
+  the first one's measurement or expected failure wrong.
 - Comments explain why the server or the driver behaves as it does, not what the line does.

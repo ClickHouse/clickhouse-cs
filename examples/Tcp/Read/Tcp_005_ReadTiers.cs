@@ -5,7 +5,7 @@ namespace ClickHouse.Driver.Examples;
 
 /// <summary>
 /// The three ways the native client reads a result, run one after another over the same query: <c>QueryAsync</c>
-/// (one <c>object[]</c> per row, every value boxed), <c>QueryAsync&lt;T&gt;</c> (one POCO per row, values
+/// (one <c>object[]</c> per row, value-type columns boxed), <c>QueryAsync&lt;T&gt;</c> (one POCO per row, values
 /// converted) and <c>StreamAsync</c> (whole <see cref="Block"/>s, typed columns, no per-row work at all).
 ///
 /// <para>
@@ -46,6 +46,7 @@ public static class TcpReadTiers
     {
         // recorded_at declares its timezone. A bare DateTime would take the server's, which is what the block
         // tier reports as the column's TimeZone; naming UTC makes this example's output the same everywhere.
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName}
             (
@@ -78,7 +79,7 @@ public static class TcpReadTiers
 
     private static async Task RowTier(ClickHouseTcpClient client)
     {
-        Console.WriteLine("\n1. QueryAsync — one object[] per row, every value boxed\n");
+        Console.WriteLine("\n1. QueryAsync — one object[] per row, value-type columns boxed\n");
         Console.WriteLine("   ID  City       Temp   recorded_at   CLR types");
         Console.WriteLine("   --  ---------  -----  -----------   ---------");
 
@@ -272,8 +273,8 @@ public static class TcpReadTiers
         Console.WriteLine("                   Block.ColumnNames if you need them. Date and time columns arrive raw.");
         Console.WriteLine();
         Console.WriteLine("   QueryAsync<T>   The default for application code. One object per row instead of an");
-        Console.WriteLine("                   array plus a box per value, values converted to the property's type,");
-        Console.WriteLine("                   and each row owns its values, so a row can be kept or returned.");
+        Console.WriteLine("                   array plus a box per value-type column, values converted to the");
+        Console.WriteLine("                   property's type, and each row owns its values, so a row can be kept.");
         Console.WriteLine();
         Console.WriteLine("   StreamAsync     Aggregating, scanning, or handing a column to something that wants a");
         Console.WriteLine("                   span. Nothing is materialized per row, and a column read out of one");

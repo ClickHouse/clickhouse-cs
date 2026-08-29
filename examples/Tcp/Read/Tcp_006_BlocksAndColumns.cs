@@ -44,6 +44,7 @@ public static class TcpBlocksAndColumns
     {
         // captured_at names a zone with an offset and a daylight-saving rule, so the block tier has something to
         // report; uptime is a Time, which is a count from midnight and has no zone at all.
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName}
             (
@@ -156,7 +157,6 @@ public static class TcpBlocksAndColumns
 
             // The first block is enough for the sections that follow. Breaking out is allowed: the client tells the
             // server the result is abandoned, and drops that connection instead of returning it to the pool.
-            break;
         }
     }
 
@@ -173,8 +173,6 @@ public static class TcpBlocksAndColumns
                 Console.WriteLine(
                     $"   {column.Name,-11}  {column.TypeName,-35}  {Describe(column.ElementType),-11}  {column.RowCount,4}  {ExtraInterface(column)}");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -213,8 +211,6 @@ public static class TcpBlocksAndColumns
             Console.WriteLine($"   A String column is a span too, of references: sensor.Values = [{string.Join(", ", sensor.Values.ToArray())}]");
             Console.WriteLine("   Reading it decodes one string per value, so the block tier saves less on String than");
             Console.WriteLine("   on a fixed-width type. It still saves the object[] and the boxes.");
-
-            break;
         }
     }
 
@@ -257,8 +253,6 @@ public static class TcpBlocksAndColumns
                 Console.WriteLine("       The count is signed and is not clamped to one day, so a TimeSpan here can be");
                 Console.WriteLine("       negative or longer than 24 hours.");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -343,8 +337,6 @@ public static class TcpBlocksAndColumns
             Console.WriteLine($"     Values[0] = [{string.Join(", ", rows.Values[0])}]   (Values: every row's array, built at once)");
             Console.WriteLine("     Those arrays outlive the block. The span holding them does not, being a span.");
             Console.WriteLine("     So prefer the indexer when only a few rows out of a tall block are wanted.");
-
-            break;
         }
 
         Console.WriteLine();

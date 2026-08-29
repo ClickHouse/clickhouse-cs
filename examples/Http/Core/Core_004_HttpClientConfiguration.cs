@@ -82,9 +82,8 @@ public static class HttpClientConfiguration
         };
 
         // Pass the HttpClient via settings
-        var settings = new ClickHouseClientSettings
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
-            Host = "localhost",
             HttpClient = httpClient,
         };
 
@@ -207,9 +206,8 @@ public static class HttpClientConfiguration
         // You can create a simple factory implementation
         var factory = new SimpleHttpClientFactory();
 
-        var settings = new ClickHouseClientSettings
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
-            Host = "localhost",
             HttpClientFactory = factory,
             HttpClientName = "ClickHouseClient", // Optional: factory can use this name
         };

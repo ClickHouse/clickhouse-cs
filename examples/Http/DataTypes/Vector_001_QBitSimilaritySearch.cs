@@ -15,6 +15,18 @@ public static class QBitSimilaritySearch
 
         Console.WriteLine("=== QBit Similarity Search with Different Precision Levels ===\n");
 
+        // QBit arrived in 25.10 with limitations, so this asks for 25.11 as the driver's own suites do. The
+        // comparison is left to the server, which spares the client parsing a four-part version string.
+        var supported = Convert.ToBoolean(await client.ExecuteScalarAsync(
+            "SELECT (toUInt32(splitByChar('.', version())[1]), toUInt32(splitByChar('.', version())[2])) >= (25, 11)"));
+
+        if (!supported)
+        {
+            var reported = await client.ExecuteScalarAsync("SELECT version()");
+            Console.WriteLine($"Skipped: QBit needs ClickHouse 25.11 or newer, and this server is {reported}.");
+            return;
+        }
+
         var tableName = "example_qbit_similarity";
 
         await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");

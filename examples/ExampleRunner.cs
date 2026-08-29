@@ -15,6 +15,29 @@ public static class ExampleRunner
     private static readonly HashSet<string> _crossTransport = new(StringComparer.Ordinal)
     {
         "TcpMigratingFromHttp",
+        "TcpOpenTelemetry",
+    };
+
+    /// <summary>
+    /// Examples that start their own server, so the configured endpoint is not theirs and preflight must not
+    /// hold them up. Declared before <c>_examples</c> for the same reason as <c>_crossTransport</c>.
+    /// </summary>
+    private static readonly HashSet<string> _selfContained = new(StringComparer.Ordinal)
+    {
+        "Testcontainers",
+        "TcpTestcontainers",
+    };
+
+    /// <summary>
+    /// Examples needing infrastructure an ordinary server does not have, so neither an unfiltered run
+    /// nor a transport run includes them. An explicit <c>--filter</c> still reaches them. Keep this in
+    /// step with the list in <c>AGENTS.md</c>.
+    /// </summary>
+    private static readonly HashSet<string> _optIn = new(StringComparer.Ordinal)
+    {
+        "CreateTableCluster",
+        "CreateTableCloud",
+        "JwtAuthentication",
     };
 
     private static readonly List<ExampleInfo> _examples = DiscoverExamples();
@@ -42,9 +65,17 @@ public static class ExampleRunner
         /// Every endpoint the example needs to reach, which is not always the one it is filed under:
         /// an example comparing the two transports needs both.
         /// </summary>
-        public IReadOnlyList<ExampleTransport> RequiredTransports { get; } = _crossTransport.Contains(ClassName)
-            ? [ExampleTransport.Http, ExampleTransport.Tcp]
-            : [ClassName.StartsWith("Tcp", StringComparison.Ordinal) ? ExampleTransport.Tcp : ExampleTransport.Http];
+        public IReadOnlyList<ExampleTransport> RequiredTransports { get; } = _selfContained.Contains(ClassName)
+            ? []
+            : _crossTransport.Contains(ClassName)
+                ? [ExampleTransport.Http, ExampleTransport.Tcp]
+                : [ClassName.StartsWith("Tcp", StringComparison.Ordinal) ? ExampleTransport.Tcp : ExampleTransport.Http];
+
+        /// <summary>
+        /// Whether a run that names no example includes it. False for one needing a cluster, Cloud
+        /// credentials or a token, which only an explicit filter should reach.
+        /// </summary>
+        public bool RunsByDefault { get; } = !_optIn.Contains(ClassName);
     }
 
     /// <summary>
@@ -53,22 +84,26 @@ public static class ExampleRunner
     public static IReadOnlyList<ExampleInfo> Examples => _examples;
 
     /// <summary>
-    /// Gets the examples that use one transport.
+    /// Gets the examples that use one transport and that a run naming no example includes.
     /// </summary>
     /// <param name="transport">The transport to select.</param>
     /// <returns>The matching examples, in class-name order.</returns>
     public static List<ExampleInfo> ForTransport(ExampleTransport transport)
-        => _examples.Where(e => e.Transport == transport).ToList();
+        => _examples.Where(e => e.Transport == transport && e.RunsByDefault).ToList();
 
     /// <summary>
     /// Finds examples matching the given filter using fuzzy matching.
     /// Matches against any substring of the normalized class name.
     /// </summary>
-    public static List<ExampleInfo> FindMatches(string filter)
+    /// <param name="filter">The pattern to match.</param>
+    /// <param name="transport">The transport to restrict the match to, or null for either.</param>
+    /// <returns>The matching examples, in class-name order.</returns>
+    public static List<ExampleInfo> FindMatches(string filter, ExampleTransport? transport = null)
     {
         var normalizedFilter = Normalize(filter);
         return _examples
             .Where(e => e.NormalizedName.Contains(normalizedFilter))
+            .Where(e => transport is null || e.Transport == transport)
             .ToList();
     }
 
@@ -86,13 +121,17 @@ public static class ExampleRunner
     /// </summary>
     public static void ListExamples(ExampleTransport? transport = null)
     {
-        var listed = transport is { } only ? ForTransport(only) : _examples.ToList();
+        // Lists the opt-in examples too, marked. They are what a reader is most likely to be looking
+        // for by name, since no unfiltered run ever prints them.
+        var listed = _examples.Where(e => transport is null || e.Transport == transport).ToList();
 
         Console.WriteLine(transport is { } named ? $"Available {named} examples:\n" : "Available examples:\n");
 
         foreach (var example in listed.OrderBy(e => e.ClassName))
         {
-            Console.WriteLine($"  - {example.ClassName}");
+            Console.WriteLine(example.RunsByDefault
+                ? $"  - {example.ClassName}"
+                : $"  - {example.ClassName}   (--filter only: needs a cluster, Cloud, or a token)");
         }
 
         Console.WriteLine();
