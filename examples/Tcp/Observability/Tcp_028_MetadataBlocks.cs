@@ -20,8 +20,9 @@ namespace ClickHouse.Driver.Examples;
 ///
 /// <para>
 /// The contract otherwise is the one Tcp_021 states: in packet order, on the reading thread, and never allowed to
-/// throw — an exception propagates out of the operation and terminates the connection. Copying a few values
-/// cannot throw, which is one more reason to copy and leave.
+/// throw — an exception propagates out of the operation and terminates the connection. So keep the callback to
+/// copying values out, and do the parsing that can fail somewhere it is allowed to. Even a copy has to be written
+/// with that in mind: a named column lookup or a span index throws if the name or the row is not there.
 /// </para>
 /// </summary>
 public static class TcpMetadataBlocks

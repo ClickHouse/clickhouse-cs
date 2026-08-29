@@ -161,13 +161,13 @@ public static class TcpErrorsAndRetries
         // misconfiguration just fails again.
         try
         {
-            await using var wrongPort = new ClickHouseTcpClient(options with { Port = ExampleConfig.HttpPort });
+            await using var wrongPort = new ClickHouseTcpClient(options with { Port = ExampleConfig.HttpEndpoint.Port });
             await wrongPort.PingAsync();
             Console.WriteLine("   The HTTP port spoke the native protocol, which is not what this example expected");
         }
         catch (ClickHouseTcpException ex)
         {
-            Console.WriteLine($"\n   the HTTP port ({ExampleConfig.HttpPort})           {ex.GetType().Name}");
+            Console.WriteLine($"\n   the HTTP port ({ExampleConfig.HttpEndpoint.Port})           {ex.GetType().Name}");
             Console.WriteLine($"                                  IsTransient={ex.IsTransient}");
             Console.WriteLine($"                                  {ex.Message}");
             Console.WriteLine("                                  72 is 'H', the first byte of an HTTP response.");
@@ -260,7 +260,9 @@ public static class TcpErrorsAndRetries
             Settings = new Dictionary<string, string> { ["max_concurrent_queries_for_user"] = "1" },
         };
 
-        for (int attempt = 1; attempt <= 8; attempt++)
+        const int attempts = 8;
+
+        for (int attempt = 1; attempt <= attempts; attempt++)
         {
             try
             {
@@ -268,10 +270,20 @@ public static class TcpErrorsAndRetries
                 Console.WriteLine($"     attempt {attempt}: {counted}");
                 break;
             }
-            catch (ClickHouseTcpException ex) when (ex.IsTransient && attempt < 8)
+            catch (ClickHouseTcpException ex) when (ex.IsTransient)
             {
                 string reason = ex is ClickHouseTcpServerException server ? $"{server.Code} ({server.RawCode})" : ex.GetType().Name;
                 Console.WriteLine($"     attempt {attempt}: {reason} — transient, so try again");
+
+                // The last attempt is caught too. The limit counts every query this user is running, so anything
+                // else on the server under the same user can keep refusing this one, and an example must report
+                // that rather than throw out of the demonstration.
+                if (attempt == attempts)
+                {
+                    Console.WriteLine($"     gave up after {attempts}: the cap is what stops a retry becoming a loop.");
+                    break;
+                }
+
                 await Task.Delay(100 * attempt);
             }
         }
@@ -312,6 +324,9 @@ public static class TcpErrorsAndRetries
 
             await Task.Delay(10);
         }
+
+        throw new TimeoutException(
+            $"query {queryId} did not appear in system.processes, so the next step's precondition does not hold");
     }
 
     private static async Task RetryingAnInsert(ClickHouseTcpClient client)

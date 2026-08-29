@@ -192,9 +192,9 @@ The filter matches the example's class name, which `--list` prints. A class name
 
 ### Connection configuration
 
-Every example takes its server from [ExampleConfig.cs](ExampleConfig.cs), so one environment variable
-points the whole suite somewhere else. The defaults are what a stock server container exposes on
-localhost, and the examples run with nothing set.
+Every example takes its server from [ExampleConfig.cs](ExampleConfig.cs), apart from the four listed
+below, so one environment variable points the whole suite somewhere else. The defaults are what a
+stock server container exposes on localhost, and the examples run with nothing set.
 
 | Variable | Default |
 | --- | --- |
@@ -212,9 +212,12 @@ For an endpoint those pieces cannot describe — TLS, a cloud host, an extra set
 CLICKHOUSE_HOST=my-server CLICKHOUSE_PASSWORD=secret dotnet run -- basicusage
 ```
 
-Two examples keep literal connection strings, because configuration is what they teach:
+Four examples do not read `ExampleConfig`. Two keep literal connection strings because configuration
+is what they teach:
 [Core_002_ConnectionStringConfiguration.cs](Http/Core/Core_002_ConnectionStringConfiguration.cs) and
-[Core_003_DependencyInjection.cs](Http/Core/Core_003_DependencyInjection.cs).
+[Core_003_DependencyInjection.cs](Http/Core/Core_003_DependencyInjection.cs). Two start their own
+server and address that: [Testing_001_Testcontainers.cs](Http/Testing/Testing_001_Testcontainers.cs)
+and [Tcp_030_Testcontainers.cs](Tcp/Observability/Tcp_030_Testcontainers.cs).
 
 ### ClickHouse Cloud
 
