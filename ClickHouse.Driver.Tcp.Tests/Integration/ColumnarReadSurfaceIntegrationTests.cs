@@ -921,6 +921,101 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
+    public async Task StreamAsync_EnumColumn_ExposesItsDeclaredMembersThroughIEnumColumn()
+    {
+        // An enum's values ride the wire as their ordinal, so the IColumn<T> surface is the raw sbyte/short and the
+        // labels live in the declaration. IEnumColumn carries that declaration, so neither a row's label nor the
+        // ordinal a label maps to needs the type string re-parsed. Filtering through the ordinal touches the label
+        // once instead of per row.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool matched = false;
+        KeyValuePair<string, long>[] members = null;
+        var labels = new string[3];
+        sbyte[] ordinals = null;
+        long doneOrdinal = -1;
+        bool foundDone = false;
+        var rowsThatAreDone = new List<int>();
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT CAST(number + 1 AS Enum8('queued' = 1, 'running' = 2, 'done' = 3)) FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IEnumColumn;
+
+            var labelled = (IEnumColumn)column;
+            members = labelled.Members.ToArray();
+            ordinals = ((IColumn<sbyte>)column).Values.ToArray();
+            for (int row = 0; row < labelled.RowCount; row++)
+            {
+                labels[row] = labelled.GetLabel(row);
+            }
+
+            foundDone = labelled.TryGetOrdinal("done", out doneOrdinal);
+            for (int row = 0; row < ordinals.Length; row++)
+            {
+                if (ordinals[row] == doneOrdinal)
+                {
+                    rowsThatAreDone.Add(row);
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(
+                members,
+                Is.EqualTo(new[]
+                {
+                    new KeyValuePair<string, long>("queued", 1),
+                    new KeyValuePair<string, long>("running", 2),
+                    new KeyValuePair<string, long>("done", 3),
+                }),
+                "in declaration order");
+            Assert.That(ordinals, Is.EqualTo(new sbyte[] { 1, 2, 3 }), "the values are the raw ordinals");
+            Assert.That(labels, Is.EqualTo(new[] { "queued", "running", "done" }));
+            Assert.That(foundDone, Is.True);
+            Assert.That(doneOrdinal, Is.EqualTo(3));
+            Assert.That(rowsThatAreDone, Is.EqualTo(new[] { 2 }));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_NullableEnumColumn_ReachesTheMembersThroughItsInnerColumn()
+    {
+        // The wrapper is its own column, so the enum view is on the dense inner one — the same shape as the
+        // temporal case, and reachable without knowing whether the ordinals are sbyte or short.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool innerIsEnum = false;
+        var readings = new string[3];
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT if(number = 1, NULL, CAST(number + 1 AS Enum8('queued' = 1, 'running' = 2, 'done' = 3))) " +
+            "FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            var nullable = (INullableColumn)block[0];
+            if (nullable.Inner is IEnumColumn labelled)
+            {
+                innerIsEnum = true;
+                for (int row = 0; row < nullable.RowCount; row++)
+                {
+                    readings[row] = nullable.NullMap[row] != 0 ? null : labelled.GetLabel(row);
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(innerIsEnum, Is.True);
+            Assert.That(readings, Is.EqualTo(new[] { "queued", null, "done" }));
+        });
+    }
+
+    [Test]
     public async Task StreamAsync_MixedComposites_TraversedThroughTheNonGenericViewsWithNoTypeArgument()
     {
         // Code that handles "whatever the server sent" cannot name a closed generic view: it would need one arm per

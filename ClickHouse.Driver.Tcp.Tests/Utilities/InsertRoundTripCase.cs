@@ -78,6 +78,10 @@ public sealed class InsertRoundTripCase
         yield return Primitive("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 });
         yield return Primitive("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 });
 
+        // A column of labels is the other write shape: it converts to the declared ordinals, which is what reads back.
+        yield return EnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, "a", "b");
+        yield return EnumLabels("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 }, "x", "y");
+
         // Floats and Bool are direct blittable maps, so the primitive factory covers them.
         yield return Primitive("Float32", new[] { 0f, 1.5f, -1.5f, float.MinValue, float.MaxValue });
         yield return Primitive("Float64", new[] { 0d, 1.5, -1.5e100, double.MinValue, double.MaxValue });
@@ -1701,6 +1705,15 @@ public sealed class InsertRoundTripCase
     // returned verbatim regardless of the timezone the server presents.
     private static InsertRoundTripCase DateTime64s(string clickHouseType, params long[] counts)
         => Same($"{clickHouseType} [{counts.Length} rows]", clickHouseType, name => new ArrayColumn<long>(name, clickHouseType, counts));
+
+    // An enum written from its labels reads back as the ordinals they are declared with, so the two columns differ.
+    private static InsertRoundTripCase EnumLabels<T>(string clickHouseType, T[] ordinals, params string[] labels)
+        => new(
+            $"{clickHouseType} from labels [{labels.Length} rows]",
+            clickHouseType,
+            name => new ArrayColumn<string>(name, clickHouseType, labels),
+            name => new ArrayColumn<T>(name, clickHouseType, ordinals),
+            settings: null);
 
     private static InsertRoundTripCase Uuids(string clickHouseType, params Guid[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<Guid>(name, clickHouseType, values));
