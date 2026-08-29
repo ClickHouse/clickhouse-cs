@@ -442,6 +442,35 @@ class Program
         await TcpTimeouts.Run();
         WaitForUser(isInteractive);
 
+        // Native Protocol: Advanced
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("NATIVE PROTOCOL: ADVANCED");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(TcpSettingsAndQueryId)}");
+        await TcpSettingsAndQueryId.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpProgressAndStatistics)}");
+        await TcpProgressAndStatistics.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpCancellation)}");
+        await TcpCancellation.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpErrorsAndRetries)}");
+        await TcpErrorsAndRetries.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpCompression)}");
+        await TcpCompression.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpServerInfo)}");
+        await TcpServerInfo.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ALL EXAMPLES COMPLETED SUCCESSFULLY!");
         Console.WriteLine(new string('=', 70));
