@@ -142,6 +142,14 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_024_Compression.cs](Tcp/Advanced/Tcp_024_Compression.cs) - `Compression=lz4|zstd|none` and `ClickHouseTcpClientOptions.Compressor`, measured in bytes on the wire: what LZ4 saves by default, why the client's codec does not choose what the server sends (`network_compression_method` does), what it does choose on an insert, and why loopback cannot measure the benefit
 - [Tcp_025_ServerInfo.cs](Tcp/Advanced/Tcp_025_ServerInfo.cs) - `GetServerInfoAsync` and every field of `ClickHouseTcpServerInfo`, the build number `Version` does not carry, gating on `ProtocolRevision` (query parameters need 54459) with one gate that passes and one that does not, and gating on the server version with a printed skip
 
+### Native Protocol: Observability
+
+- [Tcp_026_Logging.cs](Tcp/Observability/Tcp_026_Logging.cs) - `ClickHouseTcpClientOptions.LoggerFactory` and the three categories `ClickHouseTcpDiagnostics.ClientLogCategory`, `.ConnectionLogCategory`, `.PoolLogCategory`: what each reports, which levels they use (nothing at `Information`), why a stock `ILoggerFactory` shows one line, and two measured filter sets — production against debugging a connection problem
+- [Tcp_027_OpenTelemetry.cs](Tcp/Observability/Tcp_027_OpenTelemetry.cs) - `ClickHouseTcpDiagnostics.ActivitySourceName` and `IncludeSqlInActivityTags`, with spans collected and printed: the span names and attributes, `connect` nested under the statement that dialled, the W3C trace context the client propagates so the server's own spans join the trace, and why the source is separate from the HTTP transport's
+- [Tcp_028_MetadataBlocks.cs](Tcp/Observability/Tcp_028_MetadataBlocks.cs) - The three `Block`-shaped callbacks Tcp_021 does not cover — `OnLog` with `send_logs_level`, `OnTotals` for `WITH TOTALS`, `OnExtremes` with `extremes` — the borrowed-block rule of copying inside the callback, the log priority scale, and what each `send_logs_level` costs
+- [Tcp_029_HealthChecks.cs](Tcp/Observability/Tcp_029_HealthChecks.cs) - `PingAsync` as a health check over an `AddClickHouseTcpDataSource` registration: a protocol ping measured against `SELECT 1`, Healthy, Degraded and Unhealthy in one report, and what a Pong does and does not prove
+- [Tcp_030_Testcontainers.cs](Tcp/Observability/Tcp_030_Testcontainers.cs) - A throwaway ClickHouse over the native protocol: the mapped 9000 rather than `GetConnectionString()`'s 8123, why a native-port wait strategy alone reports ready too early, and a query against the container
+
 ## How to run
 
 ### Prerequisites
