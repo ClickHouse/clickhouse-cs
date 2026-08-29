@@ -11,7 +11,7 @@ public static class BulkInsert
 {
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         var tableName = "example_bulk_insert";
 

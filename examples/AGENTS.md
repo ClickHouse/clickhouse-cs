@@ -33,6 +33,22 @@ Five steps. Skip any one of them and the example does not run.
 Then run it (`dotnet run -- --filter <topic>`) and read the output. An example whose output does not
 teach the topic is not finished.
 
+## Never hard-code a connection string
+
+Take the server from `ExampleConfig`, which resolves environment variables over localhost defaults:
+
+- `ExampleConfig.CreateHttpClient()` / `CreateHttpConnection()` for the common case.
+- `ExampleConfig.HttpConnectionString` where a constructor takes the string itself.
+- `$"{ExampleConfig.HttpConnectionString};SomeKey=value"` to add a key the assembled string does not
+  already set. It sets `Host`, `Port`, `Username`, `Password` and `Database`, so appending any of
+  those would produce a duplicate.
+- `ExampleConfig.HttpBuilder()` to *change* one of those five. It returns a fresh builder each call.
+
+Three examples are exempt, because configuration is their subject or they start their own server:
+`Core_002_ConnectionStringConfiguration`, `Core_003_DependencyInjection`,
+`Testing_001_Testcontainers`. A literal connection string inside a comment, shown to teach the
+reader what one looks like, is also fine.
+
 ## Examples deliberately left out of `RunAllExamples`
 
 Three need infrastructure the CI server does not have, so they are registered nowhere and run only

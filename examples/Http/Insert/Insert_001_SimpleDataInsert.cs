@@ -16,7 +16,7 @@ public static class SimpleDataInsert
 
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         await SetupTable(client);
 
@@ -109,7 +109,7 @@ public static class SimpleDataInsert
     {
         Console.WriteLine("3. ADO.NET Command pattern:");
 
-        using var connection = new ClickHouseConnection("Host=localhost");
+        using var connection = ExampleConfig.CreateHttpConnection();
         await connection.OpenAsync();
 
         using var command = connection.CreateCommand();

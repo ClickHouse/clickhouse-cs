@@ -21,7 +21,7 @@ public static class QueryStatistics
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
+        using var connection = ExampleConfig.CreateHttpConnection();
         await connection.OpenAsync();
 
         Console.WriteLine("Query Statistics Examples\n");

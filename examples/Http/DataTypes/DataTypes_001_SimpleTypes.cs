@@ -12,7 +12,7 @@ public static class SimpleTypes
 {
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         Console.WriteLine("Simple Data Types Examples\n");
 

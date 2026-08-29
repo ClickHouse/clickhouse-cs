@@ -17,7 +17,7 @@ public static class CompressedRawExport
 {
     public static async Task Run()
     {
-        var connectionString = "Host=localhost";
+        var connectionString = ExampleConfig.HttpConnectionString;
         var tableName = "example_compressed_export";
 
         // Nothing to configure for this to work: the driver decompresses responses itself, so a raw

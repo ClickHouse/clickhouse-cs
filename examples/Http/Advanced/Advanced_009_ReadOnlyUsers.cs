@@ -21,7 +21,7 @@ public static class ReadOnlyUsers
         Console.WriteLine("This example demonstrates the limitations of READONLY = 1 users.\n");
 
         // Setup using the default (non-read-only) user
-        using var defaultClient = new ClickHouseClient("Host=localhost");
+        using var defaultClient = ExampleConfig.CreateHttpClient();
 
         // Create a unique read-only user for this example
         var guid = Guid.NewGuid().ToString("N");
@@ -29,7 +29,11 @@ public static class ReadOnlyUsers
         var readOnlyPassword = $"{guid}_pwd";
 
         // The default JsonWriteMode sets a parameter which cannot be used by readonly users, so it must be changed
-        string readOnlyConnectionString = $"Host=localhost;Username={readOnlyUsername};Password={readOnlyPassword};JsonWriteMode=None";
+        var readOnlyBuilder = ExampleConfig.HttpBuilder();
+        readOnlyBuilder.Username = readOnlyUsername;
+        readOnlyBuilder.Password = readOnlyPassword;
+        readOnlyBuilder["JsonWriteMode"] = "None";
+        string readOnlyConnectionString = readOnlyBuilder.ConnectionString;
 
         await SetupReadOnlyUser(defaultClient, readOnlyUsername, readOnlyPassword);
         await SetupTestTable(defaultClient);

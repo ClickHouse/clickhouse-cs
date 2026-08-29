@@ -23,7 +23,7 @@ public static class RetriesAndDeduplication
 
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         // Create a ReplacingMergeTree table for deduplication
         await SetupReplacingMergeTreeTable(client);
