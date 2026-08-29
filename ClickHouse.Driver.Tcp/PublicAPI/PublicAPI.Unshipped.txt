@@ -6,6 +6,8 @@ ClickHouse.Driver.Tcp.Block.ColumnNames.get -> System.Collections.Generic.IReadO
 ClickHouse.Driver.Tcp.Block.Columns.get -> System.Collections.Generic.IReadOnlyList<ClickHouse.Driver.Tcp.IColumn>
 ClickHouse.Driver.Tcp.Block.Dispose() -> void
 ClickHouse.Driver.Tcp.Block.Name.get -> string
+ClickHouse.Driver.Tcp.Block.ReadAs<T>(int index) -> ClickHouse.Driver.Tcp.IColumn<T>
+ClickHouse.Driver.Tcp.Block.ReadAs<T>(string name) -> ClickHouse.Driver.Tcp.IColumn<T>
 ClickHouse.Driver.Tcp.Block.RowCount.get -> int
 ClickHouse.Driver.Tcp.Block.this[int index].get -> ClickHouse.Driver.Tcp.IColumn
 ClickHouse.Driver.Tcp.Block.this[string name].get -> ClickHouse.Driver.Tcp.IColumn
