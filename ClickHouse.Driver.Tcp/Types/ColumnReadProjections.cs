@@ -25,6 +25,11 @@ internal sealed class ColumnReadProjections
     // Distinguishes "no reading offered" from "not compiled yet", so a refused target is not recompiled per call.
     private static readonly object NoReading = new();
 
+    // A ceiling on the cache, which lives as long as the registry. The key includes the session timezone, so an
+    // application setting one per request over many types could otherwise accumulate compiled delegates without
+    // bound. Past the ceiling a reader is compiled per call: slower, and still correct.
+    private const int MaxCachedReaders = 1024;
+
     private readonly ColumnCodecRegistry registry;
 
     private readonly ConcurrentDictionary<(string TypeName, string Context, Type Target), object> readers = new();
@@ -72,7 +77,11 @@ internal sealed class ColumnReadProjections
         // Not GetOrAdd: the factory would have to capture the context by value anyway, and a lost race just
         // compiles an equivalent delegate that is then dropped.
         Func<IColumn, int, T> read = Compile<T>(registry.Resolve(typeName, in context));
-        readers[key] = read ?? NoReading;
+        if (readers.Count < MaxCachedReaders)
+        {
+            readers[key] = read ?? NoReading;
+        }
+
         return read;
     }
 
