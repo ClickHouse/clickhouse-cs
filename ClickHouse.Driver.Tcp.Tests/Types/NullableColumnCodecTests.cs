@@ -139,7 +139,10 @@ public class NullableColumnCodecTests
                 Resolve("Nullable(DateTime('UTC'))").WritableElementTypes,
                 Is.EqualTo(new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) }));
             Assert.That(Resolve("Nullable(Int32)").WritableElementTypes, Is.EqualTo(new[] { typeof(int?) }));
-            Assert.That(Resolve("Nullable(String)").WritableElementTypes, Is.EqualTo(new[] { typeof(string) }));
+
+            // A reference type is already nullable, so the wrapper lists the inner spellings unchanged: String
+            // takes text or the bytes themselves.
+            Assert.That(Resolve("Nullable(String)").WritableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
         });
     }
 
