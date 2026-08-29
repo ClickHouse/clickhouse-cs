@@ -56,6 +56,8 @@ public static class TcpCompositeWrites
 
     private static async Task JaggedArrays(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {ArraysTable}");
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {DenseTable}");
         await client.ExecuteAsync(ArrayDdl(ArraysTable));
         await client.ExecuteAsync(ArrayDdl(DenseTable));
 
@@ -167,6 +169,8 @@ public static class TcpCompositeWrites
 
     private static async Task TheOtherComposites(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {OthersTable}");
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {OthersDenseTable}");
         await client.ExecuteAsync(OthersDdl(OthersTable));
         await client.ExecuteAsync(OthersDdl(OthersDenseTable));
 
@@ -276,9 +280,9 @@ public static class TcpCompositeWrites
         Console.WriteLine("     Nullable(T), and the plain value for LowCardinality(T).");
         Console.WriteLine("   A row of Array(T) or Map(K, V) is never null. Use an empty array, or make the elements");
         Console.WriteLine("     nullable.");
-        Console.WriteLine("   A column read out of a block is a valid insert column, and the fastest one: it is");
-        Console.WriteLine("     already in the layout the codec writes from. Re-insert it inside the iteration that");
-        Console.WriteLine("     yielded it, because the block is borrowed.");
+        Console.WriteLine("   A column read out of a block is a valid insert column, and re-inserts without its");
+        Console.WriteLine("     composite layout being rebuilt: it is already in the layout the codec writes from.");
+        Console.WriteLine("     Re-insert it inside the iteration that yielded it, because the block is borrowed.");
         Console.WriteLine("   Match the column's name to the target, in the SELECT if need be.");
     }
 
@@ -329,8 +333,9 @@ public static class TcpCompositeWrites
         }
     }
 
-    // toString of a NULL is the empty string, which is indistinguishable from an empty string in a table.
-    private static string Text(object value) => value is string { Length: 0 } ? "NULL" : value?.ToString() ?? "NULL";
+    // toString of a NULL is NULL, not the empty string: toString keeps the argument's nullability, so the row
+    // tier hands back a null reference here.
+    private static string Text(object value) => value?.ToString() ?? "NULL";
 
     // Runs an insert that is expected to be rejected client-side and prints the reason.
     private static async Task ShowRejection(ClickHouseTcpClient client, string what, string sql, IReadOnlyList<IColumn> columns)

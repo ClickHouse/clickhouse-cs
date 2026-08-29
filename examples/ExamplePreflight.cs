@@ -80,18 +80,23 @@ public static class ExamplePreflight
 
     private static void Report(ExampleTransport transport, string failure)
     {
-        var (name, endpoint, port, source) = transport == ExampleTransport.Http
-            ? ("HTTP interface", $"{ExampleConfig.Host}:{ExampleConfig.HttpPort}", "CLICKHOUSE_HTTP_PORT", "CLICKHOUSE_HTTP_CONNECTION_STRING")
-            : ("native protocol", $"{ExampleConfig.Host}:{ExampleConfig.TcpPort}", "CLICKHOUSE_TCP_PORT", "CLICKHOUSE_TCP_CONNECTION_STRING");
+        // Reported from the effective endpoint, so that a whole-string override is described as itself
+        // rather than as whatever the component variables say.
+        var http = ExampleConfig.HttpEndpoint;
+        var tcp = ExampleConfig.TcpEndpoint;
+
+        var (name, endpoint, user, port, source) = transport == ExampleTransport.Http
+            ? ("HTTP interface", $"{http.Host}:{http.Port}", ExampleConfig.HttpBuilder().Username, "CLICKHOUSE_HTTP_PORT", "CLICKHOUSE_HTTP_CONNECTION_STRING")
+            : ("native protocol", $"{tcp.Host}:{tcp.Port}", ExampleConfig.TcpBuilder().Username, "CLICKHOUSE_TCP_PORT", "CLICKHOUSE_TCP_CONNECTION_STRING");
 
         Console.WriteLine();
-        Console.WriteLine($"Cannot reach ClickHouse on the {name} at {endpoint} as user '{ExampleConfig.Username}'.");
+        Console.WriteLine($"Cannot reach ClickHouse on the {name} at {endpoint} as user '{user}'.");
         Console.WriteLine($"  {failure}");
         Console.WriteLine();
 
         if (transport == ExampleTransport.Tcp)
         {
-            Console.WriteLine($"  The native protocol listens on port 9000 by default, not on the HTTP port ({ExampleConfig.HttpPort}).");
+            Console.WriteLine($"  The native protocol listens on port 9000 by default, not on the HTTP port ({http.Port}).");
             Console.WriteLine();
         }
 

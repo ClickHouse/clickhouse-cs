@@ -125,11 +125,11 @@ public static class TcpHealthChecks
         }
 
         Console.WriteLine();
-        Console.WriteLine("   Three states, and the middle one is the point: a pool with nothing free throws");
-        Console.WriteLine("   TimeoutException, which says nothing about the server, so reporting it as Unhealthy would");
-        Console.WriteLine("   take an instance out of rotation for being busy. Degraded is the honest answer. The");
-        Console.WriteLine("   distinction has to be made on the exception type, because there is no status on the");
-        Console.WriteLine("   client to ask.");
+        Console.WriteLine("   Three states, and the middle one is the point: a timeout says nothing about the server,");
+        Console.WriteLine("   so reporting it as Unhealthy would take an instance out of rotation for being busy.");
+        Console.WriteLine("   Degraded is the honest answer. Note what the check cannot know: TimeoutException covers");
+        Console.WriteLine("   waiting for a pool slot, dialing, and reading the pong alike, and the client exposes");
+        Console.WriteLine("   nothing that separates them, so treat it as 'did not finish' and no more.");
         Console.WriteLine();
         Console.WriteLine("   Every registration resolves the client the data source owns, so the check runs on the");
         Console.WriteLine("   application's own pool and measures the path a request would take. That is also why the");
@@ -212,9 +212,10 @@ public static class TcpHealthChecks
             }
             catch (TimeoutException e)
             {
-                // No connection came free within PoolTimeout. The server has not been reached, so this is a
-                // statement about this process, not about ClickHouse.
-                return HealthCheckResult.Degraded("No pooled connection was free", e, data);
+                // One type covers three deadlines: waiting for a pool slot, dialing, and reading the pong. None
+                // of them is proof the server is down, and none of them can be told apart here, so the honest
+                // report is that the check did not finish in time.
+                return HealthCheckResult.Degraded("Timed out before a pong", e, data);
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {

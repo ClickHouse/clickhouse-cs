@@ -69,6 +69,7 @@ public static class TcpMigratingFromHttp
     private static async Task CompareTransports(ClickHouseClient http, ClickHouseTcpClient tcp)
     {
         // DDL. HTTP: ExecuteNonQueryAsync, which returns the affected-row count ADO.NET expects.
+        await http.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {TableName}");
         await http.ExecuteNonQueryAsync($@"
             CREATE TABLE {TableName} (id UInt64, name String, source String)
             ENGINE = MergeTree() ORDER BY id");

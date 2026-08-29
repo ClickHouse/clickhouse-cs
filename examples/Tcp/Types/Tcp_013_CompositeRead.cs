@@ -30,9 +30,13 @@ public static class TcpCompositeRead
     private const string Columns =
         "id, readings, attrs, point, named_point, score, city, nick, matrix, tagged, buckets";
 
+    // Geometry, the Variant over the six geo aliases, is newer than the rest of this example.
+    private static readonly Version GeometryFrom = new(25, 11);
+
     public static async Task Run()
     {
         await using var client = ExampleConfig.CreateTcpClient();
+        ClickHouseTcpServerInfo server = await client.GetServerInfoAsync();
 
         try
         {
@@ -45,7 +49,7 @@ public static class TcpCompositeRead
             await Nesting(client);
             await NestedColumns(client);
             await GeoAliases(client);
-            await Geometry(client);
+            await Geometry(client, server);
         }
         finally
         {
@@ -57,6 +61,7 @@ public static class TcpCompositeRead
 
     private static async Task Seed(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName}
             (
@@ -139,15 +144,12 @@ public static class TcpCompositeRead
             {
                 Console.WriteLine($"   {column.TypeName,-32}  {Describe(column.ElementType),-30}  {View(column)}");
             }
-
-            break;
         }
 
         await foreach (Block block in client.StreamAsync($"SELECT items FROM {NestedTable} ORDER BY id"))
         {
             IColumn column = block["items"];
             Console.WriteLine($"   {column.TypeName,-32}  {Describe(column.ElementType),-30}  {View(column)}");
-            break;
         }
 
         Console.WriteLine();
@@ -196,8 +198,6 @@ public static class TcpCompositeRead
                 Console.WriteLine("     Taking only the keys, or only the values, therefore costs nothing:");
                 Console.WriteLine($"       distinct keys across every row = {string.Join(", ", keys.Values.ToArray().Distinct())}");
             }
-
-            break;
         }
     }
 
@@ -226,8 +226,6 @@ public static class TcpCompositeRead
             var named = (ITupleColumn)block["named_point"];
             IColumn<int> xs = (IColumn<int>)named.Children[0];
             Console.WriteLine($"     Children[0].Values = [{string.Join(", ", xs.Values.ToArray())}]   (the x of every row, no ValueTuple built)");
-
-            break;
         }
     }
 
@@ -258,8 +256,6 @@ public static class TcpCompositeRead
                 Console.WriteLine("     Do not read Inner without the null map. The value at a NULL position is the inner");
                 Console.WriteLine("     codec's placeholder, not data — here it is 0, which is a perfectly plausible score.");
             }
-
-            break;
         }
     }
 
@@ -296,8 +292,6 @@ public static class TcpCompositeRead
                     }
                 }
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -350,8 +344,6 @@ public static class TcpCompositeRead
             Console.WriteLine("   The one thing to know is that each match needs the child's element type spelled out,");
             Console.WriteLine("   which IColumn.ElementType on the parent tells you: Array(Array(Int32)) reports int[][],");
             Console.WriteLine("   so the outer view is IArrayColumn<int[]> and the inner one IArrayColumn<int>.");
-
-            break;
         }
     }
 
@@ -393,8 +385,6 @@ public static class TcpCompositeRead
                 Console.WriteLine($"     The materialized row is an object[][] — one object[] per entry, boxed, so the");
                 Console.WriteLine($"     field columns are the way to read it: items.GetValue(0) = {Render(block["items"].GetValue(0))}");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -440,8 +430,6 @@ public static class TcpCompositeRead
                 Console.WriteLine($"     Children[1] [{string.Join(", ", latitudes.Values.ToArray())}]");
                 Console.WriteLine($"     row 0       {Render(block["r"].GetValue(0))}");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -453,9 +441,16 @@ public static class TcpCompositeRead
         Console.WriteLine("   client, as are Polygon and MultiLineString. Only the name tells them apart.");
     }
 
-    private static async Task Geometry(ClickHouseTcpClient client)
+    private static async Task Geometry(ClickHouseTcpClient client, ClickHouseTcpServerInfo server)
     {
         Console.WriteLine("\n9. Geometry is the one alias that is not a nested array\n");
+
+        if (server.Version < GeometryFrom)
+        {
+            Console.WriteLine($"   Skipped: needs ClickHouse {GeometryFrom} or newer, this server is {server.Version}.");
+            return;
+        }
+
         Console.WriteLine("   It names a Variant over the six above, so one column holds rows of different shapes. The");
         Console.WriteLine("   header carries only 'Geometry', so the client expands the alternatives itself, in the");
         Console.WriteLine("   server's own name-sorted discriminator order:\n");
@@ -484,8 +479,6 @@ public static class TcpCompositeRead
                     Console.WriteLine($"       row {row}: discriminator {geometry.Discriminators[row]} -> {child.TypeName,-14} value {Render(block["g"].GetValue(row))}");
                 }
             }
-
-            break;
         }
 
         Console.WriteLine();

@@ -14,7 +14,8 @@ namespace ClickHouse.Driver.Examples;
 /// </summary>
 public static class TcpBasicUsage
 {
-    // These examples are not the test suite, so a fixed name is fine. It is dropped even if a step throws.
+    // Fixed, like every example_* table in this project: the suite runs one at a time against a server, so
+    // it does not need the unique names the test suites do. It is dropped even if a step throws.
     private const string TableName = "example_tcp_basic_usage";
 
     public static async Task Run()
@@ -26,9 +27,11 @@ public static class TcpBasicUsage
         // 'await using', not 'using': the client is IAsyncDisposable, and disposal closes sockets.
         await using var client = ExampleConfig.CreateTcpClient();
 
-        Console.WriteLine($"Native protocol endpoint: {ExampleConfig.Host}:{ExampleConfig.TcpPort}, user '{ExampleConfig.Username}'");
+        var endpoint = ExampleConfig.TcpEndpoint;
+        Console.WriteLine($"Native protocol endpoint: {endpoint.Host}:{endpoint.Port}, user '{ExampleConfig.TcpBuilder().Username}'");
 
-        // Read out of the handshake the connection already made, so this costs no query.
+        // Read out of the handshake rather than from a query. A newly built client holds no connection, so
+        // the first call here dials and handshakes; later ones read what that handshake recorded.
         var server = await client.GetServerInfoAsync();
         Console.WriteLine($"Server: {server} (protocol revision {server.ProtocolRevision}, timezone {server.Timezone})");
 
@@ -50,6 +53,7 @@ public static class TcpBasicUsage
     private static async Task CreateTable(ClickHouseTcpClient client)
     {
         // ExecuteAsync is for anything that returns no rows: DDL, and DML other than INSERT ... VALUES.
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName}
             (
@@ -109,7 +113,7 @@ public static class TcpBasicUsage
     private static void ShowTheReadTiers()
     {
         Console.WriteLine("\nThree read tiers, all on this client:");
-        Console.WriteLine("  QueryAsync      one object[] per row, every value boxed");
+        Console.WriteLine("  QueryAsync      one object[] per row, value-type columns boxed");
         Console.WriteLine("  QueryAsync<T>   one POCO per row, filled by column name");
         Console.WriteLine("  StreamAsync     whole Blocks, typed columns, no per-row boxing");
         Console.WriteLine();

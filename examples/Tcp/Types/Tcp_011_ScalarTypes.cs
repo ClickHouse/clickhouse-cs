@@ -10,10 +10,16 @@ namespace ClickHouse.Driver.Examples;
 /// the 256-bit integers, the decimals, <c>BFloat16</c>, and the enums.
 ///
 /// <para>
-/// One rule underlies all of it: the client hands back <b>the value the wire carried</b>, in the narrowest CLR
-/// type that holds it without loss. So <c>UInt8</c> is a <see cref="byte"/> and not an <see cref="int"/>,
+/// One rule underlies most of it: the client hands back <b>the value the wire carried</b>, in the narrowest CLR
+/// type that holds it. So <c>UInt8</c> is a <see cref="byte"/> and not an <see cref="int"/>,
 /// <c>FixedString(N)</c> is a <see cref="byte"/>[] and not a <see cref="string"/>, and an <c>Enum8</c> is its
 /// ordinal and not its label. The same type is what an insert column must hold, in both directions.
+/// </para>
+///
+/// <para>
+/// Three types are a chosen CLR surface rather than the wire bytes: <c>BFloat16</c> widens to a
+/// <see cref="float"/>, <c>IPv4</c> and <c>IPv6</c> become an <c>IPAddress</c>, and <c>String</c> is decoded as
+/// UTF-8, which a ClickHouse <c>String</c> is not required to be. Sections 4 and 5 show what that costs.
 /// </para>
 ///
 /// <para>
@@ -54,6 +60,7 @@ public static class TcpScalarTypes
 
     private static async Task Seed(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName}
             (
@@ -134,13 +141,12 @@ public static class TcpScalarTypes
                 object value = column.GetValue(0);
                 Console.WriteLine($"   {column.TypeName,-36}  {Describe(column.ElementType),-20}  {Render(value)}");
             }
-
-            break;
         }
 
         Console.WriteLine();
-        Console.WriteLine("   Nothing in that table is a conversion. ElementType is the type the wire's bytes are,");
-        Console.WriteLine("   so a read costs a copy at most, and the same type is what an insert column must hold.");
+        Console.WriteLine("   ElementType is what an insert column must hold as well as what a read gives back. For most");
+        Console.WriteLine("   of that table it is the wire's own type, so a read costs a copy at most. BFloat16, IPv4,");
+        Console.WriteLine("   IPv6 and String are the exceptions: each is a CLR surface built from the wire bytes.");
     }
 
     private static async Task WideIntegers(ClickHouseTcpClient client)
@@ -176,8 +182,6 @@ public static class TcpScalarTypes
             signed.WriteLittleEndian(raw);
             Console.WriteLine($"     WriteLittleEndian               {Convert.ToHexString(raw)}");
             Console.WriteLine($"     ReadLittleEndian round trip     {Int256.ReadLittleEndian(raw) == signed}");
-
-            break;
         }
     }
 
@@ -197,7 +201,6 @@ public static class TcpScalarTypes
             }
 
             Console.WriteLine("     Both hold 1.25. Only the declared precision differs.");
-            break;
         }
 
         Console.WriteLine();
@@ -214,8 +217,6 @@ public static class TcpScalarTypes
                 Console.WriteLine($"       Scale {value.Scale}, Sign {value.Sign}, ToString() {value}");
                 Console.WriteLine($"       TryToDecimal {narrows}{(narrows ? $" -> {narrowed}" : " (out of a System.Decimal's range)")}");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -232,8 +233,6 @@ public static class TcpScalarTypes
                 var value = (ClickHouseTcpDecimal)column.GetValue(0);
                 Console.WriteLine($"     {column.Name,-18} {column.TypeName,-16} TryToDecimal {value.TryToDecimal(out _),-5}  {value}");
             }
-
-            break;
         }
 
         // Two values of different scale can be the same number, and comparison says so.
@@ -262,7 +261,6 @@ public static class TcpScalarTypes
             Console.WriteLine($"     Float64  wrote -2.25  read {block.Column<double>("f64")[0]}");
             Console.WriteLine($"     BFloat16 wrote 0.1f   read {block.Column<float>("bf16")[0]:R}");
             Console.WriteLine("       7 stored mantissa bits, so 0.1 is not representable and the nearest value comes back.");
-            break;
         }
     }
 
@@ -281,7 +279,6 @@ public static class TcpScalarTypes
             Console.WriteLine($"     IPv4           -> IPAddress {block.Column<IPAddress>("ip4")[0]}");
             Console.WriteLine($"     IPv6           -> IPAddress {block.Column<IPAddress>("ip6")[0]}");
             Console.WriteLine("       One CLR type for both, told apart by AddressFamily.");
-            break;
         }
 
         await foreach (Block block in client.StreamAsync(
@@ -296,7 +293,6 @@ public static class TcpScalarTypes
             }
 
             Console.WriteLine("       An IPv4 address in an IPv6 column is the mapped form, ::ffff:a.b.c.d.");
-            break;
         }
 
         Console.WriteLine();
@@ -312,7 +308,6 @@ public static class TcpScalarTypes
             }
 
             Console.WriteLine("     0xFFFE came back as two replacement characters. Use FixedString(N) for bytes.");
-            break;
         }
 
         Console.WriteLine();
@@ -345,8 +340,6 @@ public static class TcpScalarTypes
                 Console.WriteLine($"     {column.Name,-4} {column.TypeName}");
                 Console.WriteLine($"          reads as {Describe(column.ElementType)} = {column.GetValue(0)}");
             }
-
-            break;
         }
 
         Console.WriteLine();
@@ -389,8 +382,6 @@ public static class TcpScalarTypes
             {
                 Console.WriteLine($"     {column.Name,-14} {column.TypeName,-18} reads as {Describe(column.ElementType),-10} value {Render(column.GetValue(0))}");
             }
-
-            break;
         }
 
         Console.WriteLine();

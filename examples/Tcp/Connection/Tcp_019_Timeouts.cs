@@ -68,8 +68,8 @@ public static class TcpTimeouts
         // The HTTP port. Both interfaces are ClickHouse, but they speak different protocols, and the native client
         // reads the HTTP server's reply as a protocol packet.
         clock.Restart();
-        Exception? wrongPort = await Failing(options with { Port = ExampleConfig.HttpPort, DialTimeout = TimeSpan.FromSeconds(2) });
-        Console.WriteLine($"\n   The HTTP port ({ExampleConfig.HttpPort}) instead of the native one, after {clock.ElapsedMilliseconds} ms:");
+        Exception? wrongPort = await Failing(options with { Port = ExampleConfig.HttpEndpoint.Port, DialTimeout = TimeSpan.FromSeconds(2) });
+        Console.WriteLine($"\n   The HTTP port ({ExampleConfig.HttpEndpoint.Port}) instead of the native one, after {clock.ElapsedMilliseconds} ms:");
         Console.WriteLine($"     {Describe(wrongPort)}");
         Console.WriteLine("     Packet type 72 is 'H', the first byte of the HTTP response. Not a timeout either.");
 

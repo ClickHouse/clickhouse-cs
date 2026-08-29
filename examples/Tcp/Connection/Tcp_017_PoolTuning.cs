@@ -100,7 +100,9 @@ public static class TcpPoolTuning
 
     private static async Task Measure(int maxPoolSize)
     {
-        string marker = $"example_tcp_pool_cap_{maxPoolSize}";
+        // Unique per call: the count below matches on the marker, so a second run of this example would
+        // otherwise be counted too and could report more running queries than this client's pool allows.
+        string marker = $"example_tcp_pool_cap_{maxPoolSize}_{Guid.NewGuid():N}";
         var capture = new LogCapture();
 
         await using var observer = ExampleConfig.CreateTcpClient();

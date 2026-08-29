@@ -22,7 +22,7 @@ class Program
 
             if (filter != null)
             {
-                await RunFiltered(filter, isInteractive);
+                await RunFiltered(filter, transport, isInteractive);
             }
             else if (transport is { } only)
             {
@@ -46,9 +46,11 @@ class Program
         }
     }
 
-    private static async Task RunFiltered(string filter, bool isInteractive)
+    private static async Task RunFiltered(string filter, ExampleTransport? transport, bool isInteractive)
     {
-        var matches = ExampleRunner.FindMatches(filter);
+        // A transport flag narrows the filter rather than being ignored: '--tcp --filter basicusage'
+        // otherwise also selects the HTTP BasicUsage and asks for an endpoint the caller did not name.
+        var matches = ExampleRunner.FindMatches(filter, transport);
 
         if (matches.Count == 0)
         {

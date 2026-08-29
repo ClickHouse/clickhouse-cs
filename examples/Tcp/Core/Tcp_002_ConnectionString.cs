@@ -137,7 +137,7 @@ public static class TcpConnectionString
         {
             _ = new ClickHouseTcpClient(new ClickHouseTcpClientOptions
             {
-                Host = ExampleConfig.Host,
+                Host = ExampleConfig.TcpEndpoint.Host,
                 TlsAllowInvalidCertificates = true,
             });
         }
@@ -156,7 +156,11 @@ public static class TcpConnectionString
         await using var client = new ClickHouseTcpClient(options);
 
         var server = await client.GetServerInfoAsync();
-        Console.WriteLine($"   Connected to {server}, blocks framed with {Describe(options.Compressor)}");
+
+        // Compressor names the codec this client writes its own blocks with. It does not choose the codec
+        // for the blocks coming back: the query packet carries a compression flag and no codec name, so
+        // the server picks that one itself.
+        Console.WriteLine($"   Connected to {server}, blocks this client writes framed with {Describe(options.Compressor)}");
 
         // set_max_threads became a client-level setting, so the server sees it on every operation.
         object maxThreads = await client.ExecuteScalarAsync("SELECT getSetting('max_threads')");

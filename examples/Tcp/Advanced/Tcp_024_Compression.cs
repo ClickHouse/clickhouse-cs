@@ -201,7 +201,7 @@ public static class TcpCompression
         ClickHouseTcpClientOptions options,
         ClickHouseTcpQueryOptions? queryOptions)
     {
-        await using var proxy = new CountingProxy(ExampleConfig.Host, ExampleConfig.TcpPort);
+        await using var proxy = new CountingProxy(ExampleConfig.TcpEndpoint.Host, ExampleConfig.TcpEndpoint.Port);
 
         long rows = 0;
 
@@ -220,7 +220,7 @@ public static class TcpCompression
 
     private static async Task<long> MeasureInsert(ClickHouseTcpClientOptions options)
     {
-        await using var proxy = new CountingProxy(ExampleConfig.Host, ExampleConfig.TcpPort);
+        await using var proxy = new CountingProxy(ExampleConfig.TcpEndpoint.Host, ExampleConfig.TcpEndpoint.Port);
 
         var ids = new ulong[InsertRows];
         var text = new string[InsertRows];

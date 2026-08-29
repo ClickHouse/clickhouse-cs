@@ -42,6 +42,7 @@ public static class TcpPoco
 
     private static async Task CreateTable(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName}
             (

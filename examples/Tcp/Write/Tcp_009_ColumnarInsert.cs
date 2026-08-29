@@ -49,6 +49,7 @@ public static class TcpColumnarInsert
 
     private static async Task OneColumnPerTargetColumn(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         await client.ExecuteAsync($@"
             CREATE TABLE {TableName}
             (
@@ -137,6 +138,7 @@ public static class TcpColumnarInsert
 
     private static async Task ANamedSubset(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {DefaultsTable}");
         await client.ExecuteAsync($@"
             CREATE TABLE {DefaultsTable}
             (
@@ -169,6 +171,7 @@ public static class TcpColumnarInsert
 
     private static async Task TheServerStatesTheType(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {InstantsTable}");
         await client.ExecuteAsync($@"
             CREATE TABLE {InstantsTable}
             (
@@ -228,6 +231,7 @@ public static class TcpColumnarInsert
 
     private static async Task BlockGeometry(ClickHouseTcpClient client)
     {
+        await client.ExecuteAsync($"DROP TABLE IF EXISTS {BulkTable}");
         await client.ExecuteAsync($@"
             CREATE TABLE {BulkTable}
             (
@@ -240,8 +244,8 @@ public static class TcpColumnarInsert
 
         Console.WriteLine("\n5. ClickHouseTcpInsertOptions.MaxRowsPerBlock\n");
         Console.WriteLine("   One InsertAsync call is one statement, but not necessarily one wire block. The cap");
-        Console.WriteLine("   splits the rows into blocks of at most that many, which bounds what the client holds");
-        Console.WriteLine("   encoded at once. It defaults to 1,000,000 rows; null writes one block of any height.\n");
+        Console.WriteLine("   splits the rows into blocks of at most that many. It is block geometry, not a memory");
+        Console.WriteLine("   bound: it defaults to 1,000,000 rows, and null writes one block of any height.\n");
 
         Console.WriteLine("   The same six rows, once split into three blocks and once written as one:\n");
         Console.WriteLine("   MaxRowsPerBlock  Rows stored  Active parts");
@@ -254,7 +258,10 @@ public static class TcpColumnarInsert
         Console.WriteLine("   The cap is a client-side concern only. This server recombines the blocks of one insert");
         Console.WriteLine("   before it writes, so the six rows land as one part either way: lowering the cap does not");
         Console.WriteLine("   create parts and raising it does not remove them.");
-        Console.WriteLine("   Lower it to bound client memory on a very tall insert, and leave it alone otherwise.");
+        Console.WriteLine("   Leave it alone unless you want a particular block height. To bound the memory a large");
+        Console.WriteLine("   insert costs, set ClickHouseTcpClientOptions.MaxSendBufferBytes: it flushes the buffered");
+        Console.WriteLine("   bytes to the socket whenever they pass the cap, independent of block height. One column");
+        Console.WriteLine("   larger than the cap still buffers in full.");
     }
 
     private static async Task SixRowsAndCountParts(ClickHouseTcpClient client, int? maxRowsPerBlock)
@@ -284,7 +291,7 @@ public static class TcpColumnarInsert
         Console.WriteLine("   InsertRowsAsync takes one object[] per row and the same statement. It is the right");
         Console.WriteLine("   call when the data really is row-shaped, and it differs in three ways:\n");
         Console.WriteLine("     values are matched to the target columns by POSITION, not by name;");
-        Console.WriteLine("     every value is boxed, which the caller pays for when it builds the rows;");
+        Console.WriteLine("     each row is an object[], so every value-type value is boxed as the caller builds it;");
         Console.WriteLine("     the client then transposes those rows into one typed column per target.\n");
 
         await client.ExecuteAsync($"TRUNCATE TABLE {BulkTable}");

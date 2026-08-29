@@ -86,9 +86,8 @@ public static class Compression
 
         // Using ClickHouseClientSettings
         Console.WriteLine("3. Via ClickHouseClientSettings:");
-        var settings = new ClickHouseClientSettings
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
-            Host = "localhost",
             UseCompression = false  // Disable compression
         };
         using (var client = new ClickHouseClient(settings))
