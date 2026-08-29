@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,16 +6,17 @@ using System.Threading.Tasks;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// Owns one <see cref="ClickHouseTcpClient"/> and its connection pool, and hands out views onto it that cannot
-/// close it. Register this as a singleton in a dependency-injection container and let it be the thing that gets
-/// disposed at shutdown; inject <see cref="GetClient"/>'s result everywhere else.
+/// Owns one <see cref="ClickHouseTcpClient"/> and its connection pool, and hands that client to everything that
+/// runs operations against the server. Register this as a singleton in a dependency-injection container and let it
+/// be the thing that gets disposed at shutdown; inject <see cref="GetClient"/>'s result everywhere else.
+/// <c>AddClickHouseTcpDataSource</c> does both.
 /// </summary>
 /// <remarks>
 /// <para>
 /// A <see cref="ClickHouseTcpClient"/> is already thread-safe and pooled, so this adds no pooling of its own. What
-/// it adds is ownership: <see cref="GetClient"/> returns a client whose <c>DisposeAsync</c> does nothing, so a
-/// scoped service that disposes what it was injected cannot take the shared pool down with it. Disposing the data
-/// source closes the pool, once.
+/// it adds is a single owner: the client, and the pool behind it, belong to the data source. Everything else holds
+/// a client it must not dispose, because disposing it closes the pool for every other holder. Dispose the data
+/// source instead, and the pool closes once.
 /// </para>
 /// <para>
 /// This type is experimental: its surface may change in a future release. Suppress diagnostic
@@ -27,7 +27,6 @@ namespace ClickHouse.Driver.Tcp;
 public sealed class ClickHouseTcpDataSource : IAsyncDisposable, IDisposable
 {
     private readonly ClickHouseTcpClient client;
-    private readonly NonOwningClient view;
 
     /// <summary>Creates a data source from a connection string.</summary>
     /// <param name="connectionString">The connection string (keys such as <c>Host</c>, <c>Port</c>, <c>Username</c>, <c>set_&lt;name&gt;</c>).</param>
@@ -45,18 +44,17 @@ public sealed class ClickHouseTcpDataSource : IAsyncDisposable, IDisposable
     public ClickHouseTcpDataSource(ClickHouseTcpClientOptions options)
     {
         client = new ClickHouseTcpClient(options);
-        view = new NonOwningClient(client);
     }
 
     /// <summary>The configuration every operation from this data source runs under.</summary>
     public ClickHouseTcpClientOptions Options => client.Options;
 
     /// <summary>
-    /// Returns the shared client. The same instance every time, and disposing it does nothing — only disposing
-    /// the data source closes the pool.
+    /// Returns the shared client: the same instance on every call, and the data source's to dispose, not the
+    /// caller's. Disposing it closes the pool, which ends every other holder's operations as well.
     /// </summary>
-    /// <returns>A non-owning view of the shared client.</returns>
-    public IClickHouseTcpClient GetClient() => view;
+    /// <returns>The client this data source owns.</returns>
+    public IClickHouseTcpClient GetClient() => client;
 
     /// <summary>
     /// Opens a session on the shared pool: one connection, held until the session is disposed, that carries
@@ -69,7 +67,7 @@ public sealed class ClickHouseTcpDataSource : IAsyncDisposable, IDisposable
     public ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default)
         => client.OpenSessionAsync(cancellationToken);
 
-    /// <summary>Closes the pool and every connection in it. Views handed out by <see cref="GetClient"/> stop working.</summary>
+    /// <summary>Closes the pool and every connection in it. The client from <see cref="GetClient"/> stops working.</summary>
     /// <returns>A task that completes when the pool is closed.</returns>
     public ValueTask DisposeAsync() => client.DisposeAsync();
 
@@ -79,52 +77,4 @@ public sealed class ClickHouseTcpDataSource : IAsyncDisposable, IDisposable
     /// prefer <see cref="DisposeAsync"/> wherever the call site can await.
     /// </summary>
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
-
-    /// <summary>
-    /// Delegates every operation to the owned client and swallows disposal, so an injected consumer cannot close
-    /// a pool it does not own.
-    /// </summary>
-    private sealed class NonOwningClient(ClickHouseTcpClient inner) : IClickHouseTcpClient
-    {
-        public ClickHouseTcpClientOptions Options => inner.Options;
-
-        public IAsyncEnumerable<Block> StreamAsync(string sql, ClickHouseTcpQueryOptions options = null, CancellationToken cancellationToken = default)
-            => inner.StreamAsync(sql, options, cancellationToken);
-
-        public IAsyncEnumerable<object[]> QueryAsync(string sql, ClickHouseTcpQueryOptions options = null, CancellationToken cancellationToken = default)
-            => inner.QueryAsync(sql, options, cancellationToken);
-
-        public IAsyncEnumerable<T> QueryAsync<T>(string sql, ClickHouseTcpQueryOptions options = null, CancellationToken cancellationToken = default)
-            where T : class
-            => inner.QueryAsync<T>(sql, options, cancellationToken);
-
-        public ValueTask ExecuteAsync(string sql, ClickHouseTcpQueryOptions options = null, CancellationToken cancellationToken = default)
-            => inner.ExecuteAsync(sql, options, cancellationToken);
-
-        public ValueTask<object> ExecuteScalarAsync(string sql, ClickHouseTcpQueryOptions options = null, CancellationToken cancellationToken = default)
-            => inner.ExecuteScalarAsync(sql, options, cancellationToken);
-
-        public ValueTask InsertAsync(string sql, IReadOnlyList<IColumn> columns, ClickHouseTcpInsertOptions options = null, CancellationToken cancellationToken = default)
-            => inner.InsertAsync(sql, columns, options, cancellationToken);
-
-        public ValueTask InsertRowsAsync<T>(string sql, IReadOnlyList<T> rows, ClickHouseTcpInsertOptions options = null, CancellationToken cancellationToken = default)
-            where T : class
-            => inner.InsertRowsAsync(sql, rows, options, cancellationToken);
-
-        public ValueTask InsertRowsAsync(string sql, IReadOnlyList<object[]> rows, ClickHouseTcpInsertOptions options = null, CancellationToken cancellationToken = default)
-            => inner.InsertRowsAsync(sql, rows, options, cancellationToken);
-
-        public ValueTask PingAsync(CancellationToken cancellationToken = default)
-            => inner.PingAsync(cancellationToken);
-
-        public ValueTask<ClickHouseTcpServerInfo> GetServerInfoAsync(CancellationToken cancellationToken = default)
-            => inner.GetServerInfoAsync(cancellationToken);
-
-        public ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default)
-            => inner.OpenSessionAsync(cancellationToken);
-
-        /// <summary>Does nothing: the data source owns the client.</summary>
-        /// <returns>A completed task.</returns>
-        public ValueTask DisposeAsync() => default;
-    }
 }

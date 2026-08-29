@@ -31,6 +31,10 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <!-- The IServiceCollection extensions under DependencyInjection/ need the abstractions only.
+         ClickHouse.Driver declares the same package so the NuGet package states it: this project is packed
+         into that one as a DLL, and a PrivateAssets="all" reference carries no dependency across. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" />
     <PackageReference Include="StyleCop.Analyzers">

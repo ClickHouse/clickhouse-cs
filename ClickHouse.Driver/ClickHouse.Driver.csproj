@@ -73,6 +73,10 @@
   </Target>
 
   <ItemGroup>
+    <!-- Declared for the bundled ClickHouse.Driver.Tcp.dll, whose IServiceCollection extensions need it.
+         That reference is PrivateAssets="all", so its own package dependencies never reach this package;
+         Microsoft.Extensions.Http happens to pull the same assembly in, but nothing keeps it doing so. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" />
