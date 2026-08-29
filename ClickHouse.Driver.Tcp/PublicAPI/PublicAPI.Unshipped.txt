@@ -308,6 +308,11 @@ ClickHouse.Driver.Tcp.IColumn.TypeName.get -> string
 ClickHouse.Driver.Tcp.IColumn<T>
 ClickHouse.Driver.Tcp.IColumn<T>.this[int row].get -> T
 ClickHouse.Driver.Tcp.IColumn<T>.Values.get -> System.ReadOnlySpan<T>
+ClickHouse.Driver.Tcp.IDateTimeColumn
+ClickHouse.Driver.Tcp.IDateTimeColumn.GetDateTimeOffset(int row) -> System.DateTimeOffset
+ClickHouse.Driver.Tcp.IDateTimeColumn.Scale.get -> int
+ClickHouse.Driver.Tcp.IDateTimeColumn.TimeZone.get -> System.TimeZoneInfo
+ClickHouse.Driver.Tcp.IDateTimeColumn.ToDateTimeOffsets() -> System.DateTimeOffset[]
 ClickHouse.Driver.Tcp.IDynamicColumn
 ClickHouse.Driver.Tcp.IDynamicColumn.Discriminators.get -> System.ReadOnlySpan<int>
 ClickHouse.Driver.Tcp.IDynamicColumn.GetTypeColumn(int discriminator) -> ClickHouse.Driver.Tcp.IColumn
@@ -347,6 +352,10 @@ ClickHouse.Driver.Tcp.IQBitColumn.GetPlane(int bit) -> System.ReadOnlySpan<byte>
 ClickHouse.Driver.Tcp.IQBitColumn.GetPlane(int bit, int group) -> System.ReadOnlySpan<byte>
 ClickHouse.Driver.Tcp.IQBitColumn.GroupCount.get -> int
 ClickHouse.Driver.Tcp.IQBitColumn.Stride.get -> int
+ClickHouse.Driver.Tcp.ITimeColumn
+ClickHouse.Driver.Tcp.ITimeColumn.GetTimeSpan(int row) -> System.TimeSpan
+ClickHouse.Driver.Tcp.ITimeColumn.Scale.get -> int
+ClickHouse.Driver.Tcp.ITimeColumn.ToTimeSpans() -> System.TimeSpan[]
 ClickHouse.Driver.Tcp.ITupleColumn
 ClickHouse.Driver.Tcp.ITupleColumn.Children.get -> System.Collections.Generic.IReadOnlyList<ClickHouse.Driver.Tcp.IColumn>
 ClickHouse.Driver.Tcp.ITupleColumn.FieldNames.get -> System.Collections.Generic.IReadOnlyList<string>
