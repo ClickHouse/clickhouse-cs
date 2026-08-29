@@ -133,6 +133,15 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_018_Tls.cs](Tcp/Connection/Tcp_018_Tls.cs) - `UseTls`, `TlsServerName`, `TlsCaCertificatePath` (which replaces the host trust store rather than adding to it), `TlsAllowInvalidCertificates`, `ConfigureTls`, the default port moving to 9440, and the TLS mistakes the constructor refuses before anything connects
 - [Tcp_019_Timeouts.cs](Tcp/Connection/Tcp_019_Timeouts.cs) - `DialTimeout`, `ReadTimeout` as an idle deadline rather than a time limit, `PoolTimeout`, `StatementMaxLength` in the log line, `MaxSendBufferBytes`, and where a `CancellationToken` takes over
 
+### Native Protocol: Advanced
+
+- [Tcp_020_SettingsAndQueryId.cs](Tcp/Advanced/Tcp_020_SettingsAndQueryId.cs) - Client-level `CustomSettings` against per-query `ClickHouseTcpQueryOptions.Settings` and the precedence between them, a misspelled setting name being ignored rather than refused, `QueryId` in `system.query_log` and what reusing one does, and `async_insert` as a setting that changes what an insert means
+- [Tcp_021_ProgressAndStatistics.cs](Tcp/Advanced/Tcp_021_ProgressAndStatistics.cs) - `ClickHouseTcpQueryCallbacks`: `OnProgress` interleaved with the rows as the query runs, why every counter is an increment, `OnProfileInfo`'s once-per-query summary, `OnProfileEvents`' increments and gauges, and the callback contract — synchronous, on the draining thread, and never allowed to throw
+- [Tcp_022_Cancellation.cs](Tcp/Advanced/Tcp_022_Cancellation.cs) - A `CancellationToken` through `QueryAsync`, `StreamAsync` and `ExecuteAsync`: what the caller catches, the cancellation the server logs, why the connection is closed rather than pooled, why abandoning a result is the same thing, and how it differs from `ReadTimeout` and `max_execution_time`
+- [Tcp_023_ErrorsAndRetries.cs](Tcp/Advanced/Tcp_023_ErrorsAndRetries.cs) - `ClickHouseTcpServerException` (`Code`, `RawCode`, `Name`, `ServerStackTrace`), `ClickHouseTcpTransportException`, `ClickHouseTcpProtocolException`, switching on `ClickHouseErrorCode`, what `IsTransient` does and does not promise, a retry that recovers, and why retrying an insert needs `insert_deduplication_token` and a table that can deduplicate
+- [Tcp_024_Compression.cs](Tcp/Advanced/Tcp_024_Compression.cs) - `Compression=lz4|zstd|none` and `ClickHouseTcpClientOptions.Compressor`, measured in bytes on the wire: what LZ4 saves by default, why the client's codec does not choose what the server sends (`network_compression_method` does), what it does choose on an insert, and why loopback cannot measure the benefit
+- [Tcp_025_ServerInfo.cs](Tcp/Advanced/Tcp_025_ServerInfo.cs) - `GetServerInfoAsync` and every field of `ClickHouseTcpServerInfo`, the build number `Version` does not carry, gating on `ProtocolRevision` (query parameters need 54459) with one gate that passes and one that does not, and gating on the server version with a printed skip
+
 ## How to run
 
 ### Prerequisites
