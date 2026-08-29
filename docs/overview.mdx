@@ -964,7 +964,7 @@ var json = await bodyReader.ReadToEndAsync();
 
 Read the returned stream to completion before it goes out of scope, as above. When the response *is* compressed you get a decoder created with `leaveOpen`, so disposing it leaves the response intact; when it is **not** compressed you get the HTTP content stream itself, so disposing it ends the body. Either way the `ClickHouseRawResult` owns the response — don't call its other read members after the stream has been disposed. Disposing the `ClickHouseRawResult` is always required and on its own sufficient: it releases both the response and any decoder inserted here (decoders hold pooled buffers). The `await using` above is therefore optional, and safe to keep. Repeated sequential calls hand back the same stream; the type is not safe to use concurrently.
 
-See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Select/Select_007_ResponseCompression.cs) for a runnable example.
+See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Http/Select/Select_007_ResponseCompression.cs) for a runnable example.
 
 #### Insert (request) compression {#insert-compression}
 
@@ -2275,7 +2275,7 @@ SqlMapper.AddTypeHandler(new BigIntegerHandler());
 SqlMapper.AddTypeHandler(new IpAddressHandler());
 ```
 
-See the [Dapper example](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/ORM/ORM_001_Dapper.cs) for an example type handler implementation.
+See the [Dapper example](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Http/ORM/ORM_001_Dapper.cs) for an example type handler implementation.
 
 #### Dapper.Contrib {#dapper-contrib}
 
