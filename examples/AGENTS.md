@@ -23,6 +23,11 @@ Five steps. Skip any one of them and the example does not run.
    The class name is what `--list` prints and what `--filter` matches, so name it after the topic
    (`BasicUsage`), not after the file (`Core_001_BasicUsage`).
 
+   **A native-protocol example's class name must start with `Tcp`** (`TcpBasicUsage`). Every example
+   shares one namespace, so it could not reuse an HTTP example's name anyway, and that prefix is how
+   `ExampleInfo.Transport` knows which endpoint to check before running it — and what `--http` and
+   `--tcp` select on.
+
 4. **Add it to `RunAllExamples` in `Program.cs`**, under its category banner, in file-number order.
    That list is hand-maintained so the run order and the banners stay meaningful. An example missing
    from it still compiles, still appears in `--list`, and still runs under `--filter` — it just never

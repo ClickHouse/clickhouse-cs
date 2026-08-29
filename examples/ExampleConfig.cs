@@ -1,4 +1,5 @@
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Tcp;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -54,6 +55,10 @@ public static class ExampleConfig
     public static string HttpConnectionString { get; } =
         Env("CLICKHOUSE_HTTP_CONNECTION_STRING") ?? HttpBuilder().ConnectionString;
 
+    /// <summary>The connection string for the native protocol.</summary>
+    public static string TcpConnectionString { get; } =
+        Env("CLICKHOUSE_TCP_CONNECTION_STRING") ?? TcpBuilder().ToString();
+
     /// <summary>
     /// A builder pre-filled with the configured endpoint and credentials, for an example that has to
     /// change one key. Each call returns a fresh builder.
@@ -68,15 +73,36 @@ public static class ExampleConfig
         Database = Database,
     };
 
+    /// <summary>
+    /// A builder pre-filled with the configured endpoint and credentials for the native protocol, for
+    /// an example that has to change one key. Each call returns a fresh builder.
+    /// </summary>
+    /// <returns>A builder describing the configured native endpoint.</returns>
+    public static ClickHouseTcpConnectionStringBuilder TcpBuilder() => new()
+    {
+        Host = Host,
+        Port = TcpPort,
+        Username = Username,
+        Password = Password,
+        Database = Database,
+    };
+
     /// <summary>Creates a client against the configured server. The caller disposes it.</summary>
     /// <returns>A client for the configured HTTP endpoint.</returns>
     public static ClickHouseClient CreateHttpClient() => new(HttpConnectionString);
+
+    /// <summary>
+    /// Creates a native-protocol client against the configured server. The caller disposes it,
+    /// asynchronously where it can.
+    /// </summary>
+    /// <returns>A client for the configured native endpoint.</returns>
+    public static ClickHouseTcpClient CreateTcpClient() => new(TcpConnectionString);
 
     /// <summary>Creates an ADO.NET connection against the configured server. The caller disposes it.</summary>
     /// <returns>A connection for the configured HTTP endpoint.</returns>
     public static ClickHouseConnection CreateHttpConnection() => new(HttpConnectionString);
 
-    private static string Env(string name)
+    private static string? Env(string name)
     {
         var value = Environment.GetEnvironmentVariable(name);
         return string.IsNullOrWhiteSpace(value) ? null : value;
