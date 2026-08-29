@@ -78,9 +78,12 @@ class Program
 
         Console.WriteLine($"Running {selected.Count} {transport} example(s):\n");
 
-        // The named transport, not the selection's, so that asking for one with none written yet
-        // still reports whether its endpoint answers.
-        if (!await ExamplePreflight.CheckAsync(transport))
+        // The named transport plus whatever the selection needs beyond it, so that asking for one
+        // with none written yet still reports whether its endpoint answers, and an example
+        // comparing the two transports still gets both checked.
+        var needed = selected.SelectMany(e => e.RequiredTransports).Append(transport).Distinct().ToArray();
+
+        if (!await ExamplePreflight.CheckAsync(needed))
         {
             Environment.Exit(1);
         }
@@ -336,6 +339,27 @@ class Program
 
         Console.WriteLine($"Running: {nameof(Testcontainers)}");
         await Testcontainers.Run();
+        WaitForUser(isInteractive);
+
+        // Native Protocol: Core Usage & Configuration
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("NATIVE PROTOCOL: CORE USAGE & CONFIGURATION");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(TcpBasicUsage)}");
+        await TcpBasicUsage.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpConnectionString)}");
+        await TcpConnectionString.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpDependencyInjection)}");
+        await TcpDependencyInjection.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpMigratingFromHttp)}");
+        await TcpMigratingFromHttp.Run();
         WaitForUser(isInteractive);
 
         Console.WriteLine("\n\n" + new string('=', 70));

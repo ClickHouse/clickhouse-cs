@@ -97,6 +97,15 @@ Examples are grouped by transport. Everything under [Http/](Http) uses `ClickHou
 
 - [Testing_001_Testcontainers.cs](Http/Testing/Testing_001_Testcontainers.cs) - Using Testcontainers to spin up ephemeral ClickHouse instances for integration testing
 
+### Native Protocol: Core Usage & Configuration
+
+These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/README.md) first.
+
+- [Tcp_001_BasicUsage.cs](Tcp/Core/Tcp_001_BasicUsage.cs) - Constructing `ClickHouseTcpClient`, DDL with `ExecuteAsync`, inserting with `InsertRowsAsync`, reading with `QueryAsync` and `ExecuteScalarAsync`, and disposal
+- [Tcp_002_ConnectionString.cs](Tcp/Core/Tcp_002_ConnectionString.cs) - The native key set (compression codec, pool keys, TLS keys, no `Protocol`), `ClickHouseTcpConnectionStringBuilder`, and deriving an options variant with a `with` expression
+- [Tcp_003_DependencyInjection.cs](Tcp/Core/Tcp_003_DependencyInjection.cs) - `AddClickHouseTcpDataSource`, injecting `IClickHouseTcpClient`, keyed registrations for two clusters, and who disposes the shared pool
+- [Tcp_004_MigratingFromHttp.cs](Tcp/Core/Tcp_004_MigratingFromHttp.cs) - The same task over both transports, the call-for-call API mapping, the `CHTCP0001` opt-in, and what the native client cannot do
+
 ## How to run
 
 ### Prerequisites

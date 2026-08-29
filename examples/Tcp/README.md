@@ -17,8 +17,11 @@ docker run -d --name clickhouse-server -p 8123:8123 -p 9000:9000 clickhouse/clic
 
 ## The API is experimental
 
-Every public type of the native client carries `[Experimental("CHTCP0001")]`, so using one is a
-compile error until you acknowledge that the surface may change in a future release:
+The client, the data source, the session and the three `IClickHouseTcp*` interfaces carry
+`[Experimental("CHTCP0001")]`, so touching one is a compile error until you acknowledge that the
+surface may change in a future release. The types around them — the options record, the connection
+string builder, `Block`, the column interfaces and the exceptions — carry nothing, so they can be
+named without the suppression.
 
 ```csharp
 #pragma warning disable CHTCP0001 // The native protocol client's API is not yet stable.
@@ -45,6 +48,13 @@ Reach for the HTTP client instead when you need:
 - **A parameter type resolver, a parameter formatter, or a read value converter.** The native client
   has no hook for any of the three; a parameter's type comes from the `{name:Type}` placeholder in
   the query or from `ClickHouseTcpParameter.ClickHouseType`.
+- **A per-query role or database.** HTTP's `QueryOptions` carries both; `ClickHouseTcpQueryOptions`
+  carries only `QueryId`, `Settings`, `Parameters` and `Callbacks`. Set the database on the client,
+  and change roles with `SET ROLE` inside a session.
+
+Also worth knowing before you read a timestamp: a `DateTime`, `DateTime64` or `Time` column reaches
+the row and block tiers as the integer the wire carried, not as a calendar type. `QueryAsync<T>` into
+a POCO is the only tier that converts.
 
 ## What only the native client does
 
