@@ -91,6 +91,29 @@ public class EnumColumnCodecTests
         Assert.That(thrown.Message, Does.Contain("'c' is not a label of 'Enum8('a' = -1, 'b' = 127)'").And.Contain("'a', 'b'"));
     }
 
+    /// <summary>
+    /// Enum16 stores its ordinals two bytes wide, and the view widens them to long for the label lookup. A
+    /// negative ordinal is the case that separates a sign extension from a reinterpretation.
+    /// </summary>
+    [Test]
+    public void GetLabel_Enum16_WidensTheTwoByteOrdinalIncludingNegativeOnes()
+    {
+        var members = new EnumMemberTable(
+            "Enum16('low' = -32768, 'high' = 32767)",
+            new[] { new KeyValuePair<string, long>("low", -32768), new KeyValuePair<string, long>("high", 32767) });
+        using var column = new EnumColumn<short>(
+            PrimitiveColumn<short>.FromValues("v", "Enum16('low' = -32768, 'high' = 32767)", new short[] { -32768, 32767 }),
+            members);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column.GetLabel(0), Is.EqualTo("low"));
+            Assert.That(column.GetLabel(1), Is.EqualTo("high"));
+            Assert.That(column.TryGetOrdinal("low", out long ordinal), Is.True);
+            Assert.That(ordinal, Is.EqualTo(-32768));
+        });
+    }
+
     [Test]
     public void GetLabel_OrdinalWithNoDeclaredMember_ThrowsWhileTheDeclaredOnesResolve()
     {
