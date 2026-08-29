@@ -63,7 +63,7 @@ public static class QBitSimilaritySearch
             while (reader.Read())
             {
                 var word = reader.GetString(0);
-                var distance = reader.GetFloat(1);
+                var distance = reader.GetDouble(1);
                 Console.WriteLine($"{word,-12}\t{distance:F6}");
             }
         }
@@ -86,7 +86,7 @@ public static class QBitSimilaritySearch
             while (reader.Read())
             {
                 var word = reader.GetString(0);
-                var distance = reader.GetFloat(1);
+                var distance = reader.GetDouble(1);
                 Console.WriteLine($"{word,-12}\t{distance:F6}");
             }
         }

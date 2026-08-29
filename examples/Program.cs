@@ -109,6 +109,10 @@ class Program
         await BulkInsert.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(AsyncInsert)}");
+        await AsyncInsert.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine($"\n\nRunning: {nameof(RawStreamInsert)}");
         await RawStreamInsert.Run();
         WaitForUser(isInteractive);
@@ -175,6 +179,10 @@ class Program
         await SimpleTypes.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(DateTimeHandling)}");
+        await DateTimeHandling.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine($"\n\nRunning: {nameof(ComplexTypes)}");
         await ComplexTypes.Run();
         WaitForUser(isInteractive);
@@ -189,6 +197,10 @@ class Program
 
         Console.WriteLine($"\n\nRunning: {nameof(GeometryTypes)}");
         await GeometryTypes.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(QBitSimilaritySearch)}");
+        await QBitSimilaritySearch.Run();
         WaitForUser(isInteractive);
 
         // ORM Integration
