@@ -48,8 +48,7 @@ class Program
 
     private static async Task RunFiltered(string filter, ExampleTransport? transport, bool isInteractive)
     {
-        // A transport flag narrows the filter rather than being ignored: '--tcp --filter basicusage'
-        // otherwise also selects the HTTP BasicUsage and asks for an endpoint the caller did not name.
+        // A transport flag also limits fuzzy matches.
         var matches = ExampleRunner.FindMatches(filter, transport);
 
         if (matches.Count == 0)
@@ -80,9 +79,7 @@ class Program
 
         Console.WriteLine($"Running {selected.Count} {transport} example(s):\n");
 
-        // The named transport plus whatever the selection needs beyond it, so that asking for one
-        // with none written yet still reports whether its endpoint answers, and an example
-        // comparing the two transports still gets both checked.
+        // Include endpoints needed by cross-transport examples.
         var needed = selected.SelectMany(e => e.RequiredTransports).Append(transport).Distinct().ToArray();
 
         if (!await ExamplePreflight.CheckAsync(needed))
@@ -343,160 +340,49 @@ class Program
         await Testcontainers.Run();
         WaitForUser(isInteractive);
 
-        // Native Protocol: Core Usage & Configuration
-        Console.WriteLine("\n\n" + new string('=', 70));
-        Console.WriteLine("NATIVE PROTOCOL: CORE USAGE & CONFIGURATION");
-        Console.WriteLine(new string('=', 70) + "\n");
+        await RunCategory("NATIVE PROTOCOL: CORE USAGE & CONFIGURATION", isInteractive,
+            (nameof(TcpBasicUsage), TcpBasicUsage.Run),
+            (nameof(TcpConnectionString), TcpConnectionString.Run),
+            (nameof(TcpDependencyInjection), TcpDependencyInjection.Run),
+            (nameof(TcpMigratingFromHttp), TcpMigratingFromHttp.Run));
 
-        Console.WriteLine($"Running: {nameof(TcpBasicUsage)}");
-        await TcpBasicUsage.Run();
-        WaitForUser(isInteractive);
+        await RunCategory("NATIVE PROTOCOL: READING DATA", isInteractive,
+            (nameof(TcpReadTiers), TcpReadTiers.Run),
+            (nameof(TcpBlocksAndColumns), TcpBlocksAndColumns.Run),
+            (nameof(TcpParameters), TcpParameters.Run),
+            (nameof(TcpPoco), TcpPoco.Run));
 
-        Console.WriteLine($"\n\nRunning: {nameof(TcpConnectionString)}");
-        await TcpConnectionString.Run();
-        WaitForUser(isInteractive);
+        await RunCategory("NATIVE PROTOCOL: WRITING DATA", isInteractive,
+            (nameof(TcpColumnarInsert), TcpColumnarInsert.Run),
+            (nameof(TcpCompositeWrites), TcpCompositeWrites.Run));
 
-        Console.WriteLine($"\n\nRunning: {nameof(TcpDependencyInjection)}");
-        await TcpDependencyInjection.Run();
-        WaitForUser(isInteractive);
+        await RunCategory("NATIVE PROTOCOL: DATA TYPES", isInteractive,
+            (nameof(TcpScalarTypes), TcpScalarTypes.Run),
+            (nameof(TcpDateTimeAndTimezones), TcpDateTimeAndTimezones.Run),
+            (nameof(TcpCompositeRead), TcpCompositeRead.Run),
+            (nameof(TcpVariantDynamicJson), TcpVariantDynamicJson.Run),
+            (nameof(TcpQBitVectorSearch), TcpQBitVectorSearch.Run));
 
-        Console.WriteLine($"\n\nRunning: {nameof(TcpMigratingFromHttp)}");
-        await TcpMigratingFromHttp.Run();
-        WaitForUser(isInteractive);
+        await RunCategory("NATIVE PROTOCOL: CONNECTIONS AND SESSIONS", isInteractive,
+            (nameof(TcpSessions), TcpSessions.Run),
+            (nameof(TcpPoolTuning), TcpPoolTuning.Run),
+            (nameof(TcpTls), TcpTls.Run),
+            (nameof(TcpTimeouts), TcpTimeouts.Run));
 
-        // Native Protocol: Reading Data
-        Console.WriteLine("\n\n" + new string('=', 70));
-        Console.WriteLine("NATIVE PROTOCOL: READING DATA");
-        Console.WriteLine(new string('=', 70) + "\n");
+        await RunCategory("NATIVE PROTOCOL: ADVANCED", isInteractive,
+            (nameof(TcpSettingsAndQueryId), TcpSettingsAndQueryId.Run),
+            (nameof(TcpProgressAndStatistics), TcpProgressAndStatistics.Run),
+            (nameof(TcpCancellation), TcpCancellation.Run),
+            (nameof(TcpErrorsAndRetries), TcpErrorsAndRetries.Run),
+            (nameof(TcpCompression), TcpCompression.Run),
+            (nameof(TcpServerInfo), TcpServerInfo.Run));
 
-        Console.WriteLine($"Running: {nameof(TcpReadTiers)}");
-        await TcpReadTiers.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpBlocksAndColumns)}");
-        await TcpBlocksAndColumns.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpParameters)}");
-        await TcpParameters.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpPoco)}");
-        await TcpPoco.Run();
-        WaitForUser(isInteractive);
-
-        // Native Protocol: Writing Data
-        Console.WriteLine("\n\n" + new string('=', 70));
-        Console.WriteLine("NATIVE PROTOCOL: WRITING DATA");
-        Console.WriteLine(new string('=', 70) + "\n");
-
-        Console.WriteLine($"Running: {nameof(TcpColumnarInsert)}");
-        await TcpColumnarInsert.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpCompositeWrites)}");
-        await TcpCompositeWrites.Run();
-        WaitForUser(isInteractive);
-
-        // Native Protocol: Data Types
-        Console.WriteLine("\n\n" + new string('=', 70));
-        Console.WriteLine("NATIVE PROTOCOL: DATA TYPES");
-        Console.WriteLine(new string('=', 70) + "\n");
-
-        Console.WriteLine($"Running: {nameof(TcpScalarTypes)}");
-        await TcpScalarTypes.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpDateTimeAndTimezones)}");
-        await TcpDateTimeAndTimezones.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpCompositeRead)}");
-        await TcpCompositeRead.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpVariantDynamicJson)}");
-        await TcpVariantDynamicJson.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpQBitVectorSearch)}");
-        await TcpQBitVectorSearch.Run();
-        WaitForUser(isInteractive);
-
-        // Native Protocol: Connections and Sessions
-        Console.WriteLine("\n\n" + new string('=', 70));
-        Console.WriteLine("NATIVE PROTOCOL: CONNECTIONS AND SESSIONS");
-        Console.WriteLine(new string('=', 70) + "\n");
-
-        Console.WriteLine($"Running: {nameof(TcpSessions)}");
-        await TcpSessions.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpPoolTuning)}");
-        await TcpPoolTuning.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpTls)}");
-        await TcpTls.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpTimeouts)}");
-        await TcpTimeouts.Run();
-        WaitForUser(isInteractive);
-
-        // Native Protocol: Advanced
-        Console.WriteLine("\n\n" + new string('=', 70));
-        Console.WriteLine("NATIVE PROTOCOL: ADVANCED");
-        Console.WriteLine(new string('=', 70) + "\n");
-
-        Console.WriteLine($"Running: {nameof(TcpSettingsAndQueryId)}");
-        await TcpSettingsAndQueryId.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpProgressAndStatistics)}");
-        await TcpProgressAndStatistics.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpCancellation)}");
-        await TcpCancellation.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpErrorsAndRetries)}");
-        await TcpErrorsAndRetries.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpCompression)}");
-        await TcpCompression.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpServerInfo)}");
-        await TcpServerInfo.Run();
-        WaitForUser(isInteractive);
-
-        // Native Protocol: Observability
-        Console.WriteLine("\n\n" + new string('=', 70));
-        Console.WriteLine("NATIVE PROTOCOL: OBSERVABILITY");
-        Console.WriteLine(new string('=', 70) + "\n");
-
-        Console.WriteLine($"Running: {nameof(TcpLogging)}");
-        await TcpLogging.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpOpenTelemetry)}");
-        await TcpOpenTelemetry.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpMetadataBlocks)}");
-        await TcpMetadataBlocks.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpHealthChecks)}");
-        await TcpHealthChecks.Run();
-        WaitForUser(isInteractive);
-
-        Console.WriteLine($"\n\nRunning: {nameof(TcpTestcontainers)}");
-        await TcpTestcontainers.Run();
-        WaitForUser(isInteractive);
+        await RunCategory("NATIVE PROTOCOL: OBSERVABILITY", isInteractive,
+            (nameof(TcpLogging), TcpLogging.Run),
+            (nameof(TcpOpenTelemetry), TcpOpenTelemetry.Run),
+            (nameof(TcpMetadataBlocks), TcpMetadataBlocks.Run),
+            (nameof(TcpHealthChecks), TcpHealthChecks.Run),
+            (nameof(TcpTestcontainers), TcpTestcontainers.Run));
 
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ALL EXAMPLES COMPLETED SUCCESSFULLY!");
@@ -564,6 +450,24 @@ class Program
         else
         {
             Console.WriteLine(); // Just add a blank line in non-interactive mode
+        }
+    }
+
+    private static async Task RunCategory(
+        string title,
+        bool isInteractive,
+        params (string Name, Func<Task> Run)[] examples)
+    {
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine(title);
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        foreach (var example in examples)
+        {
+            Console.WriteLine($"Running: {example.Name}");
+            await example.Run();
+            WaitForUser(isInteractive);
+            Console.WriteLine();
         }
     }
 }

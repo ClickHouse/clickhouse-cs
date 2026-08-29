@@ -101,60 +101,60 @@ Examples are grouped by transport. Everything under [Http/](Http) uses `ClickHou
 
 These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/README.md) first.
 
-- [Tcp_001_BasicUsage.cs](Tcp/Core/Tcp_001_BasicUsage.cs) - Constructing `ClickHouseTcpClient`, DDL with `ExecuteAsync`, inserting with `InsertRowsAsync`, reading with `QueryAsync` and `ExecuteScalarAsync`, and disposal
-- [Tcp_002_ConnectionString.cs](Tcp/Core/Tcp_002_ConnectionString.cs) - The native key set (compression codec, pool keys, TLS keys, no `Protocol`), `ClickHouseTcpConnectionStringBuilder`, and deriving an options variant with a `with` expression
-- [Tcp_003_DependencyInjection.cs](Tcp/Core/Tcp_003_DependencyInjection.cs) - `AddClickHouseTcpDataSource`, injecting `IClickHouseTcpClient`, keyed registrations for two clusters, and who disposes the shared pool
-- [Tcp_004_MigratingFromHttp.cs](Tcp/Core/Tcp_004_MigratingFromHttp.cs) - The same task over both transports, the call-for-call API mapping, the `CHTCP0001` opt-in, and what the native client cannot do
+- [Tcp_001_BasicUsage.cs](Tcp/Core/Tcp_001_BasicUsage.cs) - Connect, create a table, insert rows, and query them
+- [Tcp_002_ConnectionString.cs](Tcp/Core/Tcp_002_ConnectionString.cs) - Build and customize a native connection string
+- [Tcp_003_DependencyInjection.cs](Tcp/Core/Tcp_003_DependencyInjection.cs) - Register shared and keyed native data sources
+- [Tcp_004_MigratingFromHttp.cs](Tcp/Core/Tcp_004_MigratingFromHttp.cs) - Compare common HTTP and native client operations
 
 ### Native Protocol: Reading Data
 
-- [Tcp_005_ReadTiers.cs](Tcp/Read/Tcp_005_ReadTiers.cs) - The three read tiers side by side — `QueryAsync` (boxed `object[]`), `QueryAsync<T>` (POCO, converted), `StreamAsync` (columnar blocks) — what each allocates, and which to pick
-- [Tcp_006_BlocksAndColumns.cs](Tcp/Read/Tcp_006_BlocksAndColumns.cs) - The block tier in depth: `Block.ColumnNames`, the indexers, `Column<T>`, `IColumn` metadata, `ReadOnlySpan<T>` values, `IDateTimeColumn`/`ITimeColumn`, `IArrayColumn<T>`, and the borrowed-lifetime contract
-- [Tcp_007_Parameters.cs](Tcp/Read/Tcp_007_Parameters.cs) - `ClickHouseTcpParameterCollection` and `ClickHouseTcpQueryOptions.Parameters`, plus the three traps: `{name:Type}` is required, an instant needs a declared timezone, and a parameter named after a server setting
-- [Tcp_008_Poco.cs](Tcp/Read/Tcp_008_Poco.cs) - `QueryAsync<T>` and `InsertRowsAsync<T>` over one class, the name-matching rules, `[ClickHouseTcpColumn]`, `[ClickHouseTcpNotMapped]`, and what a mapping mismatch reports
+- [Tcp_001_ReadTiers.cs](Tcp/Read/Tcp_001_ReadTiers.cs) - Read rows as arrays, POCOs, or columnar blocks
+- [Tcp_002_BlocksAndColumns.cs](Tcp/Read/Tcp_002_BlocksAndColumns.cs) - Access typed block columns and copy borrowed data
+- [Tcp_003_Parameters.cs](Tcp/Read/Tcp_003_Parameters.cs) - Bind typed values and identifiers
+- [Tcp_004_Poco.cs](Tcp/Read/Tcp_004_Poco.cs) - Map query results and inserts to a POCO
 
 ### Native Protocol: Writing Data
 
-- [Tcp_009_ColumnarInsert.cs](Tcp/Write/Tcp_009_ColumnarInsert.cs) - The columnar insert tier: `ClickHouseTcpColumn.Create` per target column plus `InsertAsync`, matching by name so the order is free, a named subset with the server filling the rest, why no ClickHouse type is ever stated, `MaxRowsPerBlock`, and how it differs from `InsertRowsAsync`
-- [Tcp_010_CompositeWrites.cs](Tcp/Write/Tcp_010_CompositeWrites.cs) - Writing composites: the jagged and dense `Array(T)` shapes, re-inserting a column read out of a block with nothing rebuilt, the non-nullable-row rule, and `Map`, `Tuple`, `Nullable`, `LowCardinality`
+- [Tcp_001_ColumnarInsert.cs](Tcp/Write/Tcp_001_ColumnarInsert.cs) - Insert typed columns and let ClickHouse fill defaults
+- [Tcp_002_CompositeWrites.cs](Tcp/Write/Tcp_002_CompositeWrites.cs) - Insert composite values and reuse a column from a block
 
 ### Native Protocol: Data Types
 
-- [Tcp_011_ScalarTypes.cs](Tcp/Types/Tcp_011_ScalarTypes.cs) - The CLR type of every scalar: the integer widths including `Int256`/`UInt256`, `BFloat16`'s lost precision, why the declared precision and not the value decides between `decimal` and `ClickHouseTcpDecimal`, `String` against `FixedString(N)`, and enums as bare ordinals
-- [Tcp_012_DateTimeAndTimezones.cs](Tcp/Types/Tcp_012_DateTimeAndTimezones.cs) - `Date`, `Date32`, `DateTime`, `DateTime64(scale)`, `Time`, `Time64(scale)`: the stored count against the presented calendar value, where the presentation timezone comes from, what `DateTime.Kind` does on an insert, and why a parameter naming an instant needs a declared timezone
-- [Tcp_013_CompositeRead.cs](Tcp/Types/Tcp_013_CompositeRead.cs) - Reading composites through `IArrayColumn<T>`, `IMapColumn<K,V>`, `ITupleColumn`, `INestedColumn`, `INullableColumn<T>` and `ILowCardinalityColumn<T>`, how they nest, and the geo aliases — which surface as `ValueTuple` where the HTTP driver builds `System.Tuple`
-- [Tcp_014_VariantDynamicJson.cs](Tcp/Types/Tcp_014_VariantDynamicJson.cs) - `IVariantColumn` and `IDynamicColumn`: discriminators, local indices, the two different NULL markers, and typed dispatch without boxing — then `JSON`, which travels as text and comes back normalized, so what you write is not what you read
-- [Tcp_015_QBitVectorSearch.cs](Tcp/Types/Tcp_015_QBitVectorSearch.cs) - `QBit(T, N)` and `IQBitColumn`: the transposed bit-plane layout, `GetPlane` and the bitmap byte order, rebuilding a vector from its top planes to match `L2DistanceTransposed`'s precision argument, and the padding a dimension that is not a multiple of 8 costs
+- [Tcp_001_ScalarTypes.cs](Tcp/Types/Tcp_001_ScalarTypes.cs) - Inspect representative ClickHouse-to-CLR scalar mappings
+- [Tcp_002_DateTimeAndTimezones.cs](Tcp/Types/Tcp_002_DateTimeAndTimezones.cs) - Read and write date, time, and timezone-aware values
+- [Tcp_003_CompositeRead.cs](Tcp/Types/Tcp_003_CompositeRead.cs) - Read arrays, maps, tuples, nullable values, and nested data
+- [Tcp_004_VariantDynamicJson.cs](Tcp/Types/Tcp_004_VariantDynamicJson.cs) - Read `Variant`, `Dynamic`, and `JSON` columns
+- [Tcp_005_QBitVectorSearch.cs](Tcp/Types/Tcp_005_QBitVectorSearch.cs) - Inspect `QBit` planes and run approximate vector search
 
 ### Native Protocol: Connections and Sessions
 
-- [Tcp_016_Sessions.cs](Tcp/Connection/Tcp_016_Sessions.cs) - `OpenSessionAsync`: one pinned connection, so a temporary table and a `SET` survive from one operation to the next, `IsOpen`, one operation at a time, disposal closing rather than pooling the connection, and `SET ROLE` as the native answer to HTTP's per-query `Roles`
-- [Tcp_017_PoolTuning.cs](Tcp/Connection/Tcp_017_PoolTuning.cs) - `MinPoolSize`, `MaxPoolSize`, `PoolTimeout`, `IdleTimeout`, `MaxConnectionLifetime`, `SweepInterval` and `PoolReusePolicy`, measured: concurrency actually capped, `PoolTimeout` expiring, the sweep retiring and topping up, `Lifo` against `Fifo`, and what a `ClickHouseTcpDataSource` shares
-- [Tcp_018_Tls.cs](Tcp/Connection/Tcp_018_Tls.cs) - `UseTls`, `TlsServerName`, `TlsCaCertificatePath` (which replaces the host trust store rather than adding to it), `TlsAllowInvalidCertificates`, `ConfigureTls`, the default port moving to 9440, and the TLS mistakes the constructor refuses before anything connects
-- [Tcp_019_Timeouts.cs](Tcp/Connection/Tcp_019_Timeouts.cs) - `DialTimeout`, `ReadTimeout` as an idle deadline rather than a time limit, `PoolTimeout`, `StatementMaxLength` in the log line, `MaxSendBufferBytes`, and where a `CancellationToken` takes over
+- [Tcp_001_Sessions.cs](Tcp/Connection/Tcp_001_Sessions.cs) - Keep temporary tables and settings in one session
+- [Tcp_002_PoolTuning.cs](Tcp/Connection/Tcp_002_PoolTuning.cs) - Configure pool size, reuse, and checkout timeouts
+- [Tcp_003_Tls.cs](Tcp/Connection/Tcp_003_Tls.cs) - Configure TLS and certificate validation
+- [Tcp_004_Timeouts.cs](Tcp/Connection/Tcp_004_Timeouts.cs) - Set connection and read timeouts, then cancel a query
 
 ### Native Protocol: Advanced
 
-- [Tcp_020_SettingsAndQueryId.cs](Tcp/Advanced/Tcp_020_SettingsAndQueryId.cs) - Client-level `CustomSettings` against per-query `ClickHouseTcpQueryOptions.Settings` and the precedence between them, a misspelled setting name being ignored rather than refused, `QueryId` in `system.query_log` and what reusing one does, and `async_insert` as a setting that changes what an insert means
-- [Tcp_021_ProgressAndStatistics.cs](Tcp/Advanced/Tcp_021_ProgressAndStatistics.cs) - `ClickHouseTcpQueryCallbacks`: `OnProgress` interleaved with the rows as the query runs, why every counter is an increment, `OnProfileInfo`'s once-per-query summary, `OnProfileEvents`' increments and gauges, and the callback contract — synchronous, on the draining thread, and never allowed to throw
-- [Tcp_022_Cancellation.cs](Tcp/Advanced/Tcp_022_Cancellation.cs) - A `CancellationToken` through `QueryAsync`, `StreamAsync` and `ExecuteAsync`: what the caller catches, the cancellation the server logs, why the connection is closed rather than pooled, why abandoning a result is the same thing, and how it differs from `ReadTimeout` and `max_execution_time`
-- [Tcp_023_ErrorsAndRetries.cs](Tcp/Advanced/Tcp_023_ErrorsAndRetries.cs) - `ClickHouseTcpServerException` (`Code`, `RawCode`, `Name`, `ServerStackTrace`), `ClickHouseTcpTransportException`, `ClickHouseTcpProtocolException`, switching on `ClickHouseErrorCode`, what `IsTransient` does and does not promise, a retry that recovers, and why retrying an insert needs `insert_deduplication_token` and a table that can deduplicate
-- [Tcp_024_Compression.cs](Tcp/Advanced/Tcp_024_Compression.cs) - `Compression=lz4|zstd|none` and `ClickHouseTcpClientOptions.Compressor`, measured in bytes on the wire: what LZ4 saves by default, why the client's codec does not choose what the server sends (`network_compression_method` does), what it does choose on an insert, and why loopback cannot measure the benefit
-- [Tcp_025_ServerInfo.cs](Tcp/Advanced/Tcp_025_ServerInfo.cs) - `GetServerInfoAsync` and every field of `ClickHouseTcpServerInfo`, the build number `Version` does not carry, gating on `ProtocolRevision` (query parameters need 54459) with one gate that passes and one that does not, and gating on the server version with a printed skip
+- [Tcp_001_SettingsAndQueryId.cs](Tcp/Advanced/Tcp_001_SettingsAndQueryId.cs) - Apply settings and assign a query ID
+- [Tcp_002_ProgressAndStatistics.cs](Tcp/Advanced/Tcp_002_ProgressAndStatistics.cs) - Receive progress and profile callbacks
+- [Tcp_003_Cancellation.cs](Tcp/Advanced/Tcp_003_Cancellation.cs) - Cancel row, block, and command operations
+- [Tcp_004_ErrorsAndRetries.cs](Tcp/Advanced/Tcp_004_ErrorsAndRetries.cs) - Handle errors and retry transient reads safely
+- [Tcp_005_Compression.cs](Tcp/Advanced/Tcp_005_Compression.cs) - Select a native compression codec
+- [Tcp_006_ServerInfo.cs](Tcp/Advanced/Tcp_006_ServerInfo.cs) - Read handshake metadata and gate optional features
 
 ### Native Protocol: Observability
 
-- [Tcp_026_Logging.cs](Tcp/Observability/Tcp_026_Logging.cs) - `ClickHouseTcpClientOptions.LoggerFactory` and the three categories `ClickHouseTcpDiagnostics.ClientLogCategory`, `.ConnectionLogCategory`, `.PoolLogCategory`: what each reports, which levels they use (nothing at `Information`), why a stock `ILoggerFactory` shows one line, and two measured filter sets — production against debugging a connection problem
-- [Tcp_027_OpenTelemetry.cs](Tcp/Observability/Tcp_027_OpenTelemetry.cs) - `ClickHouseTcpDiagnostics.ActivitySourceName` and `IncludeSqlInActivityTags`, with spans collected and printed: the span names and attributes, `connect` nested under the statement that dialled, the W3C trace context the client propagates so the server's own spans join the trace, and why the source is separate from the HTTP transport's
-- [Tcp_028_MetadataBlocks.cs](Tcp/Observability/Tcp_028_MetadataBlocks.cs) - The three `Block`-shaped callbacks Tcp_021 does not cover — `OnLog` with `send_logs_level`, `OnTotals` for `WITH TOTALS`, `OnExtremes` with `extremes` — the borrowed-block rule of copying inside the callback, the log priority scale, and what each `send_logs_level` costs
-- [Tcp_029_HealthChecks.cs](Tcp/Observability/Tcp_029_HealthChecks.cs) - `PingAsync` as a health check over an `AddClickHouseTcpDataSource` registration: a protocol ping measured against `SELECT 1`, Healthy, Degraded and Unhealthy in one report, and what a Pong does and does not prove
-- [Tcp_030_Testcontainers.cs](Tcp/Observability/Tcp_030_Testcontainers.cs) - A throwaway ClickHouse over the native protocol: the mapped 9000 rather than `GetConnectionString()`'s 8123, why a native-port wait strategy alone reports ready too early, and a query against the container
+- [Tcp_001_Logging.cs](Tcp/Observability/Tcp_001_Logging.cs) - Configure diagnostic log categories and levels
+- [Tcp_002_OpenTelemetry.cs](Tcp/Observability/Tcp_002_OpenTelemetry.cs) - Export native client activities with OpenTelemetry
+- [Tcp_003_MetadataBlocks.cs](Tcp/Observability/Tcp_003_MetadataBlocks.cs) - Receive server logs, totals, and extremes
+- [Tcp_004_HealthChecks.cs](Tcp/Observability/Tcp_004_HealthChecks.cs) - Use native protocol pings in an ASP.NET Core health check
+- [Tcp_005_Testcontainers.cs](Tcp/Observability/Tcp_005_Testcontainers.cs) - Run a native client test against a temporary container
 
 ## How to run
 
 ### Prerequisites
 
-- .NET 9.0 SDK or later
+- .NET 10.0 SDK or later
 - ClickHouse server (local or remote)
   - For local runs, you can use Docker:
     ```bash
@@ -186,15 +186,16 @@ dotnet run -- --filter basicusage
 dotnet run -- basicusage
 ```
 
-Before running anything, the runner reaches the endpoints the selected examples need and reports what to fix if one does not answer, rather than letting the first example fail with a connection error.
+Before running an example that uses `ExampleConfig`, the runner checks its endpoint and reports what
+to fix if it cannot connect. Examples that configure or start their own server skip this preflight.
 
 The filter matches the example's class name, which `--list` prints. A class name is the topic without the file's category prefix: `Core_001_BasicUsage.cs` declares `class BasicUsage`. Matching ignores case and underscores and accepts any substring, so `basicusage`, `basic` and `usage` all match it. The file's `core001` prefix does not.
 
 ### Connection configuration
 
-Every example takes its server from [ExampleConfig.cs](ExampleConfig.cs), apart from the four listed
-below, so one environment variable points the whole suite somewhere else. The defaults are what a
-stock server container exposes on localhost, and the examples run with nothing set.
+Most examples take their live server endpoint from [ExampleConfig.cs](ExampleConfig.cs). The seven
+exceptions are listed below. The defaults are what a stock server container exposes on localhost,
+and the examples run with nothing set.
 
 | Variable | Default |
 | --- | --- |
@@ -212,12 +213,15 @@ For an endpoint those pieces cannot describe — TLS, a cloud host, an extra set
 CLICKHOUSE_HOST=my-server CLICKHOUSE_PASSWORD=secret dotnet run -- basicusage
 ```
 
-Four examples do not read `ExampleConfig`. Two keep literal connection strings because configuration
-is what they teach:
+Seven examples do not rely on `ExampleConfig` for the endpoint they connect to. Two keep literal
+connection strings because configuration is what they teach:
 [Core_002_ConnectionStringConfiguration.cs](Http/Core/Core_002_ConnectionStringConfiguration.cs) and
-[Core_003_DependencyInjection.cs](Http/Core/Core_003_DependencyInjection.cs). Two start their own
-server and address that: [Testing_001_Testcontainers.cs](Http/Testing/Testing_001_Testcontainers.cs)
-and [Tcp_030_Testcontainers.cs](Tcp/Observability/Tcp_030_Testcontainers.cs).
+[Core_003_DependencyInjection.cs](Http/Core/Core_003_DependencyInjection.cs). Three use their own
+environment variables: [Auth_001_JwtAuthentication.cs](Http/Core/Auth_001_JwtAuthentication.cs) and
+[Tables_003_CreateTableCloud.cs](Http/Tables/Tables_003_CreateTableCloud.cs), plus
+[Tcp_003_Tls.cs](Tcp/Connection/Tcp_003_Tls.cs). Two start their own server:
+[Testing_001_Testcontainers.cs](Http/Testing/Testing_001_Testcontainers.cs) and
+[Tcp_005_Testcontainers.cs](Tcp/Observability/Tcp_005_Testcontainers.cs).
 
 ### ClickHouse Cloud
 
