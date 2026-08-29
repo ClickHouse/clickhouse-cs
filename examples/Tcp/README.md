@@ -17,11 +17,12 @@ docker run -d --name clickhouse-server -p 8123:8123 -p 9000:9000 clickhouse/clic
 
 ## The API is experimental
 
-The client, the data source, the session and the three `IClickHouseTcp*` interfaces carry
-`[Experimental("CHTCP0001")]`, so touching one is a compile error until you acknowledge that the
-surface may change in a future release. The types around them — the options record, the connection
-string builder, `Block`, the column interfaces and the exceptions — carry nothing, so they can be
-named without the suppression.
+`ClickHouseTcpClient`, `ClickHouseTcpDataSource`, the three `IClickHouseTcp*` interfaces
+(`IClickHouseTcpClient`, `IClickHouseTcpOperations`, `IClickHouseTcpSession`) and the
+`AddClickHouseTcpDataSource` overloads carry `[Experimental("CHTCP0001")]`, so touching one is a
+compile error until you acknowledge that the surface may change in a future release. The types around
+them — the options record, the connection string builder, `Block`, the column interfaces and the
+exceptions — carry nothing, so they can be named without the suppression.
 
 ```csharp
 #pragma warning disable CHTCP0001 // The native protocol client's API is not yet stable.

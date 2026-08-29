@@ -106,6 +106,13 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_003_DependencyInjection.cs](Tcp/Core/Tcp_003_DependencyInjection.cs) - `AddClickHouseTcpDataSource`, injecting `IClickHouseTcpClient`, keyed registrations for two clusters, and who disposes the shared pool
 - [Tcp_004_MigratingFromHttp.cs](Tcp/Core/Tcp_004_MigratingFromHttp.cs) - The same task over both transports, the call-for-call API mapping, the `CHTCP0001` opt-in, and what the native client cannot do
 
+### Native Protocol: Reading Data
+
+- [Tcp_005_ReadTiers.cs](Tcp/Read/Tcp_005_ReadTiers.cs) - The three read tiers side by side — `QueryAsync` (boxed `object[]`), `QueryAsync<T>` (POCO, converted), `StreamAsync` (columnar blocks) — what each allocates, and which to pick
+- [Tcp_006_BlocksAndColumns.cs](Tcp/Read/Tcp_006_BlocksAndColumns.cs) - The block tier in depth: `Block.ColumnNames`, the indexers, `Column<T>`, `IColumn` metadata, `ReadOnlySpan<T>` values, `IDateTimeColumn`/`ITimeColumn`, `IArrayColumn<T>`, and the borrowed-lifetime contract
+- [Tcp_007_Parameters.cs](Tcp/Read/Tcp_007_Parameters.cs) - `ClickHouseTcpParameterCollection` and `ClickHouseTcpQueryOptions.Parameters`, plus the three traps: `{name:Type}` is required, an instant needs a declared timezone, and a parameter named after a server setting
+- [Tcp_008_Poco.cs](Tcp/Read/Tcp_008_Poco.cs) - `QueryAsync<T>` and `InsertRowsAsync<T>` over one class, the name-matching rules, `[ClickHouseTcpColumn]`, `[ClickHouseTcpNotMapped]`, and what a mapping mismatch reports
+
 ## How to run
 
 ### Prerequisites
