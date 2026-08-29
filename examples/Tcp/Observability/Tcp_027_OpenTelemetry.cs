@@ -79,7 +79,9 @@ public static class TcpOpenTelemetry
             // stays usable.
             try
             {
-                _ = await client.ExecuteScalarAsync("SELECT * FROM example_tcp_open_telemetry_no_such_table");
+                // Unique for the same reason as in Tcp_026: the failure has to be the missing table.
+                _ = await client.ExecuteScalarAsync(
+                    $"SELECT * FROM example_tcp_open_telemetry_no_such_table_{Guid.NewGuid():N}");
             }
             catch (ClickHouseTcpServerException)
             {

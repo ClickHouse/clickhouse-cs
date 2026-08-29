@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using ClickHouse.Driver.Tcp;
 using DotNet.Testcontainers.Builders;
 using Testcontainers.ClickHouse;
@@ -130,10 +131,12 @@ public static class TcpTestcontainers
 
                 return info;
             }
-            catch (ClickHouseTcpTransportException) when (started.Elapsed < deadline)
+            catch (ClickHouseTcpTransportException e)
+                when (e.InnerException is SocketException && started.Elapsed < deadline)
             {
-                // Only a transport failure is worth retrying: the listener is not accepting yet. A server
-                // exception would mean it answered and rejected us, which no amount of waiting fixes.
+                // Only a socket failure is worth retrying: the listener is not accepting yet. The same exception
+                // type also carries a TLS or DNS failure, which no amount of waiting fixes, so it is the inner
+                // exception that decides. A server exception would mean the server answered and rejected us.
                 await Task.Delay(100);
             }
         }

@@ -136,15 +136,17 @@ public static class TcpSessions
         Console.WriteLine("   ClickHouseTcpQueryOptions carries no Roles: there is nowhere on the wire to put one per");
         Console.WriteLine("   query. A session is the equivalent, and it is per connection rather than per query.\n");
 
-        await admin.ExecuteAsync($"CREATE OR REPLACE TABLE {RoleTable} (id UInt64) ENGINE = MergeTree ORDER BY id");
-        await admin.ExecuteAsync($"CREATE ROLE OR REPLACE {RoleName}");
-        await admin.ExecuteAsync($"GRANT SELECT ON {RoleTable} TO {RoleName}");
-        await admin.ExecuteAsync($"CREATE USER OR REPLACE {RoleUser} IDENTIFIED WITH plaintext_password BY '{RoleUserPassword}'");
-        await admin.ExecuteAsync($"GRANT {RoleName} TO {RoleUser}");
-        Console.WriteLine($"   Created user '{RoleUser}', role '{RoleName}' holding SELECT on '{RoleTable}'");
-
         try
         {
+            // Inside the try, so that a failure part way through this sequence still reaches the finally and
+            // drops whatever it did create.
+            await admin.ExecuteAsync($"CREATE OR REPLACE TABLE {RoleTable} (id UInt64) ENGINE = MergeTree ORDER BY id");
+            await admin.ExecuteAsync($"CREATE ROLE OR REPLACE {RoleName}");
+            await admin.ExecuteAsync($"GRANT SELECT ON {RoleTable} TO {RoleName}");
+            await admin.ExecuteAsync($"CREATE USER OR REPLACE {RoleUser} IDENTIFIED WITH plaintext_password BY '{RoleUserPassword}'");
+            await admin.ExecuteAsync($"GRANT {RoleName} TO {RoleUser}");
+            Console.WriteLine($"   Created user '{RoleUser}', role '{RoleName}' holding SELECT on '{RoleTable}'");
+
             // Same server as everything else here; only the credentials differ.
             var asUser = ExampleConfig.TcpBuilder();
             asUser.Username = RoleUser;
