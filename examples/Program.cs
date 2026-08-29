@@ -383,6 +383,19 @@ class Program
         await TcpPoco.Run();
         WaitForUser(isInteractive);
 
+        // Native Protocol: Writing Data
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("NATIVE PROTOCOL: WRITING DATA");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(TcpColumnarInsert)}");
+        await TcpColumnarInsert.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpCompositeWrites)}");
+        await TcpCompositeWrites.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ALL EXAMPLES COMPLETED SUCCESSFULLY!");
         Console.WriteLine(new string('=', 70));
