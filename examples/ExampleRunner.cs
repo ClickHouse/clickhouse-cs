@@ -8,6 +8,15 @@ namespace ClickHouse.Driver.Examples;
 /// </summary>
 public static class ExampleRunner
 {
+    /// <summary>
+    /// Examples that talk to both interfaces, so their class-name prefix understates what they need.
+    /// Declared before <c>_examples</c>: static initializers run in order, and discovery reads this.
+    /// </summary>
+    private static readonly HashSet<string> _crossTransport = new(StringComparer.Ordinal)
+    {
+        "TcpMigratingFromHttp",
+    };
+
     private static readonly List<ExampleInfo> _examples = DiscoverExamples();
 
     /// <summary>
@@ -21,13 +30,21 @@ public static class ExampleRunner
         public string NormalizedName { get; } = Normalize(ClassName);
 
         /// <summary>
-        /// Which transport the example needs a server on. Read from the class name, because every
+        /// Which transport the example is filed under. Read from the class name, because every
         /// example shares one namespace and so a native-protocol example cannot reuse an HTTP
         /// example's class name — the <c>Tcp</c> prefix that keeps them apart is the signal.
         /// </summary>
         public ExampleTransport Transport { get; } = ClassName.StartsWith("Tcp", StringComparison.Ordinal)
             ? ExampleTransport.Tcp
             : ExampleTransport.Http;
+
+        /// <summary>
+        /// Every endpoint the example needs to reach, which is not always the one it is filed under:
+        /// an example comparing the two transports needs both.
+        /// </summary>
+        public IReadOnlyList<ExampleTransport> RequiredTransports { get; } = _crossTransport.Contains(ClassName)
+            ? [ExampleTransport.Http, ExampleTransport.Tcp]
+            : [ClassName.StartsWith("Tcp", StringComparison.Ordinal) ? ExampleTransport.Tcp : ExampleTransport.Http];
     }
 
     /// <summary>

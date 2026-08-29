@@ -21,7 +21,7 @@ public static class ExamplePreflight
     /// <param name="examples">The examples about to run. Only their transports are checked.</param>
     /// <returns>True when every needed endpoint answered.</returns>
     public static Task<bool> CheckAsync(IEnumerable<ExampleRunner.ExampleInfo> examples)
-        => CheckAsync(examples.Select(e => e.Transport).Distinct().ToArray());
+        => CheckAsync(examples.SelectMany(e => e.RequiredTransports).Distinct().ToArray());
 
     /// <summary>
     /// Checks the named endpoints, and reports what to fix if one is unreachable.
