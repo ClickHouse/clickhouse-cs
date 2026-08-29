@@ -30,6 +30,7 @@ public static class TcpColumnarInsert
             var names = new[] { "Ada", "Grace", "Alan" };
             var scores = new[] { 99.5, 97.25, 91.0 };
 
+            // Typed columns avoid the row-to-column projection performed by InsertRowsAsync.
             // Column names, not argument order, determine the target column.
             var columns = new IColumn[]
             {
