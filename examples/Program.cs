@@ -471,6 +471,31 @@ class Program
         await TcpServerInfo.Run();
         WaitForUser(isInteractive);
 
+        // Native Protocol: Observability
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine("NATIVE PROTOCOL: OBSERVABILITY");
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        Console.WriteLine($"Running: {nameof(TcpLogging)}");
+        await TcpLogging.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpOpenTelemetry)}");
+        await TcpOpenTelemetry.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpMetadataBlocks)}");
+        await TcpMetadataBlocks.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpHealthChecks)}");
+        await TcpHealthChecks.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(TcpTestcontainers)}");
+        await TcpTestcontainers.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ALL EXAMPLES COMPLETED SUCCESSFULLY!");
         Console.WriteLine(new string('=', 70));
