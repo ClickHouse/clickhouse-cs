@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -33,6 +34,26 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
 
     /// <inheritdoc/>
     public object NullPlaceholder => string.Empty;
+
+    /// <summary>
+    /// A <c>String</c> is a byte string, so a column of <c>byte[]</c> rows writes as well as a column of text, and
+    /// stores those bytes verbatim. That is the only way to store bytes UTF-8 cannot spell, and the counterpart of
+    /// reading them back through <see cref="IStringColumn"/>.
+    /// </summary>
+    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
+
+    /// <inheritdoc/>
+    public object NullPlaceholderAs(Type writeType)
+    {
+        if (writeType == typeof(string))
+        {
+            return NullPlaceholder;
+        }
+
+        return writeType == typeof(byte[])
+            ? Array.Empty<byte>()
+            : throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+    }
 
     /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -87,13 +108,45 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<string>;
+    public bool CanWrite(IColumn column) => column is IColumn<string> or IColumn<byte[]>;
 
     /// <inheritdoc/>
     // Read per element through the indexer so a scattered write-path view (a substitute for a nullable string, a
-    // Tuple field) writes with no materialized copy; a dense StringColumn decodes each row on demand just the same.
+    // Tuple field) writes with no materialized copy.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
+        // A column this client decoded still holds the bytes the wire carried, so re-emit those rather than the
+        // UTF-8 of its decoded text: a byte string UTF-8 cannot spell decodes to U+FFFD, and re-encoding that would
+        // store the replacement character instead of the original bytes.
+        if (column is StringColumn decoded)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                writer.WriteString(decoded.GetBytes(start + i));
+            }
+
+            return;
+        }
+
+        if (column is IColumn<byte[]> rawBytes)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                int row = start + i;
+                byte[] value = rawBytes[row];
+                if (value is null)
+                {
+                    throw new ArgumentException(
+                        $"A {TypeName} column cannot hold a null value (at row {row}); wrap the type in Nullable to write nulls.",
+                        nameof(column));
+                }
+
+                writer.WriteString(value);
+            }
+
+            return;
+        }
+
         var typed = (IColumn<string>)column;
         for (int i = 0; i < length; i++)
         {

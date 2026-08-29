@@ -369,6 +369,11 @@ ClickHouse.Driver.Tcp.IQBitColumn.GetPlane(int bit) -> System.ReadOnlySpan<byte>
 ClickHouse.Driver.Tcp.IQBitColumn.GetPlane(int bit, int group) -> System.ReadOnlySpan<byte>
 ClickHouse.Driver.Tcp.IQBitColumn.GroupCount.get -> int
 ClickHouse.Driver.Tcp.IQBitColumn.Stride.get -> int
+ClickHouse.Driver.Tcp.IStringColumn
+ClickHouse.Driver.Tcp.IStringColumn.Bytes.get -> System.ReadOnlySpan<byte>
+ClickHouse.Driver.Tcp.IStringColumn.GetBytes(int row) -> System.ReadOnlySpan<byte>
+ClickHouse.Driver.Tcp.IStringColumn.GetString(int row, System.Text.Encoding encoding) -> string
+ClickHouse.Driver.Tcp.IStringColumn.Offsets.get -> System.ReadOnlySpan<int>
 ClickHouse.Driver.Tcp.ITimeColumn
 ClickHouse.Driver.Tcp.ITimeColumn.GetTimeSpan(int row) -> System.TimeSpan
 ClickHouse.Driver.Tcp.ITimeColumn.Scale.get -> int
