@@ -8,7 +8,7 @@ We aim to cover various scenarios of driver usage with these examples. You shoul
 
 If something is missing, or you found a mistake in one of these examples, please open an issue or a pull request. [AGENTS.md](AGENTS.md) has the checklist for adding one.
 
-Examples are grouped by transport. Everything under [Http/](Http) uses `ClickHouseClient` or `ClickHouseConnection` over HTTP.
+Examples are grouped by transport. Everything under [Http/](Http) uses `ClickHouseClient` or `ClickHouseConnection` over HTTP; everything under [Tcp/](Tcp) uses `ClickHouseTcpClient` over the native protocol, and needs port 9000 rather than 8123 — see [Tcp/README.md](Tcp/README.md).
 
 ## Examples
 
@@ -118,8 +118,13 @@ cd examples
 # Run all examples
 dotnet run
 
-# List available examples
+# Run only one transport's examples
+dotnet run -- --http
+dotnet run -- --tcp
+
+# List available examples, optionally for one transport
 dotnet run -- --list
+dotnet run -- --list --tcp
 
 # Run specific example(s) using a filter
 dotnet run -- --filter basicusage
@@ -128,15 +133,35 @@ dotnet run -- --filter basicusage
 dotnet run -- basicusage
 ```
 
+Before running anything, the runner reaches the endpoints the selected examples need and reports what to fix if one does not answer, rather than letting the first example fail with a connection error.
+
 The filter matches the example's class name, which `--list` prints. A class name is the topic without the file's category prefix: `Core_001_BasicUsage.cs` declares `class BasicUsage`. Matching ignores case and underscores and accepts any substring, so `basicusage`, `basic` and `usage` all match it. The file's `core001` prefix does not.
 
 ### Connection configuration
 
-By default, examples connect to ClickHouse at `localhost:8123` with the `default` user and no password. If your setup is different, you can:
+Every example takes its server from [ExampleConfig.cs](ExampleConfig.cs), so one environment variable
+points the whole suite somewhere else. The defaults are what a stock server container exposes on
+localhost, and the examples run with nothing set.
 
-1. Modify the connection strings in the examples
-2. Set up a local ClickHouse instance with default settings
-3. Use environment variables or configuration files (see [Core_002_ConnectionStringConfiguration.cs](Http/Core/Core_002_ConnectionStringConfiguration.cs))
+| Variable | Default |
+| --- | --- |
+| `CLICKHOUSE_HOST` | `localhost` |
+| `CLICKHOUSE_HTTP_PORT` | `8123` |
+| `CLICKHOUSE_TCP_PORT` | `9000` |
+| `CLICKHOUSE_USER` | `default` |
+| `CLICKHOUSE_PASSWORD` | empty |
+| `CLICKHOUSE_DATABASE` | `default` |
+
+For an endpoint those pieces cannot describe — TLS, a cloud host, an extra setting — set
+`CLICKHOUSE_HTTP_CONNECTION_STRING` or `CLICKHOUSE_TCP_CONNECTION_STRING` to replace the whole string:
+
+```bash
+CLICKHOUSE_HOST=my-server CLICKHOUSE_PASSWORD=secret dotnet run -- basicusage
+```
+
+Two examples keep literal connection strings, because configuration is what they teach:
+[Core_002_ConnectionStringConfiguration.cs](Http/Core/Core_002_ConnectionStringConfiguration.cs) and
+[Core_003_DependencyInjection.cs](Http/Core/Core_003_DependencyInjection.cs).
 
 ### ClickHouse Cloud
 
