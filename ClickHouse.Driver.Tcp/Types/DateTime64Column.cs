@@ -20,7 +20,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// out to retain.
 /// </para>
 /// </summary>
-internal sealed class DateTime64Column : IColumn<long>, IStoredValuesColumn
+internal sealed class DateTime64Column : IColumn<long>, IDateTimeColumn, IStoredValuesColumn
 {
     private readonly int scale;
     private readonly TimeZoneInfo timeZone;
