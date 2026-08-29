@@ -1,0 +1,217 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Format;
+
+namespace ClickHouse.Driver.Tcp.Tests.Integration;
+
+/// <summary>
+/// Covers <see cref="Block.ReadAs{T}(string)"/> against a real server. <c>Column&lt;T&gt;</c> is a cast, so the
+/// block tier reads a column as the type it decoded to; <c>ReadAs</c> is the other route, converting through the
+/// reading its ClickHouse type offers — the same set the POCO tier maps from. What matters here is that the
+/// conversion agrees with the server's own meaning of the value (a timezone, a scale, an enum's labels), which a
+/// hand-written constant could match by luck, and that a type offering no such reading fails saying so.
+/// </summary>
+[TestFixture]
+[Category("Integration")]
+public class BlockReadAsIntegrationTests
+{
+    private static readonly CancellationToken None = CancellationToken.None;
+
+    [Test]
+    public async Task ReadAs_ColumnAlreadyOfTheRequestedType_IsTheColumnItself()
+    {
+        // The fast path: nothing is projected and nothing wrapped, so Values is still the block's borrowed span.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool sameInstance = false;
+        ulong[] values = null;
+
+        await foreach (Block block in client.StreamAsync("SELECT toUInt64(number) FROM system.numbers LIMIT 3", cancellationToken: None))
+        {
+            IColumn<ulong> read = block.ReadAs<ulong>(0);
+            sameInstance = ReferenceEquals(read, block[0]);
+            values = read.Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sameInstance, Is.True);
+            Assert.That(values, Is.EqualTo(new ulong[] { 0, 1, 2 }));
+        });
+    }
+
+    [Test]
+    public async Task ReadAs_DateTime64Column_ReadsTheCalendarValueWhileColumnReadsTheRawCount()
+    {
+        // The two readings of one column, side by side: the raw count the wire carries, and the instant it means.
+        await using var client = TcpServerFixture.CreateClient();
+
+        long rawCount = 0;
+        DateTimeOffset offset = default;
+        DateTime dateTime = default;
+        DateTime[] materialized = null;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT toDateTime64('2024-06-15 14:00:00.125', 3, 'UTC') + number AS ts FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            rawCount = block.Column<long>("ts")[0];
+            offset = block.ReadAs<DateTimeOffset>("ts")[0];
+
+            IColumn<DateTime> calendar = block.ReadAs<DateTime>("ts");
+            dateTime = calendar[0];
+            materialized = calendar.Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(offset.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture), Is.EqualTo("2024-06-15 14:00:00.125"));
+            Assert.That(rawCount, Is.EqualTo(offset.ToUnixTimeMilliseconds()), "scale 3 means the count is milliseconds");
+            Assert.That(dateTime.Kind, Is.EqualTo(DateTimeKind.Utc), "a zero offset presents as UTC");
+            Assert.That(materialized, Has.Length.EqualTo(2), "Values converts the whole column");
+            Assert.That(materialized[0], Is.EqualTo(dateTime), "and agrees with the indexer");
+            Assert.That(materialized[1] - materialized[0], Is.EqualTo(TimeSpan.FromSeconds(1)));
+        });
+    }
+
+    [Test]
+    public async Task ReadAs_EnumColumn_ReadsTheDeclaredLabels()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        string[] labels = null;
+        sbyte[] ordinals = null;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT CAST(number + 1 AS Enum8('queued' = 1, 'running' = 2, 'done' = 3)) AS state FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            labels = block.ReadAs<string>("state").Values.ToArray();
+            ordinals = block.Column<sbyte>("state").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(labels, Is.EqualTo(new[] { "queued", "running", "done" }));
+            Assert.That(ordinals, Is.EqualTo(new sbyte[] { 1, 2, 3 }));
+        });
+    }
+
+    [Test]
+    public async Task ReadAs_ArrayOfDateTime_ConvertsEveryElementOfEveryRow()
+    {
+        // The reading a composite offers is composed from its inner type's, so one call converts a whole row.
+        await using var client = TcpServerFixture.CreateClient();
+
+        DateTime[][] rows = null;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT arrayMap(i -> toDateTime('2024-06-15 14:00:00', 'UTC') + i, range(number + 1)) AS stamps " +
+            "FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            IColumn<DateTime[]> stamps = block.ReadAs<DateTime[]>("stamps");
+            rows = new[] { stamps[0], stamps[1] };
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows[0], Is.EqualTo(new[] { new DateTime(2024, 6, 15, 14, 0, 0, DateTimeKind.Utc) }));
+            Assert.That(rows[1], Has.Length.EqualTo(2));
+            Assert.That(rows[1][1], Is.EqualTo(new DateTime(2024, 6, 15, 14, 0, 1, DateTimeKind.Utc)));
+        });
+    }
+
+    [Test]
+    public async Task ReadAs_NullableDateTime64_KeepsTheNullAndConvertsTheRest()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        DateTime?[] readings = null;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT if(number = 1, NULL, toDateTime64('2024-06-15 14:00:00.500', 3, 'UTC') + number) AS ts " +
+            "FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            readings = block.ReadAs<DateTime?>("ts").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(readings[1], Is.Null);
+            Assert.That(
+                readings[0]?.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture),
+                Is.EqualTo("2024-06-15 14:00:00.500"));
+            Assert.That(readings[2] - readings[0], Is.EqualTo(TimeSpan.FromSeconds(2)));
+        });
+    }
+
+    /// <summary>
+    /// A timezone-less <c>DateTime</c> resolves its offset from the session timezone, so the same type string means
+    /// two different instants under two settings. The compiled conversion is cached per type string, and this is
+    /// what pins the session timezone as part of that key: were it not, the second query would read the first
+    /// query's timezone.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_TimezoneLessDateTime_ResolvesTheSessionTimezoneOfEachQuery()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        DateTimeOffset inUtc = await ReadOneAsync(client, "UTC");
+        DateTimeOffset inAmsterdam = await ReadOneAsync(client, "Europe/Amsterdam");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inUtc.Offset, Is.EqualTo(TimeSpan.Zero));
+            Assert.That(inAmsterdam.Offset, Is.EqualTo(TimeSpan.FromHours(2)), "June, so Amsterdam is at +02:00");
+            Assert.That(inAmsterdam.UtcDateTime, Is.EqualTo(inUtc.UtcDateTime.AddHours(-2)), "same wall clock, two zones");
+        });
+
+        static async Task<DateTimeOffset> ReadOneAsync(ClickHouseTcpClient client, string timezone)
+        {
+            var options = new ClickHouseTcpQueryOptions
+            {
+                Settings = new Dictionary<string, string>(StringComparer.Ordinal) { ["session_timezone"] = timezone },
+            };
+
+            DateTimeOffset read = default;
+            await foreach (Block block in client.StreamAsync("SELECT toDateTime('2024-06-15 14:00:00') AS ts", options, None))
+            {
+                read = block.ReadAs<DateTimeOffset>("ts")[0];
+            }
+
+            return read;
+        }
+    }
+
+    [Test]
+    public async Task ReadAs_TypeThatOffersNoSuchReading_ThrowsNamingWhatItDoesRead()
+    {
+        // No numeric widening: a UInt32 column reads as a uint and nothing else, on this tier and in a POCO alike.
+        await using var client = TcpServerFixture.CreateClient();
+
+        await foreach (Block block in client.StreamAsync("SELECT toUInt32(number) AS n FROM system.numbers LIMIT 1", cancellationToken: None))
+        {
+            var thrown = Assert.Throws<InvalidCastException>(() => block.ReadAs<long>("n"));
+            Assert.That(thrown.Message, Does.Contain("'n'").And.Contain("UInt32").And.Contain("System.Int64"));
+            Assert.That(thrown.Message, Does.Contain("It reads as: System.UInt32."));
+        }
+    }
+
+    [Test]
+    public async Task ReadAs_IndexOutsideTheBlock_ThrowsNamingTheColumnCount()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        await foreach (Block block in client.StreamAsync("SELECT 1 AS a, 2 AS b", cancellationToken: None))
+        {
+            var thrown = Assert.Throws<ArgumentOutOfRangeException>(() => block.ReadAs<int>(2));
+            Assert.That(thrown.Message, Does.Contain("has 2 columns"));
+        }
+    }
+}
