@@ -87,6 +87,11 @@ public sealed class InsertRoundTripCase
         yield return EnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, "a", "b");
         yield return EnumLabels("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 }, "x", "y");
 
+        // And through the wrappers, where the shape has to survive composition: the nullable substitute needs a
+        // placeholder label for its null rows, and the array path flattens the labels before the enum sees them.
+        yield return NullableEnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte?[] { -1, null, 127 }, "a", null, "b");
+        yield return ArrayEnumLabels("Enum8('a' = -1, 'b' = 127)", new[] { new sbyte[] { -1, 127 }, Array.Empty<sbyte>() }, new[] { "a", "b" }, Array.Empty<string>());
+
         // Floats and Bool are direct blittable maps, so the primitive factory covers them.
         yield return Primitive("Float32", new[] { 0f, 1.5f, -1.5f, float.MinValue, float.MaxValue });
         yield return Primitive("Float64", new[] { 0d, 1.5, -1.5e100, double.MinValue, double.MaxValue });
@@ -1758,6 +1763,31 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<string>(name, clickHouseType, labels),
             name => new ArrayColumn<T>(name, clickHouseType, ordinals),
             settings: null);
+
+    // As above, wrapped: a null label is a NULL row, whose hidden inner value is the codec's placeholder label.
+    private static InsertRoundTripCase NullableEnumLabels<T>(string innerType, T?[] ordinals, params string[] labels)
+        where T : struct
+    {
+        string type = $"Nullable({innerType})";
+        return new InsertRoundTripCase(
+            $"{type} from labels [{labels.Length} rows]",
+            type,
+            name => new ArrayColumn<string>(name, type, labels),
+            name => new ArrayColumn<T?>(name, type, ordinals),
+            settings: null);
+    }
+
+    // As above, one row per array of labels: the array path flattens them before the enum converts each one.
+    private static InsertRoundTripCase ArrayEnumLabels<T>(string innerType, T[][] ordinals, params string[][] labels)
+    {
+        string type = $"Array({innerType})";
+        return new InsertRoundTripCase(
+            $"{type} from labels [{labels.Length} rows]",
+            type,
+            name => new ArrayColumn<string[]>(name, type, labels),
+            name => new ArrayColumn<T[]>(name, type, ordinals),
+            settings: null);
+    }
 
     private static InsertRoundTripCase Uuids(string clickHouseType, params Guid[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<Guid>(name, clickHouseType, values));

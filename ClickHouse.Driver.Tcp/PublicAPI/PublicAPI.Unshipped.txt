@@ -313,9 +313,9 @@ ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionMinor.get -> int
 ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionMinor.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionPatch.get -> int
 ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionPatch.init -> void
-ClickHouse.Driver.Tcp.ClickHouseTcpTypes
 ClickHouse.Driver.Tcp.ClickHouseTcpTransportException
 ClickHouse.Driver.Tcp.ClickHouseTcpTransportException.ClickHouseTcpTransportException(string message, System.Exception innerException) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpTypes
 ClickHouse.Driver.Tcp.IArrayColumn
 ClickHouse.Driver.Tcp.IArrayColumn.Inner.get -> ClickHouse.Driver.Tcp.IColumn
 ClickHouse.Driver.Tcp.IArrayColumn.Offsets.get -> System.ReadOnlySpan<int>

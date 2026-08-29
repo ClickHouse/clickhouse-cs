@@ -213,7 +213,7 @@ public sealed class Block : IDisposable
         => column as IColumn<T>
             ?? throw new InvalidCastException(
                 $"Column '{column.Name}' has type '{column.TypeName}', whose values are {column.ElementType}, not {typeof(T)}. " +
-                $"Use ReadAs<{typeof(T).Name}> to convert them, where the ClickHouse type offers that reading.");
+                $"{nameof(ReadAs)} converts a column to another reading, where its ClickHouse type offers one.");
 
     private IColumn At(int index)
         => index >= 0 && index < Columns.Count
