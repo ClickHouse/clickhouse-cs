@@ -61,7 +61,7 @@ public static class Compression
 
         // Default: compression enabled
         Console.WriteLine("1. Default behavior (compression enabled):");
-        using (var client = new ClickHouseClient("Host=localhost"))
+        using (var client = ExampleConfig.CreateHttpClient())
         {
             // The driver will:
             // - Request compressed responses via enable_http_compression=true
@@ -74,7 +74,7 @@ public static class Compression
 
         // Compression disabled
         Console.WriteLine("2. Compression disabled:");
-        using (var client = new ClickHouseClient("Host=localhost;Compression=false"))
+        using (var client = new ClickHouseClient($"{ExampleConfig.HttpConnectionString};Compression=false"))
         {
             // The driver will:
             // - Set enable_http_compression=false and advertise no codec (uncompressed responses)

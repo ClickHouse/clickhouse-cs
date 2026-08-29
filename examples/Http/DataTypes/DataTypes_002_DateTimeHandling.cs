@@ -18,7 +18,7 @@ public static class DateTimeHandling
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
+        using var connection = ExampleConfig.CreateHttpConnection();
         await connection.OpenAsync();
 
         Console.WriteLine("DateTime Handling Examples\n");
@@ -302,7 +302,7 @@ public static class DateTimeHandling
             ENGINE = Memory
         ");
 
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         // Unspecified DateTime values are treated as wall-clock time in the column's timezone
         var columns = new[] { "id", "dt_utc", "dt_amsterdam" };

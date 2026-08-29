@@ -20,7 +20,7 @@ public static class EphemeralColumns
 {
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         Console.WriteLine("Ephemeral Columns Examples\n");
 

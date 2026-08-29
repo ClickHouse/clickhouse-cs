@@ -38,7 +38,7 @@ public static class NetworkTracing
         });
 
         // Step 2: Configure ClickHouse client with EnableDebugMode
-        var settings = new ClickHouseClientSettings("Host=localhost;Port=8123;Username=default;Database=default")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             LoggerFactory = loggerFactory,
             EnableDebugMode = true,  // Enable low-level network tracing

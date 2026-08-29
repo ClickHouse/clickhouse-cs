@@ -16,7 +16,7 @@ public static class StringHandling
 {
     public static async Task Run()
     {
-        using var connection = new ClickHouseConnection("Host=localhost");
+        using var connection = ExampleConfig.CreateHttpConnection();
         await connection.OpenAsync();
 
         Console.WriteLine("String and FixedString Handling Examples\n");
@@ -109,7 +109,7 @@ public static class StringHandling
             ENGINE = Memory
         ");
 
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         // Insert strings of different lengths
         var columns = new[] { "fixed_str" };
@@ -122,7 +122,7 @@ public static class StringHandling
         await client.InsertBinaryAsync(tableName, columns, data);
 
         // Read back and show the actual bytes
-        var cb = new ClickHouseConnectionStringBuilder("Host=localhost")
+        var cb = new ClickHouseConnectionStringBuilder(ExampleConfig.HttpConnectionString)
         {
             ReadStringsAsByteArrays = true
         };
@@ -157,7 +157,7 @@ public static class StringHandling
             ENGINE = Memory
         ");
 
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         // Write binary data that is NOT valid UTF-8
         var binaryData = new byte[] { 0xFF, 0xFE, 0x00, 0x01, 0x02 };
@@ -174,7 +174,7 @@ public static class StringHandling
         Console.WriteLine($"   Inserted {data.Count} rows with binary data");
 
         // Read back as byte[] to preserve the binary data
-        var cb = new ClickHouseConnectionStringBuilder("Host=localhost")
+        var cb = new ClickHouseConnectionStringBuilder(ExampleConfig.HttpConnectionString)
         {
             ReadStringsAsByteArrays = true
         };
@@ -202,7 +202,7 @@ public static class StringHandling
     {
         // Default behavior: returns string
         Console.WriteLine("   Default (ReadStringsAsByteArrays=false):");
-        using (var connection = new ClickHouseConnection("Host=localhost"))
+        using (var connection = ExampleConfig.CreateHttpConnection())
         {
             var result = await connection.ExecuteScalarAsync("SELECT 'Hello'");
             Console.WriteLine($"     Type: {result.GetType().Name}, Value: \"{result}\"");
@@ -210,7 +210,7 @@ public static class StringHandling
 
         // With setting enabled: returns byte[]
         Console.WriteLine("   With ReadStringsAsByteArrays=true:");
-        using (var connection = new ClickHouseConnection("Host=localhost;ReadStringsAsByteArrays=true"))
+        using (var connection = new ClickHouseConnection($"{ExampleConfig.HttpConnectionString};ReadStringsAsByteArrays=true"))
         {
             var result = await connection.ExecuteScalarAsync("SELECT 'Hello'");
             var bytes = (byte[])result;

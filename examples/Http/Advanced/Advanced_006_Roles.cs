@@ -26,7 +26,7 @@ public static class Roles
         Console.WriteLine("This example demonstrates role-based access control.\n");
 
         // Setup: Create tables, roles, and user using default connection
-        using var defaultClient = new ClickHouseConnection("Host=localhost");
+        using var defaultClient = ExampleConfig.CreateHttpConnection();
         await defaultClient.OpenAsync();
 
         await CreateOrReplaceUser(defaultClient, Username, Password);
@@ -40,7 +40,7 @@ public static class Roles
         try
         {
             // Create a client using a role that only has permission to query table1
-            var settings = new ClickHouseClientSettings("Host=localhost")
+            var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
             {
                 Username = Username,
                 Password = Password,

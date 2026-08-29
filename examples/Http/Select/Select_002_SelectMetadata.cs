@@ -9,7 +9,7 @@ public static class SelectMetadata
 {
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         var tableName = "example_formats";
 

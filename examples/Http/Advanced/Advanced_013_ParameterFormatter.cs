@@ -40,7 +40,7 @@ public static class ParameterFormatter
     {
         Console.WriteLine("1. DictionaryParameterFormatter - custom DateTime serialization:");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ParameterFormatter = new DictionaryParameterFormatter(new Dictionary<Type, Func<object, string>>
             {
@@ -76,7 +76,7 @@ public static class ParameterFormatter
     {
         Console.WriteLine("\n2. Formatter runs on array elements too:");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ParameterFormatter = new DictionaryParameterFormatter(new Dictionary<Type, Func<object, string>>
             {
@@ -109,7 +109,7 @@ public static class ParameterFormatter
     {
         Console.WriteLine("\n3. Custom IParameterFormatter:");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ParameterFormatter = new DoublingDecimalFormatter(),
         };
@@ -134,7 +134,7 @@ public static class ParameterFormatter
     {
         Console.WriteLine("\n4. Per-query formatter via QueryOptions:");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ParameterFormatter = new DictionaryParameterFormatter(new Dictionary<Type, Func<object, string>>
             {

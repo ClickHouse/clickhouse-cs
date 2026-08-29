@@ -25,7 +25,7 @@ public static class QueryCancellation
     {
         Console.WriteLine("1. Cancel query after timeout:");
 
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         // Create a cancellation token that will cancel after 1 second
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
@@ -60,7 +60,7 @@ public static class QueryCancellation
     {
         Console.WriteLine("\n2. Cancel query manually from another task:");
 
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
         using var cts = new CancellationTokenSource();
 
         Console.WriteLine("   Starting a 3-second query...");

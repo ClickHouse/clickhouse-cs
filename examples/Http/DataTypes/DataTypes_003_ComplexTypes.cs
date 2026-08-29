@@ -17,7 +17,7 @@ public static class ComplexTypes
 {
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         Console.WriteLine("Complex Data Types Examples\n");
 

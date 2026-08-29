@@ -23,7 +23,7 @@ public static class AspNetHealthChecks
     {
         Console.WriteLine("ClickHouse ASP.NET Health Checks Example\n");
 
-        var connectionString = "Host=localhost;Port=8123;Protocol=http;Username=default;Password=;Database=default";
+        var connectionString = ExampleConfig.HttpConnectionString;
 
         // =======================================================================
         // OPTION 1: Using ClickHouseClient (recommended for direct operations)

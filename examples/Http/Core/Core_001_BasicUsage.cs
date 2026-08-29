@@ -32,7 +32,7 @@ public static class BasicUsage
     private static async Task UsingClickHouseClient()
     {
         // ClickHouseClient is thread-safe and designed for singleton usage
-        var settings = new ClickHouseClientSettings("Host=localhost");
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString);
         using var client = new ClickHouseClient(settings);
 
         var version = await client.ExecuteScalarAsync("SELECT version()");
@@ -80,7 +80,7 @@ public static class BasicUsage
     private static async Task UsingClickHouseConnection()
     {
         // ClickHouseConnection provides ADO.NET compatibility for Dapper, EF Core, etc.
-        var settings = new ClickHouseClientSettings("Host=localhost");
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString);
         using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync();
 

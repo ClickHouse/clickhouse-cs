@@ -39,7 +39,7 @@ public static class ReadValueConverter
             .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc))
             .For<string>(s => s.Trim());
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ReadValueConverter = converter,
         };
@@ -66,7 +66,7 @@ public static class ReadValueConverter
     {
         Console.WriteLine("\n2. Custom IReadValueConverter - dispatch on ClickHouse-side type:");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ReadValueConverter = new UtcOnlyForNoTzDateTimeConverter(),
         };
@@ -91,7 +91,7 @@ public static class ReadValueConverter
     {
         Console.WriteLine("\n3. Per-query converter override via QueryOptions:");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ReadValueConverter = new DictionaryReadValueConverter()
                 .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
@@ -132,7 +132,7 @@ public static class ReadValueConverter
     {
         Console.WriteLine("\n4. Works with ClickHouseConnection (ADO.NET):");
 
-        var settings = new ClickHouseClientSettings("Host=localhost")
+        var settings = new ClickHouseClientSettings(ExampleConfig.HttpConnectionString)
         {
             ReadValueConverter = new DictionaryReadValueConverter()
                 .For<DateTime>(dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
