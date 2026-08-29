@@ -12,11 +12,11 @@ class Program
 
         try
         {
-            var filter = ParseArgs(args, out bool showList);
+            var filter = ParseArgs(args, out bool showList, out ExampleTransport? transport);
 
             if (showList)
             {
-                ExampleRunner.ListExamples();
+                ExampleRunner.ListExamples(transport);
                 return;
             }
 
@@ -24,8 +24,17 @@ class Program
             {
                 await RunFiltered(filter, isInteractive);
             }
+            else if (transport is { } only)
+            {
+                await RunTransport(only, isInteractive);
+            }
             else
             {
+                if (!await ExamplePreflight.CheckAsync(ExampleRunner.Examples))
+                {
+                    Environment.Exit(1);
+                }
+
                 await RunAllExamples(isInteractive);
             }
         }
@@ -50,7 +59,33 @@ class Program
 
         Console.WriteLine($"Found {matches.Count} matching example(s):\n");
 
+        if (!await ExamplePreflight.CheckAsync(matches))
+        {
+            Environment.Exit(1);
+        }
+
         foreach (var example in matches)
+        {
+            await ExampleRunner.RunExample(example);
+            WaitForUser(isInteractive);
+            Console.WriteLine("\n");
+        }
+    }
+
+    private static async Task RunTransport(ExampleTransport transport, bool isInteractive)
+    {
+        var selected = ExampleRunner.ForTransport(transport);
+
+        Console.WriteLine($"Running {selected.Count} {transport} example(s):\n");
+
+        // The named transport, not the selection's, so that asking for one with none written yet
+        // still reports whether its endpoint answers.
+        if (!await ExamplePreflight.CheckAsync(transport))
+        {
+            Environment.Exit(1);
+        }
+
+        foreach (var example in selected)
         {
             await ExampleRunner.RunExample(example);
             WaitForUser(isInteractive);
@@ -308,9 +343,10 @@ class Program
         Console.WriteLine(new string('=', 70));
     }
 
-    private static string? ParseArgs(string[] args, out bool showList)
+    private static string? ParseArgs(string[] args, out bool showList, out ExampleTransport? transport)
     {
         showList = false;
+        transport = null;
         string? filter = null;
 
         for (int i = 0; i < args.Length; i++)
@@ -320,7 +356,19 @@ class Program
             if (arg == "--list" || arg == "-l")
             {
                 showList = true;
-                return null;
+                continue;
+            }
+
+            if (arg == "--http")
+            {
+                transport = ExampleTransport.Http;
+                continue;
+            }
+
+            if (arg == "--tcp")
+            {
+                transport = ExampleTransport.Tcp;
+                continue;
             }
 
             if (arg == "--filter" || arg == "-f")

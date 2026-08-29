@@ -19,12 +19,29 @@ public static class ExampleRunner
         /// Normalized form for matching (lowercase, no underscores).
         /// </summary>
         public string NormalizedName { get; } = Normalize(ClassName);
+
+        /// <summary>
+        /// Which transport the example needs a server on. Read from the class name, because every
+        /// example shares one namespace and so a native-protocol example cannot reuse an HTTP
+        /// example's class name — the <c>Tcp</c> prefix that keeps them apart is the signal.
+        /// </summary>
+        public ExampleTransport Transport { get; } = ClassName.StartsWith("Tcp", StringComparison.Ordinal)
+            ? ExampleTransport.Tcp
+            : ExampleTransport.Http;
     }
 
     /// <summary>
     /// Gets all discovered examples.
     /// </summary>
     public static IReadOnlyList<ExampleInfo> Examples => _examples;
+
+    /// <summary>
+    /// Gets the examples that use one transport.
+    /// </summary>
+    /// <param name="transport">The transport to select.</param>
+    /// <returns>The matching examples, in class-name order.</returns>
+    public static List<ExampleInfo> ForTransport(ExampleTransport transport)
+        => _examples.Where(e => e.Transport == transport).ToList();
 
     /// <summary>
     /// Finds examples matching the given filter using fuzzy matching.
@@ -50,11 +67,13 @@ public static class ExampleRunner
     /// <summary>
     /// Lists all available examples to the console.
     /// </summary>
-    public static void ListExamples()
+    public static void ListExamples(ExampleTransport? transport = null)
     {
-        Console.WriteLine("Available examples:\n");
+        var listed = transport is { } only ? ForTransport(only) : _examples.ToList();
 
-        foreach (var example in _examples.OrderBy(e => e.ClassName))
+        Console.WriteLine(transport is { } named ? $"Available {named} examples:\n" : "Available examples:\n");
+
+        foreach (var example in listed.OrderBy(e => e.ClassName))
         {
             Console.WriteLine($"  - {example.ClassName}");
         }
@@ -62,7 +81,10 @@ public static class ExampleRunner
         Console.WriteLine();
         Console.WriteLine("Usage:");
         Console.WriteLine("  dotnet run                         Run all examples");
+        Console.WriteLine("  dotnet run -- --http               Run only the HTTP examples");
+        Console.WriteLine("  dotnet run -- --tcp                Run only the native protocol examples");
         Console.WriteLine("  dotnet run -- --list               List available examples");
+        Console.WriteLine("  dotnet run -- --list --tcp         List one transport's examples");
         Console.WriteLine("  dotnet run -- --filter <pattern>   Run examples matching pattern");
         Console.WriteLine("  dotnet run -- <pattern>            Shorthand for --filter");
         Console.WriteLine();
