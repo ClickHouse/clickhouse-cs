@@ -517,20 +517,53 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// Enum columns surface the raw ordinal and accept only the ordinal on write, so mirroring the write list
-    /// leaves them with no alternate reading. Pinned so that adding label projection later is a deliberate,
-    /// visible choice rather than an accident.
+    /// An enum reads as its raw ordinal or as its label, and writes from either, so the two lists match. The
+    /// members come from the type string the column carries, so neither direction needs anything of the server.
     /// </summary>
     [Test]
-    public void ReadableElementTypes_Enum_OffersOnlyTheRawOrdinal()
+    public void ReadableElementTypes_Enum_OffersTheOrdinalAndTheLabel()
     {
         IColumnCodec codec = Codec("Enum8('a' = 1, 'b' = 2)");
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(sbyte) }));
+            Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(sbyte), typeof(string) }));
             Assert.That(codec.ReadableElementTypes, Is.EqualTo(codec.WritableElementTypes));
         });
+    }
+
+    [Test]
+    public void TryProjectRead_EnumAskedForAString_YieldsTheDeclaredLabel()
+    {
+        Func<sbyte, string> project = Project<sbyte, string>(Codec("Enum8('a' = -1, 'b' = 127)"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(project(-1), Is.EqualTo("a"));
+            Assert.That(project(127), Is.EqualTo("b"));
+        });
+    }
+
+    /// <summary>
+    /// Every row of a column read from the server is a declared ordinal, so the projection cannot meet this on a
+    /// real read. Pinned anyway: it is the difference between a clear failure and a wrong label.
+    /// </summary>
+    [Test]
+    public void TryProjectRead_EnumOrdinalWithNoDeclaredMember_ThrowsNamingTheType()
+    {
+        Func<sbyte, string> project = Project<sbyte, string>(Codec("Enum8('a' = -1, 'b' = 127)"));
+
+        var thrown = Assert.Throws<KeyNotFoundException>(() => project(0));
+        Assert.That(thrown.Message, Does.Contain("Enum8('a' = -1, 'b' = 127)").And.Contain("ordinal 0"));
+    }
+
+    [Test]
+    public void TryProjectRead_EnumAskedForAnUnrelatedType_ReturnsFalse()
+    {
+        IColumnCodec codec = Codec("Enum8('a' = 1)");
+        ParameterExpression source = Expression.Parameter(typeof(sbyte), "v");
+
+        Assert.That(codec.TryProjectRead(source, typeof(int), out Expression _), Is.False);
     }
 
     /// <summary>
