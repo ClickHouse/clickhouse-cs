@@ -39,7 +39,7 @@ public static class OpenTelemetryTracing
         Console.WriteLine($"Listening to ActivitySource: {ClickHouseDiagnosticsOptions.ActivitySourceName}");
         Console.WriteLine("SQL in traces: enabled\n");
 
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         // Query with results - shows read statistics
         await ExecuteQueryWithResults(client);

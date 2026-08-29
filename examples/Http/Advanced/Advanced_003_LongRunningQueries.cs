@@ -33,7 +33,7 @@ public static class LongRunningQueries
 
     private static async Task Example1_ProgressHeaders()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         Console.WriteLine("   Configuring query with progress headers...");
         Console.WriteLine("   This approach keeps the HTTP connection alive by sending periodic progress updates.");
@@ -82,7 +82,7 @@ public static class LongRunningQueries
 
     private static async Task Example2_FireAndForget()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         Console.WriteLine("   Fire-and-forget pattern for very long queries...");
         Console.WriteLine();

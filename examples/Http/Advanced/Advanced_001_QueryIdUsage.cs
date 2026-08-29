@@ -16,7 +16,7 @@ public static class QueryIdUsage
 {
     public static async Task Run()
     {
-        using var client = new ClickHouseClient("Host=localhost");
+        using var client = ExampleConfig.CreateHttpClient();
 
         Console.WriteLine("Query ID Usage Examples\n");
 

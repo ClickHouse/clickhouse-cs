@@ -36,7 +36,7 @@ public static class DapperExample
     {
         // Create a DataSource - in a real app, this would be a singleton (register in DI)
         // The DataSource manages HttpClient pooling internally
-        var dataSource = new ClickHouseDataSource("Host=localhost");
+        var dataSource = new ClickHouseDataSource(ExampleConfig.HttpConnectionString);
 
         // Create a connection from the DataSource
         // Connections are lightweight - create them per operation
