@@ -28,8 +28,10 @@ namespace ClickHouse.Driver.Tcp;
 public interface IDateTimeColumn : IColumn
 {
     /// <summary>
-    /// The timezone the column's counts are read in, as declared by the column type — the argument of
-    /// <c>DateTime('Europe/Amsterdam')</c>, or the server's own timezone when the type names none.
+    /// The timezone the column's counts are read in. The column type's own argument wins — the
+    /// <c>Europe/Amsterdam</c> of <c>DateTime('Europe/Amsterdam')</c>. A type that names none resolves to the
+    /// query's <c>session_timezone</c> setting if it has one, and to the timezone the handshake reported
+    /// otherwise.
     /// </summary>
     TimeZoneInfo TimeZone { get; }
 
@@ -40,13 +42,20 @@ public interface IDateTimeColumn : IColumn
     int Scale { get; }
 
     /// <summary>Reads one row as an instant, offset to <see cref="TimeZone"/>.</summary>
+    /// <remarks>
+    /// <see cref="DateTimeOffset"/> counts 100 ns ticks, so this is lossy above <see cref="Scale"/> 7: a
+    /// <c>DateTime64(8)</c> or <c>DateTime64(9)</c> column has its sub-100 ns digits truncated toward zero. The
+    /// exact count stays in the <see cref="IColumn{T}"/> view.
+    /// </remarks>
     /// <param name="row">The row index, from 0 to <see cref="IColumn.RowCount"/> - 1.</param>
-    /// <returns>The instant the row's stored count names.</returns>
+    /// <returns>The instant the row's stored count names, to 100 ns.</returns>
     DateTimeOffset GetDateTimeOffset(int row);
 
     /// <summary>
     /// Reads the whole column as instants, offset to <see cref="TimeZone"/>.
     /// </summary>
+    /// <remarks>Lossy above <see cref="Scale"/> 7, for the reason given on
+    /// <see cref="GetDateTimeOffset"/>.</remarks>
     /// <returns>A new array of <see cref="IColumn.RowCount"/> instants. Unlike the borrowed spans elsewhere on
     /// the block tier, this array is the caller's and outlives the block.</returns>
     DateTimeOffset[] ToDateTimeOffsets();
