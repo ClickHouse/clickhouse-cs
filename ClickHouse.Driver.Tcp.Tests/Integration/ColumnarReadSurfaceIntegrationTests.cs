@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -824,7 +825,7 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(offsets, Has.Length.EqualTo(3));
             Assert.That(first, Is.EqualTo(offsets[0]), "the per-row and whole-column reads agree");
             Assert.That(first.Offset, Is.EqualTo(TimeSpan.FromHours(2)), "June is CEST, so +02:00");
-            Assert.That(first.ToString("yyyy-MM-dd HH:mm:ss"), Is.EqualTo("2024-06-15 14:00:00"));
+            Assert.That(first.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), Is.EqualTo("2024-06-15 14:00:00"));
             Assert.That(first.ToUnixTimeSeconds(), Is.EqualTo(firstRaw), "the instant is the raw count, presented");
             Assert.That(offsets[2] - offsets[0], Is.EqualTo(TimeSpan.FromSeconds(2)));
         });
@@ -858,7 +859,7 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(matched, Is.True);
             Assert.That(scale, Is.EqualTo(3), "the scale of DateTime64(3), which says what unit the raw count is in");
             Assert.That(first.Offset, Is.EqualTo(TimeSpan.Zero));
-            Assert.That(first.ToString("yyyy-MM-dd HH:mm:ss.fff"), Is.EqualTo("2024-06-15 14:00:00.125"));
+            Assert.That(first.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture), Is.EqualTo("2024-06-15 14:00:00.125"));
             Assert.That(firstRaw, Is.EqualTo(first.ToUnixTimeMilliseconds()), "scale 3 means the count is milliseconds");
         });
     }
@@ -875,9 +876,22 @@ public class ColumnarReadSurfaceIntegrationTests
         var spans = Array.Empty<TimeSpan>();
         TimeSpan first = default;
 
+        // Time and Time64 are setting-gated on 25.8, the floor of the CI matrix, so the query needs both flags.
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Settings = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["enable_time_time64_type"] = "1",
+                ["allow_experimental_time_time64_type"] = "1",
+            },
+        };
+
+        // A cast, not toTime(): with the flags above set, toTime resolves to toTimeWithFixedDate, which takes a
+        // Date or DateTime and rejects a String.
         await foreach (Block block in client.StreamAsync(
-            "SELECT toTime('14:30:05') + number FROM system.numbers LIMIT 2",
-            cancellationToken: None))
+            "SELECT '14:30:05'::Time + number FROM system.numbers LIMIT 2",
+            options,
+            None))
         {
             IColumn column = block[0];
             matchedTime = column is ITimeColumn;
