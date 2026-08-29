@@ -781,6 +781,29 @@ public class ColumnReadProjectionTests
         });
     }
 
+    /// <summary>
+    /// The projected view stands in for the column it reads, so it reports that column's name and type — and
+    /// disposing it must leave the column alone: the block owns that storage and every other reader of the block
+    /// shares it.
+    /// </summary>
+    [Test]
+    public void ReadAs_ProjectedView_CarriesTheSourcesIdentityAndDisposesNothing()
+    {
+        var ordinals = new ArrayColumn<sbyte>("state", "Enum8('a' = 1)", new sbyte[] { 1 });
+
+        IColumn<string> projected = ReadAs<string>(ordinals);
+        projected.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(projected.Name, Is.EqualTo("state"));
+            Assert.That(projected.TypeName, Is.EqualTo("Enum8('a' = 1)"));
+            Assert.That(projected.GetValue(0), Is.EqualTo("a"), "the boxed reading is the projected one");
+            Assert.That(ordinals.RowCount, Is.EqualTo(1), "the source column is untouched");
+            Assert.That(ordinals.Values.ToArray(), Is.EqualTo(new sbyte[] { 1 }));
+        });
+    }
+
     private static IColumn<T> ReadAs<T>(IColumn column)
         => ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, new ResolveContext { ServerTimezone = "UTC" });
 
