@@ -23,7 +23,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// out to retain.
 /// </para>
 /// </summary>
-internal sealed class TimeColumn : IColumn<int>, IStoredValuesColumn
+internal sealed class TimeColumn : IColumn<int>, ITimeColumn, IStoredValuesColumn
 {
     private readonly int length;
     private readonly bool pooled;
@@ -52,6 +52,9 @@ internal sealed class TimeColumn : IColumn<int>, IStoredValuesColumn
 
     /// <inheritdoc/>
     public int RowCount => length / sizeof(int);
+
+    /// <summary>Zero: <c>Time</c> counts whole seconds. <c>Time64(scale)</c> is where this varies.</summary>
+    public int Scale => 0;
 
     /// <summary>The raw signed second counts, as a zero-copy view. Use <see cref="ToTimeSpans"/> for a
     /// <see cref="TimeSpan"/> view.</summary>

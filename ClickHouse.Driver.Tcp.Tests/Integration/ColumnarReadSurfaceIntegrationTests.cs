@@ -785,4 +785,118 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(materialized, Is.EqualTo(new object[] { "s0", null, 100L, "s3" }));
         });
     }
+
+    [Test]
+    public async Task StreamAsync_DateTimeColumn_ExposesTheDeclaredTimezoneAndInstantsThroughIDateTimeColumn()
+    {
+        // A DateTime column's IColumn<T> surface is IColumn<uint>: the epoch seconds the wire carried. Turning
+        // those into an instant needs the timezone the column type declares, which no IColumn member reports, so
+        // IDateTimeColumn is the only way to do it from the block tier.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool matched = false;
+        string timeZoneId = null;
+        int scale = 0;
+        var offsets = Array.Empty<DateTimeOffset>();
+        DateTimeOffset first = default;
+        uint firstRaw = 0;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT toDateTime('2024-06-15 14:00:00', 'Europe/Amsterdam') + number FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IDateTimeColumn;
+
+            var instants = (IDateTimeColumn)column;
+            timeZoneId = instants.TimeZone.Id;
+            scale = instants.Scale;
+            offsets = instants.ToDateTimeOffsets();
+            first = instants.GetDateTimeOffset(0);
+            firstRaw = ((IColumn<uint>)column).Values[0];
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(timeZoneId, Is.EqualTo("Europe/Amsterdam"), "the timezone the column type declared, not the server's");
+            Assert.That(scale, Is.EqualTo(0), "DateTime counts whole seconds");
+            Assert.That(offsets, Has.Length.EqualTo(3));
+            Assert.That(first, Is.EqualTo(offsets[0]), "the per-row and whole-column reads agree");
+            Assert.That(first.Offset, Is.EqualTo(TimeSpan.FromHours(2)), "June is CEST, so +02:00");
+            Assert.That(first.ToString("yyyy-MM-dd HH:mm:ss"), Is.EqualTo("2024-06-15 14:00:00"));
+            Assert.That(first.ToUnixTimeSeconds(), Is.EqualTo(firstRaw), "the instant is the raw count, presented");
+            Assert.That(offsets[2] - offsets[0], Is.EqualTo(TimeSpan.FromSeconds(2)));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_DateTime64Column_ReportsItsScaleAndSubSecondPrecisionThroughIDateTimeColumn()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool matched = false;
+        int scale = 0;
+        DateTimeOffset first = default;
+        long firstRaw = 0;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT toDateTime64('2024-06-15 14:00:00.125', 3, 'UTC') FROM system.numbers LIMIT 1",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IDateTimeColumn;
+
+            var instants = (IDateTimeColumn)column;
+            scale = instants.Scale;
+            first = instants.GetDateTimeOffset(0);
+            firstRaw = ((IColumn<long>)column).Values[0];
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(scale, Is.EqualTo(3), "the scale of DateTime64(3), which says what unit the raw count is in");
+            Assert.That(first.Offset, Is.EqualTo(TimeSpan.Zero));
+            Assert.That(first.ToString("yyyy-MM-dd HH:mm:ss.fff"), Is.EqualTo("2024-06-15 14:00:00.125"));
+            Assert.That(firstRaw, Is.EqualTo(first.ToUnixTimeMilliseconds()), "scale 3 means the count is milliseconds");
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_TimeColumn_ExposesOffsetsFromMidnightThroughITimeColumn()
+    {
+        // Time names a time of day, not an instant, so it carries no timezone and converts to a TimeSpan.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool matchedTime = false;
+        bool matchedDateTime = false;
+        int scale = -1;
+        var spans = Array.Empty<TimeSpan>();
+        TimeSpan first = default;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT toTime('14:30:05') + number FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matchedTime = column is ITimeColumn;
+            matchedDateTime = column is IDateTimeColumn;
+
+            var times = (ITimeColumn)column;
+            scale = times.Scale;
+            spans = times.ToTimeSpans();
+            first = times.GetTimeSpan(0);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matchedTime, Is.True);
+            Assert.That(matchedDateTime, Is.False, "a time of day is not an instant, so it offers no timezone");
+            Assert.That(scale, Is.EqualTo(0), "Time counts whole seconds");
+            Assert.That(spans, Has.Length.EqualTo(2));
+            Assert.That(first, Is.EqualTo(new TimeSpan(14, 30, 5)));
+            Assert.That(spans[1] - spans[0], Is.EqualTo(TimeSpan.FromSeconds(1)));
+        });
+    }
 }
