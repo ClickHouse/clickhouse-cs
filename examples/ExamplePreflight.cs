@@ -3,29 +3,18 @@ using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
 
-/// <summary>
-/// Reaches the server once before any example runs, so that an unreachable or misconfigured endpoint
-/// is reported as itself rather than as a failure inside whichever example happened to run first.
-/// </summary>
-/// <remarks>
-/// A failure exits non-zero instead of skipping. CI runs the whole suite with no filter, and a skip
-/// would leave the run green while nothing had been exercised.
-/// </remarks>
+/// <summary>Checks required endpoints before any example runs.</summary>
 public static class ExamplePreflight
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>
-    /// Checks the endpoints the given examples need, and reports what to fix if one is unreachable.
-    /// </summary>
+    /// <summary>Checks the endpoints required by a set of examples.</summary>
     /// <param name="examples">The examples about to run. Only their transports are checked.</param>
     /// <returns>True when every needed endpoint answered.</returns>
     public static Task<bool> CheckAsync(IEnumerable<ExampleRunner.ExampleInfo> examples)
         => CheckAsync(examples.SelectMany(e => e.RequiredTransports).Distinct().ToArray());
 
-    /// <summary>
-    /// Checks the named endpoints, and reports what to fix if one is unreachable.
-    /// </summary>
+    /// <summary>Checks the named endpoints.</summary>
     /// <param name="transports">The transports to check. Duplicates are checked once.</param>
     /// <returns>True when every named endpoint answered.</returns>
     public static async Task<bool> CheckAsync(params ExampleTransport[] transports)
@@ -80,14 +69,23 @@ public static class ExamplePreflight
 
     private static void Report(ExampleTransport transport, string failure)
     {
-        // Reported from the effective endpoint, so that a whole-string override is described as itself
-        // rather than as whatever the component variables say.
+        // Report the effective endpoint, including whole-connection-string overrides.
         var http = ExampleConfig.HttpEndpoint;
         var tcp = ExampleConfig.TcpEndpoint;
 
         var (name, endpoint, user, port, source) = transport == ExampleTransport.Http
-            ? ("HTTP interface", $"{http.Host}:{http.Port}", ExampleConfig.HttpBuilder().Username, "CLICKHOUSE_HTTP_PORT", "CLICKHOUSE_HTTP_CONNECTION_STRING")
-            : ("native protocol", $"{tcp.Host}:{tcp.Port}", ExampleConfig.TcpBuilder().Username, "CLICKHOUSE_TCP_PORT", "CLICKHOUSE_TCP_CONNECTION_STRING");
+            ? (
+                "HTTP interface",
+                $"{http.Host}:{http.Port}",
+                ExampleConfig.HttpBuilder().Username,
+                "CLICKHOUSE_HTTP_PORT",
+                "CLICKHOUSE_HTTP_CONNECTION_STRING")
+            : (
+                "native protocol",
+                $"{tcp.Host}:{tcp.Port}",
+                ExampleConfig.TcpBuilder().Username,
+                "CLICKHOUSE_TCP_PORT",
+                "CLICKHOUSE_TCP_CONNECTION_STRING");
 
         Console.WriteLine();
         Console.WriteLine($"Cannot reach ClickHouse on the {name} at {endpoint} as user '{user}'.");
@@ -96,12 +94,16 @@ public static class ExamplePreflight
 
         if (transport == ExampleTransport.Tcp)
         {
-            Console.WriteLine($"  The native protocol listens on port 9000 by default, not on the HTTP port ({http.Port}).");
+            Console.WriteLine(
+                $"  The native protocol listens on port 9000 by default, " +
+                $"not on the HTTP port ({http.Port}).");
             Console.WriteLine();
         }
 
         Console.WriteLine("  Start a server with both ports published:");
-        Console.WriteLine("    docker run -d --name clickhouse-server -p 8123:8123 -p 9000:9000 clickhouse/clickhouse-server");
+        Console.WriteLine(
+            "    docker run -d --name clickhouse-server " +
+            "-p 8123:8123 -p 9000:9000 clickhouse/clickhouse-server");
         Console.WriteLine();
         Console.WriteLine("  Or point the examples somewhere else:");
         Console.WriteLine($"    CLICKHOUSE_HOST, {port}, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE");

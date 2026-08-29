@@ -8,31 +8,31 @@ namespace ClickHouse.Driver.Examples;
 /// </summary>
 public static class ExampleRunner
 {
-    /// <summary>
-    /// Examples that talk to both interfaces, so their class-name prefix understates what they need.
-    /// Declared before <c>_examples</c>: static initializers run in order, and discovery reads this.
-    /// </summary>
+    // These sets must be initialized before _examples because discovery reads them.
+    // Preflight both endpoints for examples that use both clients.
     private static readonly HashSet<string> _crossTransport = new(StringComparer.Ordinal)
     {
         "TcpMigratingFromHttp",
-        "TcpOpenTelemetry",
     };
 
-    /// <summary>
-    /// Examples that start their own server, so the configured endpoint is not theirs and preflight must not
-    /// hold them up. Declared before <c>_examples</c> for the same reason as <c>_crossTransport</c>.
-    /// </summary>
+    // Self-contained examples do not need the configured server.
     private static readonly HashSet<string> _selfContained = new(StringComparer.Ordinal)
     {
         "Testcontainers",
         "TcpTestcontainers",
     };
 
-    /// <summary>
-    /// Examples needing infrastructure an ordinary server does not have, so neither an unfiltered run
-    /// nor a transport run includes them. An explicit <c>--filter</c> still reaches them. Keep this in
-    /// step with the list in <c>AGENTS.md</c>.
-    /// </summary>
+    // These examples configure their own endpoint instead of using ExampleConfig.
+    private static readonly HashSet<string> _customEndpoint = new(StringComparer.Ordinal)
+    {
+        "ConnectionStringConfiguration",
+        "CreateTableCloud",
+        "DependencyInjection",
+        "JwtAuthentication",
+        "TcpTls",
+    };
+
+    // Run infrastructure-dependent examples only when a filter selects them explicitly.
     private static readonly HashSet<string> _optIn = new(StringComparer.Ordinal)
     {
         "CreateTableCluster",
@@ -52,29 +52,13 @@ public static class ExampleRunner
         /// </summary>
         public string NormalizedName { get; } = Normalize(ClassName);
 
-        /// <summary>
-        /// Which transport the example is filed under. Read from the class name, because every
-        /// example shares one namespace and so a native-protocol example cannot reuse an HTTP
-        /// example's class name — the <c>Tcp</c> prefix that keeps them apart is the signal.
-        /// </summary>
-        public ExampleTransport Transport { get; } = ClassName.StartsWith("Tcp", StringComparison.Ordinal)
-            ? ExampleTransport.Tcp
-            : ExampleTransport.Http;
+        /// <summary>The transport indicated by the example's class-name prefix.</summary>
+        public ExampleTransport Transport { get; } = GetTransport(ClassName);
 
-        /// <summary>
-        /// Every endpoint the example needs to reach, which is not always the one it is filed under:
-        /// an example comparing the two transports needs both.
-        /// </summary>
-        public IReadOnlyList<ExampleTransport> RequiredTransports { get; } = _selfContained.Contains(ClassName)
-            ? []
-            : _crossTransport.Contains(ClassName)
-                ? [ExampleTransport.Http, ExampleTransport.Tcp]
-                : [ClassName.StartsWith("Tcp", StringComparison.Ordinal) ? ExampleTransport.Tcp : ExampleTransport.Http];
+        /// <summary>The endpoints that preflight must check.</summary>
+        public IReadOnlyList<ExampleTransport> RequiredTransports { get; } = GetRequiredTransports(ClassName);
 
-        /// <summary>
-        /// Whether a run that names no example includes it. False for one needing a cluster, Cloud
-        /// credentials or a token, which only an explicit filter should reach.
-        /// </summary>
+        /// <summary>Whether an unfiltered run includes this example.</summary>
         public bool RunsByDefault { get; } = !_optIn.Contains(ClassName);
     }
 
@@ -121,8 +105,7 @@ public static class ExampleRunner
     /// </summary>
     public static void ListExamples(ExampleTransport? transport = null)
     {
-        // Lists the opt-in examples too, marked. They are what a reader is most likely to be looking
-        // for by name, since no unfiltered run ever prints them.
+        // Keep opt-in examples discoverable even though an unfiltered run skips them.
         var listed = _examples.Where(e => transport is null || e.Transport == transport).ToList();
 
         Console.WriteLine(transport is { } named ? $"Available {named} examples:\n" : "Available examples:\n");
@@ -196,6 +179,26 @@ public static class ExampleRunner
     private static string Normalize(string input)
     {
         return input.Replace("_", "").Replace("-", "").ToLowerInvariant();
+    }
+
+    private static ExampleTransport GetTransport(string className)
+        => className.StartsWith("Tcp", StringComparison.Ordinal)
+            ? ExampleTransport.Tcp
+            : ExampleTransport.Http;
+
+    private static IReadOnlyList<ExampleTransport> GetRequiredTransports(string className)
+    {
+        if (_selfContained.Contains(className) || _customEndpoint.Contains(className))
+        {
+            return [];
+        }
+
+        if (_crossTransport.Contains(className))
+        {
+            return [ExampleTransport.Http, ExampleTransport.Tcp];
+        }
+
+        return [GetTransport(className)];
     }
 
     private static int GetSimilarityScore(string filter, string target)

@@ -49,9 +49,11 @@ Take the server from `ExampleConfig`, which resolves environment variables over 
   those would produce a duplicate.
 - `ExampleConfig.HttpBuilder()` to *change* one of those five. It returns a fresh builder each call.
 
-Four examples are exempt, because configuration is their subject or they start their own server:
+Seven examples are exempt, because configuration is their subject, they use a separate endpoint, or
+they start their own server:
 `Core_002_ConnectionStringConfiguration`, `Core_003_DependencyInjection`,
-`Testing_001_Testcontainers`, `Tcp_030_Testcontainers`. A literal connection string inside a comment,
+`Auth_001_JwtAuthentication`, `Tables_003_CreateTableCloud`, `Testing_001_Testcontainers`,
+`Tcp_003_Tls`, `Tcp_005_Testcontainers`. A literal connection string inside a comment,
 shown to teach the reader what one looks like, is also fine.
 
 Ask `ExampleConfig` for the endpoint with `HttpEndpoint` or `TcpEndpoint` when an example has to name
