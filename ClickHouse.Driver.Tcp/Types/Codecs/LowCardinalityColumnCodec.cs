@@ -163,7 +163,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
-        if (!TryInnerWriteType(writeType, out Type innerType) || !inner.CanWriteElementType(innerType))
+        if (!InnerAccepts(writeType, out Type innerType))
         {
             throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
         }
@@ -417,9 +417,11 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public bool CanWriteElementType(Type elementType) => InnerAccepts(elementType, out _);
 
-    // A LowCardinality write has to decide which rows share a dictionary entry, so the inner codec must offer a
-    // wire-equality comparer for the surface as well as being able to write it. Only the dense re-emit path could
-    // do without one, and a dense column can only come from a type the server accepted, all of which have one.
+    // The inner type has to be one the inner codec can compare on the wire, not merely one it can write: this
+    // codec deduplicates, so a write type it cannot compare would be accepted here and then fault once the body
+    // was under way. String takes raw bytes, which have no lossless spelling as its comparable string, and so
+    // offers no comparer for them. Only the dense re-emit path could do without one, and a dense column can only
+    // come from a type the server accepted, all of which have one.
     private bool InnerAccepts(Type elementType, out Type innerType)
         => TryInnerWriteType(elementType, out innerType)
             && inner.CanWriteElementType(innerType)

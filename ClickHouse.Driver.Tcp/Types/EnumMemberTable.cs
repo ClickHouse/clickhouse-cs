@@ -22,14 +22,21 @@ internal sealed class EnumMemberTable
     public EnumMemberTable(string typeName, IReadOnlyList<KeyValuePair<string, long>> members)
     {
         TypeName = typeName;
-        Members = members;
+
+        // Copied and wrapped: the caller passes the list it built while parsing, and Members is public API, so a
+        // consumer casting it back to that list could otherwise leave it disagreeing with the two maps below.
+        var declared = new KeyValuePair<string, long>[members.Count];
         labelByOrdinal = new Dictionary<long, string>(members.Count);
         ordinalByLabel = new Dictionary<string, long>(members.Count, StringComparer.Ordinal);
-        foreach (KeyValuePair<string, long> member in members)
+        for (int i = 0; i < members.Count; i++)
         {
+            KeyValuePair<string, long> member = members[i];
+            declared[i] = member;
             labelByOrdinal[member.Value] = member.Key;
             ordinalByLabel[member.Key] = member.Value;
         }
+
+        Members = Array.AsReadOnly(declared);
     }
 
     /// <summary>The full enum type string.</summary>

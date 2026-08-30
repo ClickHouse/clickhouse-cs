@@ -112,6 +112,26 @@ public class JsonStringColumnCodecTests
         Assert.That(codec.CanWrite(PrimitiveColumn<uint>.FromValues("j", Json, new uint[] { 1 })), Is.False);
     }
 
+    /// <summary>
+    /// JSON reads and writes through the <c>String</c> codec, which also takes a <c>byte[]</c> per row. A JSON
+    /// value is a document the server parses, so bytes are not a shape this type means anything by, and refusing
+    /// them keeps the column predicate and the element-type list saying the same thing — otherwise a byte column
+    /// would insert into <c>JSON</c> while <c>Array(JSON)</c> and every interrogative reported it unwritable.
+    /// </summary>
+    [Test]
+    public void CanWrite_ByteColumn_IsRefusedUnlikeAPlainStringColumn()
+    {
+        IColumnCodec codec = Resolve(Json);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWrite(new ArrayColumn<byte[]>("j", Json, new[] { new byte[] { (byte)'{', (byte)'}' } })), Is.False);
+            Assert.That(codec.CanWriteElementType(typeof(byte[])), Is.False);
+            Assert.That(ClickHouseTcpTypes.CanWrite("JSON", typeof(byte[])), Is.False);
+            Assert.That(ClickHouseTcpTypes.CanWrite("JSON", typeof(string)), Is.True);
+        });
+    }
+
     // Unlike every other codec's placeholder, this one is real input: see the Nullable(JSON) test below.
     [Test]
     public void NullPlaceholder_IsTheEmptyJsonObject()

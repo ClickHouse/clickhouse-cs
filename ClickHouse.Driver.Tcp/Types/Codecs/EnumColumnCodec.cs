@@ -63,9 +63,18 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     public object NullPlaceholder => nullPlaceholder;
 
     /// <inheritdoc/>
-    // The ordinal is written as-is, so ordinal equality is byte equality.
+    // The ordinal is written as-is, so ordinal equality is byte equality. A label column is written as the
+    // ordinal its label resolves to, so labels compare on that same ordinal: two spellings of one member share a
+    // dictionary entry, and an undeclared label faults here exactly as it would in the write.
     public object WireEqualityComparer(Type writeType)
-        => writeType == typeof(T) ? WireEquality.Default<T>() : null;
+    {
+        if (writeType == typeof(T))
+        {
+            return WireEquality.Default<T>();
+        }
+
+        return writeType == typeof(string) ? WireEquality.Projected<string, T>(ToOrdinal) : null;
+    }
 
     /// <summary>The enum's declared members, mapping each label to its underlying ordinal.</summary>
     public IReadOnlyDictionary<string, T> LabelToOrdinal { get; }
@@ -181,17 +190,16 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => underlying.CanWrite(column) || column is IColumn<string>;
 
-    /// <inheritdoc/>
-    // A column of labels becomes its ordinals here rather than in WriteColumn, so a caller that asks for the
-    // canonical write column gets the element type this codec declares for it.
-    public IColumn ToCanonicalWriteColumn(IColumn column)
+    // A column of labels reaches the underlying ordinal codec as a borrowed view that resolves each label on
+    // access, so no converted array is materialized.
+    private IColumn AsOrdinals(IColumn column)
         => column is IColumn<string> labels && column is not IColumn<T>
             ? new ProjectedColumn<string, T>(TypeName, labels, ToOrdinal)
             : column;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-        => underlying.WriteColumn(writer, ToCanonicalWriteColumn(column), start, length);
+        => underlying.WriteColumn(writer, AsOrdinals(column), start, length);
 
     /// <summary>The ordinal a label is declared with.</summary>
     /// <exception cref="ArgumentException">The type declares no member with that label, or the label is null.</exception>

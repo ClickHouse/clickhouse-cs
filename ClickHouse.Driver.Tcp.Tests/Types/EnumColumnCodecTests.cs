@@ -135,6 +135,26 @@ public class EnumColumnCodecTests
     }
 
     /// <summary>
+    /// <c>Members</c> is public API over a list the codec built while parsing, so it is handed out wrapped: a
+    /// consumer that cast it back could otherwise leave it disagreeing with the lookups beside it.
+    /// </summary>
+    [Test]
+    public void Members_IsNotWritableThroughACastBackToItsBackingCollection()
+    {
+        var declared = new List<KeyValuePair<string, long>> { new("a", 1) };
+        var members = new EnumMemberTable("Enum8('a' = 1)", declared);
+
+        declared.Add(new KeyValuePair<string, long>("b", 2));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(members.Members, Has.Count.EqualTo(1), "the table copied what it was given");
+            Assert.Throws<NotSupportedException>(() => ((IList<KeyValuePair<string, long>>)members.Members)[0] = new("z", 9));
+            Assert.That(members.Members[0].Key, Is.EqualTo("a"));
+        });
+    }
+
+    /// <summary>
     /// An Enum16 declaring more members than a message can list still names the offending label, and says how many
     /// it left out rather than printing thousands.
     /// </summary>
