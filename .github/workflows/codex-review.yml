@@ -132,7 +132,8 @@ jobs:
           output-schema-file: .github/codex-review-schema.json
 
       - name: Upload context for debugging
-        if: failure()
+        # Only once the context exists. A run that stops at an earlier step has nothing to upload.
+        if: failure() && steps.codex.outcome != 'skipped'
         uses: actions/upload-artifact@v7
         with:
           name: codex-review-context
