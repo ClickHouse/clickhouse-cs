@@ -28,11 +28,26 @@ public static class TcpCompositeWrites
             await client.ExecuteAsync(CreateTable(SourceTable));
             await client.ExecuteAsync(CreateTable(CopyTable));
 
-            var readings = new[]
+            // Which CLR type a target column takes is a question the client answers, not a table to maintain.
+            foreach ((string Type, Type Element, string Label) candidate in new[]
             {
-                new[] { 0.5, 0.75, 1.0 },
-                Array.Empty<double>(),
-            };
+                ("Array(Float64)", typeof(double[]), "double[]"),
+                ("Map(String, Int64)", typeof(KeyValuePair<string, long>[]), "KeyValuePair<string, long>[]"),
+                ("Map(String, Int64)", typeof(Dictionary<string, long>), "Dictionary<string, long>"),
+            })
+            {
+                Console.WriteLine(
+                    $"{candidate.Type} from {candidate.Label}: " +
+                    $"{ClickHouseTcpTypes.CanWrite(candidate.Type, candidate.Element)}");
+            }
+
+            // CreateArray builds the flat native shape: every row's values end to end, plus the per-row offsets
+            // into them. Row 0 takes the first three values and row 1 is empty.
+            IArrayColumn<double> readings = ClickHouseTcpColumn.CreateArray(
+                "readings",
+                ClickHouseTcpColumn.Create("readings", new[] { 0.5, 0.75, 1.0 }),
+                new[] { 0, 3, 3 });
+
             var attributes = new[]
             {
                 new[]
@@ -43,13 +58,13 @@ public static class TcpCompositeWrites
                 Array.Empty<KeyValuePair<string, long>>(),
             };
 
-            // Use one array or map per row, ValueTuple for Tuple, and nullable CLR values for Nullable.
+            // Create takes one array or map per row, ValueTuple for Tuple, and nullable CLR values for Nullable.
             await client.InsertAsync(
                 $"INSERT INTO {SourceTable} ({Columns}) VALUES",
                 new IColumn[]
                 {
                     ClickHouseTcpColumn.Create("id", new ulong[] { 1, 2 }),
-                    ClickHouseTcpColumn.Create("readings", readings),
+                    readings,
                     ClickHouseTcpColumn.Create("attributes", attributes),
                     ClickHouseTcpColumn.Create("point", new[] { (1, "one"), (2, "two") }),
                     ClickHouseTcpColumn.Create("score", new double?[] { 1.25, null }),

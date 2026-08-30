@@ -66,6 +66,10 @@ public static class TcpDateTimeAndTimezones
                 PrintTimestamp((IDateTimeColumn)block["precise_at"]);
                 PrintTime((ITimeColumn)block["elapsed"]);
                 PrintTime((ITimeColumn)block["precise_elapsed"]);
+
+                // ReadAs converts a whole column to a reading its type offers, applying the same zone and scale.
+                IColumn<DateTimeOffset> captured = block.ReadAs<DateTimeOffset>("captured_at");
+                Console.WriteLine($"captured_at as DateTimeOffset: {captured[0]:O}");
             }
 
             var utc = new ClickHouseTcpQueryOptions
