@@ -122,6 +122,33 @@ public class StringColumnCodecTests
     }
 
     /// <summary>
+    /// Bytes are a write shape String takes directly, but not one it can compare the way it encodes, which is
+    /// what <c>LowCardinality</c> deduplicates on. Offering no comparer for them is what makes that combination
+    /// refuse before the write rather than fault once the body is under way — the codec accepts the type, the
+    /// wrapper does not.
+    /// </summary>
+    [Test]
+    public void WireEqualityComparer_Bytes_IsRefusedEvenThoughTheyCanBeWritten()
+    {
+        IColumnCodec codec = StringColumnCodec.Instance;
+        IColumnCodec lowCardinality = ColumnCodecRegistry.Default.Resolve("LowCardinality(String)", ResolveContext.ForWrite);
+        IColumnCodec nullableLowCardinality = ColumnCodecRegistry.Default.Resolve("LowCardinality(Nullable(String))", ResolveContext.ForWrite);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWriteElementType(typeof(byte[])), Is.True);
+            Assert.That(codec.WireEqualityComparer(typeof(byte[])), Is.Null);
+            Assert.That(codec.WireEqualityComparer(typeof(string)), Is.Not.Null);
+
+            Assert.That(lowCardinality.CanWriteElementType(typeof(string)), Is.True, "text still goes through");
+            Assert.That(lowCardinality.CanWriteElementType(typeof(byte[])), Is.False);
+            Assert.That(lowCardinality.CanWrite(new ArrayColumn<byte[]>("c", null, new[] { new byte[] { 0xFF } })), Is.False);
+            Assert.That(nullableLowCardinality.CanWriteElementType(typeof(byte[])), Is.False);
+            Assert.Throws<NotSupportedException>(() => lowCardinality.NullPlaceholderAs(typeof(byte[])));
+        });
+    }
+
+    /// <summary>
     /// The layout <see cref="IStringColumn"/> exposes has to be sliced to the rows, not to the pooled buffers the
     /// read path rents — a blob is normally longer than the data, and an offsets array longer than the row count.
     /// </summary>

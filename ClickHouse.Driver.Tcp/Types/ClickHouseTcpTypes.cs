@@ -39,6 +39,13 @@ public static class ClickHouseTcpTypes
     /// <param name="clickHouseType">The target column's ClickHouse type (e.g. <c>Array(Nullable(DateTime))</c>).</param>
     /// <param name="elementType">The CLR type of one row's value.</param>
     /// <returns>Whether a column of that element type can be written to that type.</returns>
+    /// <remarks>
+    /// A <c>Variant</c> (and a <c>Dynamic</c>) is written from a column of <see cref="object"/>, so the answer is
+    /// about that shape: which alternative each row takes is decided per value from its runtime type, and only an
+    /// alternative's own element type is matched there — not the extra CLR types that alternative would accept as a
+    /// column of its own. A value of one of those is refused when the row is placed, naming the types the variant
+    /// does match.
+    /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="clickHouseType"/> or <paramref name="elementType"/> is null.</exception>
     /// <exception cref="FormatException"><paramref name="clickHouseType"/> is not a well-formed ClickHouse type.</exception>
     /// <exception cref="NotSupportedException">The type is well-formed but this client does not support it.</exception>

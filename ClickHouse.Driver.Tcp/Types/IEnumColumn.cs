@@ -26,8 +26,10 @@ namespace ClickHouse.Driver.Tcp;
 public interface IEnumColumn : IColumn
 {
     /// <summary>
-    /// The declared members, each label paired with its ordinal, in declaration order. Owned by the client and
-    /// safe to retain past the block, unlike the column's values.
+    /// The declared members, each label paired with its ordinal, in the order the column's type string lists them.
+    /// That is not necessarily the order a <c>CREATE TABLE</c> or a <c>CAST</c> wrote: the server canonicalizes an
+    /// enum's members, so <c>Enum8('b' = 2, 'a' = 1)</c> arrives as <c>Enum8('a' = 1, 'b' = 2)</c> and reports
+    /// <c>a</c> before <c>b</c>. Owned by the client and safe to retain past the block, unlike the column's values.
     /// </summary>
     IReadOnlyList<KeyValuePair<string, long>> Members { get; }
 

@@ -77,7 +77,10 @@ internal sealed class JsonStringColumnCodec : IColumnCodec
         => StringColumnCodec.Instance.ReadColumnAsync(reader, columnName, columnType, rowCount, cancellationToken);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => StringColumnCodec.Instance.CanWrite(column);
+    // Text only, unlike String, which also takes a byte[] per row: a JSON value is a document the server parses,
+    // so raw bytes are not a shape this type has a meaning for. Stated here rather than delegated so it agrees
+    // with WritableElementTypes, and so Array(JSON) and a JSON target answer the same.
+    public bool CanWrite(IColumn column) => column is IColumn<string>;
 
     /// <inheritdoc/>
     // The prefix is a fixed version marker, independent of the data; the column/slice is unused.

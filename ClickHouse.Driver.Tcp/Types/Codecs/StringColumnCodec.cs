@@ -59,6 +59,10 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     // Equal strings encode to equal bytes. The converse can fail (two strings differing only in unpaired
     // surrogates both encode to the replacement character), which costs a redundant dictionary entry and nothing
     // else.
+    //
+    // Raw bytes get no key even though the writer takes them: comparing them as strings is not lossless, and
+    // a byte-oriented relation would make every LowCardinality(String) dictionary encode its text first. That
+    // refuses LowCardinality(String) from a byte column when the write is planned.
     public object LowCardinalityKeyWriter(Type writeType)
         => writeType == typeof(string) ? LowCardinalityKeys.Identity<string>() : null;
 

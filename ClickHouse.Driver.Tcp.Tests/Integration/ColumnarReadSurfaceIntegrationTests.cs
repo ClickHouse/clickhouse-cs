@@ -647,6 +647,7 @@ public class ColumnarReadSurfaceIntegrationTests
         int typeCount = 0;
         int rowCount = 0;
         string[] typeNames = null;
+        IReadOnlyList<string> typeNamesList = null;
         string[] childTypeNames = null;
         byte[] discriminators = null;
         int discriminatorLength = 0;
@@ -675,6 +676,7 @@ public class ColumnarReadSurfaceIntegrationTests
             typeCount = variant.TypeCount;
             rowCount = variant.RowCount;
             typeNames = variant.TypeNames.ToArray();
+            typeNamesList = variant.TypeNames;
             childTypeNames = Enumerable.Range(0, variant.TypeCount).Select(i => variant.GetTypeColumn(i).TypeName).ToArray();
             discriminators = variant.Discriminators.ToArray();
             discriminatorLength = variant.Discriminators.Length;
@@ -712,6 +714,10 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(discriminators, Is.EqualTo(new byte[] { 1, 0, IVariantColumn.NullDiscriminator, 1, 0 }), "0 = String, 1 = UInt64, 255 = NULL");
             Assert.That(typeNames, Is.EqualTo(new[] { "String", "UInt64" }), "which is what TypeNames reports, in discriminator order");
             Assert.That(typeNames, Is.EqualTo(childTypeNames), "and it agrees with each child's own type string");
+            // Handed out wrapped: neither a cast back to the array nor the IList surface can rewrite an entry into
+            // disagreeing with the child column it names.
+            Assert.That(typeNamesList as string[], Is.Null);
+            Assert.Throws<NotSupportedException>(() => ((IList<string>)typeNamesList)[0] = "Rewritten");
             Assert.That(localIndices, Is.EqualTo(new[] { 0, 0, -1, 1, 1 }), "per-type running position; a NULL row addresses no child, so -1");
             Assert.That(stringChild, Is.EqualTo(new[] { "a", "b" }), "each child holds only its own rows, contiguously");
             Assert.That(intChild, Is.EqualTo(new ulong[] { 100, 400 }));

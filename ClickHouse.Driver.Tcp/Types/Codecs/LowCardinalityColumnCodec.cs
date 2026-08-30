@@ -163,7 +163,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
-        if (!TryInnerWriteType(writeType, out Type innerType) || !inner.CanWriteElementType(innerType))
+        if (!InnerAccepts(writeType, out Type innerType))
         {
             throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
         }
@@ -417,8 +417,9 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public bool CanWriteElementType(Type elementType) => InnerAccepts(elementType, out _);
 
-    // A LowCardinality write has to decide which rows share a dictionary entry, so the inner codec must offer a
-    // typed key writer for the surface as well as being able to write it.
+    // The inner type has to offer a wire key, not merely be writable: this codec deduplicates, so accepting a
+    // write type with no key would fault once the body was under way. String takes raw bytes, but offers no key
+    // for them because converting arbitrary bytes to its comparable string is not lossless.
     private bool InnerAccepts(Type elementType, out Type innerType)
         => TryInnerWriteType(elementType, out innerType)
             && inner.CanWriteElementType(innerType)

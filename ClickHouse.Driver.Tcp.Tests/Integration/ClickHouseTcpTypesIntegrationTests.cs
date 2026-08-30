@@ -34,6 +34,14 @@ public class ClickHouseTcpTypesIntegrationTests
         yield return Candidate("Decimal(38, 2)", 1.25m);
         yield return Candidate("Array(Nullable(DateTime('UTC')))", new DateTime?[] { new(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc), null });
         yield return Candidate("Array(Nullable(DateTime('UTC')))", new[] { new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc) });
+
+        // Through the wrappers, where a convenience write type has to survive the shape the wrapper writes with.
+        yield return Candidate("Array(String)", new[] { new byte[] { 0x61 }, new byte[] { 0xFF } });
+        yield return Candidate("Nullable(String)", new byte[] { 0x61 });
+        yield return Candidate("LowCardinality(String)", new byte[] { 0x61 });
+        yield return Candidate("LowCardinality(Nullable(String))", new byte[] { 0x61 });
+        yield return Candidate("LowCardinality(String)", "a");
+        yield return Candidate("Array(Enum8('a' = -1, 'b' = 127))", new[] { "a", "b" });
     }
 
     private static IEnumerable<TestCaseData> ReadCandidates()

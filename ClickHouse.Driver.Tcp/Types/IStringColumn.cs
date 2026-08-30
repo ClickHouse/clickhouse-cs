@@ -11,8 +11,10 @@ namespace ClickHouse.Driver.Tcp;
 /// original byte is gone. This interface is the undamaged reading.
 ///
 /// <para>
-/// The column keeps every row's bytes in one blob with per-row offsets, which is the wire layout: row <c>i</c> is
-/// <c>Bytes.Slice(Offsets[i], Offsets[i + 1] - Offsets[i])</c>, and <see cref="GetBytes"/> is that slice.
+/// The column keeps every row's bytes in one blob with per-row offsets — not the wire's own form, which
+/// interleaves a length prefix with each row's bytes, but the decoded storage the reader builds from it. Row
+/// <c>i</c> is <c>Bytes.Slice(Offsets[i], Offsets[i + 1] - Offsets[i])</c>, and <see cref="GetBytes"/> is that
+/// slice.
 /// <see cref="GetString"/> decodes a row under an encoding of the caller's choosing, for data that is text in
 /// something other than UTF-8.
 /// </para>
