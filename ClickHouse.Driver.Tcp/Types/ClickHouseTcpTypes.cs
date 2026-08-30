@@ -59,8 +59,9 @@ public static class ClickHouseTcpTypes
     /// Whether a <paramref name="clickHouseType"/> column can be read as <paramref name="elementType"/> — the
     /// question <see cref="Block.ReadAs{T}(string)"/> asks, and the one the POCO tier asks of a property type.
     /// True for the type the column decodes to, and for every other reading that type offers (an <c>Enum8</c> as a
-    /// <see cref="string"/> label, a <c>DateTime64</c> as a <see cref="DateTime"/>). There is no numeric widening,
-    /// so a <c>UInt32</c> column does not read as a <see cref="long"/>.
+    /// <see cref="string"/> label, a <c>DateTime64</c> as a <see cref="DateTime"/>, a <c>String</c> as a
+    /// <c>byte[]</c>). There is no numeric widening, so a <c>UInt32</c> column does not read as a
+    /// <see cref="long"/>.
     /// </summary>
     /// <param name="clickHouseType">The column's ClickHouse type.</param>
     /// <param name="elementType">The CLR type to read the values as.</param>
@@ -74,7 +75,9 @@ public static class ClickHouseTcpTypes
         IColumnCodec codec = Resolve(clickHouseType);
 
         // The codec answers by building the conversion, which is also how ReadAs gets it, so the two cannot differ.
-        return codec.TryProjectRead(Expression.Parameter(codec.ElementType, "value"), elementType, out _);
+        // Both readings are asked for, and in ReadAs's order: off the column's storage, then off its decoded value.
+        return codec.TryProjectColumnRead(Expression.Parameter(typeof(IColumn), "column"), Expression.Parameter(typeof(int), "row"), elementType, out _)
+            || codec.TryProjectRead(Expression.Parameter(codec.ElementType, "value"), elementType, out _);
     }
 
     private static IColumnCodec Resolve(string clickHouseType)

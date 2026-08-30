@@ -160,7 +160,10 @@ public class ColumnReadProjectionTests
                     bool offered = false;
                     try
                     {
-                        offered = codec.TryProjectRead(source, target, out projected);
+                        // Either form counts: a reading the canonical value cannot express is taken off the
+                        // column's storage instead, and String's bytes are advertised through that one.
+                        offered = TryProjectStorageRead(codec, target, out projected)
+                            || codec.TryProjectRead(source, target, out projected);
                     }
                     catch (Exception ex)
                     {
@@ -387,8 +390,8 @@ public class ColumnReadProjectionTests
     {
         IColumnCodec codec = Codec("Nullable(String)");
 
-        // A reference inner's nulls are already CLR nulls, so the surface type is the bare inner type.
-        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(string) }));
+        // A reference inner's nulls are already CLR nulls, so both surface types are the bare inner spellings.
+        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
     }
 
     [Test]
@@ -469,7 +472,9 @@ public class ColumnReadProjectionTests
                 foreach (Type target in codec.ReadableElementTypes)
                 {
                     ParameterExpression source = Expression.Parameter(codec.ElementType, "v");
-                    Assert.That(codec.TryProjectRead(source, target, out Expression projected), Is.True,
+                    Assert.That(
+                        TryProjectStorageRead(codec, target, out Expression projected) || codec.TryProjectRead(source, target, out projected),
+                        Is.True,
                         $"{type} advertises {target} but does not project it");
                     Assert.That(projected.Type, Is.EqualTo(target), $"{type} projected {target} as {projected.Type}");
                 }
@@ -803,6 +808,69 @@ public class ColumnReadProjectionTests
             Assert.That(ordinals.Values.ToArray(), Is.EqualTo(new sbyte[] { 1 }));
         });
     }
+
+    [Test]
+    public void ReadableElementTypes_String_OffersTheTextAndTheBytes()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Codec("String").ReadableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
+            Assert.That(Codec("Nullable(String)").ReadableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }),
+                "a reference-typed reading is already nullable, so the wrapper lifts it to itself");
+        });
+    }
+
+    /// <summary>
+    /// A byte reading has to come off the column's storage, so a composite offers it only where it forwards the
+    /// question to the child holding those bytes. <c>Nullable</c> does; the others reach their child's storage
+    /// through the columnar views instead, and say no here rather than projecting from the damaged text.
+    /// </summary>
+    [Test]
+    public void TryProjectColumnRead_CompositesOtherThanNullable_OfferNoByteReading()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(OffersStorageRead(Codec("String"), typeof(byte[])), Is.True);
+            Assert.That(OffersStorageRead(Codec("Nullable(String)"), typeof(byte[])), Is.True);
+
+            Assert.That(OffersStorageRead(Codec("String"), typeof(string)), Is.False, "the text is the canonical value's own reading");
+            Assert.That(OffersStorageRead(Codec("Array(String)"), typeof(byte[][])), Is.False);
+            Assert.That(OffersStorageRead(Codec("Map(String, String)"), typeof(KeyValuePair<byte[], byte[]>[])), Is.False);
+            Assert.That(OffersStorageRead(Codec("LowCardinality(String)"), typeof(byte[])), Is.False);
+            Assert.That(OffersStorageRead(Codec("Tuple(String)"), typeof(byte[])), Is.False);
+            Assert.That(OffersStorageRead(Codec("Nullable(String)"), typeof(byte[][])), Is.False, "the inner has no such reading to forward");
+        });
+    }
+
+    /// <summary>
+    /// A <c>JSON</c> value is a document the server parses, so it is text and only text — even though it rides the
+    /// wire through the <c>String</c> codec's body and decodes into the same column class, whose bytes are
+    /// therefore right there.
+    /// </summary>
+    [Test]
+    public void TryProjectColumnRead_Json_OffersNoByteReadingEvenThoughItsBodyIsAString()
+    {
+        IColumnCodec json = Codec("JSON");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(OffersStorageRead(json, typeof(byte[])), Is.False);
+            Assert.That(json.ReadableElementTypes, Is.EqualTo(new[] { typeof(string) }));
+            Assert.That(ClickHouseTcpTypes.CanRead("JSON", typeof(byte[])), Is.False);
+            Assert.That(ClickHouseTcpTypes.CanRead("String", typeof(byte[])), Is.True);
+        });
+    }
+
+    /// <summary>Asks a codec for the reading it takes off a column's storage rather than off its decoded value.</summary>
+    private static bool TryProjectStorageRead(IColumnCodec codec, Type targetType, out Expression projected)
+        => codec.TryProjectColumnRead(
+            Expression.Parameter(typeof(IColumn), "column"),
+            Expression.Parameter(typeof(int), "row"),
+            targetType,
+            out projected);
+
+    private static bool OffersStorageRead(IColumnCodec codec, Type targetType)
+        => TryProjectStorageRead(codec, targetType, out _);
 
     private static IColumn<T> ReadAs<T>(IColumn column)
         => ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, new ResolveContext { ServerTimezone = "UTC" });

@@ -55,6 +55,13 @@ public class ClickHouseTcpTypesIntegrationTests
         yield return new TestCaseData("CAST('1.25' AS Decimal(38, 2))", typeof(decimal));
         yield return new TestCaseData("[toDateTime('2024-06-15 14:00:00', 'UTC')]", typeof(DateTime[]));
         yield return new TestCaseData("map('k', toUInt32(1))", typeof(KeyValuePair<string, uint>[]));
+
+        // A String's bytes, which its text reading cannot express, and the wrappers that do and do not forward
+        // that reading: Nullable does, and nothing else, so those refusals are the documented line.
+        yield return new TestCaseData("unhex('41FFFE42')", typeof(byte[]));
+        yield return new TestCaseData("CAST(unhex('41FF') AS Nullable(String))", typeof(byte[]));
+        yield return new TestCaseData("['a']", typeof(byte[][]));
+        yield return new TestCaseData("CAST('a' AS LowCardinality(String))", typeof(byte[]));
     }
 
     [TestCaseSource(nameof(WriteCandidates))]
