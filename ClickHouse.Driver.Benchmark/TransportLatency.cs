@@ -30,14 +30,14 @@ public class TransportLatency
     private ClickHouseClient httpClient;
     private ClickHouseTcpClient tcpClient;
 
-    [Params(100)]
+    [Params(500)]
     public int RoundTrips { get; set; }
 
     [GlobalSetup]
     public async Task Setup()
     {
-        httpClient = new ClickHouseClient(BenchmarkServer.Http);
-        tcpClient = BenchmarkServer.CreateTcpClient();
+        httpClient = new ClickHouseClient(BenchmarkServer.HttpUncompressed);
+        tcpClient = BenchmarkServer.CreateUncompressedTcpClient();
 
         await httpClient.ExecuteScalarAsync(Sql);
         await tcpClient.ExecuteScalarAsync(Sql);

@@ -15,8 +15,9 @@ namespace ClickHouse.Driver.Benchmark;
 /// on it.
 /// </para>
 /// <para>
-/// Both clients run at their own defaults, as in <see cref="TransportRead"/>. This is
-/// characterization: the arms move together when the server or the runner changes.
+/// Both sides run uncompressed, as in <see cref="TransportRead"/> and for the same reason: the
+/// transports do not default to the same codec, and over loopback a codec costs CPU while saving
+/// nothing. This is characterization: the arms move together when the server or the runner changes.
 /// </para>
 /// </remarks>
 [BenchmarkCategory(BenchmarkCategories.Cross)]
@@ -27,7 +28,7 @@ public class TransportReadPoco
     private ClickHouseClient httpClient;
     private ClickHouseTcpClient tcpClient;
 
-    [Params(500_000)]
+    [Params(2_000_000)]
     public int Count { get; set; }
 
     private string Sql =>
@@ -37,9 +38,9 @@ public class TransportReadPoco
     [GlobalSetup]
     public void Setup()
     {
-        httpClient = new ClickHouseClient(BenchmarkServer.Http);
+        httpClient = new ClickHouseClient(BenchmarkServer.HttpUncompressed);
         httpClient.RegisterPocoType<Reading>();
-        tcpClient = BenchmarkServer.CreateTcpClient();
+        tcpClient = BenchmarkServer.CreateUncompressedTcpClient();
     }
 
     [GlobalCleanup]

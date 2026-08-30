@@ -29,8 +29,30 @@ public static class BenchmarkServer
     /// <summary>The native-protocol connection string.</summary>
     public static string Tcp { get; } = Env("CLICKHOUSE_TCP_CONNECTION_STRING") ?? DeriveNativeFromHttp();
 
+    /// <summary>
+    /// The HTTP connection string with compression off, for a cross-transport comparison.
+    /// </summary>
+    /// <remarks>
+    /// The two transports do not default to the same codec — HTTP to gzip/ZSTD, the native client to
+    /// LZ4 — so a comparison at their defaults reports the codec difference as a transport
+    /// difference. Over loopback a codec costs CPU and saves nothing, so the uncompressed pair is the
+    /// one that answers "which client does less work". Pair with
+    /// <see cref="CreateUncompressedTcpClient"/>, and see <see cref="TcpCompression"/> for the codec
+    /// axis itself.
+    /// </remarks>
+    public static string HttpUncompressed { get; } =
+        new ClickHouseConnectionStringBuilder(Http) { Compression = false }.ToString();
+
     /// <summary>Creates a native client for the resolved endpoint. The caller owns it.</summary>
     public static ClickHouseTcpClient CreateTcpClient() => new(Tcp);
+
+    /// <summary>Creates a native client with compression off, matching <see cref="HttpUncompressed"/>.</summary>
+    public static ClickHouseTcpClient CreateUncompressedTcpClient() =>
+        CreateTcpClient(builder =>
+        {
+            builder.Compression = "none";
+            return builder;
+        });
 
     /// <summary>Creates a native client with one option overridden. The caller owns it.</summary>
     public static ClickHouseTcpClient CreateTcpClient(Func<ClickHouseTcpConnectionStringBuilder, ClickHouseTcpConnectionStringBuilder> configure)
