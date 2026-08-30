@@ -6,12 +6,14 @@ on:
     paths:
       - "examples/**"
       - "ClickHouse.Driver/**"
+      - "ClickHouse.Driver.Common/**"
       - ".github/workflows/examples.yml"
   pull_request:
     branches: [main]
     paths:
       - "examples/**"
       - "ClickHouse.Driver/**"
+      - "ClickHouse.Driver.Common/**"
       - ".github/workflows/examples.yml"
   workflow_dispatch:
     inputs:
@@ -53,7 +55,7 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Setup .NET Core
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             10.x

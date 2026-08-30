@@ -7,7 +7,7 @@ using ClickHouse.Driver.Types.Grammar;
 
 namespace ClickHouse.Driver.Types;
 
-internal class DecimalType : ParameterizedType
+internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWriter<ClickHouseDecimal>, ITypedReader<decimal>, ITypedReader<ClickHouseDecimal>
 {
     private int scale;
 
@@ -62,27 +62,42 @@ internal class DecimalType : ParameterizedType
     }
 
     public override object Read(ExtendedBinaryReader reader)
+        // The cast to object stops the ternary unifying decimal into ClickHouseDecimal through its implicit
+        // conversion, which would give the UseBigDecimal=false branch the wrong type.
+        => UseBigDecimal ? ReadClickHouseDecimal(reader) : (object)ReadDecimal(reader);
+
+    // Both representations stay available to the typed read; only the boxed Read follows UseBigDecimal.
+    decimal ITypedReader<decimal>.ReadValue(ExtendedBinaryReader reader) => ReadDecimal(reader);
+
+    ClickHouseDecimal ITypedReader<ClickHouseDecimal>.ReadValue(ExtendedBinaryReader reader) => ReadClickHouseDecimal(reader);
+
+    private ClickHouseDecimal ReadClickHouseDecimal(ExtendedBinaryReader reader)
     {
-        if (UseBigDecimal)
+        var mantissa = Size switch
         {
-            var mantissa = Size switch
-            {
-                4 => (BigInteger)reader.ReadInt32(),
-                8 => (BigInteger)reader.ReadInt64(),
-                _ => new BigInteger(reader.ReadBytes(Size)),
-            };
-            return new ClickHouseDecimal(mantissa, Scale);
-        }
-        else
+            4 => (BigInteger)reader.ReadInt32(),
+            8 => (BigInteger)reader.ReadInt64(),
+            _ => ReadMantissa(reader),
+        };
+        return new ClickHouseDecimal(mantissa, Scale);
+    }
+
+    private decimal ReadDecimal(ExtendedBinaryReader reader)
+    {
+        var mantissa = Size switch
         {
-            var mantissa = Size switch
-            {
-                4 => reader.ReadInt32(),
-                8 => reader.ReadInt64(),
-                _ => (decimal)new BigInteger(reader.ReadBytes(Size)),
-            };
-            return mantissa / (decimal)Exponent;
-        }
+            4 => reader.ReadInt32(),
+            8 => reader.ReadInt64(),
+            _ => (decimal)ReadMantissa(reader),
+        };
+        return mantissa / (decimal)Exponent;
+    }
+
+    private BigInteger ReadMantissa(ExtendedBinaryReader reader)
+    {
+        Span<byte> buffer = stackalloc byte[Size];
+        reader.ReadBytes(buffer);
+        return new BigInteger(buffer);
     }
 
     public override string ToString() => $"{Name}({Precision}, {Scale})";
@@ -92,13 +107,32 @@ internal class DecimalType : ParameterizedType
         try
         {
             ClickHouseDecimal @decimal = value is ClickHouseDecimal chd ? chd : Convert.ToDecimal(value, CultureInfo.InvariantCulture);
-            var mantissa = ClickHouseDecimal.ScaleMantissa(@decimal, Scale);
-            WriteBigInteger(writer, mantissa);
+            WriteScaled(writer, @decimal);
         }
         catch (OverflowException)
         {
             throw new ArgumentOutOfRangeException(nameof(value), value, $"Value cannot be represented");
         }
+    }
+
+    public void WriteValue(ExtendedBinaryWriter writer, decimal value) => WriteValue(writer, (ClickHouseDecimal)value);
+
+    public void WriteValue(ExtendedBinaryWriter writer, ClickHouseDecimal value)
+    {
+        try
+        {
+            WriteScaled(writer, value);
+        }
+        catch (OverflowException)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, $"Value cannot be represented");
+        }
+    }
+
+    private void WriteScaled(ExtendedBinaryWriter writer, ClickHouseDecimal value)
+    {
+        var mantissa = ClickHouseDecimal.ScaleMantissa(value, Scale);
+        WriteBigInteger(writer, mantissa);
     }
 
     internal virtual bool UseBigDecimal { get; init; }
@@ -114,21 +148,18 @@ internal class DecimalType : ParameterizedType
 
     private void WriteBigInteger(ExtendedBinaryWriter writer, BigInteger value)
     {
-        byte[] bigIntBytes = value.ToByteArray();
-        byte[] decimalBytes = new byte[Size];
+        // Size is always one of {4, 8, 16, 32} (see GetSizeFromPrecision), so a stack
+        // buffer avoids both the BigInteger.ToByteArray() and the new byte[Size] allocation.
+        Span<byte> decimalBytes = stackalloc byte[Size];
 
-        if (bigIntBytes.Length > Size)
-            throw new OverflowException($"Trying to write {bigIntBytes.Length} bytes, at most {Size} expected");
+        if (!value.TryWriteBytes(decimalBytes, out int bytesWritten))
+            throw new OverflowException($"Trying to write {value.GetByteCount()} bytes, at most {Size} expected");
 
-        bigIntBytes.CopyTo(decimalBytes, 0);
-
-        // If a negative BigInteger is not long enough to fill the whole buffer,
-        // the remainder needs to be filled with 0xFF
-        if (value.Sign < 0)
-        {
-            for (int i = bigIntBytes.Length; i < Size; i++)
-                decimalBytes[i] = 0xFF;
-        }
+        // Fill the bytes past the mantissa: 0xFF to sign-extend a negative value, 0x00 for a
+        // positive one. The positive case is explicit rather than relying on the stackalloc being
+        // zero-initialized (guaranteed only while the compiler emits localsinit; a future
+        // [SkipLocalsInit] would leave stack garbage in the high bytes and corrupt the value).
+        decimalBytes.Slice(bytesWritten).Fill(value.Sign < 0 ? (byte)0xFF : (byte)0x00);
         writer.Write(decimalBytes);
     }
 }

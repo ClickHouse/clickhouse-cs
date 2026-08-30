@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using ClickHouse.Driver.Types;
 using NUnit.Framework;
 
@@ -64,11 +64,26 @@ public class EnumTypeTests
         var typeString = "Enum8('Active' = 0, 'Inactive' = 1)";
         var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
         var enumType = (EnumType)type;
-        
+
         Assert.Multiple(() =>
         {
             Assert.That(enumType.Lookup(0), Is.EqualTo("Active"));
             Assert.That(enumType.Lookup(1), Is.EqualTo("Inactive"));
+        });
+    }
+
+    [Test]
+    public void TryLookupShouldReturnTrueForKnownLabelAndFalseForUnknown()
+    {
+        var typeString = "Enum8('Active' = 1, 'Inactive' = 2)";
+        var enumType = (EnumType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(enumType.TryLookup("Active", out var active), Is.True);
+            Assert.That(active, Is.EqualTo(1));
+            Assert.That(enumType.TryLookup("Missing", out var missing), Is.False);
+            Assert.That(missing, Is.EqualTo(0));
         });
     }
 
@@ -90,5 +105,52 @@ public class EnumTypeTests
 
         Assert.That(type.Lookup("a=b"), Is.EqualTo(1));
         Assert.That(type.Lookup(1), Is.EqualTo("a=b"));
+    }
+
+    [Test]
+    public void ToString_WithEscapedEnumLabels_ReturnsParseableTypeDeclaration()
+    {
+        var type = (EnumType)TypeConverter.ParseClickHouseType(
+            "Enum8('DateTime(\\'UTC\\')' = -1, 'a=b' = 1)",
+            TypeSettings.Default);
+
+        var rendered = type.ToString();
+        var reparsed = (EnumType)TypeConverter.ParseClickHouseType(rendered, TypeSettings.Default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rendered, Is.EqualTo("Enum8('DateTime(\\'UTC\\')' = -1, 'a=b' = 1)"));
+            Assert.That(reparsed.Lookup("DateTime('UTC')"), Is.EqualTo(-1));
+            Assert.That(reparsed.Lookup("a=b"), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void ToString_WithEnum16Type_ReturnsCompleteTypeDeclaration()
+    {
+        var type = (EnumType)TypeConverter.ParseClickHouseType(
+            "Enum16('Low' = -32768, 'High' = 32767)",
+            TypeSettings.Default);
+
+        Assert.That(type.ToString(), Is.EqualTo("Enum16('Low' = -32768, 'High' = 32767)"));
+    }
+
+    // SchemaDescriber writes ToString() back into GetSchemaTable()'s ProviderType and re-parses it, and
+    // PocoTypeRegistry keys its row-reader cache on it, so the rendering has to survive a round trip. An
+    // unquoted or unescaped label containing a comma or a quote would re-parse as the wrong members.
+    [TestCase("Enum8('Active' = 0, 'Inactive' = 1)")]
+    [TestCase("Enum16('Low' = -32768, 'High' = 32767)")]
+    [TestCase("Enum8('a,b' = 1, 'c' = 2)")]
+    [TestCase("Enum8('a=b' = 1, 'plain' = 2)")]
+    [TestCase("Enum8('None' = -1, 'DateTime(\\'UTC\\')' = 0, 'String' = 1)")]
+    [TestCase("Enum8('back\\\\slash' = 1)")]
+    public void ToString_WithQuotableEnumLabels_RoundTripsThroughParse(string typeString)
+    {
+        var original = (EnumType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        var reparsed = (EnumType)TypeConverter.ParseClickHouseType(original.ToString(), TypeSettings.Default);
+
+        Assert.That(reparsed.Values, Is.EqualTo(original.Values));
+        Assert.That(reparsed.ToString(), Is.EqualTo(original.ToString()));
     }
 }

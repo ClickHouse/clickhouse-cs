@@ -10,7 +10,7 @@ internal class Date32Type : DateType
 
     public override string ToString() => "Date32";
 
-    public override object Read(ExtendedBinaryReader reader) => DateTimeConversions.FromUnixTimeDays(reader.ReadInt32());
+    protected override DateTime ReadDateTime(ExtendedBinaryReader reader) => DateTimeConversions.FromUnixTimeDays(reader.ReadInt32());
 
     public override ParameterizedType Parse(SyntaxTreeNode typeName, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings) => throw new NotImplementedException();
 
@@ -18,9 +18,9 @@ internal class Date32Type : DateType
     private const int Date32MinUnixDays = -25567;
     private const int Date32MaxUnixDays = 120529;
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T value)
     {
-        var days = CoerceToDateTimeOffset(value).ToUnixTimeDays();
+        var days = dto.ToUnixTimeDays();
         if (days < Date32MinUnixDays || days > Date32MaxUnixDays)
         {
             throw new ArgumentOutOfRangeException(

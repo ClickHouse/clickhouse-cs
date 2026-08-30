@@ -91,6 +91,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         JsonReadMode = other.JsonReadMode;
         JsonWriteMode = other.JsonWriteMode;
 
+        MapReadMode = other.MapReadMode;
+        AllowDuplicateJsonKeys = other.AllowDuplicateJsonKeys;
+
         // Copy parameter type resolver
         ParameterTypeResolver = other.ParameterTypeResolver;
 
@@ -102,6 +105,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
         // Copy credentials provider
         CredentialsProvider = other.CredentialsProvider;
+
+        // Copy accept encoding
+        AcceptEncoding = other.AcceptEncoding;
     }
 
     /// <summary>
@@ -173,9 +179,20 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public Func<ClickHouseCredentials> CredentialsProvider { get; init; }
 
     /// <summary>
-    /// Gets or sets whether to use compression for data transfer.
+    /// Gets or sets whether to use compression for data transfer. This is the master switch: when false
+    /// the driver advertises no <c>Accept-Encoding</c> at all, unless <see cref="AcceptEncoding"/> names
+    /// one explicitly.
     /// Default: true
     /// </summary>
+    /// <remarks>
+    /// <c>UseCompression</c> governs both directions. Besides the response negotiation, it gzip-compresses
+    /// the request body of every SQL-text request — the statement itself — so turning it off puts that body
+    /// in the clear as well; gzip is the only codec available there, since <see cref="AcceptEncoding"/>
+    /// steers the response only. The exception is <see cref="UseFormDataParameters"/>, whose multipart body
+    /// is always sent uncompressed. A binary insert does not consult this setting and uses
+    /// <see cref="InsertOptions.Compressor"/>; a raw upload (<c>InsertRawStreamAsync</c>,
+    /// <c>PostStreamAsync</c>) takes its own per-call flag.
+    /// </remarks>
     public bool UseCompression { get; init; } = ClickHouseDefaults.Compression;
 
     /// <summary>
@@ -235,13 +252,15 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets the size, in bytes, of the buffer used when reading HTTP query responses.
+    /// The buffer is pooled (rented from <see cref="System.Buffers.ArrayPool{T}"/>), so it is not a
+    /// per-query allocation.
     /// <para>
     /// A larger buffer reduces the number of refills for large responses,
     /// but any value at or above 85,000 bytes is allocated on the LOH,
     /// which is not compacted and only reclaimed by gen2 collections; under high query
     /// throughput that can cause LOH fragmentation, inflated committed memory and longer GC pauses.
     /// </para>
-    /// Default: 8192 (8 KiB)
+    /// Default: 65536 (64 KiB)
     /// </summary>
     public int ReadBufferSize { get; init; } = ClickHouseDefaults.ReadBufferSize;
 
@@ -253,9 +272,17 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
 
     /// <summary>
     /// Gets or sets a custom HttpClient to use for connections.
-    /// Note: HttpClient must have AutomaticDecompression enabled if compression is not disabled.
+    /// Note: the driver decodes compressed responses itself, so AutomaticDecompression is optional.
     /// Default: null (driver will create its own)
     /// </summary>
+    /// <remarks>
+    /// <c>AutomaticDecompression</c> is not only a response-side setting: at send time the handler also
+    /// <i>adds</i> every algorithm in its mask that is missing from <c>Accept-Encoding</c>. A handler
+    /// supplied here with a mask therefore widens whatever the driver advertises — including an exact
+    /// <see cref="AcceptEncoding"/> — and ClickHouse may then answer with a codec you did not ask for.
+    /// Leave the mask at <see cref="System.Net.DecompressionMethods.None"/> (as the driver's own handler
+    /// does) to keep an explicit codec choice intact.
+    /// </remarks>
     public HttpClient HttpClient { get; init; }
 
     /// <summary>
@@ -351,6 +378,26 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public JsonWriteMode JsonWriteMode { get; init; } = JsonWriteMode.String;
 
     /// <summary>
+    /// Gets or sets how Map columns are returned when reading data.
+    /// Dictionary (default): Returns Dictionary&lt;TKey, TValue&gt;; a repeated key keeps only its last value
+    /// KeyValuePairs: Returns List&lt;KeyValuePair&lt;TKey, TValue&gt;&gt;, preserving every pair the server sent
+    /// The mode selects the framework type of a Map column, so it also applies to
+    /// GetFieldValue&lt;T&gt;, reported schema types, and POCO property mapping.
+    /// </summary>
+    public MapReadMode MapReadMode { get; init; } = ClickHouseDefaults.MapReadMode;
+
+    /// <summary>
+    /// Gets or sets how to read a JSON row where one path holds a value and is also the parent of
+    /// another path which holds a value. The server sends such a row with a duplicate key, which a
+    /// JsonObject cannot hold.
+    /// false (default): throw, because either value can only be kept by dropping the other
+    /// true: keep whichever value the row carries last and drop the other
+    /// Applies to JsonReadMode.Binary and JsonReadMode.None. JsonReadMode.String returns the
+    /// server's JSON text unchanged and is unaffected.
+    /// </summary>
+    public bool AllowDuplicateJsonKeys { get; init; } = ClickHouseDefaults.AllowDuplicateJsonKeys;
+
+    /// <summary>
     /// Gets or sets a custom resolver for mapping .NET types to ClickHouse types
     /// during @-style parameter substitution. When set, this resolver is consulted
     /// after explicit ClickHouseType/SQL type hints but before default type inference.
@@ -374,6 +421,26 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Default: null (no conversion)
     /// </summary>
     public IReadValueConverter ReadValueConverter { get; init; }
+
+    /// <summary>
+    /// Gets or sets the <c>Accept-Encoding</c> sent with every request, overriding the codecs the driver
+    /// advertises by default (<c>zstd, lz4, gzip, deflate</c> — see remarks). Whichever codec the server then
+    /// answers with is decoded transparently, including <c>br</c>, which is decodable but — unlike
+    /// <c>zstd</c> — not advertised by default; <c>snappy</c> cannot be decoded and will
+    /// fail with an actionable error. Can be overridden per query by
+    /// <see cref="QueryOptions.AcceptEncoding"/>.
+    /// Default: null (advertise the codecs the driver can decode)
+    /// </summary>
+    /// <remarks>
+    /// ClickHouse scans this header in its own fixed preference order (<c>zstd</c> &gt; <c>br</c> &gt;
+    /// <c>lz4</c> &gt; <c>snappy</c> &gt; <c>gzip</c> &gt; <c>deflate</c>) and ignores q-values, so the
+    /// only way to steer its choice is which tokens are listed. Setting this forces
+    /// <c>enable_http_compression=1</c> and applies to
+    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/> too, which otherwise advertises no codec at
+    /// all, so that a body handed over verbatim arrives exactly as the server sent it — naming a codec
+    /// here is how a caller asks for a compressed export on purpose.
+    /// </remarks>
+    public string AcceptEncoding { get; init; }
 
     /// <summary>
     /// Creates a ClickHouseClientSettings object from a connection string.
@@ -425,6 +492,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Roles = builder.Roles,
             JsonReadMode = builder.JsonReadMode,
             JsonWriteMode = builder.JsonWriteMode,
+            MapReadMode = builder.MapReadMode,
+            AllowDuplicateJsonKeys = builder.AllowDuplicateJsonKeys,
+            AcceptEncoding = builder.AcceptEncoding,
         };
 
         // Extract custom settings from connection string builder
@@ -473,10 +543,13 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                EnableDebugMode == other.EnableDebugMode &&
                JsonReadMode == other.JsonReadMode &&
                JsonWriteMode == other.JsonWriteMode &&
+               MapReadMode == other.MapReadMode &&
+               AllowDuplicateJsonKeys == other.AllowDuplicateJsonKeys &&
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
                ReadValueConverter == other.ReadValueConverter &&
                CredentialsProvider == other.CredentialsProvider &&
+               AcceptEncoding == other.AcceptEncoding &&
                Roles.SequenceEqual(other.Roles) &&
                CustomHeaders.EntriesEqual(other.CustomHeaders) &&
                ApplicationInfo.EntriesEqual(other.ApplicationInfo);
@@ -516,10 +589,13 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(EnableDebugMode);
         hash.Add(JsonReadMode);
         hash.Add(JsonWriteMode);
+        hash.Add(MapReadMode);
+        hash.Add(AllowDuplicateJsonKeys);
         hash.Add(ParameterTypeResolver);
         hash.Add(ParameterFormatter);
         hash.Add(ReadValueConverter);
         hash.Add(CredentialsProvider);
+        hash.Add(AcceptEncoding);
         foreach (var kvp in CustomSettings)
         {
             hash.Add(HashCode.Combine(kvp.Key, kvp.Value));
@@ -568,7 +644,14 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"UseSession={UseSession};Timeout={Timeout.TotalSeconds}s;" +
                $"ReadBufferSize={ReadBufferSize};" +
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode};" +
+               $"MapReadMode={MapReadMode};" +
+               $"AllowDuplicateJsonKeys={AllowDuplicateJsonKeys};" +
                $"UseFormDataParameters={UseFormDataParameters}";
+
+        if (!string.IsNullOrEmpty(AcceptEncoding))
+        {
+            result += $";AcceptEncoding={AcceptEncoding}";
+        }
 
         if (Roles.Count > 0)
         {

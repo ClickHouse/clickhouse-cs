@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text;
@@ -11,6 +12,8 @@ namespace ClickHouse.Driver.Utility;
 
 internal static class SchemaDescriber
 {
+    private static readonly string[] ColumnsRestrictionNames = ["database", "table"];
+
     public static DataTable DescribeSchema(this ClickHouseDataReader reader)
     {
         var table = new DataTable();
@@ -51,11 +54,22 @@ internal static class SchemaDescriber
             row["IsKey"] = false;
             row["IsAutoIncrement"] = false;
 
-            if (chType is DecimalType dt)
+            // Numeric precision/scale describe the underlying type, so unwrap Nullable(...)
+            // exactly as the DataType column above does.
+            var effectiveType = reader.GetEffectiveClickHouseType(ordinal);
+            if (effectiveType is DecimalType dt)
             {
                 row["ColumnSize"] = dt.Size;
                 row["NumericPrecision"] = dt.Precision;
                 row["NumericScale"] = dt.Scale;
+            }
+            else if (effectiveType is DateTime64Type dateTime64)
+            {
+                row["NumericScale"] = dateTime64.Scale;
+            }
+            else if (effectiveType is Time64Type time64)
+            {
+                row["NumericScale"] = time64.Scale;
             }
             table.Rows.Add(row);
         }
@@ -64,27 +78,47 @@ internal static class SchemaDescriber
 
     public static DataTable DescribeSchema(this ClickHouseConnection connection, string type, string[] restrictions) => type switch
     {
-        "Columns" => DescribeColumns(connection, restrictions),
+        "Columns" => DescribeColumns(connection, type, restrictions),
         _ => throw new NotSupportedException(),
     };
 
-    private static DataTable DescribeColumns(ClickHouseConnection connection, string[] restrictions)
+    private static DataTable DescribeColumns(ClickHouseConnection connection, string collectionName, string[] restrictions)
     {
-        var command = connection.CreateCommand();
+        // Restrictions past the supported ones cannot be applied to the query, so reject them
+        // instead of silently returning metadata which is wider than the caller asked for.
+        // Positions left null are unspecified, which is how the supported positions read null too.
+        if (restrictions != null && restrictions.Skip(ColumnsRestrictionNames.Length).Any(restriction => restriction != null))
+        {
+            throw new ArgumentException(
+                $"More restrictions were provided than the requested schema ('{collectionName}') supports. " +
+                $"Supported restrictions are: {string.Join(", ", ColumnsRestrictionNames)}.");
+        }
+
+        using var command = connection.CreateCommand();
         var query = new StringBuilder("SELECT database as Database, table as Table, name as Name, type as ProviderType, type as DataType FROM system.columns");
         var database = restrictions != null && restrictions.Length > 0 ? restrictions[0] : null;
         var table = restrictions != null && restrictions.Length > 1 ? restrictions[1] : null;
 
+        // Restriction values are positional and individually optional, so predicates are
+        // collected and only then joined - appending " WHERE"/" AND" inline produces invalid
+        // SQL when a later restriction is set while an earlier one is omitted.
+        var predicates = new List<string>();
+
         if (database != null)
         {
-            query.Append(" WHERE database={database:String}");
+            predicates.Add("database={database:String}");
             command.AddParameter("database", database);
         }
 
         if (table != null)
         {
-            query.Append(" AND table={table:String}");
+            predicates.Add("table={table:String}");
             command.AddParameter("table", table);
+        }
+
+        if (predicates.Count > 0)
+        {
+            query.Append(" WHERE ").Append(string.Join(" AND ", predicates));
         }
 
         command.CommandText = query.ToString();
@@ -95,7 +129,7 @@ internal static class SchemaDescriber
 
         foreach (var row in result.Rows.Cast<DataRow>())
         {
-            var clickHouseType = TypeConverter.ParseClickHouseType((string)row["ProviderType"], TypeSettings.Default);
+            var clickHouseType = TypeConverter.ParseClickHouseType((string)row["ProviderType"], connection.ClickHouseClient.TypeSettings);
             row["ProviderType"] = clickHouseType.ToString();
             // TODO: this should return actual framework type like other implementations do
             row["DataType"] = clickHouseType.FrameworkType.ToString().Replace("System.", string.Empty);

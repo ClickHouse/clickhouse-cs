@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
+using System.Text;
 using System.Web;
 using ClickHouse.Driver.Utility;
 
@@ -9,7 +9,16 @@ namespace ClickHouse.Driver;
 
 internal class ClickHouseUriBuilder
 {
-    private readonly IDictionary<string, string> sqlQueryParameters = new Dictionary<string, string>();
+    // Reused across ToString() calls on the same thread to avoid allocating a builder per request.
+    // Detached while in use so a (theoretical) reentrant call cannot corrupt an in-progress build,
+    // and dropped again if it grew unusually large so a one-off huge URI does not pin the buffer.
+    [ThreadStatic]
+    private static StringBuilder cachedBuilder;
+
+    private const int MaxRetainedBuilderCapacity = 64 * 1024;
+
+    // Allocated lazily: most queries carry no SQL parameters at all.
+    private Dictionary<string, string> sqlQueryParameters;
     private string effectiveQueryId;
 
     public ClickHouseUriBuilder(Uri baseUri)
@@ -65,22 +74,119 @@ internal class ClickHouseUriBuilder
     }
 
     public bool AddSqlQueryParameter(string name, string value) =>
-        DictionaryExtensions.TryAdd(sqlQueryParameters, name, value);
+        (sqlQueryParameters ??= new Dictionary<string, string>()).TryAdd(name, value);
 
     public override string ToString()
     {
-        var parameters = new Dictionary<string, string>(); // NameValueCollection but a special one
-        parameters.Set(
-            "enable_http_compression",
-            UseCompression.ToString(CultureInfo.InvariantCulture).ToLowerInvariant());
+        var sb = cachedBuilder ?? new StringBuilder(256);
+        cachedBuilder = null; // detach while in use
+        sb.Clear();
+
+        try
+        {
+            // Compose the absolute URI directly rather than allocating a UriBuilder on every call.
+            // BaseUri is credential-free, so Scheme://Host:Port/AbsolutePath reproduces
+            // UriBuilder.ToString() exactly, including the always-present (even default) port.
+            sb.Append(BaseUri.Scheme)
+              .Append("://")
+              .Append(BaseUri.Host)
+              .Append(':')
+              .Append(BaseUri.Port.ToString(CultureInfo.InvariantCulture))
+              .Append(BaseUri.AbsolutePath);
+
+            var first = true;
+
+            // Connection/command custom settings are the only source of key collisions. When none
+            // are present every key we emit is unique by construction (distinct base-setting keys,
+            // distinct JSON-mode keys, and `param_`-prefixed names unique within the collection),
+            // so we can stream directly and skip the deduplication dictionary — the common case.
+            if (ConnectionQueryStringParameters?.Count > 0 || CommandQueryStringParameters?.Count > 0)
+            {
+                foreach (var kvp in BuildDeduplicatedParameters())
+                    AppendParameter(sb, ref first, kvp.Key, kvp.Value);
+            }
+            else
+            {
+                AppendBaseParameters(sb, ref first);
+
+                if (sqlQueryParameters != null)
+                {
+                    foreach (var parameter in sqlQueryParameters)
+                        AppendParameter(sb, ref first, "param_" + parameter.Key, parameter.Value);
+                }
+
+                if (MaxExecutionTime.HasValue)
+                    AppendParameter(sb, ref first, "max_execution_time", MaxExecutionTime.Value.TotalSeconds.ToString(CultureInfo.InvariantCulture));
+            }
+
+            // Role parameters are intentionally repeatable (role=a&role=b) and never deduplicated;
+            // command roles replace connection roles.
+            var activeRoles = CommandRoles?.Count > 0 ? CommandRoles : ConnectionRoles;
+            if (activeRoles?.Count > 0)
+            {
+                foreach (var role in activeRoles)
+                    AppendParameter(sb, ref first, "role", role);
+            }
+
+            return sb.ToString();
+        }
+        finally
+        {
+            if (sb.Capacity <= MaxRetainedBuilderCapacity)
+                cachedBuilder = sb;
+        }
+    }
+
+    private static void AppendParameter(StringBuilder sb, ref bool first, string key, string value)
+    {
+        sb.Append(first ? '?' : '&');
+        first = false;
+
+        // Keys are known-safe or `param_`-prefixed identifiers; only values are URL-encoded,
+        // matching the previous behavior exactly (including HttpUtility's lowercase %xx escapes).
+        sb.Append(key).Append('=').Append(HttpUtility.UrlEncode(value));
+    }
+
+    private void AppendBaseParameters(StringBuilder sb, ref bool first)
+    {
+        AppendParameter(sb, ref first, "enable_http_compression", UseCompression ? "true" : "false");
+        AppendParameter(sb, ref first, "default_format", DefaultFormat);
+
+        if (!string.IsNullOrEmpty(Database))
+            AppendParameter(sb, ref first, "database", Database);
+        if (!string.IsNullOrEmpty(SessionId))
+            AppendParameter(sb, ref first, "session_id", SessionId);
+        if (!string.IsNullOrEmpty(Sql))
+            AppendParameter(sb, ref first, "query", Sql);
+
+        AppendParameter(sb, ref first, "query_id", GetEffectiveQueryId());
+
+        // Inject JSON format settings based on mode. None skips the setting entirely
+        // (for readonly connections or older servers).
+        if (JsonReadMode == JsonReadMode.Binary)
+            AppendParameter(sb, ref first, "output_format_binary_write_json_as_string", "0");
+        else if (JsonReadMode == JsonReadMode.String)
+            AppendParameter(sb, ref first, "output_format_binary_write_json_as_string", "1");
+
+        if (JsonWriteMode == JsonWriteMode.Binary)
+            AppendParameter(sb, ref first, "input_format_binary_read_json_as_string", "0");
+        else if (JsonWriteMode == JsonWriteMode.String)
+            AppendParameter(sb, ref first, "input_format_binary_read_json_as_string", "1");
+    }
+
+    // Slow path: custom settings can override any earlier key, so resolve the effective value per
+    // key via a dictionary (last write wins) exactly as the original implementation did.
+    private Dictionary<string, string> BuildDeduplicatedParameters()
+    {
+        var parameters = new Dictionary<string, string>();
+        parameters.Set("enable_http_compression", UseCompression ? "true" : "false");
         parameters.Set("default_format", DefaultFormat);
         parameters.SetOrRemove("database", Database);
         parameters.SetOrRemove("session_id", SessionId);
         parameters.SetOrRemove("query", Sql);
         parameters.Set("query_id", GetEffectiveQueryId());
 
-        // Inject JSON format settings based on mode - do this before sqlQueryParameters to allow for overrides
-        // None skips the setting entirely (for readonly connections or older servers)
+        // Inject JSON format settings before custom parameters to allow for overrides.
         if (JsonReadMode == JsonReadMode.Binary)
             parameters.Set("output_format_binary_write_json_as_string", "0");
         else if (JsonReadMode == JsonReadMode.String)
@@ -91,8 +197,11 @@ internal class ClickHouseUriBuilder
         else if (JsonWriteMode == JsonWriteMode.String)
             parameters.Set("input_format_binary_read_json_as_string", "1");
 
-        foreach (var parameter in sqlQueryParameters)
-            parameters.Set("param_" + parameter.Key, parameter.Value.ToString(CultureInfo.InvariantCulture));
+        if (sqlQueryParameters != null)
+        {
+            foreach (var parameter in sqlQueryParameters)
+                parameters.Set("param_" + parameter.Key, parameter.Value);
+        }
 
         if (ConnectionQueryStringParameters != null)
         {
@@ -109,17 +218,6 @@ internal class ClickHouseUriBuilder
         if (MaxExecutionTime.HasValue)
             parameters.Set("max_execution_time", MaxExecutionTime.Value.TotalSeconds.ToString(CultureInfo.InvariantCulture));
 
-        var queryString = string.Join("&", parameters.Select(kvp => $"{kvp.Key}={HttpUtility.UrlEncode(kvp.Value)}"));
-
-        // Append role parameters - command roles replace connection roles
-        var activeRoles = CommandRoles?.Count > 0 ? CommandRoles : ConnectionRoles;
-        if (activeRoles?.Count > 0)
-        {
-            var roleParams = string.Join("&", activeRoles.Select(role => $"role={HttpUtility.UrlEncode(role)}"));
-            queryString = string.IsNullOrEmpty(queryString) ? roleParams : $"{queryString}&{roleParams}";
-        }
-
-        var uriBuilder = new UriBuilder(BaseUri) { Query = queryString };
-        return uriBuilder.ToString();
+        return parameters;
     }
 }

@@ -81,17 +81,22 @@ internal static class HttpParameterFormatter
 
             case DateType dt when value is DateTimeOffset @dto:
                 return QuoteIfNeeded(@dto.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
-#if NET6_0_OR_GREATER
             case DateType dt when value is DateOnly @do:
                 return QuoteIfNeeded(@do.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
-#endif
             case DateType dt:
                 return QuoteIfNeeded(
                     Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                     quote);
 
-            case FixedStringType tt when value is byte[] fsb:
-                return quote ? Encoding.UTF8.GetString(fsb).Escape().QuoteSingle() : Encoding.UTF8.GetString(fsb).Escape();
+            // Byte payloads are escaped byte-for-byte (see EscapeBytes), mirroring the binary write
+            // path (Types/StringType.cs) which writes them verbatim; UTF-8 decoding here would mangle
+            // data that is not valid UTF-8. Without these arms a byte[] fell through to the
+            // value.ToString() arm below and was sent as the text "System.Byte[]".
+            case StringType or FixedStringType when value is byte[] bytes:
+                return QuoteIfNeeded(EscapeBytes(bytes), quote);
+
+            case StringType or FixedStringType when value is ReadOnlyMemory<byte> bytesMemory:
+                return QuoteIfNeeded(EscapeBytes(bytesMemory.Span), quote);
 
             case StringType st:
             case FixedStringType tt:
@@ -141,12 +146,15 @@ internal static class HttpParameterFormatter
 
             case TimeType tt when value is TimeSpan ts:
                 return TimeType.FormatTimeString(ts);
-
+            case TimeType tt when value is TimeOnly timeOnly:
+                return TimeType.FormatTimeString(timeOnly.ToTimeSpan());
             case TimeType tt:
                 return TimeType.FormatTimeString(Convert.ToInt32(value, CultureInfo.InvariantCulture));
 
             case Time64Type t64 when value is TimeSpan ts:
                 return t64.FormatTime64String(ts);
+            case Time64Type t64 when value is TimeOnly timeOnly:
+                return t64.FormatTime64String(timeOnly.ToTimeSpan());
 
             case NullableType nt:
                 return value is null || value is DBNull ? quote ? "null" : NullValueString : Format(nt.UnderlyingType, value, quote, customFormatter, parameterName);
@@ -181,9 +189,9 @@ internal static class HttpParameterFormatter
             case TupleType tupleType when value is IList list:
                 return $"({string.Join(",", tupleType.UnderlyingTypes.Select((x, i) => Format(x, list[i], true, customFormatter, parameterName)))})";
 
-            case MapType mapType when value is IDictionary dict:
-                var strings = string.Join(",", dict.Keys.Cast<object>().Select(k => $"{Format(mapType.KeyType, k, true, customFormatter, parameterName)} : {Format(mapType.ValueType, dict[k], true, customFormatter, parameterName)}"));
-                return $"{{{string.Join(",", strings)}}}";
+            case MapType mapType when MapType.IsMapValue(value):
+                var strings = string.Join(",", MapType.EnumerateEntries(value).Select(entry => $"{Format(mapType.KeyType, entry.Key, true, customFormatter, parameterName)} : {Format(mapType.ValueType, entry.Value, true, customFormatter, parameterName)}"));
+                return $"{{{strings}}}";
 
             case VariantType variantType:
                 if (value is null or DBNull)
@@ -216,6 +224,39 @@ internal static class HttpParameterFormatter
 
     private static string QuoteIfNeeded(string value, bool quote)
         => quote ? value.QuoteSingle() : value;
+
+    private static readonly char[] HexDigits = "0123456789ABCDEF".ToCharArray();
+
+    /// <summary>
+    /// Escapes a raw byte payload into ClickHouse escaped-string text, so that any byte sequence
+    /// (including data that is not valid UTF-8) round-trips through the text-based HTTP parameter
+    /// channel. Printable ASCII is emitted as-is, <c>\</c> and <c>'</c> are backslash-escaped, and
+    /// every other byte becomes a <c>\xHH</c> escape which the server decodes back to that byte.
+    /// </summary>
+    private static string EscapeBytes(ReadOnlySpan<byte> bytes)
+    {
+        var sb = new StringBuilder(bytes.Length);
+        foreach (var b in bytes)
+        {
+            switch (b)
+            {
+                case (byte)'\\':
+                    sb.Append(@"\\");
+                    break;
+                case (byte)'\'':
+                    sb.Append(@"\'");
+                    break;
+                default:
+                    if (b >= 0x20 && b <= 0x7E)
+                        sb.Append((char)b);
+                    else
+                        sb.Append('\\').Append('x').Append(HexDigits[b >> 4]).Append(HexDigits[b & 0xF]);
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
 
     private static bool IsTransparentWrapper(ClickHouseType type)
         => type is NullableType or LowCardinalityType or VariantType;

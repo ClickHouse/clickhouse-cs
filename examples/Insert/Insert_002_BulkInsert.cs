@@ -1,3 +1,4 @@
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Examples;
@@ -76,6 +77,40 @@ public static class BulkInsert
 
         rowsInserted = await client.InsertBinaryAsync(partialTableName, partialColumns, partialData);
         Console.WriteLine($"   Inserted {rowsInserted} rows with partial columns\n");
+
+        // Example 4: Bulk insert with Brotli compression
+        Console.WriteLine("4. Bulk inserting with Brotli compression:");
+        // The insert body is compressed before being sent. The default is ZSTD at level 3.
+        // Set the Compressor property to switch codecs; the built-in GZipCompressor and
+        // BrotliCompressor also expose a CompressionLevel. Behind a proxy tier that re-encodes request
+        // bodies, GZip is the safest choice: a request's Content-Encoding is a declaration rather than
+        // an offer, so an intermediary that does not understand the codec fails the insert outright.
+        // 
+        // Over a fast/local link, set Compressor = null to skip compression entirely;
+        // there the compression cost outweighs the bandwidth saved.
+        var brotliOptions = new InsertOptions
+        {
+            Compressor = BrotliCompressor.Default,
+        };
+
+        var brotliData = GenerateSampleData(10000, startId: 20001);
+        rowsInserted = await client.InsertBinaryAsync(tableName, columns, brotliData, brotliOptions);
+        Console.WriteLine($"   Inserted {rowsInserted} rows using Brotli compression\n");
+
+        // Example 5: Bulk insert with LZ4 compression at a custom level
+        Console.WriteLine("5. Bulk inserting with LZ4 compression (custom level):");
+        // LZ4 ships in the core driver (no extra package needed). Lz4Compressor.Default uses fast mode
+        // (Lz4Level.Fast), the recommended setting for almost all inserts — it is fastest and puts the
+        // least decompression load on the server. Higher levels cost noticeably more CPU for
+        // little-to-no extra compression on typical data.
+        var lz4Options = new InsertOptions
+        {
+            Compressor = new Lz4Compressor(Lz4Level.Fast),
+        };
+
+        var lz4Data = GenerateSampleData(10000, startId: 30001);
+        rowsInserted = await client.InsertBinaryAsync(tableName, columns, lz4Data, lz4Options);
+        Console.WriteLine($"   Inserted {rowsInserted} rows using LZ4 compression (L03_HC)\n");
 
         // Query and display sample results
         Console.WriteLine("Sample data from main table:");

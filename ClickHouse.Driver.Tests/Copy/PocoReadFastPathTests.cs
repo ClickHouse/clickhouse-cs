@@ -1,0 +1,681 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Threading.Tasks;
+using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Readers;
+using ClickHouse.Driver.Numerics;
+
+namespace ClickHouse.Driver.Tests.Copy;
+
+/// <summary>
+/// Tests for the box-free POCO read fast path (#509): <see cref="ClickHouseClient.QueryAsync{T}"/> materializes
+/// rows straight from the stream, bypassing the boxing <c>Read()</c> + <c>MapTo&lt;T&gt;</c> path. Covers value
+/// parity with the boxed path, the multiple-read-type bindings that only the fast path supports
+/// (DateTimeOffset/DateOnly/byte[]/native Int128), and per-column mixing with boxed fallback for composites.
+/// </summary>
+[TestFixture]
+public class PocoReadFastPathTests : AbstractConnectionTestFixture
+{
+    public class ScalarPoco
+    {
+        public long Id { get; set; }
+        public string Name { get; set; }
+        public double Value { get; set; }
+    }
+
+    public class AllScalarsPoco
+    {
+        public sbyte I8 { get; set; }
+        public short I16 { get; set; }
+        public int I32 { get; set; }
+        public long I64 { get; set; }
+        public byte U8 { get; set; }
+        public ushort U16 { get; set; }
+        public uint U32 { get; set; }
+        public ulong U64 { get; set; }
+        public float F32 { get; set; }
+        public double F64 { get; set; }
+        public float BF { get; set; }
+        public bool B { get; set; }
+    }
+
+    [Test]
+    public async Task QueryAsync_ScalarShape_SelectsFastPath()
+    {
+        client.RegisterPocoType<ScalarPoco>();
+
+        using var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(
+            "SELECT toInt64(1) AS Id, 'a' AS Name, toFloat64(2.0) AS Value");
+
+        Assert.That(reader.TryGetRowMaterializer<ScalarPoco>(out var materializers, out var ctor), Is.True);
+        Assert.That(materializers, Is.Not.Null.And.Length.EqualTo(3));
+        Assert.That(ctor, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task QueryAsync_ScalarShape_ReturnsSameValuesAsBoxedPath()
+    {
+        client.RegisterPocoType<ScalarPoco>();
+        var sql = "SELECT toInt64(number) AS Id, concat('n', toString(number)) AS Name, toFloat64(number) * 0.5 AS Value FROM system.numbers LIMIT 1000";
+
+        var expected = new List<(long, string, double)>();
+        using (var reader = await client.ExecuteReaderAsync(sql))
+        {
+            while (reader.Read())
+                expected.Add(((long)reader.GetValue(0), (string)reader.GetValue(1), (double)reader.GetValue(2)));
+        }
+
+        var actual = new List<(long, string, double)>();
+        await foreach (var row in client.QueryAsync<ScalarPoco>(sql))
+            actual.Add((row.Id, row.Name, row.Value));
+
+        Assert.That(actual, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task QueryAsync_AllFixedScalars_ReadBoxFreeWithCorrectValues()
+    {
+        client.RegisterPocoType<AllScalarsPoco>();
+        const string sql =
+            "SELECT toInt8(-8) AS I8, toInt16(-16) AS I16, toInt32(-32) AS I32, toInt64(-64) AS I64, " +
+            "toUInt8(8) AS U8, toUInt16(16) AS U16, toUInt32(32) AS U32, toUInt64(64) AS U64, " +
+            "toFloat32(1.5) AS F32, toFloat64(2.5) AS F64, toBFloat16(1.25) AS BF, true AS B";
+
+        // Every column is a value type with a typed reader, so the whole row is box-free.
+        using (var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(sql))
+            Assert.That(reader.TryGetRowMaterializer<AllScalarsPoco>(out _, out _), Is.True);
+
+        AllScalarsPoco row = null;
+        await foreach (var r in client.QueryAsync<AllScalarsPoco>(sql))
+            row = r;
+
+        Assert.That(row, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.I8, Is.EqualTo((sbyte)-8));
+            Assert.That(row.I16, Is.EqualTo((short)-16));
+            Assert.That(row.I32, Is.EqualTo(-32));
+            Assert.That(row.I64, Is.EqualTo(-64L));
+            Assert.That(row.U8, Is.EqualTo((byte)8));
+            Assert.That(row.U16, Is.EqualTo((ushort)16));
+            Assert.That(row.U32, Is.EqualTo(32u));
+            Assert.That(row.U64, Is.EqualTo(64ul));
+            Assert.That(row.F32, Is.EqualTo(1.5f));
+            Assert.That(row.F64, Is.EqualTo(2.5d));
+            Assert.That(row.BF, Is.EqualTo(1.25f)); // exactly representable in BFloat16
+            Assert.That(row.B, Is.True);
+        });
+    }
+
+    // ---- Multiple read representations: bindings the boxed MapTo<T> rejects, but the fast path supports ----
+
+    public class ByteArrayPoco
+    {
+        public long Id { get; set; }
+        public byte[] Data { get; set; }
+    }
+
+    public class DecimalPoco
+    {
+        public decimal Amount { get; set; }
+    }
+
+    // Date -> DateOnly and DateTime64 -> DateTimeOffset are covered, across all four date/time columns and
+    // with the offset asserted, by QueryAsync_DateTimeColumn_ReadsAsDateOnlyAndDateTimeOffset below.
+
+    [Test]
+    public async Task QueryAsync_StringColumn_ReadsAsByteArray()
+    {
+        client.RegisterPocoType<ByteArrayPoco>();
+
+        ByteArrayPoco row = null;
+        await foreach (var r in client.QueryAsync<ByteArrayPoco>("SELECT toInt64(1) AS Id, 'hello' AS Data"))
+            row = r;
+
+        Assert.That(row.Id, Is.EqualTo(1L));
+        Assert.That(row.Data, Is.EqualTo(new byte[] { (byte)'h', (byte)'e', (byte)'l', (byte)'l', (byte)'o' }));
+    }
+
+    [Test]
+    public async Task QueryAsync_DecimalColumn_ReadsAsDecimal()
+    {
+        client.RegisterPocoType<DecimalPoco>();
+
+        DecimalPoco row = null;
+        await foreach (var r in client.QueryAsync<DecimalPoco>("SELECT CAST('123.45', 'Decimal(10, 2)') AS Amount"))
+            row = r;
+
+        Assert.That(row.Amount, Is.EqualTo(123.45m));
+    }
+
+    public class EnumIntPoco
+    {
+        public int Status { get; set; }
+    }
+
+    public class EnumLabelPoco
+    {
+        public string Status { get; set; }
+    }
+
+    // Enum8 stores its value in one signed byte and Enum16 in two, so the negative and beyond-sbyte cases
+    // pin each width. The int binding also proves the typed read is used: the boxed fallback for an enum
+    // column yields the label string, which is not assignable to an int property and would throw.
+    [TestCase("Enum8('a' = -5, 'b' = 7)", "a", -5)]
+    [TestCase("Enum8('a' = -5, 'b' = 7)", "b", 7)]
+    [TestCase("Enum16('a' = -300, 'b' = 4000)", "a", -300)]
+    [TestCase("Enum16('a' = -300, 'b' = 4000)", "b", 4000)]
+    public async Task QueryAsync_EnumColumn_ReadsAsIntAndAsLabel(string enumType, string label, int expected)
+    {
+        client.RegisterPocoType<EnumIntPoco>();
+        client.RegisterPocoType<EnumLabelPoco>();
+        var sql = $"SELECT CAST('{label}', '{enumType.Replace("'", "''")}') AS Status";
+
+        EnumIntPoco asInt = null;
+        await foreach (var r in client.QueryAsync<EnumIntPoco>(sql))
+            asInt = r;
+
+        EnumLabelPoco asLabel = null;
+        await foreach (var r in client.QueryAsync<EnumLabelPoco>(sql))
+            asLabel = r;
+
+        Assert.That(asInt.Status, Is.EqualTo(expected));
+        Assert.That(asLabel.Status, Is.EqualTo(label));
+    }
+
+    // PocoTypeRegistry caches the compiled row readers under the column name plus the column type's
+    // ToString(), and the compiled delegate closes over that specific enum instance's label map. Two
+    // same-named enum columns whose definitions differ must therefore produce different keys, or the second
+    // query silently returns the first query's labels. Enum16Type used to return a bare "Enum16" here.
+    [TestCase("Enum8('a' = 1, 'b' = 2)", "Enum8('c' = 1, 'd' = 2)")]
+    [TestCase("Enum16('a' = 1, 'b' = 2)", "Enum16('c' = 1, 'd' = 2)")]
+    public async Task QueryAsync_SameColumnNameDifferentEnumDefinitions_UsesEachColumnsLabels(
+        string firstEnum, string secondEnum)
+    {
+        client.RegisterPocoType<EnumLabelPoco>();
+
+        Assert.That(await ReadLabel(firstEnum, "a"), Is.EqualTo("a"));
+        Assert.That(await ReadLabel(secondEnum, "c"), Is.EqualTo("c"),
+            "row-reader cache reused the first column's label map");
+
+        async Task<string> ReadLabel(string enumType, string label)
+        {
+            EnumLabelPoco row = null;
+            await foreach (var r in client.QueryAsync<EnumLabelPoco>(
+                $"SELECT CAST('{label}', '{enumType.Replace("'", "''")}') AS Status"))
+            {
+                row = r;
+            }
+
+            return row.Status;
+        }
+    }
+
+    public class NullableEnumIntPoco
+    {
+        public int? Status { get; set; }
+    }
+
+    [Test]
+    public async Task QueryAsync_NullableEnumColumn_ReadsIntsAndNulls()
+    {
+        client.RegisterPocoType<NullableEnumIntPoco>();
+        const string enumType = "Nullable(Enum8(''a'' = -5, ''b'' = 7))";
+        const string sql =
+            "SELECT if(number % 2 = 0, CAST('b', '" + enumType + "'), CAST(NULL, '" + enumType + "')) AS Status " +
+            "FROM system.numbers LIMIT 4";
+
+        var rows = new List<NullableEnumIntPoco>();
+        await foreach (var r in client.QueryAsync<NullableEnumIntPoco>(sql))
+            rows.Add(r);
+
+        Assert.That(rows.Select(r => r.Status), Is.EqualTo(new int?[] { 7, null, 7, null }));
+    }
+
+    // A Nullable(Enum) column needs an int? property: a non-nullable int cannot represent the null, so there
+    // is no fast path, and the boxed fallback yields the label string — not assignable to int. Fails fast
+    // with the standard diagnostic rather than at whichever row happens to be null.
+    [Test]
+    public void QueryAsync_NullableEnumColumnWithNonNullableIntProperty_ThrowsFailFast()
+    {
+        client.RegisterPocoType<EnumIntPoco>();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<EnumIntPoco>(
+                "SELECT CAST('b', 'Nullable(Enum8(''a'' = -5, ''b'' = 7))') AS Status"))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("Status"));
+    }
+
+    // The numeric read is the inverse of the insert path, which already accepts an int for an enum column,
+    // so an int property round-trips through a real Enum8 column.
+    [Test]
+    public async Task InsertBinaryAsync_EnumColumnFromIntProperty_RoundTripsThroughQueryAsync()
+    {
+        var table = CreateTableName();
+        client.RegisterPocoType<EnumIntPoco>();
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (Status Enum8('a' = -5, 'b' = 7)) ENGINE = MergeTree() ORDER BY Status");
+
+        await client.InsertBinaryAsync(table, new[] { new EnumIntPoco { Status = -5 }, new EnumIntPoco { Status = 7 } });
+
+        var values = new List<int>();
+        await foreach (var r in client.QueryAsync<EnumIntPoco>($"SELECT Status FROM {table} ORDER BY Status"))
+            values.Add(r.Status);
+
+        Assert.That(values, Is.EqualTo(new[] { -5, 7 }));
+    }
+
+#if NET8_0_OR_GREATER
+    public class Int128Poco
+    {
+        public Int128 Big { get; set; }
+    }
+
+    [Test]
+    public async Task QueryAsync_Int128Column_ReadsAsNativeInt128()
+    {
+        client.RegisterPocoType<Int128Poco>();
+        // A value beyond Int64 range to exercise the full 128-bit little-endian decode.
+        const string sql = "SELECT toInt128('170141183460469231731687303715884105727') AS Big"; // Int128.MaxValue
+
+        Int128Poco row = null;
+        await foreach (var r in client.QueryAsync<Int128Poco>(sql))
+            row = r;
+
+        Assert.That(row.Big, Is.EqualTo(Int128.MaxValue));
+    }
+#endif
+
+    // ---- Nullable ----
+
+    public class NullableLongPoco
+    {
+        public long? Id { get; set; }
+        public string Name { get; set; }
+    }
+
+    [Test]
+    public async Task QueryAsync_NullableColumn_ReadsValuesAndNulls()
+    {
+        client.RegisterPocoType<NullableLongPoco>();
+        // Rows 0..4 with every other Id null.
+        const string sql =
+            "SELECT if(number % 2 = 0, CAST(number, 'Nullable(Int64)'), CAST(NULL, 'Nullable(Int64)')) AS Id, " +
+            "concat('n', toString(number)) AS Name FROM system.numbers LIMIT 5";
+
+        var rows = new List<NullableLongPoco>();
+        await foreach (var r in client.QueryAsync<NullableLongPoco>(sql))
+            rows.Add(r);
+
+        Assert.That(rows.Select(r => r.Id), Is.EqualTo(new long?[] { 0, null, 2, null, 4 }));
+        Assert.That(rows.Select(r => r.Name), Is.EqualTo(new[] { "n0", "n1", "n2", "n3", "n4" }));
+    }
+
+    // ---- Per-column mixing: fast columns alongside a composite column that falls back to the boxed path ----
+
+    public class MixedPoco
+    {
+        public DateTimeOffset Ts { get; set; }  // fast path (extended binding)
+        public long[] Values { get; set; }      // composite -> boxed fallback
+        public string Name { get; set; }         // fast path
+    }
+
+    [Test]
+    public async Task QueryAsync_FastAndCompositeColumns_MixPerColumn()
+    {
+        client.RegisterPocoType<MixedPoco>();
+        const string sql =
+            "SELECT toDateTime64('2020-01-02 03:04:05.000', 3, 'UTC') AS Ts, " +
+            "[toInt64(1), toInt64(2), toInt64(3)] AS Values, 'mixed' AS Name";
+
+        // Fast path is still selected even though one bound column (the array) has no typed read.
+        using (var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(sql))
+            Assert.That(reader.TryGetRowMaterializer<MixedPoco>(out _, out _), Is.True);
+
+        MixedPoco row = null;
+        await foreach (var r in client.QueryAsync<MixedPoco>(sql))
+            row = r;
+
+        Assert.That(row.Ts.UtcDateTime, Is.EqualTo(new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc)));
+        Assert.That(row.Values, Is.EqualTo(new long[] { 1, 2, 3 }));
+        Assert.That(row.Name, Is.EqualTo("mixed"));
+    }
+
+    // ---- Fallback correctness: unmapped columns stay aligned; unregistered types still throw ----
+
+    [Test]
+    public async Task QueryAsync_UnmappedExtraColumn_StaysAligned()
+    {
+        client.RegisterPocoType<ScalarPoco>();
+        const string sql =
+            "SELECT toInt64(number) AS Id, concat('skip', toString(number)) AS Unmapped, " +
+            "concat('n', toString(number)) AS Name, toFloat64(number) AS Value FROM system.numbers LIMIT 500";
+
+        var rows = new List<ScalarPoco>();
+        await foreach (var row in client.QueryAsync<ScalarPoco>(sql))
+            rows.Add(row);
+
+        Assert.That(rows, Has.Count.EqualTo(500));
+        for (var i = 0; i < rows.Count; i++)
+        {
+            Assert.That(rows[i].Id, Is.EqualTo(i));
+            Assert.That(rows[i].Name, Is.EqualTo($"n{i}"));
+            Assert.That(rows[i].Value, Is.EqualTo((double)i));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_LowCardinalityColumn_ReadsUnderlyingBoxFree()
+    {
+        client.RegisterPocoType<ScalarPoco>();
+        const string sql =
+            "SELECT toInt64(number) AS Id, CAST(concat('n', toString(number)), 'LowCardinality(String)') AS Name, " +
+            "toFloat64(number) AS Value FROM system.numbers LIMIT 20";
+
+        using (var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(sql))
+            Assert.That(reader.TryGetRowMaterializer<ScalarPoco>(out _, out _), Is.True);
+
+        var rows = new List<ScalarPoco>();
+        await foreach (var row in client.QueryAsync<ScalarPoco>(sql))
+            rows.Add(row);
+
+        Assert.That(rows, Has.Count.EqualTo(20));
+        Assert.That(rows[7].Name, Is.EqualTo("n7"));
+    }
+
+    public class AggregatePoco
+    {
+        public string Name { get; set; }
+        public ulong Total { get; set; }
+    }
+
+    [Test]
+    public async Task QueryAsync_SimpleAggregateFunctionColumn_ReadsUnderlyingBoxFree()
+    {
+        client.RegisterPocoType<AggregatePoco>();
+        var table = CreateTableName();
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (Name String, Total SimpleAggregateFunction(sum, UInt64)) " +
+            "ENGINE AggregatingMergeTree ORDER BY Name");
+        await client.ExecuteNonQueryAsync($"INSERT INTO {table} VALUES ('a', 3), ('a', 4), ('b', 10)");
+
+        // FINAL, so the two 'a' parts are merged whether or not the background merge has run yet, while the
+        // column stays declared — and therefore encoded on the wire — as SimpleAggregateFunction(sum, UInt64).
+        // This is the query that actually exercises the wrapper: sum(Total) below projects to a plain UInt64
+        // and would pass with no wrapper support at all.
+        var rawSql = $"SELECT Name, Total FROM {table} FINAL ORDER BY Name";
+
+        using (var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(rawSql))
+        {
+            Assert.That(reader.GetDataTypeName(1), Does.StartWith("SimpleAggregateFunction("),
+                "the wrapper must survive to the wire, or this test is not covering it");
+            Assert.That(reader.TryGetRowMaterializer<AggregatePoco>(out _, out _), Is.True,
+                "SimpleAggregateFunction is wire-transparent and must reach the wrapped typed reader");
+        }
+
+        var raw = new List<AggregatePoco>();
+        await foreach (var row in client.QueryAsync<AggregatePoco>(rawSql))
+            raw.Add(row);
+
+        Assert.That(raw.Select(r => (r.Name, r.Total)), Is.EqualTo(new[] { ("a", 7ul), ("b", 10ul) }),
+            "the wrapped column must materialize through the fast path");
+
+        // And separately the aggregate result, whose Total is an ordinary UInt64.
+        var aggregated = new List<AggregatePoco>();
+        await foreach (var row in client.QueryAsync<AggregatePoco>(
+            $"SELECT Name, sum(Total) AS Total FROM {table} GROUP BY Name ORDER BY Name"))
+            aggregated.Add(row);
+
+        Assert.That(aggregated.Select(r => (r.Name, r.Total)), Is.EqualTo(new[] { ("a", 7ul), ("b", 10ul) }));
+    }
+
+    public class NullablePropPoco
+    {
+        public long? Id { get; set; }
+    }
+
+    [Test]
+    public async Task QueryAsync_NullablePropertyOnNonNullableColumn_Reads()
+    {
+        client.RegisterPocoType<NullablePropPoco>();
+
+        NullablePropPoco row = null;
+        await foreach (var r in client.QueryAsync<NullablePropPoco>("SELECT toInt64(5) AS Id"))
+            row = r;
+
+        Assert.That(row.Id, Is.EqualTo(5L));
+    }
+
+    public class NonNullablePropPoco
+    {
+        public long Id { get; set; }
+    }
+
+    [Test]
+    public async Task QueryAsync_NonNullablePropertyOnNullableColumn_ReadsNonNullValues()
+    {
+        // long (non-nullable) property on a Nullable(Int64) column: no fast path (a null could not be
+        // represented), so it falls back to the boxed reader, which reads the non-null value fine.
+        client.RegisterPocoType<NonNullablePropPoco>();
+
+        NonNullablePropPoco row = null;
+        await foreach (var r in client.QueryAsync<NonNullablePropPoco>("SELECT CAST(7, 'Nullable(Int64)') AS Id"))
+            row = r;
+
+        Assert.That(row.Id, Is.EqualTo(7L));
+    }
+
+    // ...and when a null actually arrives on that same binding, the boxed fallback is what reports it. This
+    // is the deferred failure the fast path defers to, so it needs to name the property and the column.
+    [Test]
+    public void QueryAsync_NonNullablePropertyOnNullableColumn_ThrowsOnNullValue()
+    {
+        client.RegisterPocoType<NonNullablePropPoco>();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<NonNullablePropPoco>(
+                "SELECT CAST(NULL, 'Nullable(Int64)') AS Id"))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("Id"));
+        Assert.That(ex.Message, Does.Contain("Nullable(Int64)"));
+    }
+
+    // An object property has no typed reader, so a Nullable(String) column falls back to the boxed reader;
+    // that reader must translate the DBNull sentinel back to a plain null before assigning.
+    [TestCase("CAST('abc', 'Nullable(String)')", "abc")]
+    [TestCase("CAST(NULL, 'Nullable(String)')", null)]
+    public async Task QueryAsync_NullableColumnToObjectProperty_AssignsValueOrNull(string expression, object expected)
+    {
+        client.RegisterPocoType<PolymorphicPoco>();
+
+        PolymorphicPoco row = null;
+        await foreach (var r in client.QueryAsync<PolymorphicPoco>($"SELECT {expression} AS Value"))
+            row = r;
+
+        Assert.That(row.Value, Is.EqualTo(expected));
+    }
+
+    public class PolymorphicPoco
+    {
+        public object Value { get; set; }
+    }
+
+    // Variant/Dynamic/JSON report a FrameworkType of object, which PocoColumnAssignment accepts for any
+    // property up front and re-checks per row when the setter runs. Neither the accept nor the per-row
+    // InvalidCastException rewrite had a POCO-level test.
+    [TestCase("CAST(toInt64(42), 'Variant(Int64, String)')", Feature.Variant, 42L)]
+    [TestCase("CAST(toInt64(42), 'Dynamic')", Feature.Dynamic, 42L)]
+    public async Task QueryAsync_PolymorphicColumnToObjectProperty_ReadsViaBoxedFallback(
+        string expression, Feature feature, object expected)
+    {
+        if (!TestUtilities.SupportedFeatures.HasFlag(feature))
+            Assert.Ignore($"Server does not support {feature}");
+
+        client.RegisterPocoType<PolymorphicPoco>();
+
+        PolymorphicPoco row = null;
+        await foreach (var r in client.QueryAsync<PolymorphicPoco>($"SELECT {expression} AS Value"))
+            row = r;
+
+        Assert.That(row.Value, Is.EqualTo(expected));
+    }
+
+    public class PolymorphicMismatchPoco
+    {
+        public Guid Value { get; set; } // a Variant never yields a Guid -> per-row cast failure
+    }
+
+    [Test]
+    [Tests.Attributes.RequiredFeature(Feature.Variant)]
+    public void QueryAsync_PolymorphicColumnWithWrongPropertyType_ThrowsWithRuntimeType()
+    {
+        client.RegisterPocoType<PolymorphicMismatchPoco>();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<PolymorphicMismatchPoco>(
+                "SELECT CAST(toInt64(42), 'Variant(Int64, String)') AS Value"))
+            {
+            }
+        });
+
+        // "Variant(Int64, String)" already contains the column name and "Int64", so assert on the
+        // runtime-type clause specifically — otherwise the declared column type satisfies the check.
+        Assert.That(ex.Message, Does.Contain("returned System.Int64"));
+        Assert.That(ex.Message, Does.Contain("PolymorphicMismatchPoco.Value"));
+    }
+
+    public class InvalidCompositeBindingPoco
+    {
+        public string Values { get; set; } // bound to an Array column -> not assignable
+    }
+
+    [Test]
+    public void QueryAsync_CompositeColumnNotAssignableToProperty_ThrowsFailFast()
+    {
+        client.RegisterPocoType<InvalidCompositeBindingPoco>();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<InvalidCompositeBindingPoco>(
+                "SELECT [toInt64(1), toInt64(2)] AS Values"))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("Values"));
+    }
+
+    public class UnregisteredScalarPoco
+    {
+        public long Id { get; set; }
+    }
+
+    [Test]
+    public void QueryAsync_UnregisteredType_Throws()
+    {
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.QueryAsync<UnregisteredScalarPoco>("SELECT toInt64(1) AS Id"))
+            {
+            }
+        });
+
+        Assert.That(ex.Message, Does.Contain("UnregisteredScalarPoco"));
+        Assert.That(ex.Message, Does.Contain("RegisterPocoType"));
+    }
+
+    // ---- End-to-end reads over the real wire format ----
+    //
+    // Scoped deliberately: the (column type x CLR type) dispatch matrix lives in PocoReadFastPathParityTests
+    // (server-free), and the per-type decoding of every column ClickHouse can return is already round-tripped
+    // by SerialisationTests and read off a real server by SqlSimpleSelectTests, both over
+    // TestCases.GetDataTypeSamples(). What neither covers is a representation the boxed reader cannot
+    // produce, because MapTo<T> would reject it — those have no other real-wire coverage, and a successful
+    // read is itself proof the typed reader ran. Only those are tested here.
+
+    private sealed class Holder<T>
+    {
+        public T Value { get; set; }
+    }
+
+    private async Task<T> QuerySingleValue<T>(string sqlExpression, ClickHouseClient useClient = null)
+    {
+        var c = useClient ?? client;
+        c.RegisterPocoType<Holder<T>>();
+
+        var rows = new List<Holder<T>>();
+        await foreach (var r in c.QueryAsync<Holder<T>>($"SELECT {sqlExpression} AS Value"))
+            rows.Add(r);
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        return rows[0].Value;
+    }
+
+    // byte[] on a client whose boxed reader yields string. String -> byte[] is already covered by
+    // QueryAsync_StringColumn_ReadsAsByteArray above; FixedString has its own fixed-width read.
+    [Test]
+    public async Task QueryAsync_FixedStringColumn_ReadsAsByteArray()
+        => Assert.That(await QuerySingleValue<byte[]>("CAST('abcde', 'FixedString(5)')"),
+            Is.EqualTo(new[] { (byte)'a', (byte)'b', (byte)'c', (byte)'d', (byte)'e' }));
+
+#if NET8_0_OR_GREATER
+    // The native decoder's only distinct behaviour is the little-endian byte order, and UInt128.MaxValue is
+    // all 0xFF — a byte-order palindrome. This value (0x0102...0F10) is asymmetric and catches a flip.
+    [Test]
+    [Tests.Attributes.RequiredFeature(Feature.WideTypes)]
+    public async Task QueryAsync_UInt128Column_ReadsAsNativeUInt128()
+        => Assert.That(await QuerySingleValue<UInt128>("toUInt128('1339673755198158349044581307228491536')"),
+            Is.EqualTo(new UInt128(0x0102030405060708UL, 0x090A0B0C0D0E0F10UL)));
+#endif
+
+    // DateOnly and DateTimeOffset are fast-path-only. Date32 additionally had no fast-path coverage at all,
+    // and its pre-1970 value pins the signed day count that Date (unsigned) cannot express.
+    [TestCase("toDate32('1950-03-14')", "1950-03-14", Feature.Date32)]
+    [TestCase("toDate('2023-03-14')", "2023-03-14", Feature.None)]
+    [TestCase("toDateTime('2021-06-15 00:00:00', 'UTC')", "2021-06-15", Feature.None)]
+    [TestCase("toDateTime64('2021-06-15 00:00:00.000', 3, 'UTC')", "2021-06-15", Feature.None)]
+    public async Task QueryAsync_DateTimeColumn_ReadsAsDateOnlyAndDateTimeOffset(
+        string expression, string expectedIsoDate, Feature feature)
+    {
+        if (feature != Feature.None && !TestUtilities.SupportedFeatures.HasFlag(feature))
+            Assert.Ignore($"Server does not support {feature}");
+
+        var expectedDate = DateOnly.Parse(expectedIsoDate, CultureInfo.InvariantCulture);
+
+        Assert.That(await QuerySingleValue<DateOnly>(expression), Is.EqualTo(expectedDate));
+
+        var offset = await QuerySingleValue<DateTimeOffset>(expression);
+        Assert.That(offset.UtcDateTime, Is.EqualTo(expectedDate.ToDateTime(TimeOnly.MinValue)));
+        Assert.That(offset.Offset, Is.EqualTo(TimeSpan.Zero));
+    }
+
+    // A ClickHouseDecimal property against a client whose boxed reader yields System.Decimal — the mirror of
+    // QueryAsync_DecimalColumn_ReadsAsDecimal, which pins the other direction on the default client. Scale is
+    // asserted explicitly: ClickHouseDecimal.Equals rescales before comparing, so the value alone would not
+    // pin the very property that makes ClickHouseDecimal worth choosing.
+    [TestCase("Decimal(10, 2)", "123.45", 2)]
+    [TestCase("Decimal(38, 8)", "12345.67890000", 8)] // size 16 -> the BigInteger mantissa branch
+    public async Task QueryAsync_DecimalColumnOnPlainDecimalClient_ReadsAsClickHouseDecimal(
+        string columnType, string literal, int expectedScale)
+    {
+        using var plainDecimalClient = TestUtilities.GetTestClickHouseClient(customDecimals: false);
+
+        var value = await QuerySingleValue<ClickHouseDecimal>(
+            $"CAST('{literal}', '{columnType}')", plainDecimalClient);
+
+        Assert.That((decimal)value, Is.EqualTo(decimal.Parse(literal, CultureInfo.InvariantCulture)));
+        Assert.That(value.Scale, Is.EqualTo(expectedScale));
+    }
+}

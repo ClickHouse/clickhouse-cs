@@ -94,7 +94,7 @@ public class ClickHouseConnectionLoggingTests
         var sendingLog = logger.Logs.Find(l =>
             l.LogLevel == LogLevel.Debug &&
             l.Message.Contains("Sending streamed request") &&
-            l.Message.Contains("Compressed"));
+            l.Message.Contains("Content-Encoding"));
         Assert.That(sendingLog, Is.Not.Null, "Should log stream request start at Debug level");
 
         // Should have logged the response message

@@ -40,7 +40,7 @@ jobs:
           path: main
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.x
 
@@ -52,10 +52,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      # The input reaches the run script through the environment rather than being interpolated
+      # into it, so a workflow_dispatch input cannot inject shell.
       - name: Get PR number
         id: pr
         run: |
-          PR_NUM="${{ inputs.pr_number }}"
+          PR_NUM="$INPUT_PR_NUMBER"
           if [ -z "$PR_NUM" ]; then
             cd pr
             PR_NUM=$(gh pr view --json number -q .number 2>/dev/null || echo "local")
@@ -64,6 +66,7 @@ jobs:
           echo "number=$PR_NUM" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
 
       - name: Build main package
         run: |

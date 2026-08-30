@@ -68,6 +68,16 @@ public static class ClickHouseDefaults
     public const bool ReadStringsAsByteArrays = false;
 
     /// <summary>
+    /// Default representation for Map columns when reading (Dictionary)
+    /// </summary>
+    public const MapReadMode MapReadMode = ClickHouse.Driver.MapReadMode.Dictionary;
+
+    /// <summary>
+    /// Default handling of a JSON row where two overlapping paths both hold a value (false = throw)
+    /// </summary>
+    public const bool AllowDuplicateJsonKeys = false;
+
+    /// <summary>
     /// Default setting for server certificate validation (false = validate certificates)
     /// </summary>
     public const bool SkipServerCertificateValidation = false;
@@ -83,7 +93,8 @@ public static class ClickHouseDefaults
     public static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
 
     /// <summary>
-    /// Default size, in bytes, of the buffer used when reading HTTP query responses (8 KiB).
+    /// Default size, in bytes, of the buffer used when reading HTTP query responses (64 KiB). The buffer is
+    /// pooled (rented from <see cref="System.Buffers.ArrayPool{T}"/>), so it is not a per-query allocation.
     /// </summary>
-    public const int ReadBufferSize = 8 * 1024;
+    public const int ReadBufferSize = 64 * 1024;
 }

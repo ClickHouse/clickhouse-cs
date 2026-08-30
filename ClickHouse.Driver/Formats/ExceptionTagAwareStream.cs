@@ -14,25 +14,28 @@ internal sealed class ExceptionTagAwareStream : Stream
     private const int BufferCapacity = 4096; // 4KB ring buffer
 
     private readonly Stream innerStream;
-    private readonly string exceptionToken;
-    private readonly byte[] exceptionMarker; // "__exception__" + token
-    private readonly byte[] closingMarker;   // token + "__exception__"
+    private readonly bool leaveOpen;
+    private readonly byte[] exceptionPrefixBytes; // "__exception__"
+    private readonly byte[] tagBytes;             // exception tag/token
 
     // Ring buffer for recent bytes
     private readonly byte[] recentBytes = new byte[BufferCapacity];
     private int writePosition;
     private int bytesRecorded;
 
-    public ExceptionTagAwareStream(Stream innerStream, string exceptionTag)
+    /// <param name="innerStream">The stream reads are pulled from and recorded off.</param>
+    /// <param name="exceptionTag">The per-query token the server brackets a mid-stream exception with.</param>
+    /// <param name="leaveOpen">When <c>true</c> the inner stream is not disposed with this wrapper.</param>
+    public ExceptionTagAwareStream(Stream innerStream, string exceptionTag, bool leaveOpen = false)
     {
         this.innerStream = innerStream ?? throw new ArgumentNullException(nameof(innerStream));
+        this.leaveOpen = leaveOpen;
 
         if (string.IsNullOrEmpty(exceptionTag))
             throw new ArgumentException("Exception tag cannot be null or empty", nameof(exceptionTag));
 
-        exceptionToken = exceptionTag;
-        exceptionMarker = Encoding.UTF8.GetBytes(ExceptionPrefix + exceptionTag);
-        closingMarker = Encoding.UTF8.GetBytes(exceptionTag + ExceptionPrefix);
+        exceptionPrefixBytes = Encoding.UTF8.GetBytes(ExceptionPrefix);
+        tagBytes = Encoding.UTF8.GetBytes(exceptionTag);
     }
 
     public override bool CanRead => innerStream.CanRead;
@@ -59,6 +62,21 @@ internal sealed class ExceptionTagAwareStream : Stream
         return bytesRead;
     }
 
+    /// <summary>
+    /// Span counterpart of <see cref="Read(byte[], int, int)"/>. Without it the base
+    /// <see cref="Stream.Read(Span{byte})"/> fallback rents and copies through a pooled array on every
+    /// call, which would defeat both the span reads issued per scalar and the bulk array reads.
+    /// </summary>
+    public override int Read(Span<byte> buffer)
+    {
+        int bytesRead = innerStream.Read(buffer);
+
+        if (bytesRead > 0)
+            RecordBytes(buffer.Slice(0, bytesRead));
+
+        return bytesRead;
+    }
+
     public override int ReadByte()
     {
         int b = innerStream.ReadByte();
@@ -73,25 +91,28 @@ internal sealed class ExceptionTagAwareStream : Stream
     }
 
     private void RecordBytes(byte[] buffer, int offset, int count)
+        => RecordBytes(buffer.AsSpan(offset, count));
+
+    private void RecordBytes(ReadOnlySpan<byte> source)
     {
         // If count >= buffer capacity, only keep last BufferCapacity bytes
-        if (count >= BufferCapacity)
+        if (source.Length >= BufferCapacity)
         {
-            Array.Copy(buffer, offset + count - BufferCapacity, recentBytes, 0, BufferCapacity);
+            source.Slice(source.Length - BufferCapacity).CopyTo(recentBytes);
             writePosition = 0;
             bytesRecorded = BufferCapacity;
             return;
         }
 
         // Copy into circular buffer, wrapping as needed
-        int firstPart = Math.Min(count, BufferCapacity - writePosition);
-        Array.Copy(buffer, offset, recentBytes, writePosition, firstPart);
+        int firstPart = Math.Min(source.Length, BufferCapacity - writePosition);
+        source.Slice(0, firstPart).CopyTo(recentBytes.AsSpan(writePosition));
 
-        if (firstPart < count)
-            Array.Copy(buffer, offset + firstPart, recentBytes, 0, count - firstPart);
+        if (firstPart < source.Length)
+            source.Slice(firstPart).CopyTo(recentBytes);
 
-        writePosition = (writePosition + count) % BufferCapacity;
-        bytesRecorded = Math.Min(bytesRecorded + count, BufferCapacity);
+        writePosition = (writePosition + source.Length) % BufferCapacity;
+        bytesRecorded = Math.Min(bytesRecorded + source.Length, BufferCapacity);
     }
 
     /// <summary>
@@ -101,16 +122,17 @@ internal sealed class ExceptionTagAwareStream : Stream
     /// <returns>ClickHouseServerException if marker found, null otherwise</returns>
     public ClickHouseServerException TryExtractMidStreamException()
     {
-        if (bytesRecorded < exceptionMarker.Length)
+        if (bytesRecorded < exceptionPrefixBytes.Length + tagBytes.Length)
             return null;
 
         byte[] buffer = GetLinearBuffer();
-        int markerIndex = FindPattern(buffer, exceptionMarker);
 
+        // Opening marker: "__exception__" <optional CR/LF> "<tag>".
+        int markerIndex = FindDelimitedMarker(buffer, exceptionPrefixBytes, tagBytes, 0, out int messageStart);
         if (markerIndex < 0)
             return null;
 
-        return ParseExceptionFormat(buffer, markerIndex);
+        return ParseExceptionFormat(buffer, messageStart);
     }
 
     private byte[] GetLinearBuffer()
@@ -133,18 +155,16 @@ internal sealed class ExceptionTagAwareStream : Stream
         return result;
     }
 
-    private ClickHouseServerException ParseExceptionFormat(byte[] buffer, int markerIndex)
+    private ClickHouseServerException ParseExceptionFormat(byte[] buffer, int messageStart)
     {
-        // Format: __exception__TOKEN\n<message>\n<size> TOKEN__exception__
-        // We ignore the size
-        int messageStart = markerIndex + exceptionMarker.Length;
-
-        // Skip newlines after opening marker
+        // Full block: __exception__<sep><tag><sep><message>\n<size> <tag><sep>__exception__
+        // where <sep> is the "\r\n" the server always writes. messageStart points just past the
+        // opening "<tag>"; skip the separator before the message text. We ignore <size>.
         while (messageStart < buffer.Length && (buffer[messageStart] == '\n' || buffer[messageStart] == '\r'))
             messageStart++;
 
-        // Find closing marker: TOKEN__exception__
-        int closingIndex = FindPattern(buffer, closingMarker, messageStart);
+        // Closing marker: "<tag>" <optional CR/LF> "__exception__".
+        int closingIndex = FindDelimitedMarker(buffer, tagBytes, exceptionPrefixBytes, messageStart, out _);
 
         // Determine where message ends
         int messageEnd = closingIndex >= 0 ? closingIndex : buffer.Length;
@@ -153,17 +173,64 @@ internal sealed class ExceptionTagAwareStream : Stream
         while (messageEnd > messageStart && char.IsWhiteSpace((char)buffer[messageEnd - 1]))
             messageEnd--;
 
-        // Also trim any trailing digits and space (the size number)
-        while (messageEnd > messageStart && char.IsDigit((char)buffer[messageEnd - 1]))
-            messageEnd--;
-        while (messageEnd > messageStart && char.IsWhiteSpace((char)buffer[messageEnd - 1]))
-            messageEnd--;
+        // The "<size> " token sits between the message and the closing marker, so only strip a
+        // trailing number when a closing marker was actually found. Otherwise a message captured
+        // without its closing marker that legitimately ends in a digit would be mangled.
+        if (closingIndex >= 0)
+        {
+            while (messageEnd > messageStart && char.IsDigit((char)buffer[messageEnd - 1]))
+                messageEnd--;
+            while (messageEnd > messageStart && char.IsWhiteSpace((char)buffer[messageEnd - 1]))
+                messageEnd--;
+        }
 
         if (messageEnd <= messageStart)
             return ClickHouseServerException.FromMidStreamException("Unknown error (could not parse exception message)");
 
         var errorMessage = Encoding.UTF8.GetString(buffer, messageStart, messageEnd - messageStart);
         return ClickHouseServerException.FromMidStreamException(errorMessage);
+    }
+
+    /// <summary>
+    /// Finds <paramref name="first"/> followed by <paramref name="second"/>, tolerating an optional
+    /// run of CR/LF bytes between them. On the wire the separator is <b>not</b> optional: the
+    /// ClickHouse server always writes a literal "\r\n" here, framing the in-band block as
+    /// "__exception__\r\n&lt;tag&gt;" (open) and "&lt;tag&gt;\r\n__exception__" (close) — hardcoded in its
+    /// WriteBufferFromHTTPServerResponse. The match is nonetheless lenient about the separator
+    /// (mirroring the server's own conformance test, which greps "__exception__\r?\n&lt;tag&gt;\r?\n"):
+    /// silently missing the block was the original bug, so degrading toward detection is safer than a
+    /// strict match, and the 16-char random tag — not the separator — is what discriminates the marker.
+    /// </summary>
+    /// <param name="afterSecond">Index immediately past <paramref name="second"/> when found; -1 otherwise.</param>
+    /// <returns>Index of <paramref name="first"/> when the delimited pair is found; -1 otherwise.</returns>
+    private static int FindDelimitedMarker(byte[] buffer, byte[] first, byte[] second, int startIndex, out int afterSecond)
+    {
+        afterSecond = -1;
+        int searchFrom = startIndex;
+
+        while (true)
+        {
+            int firstIndex = FindPattern(buffer, first, searchFrom);
+            if (firstIndex < 0)
+                return -1;
+
+            int pos = firstIndex + first.Length;
+
+            // Skip the "\r\n" separator the server writes between the two parts (tolerating its
+            // absence/variation defensively — see the method summary).
+            while (pos < buffer.Length && (buffer[pos] == (byte)'\r' || buffer[pos] == (byte)'\n'))
+                pos++;
+
+            if (pos + second.Length <= buffer.Length &&
+                buffer.AsSpan(pos, second.Length).SequenceEqual(second))
+            {
+                afterSecond = pos + second.Length;
+                return firstIndex;
+            }
+
+            // This occurrence of `first` is not followed by `second`; keep searching.
+            searchFrom = firstIndex + 1;
+        }
     }
 
     private static int FindPattern(byte[] buffer, byte[] pattern, int startIndex = 0)
@@ -209,7 +276,7 @@ internal sealed class ExceptionTagAwareStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !leaveOpen)
             innerStream.Dispose();
 
         base.Dispose(disposing);

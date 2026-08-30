@@ -29,8 +29,33 @@
     </PropertyGroup>
   </Target>
 
+  <!--
+    ClickHouse.Driver.Common is a PrivateAssets="all" project reference (no public package dependency).
+    Bundle its DLL into this package's lib/<tfm>/ so consumers get the compression types without a
+    separate package reference.
+  -->
+  <PropertyGroup>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeCommonAssemblyInPackage</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+
+  <Target Name="IncludeCommonAssemblyInPackage" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)' == 'ClickHouse.Driver.Common'" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <None Include="..\README.nuget.md" Link="README.nuget.md" Pack="true" PackagePath="" />
+    <!--
+      The vendored codecs under ClickHouse.Driver.Common/Vendor/ are compiled into the bundled
+      ClickHouse.Driver.Common.dll, and their MIT terms require the copyright and permission notice
+      to accompany every copy, binary included. PackageLicenseExpression states ClickHouse's own
+      grant but names no third party, so ship the notices as package content. Note that setting
+      PackageLicenseFile instead is not an option: it is mutually exclusive with the expression
+      (NU5033), and the expression is what tooling reads.
+    -->
+    <None Include="..\LICENSE" Link="LICENSE" Pack="true" PackagePath="" />
+    <None Include="..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <ItemGroup>
@@ -44,6 +69,11 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Unconditional (all TFMs): the HTTP driver uses the compression interface on net6.0 too. -->
+    <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" PrivateAssets="all" />
   </ItemGroup>
   
   <ItemGroup>

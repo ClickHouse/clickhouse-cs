@@ -353,28 +353,19 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
     [TestCaseSource(nameof(InsertReadbackCases))]
     public async Task InsertParameterizedIntoTable_ReadsBackAsJagged(string ddlType, object input, object expectedJagged)
     {
-        var tableName = SanitizeTableName($"nested_insert_{Guid.NewGuid():N}");
-        var fqn = $"test.{tableName}";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {fqn}");
+        var fqn = CreateTableName("nested_insert");
         await connection.ExecuteStatementAsync($"CREATE TABLE {fqn} (arr {ddlType}) ENGINE Memory");
 
-        try
+        using (var insert = connection.CreateCommand())
         {
-            using (var insert = connection.CreateCommand())
-            {
-                insert.CommandText = $"INSERT INTO {fqn} VALUES ({{values:{ddlType}}})";
-                insert.AddParameter("values", input);
-                await insert.ExecuteNonQueryAsync();
-            }
+            insert.CommandText = $"INSERT INTO {fqn} VALUES ({{values:{ddlType}}})";
+            insert.AddParameter("values", input);
+            await insert.ExecuteNonQueryAsync();
+        }
 
-            using var reader = await connection.ExecuteReaderAsync($"SELECT arr FROM {fqn}");
-            Assert.That(reader.Read(), Is.True);
-            Assert.That(reader.GetValue(0), Is.EqualTo(expectedJagged));
-        }
-        finally
-        {
-            await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {fqn}");
-        }
+        using var reader = await connection.ExecuteReaderAsync($"SELECT arr FROM {fqn}");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetValue(0), Is.EqualTo(expectedJagged));
     }
 
     // ----- ClickHouseClient (primary API) coverage -----
@@ -409,41 +400,95 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
     [Test]
     public async Task ClientInsertBinaryAsync_JaggedArrayColumn_RoundTripsViaPrimaryApi()
     {
-        var tableName = SanitizeTableName($"nested_client_jagged_{Guid.NewGuid():N}");
-        var fqn = $"test.{tableName}";
-        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {fqn}");
+        var fqn = CreateTableName("nested_client_jagged");
         await client.ExecuteNonQueryAsync($"CREATE TABLE {fqn} (id Int32, arr Array(Array(Int32))) ENGINE Memory");
-        try
-        {
-            var rows = new List<object[]>
-            {
-                new object[] { 0, new int[][] { new[] { 1, 2 }, new[] { 3 } } },
-                new object[] { 1, new int[][] { new[] { 4, 5, 6 } } },
-            };
-            await client.InsertBinaryAsync(fqn, new[] { "id", "arr" }, rows);
 
-            using var reader = await client.ExecuteReaderAsync($"SELECT arr FROM {fqn} ORDER BY id");
-            Assert.That(reader.Read(), Is.True);
-            Assert.That((int[][])reader.GetValue(0), Is.EqualTo(rows[0][1]));
-            Assert.That(reader.Read(), Is.True);
-            Assert.That((int[][])reader.GetValue(0), Is.EqualTo(rows[1][1]));
-        }
-        finally
+        var rows = new List<object[]>
         {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {fqn}");
-        }
+            new object[] { 0, new int[][] { new[] { 1, 2 }, new[] { 3 } } },
+            new object[] { 1, new int[][] { new[] { 4, 5, 6 } } },
+        };
+        await client.InsertBinaryAsync(fqn, new[] { "id", "arr" }, rows);
+
+        using var reader = await client.ExecuteReaderAsync($"SELECT arr FROM {fqn} ORDER BY id");
+        Assert.That(reader.Read(), Is.True);
+        Assert.That((int[][])reader.GetValue(0), Is.EqualTo(rows[0][1]));
+        Assert.That(reader.Read(), Is.True);
+        Assert.That((int[][])reader.GetValue(0), Is.EqualTo(rows[1][1]));
     }
 
     [Test]
     public async Task ClientInsertBinaryAsync_MultidimArrayColumn_RoundTripsViaPrimaryApi()
     {
-        var tableName = SanitizeTableName($"nested_client_multidim_{Guid.NewGuid():N}");
+        var fqn = CreateTableName("nested_client_multidim");
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {fqn} (id Int32, arr Array(Array(UInt8))) ENGINE Memory");
+
+        var matrix = new byte[,] { { 10, 20 }, { 30, 40 } };
+        await client.InsertBinaryAsync(
+            fqn,
+            new[] { "id", "arr" },
+            new List<object[]> { new object[] { 0, matrix } });
+
+        using var reader = await client.ExecuteReaderAsync($"SELECT arr FROM {fqn}");
+        Assert.That(reader.Read(), Is.True);
+        var got = (byte[][])reader.GetValue(0);
+        Assert.That(got[0], Is.EqualTo(new byte[] { 10, 20 }));
+        Assert.That(got[1], Is.EqualTo(new byte[] { 30, 40 }));
+    }
+
+    [Test]
+    public async Task ClientInsertBinaryAsync_Multidim3DArrayColumn_RoundTripsViaPrimaryApi()
+    {
+        var fqn = CreateTableName("nested_client_3d");
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {fqn} (id Int32, arr Array(Array(Array(Int32)))) ENGINE Memory");
+
+        var cube = new int[2, 2, 2] { { { 1, 2 }, { 3, 4 } }, { { 5, 6 }, { 7, 8 } } };
+        await client.InsertBinaryAsync(
+            fqn,
+            new[] { "id", "arr" },
+            new List<object[]> { new object[] { 0, cube } });
+
+        using var reader = await client.ExecuteReaderAsync($"SELECT arr FROM {fqn}");
+        Assert.That(reader.Read(), Is.True);
+        var got = (int[][][])reader.GetValue(0);
+        Assert.That(got[0][0], Is.EqualTo(new[] { 1, 2 }));
+        Assert.That(got[0][1], Is.EqualTo(new[] { 3, 4 }));
+        Assert.That(got[1][0], Is.EqualTo(new[] { 5, 6 }));
+        Assert.That(got[1][1], Is.EqualTo(new[] { 7, 8 }));
+    }
+
+    // ----- Binary blit fast path: every fixed-width primitive leaf, multidim INSERT -> read back -----
+    //
+    // InsertBinaryAsync is the only path that reaches WriteMultidimensional (the SELECT-echo cases
+    // above go through the HTTP text formatter instead). A rectangular multidim of a blittable leaf
+    // takes the new blit path on the wire; the server must accept the bytes and return the matching
+    // jagged value for every fixed-width primitive type.
+
+    public static IEnumerable<TestCaseData> BlittableLeafBinaryInsertCases()
+    {
+        yield return BinInsertCase<sbyte>("Int8", i => (sbyte)i);
+        yield return BinInsertCase<byte>("UInt8", i => (byte)i);
+        yield return BinInsertCase<short>("Int16", i => (short)i);
+        yield return BinInsertCase<ushort>("UInt16", i => (ushort)i);
+        yield return BinInsertCase<int>("Int32", i => i);
+        yield return BinInsertCase<uint>("UInt32", i => (uint)i);
+        yield return BinInsertCase<long>("Int64", i => i);
+        yield return BinInsertCase<ulong>("UInt64", i => (ulong)i);
+        yield return BinInsertCase<float>("Float32", i => i + 0.5f);
+        yield return BinInsertCase<double>("Float64", i => i + 0.5d);
+        yield return BinInsertCase<bool>("Bool", i => i % 2 == 0);
+    }
+
+    [Test]
+    [TestCaseSource(nameof(BlittableLeafBinaryInsertCases))]
+    public async Task ClientInsertBinaryAsync_BlittableMultidimLeaf_RoundTripsViaBlitPath(string leafType, object matrix, object expectedJagged)
+    {
+        var tableName = SanitizeTableName($"nested_blit_{leafType}_{Guid.NewGuid():N}");
         var fqn = $"test.{tableName}";
         await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {fqn}");
-        await client.ExecuteNonQueryAsync($"CREATE TABLE {fqn} (id Int32, arr Array(Array(UInt8))) ENGINE Memory");
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {fqn} (id Int32, arr Array(Array({leafType}))) ENGINE Memory");
         try
         {
-            var matrix = new byte[,] { { 10, 20 }, { 30, 40 } };
             await client.InsertBinaryAsync(
                 fqn,
                 new[] { "id", "arr" },
@@ -451,9 +496,7 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
 
             using var reader = await client.ExecuteReaderAsync($"SELECT arr FROM {fqn}");
             Assert.That(reader.Read(), Is.True);
-            var got = (byte[][])reader.GetValue(0);
-            Assert.That(got[0], Is.EqualTo(new byte[] { 10, 20 }));
-            Assert.That(got[1], Is.EqualTo(new byte[] { 30, 40 }));
+            Assert.That(reader.GetValue(0), Is.EqualTo(expectedJagged));
         }
         finally
         {
@@ -461,33 +504,23 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
         }
     }
 
-    [Test]
-    public async Task ClientInsertBinaryAsync_Multidim3DArrayColumn_RoundTripsViaPrimaryApi()
+    private static TestCaseData BinInsertCase<T>(string leafType, Func<int, T> gen)
     {
-        var tableName = SanitizeTableName($"nested_client_3d_{Guid.NewGuid():N}");
-        var fqn = $"test.{tableName}";
-        await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {fqn}");
-        await client.ExecuteNonQueryAsync($"CREATE TABLE {fqn} (id Int32, arr Array(Array(Array(Int32)))) ENGINE Memory");
-        try
+        var matrix = new T[2, 3];
+        var jagged = new T[2][];
+        for (var r = 0; r < 2; r++)
         {
-            var cube = new int[2, 2, 2] { { { 1, 2 }, { 3, 4 } }, { { 5, 6 }, { 7, 8 } } };
-            await client.InsertBinaryAsync(
-                fqn,
-                new[] { "id", "arr" },
-                new List<object[]> { new object[] { 0, cube } });
+            jagged[r] = new T[3];
+            for (var c = 0; c < 3; c++)
+            {
+                var v = gen((r * 3) + c);
+                matrix[r, c] = v;
+                jagged[r][c] = v;
+            }
+        }
 
-            using var reader = await client.ExecuteReaderAsync($"SELECT arr FROM {fqn}");
-            Assert.That(reader.Read(), Is.True);
-            var got = (int[][][])reader.GetValue(0);
-            Assert.That(got[0][0], Is.EqualTo(new[] { 1, 2 }));
-            Assert.That(got[0][1], Is.EqualTo(new[] { 3, 4 }));
-            Assert.That(got[1][0], Is.EqualTo(new[] { 5, 6 }));
-            Assert.That(got[1][1], Is.EqualTo(new[] { 7, 8 }));
-        }
-        finally
-        {
-            await client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {fqn}");
-        }
+        return new TestCaseData(leafType, (object)matrix, (object)jagged)
+            .SetName($"InsertBinaryBlit_{typeof(T).Name}_RoundTrips");
     }
 
     // ----- GetFieldValue<T> with multidim T (materialises jagged result as rectangular) -----
@@ -660,8 +693,7 @@ public class NestedArrayParameterTests : AbstractConnectionTestFixture
     public async Task GetFieldValueMultidim_InsertedAsMultidimReadAsMultidim_FullRoundTrip()
     {
         // The headline use case: schema is rectangular by construction, so both ends use T[,].
-        const string table = "test.nested_multidim_roundtrip";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {table}");
+        var table = CreateTableName();
         await connection.ExecuteStatementAsync(
             $"CREATE TABLE {table} (id Int32, m Array(Array(UInt8))) ENGINE Memory");
 

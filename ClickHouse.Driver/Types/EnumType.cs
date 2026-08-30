@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
+using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Types;
 
@@ -55,9 +56,16 @@ internal class EnumType : ParameterizedType
 
     public int Lookup(string key) => Values[key];
 
+    public bool TryLookup(string key, out int value) => Values.TryGetValue(key, out value);
+
     public string Lookup(int value) => reverseValues.TryGetValue(value, out var key) ? key : throw new KeyNotFoundException($"Enum value {value} not found");
 
-    public override string ToString() => $"{Name}({string.Join(",", Values.Select(kvp => kvp.Key + "=" + kvp.Value))}";
+    // Renders the ClickHouse declaration form, e.g. Enum8('a' = 1, 'b' = 2), so the result round-trips
+    // through TypeConverter.ParseClickHouseType — SchemaDescriber writes this into GetSchemaTable()'s
+    // ProviderType, and PocoTypeRegistry keys its row-reader cache on it. Labels are quoted and escaped
+    // because an unquoted label containing a comma or a quote would otherwise re-parse as the wrong members.
+    public override string ToString() =>
+        $"{Name}({string.Join(", ", Values.Select(kvp => $"{kvp.Key.Escape().QuoteSingle()} = {kvp.Value.ToString(CultureInfo.InvariantCulture)}"))})";
 
     public override object Read(ExtendedBinaryReader reader) => throw new NotImplementedException();
 

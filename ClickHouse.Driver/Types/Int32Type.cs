@@ -4,13 +4,17 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class Int32Type : IntegerType
+internal class Int32Type : IntegerType, ITypedReader<int>, ITypedWriter<int>
 {
     public override Type FrameworkType => typeof(int);
 
-    public override object Read(ExtendedBinaryReader reader) => reader.ReadInt32();
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public int ReadValue(ExtendedBinaryReader reader) => reader.ReadInt32();
 
     public override string ToString() => "Int32";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToInt32(value, CultureInfo.InvariantCulture));
+    public override void Write(ExtendedBinaryWriter writer, object value) => WriteValue(writer, Convert.ToInt32(value, CultureInfo.InvariantCulture));
+
+    public void WriteValue(ExtendedBinaryWriter writer, int value) => writer.Write(value);
 }

@@ -3,12 +3,12 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Net.Http;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Formats;
+using ClickHouse.Driver.Http;
 
 namespace ClickHouse.Driver.ADO;
 
@@ -98,7 +98,8 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
     /// <summary>
     /// Gets or sets the HTTP <c>Accept-Encoding</c> header value sent with this command's
-    /// request, overriding the connection-level default of <c>gzip, deflate</c>.
+    /// request, overriding both <see cref="ClickHouseClientSettings.AcceptEncoding"/> and the codecs the
+    /// driver advertises by default (<c>zstd, lz4, gzip, deflate</c>).
     /// </summary>
     /// <remarks>
     /// See <see cref="QueryOptions.AcceptEncoding"/> for full semantics. Setting this property
@@ -130,9 +131,21 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
         using var response = await PostSqlQueryAsync(CommandText, lcts.Token).ConfigureAwait(false);
-        using var reader = new ExtendedBinaryReader(await response.Content.ReadAsStreamAsync(lcts.Token).ConfigureAwait(false));
+        var rawStream = await response.Content.ReadAsStreamAsync(lcts.Token).ConfigureAwait(false);
 
-        return reader.PeekChar() != -1 ? reader.Read7BitEncodedInt() : 0;
+        // leaveOpen: the HTTP response owns the transport stream; we only own the decoder we add.
+        var plaintext = ResponseDecompression.Wrap(rawStream, response, leaveOpen: true);
+        var decompressor = ReferenceEquals(plaintext, rawStream) ? null : plaintext;
+        try
+        {
+            using var reader = new ExtendedBinaryReader(plaintext);
+
+            return reader.PeekChar() != -1 ? reader.Read7BitEncodedInt() : 0;
+        }
+        finally
+        {
+            decompressor?.Dispose();
+        }
     }
 
     /// <summary>
@@ -146,7 +159,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             throw new InvalidOperationException("Connection is not set");
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
-        var response = await PostSqlQueryAsync(CommandText, lcts.Token).ConfigureAwait(false);
+        var response = await PostSqlQueryAsync(CommandText, lcts.Token, rawBody: true).ConfigureAwait(false);
         return new ClickHouseRawResult(response);
     }
 
@@ -193,27 +206,31 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             throw new InvalidOperationException("Connection is not set");
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
-        var sqlBuilder = new StringBuilder(CommandText);
-        switch (behavior)
+        var limitClause = behavior switch
         {
-            case CommandBehavior.SingleRow:
-                sqlBuilder.Append(" LIMIT 1");
-                break;
-            case CommandBehavior.SchemaOnly:
-                sqlBuilder.Append(" LIMIT 0");
-                break;
-            default:
-                break;
-        }
+            CommandBehavior.SingleRow => "LIMIT 1",
+            CommandBehavior.SchemaOnly => "LIMIT 0",
+            _ => null,
+        };
 
-        var result = await PostSqlQueryAsync(sqlBuilder.ToString(), lcts.Token).ConfigureAwait(false);
+        // Normalize CommandText the way the pre-#471 code did (via `new StringBuilder(CommandText)`):
+        // a null CommandText is treated as an empty query for every behavior, so an unset command
+        // reaches the server as an empty query (rejected there) rather than throwing a client-side
+        // ArgumentNullException when the null reaches StringContent.
+        var commandText = CommandText ?? string.Empty;
+
+        // Append the LIMIT out-of-band so a trailing comment or statement terminator in CommandText
+        // cannot swallow it or turn the query into a rejected multi-statement (issue #471).
+        var sql = limitClause is null ? commandText : RowLimitAppender.Append(commandText, limitClause);
+
+        var result = await PostSqlQueryAsync(sql, lcts.Token).ConfigureAwait(false);
         return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.ClickHouseClient.TypeSettings, connection.ClickHouseClient.PocoRegistry, connection.ClickHouseClient.Settings.ReadBufferSize, connection.ClickHouseClient.Settings.ReadValueConverter).ConfigureAwait(false);
     }
 
-    private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token)
+    private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token, bool rawBody = false)
     {
         var options = BuildQueryOptions();
-        QueryResult result = await connection.ClickHouseClient.PostSqlQueryAsync(sqlQuery, commandParameters, options, token).ConfigureAwait(false);
+        QueryResult result = await connection.ClickHouseClient.PostSqlQueryAsync(sqlQuery, commandParameters, options, rawBody, token).ConfigureAwait(false);
         QueryId = result.QueryId;
         QueryStats = result.QueryStats;
         ServerTimezone = result.ServerTimezone;

@@ -1,5 +1,4 @@
 using System;
-using System.Globalization;
 using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
@@ -16,7 +15,7 @@ namespace ClickHouse.Driver.Types;
 /// At the moment, the option enable_time_time64_type must be set to 1 to use Time or Time64.
 /// </para>
 /// </summary>
-internal class TimeType : ClickHouseType
+internal class TimeType : ClickHouseType, ITypedWriter<TimeSpan>, ITypedReader<TimeSpan>
 {
     // Range: [-999:59:59, 999:59:59] in seconds
     internal const int MinSeconds = -3599999; // -999:59:59
@@ -26,16 +25,21 @@ internal class TimeType : ClickHouseType
 
     public override string ToString() => "Time";
 
-    public override object Read(ExtendedBinaryReader reader)
+    public override object Read(ExtendedBinaryReader reader) => ReadValue(reader);
+
+    public TimeSpan ReadValue(ExtendedBinaryReader reader)
     {
         var seconds = reader.ReadInt32();
         return TimeSpan.FromSeconds(seconds);
     }
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
-    {
-        var seconds = CoerceToSeconds(value);
+    public override void Write(ExtendedBinaryWriter writer, object value) => WriteSeconds(writer, CoerceToSeconds(value));
 
+    // Mirrors the TimeSpan branch of CoerceToSeconds, then the shared clamp-and-write core.
+    public void WriteValue(ExtendedBinaryWriter writer, TimeSpan value) => WriteSeconds(writer, (int)Math.Round(value.TotalSeconds));
+
+    private static void WriteSeconds(ExtendedBinaryWriter writer, int seconds)
+    {
         // Apply saturation to the valid range
         seconds = Math.Max(MinSeconds, Math.Min(MaxSeconds, seconds));
 
@@ -47,6 +51,7 @@ internal class TimeType : ClickHouseType
         return value switch
         {
             TimeSpan ts => (int)Math.Round(ts.TotalSeconds),
+            TimeOnly to => (int)Math.Round(to.ToTimeSpan().TotalSeconds),
             int i => i,
             _ => throw new NotSupportedException($"Cannot convert {value?.GetType().Name ?? "null"} to Time")
         };

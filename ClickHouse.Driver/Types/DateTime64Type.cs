@@ -42,10 +42,16 @@ internal class DateTime64Type : AbstractDateTimeType
         };
     }
 
-    public override object Read(ExtendedBinaryReader reader) => FromClickHouseTicks(reader.ReadInt64());
+    protected override DateTime ReadDateTime(ExtendedBinaryReader reader) => ToDateTime(ReadInstant(reader));
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
-    {
-        writer.Write(ToClickHouseTicks(Instant.FromDateTimeOffset(CoerceToDateTimeOffset(value))));
-    }
+    protected override DateTimeOffset ReadDateTimeOffset(ExtendedBinaryReader reader) => ToDateTimeOffset(ReadInstant(reader));
+
+    // Same conversion as FromClickHouseTicks, exposing the intermediate instant so both the DateTime and the
+    // DateTimeOffset read share one wire read.
+    private Instant ReadInstant(ExtendedBinaryReader reader)
+        => Instant.FromUnixTimeTicks(MathUtils.ShiftDecimalPlaces(reader.ReadInt64(), 7 - Scale));
+
+    // No range check: any coerced instant is representable, so 'original' is unused.
+    protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T original)
+        => writer.Write(ToClickHouseTicks(Instant.FromDateTimeOffset(dto)));
 }

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -7,7 +8,7 @@ using ClickHouse.Driver.Types.Grammar;
 
 namespace ClickHouse.Driver.Types;
 
-internal class FixedStringType : ParameterizedType
+internal class FixedStringType : ParameterizedType, ITypedReader<string>, ITypedReader<byte[]>
 {
     public int Length { get; set; }
 
@@ -28,14 +29,38 @@ internal class FixedStringType : ParameterizedType
 
     public override string ToString() => $"FixedString({Length})";
 
+    // Above this length the scratch buffer is rented from the pool instead of stack-allocated.
+    private const int MaxStackAllocLength = 256;
+
     public override object Read(ExtendedBinaryReader reader)
+        => ReadAsByteArray ? ReadByteArray(reader) : ReadStringValue(reader);
+
+    // Both representations stay available to the typed read; only the boxed Read follows ReadAsByteArray.
+    string ITypedReader<string>.ReadValue(ExtendedBinaryReader reader) => ReadStringValue(reader);
+
+    byte[] ITypedReader<byte[]>.ReadValue(ExtendedBinaryReader reader) => ReadByteArray(reader);
+
+    // Buffer is returned to the caller as the column value, so it must be a fresh heap array.
+    private byte[] ReadByteArray(ExtendedBinaryReader reader) => reader.ReadBytes(Length);
+
+    private string ReadStringValue(ExtendedBinaryReader reader)
     {
-        var bytes = reader.ReadBytes(Length);
-        if (ReadAsByteArray)
+        byte[] rented = null;
+        try
         {
-            return bytes;
+            Span<byte> buffer = Length <= MaxStackAllocLength
+                ? stackalloc byte[Length]
+                : (rented = ArrayPool<byte>.Shared.Rent(Length)).AsSpan(0, Length);
+            reader.ReadBytes(buffer);
+            return Encoding.UTF8.GetString(buffer);
         }
-        return Encoding.UTF8.GetString(bytes);
+        finally
+        {
+            if (rented != null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
     }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
@@ -100,7 +125,7 @@ internal class FixedStringType : ParameterizedType
             {
                 throw new ArgumentException($"Stream length {streamLength} does not match FixedString({Length}). Stream must be exactly {Length} bytes.");
             }
-            stream.CopyTo(writer.BaseStream);
+            stream.CopyTo(writer.RawStream);
         }
         else
         {

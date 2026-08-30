@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -18,6 +21,42 @@ namespace ClickHouse.Driver.Tests.Types;
 [Category("Cloud")]
 public class JsonModeTests
 {
+    // Cannot derive from AbstractConnectionTestFixture: every test needs its own connection with
+    // specific JSON read/write modes, so table cleanup is tracked here instead.
+    private readonly ConcurrentQueue<string> createdTables = new();
+
+    /// <summary>
+    /// Builds a unique table name and registers it to be dropped when this fixture tears down.
+    /// See <see cref="TestUtilities.CreateTableName"/> for the naming scheme.
+    /// </summary>
+    private string CreateTableName([CallerMemberName] string testName = null)
+    {
+        var name = TestUtilities.CreateTableName(testName: testName);
+        createdTables.Enqueue(name);
+        return name;
+    }
+
+    [OneTimeTearDown]
+    public void DropCreatedTables()
+    {
+        if (createdTables.IsEmpty)
+            return;
+
+        using var client = TestUtilities.GetTestClickHouseClient();
+        while (createdTables.TryDequeue(out var table))
+        {
+            try
+            {
+                client.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}").GetAwaiter().GetResult();
+            }
+            catch (Exception e)
+            {
+                // Best effort: a leftover table must not fail an otherwise passing fixture.
+                TestContext.Progress.WriteLine($"Failed to drop test table {table}: {e.Message}");
+            }
+        }
+    }
+
     private ClickHouseClientSettings GetSettingsWithJsonMode(JsonReadMode readMode = JsonReadMode.Binary, JsonWriteMode writeMode = JsonWriteMode.Binary)
     {
         var builder = TestUtilities.GetConnectionStringBuilder();
@@ -125,8 +164,7 @@ public class JsonModeTests
     {
         using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_write_string_mode";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
@@ -164,8 +202,7 @@ public class JsonModeTests
         // JsonObject is serialized to string via ToJsonString() in string mode
         using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_write_jsonobject_string_mode";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
@@ -200,8 +237,7 @@ public class JsonModeTests
     {
         using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.String, writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_roundtrip_string";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (data Json) ENGINE = Memory");
 
         var originalJson = "{\"key\": \"value\", \"num\": 42}";
@@ -233,8 +269,7 @@ public class JsonModeTests
         // Tests: JsonObject jo => jo.ToJsonString() in WriteAsString
         using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_write_jsonobject_string_mode";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
@@ -270,8 +305,7 @@ public class JsonModeTests
         // Tests: JsonNode jn => jn.ToJsonString() in WriteAsString
         using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_write_jsonnode_string_mode";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
@@ -305,8 +339,7 @@ public class JsonModeTests
         // To write a POCO as a string, serialize it to JSON string first
         using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_write_poco_string_mode";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
@@ -340,8 +373,7 @@ public class JsonModeTests
         // Uses date_time_input_format=best_effort to parse ISO 8601 datetime strings
         using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_typed_datetime_schema";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($@"
             CREATE TABLE {tableName}
             (
@@ -397,8 +429,7 @@ public class JsonModeTests
         // String inputs require JsonWriteMode.String
         using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.Binary);
 
-        var tableName = "test.json_string_binary_mode_error";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
@@ -422,8 +453,7 @@ public class JsonModeTests
         // JsonNode inputs require JsonWriteMode.String
         using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.Binary);
 
-        var tableName = "test.json_node_binary_mode_error";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
@@ -447,8 +477,7 @@ public class JsonModeTests
         // POCOs can be written with String mode via JsonSerializer
         using var connection = GetConnectionWithJsonMode(writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_poco_string_mode";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (data Json) ENGINE = Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
@@ -541,13 +570,9 @@ public class JsonModeTests
         var options = new QueryOptions { QueryId = queryId };
         await client.ExecuteScalarAsync("SELECT 1", options: options);
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        var wasSent = await WasSettingSentAsync(client, queryId, "input_format_binary_read_json_as_string");
 
-        var result = await client.ExecuteScalarAsync(
-            $"SELECT Settings['input_format_binary_read_json_as_string'] FROM system.query_log " +
-            $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
-
-        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
+        Assert.That(wasSent, Is.False, "None mode should not send the setting to the server");
     }
 
     [Test]
@@ -582,14 +607,30 @@ public class JsonModeTests
         var options = new QueryOptions { QueryId = queryId };
         await client.ExecuteScalarAsync("SELECT 1", options: options);
 
-        await client.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        var wasSent = await WasSettingSentAsync(client, queryId, "output_format_binary_write_json_as_string");
 
-        // The query_log Settings map should NOT contain output_format_binary_write_json_as_string
-        var result = await client.ExecuteScalarAsync(
-            $"SELECT Settings['output_format_binary_write_json_as_string'] FROM system.query_log " +
+        Assert.That(wasSent, Is.False, "None mode should not send the setting to the server");
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="settingName"/> was sent to the server for the query
+    /// identified by <paramref name="queryId"/>, according to system.query_log.
+    /// </summary>
+    /// <remarks>
+    /// Ask the map directly with mapContains instead of reading Settings[name] and comparing against
+    /// "". A missing key yields an empty string, so the emptiness of that value cannot distinguish
+    /// "setting absent" from "no query_log row yet" — which is exactly how a query_log row that had
+    /// not been flushed yet used to surface as a spurious "None mode should not send the setting"
+    /// failure. <see cref="QueryLog.ScalarAsync"/> then covers the flush race itself.
+    /// </remarks>
+    private static async Task<bool> WasSettingSentAsync(ClickHouseClient client, string queryId, string settingName)
+    {
+        var present = await QueryLog.ScalarAsync(
+            client,
+            $"SELECT mapContains(Settings, '{settingName}') FROM system.query_log " +
             $"WHERE query_id = '{queryId}' AND type = 'QueryFinish' LIMIT 1");
 
-        Assert.That(result, Is.EqualTo(""), "None mode should not send the setting to the server");
+        return Convert.ToBoolean(present, CultureInfo.InvariantCulture);
     }
 
     #region JSON Roundtrip Tests
@@ -604,8 +645,7 @@ public class JsonModeTests
     {
         using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.Binary, writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_roundtrip_default";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data JSON) ENGINE = Memory");
 
         var original = new JsonObject
@@ -628,8 +668,6 @@ public class JsonModeTests
         Assert.That(result["count"].GetValue<long>(), Is.EqualTo(42));
         Assert.That(result["active"].GetValue<bool>(), Is.True);
         Assert.That(((JsonArray)result["tags"]).Count, Is.EqualTo(3));
-
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
@@ -642,8 +680,7 @@ public class JsonModeTests
     {
         using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.String, writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_roundtrip_string";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data JSON) ENGINE = Memory");
 
         var original = """{"name":"test","value":123}""";
@@ -663,8 +700,6 @@ public class JsonModeTests
 
         // In string read mode, the server may return numbers as quoted strings
         Assert.That(long.Parse(resultParsed["value"].ToString()), Is.EqualTo(long.Parse(originalParsed["value"].ToString())));
-
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
@@ -677,8 +712,7 @@ public class JsonModeTests
     {
         using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.Binary, writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_roundtrip_poco";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data JSON) ENGINE = Memory");
 
         var original = new { name = "poco_test", score = 99, enabled = true };
@@ -694,8 +728,6 @@ public class JsonModeTests
         Assert.That(result["name"].GetValue<string>(), Is.EqualTo("poco_test"));
         Assert.That(result["score"].GetValue<long>(), Is.EqualTo(99));
         Assert.That(result["enabled"].GetValue<bool>(), Is.True);
-
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
@@ -707,8 +739,7 @@ public class JsonModeTests
     {
         using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.Binary, writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_roundtrip_nested";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data JSON) ENGINE = Memory");
 
         var original = new JsonObject
@@ -733,8 +764,6 @@ public class JsonModeTests
         var result = (JsonObject)reader.GetValue(0);
         Assert.That(result["user"]["profile"]["name"].GetValue<string>(), Is.EqualTo("deep"));
         Assert.That(result["user"]["profile"]["level"].GetValue<long>(), Is.EqualTo(3));
-
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     /// <summary>
@@ -746,8 +775,7 @@ public class JsonModeTests
     {
         using var connection = GetConnectionWithJsonMode(readMode: JsonReadMode.Binary, writeMode: JsonWriteMode.String);
 
-        var tableName = "test.json_roundtrip_multi";
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
+        var tableName = CreateTableName();
         await connection.ExecuteStatementAsync($"CREATE TABLE {tableName} (id UInt32, data JSON) ENGINE = Memory");
 
         var rows = new List<object[]>
@@ -774,8 +802,6 @@ public class JsonModeTests
         Assert.That(results[0], Is.EqualTo((1u, 100L)));
         Assert.That(results[1], Is.EqualTo((2u, 200L)));
         Assert.That(results[2], Is.EqualTo((3u, 300L)));
-
-        await connection.ExecuteStatementAsync($"DROP TABLE IF EXISTS {tableName}");
     }
 
     #endregion

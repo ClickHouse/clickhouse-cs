@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Numerics;
+using System.Runtime.Serialization;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -243,6 +244,72 @@ public class JsonTypeTests : AbstractConnectionTestFixture
             "code",
             "ABC1234567"
         ).SetName("FixedString(10)");
+
+        // Backtick-quoted paths: the path name itself contains characters which require quoting
+        yield return new TestCaseData(
+            "`a b` Int64",
+            "{\"a b\": 1}",
+            "a b",
+            1L
+        ).SetName("QuotedPathWithSpace");
+
+        yield return new TestCaseData(
+            "`a b` Decimal(10, 2)",
+            "{\"a b\": 1.25}",
+            "a b",
+            new ClickHouseDecimal(1.25m)
+        ).SetName("QuotedPathWithSpaceAndParameterizedType");
+
+        yield return new TestCaseData(
+            "`a,b` Int64",
+            "{\"a,b\": 1}",
+            "a,b",
+            1L
+        ).SetName("QuotedPathWithComma");
+
+        yield return new TestCaseData(
+            "`a)b` Int64",
+            "{\"a)b\": 1}",
+            "a)b",
+            1L
+        ).SetName("QuotedPathWithParenthesis");
+
+        // `` inside a quoted path is escaped by the server as \`
+        yield return new TestCaseData(
+            "`a\\`b` Int64",
+            "{\"a`b\": 1}",
+            "a`b",
+            1L
+        ).SetName("QuotedPathWithBacktick");
+
+        // ' inside a quoted path is escaped by the server as \' ; '' is the SQL literal escape
+        yield return new TestCaseData(
+            "`a\\'b` Int64",
+            "{\"a''b\": 1}",
+            "a'b",
+            1L
+        ).SetName("QuotedPathWithSingleQuote");
+
+        yield return new TestCaseData(
+            "max_dynamic_paths_used UInt64",
+            "{\"max_dynamic_paths_used\": 18446744073709551615}",
+            "max_dynamic_paths_used",
+            ulong.MaxValue
+        ).SetName("PathStartingWithMaxDynamicPaths");
+
+        yield return new TestCaseData(
+            "max_dynamic_paths UInt64",
+            "{\"max_dynamic_paths\": 18446744073709551615}",
+            "max_dynamic_paths",
+            ulong.MaxValue
+        ).SetName("PathNamedMaxDynamicPaths");
+
+        yield return new TestCaseData(
+            "max_dynamic_types_seen String",
+            "{\"max_dynamic_types_seen\": \"String value\"}",
+            "max_dynamic_types_seen",
+            "String value"
+        ).SetName("PathStartingWithMaxDynamicTypes");
     }
     
     [Test]
@@ -251,6 +318,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [TestCase("level1_int Int64, nested.level2_string String, skip path.to.ignore")]
     [TestCase("level1_int Int64, nested.level2_string String, SKIP path.to.skip, SKIP REGEXP 'regex.path.*'")]
     [TestCase("max_dynamic_paths=10, level1_int Int64, nested.level2_string String")]
+    [TestCase("max_dynamic_paths = 10, level1_int Int64, nested.level2_string String")]
     [TestCase("max_dynamic_paths=10, level1_int Int64, nested.level2_string String, SKIP path.to.skip")]
     [TestCase("max_dynamic_types=3, level1_int Int64, nested.level2_string String")]
     [TestCase("max_dynamic_paths=0")]
@@ -258,7 +326,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [TestCase("level1_int Int64, skip_items Int32, nested.level2_string String, SKIP path.to.skip, skip path.to.ignore")]
     public async Task ShouldSelectDataWithComplexHintedJsonType(string jsonDefinition)
     {
-        var targetTable = "test.select_data_complex_hinted_json";
+        var targetTable = CreateTableName();
 
         await connection.ExecuteStatementAsync(
             $@"
@@ -282,6 +350,230 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // Assert non-hinted property
         ClassicAssert.IsInstanceOf<JsonValue>(result["unhinted_float"]);
         Assert.That((double)result["unhinted_float"], Is.EqualTo(99.9));
+    }
+
+    [Test]
+    [TestCase("JSON(`a b` Int64)", "a b")]
+    [TestCase("JSON(`a,b` Int64)", "a,b")]
+    [TestCase("JSON(`a)b` Int64)", "a)b")]
+    [TestCase("JSON(`a b` Decimal(10, 2))", "a b")]
+    [TestCase(@"JSON(`a\`b` Int64)", "a`b")]
+    [TestCase(@"JSON(`a\` b` Int64)", "a` b")]
+    [TestCase(@"JSON(`a\'b` Int64)", "a'b")]
+    [TestCase("JSON(`a'b` Int64)", "a'b")]
+    [TestCase("JSON(`a b` Map(String, Array(Int32)))", "a b")]
+    [TestCase("JSON(max_dynamic_paths=8, `a b` Int64, SKIP `x,y`)", "a b")]
+    [TestCase(@"JSON(`a\nb` Int64)", "a\nb")]
+    [TestCase(@"JSON(`a\\b` Int64)", @"a\b")]
+    [TestCase("JSON(`a.b c` Int64)", "a.b c")]
+    public void ParseShouldUnquotePathWhenPathIsBacktickQuoted(string typeName, string expectedPath)
+    {
+        var type = (JsonType)TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default);
+
+        Assert.That(type.HintedTypes.Keys, Is.EquivalentTo(new[] { expectedPath }));
+    }
+
+    [Test]
+    [TestCase("JSON(`a b` Int64)", "a b", "Int64")]
+    [TestCase("JSON(`a b` Decimal(10, 2))", "a b", "Decimal64(2)")]
+    [TestCase("JSON(`a b` Map(String, Array(Int32)))", "a b", "Map(String, Array(Int32))")]
+    public void ParseShouldMapQuotedPathToItsHintedType(string typeName, string path, string expectedHintedType)
+    {
+        var type = (JsonType)TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default);
+
+        Assert.That(type.HintedTypes[path].ToString(), Is.EqualTo(expectedHintedType));
+    }
+
+    [Test]
+    [TestCase("JSON(a Int64)", "a")]
+    [TestCase("JSON(nested.b String)", "nested.b")]
+    [TestCase("JSON(a Decimal(10, 2))", "a")]
+    [TestCase("JSON(max_dynamic_paths=8, a Int64, SKIP x.y, SKIP REGEXP 'regex.path.*')", "a")]
+    public void ParseShouldKeepPathWhenPathIsNotQuoted(string typeName, string expectedPath)
+    {
+        var type = (JsonType)TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default);
+
+        Assert.That(type.HintedTypes.Keys, Is.EquivalentTo(new[] { expectedPath }));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldSelectQuotedTypedPathWhenPathIsNested()
+    {
+        // The server quotes the whole path, not the component which needs quoting:
+        // JSON(a.`b c` Int64) is reported back as JSON(`a.b c` Int64)
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT '{\"a\": {\"b c\": 1}}'::JSON(`a.b c` Int64)");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((long)result["a"]["b c"], Is.EqualTo(1L));
+    }
+
+    /// <remarks>
+    /// Every definition here is one the server accepts and reports back verbatim, verified with
+    /// <c>SELECT toTypeName(CAST('{}' AS JSON(definition)))</c> on 26.5. Expected values are the
+    /// JSON text of the node the driver returns, so a Decimal is a JSON string.
+    /// <para>
+    /// The Int64-hinted cases feed the value in as a JSON string so that the assertion is sensitive
+    /// to the hint being applied: the server coerces it to a number for a typed path, while a path
+    /// whose hint got lost stays a string.
+    /// </para>
+    /// </remarks>
+    public static IEnumerable<TestCaseData> QuotedJsonPathTestCases()
+    {
+        yield return new TestCaseData("`a b` Int64", "{\"a b\": \"1\"}", "a b", "1")
+            .SetName("PathWithSpace");
+
+        yield return new TestCaseData("`a,b` Int64", "{\"a,b\": \"1\"}", "a,b", "1")
+            .SetName("PathWithComma");
+
+        yield return new TestCaseData("`a)b` Int64", "{\"a)b\": \"1\"}", "a)b", "1")
+            .SetName("PathWithClosingParenthesis");
+
+        yield return new TestCaseData("`a(b` Int64", "{\"a(b\": \"1\"}", "a(b", "1")
+            .SetName("PathWithOpeningParenthesis");
+
+        yield return new TestCaseData("`a=b` Int64", "{\"a=b\": \"1\"}", "a=b", "1")
+            .SetName("PathWithEqualsSign");
+
+        yield return new TestCaseData("`a b` Decimal(10, 2)", "{\"a b\": 1.25}", "a b", "\"1.25\"")
+            .SetName("PathWithSpaceAndParameterizedType");
+
+        yield return new TestCaseData("`a b` Nullable(Int64)", "{\"a b\": \"1\"}", "a b", "1")
+            .SetName("PathWithSpaceAndNullableType");
+
+        yield return new TestCaseData("`a b` LowCardinality(String)", "{\"a b\": \"z\"}", "a b", "\"z\"")
+            .SetName("PathWithSpaceAndLowCardinalityType");
+
+        yield return new TestCaseData("`a b` Map(String, Array(Int32))", "{\"a b\": {\"k\": [1, 2]}}", "a b", "{\"k\":[1,2]}")
+            .SetName("PathWithSpaceAndContainerType");
+
+        // Both quote characters at once: a backtick-quoted path whose type carries a quoted argument
+        yield return new TestCaseData("`a b` Enum8('x y' = 1)", "{\"a b\": \"x y\"}", "a b", "\"x y\"")
+            .SetName("PathWithSpaceAndSingleQuotedTypeArgument");
+
+        // A comma inside a single-quoted type argument: the token must not break there either
+        yield return new TestCaseData("`a b` Enum8('x,y' = 1)", "{\"a b\": \"x,y\"}", "a b", "\"x,y\"")
+            .SetName("PathWithSpaceAndCommaInSingleQuotedTypeArgument");
+
+        yield return new TestCaseData(@"`a\`b` Int64", "{\"a`b\": \"1\"}", "a`b", "1")
+            .SetName("PathWithEscapedBacktick");
+
+        yield return new TestCaseData(@"`a\` b` Int64", "{\"a` b\": \"1\"}", "a` b", "1")
+            .SetName("PathWithEscapedBacktickFollowedBySpace");
+
+        yield return new TestCaseData("`a'b` Int64", "{\"a''b\": \"1\"}", "a'b", "1")
+            .SetName("PathWithSingleQuote");
+
+        yield return new TestCaseData("max_dynamic_paths=8, `a b` Int64, SKIP `x,y`", "{\"a b\": \"1\", \"x,y\": 2}", "a b", "1")
+            .SetName("PathWithSpaceAlongsideSettingsAndSkip");
+
+        yield return new TestCaseData("`a b` Int64, SKIP REGEXP 'p,q'", "{\"a b\": \"1\", \"p,q\": 2}", "a b", "1")
+            .SetName("PathWithSpaceAlongsideSkipRegexpContainingComma");
+
+        yield return new TestCaseData("a Int64, `b c` String", "{\"a\": 1, \"b c\": 2}", "b c", "\"2\"")
+            .SetName("QuotedPathAlongsideUnquotedPath");
+
+        yield return new TestCaseData("`a.b c` Int64", "{\"a\": {\"b c\": \"1\"}}", "a", "{\"b c\":1}")
+            .SetName("NestedPathWithSpace");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCaseSource(nameof(QuotedJsonPathTestCases))]
+    public async Task ShouldRoundTripQuotedTypedPathThroughTableColumn(string jsonDefinition, string jsonData, string pathName, string expectedJson)
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON({jsonDefinition})) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{jsonData}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That(result.ContainsKey(pathName), Is.True);
+        Assert.That(result[pathName]?.ToJsonString(), Is.EqualTo(expectedJson));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldNotReadQuotedPathExcludedBySkip()
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(`a b` Int64, SKIP `x,y`)) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a b\": 1, \"x,y\": 2}}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((long)result["a b"], Is.EqualTo(1L));
+        Assert.That(result.ContainsKey("x,y"), Is.False);
+    }
+
+    private class QuotedPathData
+    {
+        [ClickHouseJsonPath("a b")]
+        public long WithSpace { get; set; }
+
+        [ClickHouseJsonPath("a,b")]
+        public long WithComma { get; set; }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldWriteQuotedTypedPathInBinaryMode()
+    {
+        // ClickHouseJsonPath is only honoured in Binary mode, which describes the destination
+        // table and so parses the quoted paths out of the server's own type name.
+        using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryClient.RegisterJsonSerializationType<QuotedPathData>();
+
+        var targetTable = CreateTableName();
+        await binaryClient.ExecuteNonQueryAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(`a b` Int64, `a,b` Int64)) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(binaryClient.CreateConnection())
+        {
+            DestinationTableName = targetTable,
+        };
+        await bulkCopy.WriteToServerAsync([new object[] { new QuotedPathData { WithSpace = 1L, WithComma = 2L } }]);
+
+        using var reader = await binaryClient.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That((long)result["a b"], Is.EqualTo(1L));
+        Assert.That((long)result["a,b"], Is.EqualTo(2L));
+    }
+
+    [Test]
+    [TestCase("JSON(a)")]
+    [TestCase("JSON(`a b`)")]
+    public void ParseShouldThrowWhenHintHasNoType(string typeName)
+    {
+        Assert.Throws<SerializationException>(
+            () => TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default));
+    }
+
+    [Test]
+    [TestCase("JSON(max_dynamic_paths = 10, a String)")]
+    [TestCase("JSON(max_dynamic_paths  =  10, a String)")]
+    [TestCase("JSON(max_dynamic_types =3, a String)")]
+    public void ShouldExcludeSettingsFromHintedPathsWhenParsingSpacedAssignments(string typeString)
+    {
+        var type = (JsonType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.That(type.HintedTypes.Keys, Is.EquivalentTo(new[] { "a" }));
     }
 
     [Test]
@@ -337,7 +629,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithUInt64Hint_ShouldPreservePrecision()
     {
-        var targetTable = "test.json_write_uint64_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -367,7 +659,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithMultipleRowsAndTrailingColumns_ShouldRoundTrip()
     {
-        var targetTable = "test.json_write_multiple_rows_trailing";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -414,7 +706,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithInt64Hint_ShouldWriteCorrectType()
     {
-        var targetTable = "test.json_write_int64_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -439,7 +731,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithUuidHint_ShouldPreserveGuid()
     {
-        var targetTable = "test.json_write_uuid_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -466,7 +758,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithDecimalHint_ShouldPreservePrecision()
     {
-        var targetTable = "test.json_write_decimal_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -493,7 +785,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithNestedHints_ShouldWriteNestedFields()
     {
-        var targetTable = "test.json_write_nested_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -518,7 +810,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithMixedHintedAndUnhinted_ShouldHandleBoth()
     {
-        var targetTable = "test.json_write_mixed_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -546,7 +838,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithArrayHint_ShouldWriteTypedArray()
     {
-        var targetTable = "test.json_write_array_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -573,7 +865,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithArrayHint_ShouldWriteTypedList()
     {
-        var targetTable = "test.json_write_list_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -601,7 +893,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithPocoObject_ShouldSerializeCorrectly()
     {
-        var targetTable = "test.json_write_poco";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -629,7 +921,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // DateTime hints require Binary mode for proper type conversion
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
 
-        var targetTable = "test.json_write_datetime_hint";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -662,7 +954,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     {
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<UnhintedDecimalData>();
-        var targetTable = "test.json_write_unhinted_decimal";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -689,7 +981,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithNoHints_ShouldUseExistingBehavior()
     {
-        var targetTable = "test.json_write_no_hints";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -719,7 +1011,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<TestPocoWithPathAttribute>();
 
-        var targetTable = "test.json_write_poco_path_attr";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -748,7 +1040,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<TestPocoWithIgnoreAttribute>();
 
-        var targetTable = "test.json_write_poco_ignore_attr";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -772,7 +1064,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithCaseSensitiveHint_ShouldMatchExactCase()
     {
-        var targetTable = "test.json_write_case_sensitive";
+        var targetTable = CreateTableName();
         // Column has exact case hint "UserId" matching the POCO property
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
@@ -797,7 +1089,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithCaseMismatchedHint_ShouldNotMatch()
     {
-        var targetTable = "test.json_write_case_mismatch";
+        var targetTable = CreateTableName();
         // Column has lowercase hint "userid", but POCO property is "UserId" - should NOT match
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
@@ -850,6 +1142,287 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         public long UserId { get; set; }
     }
 
+    public static IEnumerable<TestCaseData> TypedPathNullValueTestCases()
+    {
+        yield return new TestCaseData("x Nullable(Int64)", "{\"x\": null}", "{\"x\":null}")
+            .SetName("TypedNullableInt64PathWithNullValue");
+
+        yield return new TestCaseData("s Nullable(String)", "{\"s\": null}", "{\"s\":null}")
+            .SetName("TypedNullableStringPathWithNullValue");
+
+        yield return new TestCaseData("x Nullable(Int64)", "{}", "{\"x\":null}")
+            .SetName("TypedNullablePathAbsentFromDocument");
+
+        yield return new TestCaseData("a.b Nullable(Int64)", "{\"a\": {\"b\": null}}", "{\"a\":{\"b\":null}}")
+            .SetName("NestedTypedNullablePathWithNullValue");
+
+        yield return new TestCaseData("a.b.c Nullable(Int64)", "{\"a\": {\"b\": {\"c\": null}}}", "{\"a\":{\"b\":{\"c\":null}}}")
+            .SetName("DeeplyNestedTypedNullablePathWithNullValue");
+
+        yield return new TestCaseData("x Dynamic", "{\"x\": null}", "{\"x\":null}")
+            .SetName("TypedDynamicPathWithNullValue");
+
+        yield return new TestCaseData("x Nullable(Int64)", "{\"x\": 42}", "{\"x\":42}")
+            .SetName("TypedNullablePathWithNonNullValue");
+
+        yield return new TestCaseData("arr Array(Nullable(Int32))", "{\"arr\": [1, null, 3]}", "{\"arr\":[1,null,3]}")
+            .SetName("TypedArrayPathWithNullElement");
+
+        yield return new TestCaseData("m Map(String, Nullable(Int64))", "{\"m\": {\"k\": null}}", "{\"m\":{\"k\":null}}")
+            .SetName("TypedMapPathWithNullValue");
+
+        // A typed leaf path may overlap a typed subtree, and the server renders both under the same
+        // key (`{"a":null,"a":{"b":null}}`), which a single JsonObject cannot represent; the subtree
+        // is kept because it is the one that can still carry a value.
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b Nullable(Int64)",
+                "{\"a\": null}",
+                "{\"a\":{\"b\":null}}")
+            .SetName("TypedLeafPathOverlappingTypedSubtreeWithNullValues");
+
+        // Mirror of the case above: the value belongs to the leaf, and the overlapping subtree
+        // (`{"b":null}`) carries none, so the leaf's value replaces it.
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b Nullable(Int64)",
+                "{\"a\": 5}",
+                "{\"a\":5}")
+            .SetName("TypedLeafPathOverlappingTypedSubtreeWithLeafValue");
+
+        // Same, with the overlapping subtree two levels deep: it is all-null throughout, so the
+        // leaf's value still replaces it.
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b.c Nullable(Int64)",
+                "{\"a\": 5}",
+                "{\"a\":5}")
+            .SetName("TypedLeafPathOverlappingDeeperTypedSubtreeWithLeafValue");
+
+        // Both `a` and `a.b` are typed and the value belongs to the subtree. Descending into an
+        // object at a path that overlaps a typed leaf was added after 25.8: 26.3 and later route
+        // the value to `a.b`, while 25.8 parses `{"b":7}` against `a Nullable(Int64)` and rejects
+        // the insert with INCORRECT_DATA. (The exact boundary is somewhere in between; 26.3 is the
+        // oldest server in the test matrix, so the gate uses it.) The flattened key is the stand-in
+        // where the nested document is not accepted — the two are indistinguishable once stored,
+        // both giving `{"a":null,"a":{"b":7}}`, so the read path under test and the expectation
+        // below are the same either way.
+        var overlappingSubtreeDocument = TestUtilities.ServerVersion >= Version.Parse("26.3")
+            ? "{\"a\": {\"b\": 7}}"
+            : "{\"a.b\": 7}";
+
+        yield return new TestCaseData(
+                "a Nullable(Int64), a.b Nullable(Int64)",
+                overlappingSubtreeDocument,
+                "{\"a\":{\"b\":7}}")
+            .SetName("TypedLeafPathOverlappingTypedSubtreeWithValue");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCaseSource(nameof(TypedPathNullValueTestCases))]
+    public async Task Read_WithTypedPathAndNullValue_ShouldMaterializeJsonNull(string jsonDefinition, string jsonData, string expectedJson)
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON({jsonDefinition})) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{jsonData}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That(result.ToJsonString(), Is.EqualTo(expectedJson));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Read_WithUntypedPathAndNullValue_ShouldOmitPath()
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"x\": null}}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        Assert.That(result.ContainsKey("x"), Is.False);
+        Assert.That(result.ToJsonString(), Is.EqualTo("{}"));
+    }
+
+    /// <param name="whenAllowed">
+    /// Document read when <c>AllowDuplicateJsonKeys</c> is set, which keeps whichever of the two
+    /// values the row carries last; <c>null</c> where the overlap stays unreadable because the
+    /// parent holds a scalar or an array, which no subtree can be placed under.
+    /// </param>
+    private static IEnumerable<(string Name, string ColumnType, string JsonData, string NestedPath, string WhenAllowed)> OverlappingPathShapes()
+    {
+        // The documents below reach a path under `a` through a flattened key rather than a nested
+        // object, because 25.8 parses `{"b": 7}` against the overlapping `a Int64` and rejects the
+        // insert with INCORRECT_DATA. The two forms are indistinguishable once stored — both give
+        // `{"a":0,"a":{"b":7}}` — so the read path under test is the same either way. See
+        // TypedPathNullValueTestCases for the same limitation.
+
+        // A non-Nullable typed path is never absent — an absent path materializes as 0 — so `a`
+        // always holds a value and always collides with the `a.b` subtree, whichever of the two
+        // the document fills in.
+        yield return ("OverlappingNonNullableTypedPathsWithValueInSubtree",
+            "JSON(a Int64, a.b Int64)", "{\"a.b\": 7}", "a.b", "{\"a\":0}");
+
+        yield return ("OverlappingNonNullableTypedPathsWithValueInLeaf",
+            "JSON(a Int64, a.b Int64)", "{\"a\": 5}", "a.b", "{\"a\":5}");
+
+        // The value is deeper than the path it collides with, so the error has to walk down to it
+        // rather than name the first key under `a`.
+        yield return ("OverlappingNonNullableTypedPathsWithValueInDeeperSubtree",
+            "JSON(a Int64, a.b.c Int64)", "{\"a.b.c\": 7}", "a.b.c", "{\"a\":0}");
+
+        // Nullable typed paths only collide where the document itself carries both, which needs a
+        // duplicate key. 26.3 and later accept the document and keep both values; 25.8 rejects it
+        // with INCORRECT_DATA unless duplicated paths are skipped, which would drop one of the two
+        // values and so remove the very thing under test.
+        if (TestUtilities.ServerVersion >= Version.Parse("26.3"))
+        {
+            yield return ("OverlappingNullableTypedPathsWithDuplicateKeyDocument",
+                "JSON(a Nullable(Int64), a.b Nullable(Int64))", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b", "{\"a\":5}");
+
+            // The same collision with no hints at all: `a` and `a.b` are both dynamic paths. The
+            // scalar `a` is sent first here, so the subtree has nowhere to go even when duplicate
+            // keys are allowed.
+            yield return ("OverlappingDynamicPathsWithDuplicateKeyDocument",
+                "JSON", "{\"a\": 5, \"a\": {\"b\": 7}}", "a.b", null);
+        }
+
+        // A Map path decodes to a JsonObject, which looks exactly like a subtree built for a
+        // deeper path. The map's entries are a value of `a` all the same, and the server sends
+        // them under a key of their own, so merging `a.b` into them would drop one of the two.
+        yield return ("OverlappingMapPathAndDeeperPathWithDisjointKeys",
+            "JSON(a Map(String, Int64))", "{\"a\": {\"x\": 1}, \"a.b\": 7}", "a.b", "{\"a\":{\"x\":1,\"b\":7}}");
+
+        // The same, where the map's own key is the one the deeper path would take.
+        yield return ("OverlappingMapPathAndDeeperPathWithTheSameKey",
+            "JSON(a Map(String, Int64))", "{\"a\": {\"b\": 1}, \"a.b\": 7}", "a.b", "{\"a\":{\"b\":7}}");
+
+        // An array value cannot hold a subtree at all.
+        yield return ("OverlappingArrayPathAndDeeperPath",
+            "JSON(a Array(Int64))", "{\"a\": [1, 2], \"a.b\": 7}", "a.b", null);
+    }
+
+    public static IEnumerable<TestCaseData> OverlappingPathsHoldingValuesTestCases()
+    {
+        foreach (var (name, columnType, jsonData, nestedPath, whenAllowed) in OverlappingPathShapes())
+        {
+            yield return new TestCaseData(columnType, jsonData, false, nestedPath, null)
+                .SetName(name);
+
+            yield return new TestCaseData(columnType, jsonData, true, nestedPath, whenAllowed)
+                .SetName($"{name}_DuplicateKeysAllowed");
+        }
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCaseSource(nameof(OverlappingPathsHoldingValuesTestCases))]
+    public async Task Read_WithOverlappingPathsHoldingValues_ShouldThrowUnlessDuplicateKeysAreAllowed(
+        string columnType, string jsonData, bool allowDuplicateJsonKeys, string expectedNestedPath, string expectedJson)
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data {columnType}) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{jsonData}')");
+
+        var settings = new ClickHouseClientSettings(TestUtilities.GetTestClickHouseClientSettings())
+        {
+            AllowDuplicateJsonKeys = allowDuplicateJsonKeys,
+        };
+        using var overlapClient = new ClickHouseClient(settings);
+
+        using var reader = await overlapClient.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+
+        if (expectedJson is not null)
+        {
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(((JsonObject)reader.GetValue(0)).ToJsonString(), Is.EqualTo(expectedJson));
+            return;
+        }
+
+        // The column is decoded by Read, so the throw lands there rather than on GetValue.
+        var exception = Assert.Throws<SerializationException>(() => reader.Read());
+
+        Assert.That(exception.Message, Does.Contain("'a'"), exception.Message);
+        Assert.That(exception.Message, Does.Contain($"'{expectedNestedPath}'"), exception.Message);
+        Assert.That(exception.Message, Does.Contain("JsonReadMode.String"), exception.Message);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Read_WithOverlappingEmptyObjectValue_ShouldKeepTheSubtree()
+    {
+        var targetTable = CreateTableName();
+
+        // The row fills in the typed `a.b` and leaves the map at `a` empty, so the server renders
+        // it as `{"a":{},"a":{"b":7}}` — an overlap where only one side holds a value.
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(a Map(String, Int64), `a.b` Int64)) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a.b\": 7}}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        // An empty map holds no value, so it neither collides with the subtree nor erases it.
+        Assert.That(result.ToJsonString(), Is.EqualTo("{\"a\":{\"b\":7}}"));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Read_WithOverlappingPathsHoldingValues_ShouldBeReadableAsString()
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} (data JSON(a Int64, a.b Int64)) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync($"INSERT INTO {targetTable} VALUES ('{{\"a.b\": 7}}')");
+
+        using var stringClient = TestUtilities.GetTestClickHouseClient(jsonReadMode: JsonReadMode.String);
+
+        using var reader = await stringClient.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        Assert.That(reader.GetValue(0), Is.EqualTo("{\"a\":0,\"a\":{\"b\":7}}"));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Read_WithNestedPathsThatDoNotOverlap_ShouldReadEveryPath()
+    {
+        var targetTable = CreateTableName();
+
+        await connection.ExecuteStatementAsync(
+            $"CREATE OR REPLACE TABLE {targetTable} " +
+            "(data JSON(a.b Int64, a.c Nullable(Int64), a.d.e String, f Int64)) ENGINE = Memory;");
+        await connection.ExecuteStatementAsync(
+            $"INSERT INTO {targetTable} VALUES ('{{\"a\": {{\"b\": 1, \"d\": {{\"e\": \"x\"}}}}, \"f\": 2}}')");
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+
+        var result = (JsonObject)reader.GetValue(0);
+
+        // The server sends the paths in its own order, so assert per path rather than on the
+        // rendered document.
+        var a = (JsonObject)result["a"];
+        Assert.That((long)a["b"], Is.EqualTo(1L));
+        Assert.That(a["c"], Is.Null);
+        Assert.That((string)((JsonObject)a["d"])["e"], Is.EqualTo("x"));
+        Assert.That((long)result["f"], Is.EqualTo(2L));
+    }
+
     private class NullableHintedData
     {
         public int? Value { get; set; }
@@ -865,7 +1438,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithNullableHintedProperty_ShouldWriteNull()
     {
-        var targetTable = "test.json_write_nullable_hinted";
+        var targetTable = CreateTableName();
         await client.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -883,6 +1456,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var reader = await client.ExecuteReaderAsync($"SELECT data FROM {targetTable}");
         ClassicAssert.IsTrue(reader.Read());
         var result = (JsonObject)reader.GetValue(0);
+        Assert.That(result.ContainsKey("Value"), Is.True);
         Assert.That(result["Value"], Is.Null);
         Assert.That(result["Name"].GetValue<string>(), Is.EqualTo("test"));
     }
@@ -891,7 +1465,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     public async Task Write_WithNullableUnhintedProperty_ShouldSkipField()
     {
         // Nullable/LowCardinality(Nullable) types are not allowed inside Variant type
-        var targetTable = "test.json_write_nullable_unhinted";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -917,7 +1491,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     public async Task Write_WithNonNullableNullProperty_ShouldSkipField()
     {
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
-        var targetTable = "test.json_write_nonnullable_null";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -955,7 +1529,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         // Tests the BinaryTypeIndex.Nothing path in WriteHintedValue
         // When a non-nullable hint (Int64) receives a null value, we write Nothing type
         // ClickHouse converts Nothing to the default value for the hinted type (0 for Int64)
-        var targetTable = "test.json_write_nonnullable_hint_null";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -988,7 +1562,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [Test]
     public async Task Write_WithDictionaryHint_ShouldWriteMap()
     {
-        var targetTable = "test.json_write_dictionary_hint";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1073,7 +1647,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<ComprehensiveTypesData>();
 
-        var targetTable = "test.json_write_comprehensive_types";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1224,7 +1798,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<CircularRefA>();
         binaryClient.RegisterJsonSerializationType<CircularRefB>();
-        var targetTable = "test.json_write_circular_ref";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1255,7 +1829,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     {
         using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
         binaryClient.RegisterJsonSerializationType<SelfReferencing>();
-        var targetTable = "test.json_write_self_ref";
+        var targetTable = CreateTableName();
         await client.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1282,7 +1856,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json | Feature.Time)]
     public async Task Write_WithTimeSpan_ShouldWriteAsTime64()
     {
-        var targetTable = "test.json_write_timespan";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1318,7 +1892,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     {
         using var binaryConnection = TestUtilities.GetTestClickHouseConnection(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
 
-        var targetTable = "test.json_write_unregistered_type";
+        var targetTable = CreateTableName();
         await binaryConnection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1356,7 +1930,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         binaryClient.RegisterJsonSerializationType<WrongTypeData>();
 
         // POCO has string property, but schema expects Int64
-        var targetTable = "test.json_write_wrong_type";
+        var targetTable = CreateTableName();
         await binaryClient.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1388,7 +1962,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     public async Task Write_WithMissingHintedProperty_ShouldSucceedWithNull()
     {
         // POCO is missing a property that the schema hints for - should be default
-        var targetTable = "test.json_write_missing_property";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1421,7 +1995,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_WithEmptyPoco_ShouldWriteEmptyObject()
     {
-        var targetTable = "test.json_write_empty_poco";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1453,7 +2027,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_WithAllNullProperties_ShouldWriteEmptyObject()
     {
-        var targetTable = "test.json_write_all_nulls";
+        var targetTable = CreateTableName();
         await connection.ExecuteStatementAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,
@@ -1489,7 +2063,7 @@ public class JsonTypeTests : AbstractConnectionTestFixture
     [RequiredFeature(Feature.Json)]
     public async Task Write_PocoWithIndexer_ShouldIgnoreIndexer()
     {
-        var targetTable = "test.json_write_indexer";
+        var targetTable = CreateTableName();
         await client.ExecuteNonQueryAsync(
             $@"CREATE OR REPLACE TABLE {targetTable} (
                 id UInt32,

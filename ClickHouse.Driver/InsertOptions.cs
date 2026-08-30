@@ -1,6 +1,7 @@
 ﻿#nullable enable
 
 using System.Collections.Generic;
+using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Copy;
 
 namespace ClickHouse.Driver;
@@ -24,6 +25,36 @@ public sealed class InsertOptions : QueryOptions
     /// Gets or sets the row binary format to use. Default is RowBinary.
     /// </summary>
     public RowBinaryFormat Format { get; init; } = RowBinaryFormat.RowBinary;
+
+    /// <summary>
+    /// Gets or sets the compressor applied to the binary insert body. Defaults to
+    /// <see cref="ZstdCompressor.Default"/> (ZSTD at level <see cref="ZstdCompressor.DefaultLevel"/>).
+    /// Set to <see langword="null"/> to send the RowBinary payload uncompressed — useful over a
+    /// fast/local link where the compression CPU outweighs the bandwidth savings, or when a proxy
+    /// already compresses on the client's behalf.
+    /// Provide a configured <see cref="ZstdCompressor"/> (or another <see cref="IClickHouseCompressor"/>,
+    /// e.g. <see cref="GZipCompressor"/>) to change the level, buffer size, or codec — note that
+    /// unlike the <c>Accept-Encoding</c> the driver sends for responses, which the server is free to
+    /// decline, a request body's <c>Content-Encoding</c> is a declaration: an intermediary that
+    /// re-encodes request bodies and does not understand the codec fails the insert outright, so
+    /// <c>gzip</c> remains the safer choice behind such a tier. This is independent of
+    /// <see cref="ADO.ClickHouseClientSettings.UseCompression"/>, which governs query/response transport compression.
+    /// </summary>
+    public IClickHouseCompressor? Compressor { get; init; } = ZstdCompressor.Default;
+
+    /// <summary>
+    /// Gets or sets where the <c>INSERT INTO ... FORMAT ...</c> statement is sent. Defaults to
+    /// <see cref="InsertQueryPlacement.Body"/>, which writes it ahead of the rows in the request body.
+    /// Set <see cref="InsertQueryPlacement.Url"/> to send it as the <c>query</c> URL parameter instead,
+    /// so URL-only routing and logging can read it without decoding and inspecting the request body,
+    /// which <see cref="Compressor"/> compresses by default. The statement then counts towards the URL
+    /// length, whose effective limit is the lowest imposed by the .NET runtime, an intermediary, and the server.
+    /// On .NET 6 through .NET 9, the complete encoded URI cannot exceed 65,519 characters; the driver
+    /// reports an <see cref="System.InvalidOperationException"/> suggesting <see cref="InsertQueryPlacement.Body"/>
+    /// if that limit is exceeded. The server's <c>http_max_uri_size</c> is 1 MiB by default. This setting is
+    /// independent of <see cref="Compressor"/>, which governs the body encoding only.
+    /// </summary>
+    public InsertQueryPlacement QueryPlacement { get; init; } = InsertQueryPlacement.Body;
 
     /// <summary>
     /// Gets or sets explicit column type mappings (key: column name; value: ClickHouse type string).
@@ -56,10 +87,14 @@ public sealed class InsertOptions : QueryOptions
             BearerToken = BearerToken,
             ParameterTypeResolver = ParameterTypeResolver,
             ParameterFormatter = ParameterFormatter,
+            ReadValueConverter = ReadValueConverter,
             MaxExecutionTime = MaxExecutionTime,
+            AcceptEncoding = AcceptEncoding,
             BatchSize = BatchSize,
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
             Format = Format,
+            Compressor = Compressor,
+            QueryPlacement = QueryPlacement,
             ColumnTypes = ColumnTypes,
             UseSchemaCache = UseSchemaCache,
         };
@@ -77,11 +112,16 @@ public sealed class InsertOptions : QueryOptions
             UseSession = UseSession,
             SessionId = SessionId,
             BearerToken = BearerToken,
+            ParameterTypeResolver = ParameterTypeResolver,
             ParameterFormatter = ParameterFormatter,
+            ReadValueConverter = ReadValueConverter,
             MaxExecutionTime = MaxExecutionTime,
+            AcceptEncoding = AcceptEncoding,
             BatchSize = BatchSize,
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
             Format = Format,
+            Compressor = Compressor,
+            QueryPlacement = QueryPlacement,
             ColumnTypes = columnTypes,
             UseSchemaCache = UseSchemaCache,
         };

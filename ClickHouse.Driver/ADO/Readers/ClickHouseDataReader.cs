@@ -13,6 +13,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Formats;
+using ClickHouse.Driver.Http;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Types;
@@ -28,17 +29,34 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     private readonly HttpResponseMessage httpResponse; // Used to dispose at the end of reader
     private readonly ExtendedBinaryReader reader;
+    private readonly PooledReadBufferStream pooledReadBuffer; // Returns its pooled buffer on dispose
+    private readonly Stream decompressor; // Can be null: only set when the response body was transport-compressed
     private readonly ExceptionTagAwareStream exceptionTagStream; // Can be null
     private readonly IReadValueConverter readValueConverter; // Can be null
-    private readonly string[] columnTypeNames; // Raw server-sent type strings; null when no converter
+    private readonly string[] columnTypeNames; // Raw server-sent type strings, exactly as declared
     private readonly PocoTypeRegistry pocoRegistry;
     private readonly Dictionary<Type, object> bindingPlanCache = new();
+
+    // Per-column typed storage for the current row; replaces the old shared object[] buffer. Built on the first
+    // Read() and mutated in place by every one after it.
+    //
+    // Not built in the constructor: QueryAsync<T>'s box-free POCO path materializes straight from the stream and
+    // never touches a slot, so eager construction would allocate one permanently dead object per column on the
+    // primary read API. Empty result sets and metadata-only readers likewise pay nothing.
+    //
+    // Built once and never nulled again, so `hasCurrentRow` implies non-null — the whole safety argument, which
+    // every value accessor establishes by going through Slot(). GetValues is the one exception: it indexes this
+    // array directly and carries its own copy of the guard, so "simplifying" that guard away yields a
+    // NullReferenceException instead of the intended InvalidOperationException.
+    private ColumnSlot[] slots;
     private bool hasCurrentRow;
 
-    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null)
+    private ClickHouseDataReader(HttpResponseMessage httpResponse, ExtendedBinaryReader reader, PooledReadBufferStream pooledReadBuffer, string[] names, ClickHouseType[] types, string[] rawTypeNames, PocoTypeRegistry pocoRegistry, ExceptionTagAwareStream exceptionTagStream = null, IReadValueConverter readValueConverter = null, Stream decompressor = null)
     {
         this.httpResponse = httpResponse ?? throw new ArgumentNullException(nameof(httpResponse));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
+        this.pooledReadBuffer = pooledReadBuffer;
+        this.decompressor = decompressor;
         this.exceptionTagStream = exceptionTagStream;
         this.readValueConverter = readValueConverter;
         // pocoRegistry may be null when the reader is used purely for ADO.NET-style access
@@ -47,10 +65,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         this.pocoRegistry = pocoRegistry;
         RawTypes = types;
         FieldNames = names;
-        CurrentRow = new object[FieldNames.Length];
-
-        if (readValueConverter != null)
-            columnTypeNames = rawTypeNames;
+        columnTypeNames = rawTypeNames;
     }
 
     internal static Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
@@ -68,27 +83,58 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
         ExtendedBinaryReader reader = null;
         ExceptionTagAwareStream exceptionStream = null;
+        PooledReadBufferStream buffered = null;
+        Stream decompressingStream = null;
         try
         {
             var rawStream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            var buffered = new BufferedStream(rawStream, readBufferSize);
 
-            // Conditionally wrap with exception-aware stream
-            Stream streamForReader = buffered;
+            // Decompression sits INNERMOST, directly on the transport stream, so that everything layered
+            // above it — the mid-stream exception scanner and the pooled read buffer alike — sees
+            // PLAINTEXT. Driven by the response's Content-Encoding, never by what we asked for.
+            // leaveOpen: true because httpResponse owns rawStream and disposes it.
+            var plaintext = ResponseDecompression.Wrap(rawStream, httpResponse, leaveOpen: true);
+
+            // Reference-equal means the body needed no decoding, so there is no extra stream to own.
+            decompressingStream = ReferenceEquals(plaintext, rawStream) ? null : plaintext;
+
+            // Conditionally record recent bytes for mid-stream exception detection. This sits *below*
+            // the buffering stream on purpose: there it observes one read per buffer refill instead of
+            // one per scalar the reader decodes, which is the difference between recording a few bytes
+            // millions of times and recording a 64 KiB block a few times. The ring buffer then holds the
+            // last bytes received rather than the last bytes consumed — equivalent for this purpose,
+            // because TryExtractMidStreamException is only consulted once a read has failed with an
+            // IOException, by which point the transport is drained and the server's trailing marker has
+            // been recorded.
+            // It must stay *above* the decompressor, though: the server writes its exception marker into
+            // the response body, so the marker only exists in the decoded plaintext.
+            // leaveOpen: true because the stream below is owned by either httpResponse (uncompressed) or
+            // this reader via decompressingStream (compressed).
+            Stream bufferedInner = plaintext;
             if (!string.IsNullOrEmpty(exceptionTag))
             {
-                exceptionStream = new ExceptionTagAwareStream(buffered, exceptionTag);
-                streamForReader = exceptionStream;
+                exceptionStream = new ExceptionTagAwareStream(plaintext, exceptionTag, leaveOpen: true);
+                bufferedInner = exceptionStream;
             }
 
-            reader = new ExtendedBinaryReader(streamForReader); // will dispose of stream
-            var (names, types, rawTypeNames) = ReadHeaders(reader, settings, readValueConverter != null);
-            return new ClickHouseDataReader(httpResponse, reader, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter);
+            // Buffer reads through a pooled buffer (rented from ArrayPool) rather than BufferedStream's
+            // fresh per-query array. leaveOpen: true because the streams below are owned elsewhere;
+            // the reader disposes this wrapper explicitly to return the buffer (the BinaryReader ->
+            // PeekableStreamWrapper chain does not propagate Dispose to inner streams).
+            // Its Read may return fewer bytes than requested; the ExtendedBinaryReader below loops to
+            // satisfy exact-count reads.
+            buffered = new PooledReadBufferStream(bufferedInner, readBufferSize, leaveOpen: true);
+
+            reader = new ExtendedBinaryReader(buffered);
+            var (names, types, rawTypeNames) = ReadHeaders(reader, settings);
+            return new ClickHouseDataReader(httpResponse, reader, buffered, names, types, rawTypeNames, pocoRegistry, exceptionStream, readValueConverter, decompressingStream);
         }
         catch (Exception)
         {
             httpResponse?.Dispose();
             reader?.Dispose();
+            buffered?.Dispose(); // returns the rented buffer if we failed before handing it to the reader
+            decompressingStream?.Dispose();
             throw;
         }
     }
@@ -100,6 +146,48 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 
     internal ClickHouseType GetClickHouseType(int ordinal) => RawTypes[ordinal];
+
+    /// <summary>
+    /// Attempts to read the underlying integer ordinal of an <c>Enum8</c>/<c>Enum16</c> (or
+    /// <c>Nullable(Enum...)</c>) column for the current row. Enum columns materialize as their
+    /// string label, so the standard numeric accessors (<c>GetInt32</c>, <c>GetByte</c>, …) throw
+    /// <see cref="InvalidCastException"/> on them, matching ADO.NET's behavior for a string-backed
+    /// column; use this method to obtain the underlying wire ordinal instead.
+    /// </summary>
+    /// <param name="ordinal">The zero-based column ordinal.</param>
+    /// <param name="value">
+    /// When this method returns <see langword="true"/>, the underlying integer ordinal that arrived
+    /// on the wire; otherwise <c>0</c>. The ordinal is the raw wire value and is independent of any
+    /// configured read value converter (which transforms the string label, not the ordinal).
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> if the column is an <c>Enum8</c>/<c>Enum16</c> type and the current
+    /// value is a known label; otherwise <see langword="false"/> (a non-enum column, a
+    /// <see cref="DBNull"/> value, or a value that is not a known enum label).
+    /// </returns>
+    public bool TryGetEnumOrdinal(int ordinal, out int value)
+    {
+        // Takes the label straight from the slot instead of through GetValue: the ordinal is the raw wire value, so
+        // a configured IReadValueConverter must not run here — it rewrites the label, which would then resolve to a
+        // different ordinal or to none at all. An enum column decodes into its own FrameworkType (string), so these
+        // are the only two slot kinds it can get; a NULL cell leaves HasValue false and falls through to false.
+        var label = Slot(ordinal) switch
+        {
+            ValueSlot<string> stringSlot => stringSlot.Value,
+            NullableSlot<string> nullableSlot when nullableSlot.HasValue => nullableSlot.Value,
+            _ => null,
+        };
+
+        if (label is not null &&
+            GetEffectiveClickHouseType(ordinal) is EnumType enumType &&
+            enumType.TryLookup(label, out value))
+        {
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
 
     public override object this[int ordinal] => GetValue(ordinal);
 
@@ -115,36 +203,89 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override int RecordsAffected { get; }
 
-    protected object[] CurrentRow { get; set; }
-
     protected string[] FieldNames { get; set; }
 
     private protected ClickHouseType[] RawTypes { get; set; }
 
-    public override bool GetBoolean(int ordinal) => Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
+    /// <summary>
+    /// Shared body for the strict typed accessors, which cast rather than coerce: the value must already be
+    /// the requested <typeparamref name="T"/>. This is the path compiled ORM mappers drive (linq2db inlines
+    /// <c>GetInt64</c>/<c>GetDouble</c>/<c>GetDateTime</c>/… per column per row), so it is where the boxing
+    /// elimination is worth the most.
+    /// </summary>
+    /// <remarks>
+    /// An <see cref="IReadValueConverter"/> does not force the accessor onto the boxed path. The value comes
+    /// out of the slot unboxed and converts through <c>ConvertValue&lt;T&gt;</c>, the overload
+    /// <see cref="GetFieldValue{T}"/> uses for a typed read. Only genuinely boxed reads —
+    /// <see cref="GetValue"/>, <see cref="GetValues"/>, and the coercing fall-throughs below — use
+    /// <c>ConvertValue(object, …)</c>.
+    /// </remarks>
+    private T GetTypedValue<T>(int ordinal)
+    {
+        var value = GetSlotValue<T>(ordinal);
+        return readValueConverter == null ? value : ConvertTyped(ordinal, value);
+    }
 
-    public override byte GetByte(int ordinal) => (byte)GetValue(ordinal);
+    // Applies the converter on the typed overload to a value already read out of its slot.
+    private T ConvertTyped<T>(int ordinal, T value)
+        => readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
+
+    // Unlike its neighbours this one coerces rather than casts, so only an exact Bool column takes the fast path;
+    // anything else keeps Convert.ToBoolean's widening and its exception messages. A NULL cell falls through too,
+    // so Convert.ToBoolean(DBNull.Value) still throws exactly as it did.
+    public override bool GetBoolean(int ordinal)
+    {
+        var slot = Slot(ordinal);
+        if (slot is ValueSlot<bool> boolSlot)
+            return readValueConverter == null ? boolSlot.Value : ConvertTyped(ordinal, boolSlot.Value);
+        if (slot is NullableSlot<bool> nullableSlot && nullableSlot.HasValue)
+            return readValueConverter == null ? nullableSlot.Value : ConvertTyped(ordinal, nullableSlot.Value);
+
+        return Convert.ToBoolean(GetValue(ordinal), CultureInfo.InvariantCulture);
+    }
+
+    public override byte GetByte(int ordinal) => GetTypedValue<byte>(ordinal);
 
     public override long GetBytes(int ordinal, long dataOffset, byte[] buffer, int bufferOffset, int length) => throw new NotImplementedException();
 
+    // No ClickHouse type reads as char, so there is no slot to hit — left on the boxed cast.
     public override char GetChar(int ordinal) => (char)GetValue(ordinal);
 
     public override long GetChars(int ordinal, long dataOffset, char[] buffer, int bufferOffset, int length) => throw new NotImplementedException();
 
     public override string GetDataTypeName(int ordinal) => GetClickHouseType(ordinal).ToString();
 
-    public override DateTime GetDateTime(int ordinal) => (DateTime)GetValue(ordinal);
+    public override DateTime GetDateTime(int ordinal) => GetTypedValue<DateTime>(ordinal);
 
+    // Box-free by construction once GetDateTime is: CoerceToDateTimeOffset has a DateTime overload.
     public virtual DateTimeOffset GetDateTimeOffset(int ordinal) => GetEffectiveClickHouseType(ordinal) is AbstractDateTimeType adt ?
         adt.CoerceToDateTimeOffset(GetDateTime(ordinal)) : throw new InvalidCastException();
 
     public override decimal GetDecimal(int ordinal)
     {
+        // Which of the two representations a Decimal column resolves to is the UseBigDecimal setting's doing;
+        // both reach the same decimal without a box, nullable or not. A NULL cell falls through to the boxed
+        // path below, where casting DBNull.Value throws exactly as it did.
+        var slot = Slot(ordinal);
+        decimal? unboxed = slot switch
+        {
+            ValueSlot<decimal> decimalSlot => decimalSlot.Value,
+            NullableSlot<decimal> n when n.HasValue => n.Value,
+            ValueSlot<ClickHouseDecimal> bigDecimalSlot => bigDecimalSlot.Value.ToDecimal(CultureInfo.InvariantCulture),
+            NullableSlot<ClickHouseDecimal> nb when nb.HasValue => nb.Value.ToDecimal(CultureInfo.InvariantCulture),
+            _ => null,
+        };
+
+        // A ClickHouseDecimal column is narrowed first, so the converter sees the decimal this accessor
+        // returns rather than the column's own representation.
+        if (unboxed.HasValue)
+            return readValueConverter == null ? unboxed.Value : ConvertTyped(ordinal, unboxed.Value);
+
         var value = GetValue(ordinal);
         return value is ClickHouseDecimal clickHouseDecimal ? clickHouseDecimal.ToDecimal(CultureInfo.InvariantCulture) : (decimal)value;
     }
 
-    public override double GetDouble(int ordinal) => (double)GetValue(ordinal);
+    public override double GetDouble(int ordinal) => GetTypedValue<double>(ordinal);
 
     public override Type GetFieldType(int ordinal)
     {
@@ -152,15 +293,15 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         return rawType is NullableType nt ? nt.UnderlyingType.FrameworkType : rawType.FrameworkType;
     }
 
-    public override float GetFloat(int ordinal) => (float)GetValue(ordinal);
+    public override float GetFloat(int ordinal) => GetTypedValue<float>(ordinal);
 
-    public override Guid GetGuid(int ordinal) => (Guid)GetValue(ordinal);
+    public override Guid GetGuid(int ordinal) => GetTypedValue<Guid>(ordinal);
 
-    public override short GetInt16(int ordinal) => (short)GetValue(ordinal);
+    public override short GetInt16(int ordinal) => GetTypedValue<short>(ordinal);
 
-    public override int GetInt32(int ordinal) => (int)GetValue(ordinal);
+    public override int GetInt32(int ordinal) => GetTypedValue<int>(ordinal);
 
-    public override long GetInt64(int ordinal) => (long)GetValue(ordinal);
+    public override long GetInt64(int ordinal) => GetTypedValue<long>(ordinal);
 
     public override string GetName(int ordinal) => FieldNames[ordinal];
 
@@ -175,43 +316,86 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         return index;
     }
 
-    public override string GetString(int ordinal) => GetValue(ordinal)?.ToString();
+    // Deliberately narrower than the other accessors: only a non-nullable String column short-circuits. Every other
+    // shape keeps ToString()'s coercion, including the quirk that a NULL cell yields "" rather than null, because
+    // DBNull.Value.ToString() is the empty string.
+    public override string GetString(int ordinal)
+        => Slot(ordinal) is ValueSlot<string> stringSlot
+            ? (readValueConverter == null ? stringSlot.Value : ConvertTyped(ordinal, stringSlot.Value))
+            : GetValue(ordinal)?.ToString();
 
+    /// <summary>
+    /// The one boxing entry point on the read path. Boxes lazily, per call, so a query that projects ten columns
+    /// and reads two pays for two — where the old <c>object[]</c> buffer boxed all ten during <see cref="Read"/>
+    /// regardless.
+    /// </summary>
+    /// <remarks>
+    /// Consequence of boxing per call rather than once per row: two <c>GetValue(i)</c> calls on the same value-type
+    /// cell return two distinct boxes. They still compare equal by <see cref="object.Equals(object)"/> — the
+    /// ADO.NET-relevant comparison — but no longer by <see cref="object.ReferenceEquals"/>.
+    /// </remarks>
     public override object GetValue(int ordinal)
-        => readValueConverter == null
-            ? CurrentRow[ordinal]
-            : readValueConverter.ConvertValue(CurrentRow[ordinal], FieldNames[ordinal], columnTypeNames[ordinal]);
+    {
+        var value = Slot(ordinal).GetBoxed();
+        return readValueConverter == null
+            ? value
+            : readValueConverter.ConvertValue(value, FieldNames[ordinal], columnTypeNames[ordinal]);
+    }
 
     public override int GetValues(object[] values)
     {
-        if (CurrentRow == null)
-        {
-            throw new InvalidOperationException();
-        }
+        if (!hasCurrentRow)
+            ThrowNoCurrentRow();
 
-        var count = Math.Min(CurrentRow.Length, values.Length);
+        var count = Math.Min(slots.Length, values.Length);
 
         if (readValueConverter != null)
         {
             for (var i = 0; i < count; i++)
-                values[i] = readValueConverter.ConvertValue(CurrentRow[i], FieldNames[i], columnTypeNames[i]);
+                values[i] = readValueConverter.ConvertValue(slots[i].GetBoxed(), FieldNames[i], columnTypeNames[i]);
         }
         else
         {
-            Array.Copy(CurrentRow, values, count);
+            for (var i = 0; i < count; i++)
+                values[i] = slots[i].GetBoxed();
         }
 
         return count;
     }
 
     public override bool IsDBNull(int ordinal)
+        // Asks the slot directly rather than going through GetValue: a configured IReadValueConverter must not run
+        // during a null check (it could throw, do expensive work, or change the result's nullness), and a null
+        // check has no business materializing a box.
+        => Slot(ordinal).IsNull;
+
+    /// <summary>
+    /// The single gate every value accessor passes through. Column metadata (<see cref="FieldCount"/>,
+    /// <see cref="GetName"/>, <see cref="GetFieldType"/>, <see cref="GetSchemaTable"/>, …) is available
+    /// without a current row and is deliberately not gated.
+    /// </summary>
+    /// <remarks>
+    /// Slots hold typed storage, so without this a non-nullable value column would read back before the first
+    /// <see cref="Read"/> as a perfectly plausible <c>0</c>/<c>false</c>/<c>Guid.Empty</c> — a value
+    /// indistinguishable from real data. Worth a branch to report the mistake instead, as <c>SqlClient</c> and the
+    /// rest of ADO.NET do.
+    /// </remarks>
+    private ColumnSlot Slot(int ordinal)
     {
-        // Read CurrentRow directly rather than going through GetValue so a configured
-        // IReadValueConverter does not run during a null check — it could throw, do
-        // expensive work, or change the nullness of the result.
-        var value = CurrentRow[ordinal];
-        return value is DBNull || value is null;
+        if (!hasCurrentRow)
+            ThrowNoCurrentRow();
+
+        return slots[ordinal];
     }
+
+    // Separate and non-inlined so the check above stays small enough for the JIT to inline into the hot
+    // accessors.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowNoCurrentRow()
+        => throw new InvalidOperationException(
+            "The reader has no current row. Call Read() and check that it returned true before reading " +
+            "column values. Column metadata (FieldCount, GetName, GetFieldType, GetSchemaTable) is " +
+            "available without a current row.");
 
     public override bool NextResult() => false;
 
@@ -259,10 +443,40 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             }
         }
 
-        var value = (T)CurrentRow[ordinal];
+        var value = GetSlotValue<T>(ordinal);
         if (readValueConverter != null)
             return readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
         return value;
+    }
+
+    /// <summary>
+    /// Extracts the current row's column value as <typeparamref name="T"/>, without boxing where the slot
+    /// already holds exactly that type.
+    /// </summary>
+    /// <remarks>
+    /// <para>Both checks are sealed-class type tests, so for a value-typed <typeparamref name="T"/> each is a plain
+    /// <c>isinst</c> against a known method table. A generic <c>IValueGetter&lt;T&gt;</c> implemented twice would let
+    /// one slot serve both <c>long</c> and <c>long?</c>, but it goes through the shared-generics dictionary and
+    /// measured several times slower — so <c>T = U?</c> is deliberately left to the boxed fallback.</para>
+    ///
+    /// <para>That fallback is the pre-slot expression verbatim, which preserves the exact-type strictness callers
+    /// depend on: <c>GetFieldValue&lt;long&gt;</c> over an <c>Int32</c> column throws rather than widening, and
+    /// reading a NULL as a non-nullable <typeparamref name="T"/> throws the runtime's own "cannot cast DBNull"
+    /// <see cref="InvalidCastException"/> as before.</para>
+    /// </remarks>
+    private T GetSlotValue<T>(int ordinal)
+    {
+        var slot = Slot(ordinal);
+
+        if (slot is ValueSlot<T> valueSlot)
+            return valueSlot.Value;
+
+        // A Nullable(T) column holds the underlying T, so this also serves GetFieldValue<long> over
+        // Nullable(Int64) — and when the cell is null it falls through to the box, which throws.
+        if (slot is NullableSlot<T> nullableSlot && nullableSlot.HasValue)
+            return nullableSlot.Value;
+
+        return (T)slot.GetBoxed();
     }
 
     /// <summary>
@@ -286,25 +500,25 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken) => Task.FromResult(false);
 
     // Custom extension
-    public ushort GetUInt16(int ordinal) => (ushort)GetValue(ordinal);
+    public ushort GetUInt16(int ordinal) => GetTypedValue<ushort>(ordinal);
 
     // Custom extension
-    public uint GetUInt32(int ordinal) => (uint)GetValue(ordinal);
+    public uint GetUInt32(int ordinal) => GetTypedValue<uint>(ordinal);
 
     // Custom extension
-    public ulong GetUInt64(int ordinal) => (ulong)GetValue(ordinal);
+    public ulong GetUInt64(int ordinal) => GetTypedValue<ulong>(ordinal);
 
     // Custom extension
-    public IPAddress GetIPAddress(int ordinal) => (IPAddress)GetValue(ordinal);
+    public IPAddress GetIPAddress(int ordinal) => GetTypedValue<IPAddress>(ordinal);
 
-    // Custom extension
+    // Custom extension. Tuple columns have no typed slot, so this stays on the boxed cast.
     public ITuple GetTuple(int ordinal) => (ITuple)GetValue(ordinal);
 
     // Custom extension
-    public sbyte GetSByte(int ordinal) => (sbyte)GetValue(ordinal);
+    public sbyte GetSByte(int ordinal) => GetTypedValue<sbyte>(ordinal);
 
     // Custom extension
-    public BigInteger GetBigInteger(int ordinal) => (BigInteger)GetValue(ordinal);
+    public BigInteger GetBigInteger(int ordinal) => GetTypedValue<BigInteger>(ordinal);
 
     /// <summary>
     /// Materializes the current row into a new instance of <typeparamref name="T"/>.
@@ -349,7 +563,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                     continue;
                 }
 
-                throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
                     typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), null));
             }
 
@@ -359,12 +573,85 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             }
             catch (InvalidCastException)
             {
-                throw new InvalidOperationException(BuildAssignmentErrorMessage(
+                throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
                     typeof(T), binding.PropInfo, FieldNames[col], RawTypes[col].ToString(), value.GetType()));
             }
         }
 
         return instance;
+    }
+
+    /// <summary>
+    /// If <typeparamref name="T"/> is registered for read, returns the per-wire-column materializer delegates
+    /// and the constructor; otherwise returns false and the caller uses the <see cref="Read"/> +
+    /// <see cref="MapTo{T}"/> loop.
+    ///
+    /// A read value converter does not disable the fast path. Each column applies it on the overload that
+    /// matches how the column was read: a box-free typed read converts through
+    /// <see cref="IReadValueConverter.ConvertValue{T}"/> with <c>T</c> the property type, as
+    /// <see cref="GetFieldValue{T}"/> does; a boxed-fallback column converts through the boxed
+    /// <see cref="IReadValueConverter.ConvertValue"/>, as <see cref="MapTo{T}"/> does via
+    /// <see cref="GetValue"/>.
+    /// </summary>
+    internal bool TryGetRowMaterializer<T>(out RowColumnReader<T>[] materializers, out Func<T> constructor)
+        where T : class
+    {
+        materializers = null;
+        constructor = null;
+
+        if (pocoRegistry == null)
+            return false;
+
+        var mapping = pocoRegistry.GetReadMapping<T>();
+        if (mapping == null)
+            return false;
+
+        var built = pocoRegistry.GetOrBuildRowReaders<T>(FieldNames, RawTypes, columnTypeNames, mapping, readValueConverter != null);
+        if (built == null)
+            return false;
+
+        materializers = built;
+        constructor = mapping.Constructor;
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the next row straight from the stream via the fast-path delegates, bypassing the reader's column
+    /// slots, which this path never allocates. Returns false at end of stream, and mirrors
+    /// <see cref="Read"/>'s mid-stream server-exception handling. The delegates consume every wire column in
+    /// order, so the stream stays aligned even for columns the POCO does not map.
+    /// </summary>
+    internal bool TryMaterializeNextRow<T>(RowColumnReader<T>[] materializers, Func<T> constructor, out T value)
+        where T : class
+    {
+        value = null;
+
+        try
+        {
+            // PeekChar is inside the try: a mid-stream failure truncates the body at a row
+            // boundary too, so the end-of-stream probe can itself hit the truncation.
+            if (reader.PeekChar() == -1)
+            {
+                hasCurrentRow = false;
+                return false;
+            }
+
+            var instance = constructor();
+            for (var i = 0; i < materializers.Length; i++)
+                materializers[i](reader, instance, readValueConverter, columnTypeNames);
+            value = instance;
+            return true;
+        }
+        // A mid-stream server failure truncates the HTTP body; reading past the truncation surfaces
+        // as an IOException — EndOfStreamException for a buffered body, but HttpIOException
+        // ("response ended prematurely") for a live streamed response. Both derive from IOException.
+        catch (IOException) when (exceptionTagStream != null)
+        {
+            var serverEx = exceptionTagStream.TryExtractMidStreamException();
+            if (serverEx != null)
+                throw serverEx;
+            throw;
+        }
     }
 
     private (int ColumnOrdinal, ColumnBinding<T> Binding)[] GetOrBuildBindingPlan<T>(PocoReadMapping<T> mapping)
@@ -397,67 +684,61 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     private void ValidateBinding(Type pocoType, PocoPropertyInfo propInfo, int columnOrdinal)
     {
         var colType = RawTypes[columnOrdinal];
-        var colFrameworkType = colType.FrameworkType;
-        var unwrappedColFrameworkType = Nullable.GetUnderlyingType(colFrameworkType) ?? colFrameworkType;
-
-        if (unwrappedColFrameworkType == typeof(object))
-            return;
-
-        var assignable = propInfo.PropertyType.IsAssignableFrom(unwrappedColFrameworkType)
-            || (propInfo.NullableUnderlyingType != null && propInfo.NullableUnderlyingType.IsAssignableFrom(unwrappedColFrameworkType));
-
-        if (!assignable)
+        if (!PocoColumnAssignment.IsAssignable(propInfo, colType))
         {
-            throw new InvalidOperationException(BuildAssignmentErrorMessage(
+            var colFrameworkType = colType.FrameworkType;
+            var unwrappedColFrameworkType = Nullable.GetUnderlyingType(colFrameworkType) ?? colFrameworkType;
+            throw new InvalidOperationException(PocoColumnAssignment.BuildAssignmentErrorMessage(
                 pocoType, propInfo, FieldNames[columnOrdinal], colType.ToString(), unwrappedColFrameworkType));
         }
     }
 
-    private static string BuildAssignmentErrorMessage(
-        Type targetType,
-        PocoPropertyInfo propInfo,
-        string columnName,
-        string clickHouseType,
-        Type returnedType)
-    {
-        var returnedDescription = returnedType is null ? "null" : returnedType.FullName;
-        return
-            $"Cannot map ClickHouse column '{columnName}' ({clickHouseType}) to property " +
-            $"{targetType.Name}.{propInfo.PropertyName} ({propInfo.PropertyType.FullName}). " +
-            $"The reader returned {returnedDescription}, which is not assignable to {propInfo.PropertyType.FullName}.";
-    }
-
     public override bool Read()
     {
-        if (reader.PeekChar() == -1)
-        {
-            hasCurrentRow = false;
-            return false; // End of stream reached
-        }
-
-        var count = RawTypes.Length;
-        var data = CurrentRow;
-
         // Clear before the per-column loop so a mid-row throw cannot leave a stale
-        // CurrentRow visible to MapTo<T> if the caller catches and continues.
+        // row visible to MapTo<T> if the caller catches and continues.
         hasCurrentRow = false;
         try
         {
-            for (var i = 0; i < count; i++)
+            // PeekChar is inside the try: a mid-stream failure truncates the body at a row
+            // boundary too, so the end-of-stream probe can itself hit the truncation.
+            if (reader.PeekChar() == -1)
+                return false; // End of stream reached
+
+            // Built on the first row rather than in the ctor: the POCO fast path materializes straight
+            // from the stream and never touches a slot, so eager construction would allocate a
+            // permanently dead object per column on the primary read API. An empty result never gets here.
+            var columns = slots ??= CreateSlots();
+            for (var i = 0; i < columns.Length; i++)
             {
-                var rawType = RawTypes[i];
-                data[i] = rawType.Read(reader);
+                columns[i].Read(reader);
             }
             hasCurrentRow = true;
             return true;
         }
-        catch (EndOfStreamException) when (exceptionTagStream != null)
+        // A mid-stream server failure truncates the HTTP body; reading past the truncation surfaces
+        // as an IOException — EndOfStreamException for a buffered body, but HttpIOException
+        // ("response ended prematurely") for a live streamed response. Both derive from IOException.
+        // When the server tagged the response (exceptionTagStream != null) the in-band exception block
+        // is captured in the ring buffer, so convert it to the real server error; otherwise re-throw.
+        catch (IOException) when (exceptionTagStream != null)
         {
             var serverEx = exceptionTagStream.TryExtractMidStreamException();
             if (serverEx != null)
                 throw serverEx;
             throw;
         }
+    }
+
+    // Runs at most once per reader, so it is kept out of Read() to leave that method small enough for the
+    // JIT to treat the slot loop as the hot path it is.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ColumnSlot[] CreateSlots()
+    {
+        var created = new ColumnSlot[RawTypes.Length];
+        for (var i = 0; i < created.Length; i++)
+            created[i] = ColumnSlotFactory.Create(RawTypes[i]);
+        return created;
     }
 
 #pragma warning disable CA2215 // Dispose methods should call base class dispose
@@ -467,29 +748,36 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         {
             httpResponse?.Dispose();
             reader?.Dispose();
+            // Explicit: the BinaryReader -> PeekableStreamWrapper chain does not propagate Dispose to the
+            // inner buffering stream, so return its pooled buffer here (idempotent if already disposed).
+            pooledReadBuffer?.Dispose();
+            // Innermost wrapper, disposed last. Null unless the body was transport-compressed; created
+            // with leaveOpen: true, so this releases the codec's own state without touching the
+            // transport stream that httpResponse owns.
+            decompressor?.Dispose();
         }
     }
 #pragma warning restore CA2215 // Dispose methods should call base class dispose
 
-    private static (string[], ClickHouseType[], string[]) ReadHeaders(ExtendedBinaryReader reader, TypeSettings settings, bool captureRawTypeNames)
+    // The raw declarations are always kept. Besides feeding IReadValueConverter, they are the row-reader
+    // cache key: a resolved type's ToString() can drop state its Read depends on — JsonType renders as
+    // "Json" whatever its typed-path hints — so keying on it would let one shape reuse another's delegates.
+    private static (string[], ClickHouseType[], string[]) ReadHeaders(ExtendedBinaryReader reader, TypeSettings settings)
     {
         if (reader.PeekChar() == -1)
         {
             return ([], [], []);
         }
 
+        // No magic-byte sniffing here: a still-compressed body is detected up front from the response's
+        // Content-Encoding header and either decoded by ResponseDecompression or rejected with an
+        // actionable error naming the codec — instead of being misread as a column count and surfacing
+        // as a bogus type-parse failure.
         var count = reader.Read7BitEncodedInt();
-
-        // Check for GZip marker: 0x1F (31) as column count, followed by 0x8B
-        // This happens when compression is misconfigured
-        if (count == 0x1F && reader.PeekChar() == 0x8B)
-        {
-            throw new InvalidOperationException("ClickHouse server returned compressed data but HttpClient did not decompress it. Ensure HttpClientHandler.AutomaticDecompression is set to DecompressionMethods.All or DecompressionMethods.GZip.");
-        }
 
         var names = new string[count];
         var types = new ClickHouseType[count];
-        var rawTypeNames = captureRawTypeNames ? new string[count] : null;
+        var rawTypeNames = new string[count];
 
         for (var i = 0; i < count; i++)
         {
@@ -499,8 +787,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         for (var i = 0; i < count; i++)
         {
             var chType = reader.ReadString();
-            if (captureRawTypeNames)
-                rawTypeNames[i] = chType;
+            rawTypeNames[i] = chType;
             types[i] = TypeConverter.ParseClickHouseType(chType, settings);
         }
         return (names, types, rawTypeNames);

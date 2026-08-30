@@ -99,38 +99,18 @@ public class QueryOptions
     public TimeSpan? MaxExecutionTime { get; init; }
 
     /// <summary>
-    /// Gets or sets the HTTP <c>Accept-Encoding</c> header value sent with this query's request.
+    /// Gets or sets the HTTP <c>Accept-Encoding</c> header value sent with this query's request,
+    /// overriding both <see cref="ADO.ClickHouseClientSettings.AcceptEncoding"/> and the codecs the
+    /// driver advertises by default (<c>zstd, lz4, gzip, deflate</c>).
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// When non-null and non-empty, this value <b>overrides</b> the default Accept-Encoding
-    /// (<c>gzip, deflate</c>) that the client adds when
-    /// <see cref="ADO.ClickHouseClientSettings.UseCompression"/> is true. The server is asked
-    /// to encode the response body with the negotiated algorithm. Multiple algorithms may be
-    /// quality-weighted per the HTTP spec, e.g. <c>"zstd, gzip;q=0.5"</c>.
-    /// </para>
-    /// <para>
-    /// Setting this property also forces <c>enable_http_compression=1</c> on the URL for the
-    /// request — ClickHouse only honours <c>Accept-Encoding</c> when that setting is on.
-    /// </para>
-    /// <para>
-    /// Note that the underlying <see cref="System.Net.Http.HttpClient"/> may transparently
-    /// decompress some algorithms (gzip/deflate/brotli by default in .NET); the resulting body
-    /// and <see cref="ADO.ClickHouseRawResult.ContentEncoding"/> reflect what the consumer
-    /// actually receives after that step.
-    /// </para>
-    /// <para>
-    /// <b>Warning:</b> selecting a codec the underlying <see cref="System.Net.Http.HttpClient"/>
-    /// cannot decode (e.g. <c>zstd</c>, <c>lz4</c>) is only meaningful with
-    /// <see cref="IClickHouseClient.ExecuteRawResultAsync"/>, where the caller decodes the body
-    /// themselves after inspecting <see cref="ADO.ClickHouseRawResult.ContentEncoding"/>. The
-    /// parsing reader APIs (<c>ExecuteReaderAsync</c>, <c>ExecuteScalarAsync</c>,
-    /// <c>ExecuteNonQueryAsync</c>) will read the still-compressed bytes as if they were the
-    /// ClickHouse wire format and return garbage or throw. To use such a codec end-to-end you
-    /// also need an <see cref="System.Net.Http.HttpClient"/> configured without
-    /// <c>AutomaticDecompression</c>; otherwise the framework strips
-    /// <c>Content-Encoding</c> before the body reaches the driver.
-    /// </para>
+    /// Whichever codec the server answers with is decoded transparently, so this only needs setting to
+    /// steer that choice — <c>"lz4"</c> instead of the advertised default, say, or <c>"identity"</c>
+    /// to opt one query out.
+    /// <c>snappy</c> cannot be decoded and fails with an actionable error; to consume it,
+    /// use <see cref="IClickHouseClient.ExecuteRawResultAsync"/> and decode the body yourself. ClickHouse
+    /// scans the header in its own fixed preference order and ignores q-values, so only a token's presence
+    /// matters, not its position. Setting this also forces <c>enable_http_compression=1</c>.
     /// </remarks>
     public string? AcceptEncoding { get; init; }
 

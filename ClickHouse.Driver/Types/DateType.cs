@@ -10,13 +10,13 @@ internal class DateType : AbstractDateTimeType
 
     public override string ToString() => "Date";
 
-    public override object Read(ExtendedBinaryReader reader) => DateTimeConversions.FromUnixTimeDays(reader.ReadUInt16());
+    protected override DateTime ReadDateTime(ExtendedBinaryReader reader) => DateTimeConversions.FromUnixTimeDays(reader.ReadUInt16());
 
     public override ParameterizedType Parse(SyntaxTreeNode typeName, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings) => throw new NotImplementedException();
 
-    public override void Write(ExtendedBinaryWriter writer, object value)
+    protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T value)
     {
-        var days = CoerceToDateTimeOffset(value).ToUnixTimeDays();
+        var days = dto.ToUnixTimeDays();
         if (days < 0 || days > ushort.MaxValue)
         {
             throw new ArgumentOutOfRangeException(

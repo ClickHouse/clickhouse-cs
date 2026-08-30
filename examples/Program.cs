@@ -162,6 +162,10 @@ class Program
         await PocoSelect.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(ResponseCompression)}");
+        await ResponseCompression.Run();
+        WaitForUser(isInteractive);
+
         // Data Types
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("DATA TYPES");

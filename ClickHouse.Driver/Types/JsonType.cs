@@ -20,13 +20,6 @@ namespace ClickHouse.Driver.Types;
 
 internal class JsonType : ParameterizedType
 {
-    private static readonly string[] JsonSettingNames =
-    [
-        "max_dynamic_paths",
-        "max_dynamic_types",
-        "skip "
-    ];
-
     /// <summary>
     /// Shared DynamicType instance for writing unhinted values.
     /// </summary>
@@ -71,6 +64,16 @@ internal class JsonType : ParameterizedType
     {
         JsonObject root = new();
 
+        // A Map path, or a Dynamic one holding an object, decodes to a JsonObject which is that
+        // path's value — not a container built here to hold deeper paths. The two are the same
+        // type, so the values are tracked by reference. Allocated only where such a path exists,
+        // which a column of plain scalar paths never has.
+        HashSet<object> objectValues = null;
+
+        // When set, an overlap keeps whichever value the row carries last and drops the other,
+        // rather than reporting that neither can be dropped without losing data.
+        var allowDuplicateKeys = TypeSettings.allowDuplicateJsonKeys;
+
         var nfields = reader.Read7BitEncodedInt();
         for (int i = 0; i < nfields; i++)
         {
@@ -78,31 +81,159 @@ internal class JsonType : ParameterizedType
             var name = reader.ReadString();
 
             HintedTypes.TryGetValue(name, out var hintedType);
-            if (ReadJsonNode(reader, hintedType) is not { } jsonNode)
+            var jsonNode = ReadJsonNode(reader, hintedType);
+            if (jsonNode is null && hintedType is null)
             {
+                // A dynamic path only exists in the rows that have a value for it, and the server
+                // omits it from its own JSON rendering when the value is null. A typed path, in
+                // contrast, is declared by the column type and is rendered with an explicit null,
+                // so it must be materialized to keep "absent" distinguishable from "null".
                 continue;
             }
 
             var pathParts = name.Split('.');
+            var depth = 0;
+            var givesWay = false;
             foreach (var part in pathParts.SkipLast1(1))
             {
-                if (current.ContainsKey(part))
+                depth++;
+                var occupant = current[part];
+
+                if (occupant is JsonObject subtree && (allowDuplicateKeys || !IsObjectValue(objectValues, subtree)))
                 {
-                    current = (JsonObject)current[part];
+                    // A container built earlier in this row for an overlapping deeper path, or —
+                    // when duplicate keys are allowed — an object value this path merges into.
+                    current = subtree;
+                }
+                else if (occupant is null || (occupant is JsonObject empty && IsAllNull(empty, out _)))
+                {
+                    // Nothing is there yet, or what is there holds no value — the null of an
+                    // overlapping leaf path, or an empty object value. ClickHouse allows both `a`
+                    // and `a.b` to be declared; the subtree replaces it so the deeper path stays
+                    // readable.
+                    var newCurrent = new JsonObject();
+                    current[part] = newCurrent;
+                    current = newCurrent;
+                }
+                else if (HoldsNoValue(jsonNode))
+                {
+                    // The parent holds a value, but this path holds none — a null, or an empty
+                    // object value — so it gives way instead of colliding with it, the same rule
+                    // the leaf applies to a subtree it lands on. Nothing is lost by dropping it,
+                    // and no container was built for it: a part which reaches this branch has an
+                    // occupant, so it was already there before this path was walked.
+                    givesWay = true;
+                    break;
                 }
                 else
                 {
-                    var newCurrent = new JsonObject();
-                    current.Add(part, newCurrent);
-                    current = newCurrent;
+                    // The parent holds a value of its own, so this row needs both a value and a
+                    // subtree under one key. Nothing can be dropped without losing data.
+                    throw OverlappingPathsException(string.Join(".", pathParts.Take(depth)), name);
                 }
             }
 
-            current[pathParts.Last()] = jsonNode;
+            if (givesWay)
+            {
+                continue;
+            }
+
+            var leaf = pathParts.Last();
+            if (current[leaf] is JsonObject occupied)
+            {
+                // A deeper overlapping path was read first and put its subtree here.
+                if (HoldsNoValue(jsonNode))
+                {
+                    // This path holds no value — a null, or an empty object value — so it must not
+                    // erase the subtree.
+                    continue;
+                }
+
+                if (!allowDuplicateKeys && !IsAllNull(occupied, out var occupiedPath))
+                {
+                    throw OverlappingPathsException(name, $"{name}.{occupiedPath}");
+                }
+
+                // The subtree carries no value either, so this path's value replaces it.
+            }
+
+            if (!allowDuplicateKeys && jsonNode is JsonObject objectValue)
+            {
+                // Mark it as a value so that an overlapping deeper path read later throws instead
+                // of descending into it and merging the two. Only the throw consults this set, so
+                // it stays unallocated when duplicate keys are allowed.
+                (objectValues ??= new HashSet<object>(ObjectReferenceEqualityComparer.Instance)).Add(objectValue);
+            }
+
+            current[leaf] = jsonNode;
         }
 
         return root;
     }
+
+    /// <summary>
+    /// Reports whether the node holds no value — a JSON null, or an object which is empty or
+    /// all-null. Such a path gives way to an overlapping one instead of colliding with it,
+    /// whichever of the two the wire puts first.
+    /// </summary>
+    private static bool HoldsNoValue(JsonNode node) =>
+        node is null || (node is JsonObject value && IsAllNull(value, out _));
+
+    /// <summary>
+    /// Reports whether the object is a path's own value rather than a container built to hold
+    /// deeper paths.
+    /// </summary>
+    private static bool IsObjectValue(HashSet<object> objectValues, JsonObject value) =>
+        objectValues is not null && objectValues.Contains(value);
+
+    /// <summary>
+    /// Reports whether every value the object holds, at any depth, is a JSON null. An empty object
+    /// holds no value, so it counts as all-null. An array counts as a value.
+    /// </summary>
+    /// <param name="valuePath">
+    /// Dotted path of the first value which is not null, relative to <paramref name="value"/>;
+    /// <c>null</c> when the object is all-null.
+    /// </param>
+    private static bool IsAllNull(JsonObject value, out string valuePath)
+    {
+        foreach (var property in value)
+        {
+            if (property.Value is null)
+            {
+                continue;
+            }
+
+            if (property.Value is JsonObject nested)
+            {
+                if (IsAllNull(nested, out var nestedPath))
+                {
+                    continue;
+                }
+
+                valuePath = $"{property.Key}.{nestedPath}";
+                return false;
+            }
+
+            valuePath = property.Key;
+            return false;
+        }
+
+        valuePath = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Builds the error for a row where one path holds a value and is also the parent of another
+    /// path which holds a value. ClickHouse accepts such a column (for example
+    /// <c>JSON(a Int64, a.b Int64)</c>) and renders the row with a duplicate key, which a
+    /// <see cref="JsonObject"/> cannot hold.
+    /// </summary>
+    private static SerializationException OverlappingPathsException(string path, string nestedPath) =>
+        new SerializationException(
+            $"JSON paths '{path}' and '{nestedPath}' overlap and both hold a value in this row. " +
+            $"'{path}' is a value and is also the parent of '{nestedPath}', so the server sends the row with a " +
+            $"duplicate '{path}' key, which a JsonObject cannot hold. " +
+            $"Read this column with JsonReadMode.String to get the server's JSON text unchanged.");
 
     public override ParameterizedType Parse(
         SyntaxTreeNode node,
@@ -110,18 +241,19 @@ internal class JsonType : ParameterizedType
         TypeSettings settings)
     {
         var hintedTypes = node.ChildNodes
-            .Where(childNode => !JsonSettingNames.Any(jsonSettingName => childNode.Value.StartsWith(jsonSettingName, StringComparison.OrdinalIgnoreCase)))
+            .Where(childNode => !IsJsonSetting(childNode.Value))
             .Select(childNode =>
             {
-                var hintParts = childNode.Value.Split(' ');
-                if (hintParts.Length != 2)
+                var separator = childNode.Value.IndexOfNameTypeSeparator();
+                var hintedTypeName = separator > 0 ? childNode.Value.Substring(separator + 1).Trim() : string.Empty;
+                if (separator <= 0 || hintedTypeName.Length == 0)
                 {
                     throw new SerializationException($"Unsupported path in JSON hint: {childNode.Value}");
                 }
 
                 var hintTypeSyntaxTreeNode = new SyntaxTreeNode
                 {
-                    Value = hintParts[1],
+                    Value = hintedTypeName,
                 };
 
                 foreach (var childNodeChildNode in childNode.ChildNodes)
@@ -130,7 +262,7 @@ internal class JsonType : ParameterizedType
                 }
 
                 return (
-                    path: hintParts[0].Trim('`'),
+                    path: childNode.Value.Substring(0, separator).DiscloseColumnName(),
                     type: parseClickHouseType(hintTypeSyntaxTreeNode));
             })
             .ToDictionary(
@@ -143,7 +275,40 @@ internal class JsonType : ParameterizedType
         };
     }
 
+    private static bool IsJsonSetting(string value) =>
+        IsAssignment(value, "max_dynamic_paths")
+        || IsAssignment(value, "max_dynamic_types")
+        || value.StartsWith("skip ", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAssignment(string value, string settingName)
+    {
+        if (!value.StartsWith(settingName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var remainder = value.AsSpan(settingName.Length).TrimStart();
+        return !remainder.IsEmpty && remainder[0] == '=';
+    }
+
     public override string ToString() => Name;
+
+    // Write picks WriteHintedValue vs WriteUnhintedValue per path from HintedTypes, which ToString() does
+    // not render — so the hints, ordered for stability, have to be part of the signature. Without them two
+    // differently hinted JSON columns share one cache entry and values go out against the wrong hints.
+    // A path is an arbitrary identifier — the server escapes it, the client discloses it back — so it can
+    // hold whatever character a separator uses, and is length-prefixed to keep the signature injective.
+    internal override string CacheSignature
+    {
+        get
+        {
+            if (HintedTypes.Count == 0)
+                return Name;
+
+            var builder = new StringBuilder(Name).Append('(');
+            foreach (var hint in HintedTypes.OrderBy(hint => hint.Key, StringComparer.Ordinal))
+                builder.AppendLengthPrefixed(hint.Key).AppendLengthPrefixed(hint.Value.CacheSignature);
+            return builder.Append(')').ToString();
+        }
+    }
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
@@ -177,7 +342,7 @@ internal class JsonType : ParameterizedType
 
         writer.Write7BitEncodedInt(fieldCount);
         tempStream.Position = 0;
-        tempStream.CopyTo(writer.BaseStream);
+        tempStream.CopyTo(writer.RawStream);
     }
 
     /// <summary>
@@ -336,19 +501,38 @@ internal class JsonType : ParameterizedType
         var obj = new JsonObject();
         for (int i = 0; i < count; i++)
         {
-            var key = (string)mapType.KeyType.Read(reader);
+            var key = DecodeString(mapType.KeyType.Read(reader));
             var value = ReadJsonNode(reader, mapType.ValueType);
             obj[key] = value;
         }
         return obj;
     }
 
-    private static JsonValue ReadJsonFixedString(ExtendedBinaryReader reader, ClickHouseType type)
+    /// <summary>
+    /// Decodes a String or FixedString value into text. Under <c>ReadStringsAsByteArrays</c> those
+    /// types read as a <see cref="byte"/> array, but JSON strings are text and <see cref="JsonValue"/>
+    /// has no byte-array form, so they are decoded either way. Lenient: invalid bytes become U+FFFD.
+    /// </summary>
+    private static string DecodeString(object value)
+        => value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : (string)value;
+
+    /// <summary>
+    /// Whether values of this type are text rather than raw bytes. Decided from the ClickHouse type,
+    /// not the CLR type: <c>Array(UInt8)</c> also reads as a <see cref="byte"/> array, so decoding on
+    /// <c>byte[]</c> alone would corrupt it. <c>Variant</c>/<c>Dynamic</c> are false because their
+    /// subtype is only known per value.
+    /// </summary>
+    private static bool IsTextBacked(ClickHouseType type) => type switch
     {
-        var value = type.Read(reader);
-        var str = value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : (string)value;
-        return JsonValue.Create(str);
-    }
+        StringType or FixedStringType => true,
+        LowCardinalityType lc => IsTextBacked(lc.UnderlyingType),
+        NullableType nt => IsTextBacked(nt.UnderlyingType),
+        SimpleAggregateFunctionType sa => IsTextBacked(sa.UnderlyingType),
+        _ => false,
+    };
+
+    private static JsonValue ReadJsonFixedString(ExtendedBinaryReader reader, ClickHouseType type)
+        => JsonValue.Create(DecodeString(type.Read(reader)));
 
     private static JsonNode ReadJsonValue(ExtendedBinaryReader reader, ClickHouseType type)
     {
@@ -363,6 +547,10 @@ internal class JsonType : ParameterizedType
             null => null,
             JsonObject jo => jo,
             string s => JsonValue.Create(s),
+
+            // Without this arm a byte[] from a string path falls through to the JsonSerializer
+            // default below, which renders it as base64.
+            byte[] bytes when IsTextBacked(type) => JsonValue.Create(DecodeString(bytes)),
             bool b => JsonValue.Create(b),
             byte by => JsonValue.Create(by),
             sbyte sb => JsonValue.Create(sb),
