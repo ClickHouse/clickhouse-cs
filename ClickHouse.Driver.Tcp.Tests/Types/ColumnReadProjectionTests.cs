@@ -962,6 +962,38 @@ public class ColumnReadProjectionTests
         });
     }
 
+    /// <summary>
+    /// The memo keeps one entry, keyed on the source column by reference: a consumer reading one column through
+    /// several calls reuses the view, and another column replaces it. Held to one entry because the consumer is a
+    /// compiled scatter, shared and long-lived, so a growing cache there would retain past blocks.
+    /// </summary>
+    [Test]
+    public void ProjectedViewCache_SameColumnThenAnother_ReusesTheViewThenRebuildsIt()
+    {
+        int built = 0;
+        var cache = new ProjectedViewCache(source =>
+        {
+            built++;
+            return new ProjectedReadColumn<string>(source, static (column, row) => column.Name);
+        });
+
+        using var first = new ArrayColumn<string>("a", "String", new[] { "1" });
+        using var second = new ArrayColumn<string>("b", "String", new[] { "2" });
+
+        IColumn firstView = cache.For(first);
+        IColumn firstAgain = cache.For(first);
+        IColumn secondView = cache.For(second);
+        IColumn firstAfterEviction = cache.For(first);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstAgain, Is.SameAs(firstView), "the same column reads through the same view");
+            Assert.That(secondView, Is.Not.SameAs(firstView));
+            Assert.That(firstAfterEviction, Is.Not.SameAs(firstView), "one entry, so the other column replaced it");
+            Assert.That(built, Is.EqualTo(3));
+        });
+    }
+
     /// <summary>Asks a codec for the reading it takes over the whole column rather than over one decoded value.</summary>
     private static bool OffersColumnRead(IColumnCodec codec, Type targetType)
         => codec.TryProjectColumnRead(targetType, out _);
