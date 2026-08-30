@@ -3,10 +3,12 @@ using System;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// A read-side view that converts each value of another column on access — what
-/// <see cref="Block.ReadAs{T}(string)"/> returns when the requested type is not the column's own. The source
-/// column is borrowed and stays the block's to dispose; this view owns nothing but the array
-/// <see cref="Values"/> materializes.
+/// A read-side view that converts each row of another column on access — what
+/// <see cref="Block.ReadAs{T}(string)"/> returns when the requested type is not the column's own, and the shape
+/// every projection takes: a codec whose reading is elementwise compiles its per-value conversion into the read
+/// delegate, while a composite or a <c>LowCardinality</c> projects its child column once and then addresses it
+/// here per row. The source column is borrowed and stays the block's to dispose; this view owns nothing but the
+/// array <see cref="Values"/> materializes.
 /// </summary>
 /// <typeparam name="T">The projected element type.</typeparam>
 internal sealed class ProjectedReadColumn<T> : IColumn<T>

@@ -1,8 +1,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Linq.Expressions;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -20,8 +18,10 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     /// <summary>The shared, stateless instance.</summary>
     public static readonly StringColumnCodec Instance = new();
 
-    private static readonly MethodInfo RowBytesMethod =
-        typeof(StringColumnCodec).GetMethod(nameof(RowBytes), BindingFlags.Public | BindingFlags.Static);
+    private static readonly Func<IColumn, int, byte[]> ReadRowBytes = RowBytes;
+
+    private static readonly ColumnReadProjection ProjectBytes =
+        static source => new ProjectedReadColumn<byte[]>(source, ReadRowBytes);
 
     // A modest starting guess for the blob (16 bytes/row), clamped, that grows on demand as rows are read.
     private const int MinInitialBlobBytes = 256;
@@ -76,12 +76,10 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     /// The bytes are read off the column, not projected from its text: the text reading spells a byte UTF-8 cannot
     /// express as U+FFFD, so re-encoding it would hand back the replacement character rather than the data.
     /// </summary>
-    public bool TryProjectColumnRead(Expression column, Expression row, Type targetType, out Expression projected)
+    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
-        projected = targetType == typeof(byte[])
-            ? Expression.Call(RowBytesMethod, column, row)
-            : null;
-        return projected is not null;
+        projection = targetType == typeof(byte[]) ? ProjectBytes : null;
+        return projection is not null;
     }
 
     /// <summary>One row's bytes, copied out of the column's blob into an array the caller owns.</summary>

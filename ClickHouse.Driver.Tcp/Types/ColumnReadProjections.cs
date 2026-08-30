@@ -1,36 +1,33 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq.Expressions;
-using System.Reflection;
 using ClickHouse.Driver.Tcp.Poco;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// Compiles and caches the per-row readers behind <see cref="Block.ReadAs{T}(string)"/>: the codec decides which
-/// readings a type offers (<see cref="IColumnCodec.TryProjectColumnRead"/> off the column's storage, then
-/// <see cref="IColumnCodec.TryProjectRead"/> off its decoded value), and this turns the expression it hands back
-/// into a delegate over the decoded column.
+/// Resolves and caches the projections behind <see cref="Block.ReadAs{T}(string)"/>. The reading itself is
+/// <see cref="ColumnProjection.For"/>'s answer; this only remembers it, so a type is resolved once rather than
+/// once per block.
 ///
 /// <para>
 /// One entry per column type, resolution context and target type. The key is the type string rather than the codec
 /// instance because a parameterized type (<c>Enum8(...)</c>, <c>DateTime64(3)</c>, anything composing them) builds
-/// a fresh codec per block, so a cache keyed on the instance would compile again for every block. The context is
+/// a fresh codec per block, so a cache keyed on the instance would resolve again for every block. The context is
 /// part of the key for the same reason it is part of a codec's identity: a timezone-less <c>DateTime</c> resolves
-/// its offset from the session timezone, which is baked into the compiled reader.
+/// its offset from the session timezone, which is baked into the projection.
 /// </para>
 /// </summary>
 internal sealed class ColumnReadProjections
 {
-    // Distinguishes "no reading offered" from "not compiled yet", so a refused target is not recompiled per call.
+    // Distinguishes "no reading offered" from "not resolved yet", so a refused target is not re-resolved per call.
     private static readonly object NoReading = new();
 
     // A ceiling on the cache, which lives as long as the registry. The key includes the session timezone, so an
     // application setting one per request over many types could otherwise accumulate compiled delegates without
-    // bound. Past the ceiling a reader is compiled per call: slower, and still correct.
+    // bound. Past the ceiling a projection is resolved per call: slower, and still correct.
     //
-    // Approximate, not exact: the count is read and the entry added as two steps, so first-time compilations
+    // Approximate, not exact: the count is read and the entry added as two steps, so first-time resolutions
     // racing each other at the ceiling can each see room and all insert, overshooting by however many raced. A
     // lock would make it exact at the cost of contention on a path that runs once per type; the point here is to
     // bound growth, and an overshoot of a few entries does not affect that.
@@ -63,58 +60,32 @@ internal sealed class ColumnReadProjections
                 $"Column '{column.Name}' carries no ClickHouse type (it was built by a caller, not decoded), so it offers no reading other than {column.ElementType}.");
         }
 
-        Func<IColumn, int, T> read = Reader<T>(column.TypeName, in context);
-        if (read is null)
+        ColumnReadProjection projection = Projection(column.TypeName, typeof(T), in context);
+        if (projection is null)
         {
             throw NoSuchReading<T>(column, in context);
         }
 
-        return new ProjectedReadColumn<T>(column, read);
+        return (IColumn<T>)projection(column);
     }
 
-    private Func<IColumn, int, T> Reader<T>(string typeName, in ResolveContext context)
+    private ColumnReadProjection Projection(string typeName, Type target, in ResolveContext context)
     {
-        var key = (typeName, PocoBlockSignature.ContextKey(in context), typeof(T));
+        var key = (typeName, PocoBlockSignature.ContextKey(in context), target);
         if (readers.TryGetValue(key, out object cached))
         {
-            return cached == NoReading ? null : (Func<IColumn, int, T>)cached;
+            return cached == NoReading ? null : (ColumnReadProjection)cached;
         }
 
         // Not GetOrAdd: the factory would have to capture the context by value anyway, and a lost race just
-        // compiles an equivalent delegate that is then dropped.
-        Func<IColumn, int, T> read = Compile<T>(registry.Resolve(typeName, in context));
+        // resolves an equivalent projection that is then dropped.
+        ColumnReadProjection projection = ColumnProjection.For(registry.Resolve(typeName, in context), target);
         if (readers.Count < MaxCachedReaders)
         {
-            readers[key] = read ?? NoReading;
+            readers[key] = projection ?? NoReading;
         }
 
-        return read;
-    }
-
-    /// <summary>
-    /// Builds <c>(column, row) => project(((IColumn&lt;source&gt;)column)[row])</c>, or the codec's own reading off
-    /// the column where it offers one, or null when it offers neither.
-    /// </summary>
-    private static Func<IColumn, int, T> Compile<T>(IColumnCodec codec)
-    {
-        ParameterExpression column = Expression.Parameter(typeof(IColumn), "column");
-        ParameterExpression row = Expression.Parameter(typeof(int), "row");
-
-        // The storage reading is asked for first: it exists precisely where the canonical value has already lost
-        // what the caller wants, so projecting from that value would answer with damaged data instead of failing.
-        if (codec.TryProjectColumnRead(column, row, typeof(T), out Expression fromStorage))
-        {
-            return Expression.Lambda<Func<IColumn, int, T>>(fromStorage, column, row).Compile();
-        }
-
-        Type typedColumn = typeof(IColumn<>).MakeGenericType(codec.ElementType);
-        PropertyInfo indexer = typedColumn.GetProperty("Item")
-            ?? throw new InvalidOperationException($"{typedColumn} has no indexer; the {nameof(ColumnReadProjections)} reader cannot be built.");
-
-        Expression value = Expression.MakeIndex(Expression.Convert(column, typedColumn), indexer, new Expression[] { row });
-        return codec.TryProjectRead(value, typeof(T), out Expression projected)
-            ? Expression.Lambda<Func<IColumn, int, T>>(projected, column, row).Compile()
-            : null;
+        return projection;
     }
 
     private InvalidCastException NoSuchReading<T>(IColumn column, in ResolveContext context)

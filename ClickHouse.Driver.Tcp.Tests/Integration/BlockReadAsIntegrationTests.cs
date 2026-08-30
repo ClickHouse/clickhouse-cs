@@ -314,9 +314,8 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// The text reading composes through <c>LowCardinality</c>, which a <c>String</c>'s byte reading does not: this
-    /// one projects from a value, so every wrapper forwards it. Read through both accessors, since one converts a
-    /// row at a time and the other materializes the whole column.
+    /// The text reading composes through <c>LowCardinality</c>, where it is taken once per dictionary entry. Read
+    /// through both accessors, since one converts a row at a time and the other materializes the whole column.
     /// </summary>
     [Test]
     public async Task ReadAs_LowCardinalityFixedStringColumn_ReadsEveryRowAsText()
@@ -341,6 +340,159 @@ public class BlockReadAsIntegrationTests
         }
 
         var expected = new[] { "alph", "beta", "alph", "beta", "alph", "beta" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(perRow, Is.EqualTo(expected), "read a row at a time through the indexer");
+            Assert.That(materialized, Is.EqualTo(expected), "Values converts the column once, and must agree");
+        });
+    }
+
+    /// <summary>
+    /// A <c>String</c>'s bytes are read off the column, and an <c>Array</c> forwards that to its element column, so
+    /// each row is the projected elements resliced. The bytes matter here rather than the shape: a byte UTF-8
+    /// cannot spell survives, which a reading rebuilt from the decoded text could not manage.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_ArrayOfString_ReadsEveryRowsElementsAsBytes()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        byte[][][] rows = null;
+
+        await foreach (Block block in client.StreamAsync(
+            @"SELECT if(number = 0, [unhex('41FF'), 'b'], CAST([] AS Array(String))) AS v
+              FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            rows = block.ReadAs<byte[][]>("v").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows[0][0], Is.EqualTo(new byte[] { 0x41, 0xFF }), "0xFF has no UTF-8 spelling and must survive");
+            Assert.That(rows[0][1], Is.EqualTo(new byte[] { (byte)'b' }));
+            Assert.That(rows[1], Is.Empty, "an empty row projects to an empty array");
+        });
+    }
+
+    /// <summary>
+    /// A <c>Map</c> forwards the byte reading to whichever of its two entry columns holds a <c>String</c>, and pairs
+    /// the projected columns per row. Here only the value side converts; the keys read as their own type.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_MapWithStringValues_ReadsThoseValuesAsBytes()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        KeyValuePair<string, byte[]>[][] rows = null;
+
+        await foreach (Block block in client.StreamAsync(
+            @"SELECT if(number = 0, map('k', unhex('41FF')), CAST(map() AS Map(String, String))) AS v
+              FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            rows = block.ReadAs<KeyValuePair<string, byte[]>[]>("v").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows[0].Single().Key, Is.EqualTo("k"));
+            Assert.That(rows[0].Single().Value, Is.EqualTo(new byte[] { 0x41, 0xFF }));
+            Assert.That(rows[1], Is.Empty, "an empty row projects to an empty pair array");
+        });
+    }
+
+    /// <summary>
+    /// A <c>Tuple</c> forwards the byte reading to the child holding the <c>String</c> and rebuilds the tuple per
+    /// row, so one field converts while the others read as their own types.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_TupleWithAStringField_ReadsThatFieldAsBytes()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        (byte Ordinal, byte[] Bytes)[] rows = null;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT tuple(toUInt8(number), unhex('41FF')) AS v FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            rows = block.ReadAs<(byte, byte[])>("v").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows.Select(row => row.Ordinal), Is.EqualTo(new byte[] { 0, 1 }));
+            Assert.That(rows[0].Bytes, Is.EqualTo(new byte[] { 0x41, 0xFF }));
+            Assert.That(rows[1].Bytes, Is.EqualTo(new byte[] { 0x41, 0xFF }));
+        });
+    }
+
+    /// <summary>
+    /// A <c>LowCardinality</c> row is a dictionary slot, so the reading is taken once per distinct value and the
+    /// rows holding that key share it. Asserted by identity, which is the observable form of "converted once" — and
+    /// the same sharing the column's own reading already has for a reference type.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_LowCardinalityString_SharesOneByteArrayPerDictionaryEntry()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        byte[][] rows = null;
+
+        await foreach (Block block in client.StreamAsync(
+            @"SELECT CAST([unhex('41FF'), 'bb'][1 + number % 2] AS LowCardinality(String)) AS v
+              FROM system.numbers LIMIT 4",
+            cancellationToken: None))
+        {
+            rows = block.ReadAs<byte[]>("v").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows[0], Is.EqualTo(new byte[] { 0x41, 0xFF }));
+            Assert.That(rows[1], Is.EqualTo(new byte[] { (byte)'b', (byte)'b' }));
+            Assert.That(ReferenceEquals(rows[0], rows[2]), Is.True, "both rows hold the same dictionary entry");
+            Assert.That(ReferenceEquals(rows[1], rows[3]), Is.True);
+        });
+    }
+
+    /// <summary>
+    /// The nullable low-cardinality shape keeps its NULL in the reserved dictionary slot, so a projected reading has
+    /// to leave the rows pointing at it null instead of converting whatever placeholder the slot holds.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_NullableLowCardinalityString_ReadsTheBytesAndKeepsTheNullRowsNull()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        byte[][] materialized = null;
+        var perRow = new byte[6][];
+
+        await foreach (Block block in client.StreamAsync(
+            @"SELECT CAST(if(number % 3 = 2, NULL, [unhex('41FF'), 'bb'][1 + number % 2]) AS LowCardinality(Nullable(String))) AS v
+              FROM system.numbers LIMIT 6",
+            cancellationToken: None))
+        {
+            IColumn<byte[]> read = block.ReadAs<byte[]>("v");
+            for (int row = 0; row < block.RowCount; row++)
+            {
+                perRow[row] = read[row];
+            }
+
+            materialized = read.Values.ToArray();
+        }
+
+        var expected = new[]
+        {
+            new byte[] { 0x41, 0xFF },
+            new byte[] { (byte)'b', (byte)'b' },
+            null,
+            new byte[] { (byte)'b', (byte)'b' },
+            new byte[] { 0x41, 0xFF },
+            null,
+        };
 
         Assert.Multiple(() =>
         {

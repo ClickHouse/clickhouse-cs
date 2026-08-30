@@ -183,10 +183,12 @@ public sealed class Block : IDisposable
     /// </para>
     ///
     /// <para>
-    /// A reading is taken from whichever of the column's two forms can express it. Most come from the decoded
-    /// value, but a <c>String</c>'s bytes come off the column's storage, because the decoded value is text and
-    /// text cannot spell a byte string: see <see cref="IStringColumn"/>, which is the same bytes borrowed rather
-    /// than copied per row.
+    /// A reading a single value cannot express is taken over the column instead, and a composite forwards that to
+    /// the child column holding it, so it composes: a <c>String</c>'s bytes reach a <c>byte[]</c>, an
+    /// <c>Array(String)</c> a <c>byte[][]</c> per row, a <c>LowCardinality(String)</c> one array per dictionary
+    /// entry. A converted reference value taken from a dictionary is shared by every row holding that key, as it
+    /// is when the column is read as its own type, so treat it as read-only. The zero-copy alternative is to reach
+    /// the same storage yourself through <see cref="IStringColumn"/> and the columnar views.
     /// </para>
     /// </summary>
     /// <typeparam name="T">The CLR type to read the values as.</typeparam>

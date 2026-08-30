@@ -155,23 +155,14 @@ public class ColumnReadProjectionTests
 
                 foreach (Type target in readable)
                 {
-                    ParameterExpression source = Expression.Parameter(codec.ElementType, "v");
-                    Expression projected = null;
-                    bool offered = false;
                     try
                     {
-                        // Either form counts: a reading the canonical value cannot express is taken off the
-                        // column's storage instead, and String's bytes are advertised through that one.
-                        offered = TryProjectStorageRead(codec, target, out projected)
-                            || codec.TryProjectRead(source, target, out projected);
+                        AssertOffers(codec, target, type);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not AssertionException)
                     {
                         Assert.Fail($"{type} advertises {target} but threw projecting it: {ex.Message}");
                     }
-
-                    Assert.That(offered, Is.True, $"{type} advertises {target} but does not project it");
-                    Assert.That(projected?.Type, Is.EqualTo(target), $"{type} projected {target} as {projected?.Type}");
                 }
             }
         });
@@ -420,9 +411,25 @@ public class ColumnReadProjectionTests
     [Test]
     public void ReadableElementTypes_LowCardinalityOfNonProjectingInner_IsJustTheInnerType()
     {
+        IColumnCodec codec = Codec("LowCardinality(UInt32)");
+
+        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(uint) }));
+    }
+
+    /// <summary>
+    /// An inner reading taken over the inner column rather than over its values is forwarded like any other, so a
+    /// <c>LowCardinality(String)</c> reads as a <c>byte[]</c> — one conversion per dictionary entry.
+    /// </summary>
+    [Test]
+    public void ReadableElementTypes_LowCardinalityOfString_OffersTheBytesToo()
+    {
         IColumnCodec codec = Codec("LowCardinality(String)");
 
-        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(string) }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
+            Assert.That(OffersColumnRead(codec, typeof(byte[])), Is.True);
+        });
     }
 
     /// <summary>
@@ -471,12 +478,7 @@ public class ColumnReadProjectionTests
                 IColumnCodec codec = Codec(type);
                 foreach (Type target in codec.ReadableElementTypes)
                 {
-                    ParameterExpression source = Expression.Parameter(codec.ElementType, "v");
-                    Assert.That(
-                        TryProjectStorageRead(codec, target, out Expression projected) || codec.TryProjectRead(source, target, out projected),
-                        Is.True,
-                        $"{type} advertises {target} but does not project it");
-                    Assert.That(projected.Type, Is.EqualTo(target), $"{type} projected {target} as {projected.Type}");
+                    AssertOffers(codec, target, type);
                 }
             }
         });
@@ -821,24 +823,123 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// A byte reading has to come off the column's storage, so a composite offers it only where it forwards the
-    /// question to the child holding those bytes. <c>Nullable</c> does; the others reach their child's storage
-    /// through the columnar views instead, and say no here rather than projecting from the damaged text.
+    /// A byte reading has to come off the column, and every wrapper forwards it to the child holding those bytes,
+    /// so it composes wherever a <c>String</c> can appear. The refusals are the ones that should stay refusals: the
+    /// text, which the decoded value expresses itself, and a shape the inner does not have.
     /// </summary>
     [Test]
-    public void TryProjectColumnRead_CompositesOtherThanNullable_OfferNoByteReading()
+    public void TryProjectColumnRead_EveryCompositeOverAString_OffersTheByteReading()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(OffersStorageRead(Codec("String"), typeof(byte[])), Is.True);
-            Assert.That(OffersStorageRead(Codec("Nullable(String)"), typeof(byte[])), Is.True);
+            Assert.That(OffersColumnRead(Codec("String"), typeof(byte[])), Is.True);
+            Assert.That(OffersColumnRead(Codec("Nullable(String)"), typeof(byte[])), Is.True);
+            Assert.That(OffersColumnRead(Codec("LowCardinality(String)"), typeof(byte[])), Is.True);
+            Assert.That(OffersColumnRead(Codec("LowCardinality(Nullable(String))"), typeof(byte[])), Is.True);
+            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(byte[][])), Is.True);
+            Assert.That(OffersColumnRead(Codec("Array(Array(String))"), typeof(byte[][][])), Is.True);
+            Assert.That(OffersColumnRead(Codec("Map(String, String)"), typeof(KeyValuePair<byte[], byte[]>[])), Is.True);
+            Assert.That(OffersColumnRead(Codec("Map(UInt8, String)"), typeof(KeyValuePair<byte, byte[]>[])), Is.True);
+            Assert.That(OffersColumnRead(Codec("Tuple(String)"), typeof(ValueTuple<byte[]>)), Is.True);
+            Assert.That(OffersColumnRead(Codec("Tuple(UInt8, String)"), typeof((byte, byte[]))), Is.True);
 
-            Assert.That(OffersStorageRead(Codec("String"), typeof(string)), Is.False, "the text is the canonical value's own reading");
-            Assert.That(OffersStorageRead(Codec("Array(String)"), typeof(byte[][])), Is.False);
-            Assert.That(OffersStorageRead(Codec("Map(String, String)"), typeof(KeyValuePair<byte[], byte[]>[])), Is.False);
-            Assert.That(OffersStorageRead(Codec("LowCardinality(String)"), typeof(byte[])), Is.False);
-            Assert.That(OffersStorageRead(Codec("Tuple(String)"), typeof(byte[])), Is.False);
-            Assert.That(OffersStorageRead(Codec("Nullable(String)"), typeof(byte[][])), Is.False, "the inner has no such reading to forward");
+            Assert.That(OffersColumnRead(Codec("String"), typeof(string)), Is.False, "the text is the canonical value's own reading");
+            Assert.That(OffersColumnRead(Codec("Nullable(String)"), typeof(byte[][])), Is.False, "the inner has no such reading to forward");
+            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(byte[])), Is.False, "a row of an array reads as an array");
+        });
+    }
+
+    /// <summary>
+    /// The reading is refused when the target does not have the composite's own row shape, and when it is the type
+    /// the column decodes to, which needs no projection at all.
+    /// </summary>
+    [Test]
+    public void TryProjectColumnRead_TargetOfTheWrongRowShapeOrTheElementTypeItself_IsRefused()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(string)), Is.False, "not an array at all");
+            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(string[])), Is.False, "the element type itself");
+            Assert.That(OffersColumnRead(Codec("Map(String, String)"), typeof(string)), Is.False, "not a pair array");
+            Assert.That(OffersColumnRead(Codec("Map(String, String)"), typeof(KeyValuePair<string, string>[])), Is.False, "the element type itself");
+            Assert.That(OffersColumnRead(Codec("Tuple(UInt8, String)"), typeof(string)), Is.False, "not a tuple");
+            Assert.That(OffersColumnRead(Codec("Tuple(UInt8, String)"), typeof((byte, string))), Is.False, "the element type itself");
+            Assert.That(OffersColumnRead(Codec("Nullable(String)"), typeof(string)), Is.False, "the element type itself");
+            Assert.That(OffersColumnRead(Codec("LowCardinality(String)"), typeof(string)), Is.False, "the element type itself");
+        });
+    }
+
+    /// <summary>
+    /// A composite needs every child to offer its part of the target, not only the one that pulled it onto the
+    /// column-level form, so one child with no such reading refuses the whole thing.
+    /// </summary>
+    [Test]
+    public void TryProjectColumnRead_OneChildWithNoSuchReading_RefusesTheWholeComposite()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(OffersColumnRead(Codec("Tuple(UInt8, String)"), typeof((long, byte[]))), Is.False, "a UInt8 does not widen");
+            Assert.That(OffersColumnRead(Codec("Map(UInt8, String)"), typeof(KeyValuePair<long, byte[]>[])), Is.False);
+            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(Guid[])), Is.False);
+            Assert.That(OffersColumnRead(Codec("LowCardinality(String)"), typeof(Guid)), Is.False);
+        });
+    }
+
+    /// <summary>
+    /// A projection reaches a composite's children through its columnar surface, and a column a caller built and
+    /// labelled with that type need not have one. Named by surface rather than left to a bare cast failure, and
+    /// said when the view is built rather than at whichever row is read first.
+    /// </summary>
+    [Test]
+    public void ReadAs_CompositeColumnWithoutItsColumnarSurface_SaysWhichSurfaceItLacks()
+    {
+        Assert.Multiple(() =>
+        {
+            AssertLacksSurface<byte[][]>("Array(String)", "IArrayColumn");
+            AssertLacksSurface<KeyValuePair<string, byte[]>[]>("Map(String, String)", "IMapColumn");
+            AssertLacksSurface<ValueTuple<byte[]>>("Tuple(String)", "ITupleColumn");
+            AssertLacksSurface<byte[]>("LowCardinality(String)", "ILowCardinalityColumn");
+        });
+    }
+
+    /// <summary>
+    /// A composite leaves a reading its children express one value at a time to <see cref="IColumnCodec.TryProjectRead"/>,
+    /// which builds the row without projecting a child column first. Only the children that need the column-level
+    /// form pull the whole composite onto it.
+    /// </summary>
+    [Test]
+    public void TryProjectColumnRead_CompositeOfElementwiseChildrenOnly_LeavesItToTheValueProjection()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(OffersColumnRead(Codec("Array(DateTime('UTC'))"), typeof(DateTime[])), Is.False);
+            Assert.That(OffersColumnRead(Codec("Tuple(DateTime('UTC'), Time)"), typeof((DateTime, TimeSpan))), Is.False);
+            Assert.That(OffersColumnRead(Codec("Map(String, DateTime('UTC'))"), typeof(KeyValuePair<string, DateTime>[])), Is.False);
+            Assert.That(OffersColumnRead(Codec("Nullable(DateTime('UTC'))"), typeof(DateTime?)), Is.False);
+
+            // Still readable, through the elementwise path.
+            Assert.That(ClickHouseTcpTypes.CanRead("Array(DateTime('UTC'))", typeof(DateTime[])), Is.True);
+            Assert.That(ClickHouseTcpTypes.CanRead("Nullable(DateTime('UTC'))", typeof(DateTime?)), Is.True);
+        });
+    }
+
+    /// <summary>
+    /// <c>LowCardinality</c> is the exception: converting per dictionary entry rather than per row is the point of
+    /// the type, so it takes the column-level form even for an inner reading that is elementwise.
+    /// </summary>
+    [Test]
+    public void TryProjectColumnRead_LowCardinalityOfElementwiseInner_StillTakesTheColumnForm()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(OffersColumnRead(Codec("LowCardinality(DateTime('UTC'))"), typeof(DateTime)), Is.True);
+            Assert.That(OffersColumnRead(Codec("LowCardinality(Nullable(DateTime('UTC')))"), typeof(DateTime?)), Is.True);
+            Assert.That(OffersColumnRead(Codec("LowCardinality(FixedString(4))"), typeof(string)), Is.True);
+
+            Assert.That(
+                OffersColumnRead(Codec("LowCardinality(Nullable(DateTime('UTC')))"), typeof(DateTime)),
+                Is.False,
+                "a bare value-typed target has nowhere to put a NULL row");
         });
     }
 
@@ -854,26 +955,43 @@ public class ColumnReadProjectionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(OffersStorageRead(json, typeof(byte[])), Is.False);
+            Assert.That(OffersColumnRead(json, typeof(byte[])), Is.False);
             Assert.That(json.ReadableElementTypes, Is.EqualTo(new[] { typeof(string) }));
             Assert.That(ClickHouseTcpTypes.CanRead("JSON", typeof(byte[])), Is.False);
             Assert.That(ClickHouseTcpTypes.CanRead("String", typeof(byte[])), Is.True);
         });
     }
 
-    /// <summary>Asks a codec for the reading it takes off a column's storage rather than off its decoded value.</summary>
-    private static bool TryProjectStorageRead(IColumnCodec codec, Type targetType, out Expression projected)
-        => codec.TryProjectColumnRead(
-            Expression.Parameter(typeof(IColumn), "column"),
-            Expression.Parameter(typeof(int), "row"),
-            targetType,
-            out projected);
+    /// <summary>Asks a codec for the reading it takes over the whole column rather than over one decoded value.</summary>
+    private static bool OffersColumnRead(IColumnCodec codec, Type targetType)
+        => codec.TryProjectColumnRead(targetType, out _);
 
-    private static bool OffersStorageRead(IColumnCodec codec, Type targetType)
-        => TryProjectStorageRead(codec, targetType, out _);
+    /// <summary>
+    /// Asserts a codec really offers an advertised reading, and — where that reading is elementwise — that its
+    /// expression has exactly the advertised type. A column-level reading is typed by the view it produces, which
+    /// <see cref="ReadAs{T}"/> casts, so the integration cases pin that end.
+    /// </summary>
+    private static void AssertOffers(IColumnCodec codec, Type target, string type)
+    {
+        Assert.That(ColumnProjection.Offers(codec, target), Is.True, $"{type} advertises {target} but does not project it");
+
+        if (codec.TryProjectRead(Expression.Parameter(codec.ElementType, "v"), target, out Expression projected))
+        {
+            Assert.That(projected.Type, Is.EqualTo(target), $"{type} projected {target} as {projected.Type}");
+        }
+    }
 
     private static IColumn<T> ReadAs<T>(IColumn column)
         => ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, new ResolveContext { ServerTimezone = "UTC" });
+
+    private static void AssertLacksSurface<T>(string type, string surface)
+    {
+        using var mislabelled = new ArrayColumn<string>("c", type, new[] { "a" });
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => ReadAs<T>(mislabelled));
+
+        Assert.That(thrown.Message, Does.Contain($"Column 'c' ({type})").And.Contain(surface));
+    }
 
     private sealed class EvaluationCounter
     {

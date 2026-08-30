@@ -16,10 +16,10 @@ namespace ClickHouse.Driver.Tcp.Types;
 ///
 /// <para>
 /// The UTF-8 text of those bytes is a reading of the type as well, so <c>Block.ReadAs&lt;string&gt;</c> and a POCO
-/// property typed <see cref="string"/> reach it, and every wrapper composes it (<c>Nullable</c>,
-/// <c>Array</c>, <c>Map</c>, <c>LowCardinality</c>) because it projects from a value rather than from this
-/// column's storage. It is <see cref="GetString(int, Encoding)"/> under UTF-8: all <c>N</c> bytes, padding
-/// included, since trimming would be a guess about a value that may legitimately end in a zero.
+/// property typed <see cref="string"/> reach it, and every wrapper composes it (<c>Nullable</c>, <c>Array</c>,
+/// <c>Map</c>, <c>Tuple</c>, <c>LowCardinality</c>). It is <see cref="GetString(int, Encoding)"/> under UTF-8: all
+/// <c>N</c> bytes, padding included, since trimming would be a guess about a value that may legitimately end in a
+/// zero.
 /// </para>
 ///
 /// <para>
