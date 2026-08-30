@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using ClickHouse.Driver.Tcp;
@@ -13,6 +14,19 @@ namespace ClickHouse.Driver.Benchmark;
 /// Two pairs are directly comparable: the <c>object[]</c> rows, and the POCO rows. The columnar arm
 /// is the native protocol's own shape, which HTTP has no counterpart for; it is here because it is
 /// what a caller who can group data by column should reach for.
+/// </para>
+/// <para>
+/// Every arm sets <c>async_insert = 0</c>. A server with async inserts on buffers any insert that
+/// carries a client data block and, with <c>wait_for_async_insert</c>, holds the response until the
+/// buffer flushes — the adaptive wait starts at <c>async_insert_busy_timeout_min_ms</c>, 50 ms by
+/// default. Measured on 26.6.1.1193, that is 55 ms per HTTP insert against 1.9 ms with the setting
+/// off, and it lands on the two transports unequally. Leaving it on measures the server's buffering
+/// policy rather than the client.
+/// </para>
+/// <para>
+/// Each arm also sends its rows in one request: <c>InsertOptions.BatchSize</c> defaults to 100,000,
+/// so a 500k-row HTTP insert would otherwise pay whatever per-request cost the server charges five
+/// times over. <see cref="HttpRowsDefaultBatching"/> keeps the default for comparison.
 /// </para>
 /// <para>
 /// The target is an <c>ENGINE Null</c> table, so the server discards the rows and the measurement
@@ -31,6 +45,9 @@ public class TransportInsert
 
     private static readonly string[] ColumnNames = { "Id", "City", "Temperature" };
 
+    private static readonly IReadOnlyDictionary<string, string> TcpSettings =
+        new Dictionary<string, string> { ["async_insert"] = "0" };
+
     private ClickHouseClient httpClient;
     private ClickHouseTcpClient tcpClient;
     private ulong[] ids;
@@ -41,6 +58,14 @@ public class TransportInsert
 
     [Params(500_000)]
     public int Count { get; set; }
+
+    private InsertOptions HttpOptions => new()
+    {
+        BatchSize = Count,
+        CustomSettings = new Dictionary<string, object> { ["async_insert"] = 0 },
+    };
+
+    private ClickHouseTcpInsertOptions TcpOptions => new() { Settings = TcpSettings };
 
     [GlobalSetup]
     public async Task Setup()
@@ -82,34 +107,21 @@ public class TransportInsert
 
     /// <summary>HTTP, through the binary insert path: one <c>object[]</c> per row.</summary>
     [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
-    public async Task<long> HttpRows() => await httpClient.InsertBinaryAsync(TableName, ColumnNames, rows);
-
-    /// <summary>
-    /// The same rows in one request. <c>InsertOptions.BatchSize</c> defaults to 100,000, so
-    /// <see cref="HttpRows"/> sends five sequential requests where the native arms send one block.
-    /// This arm separates that batching from the protocol.
-    /// </summary>
-    [Benchmark]
-    public async Task<long> HttpRowsOneBatch() =>
-        await httpClient.InsertBinaryAsync(
-            TableName, ColumnNames, rows, new InsertOptions { BatchSize = Count });
+    public async Task<long> HttpRows() =>
+        await httpClient.InsertBinaryAsync(TableName, ColumnNames, rows, HttpOptions);
 
     /// <summary>Native protocol, the same rows through its row tier.</summary>
     [Benchmark]
-    public async Task TcpRows() => await tcpClient.InsertRowsAsync(Statement, rows);
+    public async Task TcpRows() => await tcpClient.InsertRowsAsync(Statement, rows, TcpOptions);
 
     /// <summary>HTTP, reading the values off the POCO's compiled property accessors.</summary>
     [Benchmark]
-    public async Task<long> HttpPoco() => await httpClient.InsertBinaryAsync(TableName, pocoRows);
-
-    /// <summary>The same POCOs in one request, for the same reason as <see cref="HttpRowsOneBatch"/>.</summary>
-    [Benchmark]
-    public async Task<long> HttpPocoOneBatch() =>
-        await httpClient.InsertBinaryAsync(TableName, pocoRows, new InsertOptions { BatchSize = Count });
+    public async Task<long> HttpPoco() =>
+        await httpClient.InsertBinaryAsync(TableName, pocoRows, HttpOptions);
 
     /// <summary>Native protocol, the same POCOs through its row tier.</summary>
     [Benchmark]
-    public async Task TcpPoco() => await tcpClient.InsertRowsAsync(Statement, pocoRows);
+    public async Task TcpPoco() => await tcpClient.InsertRowsAsync(Statement, pocoRows, TcpOptions);
 
     /// <summary>Native protocol, columnar: nothing transposed and nothing boxed.</summary>
     [Benchmark]
@@ -122,8 +134,20 @@ public class TransportInsert
             ClickHouseTcpColumn.Create("Temperature", temperatures),
         };
 
-        await tcpClient.InsertAsync(Statement, columns);
+        await tcpClient.InsertAsync(Statement, columns, TcpOptions);
     }
+
+    /// <summary>
+    /// The same rows at the default <c>BatchSize</c> of 100,000, so the table shows what the
+    /// batching costs on top of the protocol.
+    /// </summary>
+    [Benchmark]
+    public async Task<long> HttpRowsDefaultBatching() =>
+        await httpClient.InsertBinaryAsync(
+            TableName,
+            ColumnNames,
+            rows,
+            new InsertOptions { CustomSettings = new Dictionary<string, object> { ["async_insert"] = 0 } });
 
     public class Reading
     {
