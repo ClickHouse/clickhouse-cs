@@ -295,6 +295,72 @@ public class BlockReadAsIntegrationTests
 
     // LowCardinality over a DateTime is the only inner type that offers a reading other than its own, and the
     // server refuses to build one without this.
+    /// <summary>
+    /// A <c>FixedString(N)</c> reads as text, and the text is all <c>N</c> bytes: the server pads a shorter stored
+    /// value with zeros, and those are part of the value the column holds, so they are part of its reading. A byte
+    /// UTF-8 cannot spell becomes U+FFFD, which is why the bytes remain the column's own reading.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_FixedStringColumn_DecodesEveryByteIncludingThePadding()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        string[] text = null;
+        byte[][] bytes = null;
+
+        await foreach (Block block in client.StreamAsync(
+            @"SELECT CAST(v AS FixedString(4)) AS v
+              FROM (SELECT arrayJoin(['abcd', 'ab', unhex('41FF')]) AS v)",
+            cancellationToken: None))
+        {
+            text = block.ReadAs<string>("v").Values.ToArray();
+            bytes = block.Column<byte[]>("v").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text[0], Is.EqualTo("abcd"));
+            Assert.That(text[1], Is.EqualTo("ab\0\0"), "the padding the server widened it with, not trimmed away");
+            Assert.That(text[2], Is.EqualTo("A�\0\0"), "0xFF has no UTF-8 spelling");
+            Assert.That(bytes[2], Is.EqualTo(new byte[] { 0x41, 0xFF, 0x00, 0x00 }), "which the byte reading still carries");
+        });
+    }
+
+    /// <summary>
+    /// The one place the per-entry reading is directly observable: the text of a
+    /// <c>LowCardinality(FixedString(N))</c> is a reference, so rows sharing a dictionary entry share the string
+    /// instance rather than each getting an equal copy. Converting per row would still compare equal here, and
+    /// would allocate one string per row for a dictionary holding a handful.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_LowCardinalityFixedStringAsText_GivesRowsSharingAnEntryTheSameInstance()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        string[] text = null;
+        bool sharedIndexer = false;
+        bool sharedValues = false;
+
+        await foreach (Block block in client.StreamAsync(
+            @"SELECT CAST(['alph', 'beta'][1 + number % 2] AS LowCardinality(FixedString(4))) AS v
+              FROM system.numbers LIMIT 6",
+            cancellationToken: None))
+        {
+            IColumn<string> read = block.ReadAs<string>("v");
+            sharedIndexer = ReferenceEquals(read[0], read[2]);
+
+            text = read.Values.ToArray();
+            sharedValues = ReferenceEquals(text[0], text[4]);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Is.EqualTo(new[] { "alph", "beta", "alph", "beta", "alph", "beta" }));
+            Assert.That(sharedIndexer, Is.True, "rows 0 and 2 name one dictionary entry, so they share its text");
+            Assert.That(sharedValues, Is.True, "and materializing Values does not convert them apart");
+        });
+    }
+
     private static ClickHouseTcpQueryOptions SuspiciousLowCardinality() => new()
     {
         Settings = new Dictionary<string, string>(StringComparer.Ordinal) { ["allow_suspicious_low_cardinality_types"] = "1" },

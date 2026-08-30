@@ -62,6 +62,13 @@ public class ClickHouseTcpTypesIntegrationTests
         yield return new TestCaseData("CAST(unhex('41FF') AS Nullable(String))", typeof(byte[]));
         yield return new TestCaseData("['a']", typeof(byte[][]));
         yield return new TestCaseData("CAST('a' AS LowCardinality(String))", typeof(byte[]));
+
+        // A FixedString's text, the mirror of the above: the bytes are its own reading and the UTF-8 of them the
+        // other. It projects from a value, so unlike String's byte reading it composes through every wrapper.
+        yield return new TestCaseData("CAST('abcd' AS FixedString(4))", typeof(string));
+        yield return new TestCaseData("CAST('abcd' AS LowCardinality(FixedString(4)))", typeof(string));
+        yield return new TestCaseData("CAST('abcd' AS Nullable(FixedString(4)))", typeof(string));
+        yield return new TestCaseData("[CAST('abcd' AS FixedString(4))]", typeof(string[]));
     }
 
     [TestCaseSource(nameof(WriteCandidates))]
