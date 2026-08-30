@@ -163,7 +163,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
-        if (!TryInnerWriteType(writeType, out Type innerType) || !inner.CanWriteElementType(innerType))
+        if (!TryInnerWriteType(writeType, out Type innerType) || !inner.CanCanonicalizeWriteType(innerType))
         {
             throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
         }
@@ -415,8 +415,11 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
+    // The inner type has to be one the inner codec can canonicalize, not merely one it can write: this codec
+    // deduplicates the canonical values, so a write type with no canonical form would be accepted here and then
+    // fault once the body was under way.
     public bool CanWriteElementType(Type elementType)
-        => TryInnerWriteType(elementType, out Type innerType) && inner.CanWriteElementType(innerType);
+        => TryInnerWriteType(elementType, out Type innerType) && inner.CanCanonicalizeWriteType(innerType);
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => WriteShapeFor(column) is not null;
@@ -454,7 +457,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
             return innerCanWrite && shape.CanWrite(column) ? shape : null;
         }
 
-        if (!TryInnerWriteType(elementType, out Type innerType) || !inner.CanWriteElementType(innerType))
+        if (!TryInnerWriteType(elementType, out Type innerType) || !inner.CanCanonicalizeWriteType(innerType))
         {
             return null;
         }

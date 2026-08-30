@@ -241,9 +241,31 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column)
-        => column is ArrayValueColumn<TElement> dense
-            ? inner.CanWrite(dense.Inner)
-            : ResolveWriteShape(column) is not null;
+        => TryDense(column, out _) || ResolveWriteShape(column) is not null;
+
+    /// <summary>
+    /// Recognizes a column already in the wire's layout whose elements the inner codec takes as they stand, so the
+    /// offsets and the element column are re-emitted with nothing rebuilt.
+    ///
+    /// <para>
+    /// The element type is not required to be this codec's own <typeparamref name="TElement"/>: a caller building
+    /// the dense shape names the CLR type it holds, which for a convenience type differs from the canonical one an
+    /// <c>Array(DateTime)</c> decodes to. Matching only the canonical type would send those columns down the jagged
+    /// path, where the flattening view indexes the outer column per element and each access materializes the whole
+    /// row again — quadratic in the row's length for a shape that needed no work at all.
+    /// </para>
+    /// </summary>
+    private bool TryDense(IColumn column, out IDenseArrayColumn dense)
+    {
+        dense = column as IDenseArrayColumn;
+        if (dense is not null && inner.CanWrite(dense.Inner))
+        {
+            return true;
+        }
+
+        dense = null;
+        return false;
+    }
 
     // Resolve the shape from the row's CLR element type.
     private IArrayWriteShape ResolveWriteShape(IColumn column)
@@ -297,7 +319,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     // Write cumulative offsets, then the flattened elements.
     private void WriteBody(ClickHouseBinaryWriter writer, IColumn column, int start, int length, ArrayWriteState state)
     {
-        if (column is ArrayValueColumn<TElement> dense)
+        if (TryDense(column, out IDenseArrayColumn dense))
         {
             // Rebase the stored offsets to this slice.
             ReadOnlySpan<int> offsets = dense.Offsets;
@@ -330,7 +352,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     // Prepare the element range and the inner codec's state once per slice.
     private ArrayWriteState BuildState(IColumn column, int start, int length)
     {
-        if (column is ArrayValueColumn<TElement> dense)
+        if (TryDense(column, out IDenseArrayColumn dense))
         {
             // Dense columns already contain the flattened element column.
             ReadOnlySpan<int> offsets = dense.Offsets;

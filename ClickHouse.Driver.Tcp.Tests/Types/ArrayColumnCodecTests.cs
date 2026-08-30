@@ -217,4 +217,73 @@ public class ArrayColumnCodecTests
     [Test]
     public void Resolve_UnsupportedInner_ThrowsNotSupported()
         => Assert.Throws<NotSupportedException>(() => Resolve("Array(NoSuchType)"));
+
+    /// <summary>
+    /// A dense column carrying a convenience element type — <c>DateTime</c> where <c>Array(DateTime)</c> decodes to
+    /// <c>uint</c> — is a shape the server cannot produce, so only a unit test reaches it. It has to take the dense
+    /// path: on the jagged path the flattening view indexes the outer column once per element, and each access
+    /// materializes the whole row again, which is quadratic in the row's length. Counting reads of the element
+    /// column's span separates the two: dense reads it as one run, jagged rebuilds per element.
+    /// </summary>
+    [Test]
+    public async Task WriteColumn_DenseColumnOfAConvenienceElementType_WritesItWithoutRebuildingEachRow()
+    {
+        const int elements = 64;
+        var stamps = new DateTime[elements];
+        for (int i = 0; i < elements; i++)
+        {
+            stamps[i] = new DateTime(2024, 6, 15, 0, 0, 0, DateTimeKind.Utc).AddSeconds(i);
+        }
+
+        var counting = new SpanCountingColumn<DateTime>(ClickHouseTcpColumn.Create("c", stamps));
+        IArrayColumn<DateTime> dense = ClickHouseTcpColumn.CreateArray("c", counting, new[] { 0, elements });
+        IColumnCodec codec = Resolve("Array(DateTime('UTC'))");
+
+        byte[] written = await CodecTestHarness.WriteSliceAsync(codec, dense, 0, 1);
+
+        // The jagged fallback would also produce these bytes, so the count is what pins the path taken.
+        byte[] expected = await CodecTestHarness.WriteSliceAsync(
+            codec,
+            new ArrayColumn<DateTime[]>("c", null, new[] { stamps }),
+            0,
+            1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWrite(dense), Is.True);
+            Assert.That(written, Is.EqualTo(expected), "the same bytes either way round");
+            Assert.That(counting.SpanReads, Is.LessThan(elements), $"one run, not one row rebuild per element ({elements})");
+        });
+    }
+
+    /// <summary>Counts how often a column's values are read as a span, to tell a bulk read from a per-element one.</summary>
+    private sealed class SpanCountingColumn<T> : IColumn<T>
+    {
+        private readonly IColumn<T> source;
+
+        public SpanCountingColumn(IColumn<T> source) => this.source = source;
+
+        public int SpanReads { get; private set; }
+
+        public string Name => source.Name;
+
+        public string TypeName => source.TypeName;
+
+        public int RowCount => source.RowCount;
+
+        public ReadOnlySpan<T> Values
+        {
+            get
+            {
+                SpanReads++;
+                return source.Values;
+            }
+        }
+
+        public T this[int row] => source[row];
+
+        public object GetValue(int row) => source.GetValue(row);
+
+        public void Dispose() => source.Dispose();
+    }
 }

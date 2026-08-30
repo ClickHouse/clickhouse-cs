@@ -43,6 +43,12 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
 
     /// <inheritdoc/>
+    // Raw bytes have no lossless spelling as a string, so they cannot go through the canonical form. That refuses
+    // LowCardinality(String) from a byte column up front instead of faulting once the write is under way; giving
+    // it a byte-oriented canonical form would make every LowCardinality(String) dictionary encode its text first.
+    public bool CanCanonicalizeWriteType(Type writeType) => writeType == typeof(string);
+
+    /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
         if (writeType == typeof(string))
