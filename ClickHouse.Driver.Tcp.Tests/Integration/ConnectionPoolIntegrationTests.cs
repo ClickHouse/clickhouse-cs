@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -222,6 +223,31 @@ public class ConnectionPoolIntegrationTests
                 Is.EqualTo(1UL),
                 "execute, insert, query and stream must each leave a connection the pool can keep");
         });
+    }
+
+    [Test]
+    public async Task ExecuteAsync_UnparseableSetting_ReplacesClosedConnectionBeforeNextOperation()
+    {
+        // A settings-list parse failure is raised before the server accepts the query. The server sends the
+        // Exception packet and then closes the socket, but its FIN races the pool's immediate return and checkout.
+        // Repeat the exact error/follow-up pair so the test cannot pass merely because one FIN arrived promptly.
+        const int iterations = 40;
+        var invalid = new ClickHouseTcpQueryOptions
+        {
+            Settings = new Dictionary<string, string> { ["max_threads"] = "lots" },
+        };
+        await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1);
+
+        for (int iteration = 0; iteration < iterations; iteration++)
+        {
+            var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+                await client.ExecuteAsync("SELECT 1", invalid, None));
+            Assert.That(thrown.Code, Is.EqualTo(27), $"iteration {iteration + 1}");
+
+            Assert.DoesNotThrowAsync(
+                async () => await client.ExecuteAsync("SELECT 1", cancellationToken: None),
+                $"iteration {iteration + 1}: the valid statement must not inherit the closed connection");
+        }
     }
 
     private static async Task<ulong> TemporaryTableExistsAsync(ClickHouseTcpClient client, string name)

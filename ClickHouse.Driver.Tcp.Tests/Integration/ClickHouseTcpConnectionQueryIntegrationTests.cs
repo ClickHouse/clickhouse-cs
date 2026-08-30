@@ -93,7 +93,7 @@ public class ClickHouseTcpConnectionQueryIntegrationTests
     }
 
     [Test]
-    public async Task QueryAsync_ServerError_ThrowsThenConnectionIsReusable()
+    public async Task QueryAsync_ServerError_ThrowsAndTerminatesConnection()
     {
         await using var connection = await TcpServerFixture.ConnectAsync(None);
 
@@ -106,15 +106,12 @@ public class ClickHouseTcpConnectionQueryIntegrationTests
         });
         Assert.That(thrown.Code, Is.GreaterThan(0));
 
-        // The Exception is a complete response, so the same connection can run another query.
-        Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
-
-        byte value = 0;
-        await foreach (Block block in connection.QueryAsync("SELECT 1", cancellationToken: None))
+        Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        Assert.ThrowsAsync<ObjectDisposedException>(async () =>
         {
-            value = ((IColumn<byte>)block[0]).Values[0];
-        }
-
-        Assert.That(value, Is.EqualTo((byte)1));
+            await foreach (Block _ in connection.QueryAsync("SELECT 1", cancellationToken: None))
+            {
+            }
+        });
     }
 }
