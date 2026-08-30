@@ -16,12 +16,23 @@ namespace ClickHouse.Driver.Benchmark;
 /// what a caller who can group data by column should reach for.
 /// </para>
 /// <para>
-/// Every arm sets <c>async_insert = 0</c>. A server with async inserts on buffers any insert that
-/// carries a client data block and, with <c>wait_for_async_insert</c>, holds the response until the
-/// buffer flushes — the adaptive wait starts at <c>async_insert_busy_timeout_min_ms</c>, 50 ms by
-/// default. Measured on 26.6.1.1193, that is 55 ms per HTTP insert against 1.9 ms with the setting
-/// off, and it lands on the two transports unequally. Leaving it on measures the server's buffering
-/// policy rather than the client.
+/// Two things that would otherwise dominate are turned off, because each lands on the transports
+/// unequally and would report itself as a protocol difference:
+/// </para>
+/// <para>
+/// <b>Server-side insert buffering.</b> Every arm sets <c>async_insert = 0</c>. A server with async
+/// inserts on buffers any insert that carries a client data block and, with
+/// <c>wait_for_async_insert</c>, holds the response until the buffer flushes — the adaptive wait
+/// starts at <c>async_insert_busy_timeout_min_ms</c>, 50 ms by default. Measured on 26.6.1.1193,
+/// that is 55 ms per HTTP insert against 1.9 ms with the setting off, and the native arms never paid
+/// it.
+/// </para>
+/// <para>
+/// <b>Request compression.</b> The two transports do not default to the same codec — HTTP to ZSTD,
+/// the native client to LZ4 — and on this payload the codec costs more than the serialization the
+/// arms exist to compare, so it hides the difference. Both sides run uncompressed here.
+/// <see cref="TcpCompression"/> owns the codec axis, and over loopback there is no bandwidth to
+/// save, so nothing of value is left out.
 /// </para>
 /// <para>
 /// Each arm also sends its rows in one request: <c>InsertOptions.BatchSize</c> defaults to 100,000,
@@ -62,6 +73,7 @@ public class TransportInsert
     private InsertOptions HttpOptions => new()
     {
         BatchSize = Count,
+        Compressor = null,
         CustomSettings = new Dictionary<string, object> { ["async_insert"] = 0 },
     };
 
@@ -72,7 +84,11 @@ public class TransportInsert
     {
         httpClient = new ClickHouseClient(BenchmarkServer.Http);
         httpClient.RegisterBinaryInsertType<Reading>();
-        tcpClient = BenchmarkServer.CreateTcpClient();
+        tcpClient = BenchmarkServer.CreateTcpClient(builder =>
+        {
+            builder.Compression = "none";
+            return builder;
+        });
 
         await httpClient.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test");
 
@@ -147,7 +163,11 @@ public class TransportInsert
             TableName,
             ColumnNames,
             rows,
-            new InsertOptions { CustomSettings = new Dictionary<string, object> { ["async_insert"] = 0 } });
+            new InsertOptions
+            {
+                Compressor = null,
+                CustomSettings = new Dictionary<string, object> { ["async_insert"] = 0 },
+            });
 
     public class Reading
     {
