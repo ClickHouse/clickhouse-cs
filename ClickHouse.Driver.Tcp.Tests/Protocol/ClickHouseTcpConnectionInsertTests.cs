@@ -121,7 +121,7 @@ public class ClickHouseTcpConnectionInsertTests
     }
 
     [Test]
-    public async Task InsertAsync_ServerExceptionInsteadOfSchema_ThrowsButStaysReusable()
+    public async Task InsertAsync_ServerExceptionInsteadOfSchema_ThrowsAndTerminatesConnection()
     {
         byte[] script = Concat(
             await ServerHelloBytesAsync(54476),
@@ -134,12 +134,13 @@ public class ClickHouseTcpConnectionInsertTests
         Assert.Multiple(() =>
         {
             Assert.That(thrown.Code, Is.EqualTo(60));
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+            Assert.That(connection.IsReusable, Is.False);
         });
     }
 
     [Test]
-    public async Task InsertAsync_ServerExceptionDuringAcknowledgement_ThrowsButStaysReusable()
+    public async Task InsertAsync_ServerExceptionDuringAcknowledgement_ThrowsAndTerminatesConnection()
     {
         byte[] script = Concat(
             await ServerHelloBytesAsync(54476),
@@ -153,7 +154,8 @@ public class ClickHouseTcpConnectionInsertTests
         Assert.Multiple(() =>
         {
             Assert.That(thrown.Code, Is.EqualTo(241));
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+            Assert.That(connection.IsReusable, Is.False);
         });
     }
 
