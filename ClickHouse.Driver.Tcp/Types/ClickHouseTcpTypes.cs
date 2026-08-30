@@ -60,8 +60,8 @@ public static class ClickHouseTcpTypes
     /// question <see cref="Block.ReadAs{T}(string)"/> asks, and the one the POCO tier asks of a property type.
     /// True for the type the column decodes to, and for every other reading that type offers (an <c>Enum8</c> as a
     /// <see cref="string"/> label, a <c>DateTime64</c> as a <see cref="DateTime"/>, a <c>String</c> as a
-    /// <c>byte[]</c>). There is no numeric widening, so a <c>UInt32</c> column does not read as a
-    /// <see cref="long"/>.
+    /// <c>byte[]</c>, a <c>FixedString(N)</c> as a <see cref="string"/>). There is no numeric widening, so a
+    /// <c>UInt32</c> column does not read as a <see cref="long"/>.
     /// </summary>
     /// <param name="clickHouseType">The column's ClickHouse type.</param>
     /// <param name="elementType">The CLR type to read the values as.</param>
