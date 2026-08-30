@@ -6,6 +6,9 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch: # Allow manual triggering
 
+permissions:
+  contents: read
+
 jobs:
   test-head:
     name: Test against ClickHouse HEAD
@@ -15,3 +18,9 @@ jobs:
       clickhouse-version: head
     permissions:
       statuses: write
+
+  benchmark-full:
+    name: Full benchmark suite
+    uses: ./.github/workflows/benchmark.yml
+    with:
+      categories: ''
