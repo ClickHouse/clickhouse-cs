@@ -161,6 +161,16 @@ _, findings = load({"summary_markdown": "s", "verdict": "approve",
                     "findings": [dict(GOOD, path="/src/Main.cs")]})
 check("leading slash stripped from path", findings[0]["path"] == "src/Main.cs")
 
+for value in ["false", "true", 0, 1, None, "yes"]:
+    _, findings = load({"summary_markdown": "s", "verdict": "approve",
+                        "findings": [dict(GOOD, dismissed_but_real=value)]})
+    check(f"non-boolean dismissed_but_real {value!r} falls back to commenting",
+          len(findings) == 1 and findings[0]["dismissed_but_real"] is False,
+          findings)
+_, findings = load({"summary_markdown": "s", "verdict": "approve",
+                    "findings": [dict(GOOD, dismissed_but_real=True)]})
+check("a real True is honoured", findings[0]["dismissed_but_real"] is True)
+
 for payload, why in [
     ("not json", "non-JSON output"),
     ("[1,2,3]", "JSON array"),
@@ -177,10 +187,57 @@ for payload, why in [
         check(f"{why} rejected", True)
 
 print("\ncomment markers round-trip")
-body = cr.inline_body(GOOD)
+body = cr.inline_body(GOOD, GOOD["line"])
 check("key parses back out", cr.KEY_MARKER_RE.search(body).group(1) == "reader-missing-token")
 check("severity label present", "Blocker" in body)
 check("marker strips cleanly", "codex-review-key" not in cr.KEY_MARKER_RE.sub("", body))
+
+print("\ninline_body and suggestion blocks")
+WITH_SUGGESTION = dict(GOOD, body="Pass the token.\n\n```suggestion\nawait R(ct);\n```")
+on_line = cr.inline_body(WITH_SUGGESTION, WITH_SUGGESTION["line"])
+check("suggestion kept when the comment sits on the named line",
+      "```suggestion" in on_line)
+check("no anchor note when nothing moved", "Anchored here" not in on_line)
+
+moved = cr.inline_body(WITH_SUGGESTION, WITH_SUGGESTION["line"] - 4)
+check("suggestion demoted when the comment moved", "```suggestion" not in moved, moved)
+check("the code itself is kept", "await R(ct);" in moved)
+check("the move is disclosed",
+      f"Anchored here; the finding names line {WITH_SUGGESTION['line']}." in moved, moved)
+check("suggestion with a trailing marker also demoted",
+      "```suggestion" not in cr.inline_body(
+          dict(GOOD, body="x\n```suggestion:-0+1\ny\n```"), GOOD["line"] - 1))
+
+print("\nreview_threads pagination")
+PAGES = [
+    {"pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+     "nodes": [{"id": "T1", "isResolved": False, "resolvedBy": None, "path": "a.cs", "line": 1,
+                "comments": {"nodes": [{"databaseId": 1, "author": {"login": "github-actions"},
+                                        "body": cr.KEY_MARKER.format(key="page-one") + "\nbody",
+                                        "createdAt": "t"}]}}]},
+    {"pageInfo": {"hasNextPage": False, "endCursor": None},
+     "nodes": [{"id": "T2", "isResolved": False, "resolvedBy": None, "path": "b.cs", "line": 2,
+                "comments": {"nodes": [{"databaseId": 2, "author": {"login": "github-actions"},
+                                        "body": cr.KEY_MARKER.format(key="page-two") + "\nbody",
+                                        "createdAt": "t"}]}}]},
+]
+seen_cursors = []
+saved_graphql = cr.graphql
+
+
+def fake_graphql(query, **variables):
+    seen_cursors.append(variables.get("after"))
+    page = PAGES[len(seen_cursors) - 1]
+    return {"data": {"repository": {"pullRequest": {"reviewThreads": page}}}}
+
+
+cr.graphql = fake_graphql
+threads = cr.review_threads("o/r", 1)
+cr.graphql = saved_graphql
+check("both pages collected", [t["key"] for t in threads] == ["page-one", "page-two"],
+      [t["key"] for t in threads])
+check("first request sends no cursor, second sends the first page's",
+      seen_cursors == [None, "cursor-1"], seen_cursors)
 
 
 def thread(key, thread_id, resolved, resolved_by=None):

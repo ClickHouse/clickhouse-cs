@@ -32,6 +32,9 @@ from pathlib import Path
 SUMMARY_MARKER = "<!-- codex-review-summary -->"
 KEY_MARKER = "<!-- codex-review-key: {key} -->"
 KEY_MARKER_RE = re.compile(r"<!--\s*codex-review-key:\s*([A-Za-z0-9._/-]{1,120})\s*-->")
+# Opening fence of a GitHub suggestion block, which is only safe on the exact line the fix
+# was written for.
+SUGGESTION_FENCE_RE = re.compile(r"^```suggestion[^\n]*$", re.MULTILINE)
 
 SEVERITY_LABEL = {
     "blocker": "❌ **Blocker**",
@@ -50,6 +53,9 @@ MAX_ANCHOR_DRIFT = 15
 
 # Linked issues pulled in for context. The PR body usually references one.
 MAX_LINKED_ISSUES = 5
+
+# Pages of 100 review threads to walk. A backstop against a paging loop, not a real limit.
+MAX_THREAD_PAGES = 20
 
 # Logins that count as this bot. A thread is only re-opened when the bot is the one that resolved
 # it; a thread the PR author resolved stays resolved, because resolving it is how an author says
@@ -96,10 +102,11 @@ def review_threads(repo, pr_number):
     """
     owner, name = repo.split("/", 1)
     query = """
-    query($owner: String!, $name: String!, $pr: Int!) {
+    query($owner: String!, $name: String!, $pr: Int!, $after: String) {
       repository(owner: $owner, name: $name) {
         pullRequest(number: $pr) {
-          reviewThreads(first: 100) {
+          reviewThreads(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
             nodes {
               id
               isResolved
@@ -115,8 +122,20 @@ def review_threads(repo, pr_number):
       }
     }
     """
-    data = graphql(query, owner=owner, name=name, pr=pr_number)
-    nodes = data["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    # Every page matters: a thread this misses is a comment posted twice, or one left open on an
+    # issue that is gone. A long-lived PR can hold more threads than one page.
+    nodes = []
+    after = None
+    for _ in range(MAX_THREAD_PAGES):
+        cursor = {"after": after} if after else {}
+        page = graphql(query, owner=owner, name=name, pr=pr_number, **cursor)
+        page = page["data"]["repository"]["pullRequest"]["reviewThreads"]
+        nodes += page["nodes"]
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        after = page["pageInfo"]["endCursor"]
+    else:
+        print(f"::warning::stopped after {MAX_THREAD_PAGES} pages of review threads")
 
     threads = []
     for node in nodes:
@@ -285,20 +304,30 @@ def anchor(finding, lines_by_path):
     return nearest
 
 
-def inline_body(finding):
+def inline_body(finding, line):
+    """The comment body, for a comment that will sit on `line`."""
     label = SEVERITY_LABEL.get(finding["severity"], finding["severity"])
+    body = finding["body"].strip()
+    notes = []
+    if line != finding["line"]:
+        # GitHub applies a suggestion block to the line the comment sits on. That is not the line
+        # this fix was written against, so the block must stop being one-click applicable.
+        body = SUGGESTION_FENCE_RE.sub("```", body)
+        notes.append(f"Anchored here; the finding names line {finding['line']}.")
+    notes.append(
+        "A reply here is read on the next run: an explanation that holds up drops the finding."
+    )
     return (
         f"{KEY_MARKER.format(key=finding['key'])}\n"
         f"{label}: {finding['title']}\n\n"
-        f"{finding['body'].strip()}\n\n"
-        "<sub>Automated review. A reply here is read on the next run: an explanation that holds "
-        "up drops the finding.</sub>"
+        f"{body}\n\n"
+        f"<sub>{' '.join(notes)}</sub>"
     )
 
 
 def post_inline(repo, pr_number, head_sha, finding, line):
     payload = {
-        "body": inline_body(finding),
+        "body": inline_body(finding, line),
         "commit_id": head_sha,
         "path": finding["path"],
         "line": line,
@@ -367,6 +396,15 @@ def load_review():
     seen_keys = set()
     for index, finding in enumerate(review.get("findings") or []):
         try:
+            dismissed = finding.get("dismissed_but_real", False)
+            if not isinstance(dismissed, bool):
+                # Truthiness would read the string "false" as True and silently swallow the
+                # inline comment. An unusable value falls back to commenting.
+                print(
+                    f"::warning::finding {index}: dismissed_but_real is {dismissed!r}, "
+                    "not a boolean; treating it as false"
+                )
+                dismissed = False
             cleaned = {
                 "key": str(finding["key"]).strip(),
                 "severity": str(finding["severity"]).strip().lower(),
@@ -374,7 +412,7 @@ def load_review():
                 "line": int(finding["line"]),
                 "title": str(finding["title"]).strip(),
                 "body": str(finding["body"]),
-                "dismissed_but_real": bool(finding.get("dismissed_but_real")),
+                "dismissed_but_real": dismissed,
             }
         except (KeyError, TypeError, ValueError) as e:
             print(f"::warning::dropping malformed finding {index}: {e}")

@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "PR number to review"
+        description: "PR number to review (same-repo PRs only)"
         required: true
         type: string
 
@@ -39,11 +39,13 @@ env:
 jobs:
   review:
     name: Codex review
-    # Fork PRs get no secrets on `pull_request`, so the agent could not authenticate. A
-    # maintainer can still review one through workflow_dispatch after a look at the diff.
-    # Bot PRs (dependabot and friends) are skipped: nothing to review, and they get no secrets
-    # either. A same-repo branch implies push access, which is what codex-action's own
-    # write-access check wants, so no allow-users list is needed.
+    # Same-repo PRs only, on either trigger. Both jobs run scripts out of the PR head, one with
+    # the API key and one with `pull-requests: write`, so the branch has to come from someone who
+    # already has push access. Fork PRs get no secrets on `pull_request` anyway. The `if` covers
+    # the event path and the first step covers `workflow_dispatch`, which can name a fork PR.
+    # Bot PRs (dependabot and friends) are skipped: nothing to review, and no secrets either.
+    # Push access is also what codex-action's own write-access check wants, so no allow-users
+    # list is needed.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
@@ -76,9 +78,16 @@ jobs:
             echo "::error::no PR number to review"
             exit 1
           fi
-          # Read the head SHA from the API for both trigger paths, so the inline comments are
-          # anchored to a commit that is really in the PR.
-          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          # Both jobs check out the PR head and run scripts from it: the review job with the API
+          # key in scope, the post job with `pull-requests: write`. Code from a fork must never
+          # reach either, and `workflow_dispatch` can name a fork PR, so the check belongs here
+          # rather than only in the job's `if`.
+          PR_JSON=$(gh pr view "$PR" --json headRefOid,isCrossRepository)
+          SHA=$(jq -r .headRefOid <<<"$PR_JSON")
+          if [ "$(jq -r .isCrossRepository <<<"$PR_JSON")" = "true" ]; then
+            echo "::error::PR #$PR comes from a fork; this workflow only reviews same-repo PRs"
+            exit 1
+          fi
           echo "pr=$PR" >> "$GITHUB_OUTPUT"
           echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "reviewing PR #$PR at $SHA"
@@ -92,9 +101,9 @@ jobs:
             exit 1
           fi
 
-      # `refs/pull/N/head` is the PR head for a fork PR as well as a same-repo one, and it is
-      # what the prompt tells the agent it is looking at. The default `pull_request` checkout
-      # would be the merge commit instead.
+      # `refs/pull/N/head` is the PR head on either trigger, and the PR head is what the prompt
+      # tells the agent it is looking at. The default `pull_request` checkout would be the merge
+      # commit instead.
       - name: Checkout PR head
         uses: actions/checkout@v7
         with:
