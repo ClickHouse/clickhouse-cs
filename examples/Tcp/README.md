@@ -40,5 +40,7 @@ Use the HTTP client when you need:
 - a per-query database or role.
 
 One type detail is easy to miss: row reads return `DateTime`, `DateTime64`, `Time`, and `Time64` as
-their wire integer values. `QueryAsync<T>` converts mapped POCO properties, while block reads expose
-`IDateTimeColumn` and `ITimeColumn` for typed conversion.
+their wire integer values. `QueryAsync<T>` converts mapped POCO properties. On the block tier,
+`Block.Column<T>` is a cast to the type the column decoded to, while `Block.ReadAs<T>` converts to
+any other type the ClickHouse type offers, and `IDateTimeColumn` and `ITimeColumn` convert per row.
+`ClickHouseTcpTypes.CanRead` and `CanWrite` answer which CLR types a given ClickHouse type accepts.

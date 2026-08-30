@@ -102,13 +102,18 @@ public static class TcpVariantDynamicJson
             $"SELECT value FROM {VariantTable} ORDER BY id"))
         {
             var column = (IVariantColumn)block["value"];
-            Console.WriteLine(
-                $"Variant: {column.TypeCount} alternatives, discriminators " +
-                $"[{string.Join(", ", column.Discriminators.ToArray())}]");
+
+            // TypeNames lists the alternatives in discriminator order. The server sorts them by name, so the
+            // declared order says nothing, and it is the only route to what a discriminator selects.
+            Console.WriteLine($"Variant alternatives: [{string.Join(", ", column.TypeNames)}]");
 
             for (int row = 0; row < column.RowCount; row++)
             {
-                Console.WriteLine($"  {FormatValue(block["value"].GetValue(row))}");
+                byte discriminator = column.Discriminators[row];
+                string alternative = discriminator == IVariantColumn.NullDiscriminator
+                    ? "no alternative"
+                    : column.TypeNames[discriminator];
+                Console.WriteLine($"  {alternative}: {FormatValue(block["value"].GetValue(row))}");
             }
         }
     }

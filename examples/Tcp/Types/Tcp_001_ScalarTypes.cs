@@ -82,7 +82,9 @@ public static class TcpScalarTypes
                                 20),
                         }),
                     ClickHouseTcpColumn.Create("flag", new[] { true }),
-                    ClickHouseTcpColumn.Create("text", new[] { "hello" }),
+
+                    // String is byte-oriented, so it takes raw bytes as well as text. 0xFF is not valid UTF-8.
+                    ClickHouseTcpColumn.Create("text", new[] { new byte[] { 0x68, 0x69, 0xFF } }),
 
                     // FixedString is binary data; byte[] preserves zeros and non-UTF-8 bytes.
                     ClickHouseTcpColumn.Create(
@@ -94,8 +96,8 @@ public static class TcpScalarTypes
                     ClickHouseTcpColumn.Create("ip4", new[] { IPAddress.Parse("192.168.0.1") }),
                     ClickHouseTcpColumn.Create("ip6", new[] { IPAddress.Parse("2001:db8::1") }),
 
-                    // Enum columns use their signed integer storage type on the block tier.
-                    ClickHouseTcpColumn.Create("colour", new sbyte[] { 2 }),
+                    // An Enum stores a signed integer, and accepts either that ordinal or a declared label.
+                    ClickHouseTcpColumn.Create("colour", new[] { "green" }),
                 });
 
             await foreach (Block block in client.StreamAsync($"SELECT {Columns} FROM {TableName}"))
@@ -106,6 +108,24 @@ public static class TcpScalarTypes
                         $"{column.Name,-7} {column.TypeName,-28} " +
                         $"-> {FriendlyName(column.ElementType),-20} {Render(column.GetValue(0))}");
                 }
+
+                Console.WriteLine();
+
+                // ElementType above is the default reading, not the only one a type offers. A String decodes as
+                // UTF-8, so the table lost 0xFF; IStringColumn returns the bytes the server sent.
+                var text = (IStringColumn)block["text"];
+                Console.WriteLine($"text as raw bytes:     0x{Convert.ToHexString(text.GetBytes(0))}");
+
+                // An Enum decodes as its ordinal; IEnumColumn carries the labels the type string declares.
+                var colour = (IEnumColumn)block["colour"];
+                Console.WriteLine(
+                    "colour members:        " +
+                    string.Join(", ", colour.Members.Select(member => $"{member.Key}={member.Value}")));
+                Console.WriteLine($"colour label of row 0: {colour.GetLabel(0)}");
+
+                // ReadAs asks for a reading by CLR type, so the whole column arrives as labels.
+                IColumn<string> labels = block.ReadAs<string>("colour");
+                Console.WriteLine($"colour read as string: {labels[0]}");
             }
         }
         finally
