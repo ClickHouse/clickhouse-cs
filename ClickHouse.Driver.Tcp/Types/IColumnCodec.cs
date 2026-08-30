@@ -24,11 +24,16 @@ internal interface IColumnCodec
 
     /// <summary>
     /// Common readable CLR types. Composite combinations may be omitted; test them with
-    /// <see cref="TryProjectColumnRead"/> and then <see cref="TryProjectRead"/>, which are the authority.
+    /// <see cref="ColumnProjection.Offers"/>, which is the authority.
     /// </summary>
     IReadOnlyList<Type> ReadableElementTypes => new[] { ElementType };
 
-    /// <summary>Builds an expression that projects a canonical value to <paramref name="targetType"/>.</summary>
+    /// <summary>
+    /// Builds an expression that projects a canonical value to <paramref name="targetType"/>. This is the reading
+    /// of a codec whose conversion is elementwise, and the read tiers inline it: the POCO scatter splices it into
+    /// its own row loop, and <see cref="ColumnProjection"/> compiles it into a view. A reading that is not a
+    /// function of one value goes to <see cref="TryProjectColumnRead"/> instead.
+    /// </summary>
     /// <param name="value">An expression of type <see cref="ElementType"/>.</param>
     /// <param name="targetType">The requested CLR type.</param>
     /// <param name="projected">An expression of type <paramref name="targetType"/>, or null when none is offered.</param>
@@ -42,32 +47,34 @@ internal interface IColumnCodec
     }
 
     /// <summary>
-    /// Builds an expression that reads one row as <paramref name="targetType"/> off the decoded column's own
-    /// storage, rather than from the canonical value <see cref="TryProjectRead"/> starts from. Asked first, and
-    /// offered by no codec by default.
+    /// Builds a projection from a decoded column to a view of it reading as <paramref name="targetType"/>. Asked
+    /// before <see cref="TryProjectRead"/>, and offered by no codec by default.
     ///
     /// <para>
-    /// It exists for the reading the canonical value cannot express: a <c>String</c> is a byte string whose
-    /// canonical reading is UTF-8 text, and a byte UTF-8 cannot spell decodes to U+FFFD, so a <c>byte[]</c>
-    /// projected from that text would carry the replacement character instead of the data. The bytes are still in
-    /// the column, so the reading comes from there.
+    /// It is where a reading goes when it is not a function of one value:
     /// </para>
+    /// <list type="bullet">
+    /// <item>a <c>String</c>'s bytes, which its canonical UTF-8 text has already lost — a byte UTF-8 cannot spell
+    /// decodes to U+FFFD, so re-encoding that text would hand back the replacement character;</item>
+    /// <item>a <c>LowCardinality</c> row, which is a dictionary slot: the conversion belongs to the dictionary, and
+    /// its result is then shared by every row holding that key;</item>
+    /// <item>a composite's, which is its child column's — projected once, then addressed per row through the
+    /// offsets or children the composite already holds.</item>
+    /// </list>
     ///
     /// <para>
-    /// A composite offers such a reading by forwarding to its children over their part of its storage, so it
-    /// reaches only as far as those forwards go: <c>Nullable</c> asks its inner column, and no other wrapper does.
-    /// The columnar views (<see cref="IArrayColumn"/>, <see cref="IMapColumn"/>) reach the same storage by hand.
+    /// A composite offers one exactly where a child does, so a reading every child expresses elementwise stays on
+    /// the cheaper <see cref="TryProjectRead"/> path. <c>LowCardinality</c> is the exception: it offers one
+    /// whenever its inner offers any reading at all, because converting per dictionary entry rather than per row is
+    /// the point of the type.
     /// </para>
     /// </summary>
-    /// <param name="column">An expression of type <see cref="IColumn"/> yielding the decoded column.</param>
-    /// <param name="row">An <see cref="int"/> expression yielding the row to read. Bind it to a local before
-    /// splicing it more than once: a caller may pass an arithmetic expression rather than a variable.</param>
     /// <param name="targetType">The requested CLR type.</param>
-    /// <param name="projected">An expression of type <paramref name="targetType"/>, or null when none is offered.</param>
-    /// <returns>Whether a reading of <paramref name="targetType"/> off the column's storage exists.</returns>
-    bool TryProjectColumnRead(Expression column, Expression row, Type targetType, out Expression projected)
+    /// <param name="projection">A projection producing an <c>IColumn&lt;targetType&gt;</c>, or null when none is offered.</param>
+    /// <returns>Whether a column-level reading as <paramref name="targetType"/> exists.</returns>
+    bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
-        projected = null;
+        projection = null;
         return false;
     }
 

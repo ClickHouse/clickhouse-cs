@@ -56,15 +56,22 @@ public class ClickHouseTcpTypesIntegrationTests
         yield return new TestCaseData("[toDateTime('2024-06-15 14:00:00', 'UTC')]", typeof(DateTime[]));
         yield return new TestCaseData("map('k', toUInt32(1))", typeof(KeyValuePair<string, uint>[]));
 
-        // A String's bytes, which its text reading cannot express, and the wrappers that do and do not forward
-        // that reading: Nullable does, and nothing else, so those refusals are the documented line.
+        // A String's bytes, which its text reading cannot express, through every wrapper a String can appear under:
+        // each forwards the reading to the child holding the bytes.
         yield return new TestCaseData("unhex('41FFFE42')", typeof(byte[]));
         yield return new TestCaseData("CAST(unhex('41FF') AS Nullable(String))", typeof(byte[]));
-        yield return new TestCaseData("['a']", typeof(byte[][]));
         yield return new TestCaseData("CAST('a' AS LowCardinality(String))", typeof(byte[]));
+        yield return new TestCaseData("CAST(unhex('41FF') AS LowCardinality(Nullable(String)))", typeof(byte[]));
+        yield return new TestCaseData("[unhex('41FF')]", typeof(byte[][]));
+        yield return new TestCaseData("[[unhex('41FF')]]", typeof(byte[][][]));
+        yield return new TestCaseData("map('k', unhex('41FF'))", typeof(KeyValuePair<string, byte[]>[]));
+        yield return new TestCaseData("tuple(toUInt8(1), unhex('41FF'))", typeof((byte, byte[])));
+
+        // A row of an Array reads as an array, so the element's own reading is not one of the row's.
+        yield return new TestCaseData("['a']", typeof(byte[]));
 
         // A FixedString's text, the mirror of the above: the bytes are its own reading and the UTF-8 of them the
-        // other. It projects from a value, so unlike String's byte reading it composes through every wrapper.
+        // other.
         yield return new TestCaseData("CAST('abcd' AS FixedString(4))", typeof(string));
         yield return new TestCaseData("CAST('abcd' AS LowCardinality(FixedString(4)))", typeof(string));
         yield return new TestCaseData("CAST('abcd' AS Nullable(FixedString(4)))", typeof(string));

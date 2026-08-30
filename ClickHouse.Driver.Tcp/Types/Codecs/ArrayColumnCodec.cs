@@ -77,6 +77,9 @@ internal static class ArrayColumnCodec
 /// <typeparam name="TElement">The inner codec's CLR element type; each row surfaces as <typeparamref name="TElement"/>[].</typeparam>
 internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 {
+    private static readonly MethodInfo ProjectArrayMethod =
+        typeof(ArrayColumnCodec<TElement>).GetMethod(nameof(ProjectArray), BindingFlags.NonPublic | BindingFlags.Static);
+
     private readonly IColumnCodec inner;
 
     internal ArrayColumnCodec(string typeName, IColumnCodec inner)
@@ -232,6 +235,61 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 
         projected = CompositeElementProjections.ProjectArray(value, element, elementProjection);
         return true;
+    }
+
+    /// <summary>
+    /// Forwards a column-level reading to the element codec over the flat element column, then reslices it per row.
+    /// Offered only where the element codec has one of its own: an element whose values convert one at a time is
+    /// cheaper projected into the row array <see cref="TryProjectRead"/> already builds.
+    /// </summary>
+    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
+    {
+        projection = null;
+
+        if (targetType == ElementType || !CompositeElementProjections.TryGetArrayElement(targetType, out Type targetElement))
+        {
+            return false;
+        }
+
+        if (!inner.TryProjectColumnRead(targetElement, out ColumnReadProjection elementProjection))
+        {
+            return false;
+        }
+
+        projection = ColumnProjection.Close(ProjectArrayMethod, elementProjection, targetElement);
+        return true;
+    }
+
+    /// <summary>
+    /// Builds the view over one decoded column: the flat element column projected once, then addressed per row
+    /// through the offsets this column already holds.
+    /// </summary>
+    /// <typeparam name="T">The projected element type; the view's element type is <c>T[]</c>.</typeparam>
+    /// <param name="source">The decoded <c>Array(T)</c> column.</param>
+    /// <param name="elementProjection">The element codec's projection of the flat element column.</param>
+    /// <returns>The view.</returns>
+    private static IColumn ProjectArray<T>(IColumn source, ColumnReadProjection elementProjection)
+    {
+        IArrayColumn array = ColumnProjection.Surface<IArrayColumn>(source);
+        var elements = (IColumn<T>)elementProjection(array.Inner);
+        return new ProjectedReadColumn<T[]>(source, (column, row) => Row(((IArrayColumn)column).Offsets, elements, row));
+    }
+
+    /// <summary>Copies one row's slice of the projected element column into a new array.</summary>
+    private static T[] Row<T>(ReadOnlySpan<int> offsets, IColumn<T> elements, int row)
+    {
+        int start = offsets[row];
+        int length = offsets[row + 1] - start;
+        if (length == 0)
+        {
+            return Array.Empty<T>();
+        }
+
+        // Values, not the indexer: it converts the whole element column once, so the rows of this column share that
+        // work instead of each converting its own slice.
+        var projected = new T[length];
+        elements.Values.Slice(start, length).CopyTo(projected);
+        return projected;
     }
 
     /// <inheritdoc/>
