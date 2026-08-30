@@ -99,6 +99,22 @@ internal interface IColumnCodec
     /// <summary>The CLR type accepted by <see cref="WriteCanonicalColumn"/> after write conversion.</summary>
     Type CanonicalWriteElementType => ElementType;
 
+    /// <summary>
+    /// Whether <see cref="ToCanonicalWriteColumn"/> can express a column of <paramref name="writeType"/> as
+    /// <see cref="CanonicalWriteElementType"/>. Every writable type can by default, and a codec whose conversions
+    /// cover all of them need not override this.
+    ///
+    /// <para>
+    /// It exists for the codecs that go through the canonical form — <c>LowCardinality</c>, which deduplicates the
+    /// canonical values — because they have to refuse such a type <em>before</em> the write rather than fault
+    /// part-way through it. A codec that accepts a write type it cannot canonicalize (<c>String</c> takes raw
+    /// bytes, which have no lossless spelling as its canonical <see cref="string"/>) says so here.
+    /// </para>
+    /// </summary>
+    /// <param name="writeType">The candidate CLR write type.</param>
+    /// <returns>Whether a column of that type can be projected to the canonical write form.</returns>
+    bool CanCanonicalizeWriteType(Type writeType) => CanWriteElementType(writeType);
+
     /// <summary>A valid placeholder expressed as <see cref="CanonicalWriteElementType"/>.</summary>
     object CanonicalWritePlaceholder => NullPlaceholder;
 

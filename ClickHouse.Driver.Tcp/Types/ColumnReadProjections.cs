@@ -28,6 +28,11 @@ internal sealed class ColumnReadProjections
     // A ceiling on the cache, which lives as long as the registry. The key includes the session timezone, so an
     // application setting one per request over many types could otherwise accumulate compiled delegates without
     // bound. Past the ceiling a reader is compiled per call: slower, and still correct.
+    //
+    // Approximate, not exact: the count is read and the entry added as two steps, so first-time compilations
+    // racing each other at the ceiling can each see room and all insert, overshooting by however many raced. A
+    // lock would make it exact at the cost of contention on a path that runs once per type; the point here is to
+    // bound growth, and an overshoot of a few entries does not affect that.
     private const int MaxCachedReaders = 1024;
 
     private readonly ColumnCodecRegistry registry;
