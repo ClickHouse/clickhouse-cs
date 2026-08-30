@@ -880,18 +880,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// </summary>
     internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, QueryOptions queryOverride = null)
     {
-        // Priority: override > connection-level bearer token > basic auth
-        var bearerToken = queryOverride?.BearerToken ?? Settings.BearerToken;
-        if (!string.IsNullOrEmpty(bearerToken))
-        {
-            headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
-        }
-        else
-        {
-            headers.Authorization = new AuthenticationHeaderValue(
-                "Basic",
-                Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Settings.Username}:{Settings.Password}")));
-        }
+        ApplyAuthorizationHeader(headers, queryOverride);
 
         headers.UserAgent.Add(userAgentProvider.DriverProductInfo);
         headers.UserAgent.Add(userAgentProvider.MetadataProductInfo);
@@ -914,6 +903,44 @@ public sealed class ClickHouseClient : IClickHouseClient
         // Per-query Accept-Encoding override replaces whatever was attached above
         // (settings defaults and any value injected via CustomHeaders).
         ApplyAcceptEncodingOverride(headers, queryOverride?.AcceptEncoding);
+    }
+
+    /// <summary>
+    /// Sets the Authorization header.
+    /// Priority: per-query bearer token override > credentials provider > connection-level bearer token > basic auth.
+    /// </summary>
+    private void ApplyAuthorizationHeader(HttpRequestHeaders headers, QueryOptions queryOverride)
+    {
+        var overrideToken = queryOverride?.BearerToken;
+        if (!string.IsNullOrEmpty(overrideToken))
+        {
+            headers.Authorization = new AuthenticationHeaderValue("Bearer", overrideToken);
+            return;
+        }
+
+        // Evaluated per request so rotated credentials take effect without recreating the client.
+        // A null result falls back to the static settings below.
+        var credentials = Settings.CredentialsProvider?.Invoke();
+        if (credentials != null)
+        {
+            headers.Authorization = !string.IsNullOrEmpty(credentials.BearerToken)
+                ? new AuthenticationHeaderValue("Bearer", credentials.BearerToken)
+                : new AuthenticationHeaderValue(
+                    "Basic",
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes($"{credentials.Username}:{credentials.Password}")));
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(Settings.BearerToken))
+        {
+            headers.Authorization = new AuthenticationHeaderValue("Bearer", Settings.BearerToken);
+        }
+        else
+        {
+            headers.Authorization = new AuthenticationHeaderValue(
+                "Basic",
+                Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Settings.Username}:{Settings.Password}")));
+        }
     }
 
     private static void ApplyAcceptEncodingOverride(HttpRequestHeaders headers, string acceptEncoding)

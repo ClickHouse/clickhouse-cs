@@ -1,6 +1,8 @@
 ClickHouse.Driver.ADO.ClickHouseClientSettings
 ClickHouse.Driver.ADO.ClickHouseClientSettings.BearerToken.get -> string
 ClickHouse.Driver.ADO.ClickHouseClientSettings.BearerToken.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CredentialsProvider.get -> System.Func<ClickHouse.Driver.ClickHouseCredentials>
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CredentialsProvider.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings() -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(ClickHouse.Driver.ADO.ClickHouseClientSettings other) -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder builder) -> void
@@ -105,6 +107,10 @@ ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.get -> Microsoft.I
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.init -> void
 ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions
 ClickHouse.Driver.Diagnostic.TraceHelper
+ClickHouse.Driver.ClickHouseCredentials
+ClickHouse.Driver.ClickHouseCredentials.BearerToken.get -> string
+ClickHouse.Driver.ClickHouseCredentials.Password.get -> string
+ClickHouse.Driver.ClickHouseCredentials.Username.get -> string
 ClickHouse.Driver.IClickHouseConnection.CreateCommand(string commandText = null) -> ClickHouse.Driver.ADO.ClickHouseCommand
 ClickHouse.Driver.IClickHouseConnection.PingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>
 ClickHouse.Driver.IClickHouseDataSource
@@ -185,6 +191,8 @@ static ClickHouse.Driver.ADO.ClickHouseClientSettings.operator ==(ClickHouse.Dri
 static ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.FromSettings(ClickHouse.Driver.ADO.ClickHouseClientSettings settings) -> ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder
 static ClickHouse.Driver.ADO.QueryStats.operator !=(ClickHouse.Driver.ADO.QueryStats left, ClickHouse.Driver.ADO.QueryStats right) -> bool
 static ClickHouse.Driver.ADO.QueryStats.operator ==(ClickHouse.Driver.ADO.QueryStats left, ClickHouse.Driver.ADO.QueryStats right) -> bool
+static ClickHouse.Driver.ClickHouseCredentials.CreateBasic(string username, string password) -> ClickHouse.Driver.ClickHouseCredentials
+static ClickHouse.Driver.ClickHouseCredentials.CreateBearer(string bearerToken) -> ClickHouse.Driver.ClickHouseCredentials
 static ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.IncludeSqlInActivityTags.get -> bool
 static ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.IncludeSqlInActivityTags.set -> void
 static ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions.StatementMaxLength.get -> int
