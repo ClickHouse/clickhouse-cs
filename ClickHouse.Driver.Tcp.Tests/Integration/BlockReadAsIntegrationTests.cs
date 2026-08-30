@@ -203,6 +203,103 @@ public class BlockReadAsIntegrationTests
         }
     }
 
+    /// <summary>
+    /// A low-cardinality column is read through its dictionary: every row resolves to the converted value of the
+    /// entry its key names, so the values must match what the same reading gives without a dictionary in front of
+    /// it. <c>LowCardinality(DateTime)</c> is the only shape that reaches this today, and the server calls it
+    /// suspicious, hence the setting.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_LowCardinalityColumn_ReadsEveryRowAsItsDictionaryEntrysValue()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        var options = SuspiciousLowCardinality();
+
+        DateTimeOffset[] throughDictionary = null;
+        DateTimeOffset[] reread = null;
+        DateTimeOffset[] withoutDictionary = null;
+        uint[] rawCounts = null;
+
+        // Twelve rows over three distinct values, so most rows share an entry with an earlier one.
+        const string Values = "toDateTime('2024-06-15 14:00:00', 'UTC') + INTERVAL (number % 3) DAY";
+        await foreach (Block block in client.StreamAsync(
+            $"SELECT CAST({Values} AS LowCardinality(DateTime('UTC'))) AS v FROM system.numbers LIMIT 12",
+            options,
+            cancellationToken: None))
+        {
+            throughDictionary = block.ReadAs<DateTimeOffset>("v").Values.ToArray();
+            rawCounts = block.Column<uint>("v").Values.ToArray();
+        }
+
+        // Again, so the second read is served by the cached entry reader rather than a freshly compiled one.
+        await foreach (Block block in client.StreamAsync(
+            $"SELECT CAST({Values} AS LowCardinality(DateTime('UTC'))) AS v FROM system.numbers LIMIT 12",
+            options,
+            cancellationToken: None))
+        {
+            reread = block.ReadAs<DateTimeOffset>("v").Values.ToArray();
+        }
+
+        await foreach (Block block in client.StreamAsync(
+            $"SELECT CAST({Values} AS DateTime('UTC')) AS v FROM system.numbers LIMIT 12",
+            options,
+            cancellationToken: None))
+        {
+            withoutDictionary = block.ReadAs<DateTimeOffset>("v").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(throughDictionary, Is.EqualTo(withoutDictionary));
+            Assert.That(reread, Is.EqualTo(throughDictionary), "the cached entry reader gives the same values");
+            Assert.That(throughDictionary[0].UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 15, 14, 0, 0, DateTimeKind.Utc)));
+            Assert.That(throughDictionary[1].UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 16, 14, 0, 0, DateTimeKind.Utc)));
+            Assert.That(throughDictionary[3], Is.EqualTo(throughDictionary[0]), "row 3 shares row 0's dictionary entry");
+
+            // The undecoded reading of the same column, to pin that the keys really were resolved rather than read
+            // as values: a raw count is the epoch second, not a dictionary index.
+            Assert.That(rawCounts[0], Is.EqualTo(1718460000u));
+        });
+    }
+
+    /// <summary>
+    /// The nullable shape, where the dictionary's slot 0 is the NULL marker rather than a value: those rows must
+    /// read as null, and the rest as the lifted reading of their entry. The reading is taken from the entry and
+    /// then made nullable, so a bad slot 0 would surface as a wrong value rather than an error.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_NullableLowCardinalityColumn_LiftsTheEntryReadingAndKeepsTheNullRowsNull()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        DateTimeOffset?[] read = null;
+        await foreach (Block block in client.StreamAsync(
+            @"SELECT CAST(if(number % 2 = 0, NULL, toDateTime('2024-06-15 14:00:00', 'UTC') + INTERVAL (number % 4) DAY), 'LowCardinality(Nullable(DateTime(''UTC'')))') AS v
+              FROM system.numbers LIMIT 8",
+            SuspiciousLowCardinality(),
+            cancellationToken: None))
+        {
+            read = block.ReadAs<DateTimeOffset?>("v").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.Length, Is.EqualTo(8));
+            Assert.That(read[0], Is.Null);
+            Assert.That(read[2], Is.Null, "every even row is NULL");
+            Assert.That(read[1]?.UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 16, 14, 0, 0, DateTimeKind.Utc)));
+            Assert.That(read[3]?.UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 18, 14, 0, 0, DateTimeKind.Utc)));
+            Assert.That(read[5], Is.EqualTo(read[1]), "row 5 shares row 1's dictionary entry");
+        });
+    }
+
+    // LowCardinality over a DateTime is the only inner type that offers a reading other than its own, and the
+    // server refuses to build one without this.
+    private static ClickHouseTcpQueryOptions SuspiciousLowCardinality() => new()
+    {
+        Settings = new Dictionary<string, string>(StringComparer.Ordinal) { ["allow_suspicious_low_cardinality_types"] = "1" },
+    };
+
     [Test]
     public async Task ReadAs_IndexOutsideTheBlock_ThrowsNamingTheColumnCount()
     {
