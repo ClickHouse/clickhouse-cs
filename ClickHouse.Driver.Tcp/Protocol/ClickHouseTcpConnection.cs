@@ -45,8 +45,8 @@ internal interface IInsertColumnSource : IDisposable
 /// multiplexing, so a connection carries exactly one request/response at a time. A connection is deliberately
 /// <b>not</b> thread-safe; the owner (a pool or a session) must guarantee single-caller access, including for
 /// disposal and teardown. Active operations observe cancellation through their I/O token and terminate the
-/// connection only after the cancelled I/O has unwound. Any transport or protocol failure terminates the
-/// connection, and a terminated connection is never reused.
+/// connection only after the cancelled I/O has unwound. Any server, transport, or protocol failure terminates
+/// the connection, and a terminated connection is never reused.
 /// </para>
 /// </summary>
 internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
@@ -216,8 +216,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Sends a Ping and awaits the reply. Returns when the server answers with Pong. A server Exception is
-    /// decoded and thrown, leaving the connection reusable (the exception is a complete response). Any other
-    /// packet, or a transport failure, terminates the connection.
+    /// decoded and thrown. Any error or unexpected packet terminates the connection.
     /// </summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when Pong is received.</returns>
@@ -266,9 +265,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     throw;
                 }
 
-                // The Exception is itself a complete response and leaves the stream at a packet boundary, so
-                // the connection stays usable.
-                state = TcpConnectionState.Ready;
+                Terminate();
                 throw exception;
 
             default:
@@ -380,7 +377,6 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 if (packet == ServerPacketType.Exception)
                 {
                     pending = await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
-                    completed = true;
                     break;
                 }
 
@@ -576,10 +572,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     throw new ClickHouseProtocolException("The server ended the INSERT response without sending a schema block.");
                 }
 
-                // Server Exception instead of the schema: the stream is at a packet boundary, so rethrow once
-                // the state is back to Ready.
+                // The Exception packet does not say whether the server accepted the query and returned to its
+                // request loop, so leave completed false and retire the connection in the finally below.
                 pending = error;
-                completed = true;
             }
             else
             {
@@ -621,9 +616,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 Exception gatherFailure = await StreamInsertRowsAsync(plan, source, rowCount, maxRowsPerBlock, maxSendBufferBytes, negotiated, cancellationToken).ConfigureAwait(false);
                 buildFailure ??= gatherFailure;
 
-                // Rethrow any server error once the state is back to Ready.
+                // A clean acknowledgement leaves the connection reusable. A server Exception is parked for the
+                // caller but retires the connection, because its packet does not prove the server will accept
+                // another request.
                 pending = await DrainToEndOfStreamAsync(negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
-                completed = true;
+                completed = pending is null;
             }
         }
         finally
@@ -775,7 +772,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Drains the response and returns its server error, if any, while leaving the connection reusable.
+    /// Reads and releases blocks until the response ends, returning the server
+    /// <see cref="ClickHouseServerException"/> that terminated it, or null on a clean end-of-stream. The caller
+    /// keeps the connection only after the clean end-of-stream case.
     /// </summary>
     /// <param name="negotiated">The negotiated protocol.</param>
     /// <param name="context">The codec-resolution context (timezone) for decoding blocks.</param>

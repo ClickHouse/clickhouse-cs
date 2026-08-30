@@ -22,7 +22,7 @@ public class ClickHouseTcpConnectionTests
     };
 
     [Test]
-    public async Task PingAsync_ServerRepliesException_ThrowsButStaysReusable()
+    public async Task PingAsync_ServerRepliesException_ThrowsAndTerminatesConnection()
     {
         byte[] exception = await BytesAsync(w =>
         {
@@ -45,8 +45,8 @@ public class ClickHouseTcpConnectionTests
             Assert.That(thrown.Code, Is.EqualTo(516));
             Assert.That(thrown.Message, Is.EqualTo("something went wrong"));
 
-            // A cleanly-decoded Exception is a complete response, so the connection remains usable.
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+            Assert.That(connection.IsReusable, Is.False);
         });
     }
 
