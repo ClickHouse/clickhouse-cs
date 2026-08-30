@@ -86,13 +86,21 @@ public static class TcpCompositeRead
                         $"LowCardinality dictionary [{string.Join(", ", city.Dictionary.Values.ToArray())}], " +
                         $"keys [{string.Join(", ", city.Keys.ToArray())}]");
                 }
+
+                // A typed view needs the element type, and a wrong type argument compiles and never matches. The
+                // non-generic views walk the same storage when the types are not known in advance.
+                Console.WriteLine("Shapes read without a type argument:");
+                foreach (IColumn column in block.Columns)
+                {
+                    Console.WriteLine($"  {column.Name}: {Describe(column)}");
+                }
             }
 
             // Geo aliases use the same column shape as their underlying tuple types.
             await foreach (Block block in client.StreamAsync(
                 "SELECT CAST((1.0, 2.0), 'Point') AS point"))
             {
-                Console.WriteLine($"Point uses {block["point"].GetType().Name} and materializes as " +
+                Console.WriteLine($"Point is a {Describe(block["point"])} and materializes as " +
                                   $"{block["point"].GetValue(0)}");
             }
         }
@@ -101,4 +109,14 @@ public static class TcpCompositeRead
             await client.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
         }
     }
+
+    private static string Describe(IColumn column) => column switch
+    {
+        IArrayColumn array => $"Array of {Describe(array.Inner)}",
+        IMapColumn map => $"Map of {Describe(map.KeyColumn)} to {Describe(map.ValueColumn)}",
+        INullableColumn nullable => $"Nullable {Describe(nullable.Inner)}",
+        ILowCardinalityColumn dictionary => $"LowCardinality of {Describe(dictionary.Dictionary)}",
+        ITupleColumn tuple => $"Tuple of ({string.Join(", ", tuple.Children.Select(Describe))})",
+        _ => column.ElementType.Name,
+    };
 }

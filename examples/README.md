@@ -116,13 +116,13 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 ### Native Protocol: Writing Data
 
 - [Tcp_001_ColumnarInsert.cs](Tcp/Write/Tcp_001_ColumnarInsert.cs) - Insert typed columns and let ClickHouse fill defaults
-- [Tcp_002_CompositeWrites.cs](Tcp/Write/Tcp_002_CompositeWrites.cs) - Insert composite values and reuse a column from a block
+- [Tcp_002_CompositeWrites.cs](Tcp/Write/Tcp_002_CompositeWrites.cs) - Insert composite values, build the flat array shape, and reuse a column from a block
 
 ### Native Protocol: Data Types
 
-- [Tcp_001_ScalarTypes.cs](Tcp/Types/Tcp_001_ScalarTypes.cs) - Inspect representative ClickHouse-to-CLR scalar mappings
+- [Tcp_001_ScalarTypes.cs](Tcp/Types/Tcp_001_ScalarTypes.cs) - Inspect scalar type mappings, enum labels, and raw `String` bytes
 - [Tcp_002_DateTimeAndTimezones.cs](Tcp/Types/Tcp_002_DateTimeAndTimezones.cs) - Read and write date, time, and timezone-aware values
-- [Tcp_003_CompositeRead.cs](Tcp/Types/Tcp_003_CompositeRead.cs) - Read arrays, maps, tuples, nullable values, and nested data
+- [Tcp_003_CompositeRead.cs](Tcp/Types/Tcp_003_CompositeRead.cs) - Read composites through their typed views, or without knowing the element type
 - [Tcp_004_VariantDynamicJson.cs](Tcp/Types/Tcp_004_VariantDynamicJson.cs) - Read `Variant`, `Dynamic`, and `JSON` columns
 - [Tcp_005_QBitVectorSearch.cs](Tcp/Types/Tcp_005_QBitVectorSearch.cs) - Inspect `QBit` planes and run approximate vector search
 
