@@ -11,7 +11,10 @@ public enum CompressionShape
     /// <summary>One fixed-width column: little redundancy per byte, so the codec has least to work with.</summary>
     Narrow,
 
-    /// <summary>An integer, a repeating short string and a float: what a real result set looks like.</summary>
+    /// <summary>
+    /// An integer, a repeating short string and a float. Each column repeats far more than a
+    /// production column does, so a codec scores better here than on real data.
+    /// </summary>
     Wide,
 }
 
