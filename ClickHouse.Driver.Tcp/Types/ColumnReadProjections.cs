@@ -9,7 +9,8 @@ namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
 /// Compiles and caches the per-row readers behind <see cref="Block.ReadAs{T}(string)"/>: the codec decides which
-/// readings a type offers (<see cref="IColumnCodec.TryProjectRead"/>), and this turns the expression it hands back
+/// readings a type offers (<see cref="IColumnCodec.TryProjectColumnRead"/> off the column's storage, then
+/// <see cref="IColumnCodec.TryProjectRead"/> off its decoded value), and this turns the expression it hands back
 /// into a delegate over the decoded column.
 ///
 /// <para>
@@ -90,11 +91,21 @@ internal sealed class ColumnReadProjections
         return read;
     }
 
-    /// <summary>Builds <c>(column, row) => project(((IColumn&lt;source&gt;)column)[row])</c>, or null when the codec offers no such reading.</summary>
+    /// <summary>
+    /// Builds <c>(column, row) => project(((IColumn&lt;source&gt;)column)[row])</c>, or the codec's own reading off
+    /// the column where it offers one, or null when it offers neither.
+    /// </summary>
     private static Func<IColumn, int, T> Compile<T>(IColumnCodec codec)
     {
         ParameterExpression column = Expression.Parameter(typeof(IColumn), "column");
         ParameterExpression row = Expression.Parameter(typeof(int), "row");
+
+        // The storage reading is asked for first: it exists precisely where the canonical value has already lost
+        // what the caller wants, so projecting from that value would answer with damaged data instead of failing.
+        if (codec.TryProjectColumnRead(column, row, typeof(T), out Expression fromStorage))
+        {
+            return Expression.Lambda<Func<IColumn, int, T>>(fromStorage, column, row).Compile();
+        }
 
         Type typedColumn = typeof(IColumn<>).MakeGenericType(codec.ElementType);
         PropertyInfo indexer = typedColumn.GetProperty("Item")

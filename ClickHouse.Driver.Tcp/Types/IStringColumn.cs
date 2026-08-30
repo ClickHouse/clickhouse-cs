@@ -26,6 +26,21 @@ namespace ClickHouse.Driver.Tcp;
 /// (<see cref="ClickHouseTcpColumn.Create{T}(string, T[])"/>), which a <c>String</c> target accepts and stores
 /// verbatim.
 /// </para>
+///
+/// <para>
+/// The bytes are a reading of the type, not only of this view, so the ergonomic tiers reach them too:
+/// <c>Block.ReadAs&lt;byte[]&gt;</c> gives one owned array per row, and a POCO property typed <c>byte[]</c> is
+/// filled from a <c>String</c> column the same way. <c>Nullable(String)</c> reads as a <c>byte[]</c> as well, its
+/// NULL rows arriving as null. Those copy a row at a time; this view is the zero-copy form, and the only one that
+/// reaches the whole blob at once.
+/// </para>
+///
+/// <para>
+/// A <c>LowCardinality(String)</c> does not offer that reading, and neither does an <c>Array(String)</c> or a
+/// <c>Map(K, String)</c>: a row of those is a dictionary slot or a run of elements rather than one value, so
+/// reach the child column that holds the bytes through <see cref="ILowCardinalityColumn"/>,
+/// <see cref="IArrayColumn"/> or <see cref="IMapColumn"/>, and match it as this interface.
+/// </para>
 /// </summary>
 public interface IStringColumn : IColumn<string>
 {
