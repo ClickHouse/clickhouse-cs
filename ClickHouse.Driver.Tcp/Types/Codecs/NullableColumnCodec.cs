@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -32,6 +33,12 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class NullableColumnCodec : IColumnCodec
 {
+    private static readonly MethodInfo IsNullAtMethod =
+        typeof(NullableColumnCodec).GetMethod(nameof(IsNullAt), BindingFlags.Public | BindingFlags.Static);
+
+    private static readonly MethodInfo NullMappedMethod =
+        typeof(NullableColumnCodec).GetMethod(nameof(NullMapped), BindingFlags.Public | BindingFlags.Static);
+
     private readonly IColumnCodec inner;
     private readonly INullableShape canonicalShape;
 
@@ -201,6 +208,63 @@ internal sealed class NullableColumnCodec : IColumnCodec
 
         return ColumnValueProjections.TryLiftOverAbsent(value, inner, innerTarget, targetType, out projected);
     }
+
+    /// <summary>
+    /// Forwards a storage reading to the inner codec over the dense inner column, with the null-map deciding
+    /// whether a row is read at all — the lifting rule <see cref="TryProjectRead"/> applies to a value, applied to
+    /// a reading taken off the column instead. It is how a <c>Nullable(String)</c> reads as a <c>byte[]</c>.
+    /// </summary>
+    public bool TryProjectColumnRead(Expression column, Expression row, Type targetType, out Expression projected)
+    {
+        projected = null;
+
+        // Only a reference-typed target has room for this surface's null. A Nullable<U> one would need the inner to
+        // offer U off its storage and then be lifted, which no reading needs today.
+        if (targetType.IsValueType || targetType == ElementType)
+        {
+            return false;
+        }
+
+        // Both are spliced into the condition, so bind them once: the column behind a cast and the row behind
+        // whatever arithmetic the caller passed.
+        ParameterExpression nullable = Expression.Variable(typeof(INullableColumn), "nullableColumn");
+        ParameterExpression index = Expression.Variable(typeof(int), "nullableRow");
+        if (!inner.TryProjectColumnRead(Expression.Property(nullable, nameof(INullableColumn.Inner)), index, targetType, out Expression innerProjection))
+        {
+            return false;
+        }
+
+        // The inner column holds a decoded value at every row, the null positions included, so its content there is
+        // a meaningless placeholder and the map has to be consulted first.
+        projected = Expression.Block(
+            new[] { nullable, index },
+            Expression.Assign(nullable, Expression.Call(NullMappedMethod, column)),
+            Expression.Assign(index, row),
+            Expression.Condition(
+                Expression.Call(IsNullAtMethod, nullable, index),
+                Expression.Default(targetType),
+                innerProjection));
+        return true;
+    }
+
+    /// <summary>Whether the row is NULL, read through the column's null-map.</summary>
+    /// <param name="column">The decoded nullable column.</param>
+    /// <param name="row">The zero-based row index.</param>
+    /// <returns>Whether the row is NULL.</returns>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="row"/> is negative or not less than the row count.</exception>
+    // A method rather than an inline span index: ReadOnlySpan is a ref struct, which an expression tree cannot hold.
+    public static bool IsNullAt(INullableColumn column, int row) => column.NullMap[row] != 0;
+
+    /// <summary>The column's null-map surface, which a storage reading needs to know which rows to read.</summary>
+    /// <param name="column">The decoded column.</param>
+    /// <returns>The same column, as its nullable surface.</returns>
+    /// <exception cref="InvalidOperationException"><paramref name="column"/> exposes no null-map.</exception>
+    // Named here for the same reason StringColumnCodec.RowBytes names its own: a column built by a caller and
+    // labelled Nullable(T) need not carry a null-map, and a bare cast error would name neither it nor the reading.
+    public static INullableColumn NullMapped(IColumn column) => column as INullableColumn
+        ?? throw new InvalidOperationException(
+            $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which exposes no null-map through INullableColumn, " +
+            $"so a reading taken off its storage cannot tell which rows are NULL. Only a Nullable column decoded from a server response does.");
 
     /// <summary>Builds the nullable write-type list on first use.</summary>
     /// <returns>The write types, each the inner's spelling made nullable.</returns>

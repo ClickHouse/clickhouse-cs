@@ -136,16 +136,30 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// The inner codec's readings on this codec's surface — so <c>LowCardinality(Nullable(DateTime))</c> reports
     /// <c>uint?</c>, <c>DateTimeOffset?</c> and <c>DateTime?</c>. Diagnostics only, and only ever read on a failure
     /// path, so it is built per call rather than cached.
+    ///
+    /// <para>
+    /// An inner reading taken off the inner column's own storage rather than off its values is left out, because
+    /// this codec does not forward one: a row here is a dictionary slot, and reaching the value in that slot is
+    /// what <see cref="ILowCardinalityColumn"/> is for. So a <c>LowCardinality(String)</c> reports the text and not
+    /// the bytes, which is also the only shape it writes from.
+    /// </para>
     /// </summary>
     public IReadOnlyList<Type> ReadableElementTypes
     {
         get
         {
             IReadOnlyList<Type> innerTypes = inner.ReadableElementTypes;
-            var surfaced = new Type[innerTypes.Count];
+            var surfaced = new List<Type>(innerTypes.Count);
             for (int i = 0; i < innerTypes.Count; i++)
             {
-                surfaced[i] = LowCardinalityShapes.For(innerTypes[i], nullable).SurfaceElementType;
+                Type innerType = innerTypes[i];
+                if (innerType != inner.ElementType
+                    && !inner.TryProjectRead(Expression.Parameter(inner.ElementType, "value"), innerType, out _))
+                {
+                    continue;
+                }
+
+                surfaced.Add(LowCardinalityShapes.For(innerType, nullable).SurfaceElementType);
             }
 
             return surfaced;

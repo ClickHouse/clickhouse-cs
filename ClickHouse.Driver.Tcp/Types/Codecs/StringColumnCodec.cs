@@ -1,6 +1,8 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Linq.Expressions;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -17,6 +19,9 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
 {
     /// <summary>The shared, stateless instance.</summary>
     public static readonly StringColumnCodec Instance = new();
+
+    private static readonly MethodInfo RowBytesMethod =
+        typeof(StringColumnCodec).GetMethod(nameof(RowBytes), BindingFlags.Public | BindingFlags.Static);
 
     // A modest starting guess for the blob (16 bytes/row), clamped, that grows on demand as rows are read.
     private const int MinInitialBlobBytes = 256;
@@ -42,6 +47,12 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     /// </summary>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
 
+    /// <summary>
+    /// A <c>byte[]</c> per row is a reading as well as the text, and the only lossless one. Diagnostics only;
+    /// <see cref="TryProjectColumnRead"/> is the authority.
+    /// </summary>
+    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
+
     /// <inheritdoc/>
     // Raw bytes have no lossless spelling as a string, so they cannot go through the canonical form. That refuses
     // LowCardinality(String) from a byte column up front instead of faulting once the write is under way; giving
@@ -60,6 +71,33 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
             ? Array.Empty<byte>()
             : throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
     }
+
+    /// <summary>
+    /// The bytes are read off the column, not projected from its text: the text reading spells a byte UTF-8 cannot
+    /// express as U+FFFD, so re-encoding it would hand back the replacement character rather than the data.
+    /// </summary>
+    public bool TryProjectColumnRead(Expression column, Expression row, Type targetType, out Expression projected)
+    {
+        projected = targetType == typeof(byte[])
+            ? Expression.Call(RowBytesMethod, column, row)
+            : null;
+        return projected is not null;
+    }
+
+    /// <summary>One row's bytes, copied out of the column's blob into an array the caller owns.</summary>
+    /// <param name="column">The decoded column, which must expose its bytes.</param>
+    /// <param name="row">The zero-based row index.</param>
+    /// <returns>That row's bytes.</returns>
+    /// <exception cref="InvalidOperationException"><paramref name="column"/> does not expose its bytes.</exception>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="row"/> is negative or not less than the row count.</exception>
+    // The type test is per row rather than once, which an isinst beside a byte[] allocation does not measurably
+    // cost. Every column this codec decodes exposes the bytes; a column built by a caller and labelled String
+    // need not, and would otherwise fail with a bare cast error naming neither the column nor the reading.
+    public static byte[] RowBytes(IColumn column, int row) => column is IStringColumn text
+        ? text.GetBytes(row).ToArray()
+        : throw new InvalidOperationException(
+            $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which does not expose the wire bytes through IStringColumn, " +
+            $"so its values cannot be read as a byte[]. Only a String column decoded from a server response does.");
 
     /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)

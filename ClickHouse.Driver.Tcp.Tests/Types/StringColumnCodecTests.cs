@@ -213,6 +213,67 @@ public class StringColumnCodecTests
         });
     }
 
+    /// <summary>
+    /// The byte reading is taken off the column's storage, so it survives what the text reading cannot. Asserted
+    /// against a decoded column rather than a round-trip because the point is which of the column's two forms the
+    /// projection read: the text of this row is U+FFFD, and a projection from it would hand that back.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_NonUtf8Column_ReadsTheBytesRatherThanTheDamagedText()
+    {
+        // Two rows: 'A', 0xFF, 'B', then an empty one.
+        byte[] wire = { 0x03, 0x41, 0xFF, 0x42, 0x00 };
+        using var reader = ReaderOver(wire);
+        using IColumn column = await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", 2, None);
+
+        IColumn<byte[]> bytes = ReadAs<byte[]>(column);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bytes, Is.Not.SameAs(column), "byte[] is not the column's own element type, so this is a converting view");
+            Assert.That(bytes[0], Is.EqualTo(new byte[] { 0x41, 0xFF, 0x42 }));
+            Assert.That(bytes[1], Is.EqualTo(Array.Empty<byte>()));
+            Assert.That(bytes.Values.ToArray(), Is.EqualTo(new[] { new byte[] { 0x41, 0xFF, 0x42 }, Array.Empty<byte>() }));
+            Assert.That(((IColumn<string>)column)[0], Is.EqualTo("A\uFFFDB"), "the reading the bytes exist to avoid");
+            Assert.Throws<IndexOutOfRangeException>(() => _ = bytes[2]);
+        });
+    }
+
+    [Test]
+    public async Task ReadAs_ZeroRowColumn_ReadsAsAnEmptyByteColumn()
+    {
+        using var reader = ReaderOver(Array.Empty<byte>());
+        using IColumn column = await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", 0, None);
+
+        IColumn<byte[]> bytes = ReadAs<byte[]>(column);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bytes.RowCount, Is.EqualTo(0));
+            Assert.That(bytes.Values.Length, Is.EqualTo(0));
+            Assert.Throws<IndexOutOfRangeException>(() => _ = bytes[0]);
+        });
+    }
+
+    /// <summary>
+    /// The reading needs the column's own byte storage, which only a decoded <c>String</c> column has. A column a
+    /// caller built and labelled <c>String</c> has text and nothing else, so it is told so by name rather than
+    /// failing with a bare cast error. Not reachable through a query, whose columns this codec decodes.
+    /// </summary>
+    [Test]
+    public void ReadAs_StringColumnWithoutByteStorage_SaysWhichColumnHasNoBytes()
+    {
+        var text = new ArrayColumn<string>("c", "String", new[] { "a" });
+
+        IColumn<byte[]> bytes = ReadAs<byte[]>(text);
+        var thrown = Assert.Throws<InvalidOperationException>(() => _ = bytes[0]);
+
+        Assert.That(thrown.Message, Does.Contain("Column 'c' (String)").And.Contain("IStringColumn"));
+    }
+
+    private static IColumn<T> ReadAs<T>(IColumn column)
+        => ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, new ResolveContext { ServerTimezone = "UTC" });
+
     private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)
     {
         using var ms = new MemoryStream();

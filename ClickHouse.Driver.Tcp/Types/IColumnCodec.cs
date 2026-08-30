@@ -23,7 +23,8 @@ internal interface IColumnCodec
     IReadOnlyList<Type> WritableElementTypes => new[] { ElementType };
 
     /// <summary>
-    /// Common readable CLR types. Composite combinations may be omitted; test them with <see cref="TryProjectRead"/>.
+    /// Common readable CLR types. Composite combinations may be omitted; test them with
+    /// <see cref="TryProjectColumnRead"/> and then <see cref="TryProjectRead"/>, which are the authority.
     /// </summary>
     IReadOnlyList<Type> ReadableElementTypes => new[] { ElementType };
 
@@ -38,6 +39,36 @@ internal interface IColumnCodec
         ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
         projected = targetType == ElementType ? value : null;
         return projected is not null;
+    }
+
+    /// <summary>
+    /// Builds an expression that reads one row as <paramref name="targetType"/> off the decoded column's own
+    /// storage, rather than from the canonical value <see cref="TryProjectRead"/> starts from. Asked first, and
+    /// offered by no codec by default.
+    ///
+    /// <para>
+    /// It exists for the reading the canonical value cannot express: a <c>String</c> is a byte string whose
+    /// canonical reading is UTF-8 text, and a byte UTF-8 cannot spell decodes to U+FFFD, so a <c>byte[]</c>
+    /// projected from that text would carry the replacement character instead of the data. The bytes are still in
+    /// the column, so the reading comes from there.
+    /// </para>
+    ///
+    /// <para>
+    /// A composite offers such a reading by forwarding to its children over their part of its storage, so it
+    /// reaches only as far as those forwards go: <c>Nullable</c> asks its inner column, and no other wrapper does.
+    /// The columnar views (<see cref="IArrayColumn"/>, <see cref="IMapColumn"/>) reach the same storage by hand.
+    /// </para>
+    /// </summary>
+    /// <param name="column">An expression of type <see cref="IColumn"/> yielding the decoded column.</param>
+    /// <param name="row">An <see cref="int"/> expression yielding the row to read. Bind it to a local before
+    /// splicing it more than once: a caller may pass an arithmetic expression rather than a variable.</param>
+    /// <param name="targetType">The requested CLR type.</param>
+    /// <param name="projected">An expression of type <paramref name="targetType"/>, or null when none is offered.</param>
+    /// <returns>Whether a reading of <paramref name="targetType"/> off the column's storage exists.</returns>
+    bool TryProjectColumnRead(Expression column, Expression row, Type targetType, out Expression projected)
+    {
+        projected = null;
+        return false;
     }
 
     /// <summary>A valid canonical value for the hidden inner value of a null.</summary>

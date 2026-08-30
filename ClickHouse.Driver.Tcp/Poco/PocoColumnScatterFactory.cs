@@ -20,7 +20,8 @@ namespace ClickHouse.Driver.Tcp.Poco;
 internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int start, int rowCount, long rowOffset);
 
 /// <summary>
-/// Compiles a per-column loop with <see cref="PocoValueProjection"/> inlined into each assignment.
+/// Compiles a per-column loop with the projection inlined into each assignment — <see cref="PocoValueProjection"/>
+/// over the decoded value, or the codec's own reading off the column's storage where the value cannot express it.
 /// </summary>
 internal static class PocoColumnScatterFactory
 {
@@ -48,15 +49,13 @@ internal static class PocoColumnScatterFactory
             throw NotSurfacingItsElementType(column, codec);
         }
 
-        PocoScatterTier tier = SelectTier(forcedTier, column);
-
         ParameterExpression columnParameter = Expression.Parameter(typeof(IColumn), "column");
         ParameterExpression rows = Expression.Parameter(typeof(T[]), "rows");
         ParameterExpression start = Expression.Parameter(typeof(int), "start");
         ParameterExpression rowCount = Expression.Parameter(typeof(int), "rowCount");
         ParameterExpression rowOffset = Expression.Parameter(typeof(long), "rowOffset");
         ParameterExpression row = Expression.Variable(typeof(int), "row");
-        ParameterExpression value = Expression.Variable(elementType, "value");
+        Expression columnRow = Expression.Add(start, row);
 
         var site = new PocoProjectionSite
         {
@@ -67,26 +66,41 @@ internal static class PocoColumnScatterFactory
             Row = Expression.Add(rowOffset, Expression.Convert(row, typeof(long))),
         };
 
-        if (!PocoValueProjection.TryResolve(codec, value, member.MemberType, site, out Expression projected))
-        {
-            throw NotReadableAs(column, codec, member, typeof(T));
-        }
-
         var locals = new List<ParameterExpression>(3) { row };
         var body = new List<Expression>(4);
-        Expression source = SourceOneValue(tier, columnParameter, typedColumn, elementType, Expression.Add(start, row), locals, body);
 
-        // row = 0; while (row < rowCount) { value = <source>; rows[row].P = <projected>; row++; }
+        // A reading the decoded value cannot express (a String column's bytes into a byte[] property) comes off the
+        // column's storage instead, so it neither needs the value local nor a tier to source it through. Asked only
+        // for a property type that is not the element type itself, which the value expresses by definition — the
+        // same shortcut Block.ReadAs takes before it resolves anything.
+        Expression assign;
+        if (member.MemberType != elementType
+            && codec.TryProjectColumnRead(columnParameter, columnRow, member.MemberType, out Expression fromStorage))
+        {
+            assign = Expression.Assign(Expression.Property(Expression.ArrayIndex(rows, row), member.Property), fromStorage);
+        }
+        else
+        {
+            ParameterExpression value = Expression.Variable(elementType, "value");
+            if (!PocoValueProjection.TryResolve(codec, value, member.MemberType, site, out Expression projected))
+            {
+                throw NotReadableAs(column, codec, member, typeof(T));
+            }
+
+            Expression source = SourceOneValue(SelectTier(forcedTier, column), columnParameter, typedColumn, elementType, columnRow, locals, body);
+            assign = Expression.Block(
+                new[] { value },
+                Expression.Assign(value, source),
+                Expression.Assign(Expression.Property(Expression.ArrayIndex(rows, row), member.Property), projected));
+        }
+
+        // row = 0; while (row < rowCount) { <assign>; row++; }
         LabelTarget done = Expression.Label("done");
         body.Add(Expression.Assign(row, Expression.Constant(0)));
         body.Add(Expression.Loop(
             Expression.IfThenElse(
                 Expression.LessThan(row, rowCount),
-                Expression.Block(
-                    new[] { value },
-                    Expression.Assign(value, source),
-                    Expression.Assign(Expression.Property(Expression.ArrayIndex(rows, row), member.Property), projected),
-                    Expression.PostIncrementAssign(row)),
+                Expression.Block(assign, Expression.PostIncrementAssign(row)),
                 Expression.Break(done)),
             done));
 

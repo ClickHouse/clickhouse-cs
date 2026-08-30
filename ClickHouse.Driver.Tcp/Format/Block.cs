@@ -168,10 +168,10 @@ public sealed class Block : IDisposable
     /// <summary>
     /// The column called <paramref name="name"/> read as <typeparamref name="T"/>, converting each value if the
     /// column did not decode to that type: a <c>DateTime64(3)</c> column as a <see cref="DateTime"/>, an
-    /// <c>Enum8</c> as its label, an <c>Array(DateTime)</c> as a <see cref="DateTime"/><c>[]</c> per row. Which
-    /// readings a type offers is the type's own business, and the same set the POCO tier maps from — a
-    /// <c>UInt32</c> column reads as a <c>uint</c> and nothing else, and asking for anything else fails naming
-    /// what it does read as.
+    /// <c>Enum8</c> as its label, an <c>Array(DateTime)</c> as a <see cref="DateTime"/><c>[]</c> per row, a
+    /// <c>String</c> as its raw <c>byte[]</c>. Which readings a type offers is the type's own business, and the
+    /// same set the POCO tier maps from — a <c>UInt32</c> column reads as a <c>uint</c> and nothing else, and
+    /// asking for anything else fails naming what it does read as.
     ///
     /// <para>
     /// When <typeparamref name="T"/> is the column's own element type this <em>is</em> the column, so the fast
@@ -179,6 +179,13 @@ public sealed class Block : IDisposable
     /// a converting view: the indexer projects one value per call, and <see cref="IColumn{T}.Values"/>
     /// materializes the whole column into an array of its own, once. Bind it once outside the row loop, as with
     /// every accessor here, and read it while the block is alive — the values underneath belong to the block.
+    /// </para>
+    ///
+    /// <para>
+    /// A reading is taken from whichever of the column's two forms can express it. Most come from the decoded
+    /// value, but a <c>String</c>'s bytes come off the column's storage, because the decoded value is text and
+    /// text cannot spell a byte string: see <see cref="IStringColumn"/>, which is the same bytes borrowed rather
+    /// than copied per row.
     /// </para>
     /// </summary>
     /// <typeparam name="T">The CLR type to read the values as.</typeparam>

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -117,5 +118,154 @@ public class StringBytesIntegrationTests
         }
     }
 
+    /// <summary>
+    /// The bytes are a reading of the column's type, so the block tier reaches them without pattern-matching:
+    /// <c>ReadAs&lt;byte[]&gt;</c> copies one owned array per row. The same column's text reading is asserted
+    /// beside it, because that damaged text is the whole reason the byte reading exists.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_NonUtf8StringColumn_GivesTheWireBytesRatherThanTheTextReading()
+    {
+        var rows = new[] { new byte[] { 0x41, 0xFF, 0xFE, 0x42 }, Array.Empty<byte>(), new byte[] { 0x7A } };
+
+        await using var client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} (id UInt8, value String) ENGINE = Memory", cancellationToken: None);
+            await client.InsertAsync(
+                $"INSERT INTO {table} (id, value) VALUES",
+                new IColumn[]
+                {
+                    ClickHouseTcpColumn.Create("id", new byte[] { 0, 1, 2 }),
+                    ClickHouseTcpColumn.Create("value", rows),
+                },
+                cancellationToken: None);
+
+            var perRow = new List<byte[]>();
+            var materialized = new List<byte[]>();
+            var asText = new List<string>();
+            await foreach (Block block in client.StreamAsync($"SELECT value FROM {table} ORDER BY id", cancellationToken: None))
+            {
+                IColumn<byte[]> bytes = block.ReadAs<byte[]>("value");
+                for (int row = 0; row < block.RowCount; row++)
+                {
+                    perRow.Add(bytes[row]);
+                }
+
+                materialized.AddRange(bytes.Values.ToArray());
+                asText.AddRange(block.Column<string>("value").Values.ToArray());
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(perRow, Is.EqualTo(rows), "read one row at a time through the indexer");
+                Assert.That(materialized, Is.EqualTo(rows), "Values converts the column once, and must agree");
+                Assert.That(asText[0], Is.EqualTo("A\uFFFD\uFFFDB"), "the text reading of the same row, which loses the bytes");
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    /// <summary>
+    /// A <c>Nullable(String)</c> reads as a <c>byte[]</c> too: the wrapper forwards the reading to its inner column
+    /// and its null-map decides which rows are read at all, so a NULL row arrives as null rather than as the
+    /// placeholder the wire carries there.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_NullableStringColumn_GivesTheBytesAndLeavesTheNullRowsNull()
+    {
+        var rows = new[] { new byte[] { 0x41, 0xFF }, null, Array.Empty<byte>() };
+
+        await using var client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} (id UInt8, value Nullable(String)) ENGINE = Memory", cancellationToken: None);
+            await client.InsertAsync(
+                $"INSERT INTO {table} (id, value) VALUES",
+                new IColumn[]
+                {
+                    ClickHouseTcpColumn.Create("id", new byte[] { 0, 1, 2 }),
+                    ClickHouseTcpColumn.Create("value", rows),
+                },
+                cancellationToken: None);
+
+            var read = new List<byte[]>();
+            await foreach (Block block in client.StreamAsync($"SELECT value FROM {table} ORDER BY id", cancellationToken: None))
+            {
+                IColumn<byte[]> bytes = block.ReadAs<byte[]>("value");
+                for (int row = 0; row < block.RowCount; row++)
+                {
+                    read.Add(bytes[row]);
+                }
+            }
+
+            Assert.That(read, Is.EqualTo(rows));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    /// <summary>
+    /// The POCO tier maps from the same set of readings, so a property typed <c>byte[]</c> is filled from a
+    /// <c>String</c> column with the bytes the wire carried, whether or not the type is wrapped in
+    /// <c>Nullable</c>.
+    /// </summary>
+    [Test]
+    public async Task QueryAsync_ByteArrayProperties_AreFilledWithTheWireBytes()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        try
+        {
+            await client.ExecuteAsync(
+                $"CREATE TABLE {table} (Id UInt8, Value String, Optional Nullable(String)) ENGINE = Memory",
+                cancellationToken: None);
+            await client.InsertAsync(
+                $"INSERT INTO {table} (Id, Value, Optional) VALUES",
+                new IColumn[]
+                {
+                    ClickHouseTcpColumn.Create("Id", new byte[] { 0, 1 }),
+                    ClickHouseTcpColumn.Create("Value", new[] { new byte[] { 0x41, 0xFF, 0xFE, 0x42 }, Array.Empty<byte>() }),
+                    ClickHouseTcpColumn.Create("Optional", new[] { new byte[] { 0xFE }, null }),
+                },
+                cancellationToken: None);
+
+            var rows = new List<BlobRow>();
+            await foreach (BlobRow row in client.QueryAsync<BlobRow>($"SELECT Id, Value, Optional FROM {table} ORDER BY Id", cancellationToken: None))
+            {
+                rows.Add(row);
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rows, Has.Count.EqualTo(2));
+                Assert.That(rows[0].Value, Is.EqualTo(new byte[] { 0x41, 0xFF, 0xFE, 0x42 }));
+                Assert.That(rows[0].Optional, Is.EqualTo(new byte[] { 0xFE }));
+                Assert.That(rows[1].Value, Is.EqualTo(Array.Empty<byte>()));
+                Assert.That(rows[1].Optional, Is.Null);
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
     private static string UniqueTableName() => $"tcp_string_bytes_test_{Guid.NewGuid():N}";
+
+    private sealed class BlobRow
+    {
+        public byte Id { get; set; }
+
+        public byte[] Value { get; set; }
+
+        public byte[] Optional { get; set; }
+    }
 }

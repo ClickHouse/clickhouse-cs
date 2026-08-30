@@ -324,4 +324,21 @@ public class NullableColumnCodecTests
     [Test]
     public void Resolve_Nullable_StampsFullTypeName()
         => Assert.That(Resolve("Nullable(UInt8)").TypeName, Is.EqualTo("Nullable(UInt8)"));
+
+    /// <summary>
+    /// Forwarding a reading to the inner column needs this column's null-map to say which rows to read, and only a
+    /// decoded <c>Nullable</c> column has one. A column a caller built and labelled <c>Nullable(String)</c> is told
+    /// so by name rather than failing with a bare cast error. Not reachable through a query, whose columns the
+    /// codec decodes.
+    /// </summary>
+    [Test]
+    public void ReadAs_NullableColumnWithoutANullMap_SaysWhichColumnHasNone()
+    {
+        var text = new ArrayColumn<string>("c", "Nullable(String)", new[] { "a" });
+
+        IColumn<byte[]> bytes = ColumnCodecRegistry.Default.Projections.ReadAs<byte[]>(text, new ResolveContext { ServerTimezone = "UTC" });
+        var thrown = Assert.Throws<InvalidOperationException>(() => _ = bytes[0]);
+
+        Assert.That(thrown.Message, Does.Contain("Column 'c' (Nullable(String))").And.Contain("INullableColumn"));
+    }
 }
