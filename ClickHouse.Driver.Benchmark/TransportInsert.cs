@@ -36,14 +36,21 @@ namespace ClickHouse.Driver.Benchmark;
 /// </para>
 /// <para>
 /// Each arm also sends its rows in one request: <c>InsertOptions.BatchSize</c> defaults to 100,000,
-/// so a 500k-row HTTP insert would otherwise pay whatever per-request cost the server charges five
-/// times over. <see cref="HttpRowsDefaultBatching"/> keeps the default for comparison.
+/// so this insert would otherwise go as fifty sequential requests.
+/// <see cref="HttpRowsDefaultBatching"/> keeps the default for comparison, and measures about 2.6 ms
+/// per extra request - the round trip, and little else once the server's buffering is off.
 /// </para>
 /// <para>
 /// The target is an <c>ENGINE Null</c> table, so the server discards the rows and the measurement
 /// stays on serialization plus the wire. The source data is built once in <see cref="Setup"/>. The
 /// column names match the POCO's property names, because the HTTP binary insert maps a property to
 /// the column of that name and ClickHouse column names are case-sensitive.
+/// </para>
+/// <para>
+/// <see cref="Count"/> is 5,000,000 because at 500,000 every arm ran under 60 ms, where the ratios
+/// carried a standard deviation of 0.16 to 0.76 and told a reader nothing. At this size they land at
+/// 0.04 to 0.11 and hold across the tenfold change. It costs about 1 GB of source rows held for the
+/// run, which is the reason to raise it no further.
 /// </para>
 /// </remarks>
 [BenchmarkCategory(BenchmarkCategories.Cross)]
@@ -67,7 +74,7 @@ public class TransportInsert
     private object[][] rows;
     private Reading[] pocoRows;
 
-    [Params(500_000)]
+    [Params(5_000_000)]
     public int Count { get; set; }
 
     private InsertOptions HttpOptions => new()
