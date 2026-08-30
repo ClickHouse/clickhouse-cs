@@ -204,23 +204,22 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// A low-cardinality column is read through its dictionary: every row resolves to the converted value of the
-    /// entry its key names, so the values must match what the same reading gives without a dictionary in front of
-    /// it. <c>LowCardinality(DateTime)</c> is the only shape that reaches this today, and the server calls it
-    /// suspicious, hence the setting.
+    /// Wrapping a type in <c>LowCardinality</c> must not change what its values read as: a row is a key into a
+    /// dictionary of the inner type's values, so the reading has to match what the same reading gives with no
+    /// dictionary in front of it. Only <c>DateTime</c> and <c>Time</c> have an inner reading to project here, and
+    /// the server calls a low-cardinality <c>DateTime</c> suspicious, hence the setting.
     /// </summary>
     [Test]
-    public async Task ReadAs_LowCardinalityColumn_ReadsEveryRowAsItsDictionaryEntrysValue()
+    public async Task ReadAs_LowCardinalityColumn_GivesTheSameValuesAsTheReadingWithoutADictionary()
     {
         await using var client = TcpServerFixture.CreateClient();
         var options = SuspiciousLowCardinality();
 
         DateTimeOffset[] throughDictionary = null;
-        DateTimeOffset[] reread = null;
         DateTimeOffset[] withoutDictionary = null;
         uint[] rawCounts = null;
 
-        // Twelve rows over three distinct values, so most rows share an entry with an earlier one.
+        // Twelve rows over three distinct values, so most rows repeat an earlier one.
         const string Values = "toDateTime('2024-06-15 14:00:00', 'UTC') + INTERVAL (number % 3) DAY";
         await foreach (Block block in client.StreamAsync(
             $"SELECT CAST({Values} AS LowCardinality(DateTime('UTC'))) AS v FROM system.numbers LIMIT 12",
@@ -229,15 +228,6 @@ public class BlockReadAsIntegrationTests
         {
             throughDictionary = block.ReadAs<DateTimeOffset>("v").Values.ToArray();
             rawCounts = block.Column<uint>("v").Values.ToArray();
-        }
-
-        // Again, so the second read is served by the cached entry reader rather than a freshly compiled one.
-        await foreach (Block block in client.StreamAsync(
-            $"SELECT CAST({Values} AS LowCardinality(DateTime('UTC'))) AS v FROM system.numbers LIMIT 12",
-            options,
-            cancellationToken: None))
-        {
-            reread = block.ReadAs<DateTimeOffset>("v").Values.ToArray();
         }
 
         await foreach (Block block in client.StreamAsync(
@@ -251,10 +241,9 @@ public class BlockReadAsIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(throughDictionary, Is.EqualTo(withoutDictionary));
-            Assert.That(reread, Is.EqualTo(throughDictionary), "the cached entry reader gives the same values");
             Assert.That(throughDictionary[0].UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 15, 14, 0, 0, DateTimeKind.Utc)));
             Assert.That(throughDictionary[1].UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 16, 14, 0, 0, DateTimeKind.Utc)));
-            Assert.That(throughDictionary[3], Is.EqualTo(throughDictionary[0]), "row 3 shares row 0's dictionary entry");
+            Assert.That(throughDictionary[3], Is.EqualTo(throughDictionary[0]), "row 3 repeats row 0's value");
 
             // The undecoded reading of the same column, to pin that the keys really were resolved rather than read
             // as values: a raw count is the epoch second, not a dictionary index.
@@ -263,12 +252,12 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// The nullable shape, where the dictionary's slot 0 is the NULL marker rather than a value: those rows must
-    /// read as null, and the rest as the lifted reading of their entry. The reading is taken from the entry and
-    /// then made nullable, so a bad slot 0 would surface as a wrong value rather than an error.
+    /// The nullable shape, where the dictionary reserves slot 0 as the NULL marker rather than a value: those rows
+    /// must read as null and the rest as the lifted inner reading. A mishandled slot 0 would surface as a wrong
+    /// value rather than an error, so the nulls are asserted by position.
     /// </summary>
     [Test]
-    public async Task ReadAs_NullableLowCardinalityColumn_LiftsTheEntryReadingAndKeepsTheNullRowsNull()
+    public async Task ReadAs_NullableLowCardinalityColumn_LiftsTheInnerReadingAndKeepsTheNullRowsNull()
     {
         await using var client = TcpServerFixture.CreateClient();
 
@@ -289,12 +278,10 @@ public class BlockReadAsIntegrationTests
             Assert.That(read[2], Is.Null, "every even row is NULL");
             Assert.That(read[1]?.UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 16, 14, 0, 0, DateTimeKind.Utc)));
             Assert.That(read[3]?.UtcDateTime, Is.EqualTo(new DateTime(2024, 6, 18, 14, 0, 0, DateTimeKind.Utc)));
-            Assert.That(read[5], Is.EqualTo(read[1]), "row 5 shares row 1's dictionary entry");
+            Assert.That(read[5], Is.EqualTo(read[1]), "row 5 repeats row 1's value");
         });
     }
 
-    // LowCardinality over a DateTime is the only inner type that offers a reading other than its own, and the
-    // server refuses to build one without this.
     /// <summary>
     /// A <c>FixedString(N)</c> reads as text, and the text is all <c>N</c> bytes: the server pads a shorter stored
     /// value with zeros, and those are part of the value the column holds, so they are part of its reading. A byte
@@ -327,19 +314,17 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// The one place the per-entry reading is directly observable: the text of a
-    /// <c>LowCardinality(FixedString(N))</c> is a reference, so rows sharing a dictionary entry share the string
-    /// instance rather than each getting an equal copy. Converting per row would still compare equal here, and
-    /// would allocate one string per row for a dictionary holding a handful.
+    /// The text reading composes through <c>LowCardinality</c>, which a <c>String</c>'s byte reading does not: this
+    /// one projects from a value, so every wrapper forwards it. Read through both accessors, since one converts a
+    /// row at a time and the other materializes the whole column.
     /// </summary>
     [Test]
-    public async Task ReadAs_LowCardinalityFixedStringAsText_GivesRowsSharingAnEntryTheSameInstance()
+    public async Task ReadAs_LowCardinalityFixedStringColumn_ReadsEveryRowAsText()
     {
         await using var client = TcpServerFixture.CreateClient();
 
-        string[] text = null;
-        bool sharedIndexer = false;
-        bool sharedValues = false;
+        string[] materialized = null;
+        var perRow = new string[6];
 
         await foreach (Block block in client.StreamAsync(
             @"SELECT CAST(['alph', 'beta'][1 + number % 2] AS LowCardinality(FixedString(4))) AS v
@@ -347,20 +332,24 @@ public class BlockReadAsIntegrationTests
             cancellationToken: None))
         {
             IColumn<string> read = block.ReadAs<string>("v");
-            sharedIndexer = ReferenceEquals(read[0], read[2]);
+            for (int row = 0; row < block.RowCount; row++)
+            {
+                perRow[row] = read[row];
+            }
 
-            text = read.Values.ToArray();
-            sharedValues = ReferenceEquals(text[0], text[4]);
+            materialized = read.Values.ToArray();
         }
+
+        var expected = new[] { "alph", "beta", "alph", "beta", "alph", "beta" };
 
         Assert.Multiple(() =>
         {
-            Assert.That(text, Is.EqualTo(new[] { "alph", "beta", "alph", "beta", "alph", "beta" }));
-            Assert.That(sharedIndexer, Is.True, "rows 0 and 2 name one dictionary entry, so they share its text");
-            Assert.That(sharedValues, Is.True, "and materializing Values does not convert them apart");
+            Assert.That(perRow, Is.EqualTo(expected), "read a row at a time through the indexer");
+            Assert.That(materialized, Is.EqualTo(expected), "Values converts the column once, and must agree");
         });
     }
 
+    // The server refuses to build a low-cardinality DateTime without this.
     private static ClickHouseTcpQueryOptions SuspiciousLowCardinality() => new()
     {
         Settings = new Dictionary<string, string>(StringComparer.Ordinal) { ["allow_suspicious_low_cardinality_types"] = "1" },
