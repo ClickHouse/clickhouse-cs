@@ -283,7 +283,7 @@ public class ClickHouseTcpSessionIntegrationTests
     }
 
     [Test]
-    public async Task IsOpen_AfterAQueryTheServerRejects_StaysTrue()
+    public async Task IsOpen_AfterAQueryTheServerRejects_IsFalseAndFurtherOperationsSayWhy()
     {
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
         await using IClickHouseTcpSession session = await client.OpenSessionAsync(None);
@@ -294,12 +294,14 @@ public class ClickHouseTcpSessionIntegrationTests
             async () => await session.ExecuteAsync("SELECT * FROM no_such_table_here", cancellationToken: None),
             Throws.TypeOf<ClickHouseServerException>());
 
-        // An error the server raised over a connection it still owns costs nothing but the query: the session's
-        // temporary table is still there, so the session is still worth keeping.
-        Assert.Multiple(async () =>
+        // An Exception packet does not say whether the server will accept another request, so the connection is
+        // retired. Unlike a pooled client, a session cannot redial without losing the state it exists to preserve.
+        Assert.Multiple(() =>
         {
-            Assert.That(session.IsOpen, Is.True);
-            Assert.That(await ScalarAsync(session, $"SELECT count() AS value FROM {table}"), Is.EqualTo(0UL));
+            Assert.That(session.IsOpen, Is.False);
+            Assert.That(
+                async () => await session.ExecuteAsync($"SELECT count() FROM {table}", cancellationToken: None),
+                Throws.TypeOf<InvalidOperationException>().With.Message.Contains("Open a new session"));
         });
     }
 

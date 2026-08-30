@@ -36,8 +36,8 @@ public interface IClickHouseTcpSession : IClickHouseTcpOperations
     /// The connection is tested when an operation ends and again before the next one starts, so a drop while the
     /// session sat idle is caught. True is still not a promise that the next operation will work, since nothing rules
     /// out a drop between this answer and its use: treat false as certain and true as "nothing known to be wrong". An
-    /// operation leaves the connection unusable by failing at the transport or protocol level, by being cancelled, or
-    /// by streaming a result abandoned part-way; a server-side error in a query the server accepted does not.
+    /// operation leaves the connection unusable by failing at the transport or protocol level, by receiving a
+    /// server-side error, by being cancelled, or by streaming a result abandoned part-way.
     /// </remarks>
     bool IsOpen { get; }
 }
