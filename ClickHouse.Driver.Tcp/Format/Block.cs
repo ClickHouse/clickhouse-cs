@@ -183,12 +183,6 @@ public sealed class Block : IDisposable
     /// </para>
     ///
     /// <para>
-    /// A <c>LowCardinality</c> column converts its dictionary rather than its rows: every row resolves to the
-    /// converted value of the entry its key names, so rows sharing an entry share one converted value and a
-    /// million rows over a small dictionary convert as many values as the dictionary holds.
-    /// </para>
-    ///
-    /// <para>
     /// A reading is taken from whichever of the column's two forms can express it. Most come from the decoded
     /// value, but a <c>String</c>'s bytes come off the column's storage, because the decoded value is text and
     /// text cannot spell a byte string: see <see cref="IStringColumn"/>, which is the same bytes borrowed rather
