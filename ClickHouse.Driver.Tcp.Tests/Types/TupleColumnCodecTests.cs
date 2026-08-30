@@ -403,4 +403,24 @@ public class TupleColumnCodecTests
         Assert.That(thrown.Message, Does.Contain("Tuple(Int32, String)").And.Contain("field codecs accept"));
     }
 
+    /// <summary>
+    /// A projected reading pairs each child column with the child codec of the same position, so a column carrying
+    /// fewer children than its type string declares is refused by name. Not reachable through a query, whose
+    /// columns this codec builds from that same type string.
+    /// </summary>
+    [Test]
+    public void ReadAs_TupleColumnWithFewerChildrenThanItsType_ThrowsNamingBothCounts()
+    {
+        using var narrower = new TupleColumn<byte>(
+            "c",
+            "Tuple(UInt8, String)",
+            new IColumn[] { PrimitiveColumn<byte>.FromValues("1", "UInt8", new byte[] { 7 }) },
+            fieldNames: null,
+            ownsChildren: false);
+
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => ColumnCodecRegistry.Default.Projections.ReadAs<(byte, byte[])>(narrower, default));
+
+        Assert.That(thrown.Message, Does.Contain("Tuple(UInt8, String)").And.Contain("1 children").And.Contain("resolved to 2"));
+    }
 }

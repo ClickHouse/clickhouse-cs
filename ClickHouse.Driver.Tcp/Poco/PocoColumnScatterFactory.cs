@@ -20,8 +20,9 @@ namespace ClickHouse.Driver.Tcp.Poco;
 internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int start, int rowCount, long rowOffset);
 
 /// <summary>
-/// Compiles a per-column loop with the projection inlined into each assignment — <see cref="PocoValueProjection"/>
-/// over the decoded value, or the codec's own reading off the column's storage where the value cannot express it.
+/// Compiles a per-column loop that fills one property a row at a time — from <see cref="PocoValueProjection"/>
+/// inlined over each decoded value, or from a view the codec projects over the whole column where a single value
+/// cannot express the reading.
 /// </summary>
 internal static class PocoColumnScatterFactory
 {
@@ -69,15 +70,25 @@ internal static class PocoColumnScatterFactory
         var locals = new List<ParameterExpression>(3) { row };
         var body = new List<Expression>(4);
 
-        // A reading the decoded value cannot express (a String column's bytes into a byte[] property) comes off the
-        // column's storage instead, so it neither needs the value local nor a tier to source it through. Asked only
-        // for a property type that is not the element type itself, which the value expresses by definition — the
-        // same shortcut Block.ReadAs takes before it resolves anything.
+        // A reading that is not a function of one value (a String column's bytes into a byte[] property, a
+        // LowCardinality one converted per dictionary entry) is taken through the codec's column-level projection:
+        // the view is built once in the prologue and the loop reads it a row at a time, so this branch needs
+        // neither the value local nor a tier to source it through. Asked only for a property type that is not the
+        // element type itself, which the value expresses by definition — the same shortcut Block.ReadAs takes.
         Expression assign;
         if (member.MemberType != elementType
-            && codec.TryProjectColumnRead(columnParameter, columnRow, member.MemberType, out Expression fromStorage))
+            && codec.TryProjectColumnRead(member.MemberType, out ColumnReadProjection projection))
         {
-            assign = Expression.Assign(Expression.Property(Expression.ArrayIndex(rows, row), member.Property), fromStorage);
+            Type typedView = typeof(IColumn<>).MakeGenericType(member.MemberType);
+            ParameterExpression view = Expression.Variable(typedView, "view");
+            locals.Add(view);
+            body.Add(Expression.Assign(
+                view,
+                Expression.Convert(Expression.Invoke(Expression.Constant(projection), columnParameter), typedView)));
+
+            assign = Expression.Assign(
+                Expression.Property(Expression.ArrayIndex(rows, row), member.Property),
+                Expression.MakeIndex(view, typedView.GetProperty("Item", member.MemberType, new[] { typeof(int) }), new[] { columnRow }));
         }
         else
         {

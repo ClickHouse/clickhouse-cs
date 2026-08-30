@@ -258,6 +258,56 @@ public class StringBytesIntegrationTests
         }
     }
 
+    /// <summary>
+    /// The byte reading composes, so the POCO tier reaches it under a wrapper too: a property typed
+    /// <c>byte[][]</c> is filled from an <c>Array(String)</c> column, and one typed <c>byte[]</c> from a
+    /// <c>LowCardinality(String)</c> column, where the conversion happens once per dictionary entry.
+    /// </summary>
+    [Test]
+    public async Task QueryAsync_ByteArrayPropertiesUnderAWrapper_AreFilledWithTheWireBytes()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        try
+        {
+            await client.ExecuteAsync(
+                $"CREATE TABLE {table} (Id UInt8, Parts Array(String), Label LowCardinality(String)) ENGINE = Memory",
+                cancellationToken: None);
+            await client.InsertAsync(
+                $"INSERT INTO {table} (Id, Parts, Label) VALUES",
+                new IColumn[]
+                {
+                    ClickHouseTcpColumn.Create("Id", new byte[] { 0, 1, 2 }),
+                    ClickHouseTcpColumn.Create(
+                        "Parts",
+                        new[] { new[] { new byte[] { 0x41, 0xFF }, Array.Empty<byte>() }, Array.Empty<byte[]>(), new[] { new byte[] { 0xFE } } }),
+                    ClickHouseTcpColumn.Create("Label", new[] { "shared", "other", "shared" }),
+                },
+                cancellationToken: None);
+
+            var rows = new List<NestedBlobRow>();
+            await foreach (NestedBlobRow row in client.QueryAsync<NestedBlobRow>($"SELECT Id, Parts, Label FROM {table} ORDER BY Id", cancellationToken: None))
+            {
+                rows.Add(row);
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rows, Has.Count.EqualTo(3));
+                Assert.That(rows[0].Parts, Is.EqualTo(new[] { new byte[] { 0x41, 0xFF }, Array.Empty<byte>() }));
+                Assert.That(rows[1].Parts, Is.Empty);
+                Assert.That(rows[2].Parts, Is.EqualTo(new[] { new byte[] { 0xFE } }));
+                Assert.That(rows[0].Label, Is.EqualTo(new byte[] { 0x73, 0x68, 0x61, 0x72, 0x65, 0x64 }));
+                Assert.That(rows[1].Label, Is.EqualTo(new byte[] { 0x6F, 0x74, 0x68, 0x65, 0x72 }));
+                Assert.That(ReferenceEquals(rows[0].Label, rows[2].Label), Is.True, "both rows hold the same dictionary entry");
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
     private static string UniqueTableName() => $"tcp_string_bytes_test_{Guid.NewGuid():N}";
 
     private sealed class BlobRow
@@ -267,5 +317,14 @@ public class StringBytesIntegrationTests
         public byte[] Value { get; set; }
 
         public byte[] Optional { get; set; }
+    }
+
+    private sealed class NestedBlobRow
+    {
+        public byte Id { get; set; }
+
+        public byte[][] Parts { get; set; }
+
+        public byte[] Label { get; set; }
     }
 }

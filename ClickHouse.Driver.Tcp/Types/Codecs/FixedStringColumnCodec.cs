@@ -24,8 +24,10 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<byte[]>
 {
-    private static readonly MethodInfo RowTextMethod =
-        typeof(FixedStringColumnCodec).GetMethod(nameof(RowText), BindingFlags.Public | BindingFlags.Static);
+    private static readonly Func<IColumn, int, string> ReadRowText = RowText;
+
+    private static readonly ColumnReadProjection ProjectText =
+        static source => new ProjectedReadColumn<string>(source, ReadRowText);
 
     private static readonly MethodInfo Utf8Method =
         typeof(Encoding).GetMethod(nameof(Encoding.GetString), new[] { typeof(byte[]) });
@@ -72,15 +74,13 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
 
     /// <summary>
     /// The text reading decodes off the column's own blob, so no <c>byte[]</c> is materialized per row to decode
-    /// from. <see cref="TryProjectRead"/> offers the same reading from a value, for the composites that hold their
-    /// elements as arrays rather than as this column's storage.
+    /// from. <see cref="TryProjectRead"/> offers the same reading from a value, for a caller holding one element
+    /// rather than the column.
     /// </summary>
-    public bool TryProjectColumnRead(Expression column, Expression row, Type targetType, out Expression projected)
+    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
-        projected = targetType == typeof(string)
-            ? Expression.Call(RowTextMethod, column, row)
-            : null;
-        return projected is not null;
+        projection = targetType == typeof(string) ? ProjectText : null;
+        return projection is not null;
     }
 
     /// <inheritdoc/>
