@@ -25,9 +25,10 @@ public enum TransportReadShape
 /// </summary>
 /// <remarks>
 /// <para>
-/// Both clients run at their own defaults, which is what a caller gets: response compression is on
-/// for HTTP and LZ4 framing is on for the native protocol. The codecs differ, so this table answers
-/// "what do I get today", not "which codec is faster" — <see cref="TcpCompression"/> owns that axis.
+/// Both sides run uncompressed. The transports do not default to the same codec — HTTP to gzip/ZSTD,
+/// the native client to LZ4 — so at their defaults the codec difference reports itself as a transport
+/// difference, and over loopback a codec costs CPU while saving nothing. <see cref="TcpCompression"/>
+/// owns the codec axis; a comparison of the codecs' benefit needs a path with real bandwidth.
 /// </para>
 /// <para>
 /// Every arm consumes every value, because a transport that only decodes is not comparable with one
@@ -39,6 +40,10 @@ public enum TransportReadShape
 /// runner changes. The per-transport classes (<see cref="SelectColumn"/>,
 /// <see cref="TcpSelectColumn"/>) are what a PR comparison reads.
 /// </para>
+/// <para>
+/// Two million rows rather than five hundred thousand: at the smaller size the arms ran in tens of
+/// milliseconds with a relative standard deviation near 30%, which no reader can act on.
+/// </para>
 /// </remarks>
 [BenchmarkCategory(BenchmarkCategories.Cross)]
 [Config(typeof(ComparisonConfig))]
@@ -48,7 +53,7 @@ public class TransportRead
     private ClickHouseConnection httpConnection;
     private ClickHouseTcpClient tcpClient;
 
-    [Params(500_000)]
+    [Params(2_000_000)]
     public int Count { get; set; }
 
     [ParamsAllValues]
@@ -70,8 +75,8 @@ public class TransportRead
     [GlobalSetup]
     public void Setup()
     {
-        httpConnection = new ClickHouseConnection(BenchmarkServer.Http);
-        tcpClient = BenchmarkServer.CreateTcpClient();
+        httpConnection = new ClickHouseConnection(BenchmarkServer.HttpUncompressed);
+        tcpClient = BenchmarkServer.CreateUncompressedTcpClient();
     }
 
     [GlobalCleanup]

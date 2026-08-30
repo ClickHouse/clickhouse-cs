@@ -77,6 +77,8 @@ public class TransportInsert
     [Params(5_000_000)]
     public int Count { get; set; }
 
+    // Compressor, not the connection string's Compression key: a binary insert does not consult that
+    // setting (see ClickHouseClientSettings.UseCompression), so this is what turns the codec off here.
     private InsertOptions HttpOptions => new()
     {
         BatchSize = Count,
@@ -89,13 +91,9 @@ public class TransportInsert
     [GlobalSetup]
     public async Task Setup()
     {
-        httpClient = new ClickHouseClient(BenchmarkServer.Http);
+        httpClient = new ClickHouseClient(BenchmarkServer.HttpUncompressed);
         httpClient.RegisterBinaryInsertType<Reading>();
-        tcpClient = BenchmarkServer.CreateTcpClient(builder =>
-        {
-            builder.Compression = "none";
-            return builder;
-        });
+        tcpClient = BenchmarkServer.CreateUncompressedTcpClient();
 
         await httpClient.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test");
 
