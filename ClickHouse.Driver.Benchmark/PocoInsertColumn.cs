@@ -6,6 +6,7 @@ using BenchmarkDotNet.Attributes;
 
 namespace ClickHouse.Driver.Benchmark;
 
+[BenchmarkCategory(BenchmarkCategories.HttpRegression)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class PocoInsertColumn

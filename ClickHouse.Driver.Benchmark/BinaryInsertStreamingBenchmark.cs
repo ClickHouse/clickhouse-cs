@@ -22,6 +22,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// Peak values are written to <c>streaming-peak-memory.txt</c> in the working directory so a
 /// before/after comparison survives across the two benchmark runs.
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class BinaryInsertStreamingBenchmark
@@ -98,7 +99,7 @@ public class BinaryInsertStreamingBenchmark
         client?.Dispose();
     }
 
-    [Benchmark(Baseline = true)]
+    [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
     public async Task<long> ObjectArray()
     {
         var options = new InsertOptions { BatchSize = BatchRows, MaxDegreeOfParallelism = Degree };

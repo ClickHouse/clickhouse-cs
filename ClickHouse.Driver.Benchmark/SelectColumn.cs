@@ -6,6 +6,7 @@ using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Benchmark;
 
+[BenchmarkCategory(BenchmarkCategories.HttpRegression)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class SelectColumn

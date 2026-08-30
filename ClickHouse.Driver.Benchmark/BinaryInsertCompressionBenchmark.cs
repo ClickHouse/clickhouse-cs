@@ -24,6 +24,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// The table uses ENGINE Null so the server discards rows and the benchmark isolates client-side
 /// serialization + compression + transport rather than storage.
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.Compression)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class BinaryInsertCompressionBenchmark
