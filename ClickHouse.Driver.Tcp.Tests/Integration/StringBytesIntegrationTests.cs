@@ -308,6 +308,35 @@ public class StringBytesIntegrationTests
         }
     }
 
+    /// <summary>
+    /// A POCO read materializes a block in windows, and the projected view is bound per column rather than per
+    /// window. Two rows in different windows holding the same dictionary entry therefore get the same array, which
+    /// they could not if the dictionary were converted again for every window.
+    /// </summary>
+    [Test]
+    public async Task QueryAsync_ByteArrayPropertyOverALowCardinalityColumn_ConvertsEachDictionaryEntryOnce()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        var rows = new List<LabelRow>();
+        await foreach (LabelRow row in client.QueryAsync<LabelRow>(
+            @"SELECT toUInt64(number) AS Id, CAST(['aa', 'bb'][1 + number % 2] AS LowCardinality(String)) AS Label
+              FROM system.numbers LIMIT 600",
+            cancellationToken: None))
+        {
+            rows.Add(row);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows, Has.Count.EqualTo(600), "more rows than one materialization window holds");
+            Assert.That(rows[0].Label, Is.EqualTo(new byte[] { 0x61, 0x61 }));
+            Assert.That(rows[1].Label, Is.EqualTo(new byte[] { 0x62, 0x62 }));
+            Assert.That(rows[2].Label, Is.SameAs(rows[0].Label), "the same window");
+            Assert.That(rows[400].Label, Is.SameAs(rows[0].Label), "a later window of the same block");
+        });
+    }
+
     private static string UniqueTableName() => $"tcp_string_bytes_test_{Guid.NewGuid():N}";
 
     private sealed class BlobRow
@@ -324,6 +353,13 @@ public class StringBytesIntegrationTests
         public byte Id { get; set; }
 
         public byte[][] Parts { get; set; }
+
+        public byte[] Label { get; set; }
+    }
+
+    private sealed class LabelRow
+    {
+        public ulong Id { get; set; }
 
         public byte[] Label { get; set; }
     }

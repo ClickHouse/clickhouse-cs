@@ -275,7 +275,10 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         return new ProjectedReadColumn<T[]>(source, (column, row) => Row(((IArrayColumn)column).Offsets, elements, row));
     }
 
-    /// <summary>Copies one row's slice of the projected element column into a new array.</summary>
+    /// <summary>Reads one row's slice of the projected element column into a new array.</summary>
+    // Read through the indexer, not Values: an element belongs to exactly one row, so there is nothing for the rows
+    // to share, and materializing the whole element column to copy one slice out of it would convert every other
+    // row's elements as well.
     private static T[] Row<T>(ReadOnlySpan<int> offsets, IColumn<T> elements, int row)
     {
         int start = offsets[row];
@@ -285,10 +288,12 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             return Array.Empty<T>();
         }
 
-        // Values, not the indexer: it converts the whole element column once, so the rows of this column share that
-        // work instead of each converting its own slice.
         var projected = new T[length];
-        elements.Values.Slice(start, length).CopyTo(projected);
+        for (int i = 0; i < length; i++)
+        {
+            projected[i] = elements[start + i];
+        }
+
         return projected;
     }
 

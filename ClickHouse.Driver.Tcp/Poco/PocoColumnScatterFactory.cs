@@ -28,6 +28,8 @@ internal static class PocoColumnScatterFactory
 {
     private static readonly MethodInfo SpanAt = typeof(PocoSpan).GetMethod(nameof(PocoSpan.At), BindingFlags.Public | BindingFlags.Static);
 
+    private static readonly MethodInfo CacheFor = typeof(ProjectedViewCache).GetMethod(nameof(ProjectedViewCache.For));
+
     /// <summary>
     /// Compiles the scatter for one column into one property.
     /// </summary>
@@ -72,9 +74,12 @@ internal static class PocoColumnScatterFactory
 
         // A reading that is not a function of one value (a String column's bytes into a byte[] property, a
         // LowCardinality one converted per dictionary entry) is taken through the codec's column-level projection:
-        // the view is built once in the prologue and the loop reads it a row at a time, so this branch needs
+        // the view is bound once in the prologue and the loop reads it a row at a time, so this branch needs
         // neither the value local nor a tier to source it through. Asked only for a property type that is not the
         // element type itself, which the value expresses by definition — the same shortcut Block.ReadAs takes.
+        //
+        // Through the memo rather than the projection itself: a scatter runs once per materialization window, and
+        // building the view per window would convert this column's dictionary again for every window of the block.
         Expression assign;
         if (member.MemberType != elementType
             && codec.TryProjectColumnRead(member.MemberType, out ColumnReadProjection projection))
@@ -84,7 +89,9 @@ internal static class PocoColumnScatterFactory
             locals.Add(view);
             body.Add(Expression.Assign(
                 view,
-                Expression.Convert(Expression.Invoke(Expression.Constant(projection), columnParameter), typedView)));
+                Expression.Convert(
+                    Expression.Call(Expression.Constant(new ProjectedViewCache(projection)), CacheFor, columnParameter),
+                    typedView)));
 
             assign = Expression.Assign(
                 Expression.Property(Expression.ArrayIndex(rows, row), member.Property),

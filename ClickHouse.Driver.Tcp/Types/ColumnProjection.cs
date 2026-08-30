@@ -1,6 +1,7 @@
 using System;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Threading;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
@@ -130,4 +131,59 @@ internal static class ColumnProjection
 
     private static ColumnReadProjection ElementwiseView<T>(Func<IColumn, int, T> read)
         => source => new ProjectedReadColumn<T>(source, read);
+}
+
+/// <summary>
+/// A one-entry memo of a projected view, keyed on the source column by reference, for a consumer that reads one
+/// column through several calls. The POCO scatter is one: it runs once per materialization window, and a view
+/// built per window would convert a dictionary — or a child column — again for every window of the block.
+///
+/// <para>
+/// The entry outlives the block whose column it holds, until another column replaces it. That retains one view's
+/// worth of converted values, which is the same order as the caches the column itself builds while it is alive.
+/// </para>
+/// </summary>
+internal sealed class ProjectedViewCache
+{
+    private readonly ColumnReadProjection projection;
+
+    private Entry entry;
+
+    /// <summary>Initializes a memo over one projection.</summary>
+    /// <param name="projection">The projection to apply, and to remember the result of.</param>
+    public ProjectedViewCache(ColumnReadProjection projection) => this.projection = projection;
+
+    /// <summary>The projected view of <paramref name="column"/>, reusing the last one when it is the same column.</summary>
+    /// <param name="column">The decoded column to project.</param>
+    /// <returns>The view.</returns>
+    // The entry is read and published as one reference to an immutable object, so a reader either does not see a
+    // concurrent write at all or sees a fully built entry, never a half-written one. A lost race projects twice and
+    // drops one view; both are views over the column their own caller passed, so neither can be handed the wrong
+    // one. Plans are cached and shared, so two enumerations of different blocks can take turns evicting each
+    // other's entry — that costs the reuse, not correctness.
+    public IColumn For(IColumn column)
+    {
+        Entry current = Volatile.Read(ref entry);
+        if (current is not null && ReferenceEquals(current.Source, column))
+        {
+            return current.View;
+        }
+
+        var fresh = new Entry(column, projection(column));
+        Volatile.Write(ref entry, fresh);
+        return fresh.View;
+    }
+
+    private sealed class Entry
+    {
+        public Entry(IColumn source, IColumn view)
+        {
+            Source = source;
+            View = view;
+        }
+
+        public IColumn Source { get; }
+
+        public IColumn View { get; }
+    }
 }
