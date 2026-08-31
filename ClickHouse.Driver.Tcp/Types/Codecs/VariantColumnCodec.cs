@@ -555,7 +555,25 @@ internal sealed class VariantColumnCodec : IColumnCodec
         }
 
         throw new ArgumentException(
-            $"Variant '{TypeName}' has no alternative for a value of CLR type '{clrType}'. Supported CLR types: {string.Join(", ", discriminatorByClrType.Keys)}.");
+            $"Variant '{TypeName}' has no alternative for a value of CLR type '{clrType}'. Supported CLR types: {SupportedClrTypes()}.");
+    }
+
+    // Every alternative's element type, in discriminator order and without repeats. A type several alternatives
+    // share is supported as well — settled per value in SettleCollision — so listing only the unambiguous map
+    // would call an IPAddress unsupported in Variant(IPv4, IPv6, String).
+    private string SupportedClrTypes()
+    {
+        var seen = new HashSet<Type>();
+        var names = new List<string>(children.Length);
+        foreach (IColumnCodec child in children)
+        {
+            if (seen.Add(child.ElementType))
+            {
+                names.Add(child.ElementType.ToString());
+            }
+        }
+
+        return string.Join(", ", names);
     }
 
     // Several alternatives surface this CLR type, so the type alone does not name one and the value is asked
