@@ -47,6 +47,7 @@ public class ClickHouseTcpServiceCollectionExtensionsTests
             Is.EquivalentTo(new[]
             {
                 (typeof(ClickHouseTcpDataSource), ServiceLifetime.Singleton),
+                (typeof(IClickHouseTcpDataSource), ServiceLifetime.Singleton),
                 (typeof(IClickHouseTcpClient), ServiceLifetime.Singleton),
                 (typeof(IClickHouseTcpOperations), ServiceLifetime.Singleton),
             }));
@@ -66,6 +67,10 @@ public class ClickHouseTcpServiceCollectionExtensionsTests
             Assert.That(provider.GetRequiredService<ClickHouseTcpDataSource>(), Is.SameAs(dataSource));
             Assert.That(provider.GetRequiredService<IClickHouseTcpClient>(), Is.SameAs(dataSource.GetClient()));
             Assert.That(provider.GetRequiredService<IClickHouseTcpOperations>(), Is.SameAs(dataSource.GetClient()));
+
+            // The interface forwards to the same instance, so injecting either one gets the owner of the pool
+            // rather than a second data source the provider would also dispose.
+            Assert.That(provider.GetRequiredService<IClickHouseTcpDataSource>(), Is.SameAs(dataSource));
         });
     }
 
@@ -144,9 +149,11 @@ public class ClickHouseTcpServiceCollectionExtensionsTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(provider.GetRequiredKeyedService<IClickHouseTcpDataSource>("reporting"), Is.SameAs(dataSource));
             Assert.That(provider.GetRequiredKeyedService<IClickHouseTcpClient>("reporting"), Is.SameAs(dataSource.GetClient()));
             Assert.That(provider.GetRequiredKeyedService<IClickHouseTcpOperations>("reporting"), Is.SameAs(dataSource.GetClient()));
             Assert.That(provider.GetService<ClickHouseTcpDataSource>(), Is.Null);
+            Assert.That(provider.GetService<IClickHouseTcpDataSource>(), Is.Null);
             Assert.That(provider.GetService<IClickHouseTcpClient>(), Is.Null);
         });
     }

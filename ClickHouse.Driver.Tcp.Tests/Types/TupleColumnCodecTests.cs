@@ -167,6 +167,24 @@ public class TupleColumnCodecTests
     }
 
     [Test]
+    public async Task ReadColumn_UnnamedTuple_ReportsEmptyFieldNamesRatherThanNull()
+    {
+        // The interface promises an empty list over a null so a caller can enumerate it unguarded. The codec builds
+        // the unnamed shape by passing no names at all, so the normalization has to happen in the column.
+        IColumnCodec codec = Resolve("Tuple(Int32, String)");
+        var column = new TupleColumn<int, string>("c", "Tuple(Int32, String)", new (int, string)[] { (1, "a") });
+
+        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Tuple(Int32, String)", 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((ITupleColumn)read).FieldNames, Is.Not.Null);
+            Assert.That(((ITupleColumn)read).FieldNames, Is.Empty);
+            Assert.That(((ITupleColumn)column).FieldNames, Is.Empty, "a column built from rows names nothing either");
+        });
+    }
+
+    [Test]
     public async Task ReadColumn_NamedParametricElements_ResolveTypesAndRoundTrip()
     {
         // The element name is split off at the first space, so a named element whose type is itself parametric

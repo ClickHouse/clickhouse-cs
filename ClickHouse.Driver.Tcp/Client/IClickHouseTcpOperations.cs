@@ -131,9 +131,10 @@ public interface IClickHouseTcpOperations : IAsyncDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Inserts columnar data. The columns are matched to the target's schema <b>by name</b> (order is free, and a
-    /// named subset inserts only those columns, the server filling the rest from their defaults); values are
-    /// serialized as the target's resolved type. Zero rows is a no-op.
+    /// Inserts columnar data. The columns are matched <b>by name</b> to the columns <paramref name="sql"/>
+    /// lists — order is free, and one column is required for each of those names — and values are serialized as
+    /// the target's resolved type. The server fills any column the statement does not list from its default.
+    /// Zero rows is a no-op.
     /// </summary>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="columns">The row data, matched to the target columns by name.</param>

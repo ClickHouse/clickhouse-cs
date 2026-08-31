@@ -13,11 +13,19 @@ namespace ClickHouse.Driver.Tcp;
 /// <remarks>
 /// <para>
 /// Give each column the <b>target column's name</b>: an insert matches by name, not position, so the order is
-/// free and naming a subset of the table inserts only those columns, the server filling the rest from their
-/// defaults. You do not state the ClickHouse type — the server sends the target's schema before any row data and
+/// free. You do not state the ClickHouse type — the server sends the target's schema before any row data and
 /// that is what the values are serialized as, so a column built here reports a null
-/// <see cref="IColumn.TypeName"/>. If <typeparamref name="T"/> is not a CLR type the target column accepts,
-/// the insert fails with an <see cref="ArgumentException"/> naming both.
+/// <see cref="IColumn.TypeName"/>. If <typeparamref name="T"/> is not a CLR type the target column accepts, the
+/// insert fails with an <see cref="ArgumentException"/> naming the target's ClickHouse type, the CLR element
+/// type it was given, and the element types it does accept.
+/// </para>
+/// <para>
+/// <b>The statement's column list decides which columns are inserted, not the columns you build.</b> You must
+/// supply one column for every name the statement lists, and no others: <c>INSERT INTO t (id, name) VALUES</c>
+/// takes exactly <c>id</c> and <c>name</c>, and the server fills <c>t</c>'s remaining columns from their
+/// defaults. Listing three names and passing two is an <see cref="ArgumentException"/> naming what is missing —
+/// so a subset is something you write into the statement, not something you get by leaving a column out. A
+/// statement with no list at all targets every column of the table.
 /// </para>
 /// <para>
 /// Pick <typeparamref name="T"/> to match the target: <c>Int32</c> takes an <c>int</c>, <c>String</c> a

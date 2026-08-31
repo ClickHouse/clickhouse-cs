@@ -12,6 +12,11 @@ namespace ClickHouse.Driver.Tcp;
 /// <para>
 /// Equality and comparison are value-based: <c>1.0</c> and <c>1.00</c> compare equal despite different scales.
 /// </para>
+///
+/// <para>
+/// There is one text form, invariant fixed-point, and no format string or culture selects another. See
+/// <see cref="ToString(string, IFormatProvider)"/>.
+/// </para>
 /// </summary>
 public readonly struct ClickHouseTcpDecimal : IEquatable<ClickHouseTcpDecimal>, IComparable<ClickHouseTcpDecimal>, IFormattable
 {
@@ -176,12 +181,34 @@ public readonly struct ClickHouseTcpDecimal : IEquatable<ClickHouseTcpDecimal>, 
         return HashCode.Combine(m, s);
     }
 
-    /// <inheritdoc/>
+    /// <summary>Renders the value as invariant fixed-point: sign, integer part, then a <c>.</c> and exactly <see cref="Scale"/> digits.</summary>
+    /// <returns>The rendered value.</returns>
     public override string ToString() => ToString(null, CultureInfo.InvariantCulture);
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Renders the value as invariant fixed-point, the same text <see cref="ToString()"/> gives. Neither argument
+    /// changes the result: <paramref name="format"/> selects nothing, and <paramref name="formatProvider"/> is
+    /// ignored because the rendering is always invariant.
+    /// </summary>
+    /// <remarks>
+    /// A format string other than the general one is <b>rejected</b> rather than ignored, so a call that asks for
+    /// a rendering this type cannot give fails loudly instead of returning differently formatted text than it
+    /// asked for. To format the value some other way, convert it with <see cref="ToDecimal"/> or
+    /// <see cref="TryToDecimal"/> and format that.
+    /// </remarks>
+    /// <param name="format">Null, empty, <c>"G"</c> or <c>"g"</c>; any other value throws.</param>
+    /// <param name="formatProvider">Ignored.</param>
+    /// <returns>The rendered value.</returns>
+    /// <exception cref="FormatException"><paramref name="format"/> is not null, empty, <c>"G"</c> or <c>"g"</c>.</exception>
     public string ToString(string format, IFormatProvider formatProvider)
     {
+        if (!string.IsNullOrEmpty(format) && format != "G" && format != "g")
+        {
+            throw new FormatException(
+                $"'{format}' is not a format {nameof(ClickHouseTcpDecimal)} can render; it has one text form, invariant fixed-point, selected by a null, empty, \"G\" or \"g\" format. " +
+                $"Convert the value with {nameof(ToDecimal)}() to format it another way.");
+        }
+
         // A fixed-point rendering, always invariant: sign, integer part, then a '.' and exactly `scale` digits.
         BigInteger m = mantissa.ToBigInteger();
         bool negative = m.Sign < 0;

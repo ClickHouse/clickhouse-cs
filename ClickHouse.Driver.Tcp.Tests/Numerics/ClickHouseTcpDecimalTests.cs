@@ -36,6 +36,43 @@ public class ClickHouseTcpDecimalTests
         }
     }
 
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("G")]
+    [TestCase("g")]
+    public void ToString_GeneralFormat_RendersFixedPointInvariant(string format)
+    {
+        var value = new ClickHouseTcpDecimal(new BigInteger(12345), 2);
+        Assert.That(value.ToString(format, CultureInfo.InvariantCulture), Is.EqualTo("123.45"));
+    }
+
+    [TestCase("F3")]
+    [TestCase("N2")]
+    [TestCase("E")]
+    [TestCase("0.00")]
+    [TestCase("D")]
+    public void ToString_FormatItCannotRender_ThrowsFormatException(string format)
+    {
+        var value = new ClickHouseTcpDecimal(new BigInteger(12345), 2);
+        var ex = Assert.Throws<FormatException>(() => value.ToString(format, CultureInfo.InvariantCulture));
+        Assert.That(ex.Message, Does.Contain(format).And.Contain(nameof(ClickHouseTcpDecimal.ToDecimal)));
+    }
+
+    [Test]
+    public void ToString_InterpolatedWithAFormat_ThrowsRatherThanIgnoringIt()
+    {
+        // Interpolation reaches IFormattable, so an ignored format would silently render unrequested text.
+        var value = new ClickHouseTcpDecimal(new BigInteger(12345), 2);
+        Assert.Throws<FormatException>(() => _ = string.Format(CultureInfo.InvariantCulture, "{0:F3}", value));
+    }
+
+    [Test]
+    public void ToString_CultureWithAnotherSeparator_IsStillInvariant()
+    {
+        var value = new ClickHouseTcpDecimal(new BigInteger(12345), 2);
+        Assert.That(value.ToString(null, CultureInfo.GetCultureInfo("de-DE")), Is.EqualTo("123.45"));
+    }
+
     [TestCase("123.45")]
     [TestCase("-123.45")]
     [TestCase("0")]

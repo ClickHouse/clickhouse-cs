@@ -576,9 +576,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// larger than the cap still buffers in full). Independent of the row-based block split. Defaults to
     /// <see cref="BlockWriter.DefaultFlushThresholdBytes"/>.</param>
     /// <param name="telemetry">The client's own metadata observers, run before the caller's, or null.</param>
-    /// <param name="callbacks">The caller's callbacks for the metadata the server interleaves into the insert
-    /// acknowledgement (notably <see cref="ClickHouseTcpQueryCallbacks.OnProgress"/> for rows written and
-    /// <see cref="ClickHouseTcpQueryCallbacks.OnProfileEvents"/>), or null to discard it.</param>
+    /// <param name="callbacks">The caller's callbacks: <see cref="ClickHouseTcpQueryCallbacks.OnBlockWritten"/> per
+    /// block sent, plus the metadata the server interleaves into the acknowledgement
+    /// (<see cref="ClickHouseTcpQueryCallbacks.OnProfileEvents"/> and the rest). Null discards all of it.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server acknowledges the insert with end-of-stream.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="columns"/> is null.</exception>
@@ -743,7 +743,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 // server to finish the insert. A gather failure is deferred the same way, so it still closes
                 // cleanly and this stays a whole-packet boundary.
                 flushedWholePackets = false;
-                Exception gatherFailure = await StreamInsertRowsAsync(plan, source, rowCount, maxRowsPerBlock, maxSendBufferBytes, negotiated, cancellationToken).ConfigureAwait(false);
+                Exception gatherFailure = await StreamInsertRowsAsync(
+                    plan, source, rowCount, maxRowsPerBlock, maxSendBufferBytes, negotiated, telemetry, callbacks, cancellationToken).ConfigureAwait(false);
                 flushedWholePackets = true;
                 buildFailure ??= gatherFailure;
 
@@ -865,6 +866,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="source">The row source to fill the plan's columns from per block, or null when the caller
     /// supplied whole columns.</param>
     /// <param name="flushThresholdBytes">The buffered-byte cap that triggers a between-column flush while a block is written.</param>
+    /// <param name="telemetry">The client's own metadata observers, run before the caller's, or null.</param>
+    /// <param name="callbacks">The caller's callbacks, for the per-block report, or null to report nothing.</param>
     /// <returns>The gather failure that stopped the row stream, or null if every block was written.</returns>
     private async ValueTask<Exception> StreamInsertRowsAsync(
         InsertColumn[] plan,
@@ -873,11 +876,15 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         int? maxRowsPerBlock,
         int flushThresholdBytes,
         NegotiatedProtocol negotiated,
+        ClickHouseTcpQueryCallbacks telemetry,
+        ClickHouseTcpQueryCallbacks callbacks,
         CancellationToken cancellationToken)
     {
         Exception gatherFailure = null;
         if (rowCount > 0 && plan is not null)
         {
+            int blockIndex = 0;
+
             // Row count controls block splitting; the flush threshold bounds buffered output within each block.
             foreach ((int start, int length) in PlanInsertBlocks(rowCount, maxRowsPerBlock))
             {
@@ -896,9 +903,19 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     }
                 }
 
-                await WriteDataBlockPacketAsync(
+                (long uncompressed, long compressed) = await WriteDataBlockPacketAsync(
                     negotiated, plan, source is null ? start : 0, length, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
                 await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+                // Reported after the flush, so a block the caller hears about is one the socket has taken.
+                if (telemetry?.OnBlockWritten is not null || callbacks?.OnBlockWritten is not null)
+                {
+                    var written = new ClickHouseTcpBlockWritten(blockIndex, length, uncompressed, compressed);
+                    telemetry?.OnBlockWritten?.Invoke(written);
+                    callbacks?.OnBlockWritten?.Invoke(written);
+                }
+
+                blockIndex++;
             }
         }
 
@@ -1027,7 +1044,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
             if (validateWritable && !codec.CanWrite(slot.Values))
             {
-                error = $"Column '{slot.Name}' was given a value column of type {slot.Values.GetType()}, whose CLR element type the target type '{slot.TypeName}' does not accept.";
+                error = DescribeUnwritableColumn(slot, codec);
                 return null;
             }
 
@@ -1035,6 +1052,43 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
 
         return plan;
+    }
+
+    /// <summary>Composes the message for a column whose CLR element type the target type cannot be written from.</summary>
+    /// <param name="slot">The plan slot: the target's name and type, and the column the caller supplied.</param>
+    /// <param name="codec">The target type's codec, for the element types it accepts.</param>
+    /// <returns>The message.</returns>
+    private static string DescribeUnwritableColumn(InsertColumn slot, IColumnCodec codec)
+    {
+        // The caller wrote the element type, not the column class holding it, so that is what the message names.
+        // A column implementing IColumn<> zero or several times has no single element type; fall back to the class
+        // rather than let the diagnostic throw over the diagnosis.
+        string present;
+        try
+        {
+            present = slot.Values.ElementType.ToString();
+        }
+        catch (InvalidOperationException)
+        {
+            present = slot.Values.GetType().ToString();
+        }
+
+        IReadOnlyList<Type> writable = codec.WritableElementTypes;
+        var offered = new List<string>(writable.Count);
+        for (int i = 0; i < writable.Count; i++)
+        {
+            if (codec.CanWriteElementType(writable[i]))
+            {
+                offered.Add(writable[i].ToString());
+            }
+        }
+
+        // Empty means the type is written only from a column shape this codec builds itself.
+        string remedy = offered.Count == 0
+            ? $"No column built from a CLR element type can fill a '{slot.TypeName}' column; re-insert one read back from a query of the same type."
+            : $"It accepts {string.Join(" or ", offered)}, and — for a composite type — a column whose elements are any type its element codecs accept.";
+
+        return $"Column '{slot.Name}' ({slot.TypeName}) was given a column of element type {present}, which it cannot be written from. " + remedy;
     }
 
     /// <summary>Composes a message naming the columns the caller failed to supply and the ones it supplied in excess.</summary>
@@ -1133,7 +1187,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="rowCount">The number of rows the block holds.</param>
     /// <param name="flushThresholdBytes">The buffered-byte cap that triggers a between-column flush.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
-    private async ValueTask WriteDataBlockPacketAsync(
+    /// <returns>The block body's size before compression, and the bytes it put on the socket. Both measure the
+    /// body only, so they agree exactly when nothing is compressing.</returns>
+    private async ValueTask<(long Uncompressed, long Compressed)> WriteDataBlockPacketAsync(
         NegotiatedProtocol negotiated,
         IReadOnlyList<InsertColumn> columns,
         int start,
@@ -1144,15 +1200,25 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         writer.WriteClientPacketType(ClientPacketType.Data);
         writer.WriteString(string.Empty); // table_name: empty for the INSERT row stream, and never framed
 
+        // Counted after the envelope and before the body, so the totals are the body's own size whichever path
+        // writes it. BytesWritten counts what a writer accepted, so a flush inside the body does not lose any.
         if (compressor is null)
         {
+            long before = writer.BytesWritten;
             await BlockWriter.WriteDataBlockBodyAsync(writer, negotiated, columns, start, rowCount, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
-            return;
+            long body = writer.BytesWritten - before;
+            return (body, body);
         }
 
         frameWriter ??= new CompressedFrameWriter(writer, compressor);
+        long plaintextBefore = frameWriter.Writer.BytesWritten;
+        long framedBefore = writer.BytesWritten;
         await BlockWriter.WriteDataBlockBodyAsync(frameWriter.Writer, negotiated, columns, start, rowCount, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
+
+        // Read after EndBlockAsync, which flushes the last frame: until it runs, the tail of the body is still
+        // plaintext in the frame writer and has cost no framed bytes yet.
         await frameWriter.EndBlockAsync(cancellationToken).ConfigureAwait(false);
+        return (frameWriter.Writer.BytesWritten - plaintextBefore, writer.BytesWritten - framedBefore);
     }
 
     /// <summary>

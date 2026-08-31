@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
@@ -54,7 +55,10 @@ public class ClickHouseTcpLoggingIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(ConnectionLogger.WithEventId(2000), Is.Not.Empty, "the dial is announced before it is attempted");
-            Assert.That(ConnectionLogger.WithEventId(2001).Single().Message, Does.Contain("protocol revision"), "the negotiated revision is worth having in a log");
+            // Both revisions, each labelled, so a reader can tell the one in force from the one advertised.
+            string opened = ConnectionLogger.WithEventId(2001).Single().Message;
+            Assert.That(opened, Does.Contain($"protocol revision {NegotiatedProtocol.ClientTcpProtocolVersion} in force"));
+            Assert.That(opened, Does.Match(@"server advertised \d+"));
         });
     }
 
@@ -76,6 +80,53 @@ public class ClickHouseTcpLoggingIntegrationTests
             Assert.That(completed.Message, Does.Contain("reading 1000 rows"), "the accumulated progress increments, not the last packet");
             Assert.That(completed.Message, Does.Match(@"\d+(\.\d+)? ms"));
         });
+    }
+
+    [Test]
+    public async Task StreamAsync_CallerNamedNoQueryId_LogsAGeneratedIdTheServerRecordedUnder()
+    {
+        // The native protocol never sends back the id a server assigns, so the only id that can be both logged
+        // and looked up afterwards is one the client chose. Proving it needs both ends: the id in the log line,
+        // and the same id against a row in system.query_log.
+        await using ClickHouseTcpClient client = CreateClient();
+
+        await DrainAsync(client, "SELECT sum(number) FROM numbers(1000)");
+
+        // Both lines are read before the lookup: it runs its own queries on this client, which log 1000/1001 too.
+        LogEntry started = ClientLogger.WithEventId(1000).Single();
+        string completed = ClientLogger.WithEventId(1001).Single().Message;
+
+        Match logged = Regex.Match(started.Message, @"query id ([0-9a-f-]{36})");
+        Assert.That(logged.Success, Is.True, $"a generated id is logged, not an empty field: {started.Message}");
+
+        string id = logged.Groups[1].Value;
+        object recorded = await QueryLog.ScalarAsync(
+            client,
+            $"SELECT count() FROM system.query_log WHERE query_id = '{id}' AND type = 'QueryFinish'");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Guid.TryParse(id, out _), Is.True, "the generated id is a GUID, the shape the server uses too");
+            Assert.That(recorded, Is.EqualTo(1UL), "the id the client logged is the one the server ran the query under");
+            Assert.That(completed, Does.Contain(id), "the completion line carries the same id");
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_CallerSuppliedAQueryId_LogsThatIdRatherThanAGeneratedOne()
+    {
+        await using ClickHouseTcpClient client = CreateClient();
+        string supplied = "test-" + Guid.NewGuid().ToString("N");
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT 1",
+            new ClickHouseTcpQueryOptions { QueryId = supplied },
+            cancellationToken: None))
+        {
+            _ = block.RowCount;
+        }
+
+        Assert.That(ClientLogger.WithEventId(1000).Single().Message, Does.Contain($"query id {supplied}"));
     }
 
     [Test]

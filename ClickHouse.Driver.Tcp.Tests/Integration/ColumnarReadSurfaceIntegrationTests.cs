@@ -252,7 +252,7 @@ public class ColumnarReadSurfaceIntegrationTests
 
             var tuple = (ITupleColumn)column;
             childCount = tuple.Children.Count;
-            fieldNames = tuple.FieldNames?.ToArray();
+            fieldNames = tuple.FieldNames.ToArray();
             childRowCounts = new[] { tuple.Children[0].RowCount, tuple.Children[1].RowCount };
             firstElement = ((IColumn<int>)tuple.Children[0]).Values.ToArray();
             secondElement = ((IColumn<string>)tuple.Children[1]).Values.ToArray();
@@ -272,14 +272,14 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task StreamAsync_UnnamedTupleWithCompositeElement_OmitsFieldNamesAndAllowsChildRecursion()
+    public async Task StreamAsync_UnnamedTupleWithCompositeElement_ReportsEmptyFieldNamesAndAllowsChildRecursion()
     {
-        // Two things the named case cannot show: an unnamed tuple carries no names at all (FieldNames is null, not
-        // a list of nulls), and a child that is itself a composite pattern-matches to its own columnar view — so a
+        // Two things the named case cannot show: an unnamed tuple reports an empty FieldNames rather than null or a
+        // list of nulls, and a child that is itself a composite pattern-matches to its own columnar view — so a
         // Tuple(Array(Int32), ...) can be walked into without materializing the tuple or the array rows.
         await using var client = TcpServerFixture.CreateClient();
 
-        bool hasFieldNames = true;
+        string[] fieldNames = null;
         bool childIsArray = false;
         int[] childOffsets = null;
         int[] childInnerValues = null;
@@ -290,7 +290,9 @@ public class ColumnarReadSurfaceIntegrationTests
             cancellationToken: None))
         {
             var tuple = (ITupleColumn)block[0];
-            hasFieldNames = tuple.FieldNames is not null;
+
+            // Enumerated without a null check, which is the point of the empty list.
+            fieldNames = tuple.FieldNames.ToArray();
 
             childIsArray = tuple.Children[0] is IArrayColumn<int>;
             var child = (IArrayColumn<int>)tuple.Children[0];
@@ -300,7 +302,7 @@ public class ColumnarReadSurfaceIntegrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(hasFieldNames, Is.False, "an unnamed tuple reports no names rather than a list of nulls");
+            Assert.That(fieldNames, Is.Empty, "an unnamed tuple reports an empty list rather than null or a list of nulls");
             Assert.That(childIsArray, Is.True, "a composite child re-enters the columnar surface");
             Assert.That(childOffsets, Is.EqualTo(new[] { 0, 0, 1, 3 }), "the child array's own per-row offsets");
             Assert.That(childInnerValues, Is.EqualTo(new[] { 0, 0, 1 }));

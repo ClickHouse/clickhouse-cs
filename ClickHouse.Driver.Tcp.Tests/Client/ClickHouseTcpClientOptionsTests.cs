@@ -577,7 +577,9 @@ public class ClickHouseTcpClientOptionsTests
 
             foreach (PropertyInfo property in typeof(ClickHouseTcpClientOptions).GetProperties())
             {
-                if (property.Name == nameof(ClickHouseTcpClientOptions.Port))
+                // The property under change, and any property computed from it: ResolvedPort is derived from
+                // Port and UseTls, so it is meant to move when either does. Only stored state is carried across.
+                if (property.Name == nameof(ClickHouseTcpClientOptions.Port) || property.SetMethod is null)
                 {
                     continue;
                 }

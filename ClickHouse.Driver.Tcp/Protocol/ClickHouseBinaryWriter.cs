@@ -20,6 +20,7 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
     private readonly bool writesToTransport;
     private byte[] buffer;
     private int position;
+    private long flushed;
     // An int rather than a bool so disposal can be made exactly-once with Interlocked; see Dispose.
     private int disposed;
 
@@ -50,6 +51,13 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
 
     /// <summary>The number of bytes buffered and not yet flushed.</summary>
     public int BufferedBytes => position;
+
+    /// <summary>
+    /// Every byte written to this writer since it was created, whether flushed yet or not. Counts what the writer
+    /// accepted rather than what reached the stream, so the difference across a stretch of writes is that
+    /// stretch's size no matter when a flush falls inside it. <see cref="Reset"/> discards bytes it has counted.
+    /// </summary>
+    public long BytesWritten => flushed + position;
 
     /// <summary>The number of bytes a VarUInt encoding of <paramref name="value"/> occupies (1–10).</summary>
     /// <param name="value">The value that would be written with <see cref="WriteVarUInt"/>.</param>
@@ -303,6 +311,7 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
             if (position > 0)
             {
                 await stream.WriteAsync(buffer.AsMemory(0, position), cancellationToken).ConfigureAwait(false);
+                flushed += position;
                 position = 0;
             }
 

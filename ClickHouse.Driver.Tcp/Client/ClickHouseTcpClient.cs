@@ -69,6 +69,9 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     // prefix declares.
     private const string JsonAsStringSetting = "output_format_native_write_json_as_string";
 
+    // The setting ClickHouseTcpInsertOptions.DeduplicationToken is carried by.
+    private const string DeduplicationTokenSetting = "insert_deduplication_token";
+
     private static readonly ClickHouseTcpInsertOptions DefaultInsertOptions = new();
 
     private readonly IConnectionSource source;
@@ -157,7 +160,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
 
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
         IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
-        string queryId = options?.QueryId;
+        string queryId = ResolveQueryId(options);
 
         // Started before the rent, so the span covers waiting for a connection, and so the Query packet's
         // trace-context field picks it up from Activity.Current.
@@ -393,9 +396,10 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     }
 
     /// <summary>
-    /// Inserts columnar data. The columns are matched to the target's schema <b>by name</b> (order is free, and
-    /// a named subset inserts only those columns, the server filling the rest from their defaults); values are
-    /// serialized as the target's resolved type. Zero rows is a no-op.
+    /// Inserts columnar data. The columns are matched <b>by name</b> to the columns
+    /// <paramref name="sql"/> lists — order is free, and one column is required for each of those names —
+    /// and values are serialized as the target's resolved type. The server fills any column the statement does
+    /// not list from its default. Zero rows is a no-op.
     /// </summary>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="columns">The row data, matched to the target columns by name.</param>
@@ -413,10 +417,12 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(columns);
 
-        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        IReadOnlyDictionary<string, string> settings = BuildInsertSettings(options);
         IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
 
-        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId);
+        string queryId = ResolveQueryId(options);
+
+        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, queryId);
         try
         {
             await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
@@ -425,7 +431,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
                 columns,
                 settings,
                 parameters,
-                options?.QueryId,
+                queryId,
                 ResolveMaxRowsPerBlock(options),
                 Options.MaxSendBufferBytes,
                 operation?.Telemetry,
@@ -459,14 +465,16 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
                 nameof(rows));
         }
 
-        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        IReadOnlyDictionary<string, string> settings = BuildInsertSettings(options);
         IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
 
         int? maxRowsPerBlock = ResolveMaxRowsPerBlock(options);
         int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
         using var buffer = PocoRowBuffer<T>.Create(rows, nameof(rows), blockRows, cancellationToken);
 
-        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId);
+        string queryId = ResolveQueryId(options);
+
+        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, queryId);
         try
         {
             await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
@@ -476,7 +484,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
                 schema => PocoTypes.WritePlanFor<T>(schema).CreateSource(buffer, blockRows),
                 settings,
                 parameters,
-                options?.QueryId,
+                queryId,
                 maxRowsPerBlock,
                 Options.MaxSendBufferBytes,
                 operation?.Telemetry,
@@ -501,13 +509,15 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(rows);
 
-        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        IReadOnlyDictionary<string, string> settings = BuildInsertSettings(options);
         IReadOnlyDictionary<string, string> parameters = BuildParameters(sql, options);
         int? maxRowsPerBlock = ResolveMaxRowsPerBlock(options);
         int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
         using var buffer = PocoRowBuffer<object[]>.Create(rows, nameof(rows), blockRows, cancellationToken);
 
-        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, options?.QueryId);
+        string queryId = ResolveQueryId(options);
+
+        using ClientOperation operation = ClientOperation.Start(Options, logger, sql, queryId);
         try
         {
             await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
@@ -517,7 +527,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
                 schema => UntypedRowColumns.CreateSource(schema, buffer, blockRows),
                 settings,
                 parameters,
-                options?.QueryId,
+                queryId,
                 maxRowsPerBlock,
                 Options.MaxSendBufferBytes,
                 operation?.Telemetry,
@@ -544,6 +554,21 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     /// </remarks>
     internal static int? ResolveMaxRowsPerBlock(ClickHouseTcpInsertOptions options)
         => (options ?? DefaultInsertOptions).MaxRowsPerBlock;
+
+    /// <summary>The query id an operation runs under: the caller's, or a fresh one when they named none.</summary>
+    /// <param name="options">The per-operation options, or null for the client defaults.</param>
+    /// <returns>A non-empty query id.</returns>
+    /// <remarks>
+    /// The native protocol never sends back the id a server assigns, so an operation that leaves the field empty
+    /// cannot be found in <c>system.query_log</c> afterwards. Generating one client-side is what makes the id
+    /// knowable: every log line this operation writes carries it (see <see cref="ClientOperation"/>), as does its
+    /// trace span. An empty string is treated as absent, which is how the server reads it.
+    /// </remarks>
+    internal static string ResolveQueryId(ClickHouseTcpQueryOptions options)
+    {
+        string supplied = options?.QueryId;
+        return string.IsNullOrEmpty(supplied) ? Guid.NewGuid().ToString() : supplied;
+    }
 
     /// <summary>
     /// Opens a session: one connection, taken from this client's pool and held until the session is disposed, that
@@ -620,6 +645,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
             VersionMinor = server.VersionMinor,
             VersionPatch = server.VersionPatch,
             ProtocolRevision = server.Negotiated.Version,
+            ServerProtocolRevision = server.Revision,
+            ClientProtocolRevision = NegotiatedProtocol.ClientTcpProtocolVersion,
             Timezone = server.Timezone,
             DisplayName = server.DisplayName,
         };
@@ -638,6 +665,30 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
 
     private IReadOnlyDictionary<string, string> BuildSettings(ClickHouseTcpQueryOptions options)
         => MergeSettings(Options.CustomSettings, options?.Settings);
+
+    /// <summary>
+    /// The settings for one insert: the query settings, plus
+    /// <see cref="ClickHouseTcpInsertOptions.DeduplicationToken"/> as its own server setting.
+    /// </summary>
+    /// <param name="options">The per-insert options, or null for the client defaults.</param>
+    /// <returns>The merged settings to send with the insert.</returns>
+    /// <remarks>The dedicated property wins over the same key in <see cref="ClickHouseTcpQueryOptions.Settings"/>,
+    /// being the more specific way to say it.</remarks>
+    private IReadOnlyDictionary<string, string> BuildInsertSettings(ClickHouseTcpInsertOptions options)
+    {
+        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        if (string.IsNullOrEmpty(options?.DeduplicationToken))
+        {
+            return settings;
+        }
+
+        var withToken = new Dictionary<string, string>(settings, StringComparer.Ordinal)
+        {
+            [DeduplicationTokenSetting] = options.DeduplicationToken,
+        };
+
+        return withToken;
+    }
 
     /// <summary>Formats bound parameters for the Query packet.</summary>
     /// <param name="sql">The SQL text, scanned for the <c>{name:Type}</c> placeholders that give the types.</param>

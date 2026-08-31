@@ -17,6 +17,12 @@ namespace ClickHouse.Driver.Tcp;
 /// <para>
 /// The connection is terminated and never reused.
 /// </para>
+/// <para>
+/// <b>An insert that ends this way has an unknown outcome</b>: the rows may have been applied before the
+/// connection broke, or not at all, and nothing the client can read says which. So retrying one duplicates the
+/// rows as often as it succeeds. Set <see cref="ClickHouseTcpInsertOptions.DeduplicationToken"/> to make the
+/// retry safe — the server drops a second attempt carrying a token it has already seen.
+/// </para>
 /// </remarks>
 public sealed class ClickHouseTcpTransportException : ClickHouseTcpException
 {
