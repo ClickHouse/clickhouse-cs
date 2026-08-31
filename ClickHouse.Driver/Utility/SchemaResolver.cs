@@ -90,7 +90,7 @@ internal class SchemaResolver
             ? "*"
             : string.Join(",", columns.Select(c => c.EncloseColumnName()));
         using var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(
-            $"SELECT {columnsExpr} FROM {table} WHERE 1=0", null, options).ConfigureAwait(false);
+            $"SELECT {columnsExpr} FROM {table.EncloseQualifiedName()} WHERE 1=0", null, options).ConfigureAwait(false);
         var types = reader.GetClickHouseColumnTypes();
         var names = reader.GetColumnNames().Select(c => c.EncloseColumnName()).ToArray();
         return (names, types);
@@ -137,7 +137,7 @@ internal class SchemaResolver
         var database = options.Database ?? client.Settings.Database ?? string.Empty;
 
         var enclosedDatabase = database.EncloseColumnName();
-        var enclosedTable = table.EncloseColumnName();
+        var enclosedTable = table.EncloseQualifiedName();
         return $"{enclosedDatabase}.{enclosedTable}";
     }
 
