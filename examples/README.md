@@ -138,7 +138,7 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_001_SettingsAndQueryId.cs](Tcp/Advanced/Tcp_001_SettingsAndQueryId.cs) - Apply settings and assign a query ID
 - [Tcp_002_ProgressAndStatistics.cs](Tcp/Advanced/Tcp_002_ProgressAndStatistics.cs) - Receive progress and profile callbacks
 - [Tcp_003_Cancellation.cs](Tcp/Advanced/Tcp_003_Cancellation.cs) - Cancel row, block, and command operations
-- [Tcp_004_ErrorsAndRetries.cs](Tcp/Advanced/Tcp_004_ErrorsAndRetries.cs) - Handle errors and retry transient reads safely
+- [Tcp_004_ErrorsAndRetries.cs](Tcp/Advanced/Tcp_004_ErrorsAndRetries.cs) - Handle errors and retry a failed read safely
 - [Tcp_005_Compression.cs](Tcp/Advanced/Tcp_005_Compression.cs) - Select a native compression codec
 - [Tcp_006_ServerInfo.cs](Tcp/Advanced/Tcp_006_ServerInfo.cs) - Read handshake metadata and gate optional features
 

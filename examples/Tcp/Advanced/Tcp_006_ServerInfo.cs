@@ -15,7 +15,9 @@ public static class TcpServerInfo
 
         Console.WriteLine($"Name: {server.Name}");
         Console.WriteLine($"Version: {server.Version}");
-        Console.WriteLine($"Protocol revision: {server.ProtocolRevision}");
+        // The negotiated revision is the lower of the two the client and the server support.
+        Console.WriteLine($"Protocol revision: {server.ProtocolRevision} in force");
+        Console.WriteLine($"  server advertised {server.ServerProtocolRevision}, client supports {server.ClientProtocolRevision}");
         Console.WriteLine($"Timezone: {server.Timezone}");
         Console.WriteLine($"Display name: {server.DisplayName}");
 
