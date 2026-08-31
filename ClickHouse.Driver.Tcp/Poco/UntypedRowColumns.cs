@@ -15,57 +15,37 @@ internal static class UntypedRowColumns
     private static readonly MethodInfo CreateBuilderMethod =
         typeof(UntypedRowColumns).GetMethod(nameof(CreateBuilder), BindingFlags.NonPublic | BindingFlags.Static);
 
-    /// <summary>Builds one column per target from the corresponding value in each row.</summary>
+    /// <summary>
+    /// Opens one insert: a column per target, filled from the corresponding value in each row, a block at a time.
+    /// </summary>
+    /// <remarks>
+    /// Each column's CLR write type is chosen once for the whole insert, from the first row that has a value for
+    /// it, because one buffer serves every block. A later value of another type is reported when its block is
+    /// gathered.
+    /// </remarks>
     /// <param name="schema">The server's sample block, naming and typing the target columns.</param>
-    /// <param name="rows">The rows, each non-null; at least <paramref name="rowCount"/> long.</param>
-    /// <param name="rowCount">The number of rows to insert.</param>
-    /// <returns>The columns, each owning a pooled buffer it returns when disposed.</returns>
-    /// <exception cref="ArgumentException">A row has the wrong number of values.</exception>
-    /// <exception cref="InvalidOperationException">A value's CLR type is not one the target column accepts, or a
-    /// value is null for a column that cannot hold null.</exception>
-    public static IReadOnlyList<IColumn> Build(Block schema, object[][] rows, int rowCount)
+    /// <param name="rows">The insert's rows; not owned by the source.</param>
+    /// <param name="blockRows">The most rows one wire block will hold.</param>
+    /// <returns>The source, owning its gather buffers until it is disposed.</returns>
+    /// <exception cref="InvalidOperationException">A value's CLR type is not one the target column accepts, or the
+    /// target cannot be built from rows at all.</exception>
+    public static PocoInsertSource<object[]> CreateSource(Block schema, PocoRowBuffer<object[]> rows, int blockRows)
     {
         int columnCount = schema.ColumnCount;
-        for (int row = 0; row < rowCount; row++)
+        var builders = new PocoColumnBuilder<object[]>[columnCount];
+
+        for (int i = 0; i < columnCount; i++)
         {
-            if (rows[row].Length != columnCount)
-            {
-                throw new ArgumentException(
-                    $"Row {row} has {rows[row].Length} values, but the insert targets {columnCount} column(s) ({DescribeTargets(schema)}). " +
-                    $"Untyped rows are matched to the target columns by position, so every row must have one value per column.",
-                    nameof(rows));
-            }
+            IColumn target = schema[i];
+            IColumnCodec codec = schema.Codecs.Resolve(target.TypeName, schema.Context);
+            Type writeType = ChooseWriteType(codec, target, rows, i);
+
+            builders[i] = (PocoColumnBuilder<object[]>)CreateBuilderMethod
+                .MakeGenericMethod(writeType)
+                .Invoke(null, new object[] { target.Name, target.TypeName, i, PocoWriteConversion.TakesNull(codec) });
         }
 
-        var columns = new IColumn[columnCount];
-        int built = 0;
-        try
-        {
-            for (; built < columnCount; built++)
-            {
-                IColumn target = schema[built];
-                IColumnCodec codec = schema.Codecs.Resolve(target.TypeName, schema.Context);
-                Type writeType = ChooseWriteType(codec, target, rows, rowCount, built);
-
-                // Invoke only constructs the builder, so fill errors are not reflection-wrapped.
-                var builder = (PocoColumnBuilder<object[]>)CreateBuilderMethod
-                    .MakeGenericMethod(writeType)
-                    .Invoke(null, new object[] { target.Name, target.TypeName, built, PocoWriteConversion.TakesNull(codec) });
-
-                columns[built] = builder.Build(rows, rowCount);
-            }
-        }
-        catch
-        {
-            for (int i = 0; i < built; i++)
-            {
-                columns[i].Dispose();
-            }
-
-            throw;
-        }
-
-        return columns;
+        return new UntypedInsertSource(builders, rows, blockRows, columnCount, rows.ParameterName);
     }
 
     /// <summary>
@@ -74,12 +54,11 @@ internal static class UntypedRowColumns
     /// </summary>
     /// <param name="codec">The target column's codec.</param>
     /// <param name="target">The target column, for diagnostics.</param>
-    /// <param name="rows">The rows.</param>
-    /// <param name="rowCount">The number of rows.</param>
+    /// <param name="rows">The insert's rows.</param>
     /// <param name="index">The column's position in every row.</param>
     /// <returns>The write type.</returns>
     /// <exception cref="InvalidOperationException">The values' type is not one the target accepts.</exception>
-    private static Type ChooseWriteType(IColumnCodec codec, IColumn target, object[][] rows, int rowCount, int index)
+    private static Type ChooseWriteType(IColumnCodec codec, IColumn target, PocoRowBuffer<object[]> rows, int index)
     {
         IReadOnlyList<Type> accepted = PocoWriteConversion.AcceptedWriteTypes(codec);
         if (accepted.Count == 0)
@@ -89,9 +68,11 @@ internal static class UntypedRowColumns
         }
 
         Type present = null;
-        for (int row = 0; row < rowCount && present is null; row++)
+        for (int row = 0; row < rows.Count && present is null; row++)
         {
-            present = rows[row][index]?.GetType();
+            // A null or short row is reported when its block is gathered; here it simply holds no value.
+            object[] values = rows.RowAt(row);
+            present = values is not null && index < values.Length ? values[index]?.GetType() : null;
         }
 
         if (present is null)
@@ -133,17 +114,17 @@ internal static class UntypedRowColumns
 
         // Nullable<T> values arrive boxed as T but can still be unboxed into Nullable<T>.
         Type expected = Nullable.GetUnderlyingType(typeof(TWrite)) ?? typeof(TWrite);
-        return new PocoColumnBuilder<object[], TWrite>(name, typeName, (source, count, destination) =>
+        return new PocoColumnBuilder<object[], TWrite>(name, typeName, (source, start, rowNumber, count, destination) =>
         {
-            for (int row = 0; row < count; row++)
+            for (int slot = 0; slot < count; slot++)
             {
-                object value = source[row][index];
+                object value = source[start + slot][index];
                 if (value is null)
                 {
-                    destination[row] = acceptsNull
+                    destination[slot] = acceptsNull
                         ? default
                         : throw new InvalidOperationException(
-                            $"Column {index} ('{name}', {typeName}) is null at row {row} of the insert, but it cannot hold null. " +
+                            $"Column {index} ('{name}', {typeName}) is null at row {rowNumber + slot} of the insert, but it cannot hold null. " +
                             $"Make the column Nullable(...), or leave out the rows with no value.");
                     continue;
                 }
@@ -152,23 +133,60 @@ internal static class UntypedRowColumns
                 if (!expected.IsInstanceOfType(value))
                 {
                     throw new InvalidOperationException(
-                        $"Column {index} ('{name}', {typeName}) is written as {typeof(TWrite)}, but row {row} holds a {value.GetType()}. " +
+                        $"Column {index} ('{name}', {typeName}) is written as {typeof(TWrite)}, but row {rowNumber + slot} holds a {value.GetType()}. " +
                         $"Every value of one column must have the same CLR type.");
                 }
 
-                destination[row] = (TWrite)value;
+                destination[slot] = (TWrite)value;
             }
         });
     }
 
-    private static string DescribeTargets(Block schema)
+    /// <summary>
+    /// Matches every row of a block to the target columns by position, before any column reads it.
+    /// </summary>
+    private sealed class UntypedInsertSource : PocoInsertSource<object[]>
     {
-        var names = new string[schema.ColumnCount];
-        for (int i = 0; i < names.Length; i++)
+        private readonly int columnCount;
+        private readonly string parameterName;
+
+        public UntypedInsertSource(
+            PocoColumnBuilder<object[]>[] builders,
+            PocoRowBuffer<object[]> rows,
+            int blockRows,
+            int columnCount,
+            string parameterName)
+            : base(builders, rows, blockRows)
         {
-            names[i] = schema[i].Name;
+            this.columnCount = columnCount;
+            this.parameterName = parameterName;
         }
 
-        return string.Join(", ", names);
+        /// <inheritdoc/>
+        protected override void CheckBlock(object[][] window, int offset, int rowNumber, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                int length = window[offset + i].Length;
+                if (length != columnCount)
+                {
+                    throw new ArgumentException(
+                        $"Row {rowNumber + i} has {length} values, but the insert targets {columnCount} column(s) ({DescribeTargets()}). " +
+                        $"Untyped rows are matched to the target columns by position, so every row must have one value per column.",
+                        parameterName);
+                }
+            }
+        }
+
+        private string DescribeTargets()
+        {
+            var names = new string[Columns.Count];
+            for (int i = 0; i < names.Length; i++)
+            {
+                names[i] = Columns[i].Name;
+            }
+
+            return string.Join(", ", names);
+        }
     }
 }

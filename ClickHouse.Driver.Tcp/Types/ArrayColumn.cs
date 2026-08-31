@@ -70,17 +70,6 @@ internal sealed class ArrayColumn<T> : IColumn<T>, ISpanColumn<T>, IStoredValues
     internal static ArrayColumn<T> OverBuffer(string name, string typeName, T[] buffer, int length)
         => new(name, typeName, buffer, offset: 0, length, pooled: false);
 
-    /// <summary>
-    /// Wraps a rented buffer and returns it to <see cref="ArrayPool{T}"/> on disposal.
-    /// </summary>
-    /// <param name="name">The column name.</param>
-    /// <param name="typeName">The ClickHouse type string.</param>
-    /// <param name="buffer">The rented backing buffer; only <paramref name="length"/> elements are exposed.</param>
-    /// <param name="length">The logical row count.</param>
-    /// <returns>A column that owns the buffer.</returns>
-    internal static ArrayColumn<T> OverPooledBuffer(string name, string typeName, T[] buffer, int length)
-        => new(name, typeName, buffer, offset: 0, length, pooled: true);
-
     /// <inheritdoc/>
     public string Name { get; }
 

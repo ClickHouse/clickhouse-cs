@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -76,46 +77,46 @@ public class PocoWritePlanTests
     }
 
     [Test]
-    public void BuildColumns_CalendarProperty_WritesThroughTheCalendarTypeNotTheWireCount()
+    public void Gather_CalendarProperty_WritesThroughTheCalendarTypeNotTheWireCount()
     {
         // Leave DateTime conversion to the codec.
         Block schema = SchemaOf(Target("value", "DateTime('UTC')"));
         var rows = new[] { new Row<DateTime> { Value = DateTime.UnixEpoch } };
 
-        IReadOnlyList<IColumn> columns = Plan<Row<DateTime>>(schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<Row<DateTime>> source = GatherAll(Plan<Row<DateTime>>(schema), rows, rows.Length);
 
-        Assert.That(columns[0], Is.InstanceOf<IColumn<DateTime>>());
+        Assert.That(source.Columns[0], Is.InstanceOf<IColumn<DateTime>>());
     }
 
     [Test]
-    public void BuildColumns_NonNullablePropertyIntoANullableColumn_LiftsToTheNullableWriteType()
+    public void Gather_NonNullablePropertyIntoANullableColumn_LiftsToTheNullableWriteType()
     {
         Block schema = SchemaOf(Target("value", "Nullable(Int32)"));
         var rows = new[] { new Row<int> { Value = 42 } };
 
-        IReadOnlyList<IColumn> columns = Plan<Row<int>>(schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<Row<int>> source = GatherAll(Plan<Row<int>>(schema), rows, rows.Length);
 
         Assert.Multiple(() =>
         {
-            Assert.That(columns[0], Is.InstanceOf<IColumn<int?>>());
-            Assert.That(columns[0].GetValue(0), Is.EqualTo(42));
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<int?>>());
+            Assert.That(source.Columns[0].GetValue(0), Is.EqualTo(42));
         });
     }
 
     [Test]
-    public void BuildColumns_NullableCalendarProperty_WritesThroughTheLiftedCalendarType()
+    public void Gather_NullableCalendarProperty_WritesThroughTheLiftedCalendarType()
     {
         // Verify that nullable codecs expose their lifted calendar spelling.
         Block schema = SchemaOf(Target("value", "Nullable(DateTime('UTC'))"));
         var rows = new[] { new Row<DateTime?> { Value = DateTime.UnixEpoch }, new Row<DateTime?> { Value = null } };
 
-        IReadOnlyList<IColumn> columns = Plan<Row<DateTime?>>(schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<Row<DateTime?>> source = GatherAll(Plan<Row<DateTime?>>(schema), rows, rows.Length);
 
         Assert.Multiple(() =>
         {
-            Assert.That(columns[0], Is.InstanceOf<IColumn<DateTime?>>());
-            Assert.That(columns[0].GetValue(0), Is.EqualTo(DateTime.UnixEpoch));
-            Assert.That(columns[0].GetValue(1), Is.Null);
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<DateTime?>>());
+            Assert.That(source.Columns[0].GetValue(0), Is.EqualTo(DateTime.UnixEpoch));
+            Assert.That(source.Columns[0].GetValue(1), Is.Null);
         });
     }
 
@@ -129,173 +130,242 @@ public class PocoWritePlanTests
 
         Assert.That(descriptor.CanActivate, Is.False, "the type a query could not materialize");
 
-        IReadOnlyList<IColumn> columns = PocoWritePlan<ConstructorOnlyPoco>.Build(descriptor, schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<ConstructorOnlyPoco> source =
+            GatherAll(PocoWritePlan<ConstructorOnlyPoco>.Build(descriptor, schema), rows, rows.Length);
 
-        Assert.That(columns[0].GetValue(0), Is.EqualTo(7));
+        Assert.That(source.Columns[0].GetValue(0), Is.EqualTo(7));
     }
 
     [Test]
-    public void BuildColumns_NullablePropertyIntoANullableColumn_CarriesTheNullThrough()
+    public void Gather_NullablePropertyIntoANullableColumn_CarriesTheNullThrough()
     {
         Block schema = SchemaOf(Target("value", "Nullable(Int32)"));
         var rows = new[] { new Row<int?> { Value = null }, new Row<int?> { Value = 7 } };
 
-        IReadOnlyList<IColumn> columns = Plan<Row<int?>>(schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<Row<int?>> source = GatherAll(Plan<Row<int?>>(schema), rows, rows.Length);
 
         Assert.Multiple(() =>
         {
-            Assert.That(columns[0].GetValue(0), Is.Null);
-            Assert.That(columns[0].GetValue(1), Is.EqualTo(7));
+            Assert.That(source.Columns[0].GetValue(0), Is.Null);
+            Assert.That(source.Columns[0].GetValue(1), Is.EqualTo(7));
         });
     }
 
     [Test]
-    public void BuildColumns_NullPropertyIntoANonNullableColumn_ThrowsNamingTheRow()
+    public void Gather_NullPropertyIntoANonNullableColumn_ThrowsNamingTheRow()
     {
         // Nullability is checked per row because non-null values remain valid.
         Block schema = SchemaOf(Target("value", "Int32"));
         var rows = new[] { new Row<int?> { Value = 1 }, new Row<int?> { Value = null } };
         PocoWritePlan<Row<int?>> plan = Plan<Row<int?>>(schema);
 
-        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => plan.BuildColumns(rows, rows.Length));
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => GatherAll(plan, rows, rows.Length));
 
         Assert.That(error.Message, Does.Contain("row 1").And.Contain("value").And.Contain("Value"));
     }
 
     [Test]
-    public void BuildColumns_ALaterColumnFailing_ThrowsNamingIt()
+    public void Gather_ASecondBlock_NamesTheRowByItsNumberInTheInsertNotInTheBlock()
+    {
+        // The row a value failed at must be the caller's row number, whichever block held it.
+        Block schema = SchemaOf(Target("value", "Int32"));
+        var rows = new[] { new Row<int?> { Value = 1 }, new Row<int?> { Value = 2 }, new Row<int?> { Value = null } };
+        using var buffer = PocoRowBuffer<Row<int?>>.Create(rows, "rows", blockRows: 2, CancellationToken.None);
+        using PocoInsertSource<Row<int?>> source = Plan<Row<int?>>(schema).CreateSource(buffer, blockRows: 2);
+
+        source.Gather(0, 2);
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => source.Gather(2, 1));
+
+        Assert.That(error.Message, Does.Contain("row 2"));
+    }
+
+    [Test]
+    public void Gather_ALaterColumnFailing_ThrowsNamingIt()
     {
         // A later failure also exercises cleanup of earlier columns.
         Block schema = SchemaOf(Target("Ok", "Int32"), Target("Bad", "Int32"));
         var rows = new[] { new TwoValues { Ok = 1, Bad = null } };
         PocoWritePlan<TwoValues> plan = Plan<TwoValues>(schema);
 
-        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => plan.BuildColumns(rows, rows.Length));
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => GatherAll(plan, rows, rows.Length));
 
         Assert.That(error.Message, Does.Contain("Bad"));
     }
 
     [Test]
-    public void BuildColumns_NullablePropertyIntoAColumnWrittenFromObject_CarriesTheNullThrough()
+    public void Gather_NullablePropertyIntoAColumnWrittenFromObject_CarriesTheNullThrough()
     {
         // Dynamic's object surface can carry null.
         Block schema = SchemaOf(Target("value", "Dynamic"));
         var rows = new[] { new Row<int?> { Value = null }, new Row<int?> { Value = 7 } };
 
-        IReadOnlyList<IColumn> columns = Plan<Row<int?>>(schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<Row<int?>> source = GatherAll(Plan<Row<int?>>(schema), rows, rows.Length);
 
         Assert.Multiple(() =>
         {
-            Assert.That(columns[0], Is.InstanceOf<IColumn<object>>());
-            Assert.That(columns[0].GetValue(0), Is.Null);
-            Assert.That(columns[0].GetValue(1), Is.EqualTo(7));
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<object>>());
+            Assert.That(source.Columns[0].GetValue(0), Is.Null);
+            Assert.That(source.Columns[0].GetValue(1), Is.EqualTo(7));
         });
     }
 
     [Test]
-    public void BuildColumns_NullStringPropertyIntoANonNullableColumn_ThrowsNamingTheRow()
+    public void Gather_NullStringPropertyIntoANonNullableColumn_ThrowsNamingTheRow()
     {
-        // Reject null references before any block is written.
+        // Reject null references before the block is written.
         Block schema = SchemaOf(Target("value", "String"));
         var rows = new[] { new Row<string> { Value = "a" }, new Row<string> { Value = null } };
         PocoWritePlan<Row<string>> plan = Plan<Row<string>>(schema);
 
-        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => plan.BuildColumns(rows, rows.Length));
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => GatherAll(plan, rows, rows.Length));
 
         Assert.That(error.Message, Does.Contain("row 1").And.Contain("value").And.Contain("Value"));
     }
 
     [Test]
-    public void BuildColumns_NullArrayPropertyIntoANonNullableColumn_ThrowsNamingTheRow()
+    public void Gather_NullArrayPropertyIntoANonNullableColumn_ThrowsNamingTheRow()
     {
         // The same rule reaches every reference-typed write type, not just string.
         Block schema = SchemaOf(Target("value", "Array(Int32)"));
         var rows = new[] { new Row<int[]> { Value = new[] { 1 } }, new Row<int[]> { Value = null } };
         PocoWritePlan<Row<int[]>> plan = Plan<Row<int[]>>(schema);
 
-        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => plan.BuildColumns(rows, rows.Length));
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => GatherAll(plan, rows, rows.Length));
 
         Assert.That(error.Message, Does.Contain("row 1"));
     }
 
     [Test]
-    public void BuildColumns_NullReferencePropertyIntoANullableColumn_CarriesTheNullThrough()
+    public void Gather_NullReferencePropertyIntoANullableColumn_CarriesTheNullThrough()
     {
         // A nullable target accepts the reference null directly.
         Block schema = SchemaOf(Target("value", "Nullable(String)"));
         var rows = new[] { new Row<string> { Value = "a" }, new Row<string> { Value = null } };
 
-        IReadOnlyList<IColumn> columns = Plan<Row<string>>(schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<Row<string>> source = GatherAll(Plan<Row<string>>(schema), rows, rows.Length);
 
         Assert.Multiple(() =>
         {
-            Assert.That(columns[0].GetValue(0), Is.EqualTo("a"));
-            Assert.That(columns[0].GetValue(1), Is.Null);
+            Assert.That(source.Columns[0].GetValue(0), Is.EqualTo("a"));
+            Assert.That(source.Columns[0].GetValue(1), Is.Null);
         });
     }
 
     [Test]
-    public void BuildColumns_EnumProperty_WritesTheOrdinal()
+    public void Gather_EnumProperty_WritesTheOrdinal()
     {
         Block schema = SchemaOf(Target("value", "Enum8('low' = -1, 'high' = 127)"));
         var rows = new[] { new Row<Level> { Value = Level.High } };
 
-        IReadOnlyList<IColumn> columns = Plan<Row<Level>>(schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<Row<Level>> source = GatherAll(Plan<Row<Level>>(schema), rows, rows.Length);
 
         Assert.Multiple(() =>
         {
-            Assert.That(columns[0], Is.InstanceOf<IColumn<sbyte>>());
-            Assert.That(columns[0].GetValue(0), Is.EqualTo((sbyte)127));
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<sbyte>>());
+            Assert.That(source.Columns[0].GetValue(0), Is.EqualTo((sbyte)127));
         });
     }
 
     [Test]
-    public void BuildColumns_PropertyMatchingNoTargetColumn_IsNotInserted()
+    public void Gather_PropertyMatchingNoTargetColumn_IsNotInserted()
     {
         // Properties not named by the INSERT are ignored.
         Block schema = SchemaOf(Target("Id", "Int32"));
         var rows = new[] { new IdName { Id = 3, Name = "not inserted" } };
 
-        IReadOnlyList<IColumn> columns = Plan<IdName>(schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<IdName> source = GatherAll(Plan<IdName>(schema), rows, rows.Length);
 
         Assert.Multiple(() =>
         {
-            Assert.That(columns, Has.Count.EqualTo(1));
-            Assert.That(columns[0].Name, Is.EqualTo("Id"));
-            Assert.That(columns[0].GetValue(0), Is.EqualTo(3));
+            Assert.That(source.Columns, Has.Count.EqualTo(1));
+            Assert.That(source.Columns[0].Name, Is.EqualTo("Id"));
+            Assert.That(source.Columns[0].GetValue(0), Is.EqualTo(3));
         });
     }
 
     [Test]
-    public void BuildColumns_SeveralTargets_AreBuiltInSchemaOrderWithTheTargetsNamesAndTypes()
+    public void Gather_SeveralTargets_AreFilledInSchemaOrderWithTheTargetsNamesAndTypes()
     {
         // Output columns follow the sample block's order, names, and types.
         Block schema = SchemaOf(Target("Name", "String"), Target("Id", "Int32"));
         var rows = new[] { new IdName { Id = 1, Name = "a" }, new IdName { Id = 2, Name = "b" } };
 
-        IReadOnlyList<IColumn> columns = Plan<IdName>(schema).BuildColumns(rows, rows.Length);
+        using PocoInsertSource<IdName> source = GatherAll(Plan<IdName>(schema), rows, rows.Length);
 
         Assert.Multiple(() =>
         {
-            Assert.That(columns[0].Name, Is.EqualTo("Name"));
-            Assert.That(columns[0].TypeName, Is.EqualTo("String"));
-            Assert.That(columns[0].RowCount, Is.EqualTo(2));
-            Assert.That(columns[1].Name, Is.EqualTo("Id"));
-            Assert.That(columns[1].TypeName, Is.EqualTo("Int32"));
-            Assert.That(columns[1].GetValue(1), Is.EqualTo(2));
+            Assert.That(source.Columns[0].Name, Is.EqualTo("Name"));
+            Assert.That(source.Columns[0].TypeName, Is.EqualTo("String"));
+            Assert.That(source.Columns[0].RowCount, Is.EqualTo(2));
+            Assert.That(source.Columns[1].Name, Is.EqualTo("Id"));
+            Assert.That(source.Columns[1].TypeName, Is.EqualTo("Int32"));
+            Assert.That(source.Columns[1].GetValue(1), Is.EqualTo(2));
         });
     }
 
     [Test]
-    public void BuildColumns_FewerRowsThanTheBuffer_ExposesOnlyTheRowsAsked()
+    public void Gather_FewerRowsThanTheBuffer_ExposesOnlyTheRowsAsked()
     {
-        // Use the logical row count, not the pooled buffer length.
+        // Use the block's row count, not the pooled buffer length.
         Block schema = SchemaOf(Target("value", "Int32"));
         var rows = new[] { new Row<int> { Value = 1 }, new Row<int> { Value = 2 }, new Row<int> { Value = 3 } };
 
-        IReadOnlyList<IColumn> columns = Plan<Row<int>>(schema).BuildColumns(rows, rowCount: 2);
+        using PocoInsertSource<Row<int>> source = GatherAll(Plan<Row<int>>(schema), rows, rowCount: 2);
 
-        Assert.That(columns[0].RowCount, Is.EqualTo(2));
+        Assert.That(source.Columns[0].RowCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void CreateSource_BeforeTheFirstGather_HoldsColumnsWithNoRows()
+    {
+        // The insert plan is built from these columns before any row is converted.
+        Block schema = SchemaOf(Target("value", "Int32"));
+        var rows = new[] { new Row<int> { Value = 1 } };
+        using var buffer = PocoRowBuffer<Row<int>>.Create(rows, "rows", blockRows: 1, CancellationToken.None);
+
+        using PocoInsertSource<Row<int>> source = Plan<Row<int>>(schema).CreateSource(buffer, blockRows: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source.Columns, Has.Count.EqualTo(1));
+            Assert.That(source.Columns[0].RowCount, Is.Zero);
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<int>>());
+        });
+    }
+
+    [Test]
+    public void Gather_EachBlockInTurn_ReusesTheSameColumnObjects()
+    {
+        // The write plan holds these columns, so their identity has to survive every block.
+        Block schema = SchemaOf(Target("value", "Int32"));
+        var rows = new[] { new Row<int> { Value = 1 }, new Row<int> { Value = 2 }, new Row<int> { Value = 3 } };
+        using var buffer = PocoRowBuffer<Row<int>>.Create(rows, "rows", blockRows: 2, CancellationToken.None);
+        using PocoInsertSource<Row<int>> source = Plan<Row<int>>(schema).CreateSource(buffer, blockRows: 2);
+
+        source.Gather(0, 2);
+        IColumn first = source.Columns[0];
+        object firstBlock = first.GetValue(1);
+
+        source.Gather(2, 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstBlock, Is.EqualTo(2));
+            Assert.That(source.Columns[0], Is.SameAs(first));
+            Assert.That(source.Columns[0].RowCount, Is.EqualTo(1), "the column holds the current block only");
+            Assert.That(source.Columns[0].GetValue(0), Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void Gather_ABlockLongerThanTheBuffer_ThrowsRatherThanWriteAWrongSizedBlock()
+    {
+        Block schema = SchemaOf(Target("value", "Int32"));
+        var rows = new[] { new Row<int> { Value = 1 }, new Row<int> { Value = 2 } };
+        using var buffer = PocoRowBuffer<Row<int>>.Create(rows, "rows", blockRows: 1, CancellationToken.None);
+        using PocoInsertSource<Row<int>> source = Plan<Row<int>>(schema).CreateSource(buffer, blockRows: 1);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => source.Gather(0, 2));
     }
 
     [Test]
@@ -319,11 +389,13 @@ public class PocoWritePlanTests
         PocoWritePlan<Row<int>> nullables = registry.WritePlanFor<Row<int>>(SchemaOf(Target("value", "Nullable(Int32)")));
 
         var rows = new[] { new Row<int> { Value = 1 } };
+        using PocoInsertSource<Row<int>> intSource = GatherAll(ints, rows, rows.Length);
+        using PocoInsertSource<Row<int>> nullableSource = GatherAll(nullables, rows, rows.Length);
         Assert.Multiple(() =>
         {
             Assert.That(nullables, Is.Not.SameAs(ints));
-            Assert.That(ints.BuildColumns(rows, 1)[0], Is.InstanceOf<IColumn<int>>());
-            Assert.That(nullables.BuildColumns(rows, 1)[0], Is.InstanceOf<IColumn<int?>>());
+            Assert.That(intSource.Columns[0], Is.InstanceOf<IColumn<int>>());
+            Assert.That(nullableSource.Columns[0], Is.InstanceOf<IColumn<int?>>());
         });
     }
 
@@ -339,11 +411,13 @@ public class PocoWritePlanTests
         PocoWritePlan<SeparatorColumns> threePlan = registry.WritePlanFor<SeparatorColumns>(three);
 
         var rows = new[] { new SeparatorColumns { Id = 1, Spelled = 9, Name = 2, Score = 3 } };
+        using PocoInsertSource<SeparatorColumns> spelledSource = GatherAll(spelledPlan, rows, rows.Length);
+        using PocoInsertSource<SeparatorColumns> threeSource = GatherAll(threePlan, rows, rows.Length);
         Assert.Multiple(() =>
         {
             Assert.That(threePlan, Is.Not.SameAs(spelledPlan));
-            Assert.That(Names(spelledPlan.BuildColumns(rows, 1)), Is.EqualTo(new[] { "Id", "Name\tInt32\nScore" }));
-            Assert.That(Names(threePlan.BuildColumns(rows, 1)), Is.EqualTo(new[] { "Id", "Name", "Score" }));
+            Assert.That(Names(spelledSource.Columns), Is.EqualTo(new[] { "Id", "Name\tInt32\nScore" }));
+            Assert.That(Names(threeSource.Columns), Is.EqualTo(new[] { "Id", "Name", "Score" }));
         });
     }
 
@@ -374,6 +448,28 @@ public class PocoWritePlanTests
     private static PocoWritePlan<T> Plan<T>(Block schema)
         where T : class
         => PocoWritePlan<T>.Build(PocoTypeDescriptor<T>.Build(), schema);
+
+    /// <summary>
+    /// Gathers the rows as a single block. The source is returned rather than its columns, because it owns the
+    /// buffers the columns read from.
+    /// </summary>
+    private static PocoInsertSource<T> GatherAll<T>(PocoWritePlan<T> plan, T[] rows, int rowCount)
+        where T : class
+    {
+        // The rows are an array, so the buffer borrows them and holds nothing past the gather.
+        using var buffer = PocoRowBuffer<T>.Create(rows, "rows", rowCount, CancellationToken.None);
+        PocoInsertSource<T> source = plan.CreateSource(buffer, rowCount);
+        try
+        {
+            source.Gather(0, rowCount);
+            return source;
+        }
+        catch
+        {
+            source.Dispose();
+            throw;
+        }
+    }
 
     private static string[] Names(IReadOnlyList<IColumn> columns)
     {
