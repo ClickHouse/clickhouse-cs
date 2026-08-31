@@ -17,7 +17,7 @@ public static class TcpConnectionString
         builder["set_max_threads"] = 2;
 
         ClickHouseTcpClientOptions options = builder.ToOptions();
-        Console.WriteLine($"Endpoint: {options.Host}:{options.Port ?? 9000}/{options.Database}");
+        Console.WriteLine($"Endpoint: {options.Host}:{options.ResolvedPort}/{options.Database}");
         Console.WriteLine($"Compression: {options.Compressor?.GetType().Name ?? "none"}");
         Console.WriteLine($"Max pool size: {options.MaxPoolSize}");
 

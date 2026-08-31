@@ -39,10 +39,20 @@ public static class TcpColumnarInsert
                 ClickHouseTcpColumn.Create("name", names),
             };
 
+            // An insert gets no server progress packets, so OnBlockWritten is its only progress. It also
+            // reports the block sizing MaxRowsPerBlock produced: 3 rows capped at 2 is a block of 2 then 1.
             await client.InsertAsync(
                 $"INSERT INTO {TableName} (id, name, score) VALUES",
                 columns,
-                new ClickHouseTcpInsertOptions { MaxRowsPerBlock = 2 });
+                new ClickHouseTcpInsertOptions
+                {
+                    MaxRowsPerBlock = 2,
+                    Callbacks = new ClickHouseTcpQueryCallbacks
+                    {
+                        OnBlockWritten = block => Console.WriteLine(
+                            $"Block {block.BlockIndex}: {block.RowCount} rows, {block.UncompressedBytes} bytes"),
+                    },
+                });
 
             // region is absent from the statement, so ClickHouse applies its default.
             await client.InsertAsync(
