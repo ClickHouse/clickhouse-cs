@@ -22,7 +22,8 @@ internal abstract class TupleColumnBase : ITupleColumn
     /// <param name="name">The column name.</param>
     /// <param name="typeName">The full <c>Tuple(...)</c> type string (element names included when named).</param>
     /// <param name="children">The child columns, one per element; each must be an <see cref="IColumn{T}"/> of the corresponding element type.</param>
-    /// <param name="fieldNames">The element names (one per element, null entry for an unnamed element), or null when the tuple is unnamed.</param>
+    /// <param name="fieldNames">The element names, one per element, or null when the tuple is unnamed; a null is
+    /// surfaced as an empty <see cref="ITupleColumn.FieldNames"/>, which the interface promises over a null.</param>
     /// <param name="ownsChildren">Whether disposing this column disposes the child columns.</param>
     /// <exception cref="ArgumentNullException"><paramref name="children"/> is null.</exception>
     /// <exception cref="ArgumentException"><paramref name="children"/> is empty, or the children disagree on their row count.</exception>
@@ -31,7 +32,7 @@ internal abstract class TupleColumnBase : ITupleColumn
         this.children = children ?? throw new ArgumentNullException(nameof(children));
         Name = name;
         TypeName = typeName;
-        FieldNames = fieldNames;
+        FieldNames = fieldNames ?? Array.Empty<string>();
         this.ownsChildren = ownsChildren;
 
         // A tuple stores one value per element per row, so every child is exactly as tall as the tuple and no

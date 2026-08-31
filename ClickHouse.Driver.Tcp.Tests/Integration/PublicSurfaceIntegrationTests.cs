@@ -37,6 +37,15 @@ public class PublicSurfaceIntegrationTests
 
             // Negotiated, so it is the client's ceiling whenever the server offers at least that much.
             Assert.That(info.ProtocolRevision, Is.EqualTo(NegotiatedProtocol.ClientTcpProtocolVersion));
+
+            // The three revisions are separable: the negotiated one is the lower of the other two, and a server
+            // the CI matrix runs is newer than this client, so it advertises more than is in force.
+            Assert.That(info.ClientProtocolRevision, Is.EqualTo(NegotiatedProtocol.ClientTcpProtocolVersion));
+            Assert.That(info.ServerProtocolRevision, Is.GreaterThanOrEqualTo(info.ProtocolRevision));
+            Assert.That(
+                info.ProtocolRevision,
+                Is.EqualTo(Math.Min(info.ClientProtocolRevision, info.ServerProtocolRevision)),
+                "the revision in force is the lower of the two, which is what a feature gate reads.");
         });
     }
 

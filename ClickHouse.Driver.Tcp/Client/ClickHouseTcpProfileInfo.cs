@@ -13,7 +13,7 @@ public readonly record struct ClickHouseTcpProfileInfo
     /// <summary>Initializes a new instance of the <see cref="ClickHouseTcpProfileInfo"/> struct.</summary>
     /// <param name="rows">Rows in the result.</param>
     /// <param name="blocks">Blocks in the result.</param>
-    /// <param name="bytes">Bytes in the result.</param>
+    /// <param name="bytes">The server's in-memory size of the result; see <see cref="Bytes"/>.</param>
     /// <param name="appliedLimit">Whether a LIMIT was applied.</param>
     /// <param name="rowsBeforeLimit">Rows before the LIMIT.</param>
     /// <param name="calculatedRowsBeforeLimit">Whether <paramref name="rowsBeforeLimit"/> is meaningful.</param>
@@ -33,7 +33,14 @@ public readonly record struct ClickHouseTcpProfileInfo
     /// <summary>Blocks in the result.</summary>
     public ulong Blocks { get; }
 
-    /// <summary>Bytes in the result.</summary>
+    /// <summary>
+    /// The server's own in-memory size for the result blocks — <b>not the bytes it put on the wire</b>, and not a
+    /// figure to size a transfer or a buffer from. It counts the server's column allocations, so a small result
+    /// reads far above its wire form: ten rows of <c>(UInt64, UInt8)</c> report 464 bytes against a 90-byte
+    /// uncompressed body, while at 200,000 rows the two nearly meet (1,801,216 against about 1,800,000) because
+    /// the values come to dominate the per-block overhead. Compression is applied after this is counted, so it
+    /// does not appear here at all.
+    /// </summary>
     public ulong Bytes { get; }
 
     /// <summary>Whether a LIMIT was applied.</summary>

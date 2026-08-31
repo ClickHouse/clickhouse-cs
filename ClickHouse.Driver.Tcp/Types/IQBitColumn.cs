@@ -5,7 +5,7 @@ namespace ClickHouse.Driver.Tcp;
 /// <summary>
 /// Exposes the transposed bit planes of a decoded <c>QBit(T, N)</c> column without materializing row vectors.
 /// The corresponding typed column exposes <see cref="float"/>[] for <c>BFloat16</c> and <c>Float32</c>,
-/// <see cref="double"/>[] for <c>Float64</c>, or <see cref="sbyte"/>[] for <c>Int8</c>.
+/// <see cref="double"/>[] for <c>Float64</c>, or <see cref="sbyte"/>[] for <c>Int8</c> on ClickHouse 26.7+.
 /// </summary>
 public interface IQBitColumn : IColumn
 {
@@ -20,7 +20,8 @@ public interface IQBitColumn : IColumn
 
     /// <summary>
     /// Gets the number of elements represented by each plane group. Columns decoded by this driver report
-    /// <see cref="Dimension"/> because strided <c>QBit(T, N, stride)</c> columns are unsupported.
+    /// <see cref="Dimension"/> because strided <c>QBit(T, N, stride)</c> columns, available since ClickHouse
+    /// 26.7, are unsupported.
     /// </summary>
     int Stride { get; }
 
