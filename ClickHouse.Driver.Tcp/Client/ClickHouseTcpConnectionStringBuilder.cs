@@ -85,7 +85,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["ReadTimeout"] = value.TotalSeconds;
     }
 
-    /// <summary>The soft send-buffer cap, in bytes. Defaults to 10 MiB.</summary>
+    /// <summary>The soft send-buffer cap, in bytes. Defaults to 1 MiB.</summary>
     public int MaxSendBufferBytes
     {
         get => GetIntOrDefault("MaxSendBufferBytes", ClickHouseTcpClientOptions.DefaultMaxSendBufferBytes);
