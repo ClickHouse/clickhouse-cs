@@ -235,7 +235,16 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
 
             var thrown = Assert.ThrowsAsync<ArgumentException>(async () =>
                 await connection.InsertAsync($"INSERT INTO {table} (value) VALUES", new[] { mismatched }, cancellationToken: None));
-            Assert.That(thrown.Message, Does.Contain("Int32"));
+
+            // The message names the target, the CLR element type it was given, and what it accepts — not the
+            // driver's internal column class, which tells the caller nothing they wrote.
+            Assert.Multiple(() =>
+            {
+                Assert.That(thrown.Message, Does.Contain("'value' (Int32)"));
+                Assert.That(thrown.Message, Does.Contain("System.Int64"), "the element type of the column supplied.");
+                Assert.That(thrown.Message, Does.Contain("It accepts System.Int32"));
+                Assert.That(thrown.Message, Does.Not.Contain(nameof(PrimitiveColumn<long>)), "the internal column class is not named.");
+            });
 
             // Only the terminator went out (no data block), so the server saw an insert of no rows and the
             // connection is left ready and usable — and nothing was actually inserted.

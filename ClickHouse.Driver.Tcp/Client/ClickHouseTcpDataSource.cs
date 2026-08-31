@@ -13,6 +13,10 @@ namespace ClickHouse.Driver.Tcp;
 /// </summary>
 /// <remarks>
 /// <para>
+/// Depend on <see cref="IClickHouseTcpDataSource"/> rather than on this class where the data source is
+/// substituted or wrapped.
+/// </para>
+/// <para>
 /// A <see cref="ClickHouseTcpClient"/> is already thread-safe and pooled, so this adds no pooling of its own. What
 /// it adds is a single owner: the client, and the pool behind it, belong to the data source. Everything else holds
 /// a client it must not dispose, because disposing it closes the pool for every other holder. Dispose the data
@@ -24,7 +28,7 @@ namespace ClickHouse.Driver.Tcp;
 /// </para>
 /// </remarks>
 [Experimental("CHTCP0001")]
-public sealed class ClickHouseTcpDataSource : IAsyncDisposable, IDisposable
+public sealed class ClickHouseTcpDataSource : IClickHouseTcpDataSource
 {
     private readonly ClickHouseTcpClient client;
 

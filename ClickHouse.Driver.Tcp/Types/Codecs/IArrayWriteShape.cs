@@ -51,7 +51,7 @@ internal sealed class ArrayWriteShape<TWrite> : IArrayWriteShape
             {
                 throw new ArgumentException(
                     $"Array column '{source.Name}' has a null value at row {start + i}; Array(T) rows are non-nullable. Use an empty array for an empty row, or declare the column Array(Nullable(T)) to carry null elements.",
-                    "source");
+                    nameof(column));
             }
 
             total64 += (ulong)row.Length;

@@ -81,6 +81,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
                     server.VersionMinor,
                     server.VersionPatch,
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                    server.Negotiated.Version,
                     server.Revision,
                     server.Timezone);
             }

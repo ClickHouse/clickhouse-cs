@@ -43,7 +43,7 @@ internal sealed class ClientOperation : IDisposable
     /// <param name="options">The client options the span's endpoint attributes come from.</param>
     /// <param name="logger">The client-category logger, or null when none is configured.</param>
     /// <param name="sql">The statement.</param>
-    /// <param name="queryId">The caller's query id, or null to let the server assign one.</param>
+    /// <param name="queryId">The query id in force, which every line this operation logs carries.</param>
     /// <returns>The operation, or null when nothing is observing it.</returns>
     /// <remarks>
     /// The caller's own callbacks are not this type's concern: the connection invokes them alongside

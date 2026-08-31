@@ -14,9 +14,10 @@ namespace Microsoft.Extensions.DependencyInjection;
 /// <remarks>
 /// <para>
 /// Every overload registers one <see cref="ClickHouseTcpDataSource" /> as a singleton and resolves
-/// <see cref="IClickHouseTcpClient" /> and <see cref="IClickHouseTcpOperations" /> from it, so the whole
-/// application shares one connection pool. Singleton is the only lifetime offered: the data source owns a pool
-/// that has to outlive every consumer, and the client is that pool rather than a per-consumer resource.
+/// <see cref="IClickHouseTcpDataSource" />, <see cref="IClickHouseTcpClient" /> and
+/// <see cref="IClickHouseTcpOperations" /> from it, so the whole application shares one connection pool.
+/// Singleton is the only lifetime offered: the data source owns a pool that has to outlive every consumer, and
+/// the client is that pool rather than a per-consumer resource.
 /// </para>
 /// <para>
 /// <b>Do not dispose the injected client.</b> Disposing it closes the shared pool, so every other consumer's
@@ -129,6 +130,10 @@ public static class ClickHouseTcpServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(dataSourceFactory);
 
         services.TryAdd(new ServiceDescriptor(typeof(ClickHouseTcpDataSource), serviceKey, dataSourceFactory, ServiceLifetime.Singleton));
+
+        // Forwarded to the concrete singleton, so injecting either the class or the interface gets the one
+        // instance that owns the pool, and the provider disposes it once.
+        services.TryAdd(new ServiceDescriptor(typeof(IClickHouseTcpDataSource), serviceKey, static (sp, key) => GetService<ClickHouseTcpDataSource>(sp, key), ServiceLifetime.Singleton));
         services.TryAdd(new ServiceDescriptor(typeof(IClickHouseTcpClient), serviceKey, static (sp, key) => GetService<ClickHouseTcpDataSource>(sp, key).GetClient(), ServiceLifetime.Singleton));
         services.TryAdd(new ServiceDescriptor(typeof(IClickHouseTcpOperations), serviceKey, static (sp, key) => GetService<IClickHouseTcpClient>(sp, key), ServiceLifetime.Singleton));
         return services;

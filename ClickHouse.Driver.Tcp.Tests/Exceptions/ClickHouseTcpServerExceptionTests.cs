@@ -20,4 +20,24 @@ public class ClickHouseTcpServerExceptionTests
             Assert.That(exception.ErrorCode, Is.EqualTo(65000));
         });
     }
+
+    // The shapes a live server does not send: a message without the prefix, one that only looks like it carries
+    // it, and an empty name. That the real prefix is present at all is asserted in the integration suite.
+    [TestCase("DB::Exception", "DB::Exception: it failed", "it failed")]
+    [TestCase("DB::Exception", "it failed", "it failed")]
+    [TestCase("DB::Exception", "DB::Exception", "DB::Exception")]
+    [TestCase("DB::Exception", "DB::ExceptionX: it failed", "DB::ExceptionX: it failed")]
+    [TestCase("DB::NetException", "DB::Exception: it failed", "DB::Exception: it failed")]
+    [TestCase("", "DB::Exception: it failed", "DB::Exception: it failed")]
+    [TestCase(null, "DB::Exception: it failed", "DB::Exception: it failed")]
+    public void Message_ServerRepeatedTheNameAtTheHeadOfTheText_ReportsTheTextWithoutIt(string name, string sent, string expected)
+    {
+        var exception = new ClickHouseTcpServerException(60, name, sent, "stack trace");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Is.EqualTo(expected));
+            Assert.That(exception.Name, Is.EqualTo(name), "the class name is still reported, just not twice.");
+        });
+    }
 }

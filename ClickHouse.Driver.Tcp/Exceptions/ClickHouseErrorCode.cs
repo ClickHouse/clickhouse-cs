@@ -31,6 +31,12 @@ public enum ClickHouseErrorCode
     /// <summary>The table has no column of that name.</summary>
     NoSuchColumnInTable = 16,
 
+    /// <summary>
+    /// A quoted string was expected and something else was found. What a query parameter named after a server
+    /// setting produces, because the server reads the name as that setting and then parses its value as one.
+    /// </summary>
+    CannotParseQuotedString = 26,
+
     /// <summary>The input did not match the expected format.</summary>
     CannotParseInputAssertionFailed = 27,
 
