@@ -70,6 +70,86 @@ public class PocoWriteIntegrationTests
         }
     }
 
+    [TestCase(1)]
+    [TestCase(7)]
+    [TestCase(1000)]
+    public async Task InsertRowsAsync_StatefulTypesSplitIntoBlocks_StoreWhatOneBlockStores(int maxRowsPerBlock)
+    {
+        // A row insert converts one block at a time, so every codec carrying per-block write state — the
+        // LowCardinality dictionary, Array and Map offsets, the Nullable null map, the Tuple fields — writes that
+        // state once per block, over gather buffers reused from the block before. Whatever the split, the stored
+        // rows must be the ones a single block stores, which sum(cityHash64(*)) compares independently of order.
+        await using var client = TcpServerFixture.CreateClient();
+        string table = CreateTableName();
+        try
+        {
+            await client.ExecuteAsync(
+                $@"CREATE TABLE {table} (
+                    id UInt32,
+                    lc LowCardinality(String),
+                    arr Array(String),
+                    pairs Map(String, String),
+                    tup Tuple(a Int32, b String),
+                    maybe Nullable(Int64))
+                   ENGINE = MergeTree ORDER BY id",
+                cancellationToken: None);
+
+            StatefulRow[] rows = StatefulRows(2_000);
+            string sql = $"INSERT INTO {table} (id, lc, arr, pairs, tup, maybe) VALUES";
+
+            await client.InsertRowsAsync(sql, rows, new ClickHouseTcpInsertOptions { MaxRowsPerBlock = null }, None);
+            ulong whole = await HashAsync(client, table);
+
+            await client.ExecuteAsync($"TRUNCATE TABLE {table}", cancellationToken: None);
+            await client.InsertRowsAsync(sql, rows, new ClickHouseTcpInsertOptions { MaxRowsPerBlock = maxRowsPerBlock }, None);
+
+            int count = await CountAsync(client, table);
+            ulong split = await HashAsync(client, table);
+            Assert.Multiple(() =>
+            {
+                Assert.That(count, Is.EqualTo(rows.Length));
+                Assert.That(split, Is.EqualTo(whole));
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task InsertRowsAsync_NullPropertyInALaterBlock_ThrowsAndKeepsWhatWasAlreadySent()
+    {
+        // The block is the conversion unit, so a value the target cannot take is found only when its block is
+        // gathered — after the blocks before it have gone out. The connection is still at a block boundary, so it
+        // stays usable.
+        await using var client = TcpServerFixture.CreateClient();
+        string table = CreateTableName();
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} (value Int32) ENGINE = Memory", cancellationToken: None);
+
+            var rows = new[] { new Row<int?> { Value = 1 }, new Row<int?> { Value = 2 }, new Row<int?> { Value = null } };
+
+            InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await client.InsertRowsAsync(
+                    $"INSERT INTO {table} (value) VALUES",
+                    rows,
+                    new ClickHouseTcpInsertOptions { MaxRowsPerBlock = 2 },
+                    None));
+
+            Assert.That(error.Message, Does.Contain("row 2").And.Contain("value"));
+            Assert.That(await CountAsync(client, table), Is.EqualTo(2), "the block written before the failing one");
+
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", new[] { new Row<int> { Value = 3 } }, cancellationToken: None);
+            Assert.That(await CountAsync(client, table), Is.EqualTo(3), "the client is still usable");
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
     [Test]
     public async Task InsertRowsAsync_PocoOverSeveralColumns_RoundTripsThroughQueryAsync()
     {
@@ -624,6 +704,60 @@ public class PocoWriteIntegrationTests
         await client.InsertRowsAsync(sql, rows, options, None);
     }
 
+    /// <summary>
+    /// Builds rows whose every column carries per-block write state, with values that vary from row to row so a
+    /// block's dictionary, offsets and null map differ from its neighbours'.
+    /// </summary>
+    /// <param name="count">How many rows to build.</param>
+    /// <returns>The rows.</returns>
+    private static StatefulRow[] StatefulRows(int count)
+    {
+        var rows = new StatefulRow[count];
+        for (int i = 0; i < count; i++)
+        {
+            rows[i] = new StatefulRow
+            {
+                Id = (uint)i,
+                Lc = $"label{i % 7}",
+                Arr = BuildStrings(i % 4, element => $"e{i}-{element}"),
+                Pairs = BuildPairs(i % 3, element => $"k{element}", element => $"v{i}-{element}"),
+                Tup = (i, $"t{i}"),
+                Maybe = i % 5 == 0 ? null : i,
+            };
+        }
+
+        return rows;
+    }
+
+    private static string[] BuildStrings(int length, Func<int, string> element)
+    {
+        var values = new string[length];
+        for (int i = 0; i < length; i++)
+        {
+            values[i] = element(i);
+        }
+
+        return values;
+    }
+
+    private static KeyValuePair<string, string>[] BuildPairs(int length, Func<int, string> key, Func<int, string> value)
+    {
+        var pairs = new KeyValuePair<string, string>[length];
+        for (int i = 0; i < length; i++)
+        {
+            pairs[i] = new KeyValuePair<string, string>(key(i), value(i));
+        }
+
+        return pairs;
+    }
+
+    /// <summary>Hashes the stored rows independently of their order, for comparing two inserts of the same data.</summary>
+    private static async Task<ulong> HashAsync(IClickHouseTcpClient client, string table)
+    {
+        List<object[]> rows = await client.QueryAsync($"SELECT sum(cityHash64(*)) FROM {table}", cancellationToken: None).ToListAsync();
+        return (ulong)rows[0][0];
+    }
+
     private static Task<object[]> ReadColumnAsRowsAsync(IClickHouseTcpClient client, string sql, ClickHouseTcpQueryOptions options, Type valueType)
     {
         MethodInfo reader = typeof(PocoWriteIntegrationTests)
@@ -720,6 +854,22 @@ public class PocoWriteIntegrationTests
         public ulong Id { get; set; }
 
         public double? Score { get; set; }
+    }
+
+    /// <summary>A row whose every column's codec carries write state of its own within a block.</summary>
+    private sealed class StatefulRow
+    {
+        public uint Id { get; set; }
+
+        public string Lc { get; set; }
+
+        public string[] Arr { get; set; }
+
+        public KeyValuePair<string, string>[] Pairs { get; set; }
+
+        public (int A, string B) Tup { get; set; }
+
+        public long? Maybe { get; set; }
     }
 
     private sealed class CalendarRow
