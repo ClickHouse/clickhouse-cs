@@ -9,9 +9,10 @@
 - **Critical priorities**: Stability, correctness, performance, and comprehensive testing
 - **Tech stack**: C#/.NET targeting `net6.0`, `net8.0`, `net9.0`, `net10.0`
 - **Tests run on**: `net6.0`, `net8.0`, `net9.0`, `net10.0`; Integration tests: `net10.0`; Benchmarks: `net10.0`
-- **Supported ClickHouse versions**: `25.8` LTS and newer — the floor of the CI matrix in
-  `.github/workflows/tests.yml`. Behavior that only affects older servers is out of scope; don't add
-  code paths or workarounds for it.
+- **Supported ClickHouse versions**: the last 3 releases plus the last 2 LTS releases (a moving
+  window, see `docs/overview.mdx`). The authoritative list is the `version` matrix in
+  `.github/workflows/tests.yml`; its lowest entry is the current support floor. Behavior that only
+  affects servers older than that floor is out of scope; don't add code paths or workarounds for it.
 
 ### Solution Structure
 ```
