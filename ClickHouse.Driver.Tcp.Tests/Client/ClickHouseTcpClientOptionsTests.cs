@@ -21,7 +21,7 @@ public class ClickHouseTcpClientOptionsTests
             Assert.That(options.Database, Is.EqualTo("default"));
             Assert.That(options.DialTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
             Assert.That(options.ReadTimeout, Is.EqualTo(TimeSpan.FromSeconds(300)));
-            Assert.That(options.MaxSendBufferBytes, Is.EqualTo(10 * 1024 * 1024));
+            Assert.That(options.MaxSendBufferBytes, Is.EqualTo(1024 * 1024));
         });
     }
 
