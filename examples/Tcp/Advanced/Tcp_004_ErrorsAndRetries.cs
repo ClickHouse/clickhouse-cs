@@ -2,7 +2,7 @@ using ClickHouse.Driver.Tcp;
 
 namespace ClickHouse.Driver.Examples;
 
-/// <summary>Handles server, transport, and protocol errors and retries transient reads.</summary>
+/// <summary>Handles server, transport, and protocol errors and retries a read that failed to connect.</summary>
 public static class TcpErrorsAndRetries
 {
     private const string TableName = "example_tcp_retry_deduplication";
@@ -18,8 +18,7 @@ public static class TcpErrorsAndRetries
         }
         catch (ClickHouseTcpServerException ex)
         {
-            Console.WriteLine(
-                $"Server error: {ex.Code} ({ex.RawCode}), transient={ex.IsTransient}");
+            Console.WriteLine($"Server error: {ex.Code} ({ex.RawCode})");
         }
 
         await using var unreachable = new ClickHouseTcpClient(
@@ -29,7 +28,7 @@ public static class TcpErrorsAndRetries
                 DialTimeout = TimeSpan.FromSeconds(1),
             });
 
-        // A transient read is safe to retry. A failed write may already have reached the server.
+        // A read is safe to retry. A failed write may already have reached the server.
         int attempts = 0;
         object result = await RetryRead(async () =>
         {
@@ -54,10 +53,7 @@ public static class TcpErrorsAndRetries
             // Reuse one token for retries of the same logical batch. The table must enable deduplication.
             var insertOptions = new ClickHouseTcpInsertOptions
             {
-                Settings = new Dictionary<string, string>
-                {
-                    ["insert_deduplication_token"] = "example-logical-batch-1",
-                },
+                DeduplicationToken = "example-logical-batch-1",
             };
 
             await client.InsertRowsAsync(
@@ -88,9 +84,11 @@ public static class TcpErrorsAndRetries
             {
                 return await operation();
             }
-            catch (ClickHouseTcpException ex) when (ex.IsTransient && attempt < MaxAttempts)
+            // The connection failed, so the read never ran. Which failures are worth a retry is the
+            // caller's policy: a server rejection of the query itself would repeat, so it is not caught.
+            catch (ClickHouseTcpTransportException ex) when (attempt < MaxAttempts)
             {
-                Console.WriteLine($"Transient {ex.GetType().Name}; retrying.");
+                Console.WriteLine($"{ex.GetType().Name}; retrying.");
                 await Task.Delay(TimeSpan.FromMilliseconds(100 * attempt));
             }
         }

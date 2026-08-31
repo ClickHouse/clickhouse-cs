@@ -18,9 +18,9 @@ public static class TcpTls
             ConfigureTls = tls => tls.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
         };
 
-        Console.WriteLine($"Plain endpoint:  {plain.Host}:{plain.Port ?? 9000}");
-        Console.WriteLine($"Secure endpoint: {secure.Host}:{secure.Port ?? 9440}");
-        Console.WriteLine("With Port unset, TLS uses the native secure port 9440.");
+        // ResolvedPort is the port a connection dials: Port when set, otherwise derived from UseTls.
+        Console.WriteLine($"Plain endpoint:  {plain.Host}:{plain.ResolvedPort}");
+        Console.WriteLine($"Secure endpoint: {secure.Host}:{secure.ResolvedPort}");
 
         // Use TlsCaCertificatePath for a private CA. It replaces the host trust store.
         // TlsAllowInvalidCertificates is intended only for local development.

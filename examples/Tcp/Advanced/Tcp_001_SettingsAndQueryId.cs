@@ -39,5 +39,10 @@ public static class TcpSettingsAndQueryId
 
         object nextSetting = await client.ExecuteScalarAsync("SELECT getSetting('max_threads')");
         Console.WriteLine($"Next query uses the client default again: {nextSetting}");
+
+        // With no QueryId the client generates one, so every operation is correlatable with
+        // system.query_log. The protocol never sends the server's own id back.
+        object generated = await client.ExecuteScalarAsync("SELECT currentQueryID()");
+        Console.WriteLine($"Client-generated query ID: {generated}");
     }
 }

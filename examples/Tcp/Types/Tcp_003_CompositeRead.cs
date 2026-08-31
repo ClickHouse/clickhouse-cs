@@ -70,7 +70,8 @@ public static class TcpCompositeRead
                 if (block["point"] is ITupleColumn point)
                 {
                     Console.WriteLine(
-                        $"Tuple fields [{string.Join(", ", point.FieldNames ?? Array.Empty<string?>())}]");
+                        // FieldNames is empty, not null, for an unnamed tuple.
+                        $"Tuple fields [{string.Join(", ", point.FieldNames)}]");
                 }
 
                 if (block["score"] is INullableColumn<double> score)
