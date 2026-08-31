@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -8,17 +7,19 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// Fills one target-column buffer from a property of each row.
+/// Fills one target-column buffer from a property of each row in a range.
 /// </summary>
 /// <typeparam name="T">The row type.</typeparam>
 /// <typeparam name="TWrite">The CLR type the target column is written in.</typeparam>
-/// <param name="rows">The rows to gather from; at least <paramref name="rowCount"/> long, each non-null.</param>
-/// <param name="rowCount">The number of rows to gather.</param>
-/// <param name="destination">The buffer to fill; at least <paramref name="rowCount"/> long.</param>
-internal delegate void PocoColumnGather<in T, in TWrite>(T[] rows, int rowCount, TWrite[] destination);
+/// <param name="rows">The rows to gather from; holds the range at <paramref name="start"/>, each non-null.</param>
+/// <param name="start">The index in <paramref name="rows"/> the range begins at.</param>
+/// <param name="rowNumber">The insert row number of that first row, for error messages.</param>
+/// <param name="count">The number of rows to gather.</param>
+/// <param name="destination">The buffer to fill from index zero; at least <paramref name="count"/> long.</param>
+internal delegate void PocoColumnGather<in T, in TWrite>(T[] rows, int start, int rowNumber, int count, TWrite[] destination);
 
 /// <summary>
-/// Builds one target column from buffered rows. The returned column owns its buffer.
+/// Gathers one target column, one block at a time, into a buffer it rents for the whole insert.
 /// </summary>
 /// <typeparam name="T">The row type.</typeparam>
 internal abstract class PocoColumnBuilder<T>
@@ -39,17 +40,23 @@ internal abstract class PocoColumnBuilder<T>
     /// <summary>The target column's ClickHouse type.</summary>
     protected string TypeName { get; }
 
-    /// <summary>Gathers <paramref name="rowCount"/> values into a new column.</summary>
-    /// <param name="rows">The rows, each non-null.</param>
-    /// <param name="rowCount">The number of rows to gather.</param>
+    /// <summary>Rents this column's gather destination, sized for one block.</summary>
+    /// <param name="blockRows">The most rows one block will hold.</param>
     /// <returns>The column, owning a pooled buffer it returns when disposed.</returns>
+    public abstract IColumn CreateColumn(int blockRows);
+
+    /// <summary>Gathers one block's values into a column from <see cref="CreateColumn"/>.</summary>
+    /// <param name="column">The column to fill, from this builder's <see cref="CreateColumn"/>.</param>
+    /// <param name="rows">The rows, each non-null.</param>
+    /// <param name="start">The index in <paramref name="rows"/> the block begins at.</param>
+    /// <param name="rowNumber">The insert row number of that first row, for error messages.</param>
+    /// <param name="count">The number of rows to gather.</param>
     /// <exception cref="InvalidOperationException">A row has no value for a column that cannot hold null.</exception>
-    public abstract IColumn Build(T[] rows, int rowCount);
+    public abstract void Gather(IColumn column, T[] rows, int start, int rowNumber, int count);
 }
 
 /// <summary>
-/// Gathers rows into a rented <typeparamref name="TWrite"/> buffer and transfers ownership to an
-/// <see cref="ArrayColumn{T}"/>.
+/// Gathers rows into a <see cref="PocoGatherColumn{T}"/>'s reused <typeparamref name="TWrite"/> buffer.
 /// </summary>
 /// <typeparam name="T">The row type.</typeparam>
 /// <typeparam name="TWrite">The CLR type the target column is written in.</typeparam>
@@ -66,21 +73,18 @@ internal sealed class PocoColumnBuilder<T, TWrite> : PocoColumnBuilder<T>
         : base(name, typeName) => this.gather = gather;
 
     /// <inheritdoc/>
-    public override IColumn Build(T[] rows, int rowCount)
-    {
-        TWrite[] buffer = ArrayPool<TWrite>.Shared.Rent(rowCount);
-        try
-        {
-            gather(rows, rowCount, buffer);
-        }
-        catch
-        {
-            // No column owns the rent yet; clear any partially gathered references before returning it.
-            ArrayPool<TWrite>.Shared.Return(buffer, clearArray: true);
-            throw;
-        }
+    public override IColumn CreateColumn(int blockRows) => new PocoGatherColumn<TWrite>(Name, TypeName, blockRows);
 
-        return ArrayColumn<TWrite>.OverPooledBuffer(Name, TypeName, buffer, rowCount);
+    /// <inheritdoc/>
+    public override void Gather(IColumn column, T[] rows, int start, int rowNumber, int count)
+    {
+        var destination = (PocoGatherColumn<TWrite>)column;
+
+        // Publish the rows only once they are all written, so a failed gather leaves no half-filled range
+        // readable through the column.
+        destination.Publish(0);
+        gather(rows, start, rowNumber, count, destination.Buffer);
+        destination.Publish(count);
     }
 }
 
@@ -124,9 +128,11 @@ internal static class PocoColumnBuilderFactory
         where T : class
     {
         ParameterExpression rows = Expression.Parameter(typeof(T[]), "rows");
-        ParameterExpression rowCount = Expression.Parameter(typeof(int), "rowCount");
+        ParameterExpression start = Expression.Parameter(typeof(int), "start");
+        ParameterExpression rowNumber = Expression.Parameter(typeof(int), "rowNumber");
+        ParameterExpression count = Expression.Parameter(typeof(int), "count");
         ParameterExpression destination = Expression.Parameter(typeof(TWrite[]), "destination");
-        ParameterExpression row = Expression.Variable(typeof(int), "row");
+        ParameterExpression slot = Expression.Variable(typeof(int), "slot");
 
         var site = new PocoGatherSite
         {
@@ -134,27 +140,30 @@ internal static class PocoColumnBuilderFactory
             ColumnType = typeName,
             PocoTypeName = typeof(T).Name,
             MemberName = member.MemberName,
-            Row = Expression.Convert(row, typeof(long)),
+
+            // Name the row by its number in the insert, not by its position in the block. Evaluated only where
+            // a conversion throws, so the addition costs nothing per row.
+            Row = Expression.Convert(Expression.Add(rowNumber, slot), typeof(long)),
         };
 
-        Expression value = Expression.Property(Expression.ArrayIndex(rows, row), member.Property);
+        Expression value = Expression.Property(Expression.ArrayIndex(rows, Expression.Add(start, slot)), member.Property);
         Expression converted = PocoWriteConversion.Convert(value, typeof(TWrite), targetTakesNull, site);
 
-        // row = 0; while (row < rowCount) { destination[row] = <converted>; row++; }
+        // slot = 0; while (slot < count) { destination[slot] = <converted from rows[start + slot]>; slot++; }
         LabelTarget done = Expression.Label("done");
         Expression body = Expression.Block(
-            new[] { row },
-            Expression.Assign(row, Expression.Constant(0)),
+            new[] { slot },
+            Expression.Assign(slot, Expression.Constant(0)),
             Expression.Loop(
                 Expression.IfThenElse(
-                    Expression.LessThan(row, rowCount),
+                    Expression.LessThan(slot, count),
                     Expression.Block(
-                        Expression.Assign(Expression.ArrayAccess(destination, row), converted),
-                        Expression.PostIncrementAssign(row)),
+                        Expression.Assign(Expression.ArrayAccess(destination, slot), converted),
+                        Expression.PostIncrementAssign(slot)),
                     Expression.Break(done)),
                 done));
 
-        var gather = Expression.Lambda<PocoColumnGather<T, TWrite>>(body, rows, rowCount, destination).Compile();
+        var gather = Expression.Lambda<PocoColumnGather<T, TWrite>>(body, rows, start, rowNumber, count, destination).Compile();
         return new PocoColumnBuilder<T, TWrite>(name, typeName, gather);
     }
 

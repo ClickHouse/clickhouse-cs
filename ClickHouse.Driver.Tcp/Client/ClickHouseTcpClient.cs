@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
+using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp;
@@ -313,17 +314,19 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
 
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
 
-        using var buffer = PocoRowBuffer<T>.Create(rows, nameof(rows), cancellationToken);
+        int? maxRowsPerBlock = ResolveMaxRowsPerBlock(options);
+        int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
+        using var buffer = PocoRowBuffer<T>.Create(rows, nameof(rows), blockRows, cancellationToken);
 
         await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
         await lease.Connection.InsertAsync(
             sql,
             buffer.Count,
-            schema => pocoTypes.WritePlanFor<T>(schema).BuildColumns(buffer.Rows, buffer.Count),
+            schema => pocoTypes.WritePlanFor<T>(schema).CreateSource(buffer, blockRows),
             settings,
             parameters: null,
             options?.QueryId,
-            ResolveMaxRowsPerBlock(options),
+            maxRowsPerBlock,
             Options.MaxSendBufferBytes,
             handlers: null,
             cancellationToken).ConfigureAwait(false);
@@ -340,17 +343,19 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         ArgumentNullException.ThrowIfNull(rows);
 
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);
-        using var buffer = PocoRowBuffer<object[]>.Create(rows, nameof(rows), cancellationToken);
+        int? maxRowsPerBlock = ResolveMaxRowsPerBlock(options);
+        int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
+        using var buffer = PocoRowBuffer<object[]>.Create(rows, nameof(rows), blockRows, cancellationToken);
 
         await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
         await lease.Connection.InsertAsync(
             sql,
             buffer.Count,
-            schema => UntypedRowColumns.Build(schema, buffer.Rows, buffer.Count),
+            schema => UntypedRowColumns.CreateSource(schema, buffer, blockRows),
             settings,
             parameters: null,
             options?.QueryId,
-            ResolveMaxRowsPerBlock(options),
+            maxRowsPerBlock,
             Options.MaxSendBufferBytes,
             handlers: null,
             cancellationToken).ConfigureAwait(false);

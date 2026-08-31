@@ -128,6 +128,13 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// Every column targeted by the INSERT must have a compatible public getter. Other properties
     /// are ignored. Rows must be materialized and must not be modified until the operation completes. An empty list
     /// still validates the mapping.
+    ///
+    /// <para>
+    /// Rows are converted to columns one wire block at a time (see
+    /// <see cref="ClickHouseTcpInsertOptions.MaxRowsPerBlock"/>), so the list is read as the insert runs rather
+    /// than copied up front. A value the target cannot take — a null for a non-nullable column, say — is
+    /// therefore found when its own block is converted, and the blocks before it have already been sent.
+    /// </para>
     /// </remarks>
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
@@ -151,9 +158,10 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// Inserts untyped rows, matching each <c>object[]</c> to the target columns by position.
     /// </summary>
     /// <remarks>
-    /// A column uses the CLR type of its first non-null value; later values must use the same type unless the target
-    /// is <c>Variant</c> or <c>Dynamic</c>. Rows must not be modified until the operation completes. Value types are
-    /// boxed because each row stores its values as <see cref="object"/>.
+    /// A column uses the CLR type of its first non-null value, wherever in the insert that row is; later values
+    /// must use the same type unless the target is <c>Variant</c> or <c>Dynamic</c>. Rows must not be modified
+    /// until the operation completes, since they are converted one wire block at a time as the insert runs. Value
+    /// types are boxed because each row stores its values as <see cref="object"/>.
     /// </remarks>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="rows">The materialized rows to insert, each non-null and one value long per target column.</param>

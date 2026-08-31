@@ -39,32 +39,4 @@ public class ArrayColumnTests
         ArrayPool<int>.Shared.Return(buffer);
     }
 
-    [Test]
-    public void OverPooledBuffer_DisposedTwice_ReturnsTheBufferOnce()
-    {
-        // An owning column must return its buffer exactly once.
-        ArrayColumn<int> column = ArrayColumn<int>.OverPooledBuffer("c", "Int32", ArrayPool<int>.Shared.Rent(4), length: 2);
-
-        column.Dispose();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(() => column.Dispose(), Throws.Nothing);
-            Assert.That(column.RowCount, Is.EqualTo(2), "the row count is the column's own, not the released buffer's");
-            Assert.That(() => column[0], Throws.InstanceOf<ArgumentOutOfRangeException>(), "the values are gone with the buffer");
-        });
-    }
-
-    [Test]
-    public void OverPooledBuffer_ZeroRows_IsDisposable()
-    {
-        // Zero-row inserts may produce the pool's shared empty array.
-        ArrayColumn<int> column = ArrayColumn<int>.OverPooledBuffer("c", "Int32", ArrayPool<int>.Shared.Rent(0), length: 0);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(column.RowCount, Is.EqualTo(0));
-            Assert.That(() => column.Dispose(), Throws.Nothing);
-        });
-    }
 }

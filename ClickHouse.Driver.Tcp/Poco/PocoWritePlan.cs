@@ -76,33 +76,16 @@ internal sealed class PocoWritePlan<T>
         return new PocoWritePlan<T>(builders);
     }
 
-    /// <summary>Gathers one column per target in sample-block order.</summary>
-    /// <param name="rows">The rows, each non-null; at least <paramref name="rowCount"/> long.</param>
-    /// <param name="rowCount">The number of rows to insert.</param>
-    /// <returns>The columns, each owning a pooled buffer it returns when disposed.</returns>
-    /// <exception cref="InvalidOperationException">A row has no value for a column that cannot hold null.</exception>
-    public IReadOnlyList<IColumn> BuildColumns(T[] rows, int rowCount)
-    {
-        var columns = new IColumn[builders.Length];
-        int built = 0;
-        try
-        {
-            for (; built < builders.Length; built++)
-            {
-                columns[built] = builders[built].Build(rows, rowCount);
-            }
-        }
-        catch
-        {
-            // Dispose columns built before a later gather failed.
-            for (int i = 0; i < built; i++)
-            {
-                columns[i].Dispose();
-            }
-
-            throw;
-        }
-
-        return columns;
-    }
+    /// <summary>
+    /// Opens one insert over this plan: a column per target in sample-block order, gathered a block at a time.
+    /// </summary>
+    /// <remarks>
+    /// The plan is cached and shared between inserts, so the buffers belong to the returned source rather than
+    /// to the plan.
+    /// </remarks>
+    /// <param name="rows">The insert's rows; not owned by the source.</param>
+    /// <param name="blockRows">The most rows one wire block will hold.</param>
+    /// <returns>The source, owning its gather buffers until it is disposed.</returns>
+    public PocoInsertSource<T> CreateSource(PocoRowBuffer<T> rows, int blockRows)
+        => new(builders, rows, blockRows);
 }
