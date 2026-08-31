@@ -126,6 +126,25 @@ public class VariantColumnCodecTests
         Assert.ThrowsAsync<ArgumentException>(async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
     }
 
+    // The refusal lists what the variant does take, so it must include a type a collision settles: IPv4 and IPv6
+    // both surface IPAddress, and Variant(IPv4, IPv6, String) does write an address of either family. Listing only
+    // the alternatives that own their CLR type outright would report IPAddress as unsupported.
+    [Test]
+    public void WriteColumn_ValueWithNoMatchingAlternative_NamesTheTypesACollisionSettles()
+    {
+        const string type = "Variant(IPv4, IPv6, String)";
+        IColumnCodec codec = Resolve(type);
+        var column = new ArrayColumn<object>("v", type, new object[] { 3.14 });
+
+        ArgumentException refusal = Assert.ThrowsAsync<ArgumentException>(
+            async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(refusal.Message, Does.Contain(typeof(IPAddress).ToString()));
+            Assert.That(refusal.Message, Does.Contain(typeof(string).ToString()));
+        });
+    }
+
     // Several alternatives can share a CLR element type even though the server forbids duplicate alternative types
     // — they only have to surface the same one. JSON and String are both string; Int64, DateTime64 and Time64 are
     // all long; Geometry collides twice over (Ring/LineString, Polygon/MultiLineString). No alternative claims
