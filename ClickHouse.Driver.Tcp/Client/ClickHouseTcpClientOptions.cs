@@ -286,7 +286,8 @@ public sealed record ClickHouseTcpClientOptions
     /// </para>
     /// <para>
     /// A codec chooses the method byte and the body encoding, but never the decoding: the server picks its own
-    /// codec, so a client that asks for LZ4 can still be sent ZSTD and must decode whatever arrives.
+    /// codec, so a client that asks for LZ4 can still be sent ZSTD and must decode whatever arrives. To steer
+    /// what the server sends, set its <c>network_compression_method</c> setting, here or per query.
     /// </para>
     /// </summary>
     public IClickHouseCompressor Compressor { get; init; } = ResolveCompressor(DefaultCompression);
