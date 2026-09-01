@@ -396,6 +396,43 @@ public class ColumnReadProjectionTests
         });
     }
 
+    // The Time64 refusal is on the raw count, not on the TimeSpan it shifts to: at scale 8 and 9 the shift to
+    // 100 ns ticks truncates toward zero, so every count from -1 to -99 at scale 9 reaches TimeSpan.Zero and a
+    // check made after it reads a negative value as midnight.
+    [TestCase(9, -1L, TestName = "A nanosecond before midnight, scale 9")]
+    [TestCase(9, -99L, TestName = "The last count scale 9 truncates to zero")]
+    [TestCase(9, -100L, TestName = "One tick before midnight, scale 9")]
+    [TestCase(8, -1L, TestName = "Ten nanoseconds before midnight, scale 8")]
+    [TestCase(8, -9L, TestName = "The last count scale 8 truncates to zero")]
+    [TestCase(3, -1L, TestName = "A millisecond before midnight, scale 3")]
+    [TestCase(3, 86_400_000L, TestName = "Exactly 24 hours, scale 3")]
+    [TestCase(0, 86_400L, TestName = "Exactly 24 hours, scale 0")]
+    [TestCase(0, 100 * 3600L, TestName = "A duration of 100 hours, scale 0")]
+    public void TryProjectRead_Time64ToTimeOnlyOfAValueThatIsNoTimeOfDay_Throws(int scale, long count)
+    {
+        Func<long, TimeOnly> project = Project<long, TimeOnly>(Codec($"Time64({scale})"));
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => project(count));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("is not a time of day"));
+            Assert.That(thrown.Message, Does.Contain("TimeSpan"));
+        });
+    }
+
+    // The bounds on the accepting side of the same check, so it cannot pass by refusing everything.
+    [TestCase(9, 0L, "00:00:00")]
+    [TestCase(9, 86_399_999_999_999L, "23:59:59.9999999")]
+    [TestCase(3, 86_399_999L, "23:59:59.999")]
+    [TestCase(0, 86_399L, "23:59:59")]
+    public void TryProjectRead_Time64ToTimeOnlyAtTheEndsOfTheDay_IsAccepted(int scale, long count, string expected)
+    {
+        Func<long, TimeOnly> project = Project<long, TimeOnly>(Codec($"Time64({scale})"));
+
+        Assert.That(project(count), Is.EqualTo(TimeOnly.Parse(expected)));
+    }
+
     [Test]
     public void ReadableElementTypes_NullableOfProjectingInner_LiftsEveryInnerType()
     {

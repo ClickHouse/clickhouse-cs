@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
 using ClickHouse.Driver.Tcp.Types.Codecs;
@@ -20,6 +21,8 @@ internal static class ColumnValueProjections
 
     /// <summary>The exclusive upper bound of a time of day.</summary>
     private static readonly TimeSpan OneDay = TimeSpan.FromDays(1);
+
+    private const long SecondsPerDay = 24 * 60 * 60;
 
     /// <summary>
     /// Presents an instant as a <see cref="DateTime"/>: a zero offset yields <see cref="DateTimeKind.Utc"/>, any
@@ -116,7 +119,19 @@ internal static class ColumnValueProjections
     /// <param name="scale">The column's fractional-second scale (0–9).</param>
     /// <returns>The time of day, with sub-100 ns digits truncated toward zero.</returns>
     /// <exception cref="InvalidOperationException">The value is not a time of day.</exception>
-    public static TimeOnly Time64ToTimeOnly(long count, int scale) => AsTimeOfDay(Time64ToTimeSpan(count, scale), "Time64");
+    public static TimeOnly Time64ToTimeOnly(long count, int scale)
+    {
+        // Checked on the raw count rather than on the TimeSpan: at scale 8 or 9 the shift to 100 ns ticks
+        // truncates toward zero, so a negative count finer than one tick reaches zero and passes a check made
+        // after it. -1 at scale 9 would read as midnight.
+        if (count < 0 || count >= SecondsPerDay * FixedPointScaling.Pow10(scale))
+        {
+            decimal seconds = (decimal)count / FixedPointScaling.Pow10(scale);
+            throw NotATimeOfDay("Time64", $"{seconds.ToString(CultureInfo.InvariantCulture)} s");
+        }
+
+        return TimeOnly.FromTimeSpan(Time64ToTimeSpan(count, scale));
+    }
 
     /// <summary>
     /// Confirms a codec was handed an expression of its canonical <see cref="IColumnCodec.ElementType"/>. Catches the
@@ -144,12 +159,14 @@ internal static class ColumnValueProjections
     {
         if (value < TimeSpan.Zero || value >= OneDay)
         {
-            throw new InvalidOperationException(
-                $"A {typeName} column value of {value} is not a time of day, so it has no TimeOnly. Read the column as a TimeSpan.");
+            throw NotATimeOfDay(typeName, value.ToString());
         }
 
         return TimeOnly.FromTimeSpan(value);
     }
+
+    private static InvalidOperationException NotATimeOfDay(string typeName, string value)
+        => new($"A {typeName} column value of {value} is not a time of day, so it has no TimeOnly. Read the column as a TimeSpan.");
 
     /// <summary>
     /// Lifts an inner codec's projection over a source that can be absent: an absent row yields
