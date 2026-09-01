@@ -96,9 +96,11 @@ public sealed class InsertRoundTripCase
         yield return NullableEnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte?[] { -1, null, 127 }, "a", null, "b");
         yield return ArrayEnumLabels("Enum8('a' = -1, 'b' = 127)", new[] { new sbyte[] { -1, 127 }, Array.Empty<sbyte>() }, new[] { "a", "b" }, Array.Empty<string>());
 
-        // Floats and Bool are direct blittable maps, so the primitive factory covers them.
-        yield return Primitive("Float32", new[] { 0f, 1.5f, -1.5f, float.MinValue, float.MaxValue });
-        yield return Primitive("Float64", new[] { 0d, 1.5, -1.5e100, double.MinValue, double.MaxValue });
+        // Floats and Bool are direct blittable maps, so the primitive factory covers them. NaN and the infinities
+        // are the patterns a conversion through a decimal text form would lose; signed zero rides along, and
+        // FloatSpecialValueIntegrationTests is where its sign is actually observable.
+        yield return Primitive("Float32", new[] { 0f, -0f, 1.5f, -1.5f, float.MinValue, float.MaxValue, float.NaN, float.PositiveInfinity, float.NegativeInfinity });
+        yield return Primitive("Float64", new[] { 0d, -0d, 1.5, -1.5e100, double.MinValue, double.MaxValue, double.NaN, double.PositiveInfinity, double.NegativeInfinity });
         yield return Primitive("Bool", new[] { false, true, true, false });
 
         yield return Strings("String", string.Empty, "hello", "héllo✓", "a\0b", new string('x', 500));
@@ -178,7 +180,7 @@ public sealed class InsertRoundTripCase
         yield return Primitive("IntervalDay", new[] { 0L, 7L, -30L });
 
         // Newer/experimental server types: enable their flag on the round-trip
-        yield return BFloat16s("BFloat16", BFloat16Settings, 0f, 1f, -2f, 0.5f, 100f);
+        yield return BFloat16s("BFloat16", BFloat16Settings, 0f, -0f, 1f, -2f, 0.5f, 100f, float.NaN, float.PositiveInfinity, float.NegativeInfinity);
         // Time surfaces as the raw Int32 seconds; Time64 as the raw Int64 count at the column's scale. The
         // inserted values are the exact wire values, returned verbatim.
         yield return TimeSeconds("Time", TimeSettings, 0, (12 * 3600) + (34 * 60) + 56, -((1 * 3600) + (2 * 60) + 3));
@@ -222,8 +224,10 @@ public sealed class InsertRoundTripCase
         yield return NullableValues<Int128>("Int128", Int128.MinValue, null, Int128.MaxValue);
         yield return NullableValues<UInt256>("UInt256", UInt256.Zero, null, UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)));
         yield return NullableValues<Int256>("Int256", Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)), null, Int256.Zero);
-        yield return NullableValues<float>("Float32", 0f, null, -1.5f, float.MaxValue);
-        yield return NullableValues<double>("Float64", 1.5, null, -1.5e100, null);
+        // A special next to a null, because the null map and the value run are written separately: the placeholder
+        // a null row contributes must not be mistaken for the NaN beside it, or the other way round.
+        yield return NullableValues<float>("Float32", 0f, null, -1.5f, float.MaxValue, float.NaN, null, float.PositiveInfinity, -0f);
+        yield return NullableValues<double>("Float64", 1.5, null, -1.5e100, null, double.NaN, double.NegativeInfinity, -0d);
         yield return NullableValues<bool>("Bool", true, null, false);
         yield return NullableValues<sbyte>("Enum8('a' = -1, 'b' = 127)", -1, null, 127);
         yield return NullableValues<short>("Enum16('x' = -32768, 'y' = 32767)", -32768, null, 32767);
@@ -273,7 +277,7 @@ public sealed class InsertRoundTripCase
             settings: null);
 
         // Experimental server types: enable their flag on the round-trip (same as their non-nullable cases).
-        yield return NullableValues<float>("BFloat16", BFloat16Settings, 0f, null, 1f, -2f);
+        yield return NullableValues<float>("BFloat16", BFloat16Settings, 0f, null, 1f, -2f, float.NaN, null, float.PositiveInfinity);
         yield return NullableValues<int>("Time", TimeSettings, 0, null, (12 * 3600) + (34 * 60) + 56);
         yield return NullableValues<long>("Time64(3)", TimeSettings, 0L, null, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456);
 
@@ -311,8 +315,8 @@ public sealed class InsertRoundTripCase
         yield return Arrays("Int256", new[] { Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)), Int256.Zero });
         yield return Arrays("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, Array.Empty<sbyte>());
         yield return Arrays("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 });
-        yield return Arrays("Float32", new[] { 0f, 1.5f, -1.5f, float.MaxValue }, Array.Empty<float>());
-        yield return Arrays("Float64", new[] { 0d, -1.5e100, double.MaxValue });
+        yield return Arrays("Float32", new[] { 0f, 1.5f, -1.5f, float.MaxValue }, Array.Empty<float>(), new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, -0f });
+        yield return Arrays("Float64", new[] { 0d, -1.5e100, double.MaxValue }, new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity, -0d });
         yield return Arrays("Bool", new[] { true, false, true }, Array.Empty<bool>());
         yield return Arrays("String", new[] { "a", "bb" }, Array.Empty<string>(), new[] { string.Empty, "héllo✓" });
         yield return Arrays<byte[]>("FixedString(4)", new[] { new byte[] { 1, 2, 3, 4 }, new byte[] { 0xFF, 0, 0xFF, 0 } }, Array.Empty<byte[]>());
@@ -342,7 +346,7 @@ public sealed class InsertRoundTripCase
         yield return Arrays("IntervalDay", new[] { 7L, -30L });
 
         // Experimental server types: enable their flag on the round-trip (same as their bare cases).
-        yield return Arrays("BFloat16", BFloat16Settings, new[] { 0f, 1f, -2f, 0.5f }, Array.Empty<float>());
+        yield return Arrays("BFloat16", BFloat16Settings, new[] { 0f, 1f, -2f, 0.5f }, Array.Empty<float>(), new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, -0f });
         yield return Arrays("Time", TimeSettings, new[] { 0, (12 * 3600) + (34 * 60) + 56 }, Array.Empty<int>());
         yield return Arrays("Time64(3)", TimeSettings, new[] { 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456 });
 
@@ -1780,6 +1784,8 @@ public sealed class InsertRoundTripCase
     }
 
     // BFloat16 widens to float; values are chosen to be exactly representable so the narrow-on-write is lossless.
+    // NaN and the infinities qualify: truncating the low 16 bits keeps an all-ones exponent, and the quiet bit is
+    // the mantissa's top bit, which stays.
     private static InsertRoundTripCase BFloat16s(string clickHouseType, IReadOnlyDictionary<string, string> settings, params float[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<float>(name, clickHouseType, values), settings);
 
