@@ -75,7 +75,6 @@ public class ClickHouseTcpConnectionIntegrationTests
         {
             Assert.That(thrown.Message, Does.Contain($"{TcpServerFixture.Host}:1"));
             Assert.That(thrown.InnerException, Is.InstanceOf<SocketException>());
-            Assert.That(thrown.IsTransient, Is.True);
         });
     }
 }

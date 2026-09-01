@@ -54,30 +54,6 @@ public sealed class ClickHouseTcpServerException : ClickHouseTcpException
     public string ServerStackTrace { get; }
 
     /// <summary>
-    /// Whether retrying the same operation later could plausibly succeed. True for load, contention and
-    /// server-side network failures.
-    /// </summary>
-    /// <remarks>
-    /// Judged from <see cref="Code"/> alone, so an unnamed code reads as not transient. Deterministic
-    /// failures are excluded even when they look temporary:
-    /// <see cref="ClickHouseErrorCode.MemoryLimitExceeded"/> repeats for the same query at the same size,
-    /// and <see cref="ClickHouseErrorCode.TooSlow"/> repeats for the same query plan.
-    /// </remarks>
-    public override bool IsTransient => Code switch
-    {
-        ClickHouseErrorCode.TimeoutExceeded => true,
-        ClickHouseErrorCode.TooManySimultaneousQueries => true,
-        ClickHouseErrorCode.NoFreeConnection => true,
-        ClickHouseErrorCode.SocketTimeout => true,
-        ClickHouseErrorCode.NetworkError => true,
-        ClickHouseErrorCode.TooManyParts => true,
-        ClickHouseErrorCode.AllConnectionTriesFailed => true,
-        ClickHouseErrorCode.ServerOverloaded => true,
-        ClickHouseErrorCode.KeeperException => true,
-        _ => false,
-    };
-
-    /// <summary>
     /// Decodes an Exception packet body (the bytes after the packet type code): <c>Int32 code</c>,
     /// <c>String name</c>, <c>String message</c>, <c>String stack_trace</c>, <c>Bool has_nested</c>. When
     /// <c>has_nested</c> is set, the nested exception follows and becomes the inner exception.
