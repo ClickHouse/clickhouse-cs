@@ -530,6 +530,118 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         }
     }
 
+    /// <summary>
+    /// A dense <c>Variant</c> column read from one column and inserted into another whose alternatives differ.
+    /// Such a column cannot use the dense shortcut, which pairs alternative <c>i</c> with alternative <c>i</c>, so
+    /// it is scattered by each value's own type instead — and only a server can say where the values then landed.
+    /// This is the case where the counts match, which is the one no arity check separates.
+    /// </summary>
+    [Test]
+    public async Task InsertAsync_DenseVariantOfAnotherVariantsAlternatives_LandsInTheAlternativeTheValueNames()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string source = UniqueTableName();
+        string target = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Date, Int64)) ENGINE = Memory");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Date32, Int64)) ENGINE = Memory");
+            // toInt64: a bare 7 is UInt8, and a Variant takes only its own alternatives.
+            await ExecuteAsync(
+                connection,
+                $"INSERT INTO {source} VALUES (CAST(toDate('2024-06-15') AS Variant(Date, Int64))), (CAST(toInt64(7) AS Variant(Date, Int64)))");
+
+            // Inside the loop: the block owns the column's pooled buffers, so it has to still be alive. The read
+            // needs its own connection — one connection carries one in-flight operation.
+            await using ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None);
+            // No ORDER BY on the Variant itself: the server refuses one without allow_suspicious_types_in_order_by,
+            // and the read-back below sorts on a String expression instead.
+            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", cancellationToken: None))
+            {
+                await connection.InsertAsync($"INSERT INTO {target} (value) VALUES", new[] { block[0] }, cancellationToken: None);
+            }
+
+            // variantType names the alternative the row actually selected, which is the whole question here.
+            var readBack = new List<string>();
+            await foreach (Block block in connection.QueryAsync(
+                $"SELECT concat(toString(value), ' as ', toString(variantType(value))) FROM {target} ORDER BY toString(value)",
+                cancellationToken: None))
+            {
+                for (int row = 0; row < block[0].RowCount; row++)
+                {
+                    readBack.Add((string)block[0].GetValue(row));
+                }
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(readBack, Is.EqualTo(new[] { "2024-06-15 as Date32", "7 as Int64" }));
+                Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+            });
+        }
+        finally
+        {
+            // Its own connection: a write that fails terminates the one it failed on, and a DROP that then
+            // throws ObjectDisposedException would mask the failure under test.
+            await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {source}");
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {target}");
+        }
+    }
+
+    /// <summary>
+    /// The same shortcut, where the value fits no alternative of the target at all. The refusal has to come
+    /// before any of the column reaches the wire: the discriminators are written first, so a failure discovered
+    /// in the body leaves a half-written column and costs the connection.
+    /// </summary>
+    [Test]
+    public async Task InsertAsync_DenseVariantWhoseValueNoTargetAlternativeAccepts_RefusesBeforeWritingAnything()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string source = UniqueTableName();
+        string target = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = Memory");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = Memory");
+            await ExecuteAsync(connection, $"INSERT INTO {source} VALUES (CAST('abc' AS Variant(Int64, String)))");
+
+            ArgumentException refusal = null;
+            await using ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None);
+            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", cancellationToken: None))
+            {
+                refusal = Assert.ThrowsAsync<ArgumentException>(
+                    async () => await connection.InsertAsync($"INSERT INTO {target} (value) VALUES", new[] { block[0] }, cancellationToken: None));
+            }
+
+            // A fresh connection to count with: the INSERT statement was already in flight when the column was
+            // refused, so the client cannot resume that connection and terminates it. That is the existing
+            // contract for an abandoned insert, not something this test is asserting about.
+            long rows = 0;
+            await using ClickHouseTcpConnection counter = await TcpServerFixture.ConnectAsync(None);
+            await foreach (Block block in counter.QueryAsync($"SELECT count() FROM {target}", cancellationToken: None))
+            {
+                rows = Convert.ToInt64(block[0].GetValue(0));
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refusal, Is.Not.Null);
+                Assert.That(refusal.Message, Does.Contain("System.String"), "names the CLR type no alternative accepts");
+                Assert.That(refusal.Message, Does.Contain("Variant(Bool, Int64)"), "names the target type");
+                Assert.That(rows, Is.Zero, "nothing may land from a column that could not be written");
+            });
+        }
+        finally
+        {
+            // Its own connection: a write that fails terminates the one it failed on, and a DROP that then
+            // throws ObjectDisposedException would mask the failure under test.
+            await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {source}");
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {target}");
+        }
+    }
+
     [Test]
     public async Task InsertAsync_DenseDynamicColumnSplitAcrossBlocks_RoundTripsEveryRow()
     {
