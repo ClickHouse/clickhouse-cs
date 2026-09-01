@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
+using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -17,6 +18,19 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 public class ConnectionPoolIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
+
+    /// <summary>An operation that fails, one per place a failure can strike after the permit is taken.</summary>
+    public enum FailingOperation
+    {
+        /// <summary>A query the server refuses, so the failure arrives over the wire.</summary>
+        QueryTheServerRefuses,
+
+        /// <summary>An insert of a column the table has not, refused by the client against the schema block.</summary>
+        InsertOfAnUnknownColumn,
+
+        /// <summary>An insert whose columns disagree on row count, refused before the connection is used.</summary>
+        InsertOfRaggedColumns,
+    }
 
     private static string UniqueTableName() => $"tcp_pool_test_{Guid.NewGuid():N}";
 
@@ -359,6 +373,87 @@ public class ConnectionPoolIntegrationTests
             Assert.DoesNotThrowAsync(
                 async () => await client.ExecuteAsync("SELECT 1", cancellationToken: None),
                 $"iteration {iteration + 1}: the valid statement must not inherit the closed connection");
+        }
+    }
+
+    /// <summary>
+    /// A failed operation gives its pool permit back. The other error-path tests run at the default
+    /// <c>MaxPoolSize</c> of 20, where losing one permit per failure still leaves nineteen and every assertion
+    /// passes; at a pool of one the attempt after the first has nothing to run on. Three failures, then a
+    /// successful query on the same client.
+    ///
+    /// <para>
+    /// One case per place an operation can fail once it holds a permit: on the server, in the client against the
+    /// insert schema block, and in the client before the connection is touched at all. The fourth failure kind,
+    /// a setting the server refuses, is already repeated at a pool of one by
+    /// <see cref="ExecuteAsync_UnparseableSetting_ReplacesClosedConnectionBeforeNextOperation"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="failing">The operation to repeat.</param>
+    /// <param name="expected">The exception it must fail with. A lost permit reports a pool timeout instead.</param>
+    [TestCase(FailingOperation.QueryTheServerRefuses, typeof(ClickHouseTcpServerException))]
+    [TestCase(FailingOperation.InsertOfAnUnknownColumn, typeof(ArgumentException))]
+    [TestCase(FailingOperation.InsertOfRaggedColumns, typeof(ArgumentException))]
+    public async Task Failure_RepeatedAtAPoolOfOne_ReturnsThePermitEveryTime(FailingOperation failing, Type expected)
+    {
+        const int attempts = 3;
+
+        // A lost permit makes the next attempt wait out PoolTimeout and report one, so the value is what this
+        // test costs when it fails. Five seconds is long enough not to be reported by a busy machine instead.
+        await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1, poolTimeout: TimeSpan.FromSeconds(5));
+        string table = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = MergeTree ORDER BY id", cancellationToken: None);
+        try
+        {
+            for (int attempt = 1; attempt <= attempts; attempt++)
+            {
+                Exception thrown = Assert.CatchAsync(async () => await FailAsync(client, failing, table));
+                Assert.That(thrown, Is.InstanceOf(expected), $"attempt {attempt}");
+            }
+
+            ulong rows = 0;
+            await foreach (ValueRow row in client.QueryAsync<ValueRow>(
+                $"SELECT toUInt64(count()) AS id FROM {table}", cancellationToken: None))
+            {
+                rows = row.Id;
+            }
+
+            Assert.That(rows, Is.Zero, "a refused insert must leave no row behind");
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    private static async Task FailAsync(ClickHouseTcpClient client, FailingOperation failing, string table)
+    {
+        switch (failing)
+        {
+            case FailingOperation.QueryTheServerRefuses:
+                await client.ExecuteAsync($"SELECT count() FROM {table}_absent", cancellationToken: None);
+                break;
+
+            case FailingOperation.InsertOfAnUnknownColumn:
+                IColumn[] unknown =
+                [
+                    PrimitiveColumn<ulong>.FromValues("id", "UInt64", [1, 2]),
+                    PrimitiveColumn<ulong>.FromValues("absent", "UInt64", [1, 2]),
+                ];
+                await client.InsertAsync($"INSERT INTO {table} (id) VALUES", unknown, cancellationToken: None);
+                break;
+
+            case FailingOperation.InsertOfRaggedColumns:
+                IColumn[] ragged =
+                [
+                    PrimitiveColumn<ulong>.FromValues("id", "UInt64", [1, 2]),
+                    PrimitiveColumn<ulong>.FromValues("second", "UInt64", [1, 2, 3]),
+                ];
+                await client.InsertAsync($"INSERT INTO {table} (id) VALUES", ragged, cancellationToken: None);
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(failing), failing, "unhandled failure");
         }
     }
 
