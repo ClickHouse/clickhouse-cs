@@ -69,21 +69,25 @@ public class TcpParameterFormatterEdgeCaseTests
         Assert.That(exception.Message, Does.Contain("serialized aggregate states").And.Contain("the server rejects one too"));
     }
 
-    // The server does accept a text value for each of these, so the refusal is this client's own and must not
-    // read like the type does not exist.
-    [TestCase("Dynamic", TestName = "Dynamic, where the value would have to name its own type")]
-    [TestCase("Geometry", TestName = "Geometry, where an array of points is two different shapes")]
-    [TestCase("SimpleAggregateFunction(sum, UInt64)", TestName = "SimpleAggregateFunction, which the codec reads as its inner type")]
-    public void FormatSqlText_TypeTheServerTakesAndThisClientCannotWrite_SaysWhoseLimitItIs(string typeName)
-    {
-        var exception = Assert.Throws<ArgumentException>(() => Format(5, typeName));
+    // Three types whose name does not fix the value's layout on its own. SimpleAggregateFunction writes as its
+    // inner type; Dynamic and Geometry write as the value's own type, and the server's parse is what decides
+    // whether that text fits. A Geometry is ambiguous by construction — the ring below is equally a LineString —
+    // and the text is the same either way, which is why the ambiguity costs nothing here.
+    [TestCase("SimpleAggregateFunction(sum, UInt64)", 5, ExpectedResult = "5", TestName = "SimpleAggregateFunction writes as its inner type")]
+    [TestCase("Dynamic", 5, ExpectedResult = "5", TestName = "Dynamic writes an integer")]
+    [TestCase("Dynamic", "x", ExpectedResult = "x", TestName = "Dynamic writes a string")]
+    [TestCase("Geometry", null, ExpectedResult = "(10,20)", TestName = "Geometry writes a point")]
+    public string FormatSqlText_TypeThatTakesItsLayoutFromTheValue_WritesTheValuesOwnText(string typeName, object value)
+        => Format(value ?? (10.0, 20.0), typeName);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(exception.Message, Does.Contain("This client cannot format a parameter value"));
-            Assert.That(exception.Message, Does.Contain("Name the concrete type of the value instead"));
-            Assert.That(exception.Message, Does.Not.Contain("is not a ClickHouse type name"));
-        });
+    [Test]
+    public void FormatSqlText_GeometryHoldingAnArrayOfPoints_WritesTheShapeTextTheServerParses()
+    {
+        // Both the Ring and the LineString reading of this value produce this text, so the client does not have to
+        // choose between them.
+        Assert.That(
+            Format(new[] { (0.0, 0.0), (1.0, 1.0), (0.0, 1.0) }, "Geometry"),
+            Is.EqualTo("[(0,0),(1,1),(0,1)]"));
     }
 
     [Test]

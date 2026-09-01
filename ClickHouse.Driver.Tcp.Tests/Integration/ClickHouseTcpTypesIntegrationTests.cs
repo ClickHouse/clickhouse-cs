@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
@@ -177,6 +178,14 @@ public class ClickHouseTcpTypesIntegrationTests
             // Only the aliases whose target this client has a codec for: the server also aliases types the
             // client does not support, and those are TT-14/TT-48 decisions rather than table entries.
             if (family.Value.Length == 0 || !ColumnCodecRegistry.Default.KnowsTypeName(family.Value))
+            {
+                continue;
+            }
+
+            // 25.8 has the GEOMETRY alias but not the Geometry type, so it points the alias at String. The
+            // client's table names the type, which is right for every server that has one.
+            if (!TcpServerFeatures.Has(TcpFeature.Geometry)
+                && family.Key.Equals("GEOMETRY", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

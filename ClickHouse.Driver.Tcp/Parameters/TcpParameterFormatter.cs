@@ -203,13 +203,16 @@ internal static class TcpParameterFormatter
                     $"ClickHouse type '{type}' holds serialized aggregate states, so no parameter value spells it; " +
                     "the server rejects one too. Pass the arguments the state is built from instead.");
 
-            // The server does take a text value for each of these (checked on 26.6), so the refusal is this
-            // client's own: a Dynamic needs the value's type to name itself, and a Geometry value is ambiguous —
-            // an array of points is both a Ring and a LineString.
-            case "Dynamic" or "Geometry" or "SimpleAggregateFunction":
-                throw new ArgumentException(
-                    $"This client cannot format a parameter value as ClickHouse type '{type}'. Name the concrete " +
-                    "type of the value instead.");
+            // The alias is transparent: the value is written as T, which is also what the codec resolves the
+            // column to. The function only tells the server how to merge rows.
+            case "SimpleAggregateFunction" when type.Arguments.Count == 2:
+                return Format(type.Arguments[1], value, quote);
+
+            // Neither of these names a layout for the value on its own, so the value's own type does. A Geometry
+            // is ambiguous by construction — an array of points is both a Ring and a LineString — but the text is
+            // the same either way, and the server's parse is what picks the shape.
+            case "Dynamic" or "Geometry":
+                return Format(TypeParser.Parse(ParameterTypeInference.Infer(value, name)), value, quote);
 
             default:
                 throw NotFormattable(type, name, value);

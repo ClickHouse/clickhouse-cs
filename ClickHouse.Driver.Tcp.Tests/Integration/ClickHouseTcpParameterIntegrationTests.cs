@@ -186,6 +186,23 @@ public class ClickHouseTcpParameterIntegrationTests
         // A surrogate pair, which a formatter that walks chars rather than runes can split.
         yield return new TestCaseData("String", "a\U0001F600b").Returns("a\U0001F600b").SetName("String with an emoji");
 
+        // Three types whose name does not fix the value's layout, so the client writes the value's own text and the
+        // server's parse decides. Geometry is the ambiguous one — this ring is equally a LineString — and the text
+        // is the same either way.
+        yield return new TestCaseData("SimpleAggregateFunction(sum, UInt64)", 42UL)
+            .Returns("42").SetName("SimpleAggregateFunction as its inner type");
+        yield return new TestCaseData("SimpleAggregateFunction(groupArrayArray, Array(UInt64))", new ulong[] { 1, 2, 3 })
+            .Returns("[1,2,3]").SetName("SimpleAggregateFunction over an array inner");
+        yield return new TestCaseData("Dynamic", -7L).Returns("-7").SetName("Dynamic holding an integer");
+        yield return new TestCaseData("Dynamic", "x").Returns("x").SetName("Dynamic holding a string");
+        yield return new TestCaseData("Dynamic", new ulong[] { 1, 2, 3 }).Returns("[1,2,3]").SetName("Dynamic holding an array");
+        if (TcpServerFeatures.Has(TcpFeature.Geometry))
+        {
+            yield return new TestCaseData("Geometry", (10.0, 20.0)).Returns("(10,20)").SetName("Geometry as a point");
+            yield return new TestCaseData("Geometry", new[] { (0.0, 0.0), (1.0, 1.0), (0.0, 1.0) })
+                .Returns("[(0,0),(1,1),(0,1)]").SetName("Geometry as a ring");
+        }
+
         // A ValueTuple past 7 elements nests its tail in TRest, which ITuple flattens back out.
         yield return new TestCaseData("Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, String, String)",
             (1, 2, 3, 4, 5, 6, 7, "eight", "nine")).Returns("(1,2,3,4,5,6,7,'eight','nine')").SetName("Tuple of nine");

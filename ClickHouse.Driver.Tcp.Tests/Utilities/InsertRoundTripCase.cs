@@ -294,16 +294,19 @@ public sealed class InsertRoundTripCase
         // project the inner column before the state-prefix phase: the tuple builds its write state there and
         // needs a column of (byte, string), not of (byte, string)?. A null row beside a row of inner defaults
         // keeps the two distinguishable.
-        yield return Same(
-            "Nullable(Tuple(UInt8, String))",
-            "Nullable(Tuple(UInt8, String))",
-            name => new ArrayColumn<(byte, string)?>(name, "Nullable(Tuple(UInt8, String))", new (byte, string)?[]
-            {
-                ((byte)7, "x"),
-                null,
-                ((byte)0, string.Empty),
-            }),
-            NullableTupleSettings);
+        if (TcpServerFeatures.Has(TcpFeature.NullableTuple))
+        {
+            yield return Same(
+                "Nullable(Tuple(UInt8, String))",
+                "Nullable(Tuple(UInt8, String))",
+                name => new ArrayColumn<(byte, string)?>(name, "Nullable(Tuple(UInt8, String))", new (byte, string)?[]
+                {
+                    ((byte)7, "x"),
+                    null,
+                    ((byte)0, string.Empty),
+                }),
+                NullableTupleSettings);
+        }
         yield return NullableValues<sbyte>("Enum8('a' = -1, 'b' = 127)", -1, null, 127);
         yield return NullableValues<short>("Enum16('x' = -32768, 'y' = 32767)", -32768, null, 32767);
         yield return NullableValues<DateOnly>("Date", new DateOnly(1970, 1, 1), null, new DateOnly(2149, 6, 6));
@@ -1569,16 +1572,19 @@ public sealed class InsertRoundTripCase
         // Nullable over an alias for a tuple: the null map sits outside, and the inner tuple is still resolved
         // from the alias name. The bare Nullable(Tuple(...)) case is in the nullable section above; this one adds
         // the alias.
-        yield return Same(
-            "Nullable(Point)",
-            "Nullable(Point)",
-            name => new ArrayColumn<(double, double)?>(name, "Nullable(Point)", new (double, double)?[]
-            {
-                (1.5d, -2.5d),
-                null,
-                (0d, 0d),
-            }),
-            NullableTupleSettings);
+        if (TcpServerFeatures.Has(TcpFeature.NullableTuple))
+        {
+            yield return Same(
+                "Nullable(Point)",
+                "Nullable(Point)",
+                name => new ArrayColumn<(double, double)?>(name, "Nullable(Point)", new (double, double)?[]
+                {
+                    (1.5d, -2.5d),
+                    null,
+                    (0d, 0d),
+                }),
+                NullableTupleSettings);
+        }
 
         // Geometry is a Variant over the six aliases, and the column header carries only "Geometry", so the client
         // expands it and picks the discriminator order itself. A row against each of the six discriminators, plus a
