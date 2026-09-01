@@ -47,14 +47,21 @@ internal static class ColumnValueProjections
     /// <param name="seconds">The raw epoch-second count.</param>
     /// <param name="timeZone">The column's timezone.</param>
     /// <returns>The instant, presented in <paramref name="timeZone"/>.</returns>
-    public static DateTimeOffset DateTimeToOffset(uint seconds, TimeZoneInfo timeZone)
-        => TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(seconds), timeZone);
+    /// <exception cref="FormatException">The column's timezone is one this platform cannot represent.</exception>
+    /// <remarks>
+    /// Takes the resolved zone, not the zone: a codec embeds this call in an expression tree before any row
+    /// exists, and asking for the zone there would refuse the reading rather than the value. The dereference
+    /// costs a null check against a timezone conversion.
+    /// </remarks>
+    public static DateTimeOffset DateTimeToOffset(uint seconds, ResolvedTimeZone timeZone)
+        => TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(seconds), timeZone.Value);
 
     /// <summary><see cref="DateTimeToOffset"/> as a <see cref="DateTime"/>; see <see cref="PresentAsDateTime"/>.</summary>
     /// <param name="seconds">The raw epoch-second count.</param>
     /// <param name="timeZone">The column's timezone.</param>
     /// <returns>The instant as a <see cref="DateTime"/>.</returns>
-    public static DateTime DateTimeToDateTime(uint seconds, TimeZoneInfo timeZone)
+    /// <exception cref="FormatException">The column's timezone is one this platform cannot represent.</exception>
+    public static DateTime DateTimeToDateTime(uint seconds, ResolvedTimeZone timeZone)
         => PresentAsDateTime(DateTimeToOffset(seconds, timeZone));
 
     /// <summary>
@@ -66,20 +73,23 @@ internal static class ColumnValueProjections
     /// <param name="timeZone">The column's timezone.</param>
     /// <returns>The instant, presented in <paramref name="timeZone"/>.</returns>
     /// <exception cref="OverflowException">The count is decodable but outside <see cref="DateTimeOffset"/>'s range.</exception>
-    public static DateTimeOffset DateTime64ToOffset(long count, int scale, TimeZoneInfo timeZone)
+    public static DateTimeOffset DateTime64ToOffset(long count, int scale, ResolvedTimeZone timeZone)
     {
+        // Resolved once, outside the try, since the conversion below needs it either way.
+        TimeZoneInfo zone = timeZone.Value;
+
         // A count can be decodable yet outside DateTimeOffset's range. Point at the raw values rather than let a bare
         // arithmetic exception surface.
         try
         {
             long dotNetTicks = FixedPointScaling.ShiftDecimalPlaces(count, DotNetTickScale - scale);
             var utc = new DateTimeOffset(UnixEpochTicks + dotNetTicks, TimeSpan.Zero);
-            return TimeZoneInfo.ConvertTime(utc, timeZone);
+            return TimeZoneInfo.ConvertTime(utc, zone);
         }
         catch (Exception ex) when (ex is OverflowException or ArgumentOutOfRangeException)
         {
             throw new OverflowException(
-                $"A DateTime64 count of {count} at scale {scale} is outside the range presentable as a DateTimeOffset in timezone '{timeZone.Id}'; read the raw count via Values instead.",
+                $"A DateTime64 count of {count} at scale {scale} is outside the range presentable as a DateTimeOffset in timezone '{zone.Id}'; read the raw count via Values instead.",
                 ex);
         }
     }
@@ -90,7 +100,7 @@ internal static class ColumnValueProjections
     /// <param name="timeZone">The column's timezone.</param>
     /// <returns>The instant as a <see cref="DateTime"/>.</returns>
     /// <exception cref="OverflowException">The count is decodable but outside <see cref="DateTimeOffset"/>'s range.</exception>
-    public static DateTime DateTime64ToDateTime(long count, int scale, TimeZoneInfo timeZone)
+    public static DateTime DateTime64ToDateTime(long count, int scale, ResolvedTimeZone timeZone)
         => PresentAsDateTime(DateTime64ToOffset(count, scale, timeZone));
 
     /// <summary>Projects a <c>Time</c> column's raw second count to a <see cref="TimeSpan"/>. Exact — whole seconds.</summary>
