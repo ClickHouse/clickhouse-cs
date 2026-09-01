@@ -225,5 +225,5 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     }
 
     private long CountFromDateTime(DateTime value)
-        => CountFromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(value, timeZone.Value)));
+        => CountFromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(value, timeZone)));
 }
