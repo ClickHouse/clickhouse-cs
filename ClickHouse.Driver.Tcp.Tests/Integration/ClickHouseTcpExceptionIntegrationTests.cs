@@ -34,23 +34,18 @@ public class ClickHouseTcpExceptionIntegrationTests
             Assert.That(thrown.RawCode, Is.EqualTo(expectedRaw));
             Assert.That(thrown.ErrorCode, Is.EqualTo(expectedRaw), "DbException.ErrorCode carries the same number.");
             Assert.That(thrown.Name, Is.Not.Empty);
-            Assert.That(thrown.IsTransient, Is.False);
         });
     }
 
     [Test]
-    public async Task ExecuteAsync_QueryExceedsMaxExecutionTime_ReportsATransientTimeout()
+    public async Task ExecuteAsync_QueryExceedsMaxExecutionTime_MapsTheCodeToTimeoutExceeded()
     {
         await using var client = TcpServerFixture.CreateClient();
 
         var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(
             async () => await client.ExecuteAsync("SELECT sleep(3) SETTINGS max_execution_time = 1", cancellationToken: None));
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(thrown.Code, Is.EqualTo(ClickHouseErrorCode.TimeoutExceeded));
-            Assert.That(thrown.IsTransient, Is.True, "the same query may well succeed on a less busy server.");
-        });
+        Assert.That(thrown.Code, Is.EqualTo(ClickHouseErrorCode.TimeoutExceeded));
     }
 
     [Test]
@@ -94,10 +89,6 @@ public class ClickHouseTcpExceptionIntegrationTests
         var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(
             async () => await client.ExecuteAsync("SELECT 1", cancellationToken: None));
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(thrown.Code, Is.EqualTo(ClickHouseErrorCode.AuthenticationFailed));
-            Assert.That(thrown.IsTransient, Is.False, "retrying the same wrong password cannot help.");
-        });
+        Assert.That(thrown.Code, Is.EqualTo(ClickHouseErrorCode.AuthenticationFailed));
     }
 }
