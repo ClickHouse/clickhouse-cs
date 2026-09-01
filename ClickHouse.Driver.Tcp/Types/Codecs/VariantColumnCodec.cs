@@ -187,13 +187,14 @@ internal sealed class VariantColumnCodec : IColumnCodec
                     $"Variant alternative '{argument}' must not be Nullable; a Variant carries NULL through its discriminator, not a nullable alternative.");
             }
 
-            // The server rejects Dynamic inside Variant (Dynamic is a superset of Variant). Reject it client-side
-            // too: a Variant does not thread the per-operation write state a data-dependent alternative needs, so a
-            // Dynamic alternative would desynchronize its type-list prefix from its body.
+            // A Variant does not thread the per-operation write state a data-dependent alternative needs, so a
+            // Dynamic alternative would desynchronize its type-list prefix from its body. That is this client's
+            // own limit; the server rejecting the type as well is not the reason to refuse it here.
             if (string.Equals(argument.Name, "Dynamic", StringComparison.Ordinal))
             {
                 throw new FormatException(
-                    $"Variant alternative '{argument}' must not be Dynamic; the server does not allow a Dynamic type inside a Variant.");
+                    $"Variant alternative '{argument}' must not be Dynamic; this client cannot write a Dynamic alternative, "
+                    + "whose type list would desynchronize from its body.");
             }
 
             childCodecs[i] = registry.ResolveNode(argument, in context);
