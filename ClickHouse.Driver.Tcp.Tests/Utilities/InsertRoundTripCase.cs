@@ -108,6 +108,11 @@ public sealed class InsertRoundTripCase
         // so the label a caller writes has to be the decoded one, and only a server proves the two agree.
         yield return EnumLabels(@"Enum8('a\nb' = 1, 't\tab' = 2)", new sbyte[] { 1, 2 }, "a\nb", "t\tab");
 
+        // Labels holding the grammar's own separators: a comma, an escaped quote, and an equals sign. The member
+        // splitter must not cut on the comma or end the token at the quote, and ToString() has to re-emit the raw
+        // spelling into the insert header while ToOrdinal looks the decoded label up.
+        yield return EnumLabels(@"Enum8('a,b' = 1, 'c\'d' = 2, 'e = f' = 3)", new sbyte[] { 1, 2, 3 }, "a,b", "c'd", "e = f");
+
         // And through the wrappers, where the shape has to survive composition: the nullable substitute needs a
         // placeholder label for its null rows, and the array path flattens the labels before the enum sees them.
         yield return NullableEnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte?[] { -1, null, 127 }, "a", null, "b");
