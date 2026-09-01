@@ -185,6 +185,53 @@ public class ConnectionPoolIntegrationTests
             "a connection left idle past the timeout must not be handed out again");
     }
 
+    /// <summary>
+    /// The other way a pooled connection dies: the server hangs up on it while the client still considers it
+    /// fresh. <c>idle_connection_timeout</c> makes a real server do that on request, which is the behaviour of
+    /// Cloud and of any load balancer with an idle cut, and the client's own timeouts are left at their defaults
+    /// so neither can be what retires the connection. The only thing between the caller and a dead socket is the
+    /// probe in <c>IsReusable</c>: with it disabled, the query below fails with a transport error saying the
+    /// server closed the connection before the response was complete.
+    ///
+    /// <para>
+    /// The <c>null</c> case is the control. The same wait against a server left at its default idle timeout keeps
+    /// the connection, so what retires it in the other case is the server hanging up and not the wait.
+    /// </para>
+    /// </summary>
+    /// <param name="serverIdleTimeout">Seconds for the server's <c>idle_connection_timeout</c>, or null to leave it.</param>
+    /// <param name="markerAfterTheWait">The marker count expected after the wait: 1 if the connection was kept, 0 if it was replaced.</param>
+    [TestCase("1", 0UL)]
+    [TestCase(null, 1UL)]
+    public async Task QueryAsync_AfterTheServerHungUpOnAnIdleConnection_RunsOnAFreshConnectionRatherThanFailing(
+        string serverIdleTimeout,
+        ulong markerAfterTheWait)
+    {
+        await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1);
+        ClickHouseTcpQueryOptions options = serverIdleTimeout is null
+            ? null
+            : new ClickHouseTcpQueryOptions
+            {
+                Settings = new Dictionary<string, string> { ["idle_connection_timeout"] = serverIdleTimeout },
+            };
+
+        string marker = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TEMPORARY TABLE {marker} (id UInt64)", options, None);
+        Assert.That(
+            await TemporaryTableExistsAsync(client, marker, options),
+            Is.EqualTo(1UL),
+            "the marker must exist to begin with, or the assertion below proves nothing");
+
+        // Four seconds against a one-second server timeout: the server notices an idle connection on its own
+        // schedule, and the suites for the other frameworks are on the same server.
+        await Task.Delay(TimeSpan.FromSeconds(4));
+
+        // Has to be asserted rather than thrown out of: the failure this defends against is the query failing,
+        // and the marker count then says whether the connection was replaced or kept.
+        ulong markerAfterwards = 0;
+        Assert.DoesNotThrowAsync(async () => markerAfterwards = await TemporaryTableExistsAsync(client, marker, options));
+        Assert.That(markerAfterwards, Is.EqualTo(markerAfterTheWait));
+    }
+
     [Test]
     public async Task Return_AfterEachKindOfOperation_KeepsTheSameConnection()
     {
@@ -249,12 +296,16 @@ public class ConnectionPoolIntegrationTests
         }
     }
 
-    private static async Task<ulong> TemporaryTableExistsAsync(ClickHouseTcpClient client, string name)
+    private static async Task<ulong> TemporaryTableExistsAsync(
+        ClickHouseTcpClient client,
+        string name,
+        ClickHouseTcpQueryOptions options = null)
     {
         ulong exists = 0;
         await foreach (ValueRow row in client.QueryAsync<ValueRow>(
             $"SELECT toUInt64(count()) AS id FROM system.tables WHERE is_temporary AND name = '{name}'",
-            cancellationToken: None))
+            options,
+            None))
         {
             exists = row.Id;
         }
