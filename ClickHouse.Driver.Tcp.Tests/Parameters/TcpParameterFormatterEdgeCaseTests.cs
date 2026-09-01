@@ -14,6 +14,67 @@ public class TcpParameterFormatterEdgeCaseTests
     private static string Format(object value, string typeName)
         => TcpParameterFormatter.FormatSqlText(value, typeName, "p");
 
+    // A type hint the shipped HTTP driver accepts, a case variant, and two names no ClickHouse version has. All
+    // of them reach the same arm as a value that simply does not fit, and blaming the value there sends a caller
+    // to inspect a value that was never the problem.
+    [TestCase("VARCHAR", TestName = "An alias the HTTP driver accepts")]
+    [TestCase("BIGINT", TestName = "An alias whose spelling is SQL's")]
+    [TestCase("string", TestName = "A case variant the server rejects too")]
+    [TestCase("Boolean", TestName = "A name no version has, spelled like one that does")]
+    public void FormatSqlText_TypeNameThisClientDoesNotKnow_SaysSoRatherThanBlamingTheValue(string typeName)
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format("abc", typeName));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain($"'{typeName}' is not a ClickHouse type name this client knows"));
+            Assert.That(exception.Message, Does.Contain("toTypeName"), "says how to find the name to write");
+            Assert.That(exception.Message, Does.Contain("case-sensitive"), "says why a spelling that looks right can fail");
+            Assert.That(exception.Message, Does.Not.Contain("Cannot convert value"), "the value is not the problem");
+            Assert.That(exception.Message, Does.Contain("Parameter 'p'"), "names the parameter");
+        });
+    }
+
+    [Test]
+    public void FormatSqlText_KnownTypeAValueDoesNotFit_BlamesTheValue()
+    {
+        // The other half of the pair above: Array is a type this client knows, and an int is not a list, so here
+        // the value is exactly what is wrong.
+        var exception = Assert.Throws<ArgumentException>(() => Format(5, "Array(String)"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("Cannot convert value of type 'System.Int32' (5)"));
+            Assert.That(exception.Message, Does.Contain("Array(String)"));
+        });
+    }
+
+    [Test]
+    public void FormatSqlText_AggregateFunction_SaysNoValueSpellsAState()
+    {
+        // The server rejects a parameter of this type as well (Code 33 on 26.6), so there is nothing to write.
+        var exception = Assert.Throws<ArgumentException>(() => Format("abc", "AggregateFunction(sum, UInt64)"));
+
+        Assert.That(exception.Message, Does.Contain("serialized aggregate states").And.Contain("the server rejects one too"));
+    }
+
+    // The server does accept a text value for each of these, so the refusal is this client's own and must not
+    // read like the type does not exist.
+    [TestCase("Dynamic", TestName = "Dynamic, where the value would have to name its own type")]
+    [TestCase("Geometry", TestName = "Geometry, where an array of points is two different shapes")]
+    [TestCase("SimpleAggregateFunction(sum, UInt64)", TestName = "SimpleAggregateFunction, which the codec reads as its inner type")]
+    public void FormatSqlText_TypeTheServerTakesAndThisClientCannotWrite_SaysWhoseLimitItIs(string typeName)
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format(5, typeName));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("This client cannot format a parameter value"));
+            Assert.That(exception.Message, Does.Contain("Name the concrete type of the value instead"));
+            Assert.That(exception.Message, Does.Not.Contain("is not a ClickHouse type name"));
+        });
+    }
+
     [Test]
     public void FormatSqlText_NothingType_ProducesTheNullMarker()
     {

@@ -190,10 +190,44 @@ internal static class TcpParameterFormatter
             case "Point" or "Ring" or "LineString" or "Polygon" or "MultiLineString" or "MultiPolygon":
                 return Format(GeoShapeOf(name), value, quote);
 
-            default:
+            case "AggregateFunction":
                 throw new ArgumentException(
-                    $"Cannot convert value of type '{value.GetType().FullName}' ({value}) to ClickHouse type {type}");
+                    $"ClickHouse type '{type}' holds serialized aggregate states, so no parameter value spells it; " +
+                    "the server rejects one too. Pass the arguments the state is built from instead.");
+
+            // The server does take a text value for each of these (checked on 26.6), so the refusal is this
+            // client's own: a Dynamic needs the value's type to name itself, and a Geometry value is ambiguous —
+            // an array of points is both a Ring and a LineString.
+            case "Dynamic" or "Geometry" or "SimpleAggregateFunction":
+                throw new ArgumentException(
+                    $"This client cannot format a parameter value as ClickHouse type '{type}'. Name the concrete " +
+                    "type of the value instead.");
+
+            default:
+                throw NotFormattable(type, name, value);
         }
+    }
+
+    /// <summary>Explains why a value reached no formatting arm.</summary>
+    /// <param name="type">The parsed type.</param>
+    /// <param name="name">The type's base name.</param>
+    /// <param name="value">The value, which is never null here.</param>
+    /// <returns>The exception to throw.</returns>
+    private static ArgumentException NotFormattable(TypeNode type, string name, object value)
+    {
+        // Two unrelated failures arrive here and used to read the same: a type name this client does not know,
+        // and a known type an arm declined this value's shape for. Blaming the value for the first sends a
+        // caller looking at the value they wrote, which is fine, for a type name that never existed.
+        if (!ColumnCodecRegistry.Default.KnowsTypeName(name))
+        {
+            return new ArgumentException(
+                $"'{name}' is not a ClickHouse type name this client knows, so no value formats as '{type}'. " +
+                "Write the name the server reports for the column — SELECT toTypeName(expr) — as ClickHouse spells it, " +
+                "which is case-sensitive for most types.");
+        }
+
+        return new ArgumentException(
+            $"Cannot convert value of type '{value.GetType().FullName}' ({value}) to ClickHouse type {type}");
     }
 
     /// <summary>Expands a geo type name into the Tuple/Array shape it stands for.</summary>
