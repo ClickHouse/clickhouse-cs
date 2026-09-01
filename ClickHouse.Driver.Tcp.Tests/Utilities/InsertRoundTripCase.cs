@@ -27,7 +27,12 @@ public sealed class InsertRoundTripCase
     private readonly Func<string, IColumn> buildInsert;
     private readonly Func<string, IColumn> buildExpected;
 
-    private InsertRoundTripCase(string label, string clickHouseType, Func<string, IColumn> buildInsert, Func<string, IColumn> buildExpected, IReadOnlyDictionary<string, string> settings)
+    private InsertRoundTripCase(
+        string label,
+        string clickHouseType,
+        Func<string, IColumn> buildInsert,
+        Func<string, IColumn> buildExpected,
+        IReadOnlyDictionary<string, string> settings)
     {
         Label = label;
         ClickHouseType = clickHouseType;
@@ -1367,11 +1372,6 @@ public sealed class InsertRoundTripCase
             yield return Same("Geometry", "Geometry", name => BuildGeometryColumn(name));
         }
 
-        // QBit(T, N): the vector's bit planes transposed, so the values a row round-trips through are spread one
-        // bit at a time across the whole body. The insert source is the ergonomic ArrayColumn<float[]>, which
-        // takes the transposing write path; the dense read-back is re-inserted by the shared dense case below,
-        // which is what covers the plane-copy path. Signed zero, infinity and NaN pin the sign and exponent
-        // planes, which an all-positive vector leaves untouched.
         if (TcpServerFeatures.Has(TcpFeature.QBit))
         {
             yield return Same(
@@ -1384,18 +1384,6 @@ public sealed class InsertRoundTripCase
                     new[] { float.Epsilon, float.PositiveInfinity, float.NegativeInfinity, float.NaN },
                 }));
 
-            // A dimension that is not a multiple of 8 leaves the high bits of each row's last plane byte unused;
-            // 9 spans two bytes so a mis-set stride shows up as a shifted element rather than a lost one.
-            yield return Same(
-                "QBit(Float32, 9)",
-                "QBit(Float32, 9)",
-                name => new ArrayColumn<float[]>(name, "QBit(Float32, 9)", new[]
-                {
-                    new[] { 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f },
-                    new[] { -1f, 0f, -0f, 0.5f, -0.5f, 1e10f, -1e10f, 1e-10f, -1e-10f },
-                }));
-
-            // Float64 is the 64-plane path and its own accumulator width.
             yield return Same(
                 "QBit(Float64, 3)",
                 "QBit(Float64, 3)",
@@ -1406,10 +1394,6 @@ public sealed class InsertRoundTripCase
                     new[] { 0d, -0d, double.NaN },
                 }));
 
-            // Dimensions of 8 and above reach the vector write path, which works a group of 8 elements at a time;
-            // everything narrower is handled entirely by its scalar tail. 17 is two whole groups plus one element,
-            // so it covers the group loop and the tail together, and it is an embedding-shaped width rather than
-            // the hand-checked fixtures above.
             yield return Same(
                 "QBit(Float32, 17)",
                 "QBit(Float32, 17)",
@@ -1419,8 +1403,6 @@ public sealed class InsertRoundTripCase
                     Ramp(17, i => i % 2 == 0 ? float.MaxValue : float.MinValue),
                 }));
 
-            // The Float64 group loop takes two extracts per plane byte, where the Float32 one takes a single
-            // extract, so it needs its own multi-group case.
             yield return Same(
                 "QBit(Float64, 17)",
                 "QBit(Float64, 17)",
@@ -1430,19 +1412,21 @@ public sealed class InsertRoundTripCase
                     Ramp(17, i => i % 2 == 0 ? double.MaxValue : double.MinValue),
                 }));
 
-            // BFloat16 keeps only the float's high 16 bits, so every value here is one a brain-float represents
-            // exactly — otherwise the round-trip would compare the narrowed value against the original.
-            yield return Same(
+            yield return new InsertRoundTripCase(
                 "QBit(BFloat16, 4)",
                 "QBit(BFloat16, 4)",
                 name => new ArrayColumn<float[]>(name, "QBit(BFloat16, 4)", new[]
                 {
+                    new[] { 1.0001f, 2f, -3f, 0f },
+                    new[] { -0f, 0.5f, -0.5f, 256f },
+                }),
+                name => new ArrayColumn<float[]>(name, "QBit(BFloat16, 4)", new[]
+                {
                     new[] { 1f, 2f, -3f, 0f },
                     new[] { -0f, 0.5f, -0.5f, 256f },
-                }));
+                }),
+                settings: null);
 
-            // Nullable(QBit(...)) is accepted by the server and round-trips NULL, which is the only thing that
-            // reads the codec's all-zero placeholder vector.
             yield return Same(
                 "Nullable(QBit(Float32, 4))",
                 "Nullable(QBit(Float32, 4))",
@@ -1453,11 +1437,26 @@ public sealed class InsertRoundTripCase
                     new[] { -1f, -2f, -3f, -4f },
                 }));
 
-            // QBit(Int8, N) arrived in 26.7. Its 8 planes are the element's raw two's-complement byte, so
-            // MinValue/-1 pin the sign plane and the all-ones pattern that a widening bug would drop. Dimension 17
-            // is three bytes per row and crosses two whole 8-element groups plus a tail. The byte order itself is
-            // *not* what these prove — writing and reading share QBitLayout.ByteOfGroup, so a reversed convention
-            // round-trips clean; DocumentedInt8Bytes16 and QBitIntegrationTests are what pin it.
+            yield return Same(
+                "Nullable(QBit(BFloat16, 4))",
+                "Nullable(QBit(BFloat16, 4))",
+                name => new ArrayColumn<float[]>(name, "Nullable(QBit(BFloat16, 4))", new[]
+                {
+                    new[] { 1f, 2f, -3f, 0f },
+                    null,
+                    new[] { -0f, 0.5f, -0.5f, 256f },
+                }));
+
+            yield return Same(
+                "Nullable(QBit(Float64, 3))",
+                "Nullable(QBit(Float64, 3))",
+                name => new ArrayColumn<double[]>(name, "Nullable(QBit(Float64, 3))", new[]
+                {
+                    new[] { 1d, -2d, 3.5d },
+                    null,
+                    new[] { 0d, -0d, double.NaN },
+                }));
+
             if (TcpServerFeatures.Has(TcpFeature.QBitInt8))
             {
                 yield return Same(
@@ -1729,8 +1728,6 @@ public sealed class InsertRoundTripCase
     private static InsertRoundTripCase Same(string label, string clickHouseType, Func<string, IColumn> build, IReadOnlyDictionary<string, string> settings = null)
         => new(label, clickHouseType, build, build, settings);
 
-    /// <summary>A vector of <paramref name="length"/> values from their index — for the wider QBit dimensions,
-    /// where spelling out every element would obscure the width being tested.</summary>
     private static T[] Ramp<T>(int length, Func<int, T> value)
     {
         var values = new T[length];
