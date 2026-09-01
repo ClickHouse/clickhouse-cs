@@ -18,6 +18,9 @@ internal static class ColumnValueProjections
 
     private static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
 
+    /// <summary>The exclusive upper bound of a time of day.</summary>
+    private static readonly TimeSpan OneDay = TimeSpan.FromDays(1);
+
     /// <summary>
     /// Presents an instant as a <see cref="DateTime"/>: a zero offset yields <see cref="DateTimeKind.Utc"/>, any
     /// other offset the wall clock in the column's timezone as <see cref="DateTimeKind.Unspecified"/>.
@@ -102,6 +105,19 @@ internal static class ColumnValueProjections
     public static TimeSpan Time64ToTimeSpan(long count, int scale)
         => TimeSpan.FromTicks(FixedPointScaling.ShiftDecimalPlaces(count, DotNetTickScale - scale));
 
+    /// <summary>Projects a <c>Time</c> column's raw second count to a <see cref="TimeOnly"/>.</summary>
+    /// <param name="seconds">The raw signed second count.</param>
+    /// <returns>The time of day.</returns>
+    /// <exception cref="InvalidOperationException">The value is not a time of day.</exception>
+    public static TimeOnly TimeToTimeOnly(int seconds) => AsTimeOfDay(TimeToTimeSpan(seconds), "Time");
+
+    /// <summary>Projects a <c>Time64</c> count at <paramref name="scale"/> to a <see cref="TimeOnly"/>.</summary>
+    /// <param name="count">The raw signed count at <c>10^-<paramref name="scale"/></c> seconds.</param>
+    /// <param name="scale">The column's fractional-second scale (0–9).</param>
+    /// <returns>The time of day, with sub-100 ns digits truncated toward zero.</returns>
+    /// <exception cref="InvalidOperationException">The value is not a time of day.</exception>
+    public static TimeOnly Time64ToTimeOnly(long count, int scale) => AsTimeOfDay(Time64ToTimeSpan(count, scale), "Time64");
+
     /// <summary>
     /// Confirms a codec was handed an expression of its canonical <see cref="IColumnCodec.ElementType"/>. Catches the
     /// caller's mistake here, instead of as an opaque expression-tree failure much later.
@@ -119,6 +135,20 @@ internal static class ColumnValueProjections
                 $"The '{typeName}' codec projects from its element type {elementType}, but was given an expression of type {value.Type}.",
                 nameof(value));
         }
+    }
+
+    // The narrowing a TimeOnly read is: a Time column holds a signed duration of up to 999 hours, and only the
+    // part of that range which is a time of day has a TimeOnly. Refused rather than wrapped, a duration reduced
+    // modulo a day being a different value.
+    private static TimeOnly AsTimeOfDay(TimeSpan value, string typeName)
+    {
+        if (value < TimeSpan.Zero || value >= OneDay)
+        {
+            throw new InvalidOperationException(
+                $"A {typeName} column value of {value} is not a time of day, so it has no TimeOnly. Read the column as a TimeSpan.");
+        }
+
+        return TimeOnly.FromTimeSpan(value);
     }
 
     /// <summary>

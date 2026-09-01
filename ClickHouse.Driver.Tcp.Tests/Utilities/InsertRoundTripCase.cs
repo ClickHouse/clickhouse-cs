@@ -245,6 +245,25 @@ public sealed class InsertRoundTripCase
         // inserted values are the exact wire values, returned verbatim.
         yield return TimeSeconds("Time", TimeSettings, 0, (12 * 3600) + (34 * 60) + 56, -((1 * 3600) + (2 * 60) + 3));
         yield return Time64Counts("Time64(3)", TimeSettings, 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456, -((((1 * 3600) + (2 * 60) + 3) * 1000L) + 456));
+
+        // A TimeOnly is the time-of-day spelling of the same column, the counterpart of DateOnly for Date. The
+        // read-back is the raw count either way, so the two columns differ. TimeOnly.MaxValue is 23:59:59.9999999,
+        // which truncates toward zero at scale 3 exactly as a TimeSpan does.
+        var timesOfDay = new[] { new TimeOnly(0, 0, 0), new TimeOnly(12, 34, 56), new TimeOnly(23, 59, 59) };
+        yield return new InsertRoundTripCase(
+            "Time <- TimeOnly",
+            "Time",
+            name => new ArrayColumn<TimeOnly>(name, "Time", timesOfDay),
+            name => new ArrayColumn<int>(name, "Time", new[] { 0, (12 * 3600) + (34 * 60) + 56, (23 * 3600) + (59 * 60) + 59 }),
+            TimeSettings);
+
+        var timesOfDay64 = new[] { new TimeOnly(0, 0, 0), new TimeOnly(1, 2, 3, 456), TimeOnly.MaxValue };
+        yield return new InsertRoundTripCase(
+            "Time64(3) <- TimeOnly",
+            "Time64(3)",
+            name => new ArrayColumn<TimeOnly>(name, "Time64(3)", timesOfDay64),
+            name => new ArrayColumn<long>(name, "Time64(3)", new[] { 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456, 86_399_999L }),
+            TimeSettings);
         yield return Time64Counts("Time64(9)", TimeSettings, 0L, 3_723_123_456_789L, -3_723_123_456_789L);
 
         // Time/Time64 also accept a TimeSpan on write, truncating toward zero at the column's scale. The read-back
@@ -359,6 +378,23 @@ public sealed class InsertRoundTripCase
         yield return NullableValues<float>("BFloat16", BFloat16Settings, 0f, null, 1f, -2f, float.NaN, null, float.PositiveInfinity);
         yield return NullableValues<int>("Time", TimeSettings, 0, null, (12 * 3600) + (34 * 60) + 56);
         yield return NullableValues<long>("Time64(3)", TimeSettings, 0L, null, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456);
+
+        // The TimeOnly spelling through the null wrapper, where the placeholder a null row contributes has to be
+        // one the inner codec offers for that write type.
+        var nullableTimesOfDay = new TimeOnly?[] { new TimeOnly(1, 2, 3), null, new TimeOnly(0, 0, 0) };
+        yield return new InsertRoundTripCase(
+            "Nullable(Time) <- TimeOnly?",
+            "Nullable(Time)",
+            name => new ArrayColumn<TimeOnly?>(name, "Nullable(Time)", nullableTimesOfDay),
+            name => new ArrayColumn<int?>(name, "Nullable(Time)", new int?[] { (1 * 3600) + (2 * 60) + 3, null, 0 }),
+            TimeSettings);
+
+        yield return new InsertRoundTripCase(
+            "Nullable(Time64(3)) <- TimeOnly?",
+            "Nullable(Time64(3))",
+            name => new ArrayColumn<TimeOnly?>(name, "Nullable(Time64(3))", nullableTimesOfDay),
+            name => new ArrayColumn<long?>(name, "Nullable(Time64(3))", new long?[] { (((1 * 3600) + (2 * 60) + 3) * 1000L), null, 0L }),
+            TimeSettings);
 
         yield return NullableStrings("hello", null, "world", string.Empty);
         yield return NullableStrings(null, null); // every row null
