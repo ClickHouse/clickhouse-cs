@@ -121,17 +121,22 @@ public sealed class InsertRoundTripCase
 
         // DateTime reads back as the raw UInt32 epoch seconds. Insert as DateTime (UTC) and expect the epoch
         // seconds of the same instants, regardless of the timezone the server presents.
+        // 2100 is past the signed-32-bit second count that a narrowing cast would wrap, and the last value is the
+        // largest a DateTime column holds: 2106-02-07 06:28:15 UTC, uint.MaxValue seconds.
         yield return DateTimes(
             "DateTime",
             new DateTime(1988, 8, 28, 11, 22, 33, DateTimeKind.Utc),
             new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc),
-            DateTime.UnixEpoch);
+            DateTime.UnixEpoch,
+            new DateTime(2100, 6, 15, 12, 0, 0, DateTimeKind.Utc),
+            DateTime.UnixEpoch.AddSeconds(uint.MaxValue));
 
         // A DateTimeOffset with a non-UTC offset survives as the same instant (i.e. the same epoch seconds).
         var dateTimeOffsets = new[]
         {
             new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)),
             new DateTimeOffset(1988, 8, 28, 11, 22, 33, TimeSpan.FromHours(-8)),
+            new DateTimeOffset(2100, 6, 15, 12, 0, 0, TimeSpan.FromHours(5)),
         };
         yield return new InsertRoundTripCase(
             "DateTime <- DateTimeOffset",
@@ -143,7 +148,10 @@ public sealed class InsertRoundTripCase
         // DateTime64 surfaces as the raw Int64 count at the column's scale, so it retains the exact wire value at
         // any scale. Scale 9 (nanoseconds) is finer than a .NET tick, proving precision no DateTimeOffset can hold.
         yield return DateTime64s("DateTime64(3)", 0L, 1_700_000_000_123L, -6_000_000_000_000L);
-        yield return DateTime64s("DateTime64(9)", 0L, 1_700_000_000_123_456_789L, -1_000_000_001L);
+
+        // Both Int64 ends, which at scale 9 are the instants the type stops at (2262-04-11 23:47:16.854775807 and
+        // its negative mirror). The count is the wire value, so these pin the limbs of the widest column value.
+        yield return DateTime64s("DateTime64(9)", 0L, 1_700_000_000_123_456_789L, -1_000_000_001L, long.MaxValue, long.MinValue);
 
         // DateTime64 also accepts a DateTimeOffset on write, converting the instant to the column's scale; the
         // read-back is still the raw count, so at scale 3 the expected column carries epoch milliseconds. The
@@ -152,12 +160,25 @@ public sealed class InsertRoundTripCase
         {
             DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123),
             new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)),
+            new DateTimeOffset(2299, 12, 31, 23, 59, 59, TimeSpan.Zero),
         };
         yield return new InsertRoundTripCase(
             "DateTime64(3) <- DateTimeOffset",
             "DateTime64(3)",
             name => new ArrayColumn<DateTimeOffset>(name, "DateTime64(3)", dateTime64Offsets),
             name => new ArrayColumn<long>(name, "DateTime64(3)", Array.ConvertAll(dateTime64Offsets, o => o.ToUnixTimeMilliseconds())),
+            settings: null);
+
+        // The last instant a scale-9 column can take from a DateTimeOffset: .NET ticks are 100 ns, so the finest
+        // value expressible is 2262-04-11 23:47:16.8547758, and scaling it up lands 7 nanoseconds short of
+        // Int64.MaxValue. The expected count is written out rather than computed, so the multiply under test is not
+        // also the oracle. One tick more overflows, which DateTime64ColumnCodecTests covers.
+        var dateTime64NanosecondOffsets = new[] { new DateTimeOffset(2262, 4, 11, 23, 47, 16, TimeSpan.Zero).AddTicks(8_547_758) };
+        yield return new InsertRoundTripCase(
+            "DateTime64(9) <- DateTimeOffset [latest instant]",
+            "DateTime64(9)",
+            name => new ArrayColumn<DateTimeOffset>(name, "DateTime64(9)", dateTime64NanosecondOffsets),
+            name => new ArrayColumn<long>(name, "DateTime64(9)", new[] { 9_223_372_036_854_775_800L }),
             settings: null);
 
         yield return Uuids("UUID", Guid.Empty, new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff"));
@@ -244,9 +265,10 @@ public sealed class InsertRoundTripCase
         yield return NullableDateTimes(
             new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero),
             null,
-            new DateTimeOffset(1988, 8, 28, 11, 22, 33, TimeSpan.Zero));
+            new DateTimeOffset(1988, 8, 28, 11, 22, 33, TimeSpan.Zero),
+            DateTimeOffset.UnixEpoch.AddSeconds(uint.MaxValue));
         yield return NullableDateTime64s(3, 0L, null, 1_700_000_000_123L, null);
-        yield return NullableDateTime64s(9, 1_700_000_000_123_456_789L, null, -1_000_000_001L);
+        yield return NullableDateTime64s(9, 1_700_000_000_123_456_789L, null, -1_000_000_001L, long.MaxValue);
 
         // Nullable re-offers every CLR write spelling the bare inner accepts, each with its own-typed null
         // placeholder — so Nullable(DateTime) takes DateTimeOffset? or DateTime?, and Nullable(DateTime64) takes
@@ -325,9 +347,9 @@ public sealed class InsertRoundTripCase
 
         // Array(DateTime) reads back raw uint epoch seconds; Array(DateTime64) raw long counts at the column scale.
         // The shared corpus uses canonical CLR types; lifted types have focused coverage.
-        yield return Arrays<uint>("DateTime", new uint[] { 1_700_000_000, 0 }, Array.Empty<uint>());
+        yield return Arrays<uint>("DateTime", new uint[] { 1_700_000_000, 0, uint.MaxValue }, Array.Empty<uint>());
         yield return Arrays<long>("DateTime64(3)", new[] { 0L, 1_700_000_000_123L });
-        yield return Arrays<long>("DateTime64(9)", new[] { 1_700_000_000_123_456_789L }, Array.Empty<long>());
+        yield return Arrays<long>("DateTime64(9)", new[] { 1_700_000_000_123_456_789L, long.MaxValue, long.MinValue }, Array.Empty<long>());
 
         // The dense shape built by a caller rather than received from a read: flat elements plus per-row offsets,
         // which is what the codec writes with no rebuilding. Same rows as the jagged Array(UInt32) case above.
