@@ -356,11 +356,35 @@ public class PocoReadFastPathParityTests
     public void TryBuildReadBody_CompositeColumn_ReturnsNull(string typeName, Type target)
         => AssertNoFastPath(typeName, target);
 
-    // SimpleAggregateFunction is wire-transparent like LowCardinality, but the factory does not unwrap it,
-    // so it currently falls back to the boxed path. Pins today's behaviour; see the note in the PR.
+    // SimpleAggregateFunction is wire-transparent like LowCardinality, so it must reach the same typed
+    // reader the bare column would. Nesting checks the unwrap loop rather than a single-level special case.
+    [TestCase("SimpleAggregateFunction(sum, UInt64)", typeof(ulong))]
+    [TestCase("SimpleAggregateFunction(any, LowCardinality(String))", typeof(string))]
+    [TestCase("LowCardinality(SimpleAggregateFunction(any, String))", typeof(byte[]))]
+    public void TryBuildReadBody_WireTransparentWrapper_ResolvesToWrappedTypedRead(string typeName, Type target)
+    {
+        var body = TryBuild(Parse(typeName), target);
+        Assert.That(body, Is.Not.Null, $"expected a fast path for {typeName} -> {target}");
+        Assert.That(body.Type, Is.EqualTo(target));
+    }
+
+    // The wrapper is transparent, not permissive: unwrapping must not widen the target-type match either.
     [Test]
-    public void TryBuildReadBody_SimpleAggregateFunctionColumn_ReturnsNull()
-        => AssertNoFastPath("SimpleAggregateFunction(sum, UInt64)", typeof(ulong));
+    public void TryBuildReadBody_WireTransparentWrapperWithMismatchedTarget_ReturnsNull()
+        => AssertNoFastPath("SimpleAggregateFunction(sum, UInt64)", typeof(long));
+
+    // SimpleAggregateFunction(any, Nullable(T)) still has to go through the null-marker read.
+    [Test]
+    public void TryBuildReadBody_WireTransparentWrapperOverNullable_ReadsNullMarker()
+    {
+        var type = Parse("SimpleAggregateFunction(any, Nullable(Int32))");
+        Assert.Multiple(() =>
+        {
+            Assert.That(TryBuild(type, typeof(int?))?.Type, Is.EqualTo(typeof(int?)));
+            // A non-nullable target on a nullable column cannot represent the null and must decline.
+            Assert.That(TryBuild(type, typeof(int)), Is.Null);
+        });
+    }
 
     private static void AssertNoFastPath(string typeName, Type targetClrType)
     {

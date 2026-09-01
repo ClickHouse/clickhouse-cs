@@ -64,11 +64,26 @@ public class EnumTypeTests
         var typeString = "Enum8('Active' = 0, 'Inactive' = 1)";
         var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
         var enumType = (EnumType)type;
-        
+
         Assert.Multiple(() =>
         {
             Assert.That(enumType.Lookup(0), Is.EqualTo("Active"));
             Assert.That(enumType.Lookup(1), Is.EqualTo("Inactive"));
+        });
+    }
+
+    [Test]
+    public void TryLookupShouldReturnTrueForKnownLabelAndFalseForUnknown()
+    {
+        var typeString = "Enum8('Active' = 1, 'Inactive' = 2)";
+        var enumType = (EnumType)TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(enumType.TryLookup("Active", out var active), Is.True);
+            Assert.That(active, Is.EqualTo(1));
+            Assert.That(enumType.TryLookup("Missing", out var missing), Is.False);
+            Assert.That(missing, Is.EqualTo(0));
         });
     }
 

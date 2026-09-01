@@ -9,9 +9,10 @@
 - **Critical priorities**: Stability, correctness, performance, and comprehensive testing
 - **Tech stack**: C#/.NET targeting `net6.0`, `net8.0`, `net9.0`, `net10.0`
 - **Tests run on**: `net6.0`, `net8.0`, `net9.0`, `net10.0`; Integration tests: `net10.0`; Benchmarks: `net10.0`
-- **Supported ClickHouse versions**: `25.8` LTS and newer — the floor of the CI matrix in
-  `.github/workflows/tests.yml`. Behavior that only affects older servers is out of scope; don't add
-  code paths or workarounds for it.
+- **Supported ClickHouse versions**: the last 3 releases plus the last 2 LTS releases (a moving
+  window, see `docs/overview.mdx`). The authoritative list is the `version` matrix in
+  `.github/workflows/tests.yml`; its lowest entry is the current support floor. Behavior that only
+  affects servers older than that floor is out of scope; don't add code paths or workarounds for it.
 
 ### Solution Structure
 ```
@@ -22,7 +23,7 @@ ClickHouse.Driver.sln
 │   ├── Types/                          # 60+ ClickHouse type implementations + TypeConverter.cs
 │   ├── Copy/                           # Binary serialization (used internally by ClickHouseClient)
 │   ├── Http/                           # HTTP layer & connection pooling
-│   └── PublicAPI/                      # Public API surface tracking (analyzer-enforced)
+│   └── PublicAPI/                      # Public API surface tracking (hand-maintained)
 ├── ClickHouse.Driver.Tests/            # NUnit tests (multi-framework)
 ├── ClickHouse.Driver.IntegrationTests/ # Integration tests (net10.0)
 └── ClickHouse.Driver.Benchmark/        # BenchmarkDotNet performance tests
@@ -35,7 +36,9 @@ Prefer using LSP to grep when navigating the codebase.
 - **Type system**: `Types/TypeConverter.cs` (14KB, complex), `Types/Grammar/` (type parsing)
 - **ADO.NET layer**: `ADO/ClickHouseConnection.cs`, `ADO/ClickHouseCommand.cs`, `ADO/Readers/`
 - **Feature detection**: `Utility/ClickHouseFeatureMap.cs` (version-based capabilities)
-- **Public API**: `PublicAPI/*.txt` (Roslyn analyzer enforces shipped signatures)
+- **Public API**: `PublicAPI/*.txt` (hand-maintained record of shipped signatures; the
+  `Microsoft.CodeAnalysis.PublicApiAnalyzers` package is *not* referenced, so nothing checks these
+  files at build time — keep them in sync yourself)
 - **Config**: `.editorconfig` (file-scoped namespaces, StyleCop suppressions)
 
 ### API Architecture
@@ -241,7 +244,7 @@ If the value is null/`DBNull` and no explicit type or hint is provided, resoluti
 - **Connection state**: Clear logging of connection lifecycle events
 
 ### Public API Surface
-- **Breaking changes**: Must update `PublicAPI/*.txt` files (analyzer enforces)
+- **Breaking changes**: Must update `PublicAPI/*.txt` files (by hand — no analyzer enforces this)
 - **ADO.NET compliance**: Follow ADO.NET patterns and interfaces correctly
 - **Dispose patterns**: Proper `IDisposable` implementation, no resource leaks
 

@@ -92,6 +92,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         JsonWriteMode = other.JsonWriteMode;
 
         MapReadMode = other.MapReadMode;
+        AllowDuplicateJsonKeys = other.AllowDuplicateJsonKeys;
 
         // Copy parameter type resolver
         ParameterTypeResolver = other.ParameterTypeResolver;
@@ -366,6 +367,17 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     public MapReadMode MapReadMode { get; init; } = ClickHouseDefaults.MapReadMode;
 
     /// <summary>
+    /// Gets or sets how to read a JSON row where one path holds a value and is also the parent of
+    /// another path which holds a value. The server sends such a row with a duplicate key, which a
+    /// JsonObject cannot hold.
+    /// false (default): throw, because either value can only be kept by dropping the other
+    /// true: keep whichever value the row carries last and drop the other
+    /// Applies to JsonReadMode.Binary and JsonReadMode.None. JsonReadMode.String returns the
+    /// server's JSON text unchanged and is unaffected.
+    /// </summary>
+    public bool AllowDuplicateJsonKeys { get; init; } = ClickHouseDefaults.AllowDuplicateJsonKeys;
+
+    /// <summary>
     /// Gets or sets a custom resolver for mapping .NET types to ClickHouse types
     /// during @-style parameter substitution. When set, this resolver is consulted
     /// after explicit ClickHouseType/SQL type hints but before default type inference.
@@ -461,6 +473,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             JsonReadMode = builder.JsonReadMode,
             JsonWriteMode = builder.JsonWriteMode,
             MapReadMode = builder.MapReadMode,
+            AllowDuplicateJsonKeys = builder.AllowDuplicateJsonKeys,
             AcceptEncoding = builder.AcceptEncoding,
         };
 
@@ -511,6 +524,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                JsonReadMode == other.JsonReadMode &&
                JsonWriteMode == other.JsonWriteMode &&
                MapReadMode == other.MapReadMode &&
+               AllowDuplicateJsonKeys == other.AllowDuplicateJsonKeys &&
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
                ReadValueConverter == other.ReadValueConverter &&
@@ -555,6 +569,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(JsonReadMode);
         hash.Add(JsonWriteMode);
         hash.Add(MapReadMode);
+        hash.Add(AllowDuplicateJsonKeys);
         hash.Add(ParameterTypeResolver);
         hash.Add(ParameterFormatter);
         hash.Add(ReadValueConverter);
@@ -608,6 +623,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"ReadBufferSize={ReadBufferSize};" +
                $"JsonReadMode={JsonReadMode};JsonWriteMode={JsonWriteMode};" +
                $"MapReadMode={MapReadMode};" +
+               $"AllowDuplicateJsonKeys={AllowDuplicateJsonKeys};" +
                $"UseFormDataParameters={UseFormDataParameters}";
 
         if (!string.IsNullOrEmpty(AcceptEncoding))

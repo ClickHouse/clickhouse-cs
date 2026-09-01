@@ -73,6 +73,11 @@ public static class ClickHouseDefaults
     public const MapReadMode MapReadMode = ClickHouse.Driver.MapReadMode.Dictionary;
 
     /// <summary>
+    /// Default handling of a JSON row where two overlapping paths both hold a value (false = throw)
+    /// </summary>
+    public const bool AllowDuplicateJsonKeys = false;
+
+    /// <summary>
     /// Default setting for server certificate validation (false = validate certificates)
     /// </summary>
     public const bool SkipServerCertificateValidation = false;

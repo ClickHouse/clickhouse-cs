@@ -104,6 +104,7 @@ ClickHouse.Driver.ADO.QueryStats.Deconstruct(out long ReadRows, out long ReadByt
 ClickHouse.Driver.ADO.QueryStats.QueryStats(ClickHouse.Driver.ADO.QueryStats original) -> void
 ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetTuple(int ordinal) -> System.Runtime.CompilerServices.ITuple
 ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetFieldValue<T>(string name) -> T
+ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.TryGetEnumOrdinal(int ordinal, out int value) -> bool
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.get -> Microsoft.IO.RecyclableMemoryStreamManager
 ClickHouse.Driver.Copy.ClickHouseBulkCopy.MemoryStreamManager.init -> void
 ClickHouse.Driver.Diagnostic.ClickHouseDiagnosticsOptions
@@ -257,3 +258,13 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.MapReadMode.init -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.MapReadMode.get -> ClickHouse.Driver.MapReadMode
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.MapReadMode.set -> void
 const ClickHouse.Driver.ADO.ClickHouseDefaults.MapReadMode = ClickHouse.Driver.MapReadMode.Dictionary -> ClickHouse.Driver.MapReadMode
+ClickHouse.Driver.ADO.ClickHouseClientSettings.AllowDuplicateJsonKeys.get -> bool
+ClickHouse.Driver.ADO.ClickHouseClientSettings.AllowDuplicateJsonKeys.init -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AllowDuplicateJsonKeys.get -> bool
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AllowDuplicateJsonKeys.set -> void
+const ClickHouse.Driver.ADO.ClickHouseDefaults.AllowDuplicateJsonKeys = false -> bool
+ClickHouse.Driver.InsertOptions.QueryPlacement.get -> ClickHouse.Driver.InsertQueryPlacement
+ClickHouse.Driver.InsertOptions.QueryPlacement.init -> void
+ClickHouse.Driver.InsertQueryPlacement
+ClickHouse.Driver.InsertQueryPlacement.Body = 0 -> ClickHouse.Driver.InsertQueryPlacement
+ClickHouse.Driver.InsertQueryPlacement.Url = 1 -> ClickHouse.Driver.InsertQueryPlacement
