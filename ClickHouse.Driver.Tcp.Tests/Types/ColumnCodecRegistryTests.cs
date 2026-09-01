@@ -130,6 +130,37 @@ public class ColumnCodecRegistryTests
     }
 
     [Test]
+    public void Resolve_UnsupportedChildType_NamesTheOuterTypeAsWell()
+    {
+        // The refusal comes from the child, and 'Boolean' on its own sends a caller searching their code for a
+        // name they never wrote (the server spells the type Bool). No "yet" either: Object('json') was removed
+        // from ClickHouse and MultiPoint never existed, so some of what lands here is not coming.
+        var exception = Assert.Throws<NotSupportedException>(
+            () => ColumnCodecRegistry.Default.Resolve("Map(String, Array(Boolean))", default));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("'Boolean'"));
+            Assert.That(exception.Message, Does.Contain("'Map(String, Array(Boolean))'"));
+            Assert.That(exception.Message, Does.Not.Contain("yet"));
+            Assert.That(exception.InnerException, Is.TypeOf<NotSupportedException>(), "the child's own refusal is kept");
+        });
+    }
+
+    [Test]
+    public void Resolve_UnsupportedTopLevelType_NamesItOnce()
+    {
+        // The type the caller wrote is the type that failed, so there is no outer type to add.
+        var exception = Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve("Boolean", default));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("'Boolean'").And.Not.Contain("inside"));
+            Assert.That(exception.InnerException, Is.Null);
+        });
+    }
+
+    [Test]
     public void Resolve_AggregateFunctionNamingNoFunction_ThrowsFormat()
         => Assert.Throws<FormatException>(() => ColumnCodecRegistry.Default.Resolve("AggregateFunction()", default));
 }
