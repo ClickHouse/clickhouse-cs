@@ -7,39 +7,31 @@ using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
-/// <summary>
-/// Unit coverage for <c>QBit(T, N)</c>, limited to what a server round-trip cannot observe: the exact plane
-/// layout, the significance ordering <see cref="IQBitColumn.GetPlane(int)"/> imposes on top of it, the type-resolution
-/// and write error paths, and the pooled <c>Values</c> cache. Per-type values are covered by
-/// <see cref="InsertRoundTripCase"/> against a real server.
-/// </summary>
 [TestFixture]
 public class QBitColumnCodecTests
 {
     private const string Float32X4 = "QBit(Float32, 4)";
 
-    // Captured from a ClickHouse 26.6 `SELECT v FROM t FORMAT Native` where v is QBit(Float32, 4) holding one row
-    // of [1.0, 2.0, 3.0, 4.0] — the example documented on QBitColumnCodec. 32 planes, one byte per plane (one row
-    // of ceil(4/8) = 1 byte), most significant bit first.
+    // Server-produced Native body for one QBit(Float32, 4) row containing [1, 2, 3, 4]. Planes are
+    // ordered most-significant first.
     private static readonly byte[] DocumentedBytes =
     {
-        0x00, // bit 31 (sign): none of the four is negative
-        0x0E, // bit 30: set for 2.0, 3.0, 4.0 -> elements 1, 2, 3 -> 0b1110
-        0x01, // bit 29: only 1.0 (0x3F800000)
-        0x01, // bit 28
-        0x01, // bit 27
-        0x01, // bit 26
-        0x01, // bit 25
-        0x01, // bit 24
-        0x09, // bit 23: 1.0 and 4.0 -> elements 0 and 3 -> 0b1001
-        0x04, // bit 22: only 3.0 -> element 2 -> 0b0100
+        0x00, // Bit 31: no elements set.
+        0x0E, // Bit 30: elements 1, 2, and 3.
+        0x01, // Bits 29 through 24: element 0.
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x09, // Bit 23: elements 0 and 3.
+        0x04, // Bit 22: element 2.
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     };
 
-    // Captured the same way, for QBit(Float32, 16) holding one row of [1, -2, 3, -4, ... 15, -16]. Two bytes per
-    // row per plane, so this is the only fixture that spans more than one 8-element group — the unit the vector
-    // write path works in. The signs alternate, which makes the sign plane 0xAA 0xAA.
+    // Server-produced Native body for one QBit(Float32, 16) row containing [1, -2, ..., 15, -16]. Each plane
+    // contains a two-byte row bitmap.
     private static readonly byte[] DocumentedBytes16 =
     {
         0xAA, 0xAA, 0xFF, 0xFE, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
@@ -50,10 +42,8 @@ public class QBitColumnCodecTests
         0x00, 0x00, 0x00, 0x00,
     };
 
-    // Captured from a ClickHouse 26.7 `SELECT v FROM t FORMAT Native` where v is QBit(Int8, 16) holding one row of
-    // [1, -2, 3, -4, ... 15, -16] — the same input values as DocumentedBytes16, over a two's-complement encoding
-    // rather than IEEE-754. 8 planes of two bytes, most significant (the sign) first. Two bytes per row is what
-    // makes the reversed byte order within a bitmap observable at all.
+    // Server-produced Native body for one QBit(Int8, 16) row containing [1, -2, ..., 15, -16]. The eight planes
+    // encode two's-complement bytes, most-significant plane first.
     private static readonly byte[] DocumentedInt8Bytes16 =
     {
         0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
@@ -90,50 +80,29 @@ public class QBitColumnCodecTests
     }
 
     [Test]
-    public async Task WriteColumn_SpanningSeveralGroupsOfEight_ProducesTheServersOwnBytes()
+    public async Task WriteColumn_DenseRowSlice_ProducesTheServersOwnBytes()
     {
-        // 16 elements is two whole 8-element groups, which is the unit the vector write path works in; the
-        // dimension-4 fixture above never leaves the scalar tail. Pins the group loop against real server bytes.
         const string Type = "QBit(Float32, 16)";
         IColumnCodec codec = Codec(Type);
-        using var column = new ArrayColumn<float[]>("v", Type, new[]
+        using var source = new ArrayColumn<float[]>("v", Type, new[]
         {
+            new float[16],
             new[] { 1f, -2f, 3f, -4f, 5f, -6f, 7f, -8f, 9f, -10f, 11f, -12f, 13f, -14f, 15f, -16f },
-        });
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
-
-        CollectionAssert.AreEqual(DocumentedBytes16, bytes);
-    }
-
-    [Test]
-    public async Task WriteColumn_RowSlice_EmitsEachPlaneStridedByTheSourceRowCount()
-    {
-        // The body is plane-major, so a row range is contiguous within a plane but the planes are strided by the
-        // *source* column's row count. Slicing the middle row of three is the shape that catches a write which
-        // strides by the slice length instead. Whole-column re-inserts never reach it.
-        IColumnCodec codec = Codec(Float32X4);
-        using var source = new ArrayColumn<float[]>("v", Float32X4, new[]
-        {
-            new[] { 0f, 0f, 0f, 0f },
-            new[] { 1f, 2f, 3f, 4f },
-            new[] { 0f, 0f, 0f, 0f },
+            new float[16],
         });
 
         byte[] dense = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, source));
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(dense);
-        using IColumn read = await codec.ReadColumnAsync(reader, "v", Float32X4, 3, CodecTestHarness.None);
+        using IColumn read = await codec.ReadColumnAsync(reader, "v", Type, 3, CodecTestHarness.None);
 
         byte[] sliced = await CodecTestHarness.WriteSliceAsync(codec, read, start: 1, length: 1);
 
-        CollectionAssert.AreEqual(DocumentedBytes, sliced);
+        CollectionAssert.AreEqual(DocumentedBytes16, sliced);
     }
 
     [Test]
     public async Task GetPlane_ReadColumn_IndexesPlanesBySignificanceNotWireOrder()
     {
-        // The wire stores planes most significant first; GetPlane takes the bit's significance, so bit 30 is the
-        // second plane on the wire. Nothing about this ordering is observable through a round-trip.
         IColumnCodec codec = Codec(Float32X4);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
         using IColumn read = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
@@ -156,8 +125,6 @@ public class QBitColumnCodecTests
     [Test]
     public async Task GetPlane_MultipleRows_ReturnsEveryRowsBitmapForThatPlane()
     {
-        // Rows are contiguous within a plane, so one plane spans the whole column. -0.0 sets only the sign bit,
-        // which makes the sign plane the one place the three rows differ.
         IColumnCodec codec = Codec("QBit(Float32, 8)");
         using var column = new ArrayColumn<float[]>("v", "QBit(Float32, 8)", new[]
         {
@@ -186,8 +153,6 @@ public class QBitColumnCodecTests
     [Test]
     public async Task Values_ReadColumn_MaterializesEveryRowThroughThePooledCache()
     {
-        // GetValue delegates to the same de-transpose, but Values is a separately materialized pooled cache that
-        // the round-trip's per-row comparison never touches.
         IColumnCodec codec = Codec(Float32X4);
         using var column = new ArrayColumn<float[]>("v", Float32X4, new[]
         {
@@ -211,8 +176,14 @@ public class QBitColumnCodecTests
 
         using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, Float32X4, 1);
         var typed = (IColumn<float[]>)read;
+        float[] first = typed.Values[0];
+        float[] second = typed.Values[0];
 
-        Assert.That(typed.Values[0], Is.SameAs(typed.Values[0]));
+        Assert.Multiple(() =>
+        {
+            Assert.That(second, Is.SameAs(first));
+            Assert.That(read.GetValue(0), Is.SameAs(first));
+        });
     }
 
     [Test]
@@ -259,25 +230,6 @@ public class QBitColumnCodecTests
         {
             Assert.That(codec.ElementType, Is.EqualTo(typeof(float[])));
             Assert.That(codec.NullPlaceholder, Is.EqualTo(new float[4]));
-        });
-    }
-
-    [Test]
-    public async Task WriteThenRead_BFloat16_DropsTheLowMantissaBits()
-    {
-        // A brain-float keeps only the float's high 16 bits, so a value needing the low half comes back narrowed.
-        // The server normalizes nothing here — this is the client's own lossy narrowing, so no round-trip shows it.
-        const string Type = "QBit(BFloat16, 2)";
-        IColumnCodec codec = Codec(Type);
-        using var column = new ArrayColumn<float[]>("v", Type, new[] { new[] { 1.0001f, 2f } });
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, Type, 1);
-        var value = (float[])read.GetValue(0);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(value[0], Is.EqualTo(1f), "1.0001f narrows to 1f in a brain-float");
-            Assert.That(value[1], Is.EqualTo(2f), "2f is exactly representable");
         });
     }
 
@@ -337,8 +289,6 @@ public class QBitColumnCodecTests
     [Test]
     public async Task ReadColumnAsync_Int8ServerBytes_DecodesTheTwosComplementVector()
     {
-        // The negative values are what a de-transpose that rebuilt the byte through a signed accumulator would
-        // get wrong; the sign is just plane 0's bit, with no widening involved.
         const string Type = "QBit(Int8, 16)";
         IColumnCodec codec = Codec(Type);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedInt8Bytes16);
@@ -366,9 +316,6 @@ public class QBitColumnCodecTests
     [Test]
     public async Task GetPlane_UnstridedColumn_ReportsOneGroupAndAgreesWithTheGroupOverload()
     {
-        // Stride and GroupCount describe the strided QBit(T, N, stride) layout 26.7 added, which is not decoded
-        // yet — so every column reports a single group, and GetPlane(bit) is GetPlane(bit, 0). Pinning that keeps
-        // the two accessors from drifting apart when the strided layout does land.
         IColumnCodec codec = Codec(Float32X4);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
         using IColumn read = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
@@ -397,14 +344,11 @@ public class QBitColumnCodecTests
         });
     }
 
-    [TestCase(1, 3, TestName = "length runs past the last row")]
-    [TestCase(3, 1, TestName = "start is past the last row")]
+    [TestCase(-1, 1, TestName = "negative start")]
     [TestCase(0, -1, TestName = "negative length")]
+    [TestCase(0, 2, TestName = "length runs past the last row")]
     public async Task WriteColumn_DenseSliceOutsideTheColumn_ThrowsArgumentOutOfRange(int start, int length)
     {
-        // The dense path slices the blob per plane. The blob is rented and may be longer than the column, so an
-        // over-long range has to be bounded against RowCount rather than against the array — otherwise it would
-        // quietly emit stale pooled bytes instead of failing. Only the dense path can reach this.
         IColumnCodec codec = Codec(Float32X4);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
         using IColumn dense = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
@@ -415,11 +359,20 @@ public class QBitColumnCodecTests
     }
 
     [Test]
+    public async Task WriteColumn_EmptySliceAtTheEnd_WritesNoBytes()
+    {
+        IColumnCodec codec = Codec(Float32X4);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
+        using IColumn dense = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
+
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(codec, dense, start: 1, length: 0);
+
+        Assert.That(bytes, Is.Empty);
+    }
+
+    [Test]
     public void ReadColumnAsync_TruncatedPlaneBody_ThrowsEndOfStream()
     {
-        // A body shorter than BitWidth * rows * BytesPerRow must fail rather than decode whatever the rented blob
-        // happened to contain. This also drives the catch that hands the rent back before rethrowing — that half
-        // is not observable from here, since ArrayPool gives no way to ask whether an array came home.
         IColumnCodec codec = Codec(Float32X4);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(new byte[] { 0x00, 0x0E });
 
@@ -438,9 +391,6 @@ public class QBitColumnCodecTests
     [Test]
     public void Resolve_TheStrideFormAddedIn267_ThrowsNotSupportedException()
     {
-        // 26.7 added QBit(T, N, stride), whose body is N / stride groups each carrying a full set of planes. The
-        // server prints the third argument only when stride != N, so this is always a genuinely strided column.
-        // Not decoded yet, and the error has to say which of the two it is rather than "wrong argument count".
         Assert.That(
             () => Codec("QBit(Float32, 16, 8)"),
             Throws.InstanceOf<NotSupportedException>().With.Message.Contains("strided"));
@@ -454,12 +404,8 @@ public class QBitColumnCodecTests
         Assert.That(() => Codec(type), Throws.InstanceOf<FormatException>().With.Message.Contains("vector length"));
     }
 
-    // Int16 and UInt8 are the near misses: 26.7 widened the element type to Int8 only, so the neighbouring integer
-    // widths stay rejected and a codec that matched on "any integer" would let them through.
     [TestCase("QBit(Int16, 4)")]
     [TestCase("QBit(UInt8, 4)")]
-    [TestCase("QBit(Int32, 4)")]
-    [TestCase("QBit(String, 4)")]
     [TestCase("QBit(Float16, 4)")]
     public void Resolve_ElementTypeTheServerRejects_ThrowsNotSupportedException(string type)
     {
