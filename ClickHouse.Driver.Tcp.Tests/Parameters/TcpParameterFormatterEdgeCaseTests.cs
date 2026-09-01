@@ -157,14 +157,23 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
-    // A TimeOnly reaches a different arm than a TimeSpan, and the whole day is what a time of day spans: the
-    // last representable tick is 23:59:59.9999999, which scale 7 prints in full and a coarser scale rounds up
-    // into the next hour rather than clamping.
+    // A TimeOnly reaches a different arm than a TimeSpan, but both print as one clock reading.
     [TestCase("Time", ExpectedResult = "1:02:03", TestName = "Time from a TimeOnly")]
     [TestCase("Time64(3)", ExpectedResult = "1:02:03.123", TestName = "Time64 from a TimeOnly")]
-    [TestCase("Time64(1)", ExpectedResult = "1:02:03.1", TestName = "Time64 from a TimeOnly, truncated to the scale")]
     public string FormatSqlText_TimeFromATimeOnly_UsesTheClockReading(string typeName)
         => Format(new TimeOnly(1, 2, 3, 123), typeName);
+
+    // A value coarser than the declared scale is rounded to it, not truncated, and to even. That is what the
+    // shipped HTTP driver does with the same value, and the two clients have to agree on the text they send.
+    // The binary insert path truncates instead, so the same CLR value can land one unit apart depending on
+    // which path carried it; tracked in the TCP TODO rather than settled here.
+    [TestCase("Time64(1)", 150, ExpectedResult = "1:02:03.2", TestName = "A midpoint rounds to even, upward")]
+    [TestCase("Time64(1)", 250, ExpectedResult = "1:02:03.2", TestName = "A midpoint rounds to even, downward")]
+    [TestCase("Time64(1)", 149, ExpectedResult = "1:02:03.1", TestName = "Below the midpoint")]
+    [TestCase("Time64(2)", 999, ExpectedResult = "1:02:04.00", TestName = "Rounding carries into the second")]
+    [TestCase("Time", 600, ExpectedResult = "1:02:04", TestName = "Rounding carries into the second at scale 0")]
+    public string FormatSqlText_TimeOnlyFinerThanTheScale_IsRoundedToIt(string typeName, int milliseconds)
+        => Format(new TimeOnly(1, 2, 3, milliseconds), typeName);
 
     [Test]
     public void FormatSqlText_TimeOnlyAtTheEndOfTheDay_KeepsEveryTick()
@@ -174,9 +183,48 @@ public class TcpParameterFormatterEdgeCaseTests
             Assert.That(Format(TimeOnly.MaxValue, "Time64(7)"), Is.EqualTo("23:59:59.9999999"));
             Assert.That(Format(TimeOnly.MaxValue, "Time64(9)"), Is.EqualTo("23:59:59.999999900"));
             Assert.That(Format(TimeOnly.MinValue, "Time64(3)"), Is.EqualTo("0:00:00.000"));
+
+            // The last half-second of the day rounds past it. The server reads 24:00:00 as 86400 seconds, which
+            // is a legal Time value but no longer a time of day, so it does not read back as a TimeOnly. Pinned
+            // because it is what the shipped HTTP driver sends for the same value.
             Assert.That(Format(TimeOnly.MaxValue, "Time"), Is.EqualTo("24:00:00"), "rounded, not clamped to the day");
+            Assert.That(Format(TimeOnly.MaxValue, "Time64(3)"), Is.EqualTo("23:59:60.000"));
         });
     }
+
+    // Accepts picks the Variant alternative, and it sees the name as the caller wrote it. Canonicalizing only at
+    // the formatter's dispatch left every alias and every case variant unusable as an alternative, although the
+    // server resolves Variant(BIGINT, String) to Variant(Int64, String) and accepts the value.
+    [TestCase("Variant(BIGINT, String)", ExpectedResult = "7", TestName = "An alias alternative")]
+    [TestCase("Variant(bigint, String)", ExpectedResult = "7", TestName = "An alias alternative in another case")]
+    [TestCase("Variant(int64, String)", ExpectedResult = "7", TestName = "A canonical alternative in another case")]
+    [TestCase("Variant(String, BIGINT)", ExpectedResult = "7", TestName = "An alias alternative, second")]
+    public string FormatSqlText_VariantAlternativeSpelledAsAnAlias_TakesTheValue(string typeName)
+        => Format(7L, typeName);
+
+    [Test]
+    public void FormatSqlText_VariantAlternativeWithAnAliasInsideAComposite_TakesTheValue()
+        => Assert.That(Format(new[] { 7L, 8L }, "Variant(Array(BIGINT), String)"), Is.EqualTo("[7,8]"));
+
+    // Resolving the alias must not make every alternative match: an Int64 still fits neither of these.
+    [Test]
+    public void FormatSqlText_VariantWhoseAliasedAlternativesRefuseTheValue_IsStillRefused()
+        => Assert.Throws<ArgumentException>(() => Format(7L, "Variant(INET4, String)"));
+
+    // The shape this client reads a Map column back as. Infer had no arm for it, so it fell to the Array arm,
+    // whose element inference has no reading for a KeyValuePair: a row read from a Map column could not be sent
+    // back as a Dynamic parameter at all.
+    [Test]
+    public void FormatSqlText_DynamicFromTheMapReadShape_FormatsAMapLiteral()
+    {
+        var pairs = new[] { new KeyValuePair<string, int>("a", 1), new KeyValuePair<string, int>("b", 2) };
+
+        Assert.That(Format(pairs, "Dynamic"), Is.EqualTo("{'a' : 1,'b' : 2}"));
+    }
+
+    [Test]
+    public void FormatSqlText_DynamicFromAnEmptyPairSequence_FormatsAnEmptyMap()
+        => Assert.That(Format(Array.Empty<KeyValuePair<string, int>>(), "Dynamic"), Is.EqualTo("{}"));
 
     [Test]
     public void FormatSqlText_NestedRows_WrapsTupleRowsInAnArray()

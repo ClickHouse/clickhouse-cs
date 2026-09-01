@@ -126,6 +126,12 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Variant(Int64, String)", 7L).Returns("7").SetName("Variant picks the integer");
         yield return new TestCaseData("Variant(Int64, String)", "x").Returns("x").SetName("Variant picks the string");
 
+        // Picking the alternative is a separate match from formatting the value, and it reads the name as the
+        // caller wrote it. The server resolves both declarations to Variant(Int64, String).
+        yield return new TestCaseData("Variant(BIGINT, String)", 7L).Returns("7").SetName("An alias as a Variant alternative");
+        yield return new TestCaseData("Variant(Array(BIGINT), String)", new[] { 7L, 8L })
+            .Returns("[7,8]").SetName("An alias nested inside a Variant alternative");
+
         // A Variant holding Time: the value has to match that arm, not only a Time64 one. Matching nothing
         // refuses the whole Variant rather than the one alternative, so a time value reached no Variant at all.
         // The server renders a Time inside a Variant without the leading zero it gives a bare Time column, hence
@@ -351,6 +357,38 @@ public class ClickHouseTcpParameterIntegrationTests
         object read = await ScalarAsync(client, "SELECT toString({p:Map(String, String)})", options);
 
         Assert.That(read, Is.EqualTo(@"{'k\'1':'v\\1'}"));
+    }
+
+    /// <summary>
+    /// A Map row comes back as <c>KeyValuePair&lt;K, V&gt;[]</c>, not as a dictionary, so that duplicate keys and
+    /// pair order survive. A <c>Dynamic</c> parameter names no layout, so the value's own type has to, and the
+    /// inference had no reading for a pair sequence: a value read from a Map column could not be sent back as
+    /// one at all.
+    /// <para>
+    /// The server holds a <c>Dynamic</c> parameter as a String whatever the text looks like — checked on 26.6,
+    /// where <c>{p:Dynamic}</c> reports <c>dynamicType</c> String for <c>42</c> as well. It does parse the text
+    /// first, which is why the map comes back with the pair separator normalized.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task QueryAsync_MapReadBackSentAsADynamicParameter_IsParsedAsAMap()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        object pairs = await ScalarAsync(client, "SELECT map('a', toInt32(1), 'b', toInt32(2))", null);
+        Assert.That(pairs, Is.InstanceOf<KeyValuePair<string, int>[]>(), "the shape this test is about");
+
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", pairs } },
+        };
+
+        object read = await ScalarAsync(
+            client,
+            "SELECT concat(toString(dynamicType({p:Dynamic})), ' = ', toString({p:Dynamic}))",
+            options);
+
+        Assert.That(read, Is.EqualTo("String = {'a':1,'b':2}"));
     }
 
     [TestCase("limit")]
