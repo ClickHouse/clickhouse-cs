@@ -123,6 +123,18 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["UseTls"] = value;
     }
 
+    /// <summary>
+    /// Whether every operation asks for the <c>JSON</c>/<c>Dynamic</c> wire form this client reads. Defaults to
+    /// true; set false for a user under a readonly profile. See
+    /// <see cref="ClickHouseTcpClientOptions.SendJsonAndDynamicSerializationSettings"/>.
+    /// </summary>
+    /// <exception cref="ArgumentException">The stored value is not a boolean.</exception>
+    public bool SendJsonAndDynamicSerializationSettings
+    {
+        get => GetBoolOrDefault("SendJsonAndDynamicSerializationSettings", true);
+        set => this["SendJsonAndDynamicSerializationSettings"] = value;
+    }
+
     /// <summary>The host name to match the server certificate against. Absent, the default, uses <see cref="Host"/>.</summary>
     public string TlsServerName
     {
@@ -294,6 +306,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             Password = Password,
             Database = Database,
             QuotaKey = QuotaKey,
+            SendJsonAndDynamicSerializationSettings = SendJsonAndDynamicSerializationSettings,
             UseTls = UseTls,
             TlsServerName = TlsServerName,
             TlsAllowInvalidCertificates = TlsAllowInvalidCertificates,
