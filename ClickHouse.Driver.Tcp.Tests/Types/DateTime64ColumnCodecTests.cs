@@ -74,6 +74,25 @@ public class DateTime64ColumnCodecTests
         Assert.ThrowsAsync<ArgumentException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
     }
 
+    [Test]
+    public void WriteColumn_DateTimeOffsetPastTheScalesRange_ThrowsNamingTheValueAndTheColumn()
+    {
+        // A fine scale reaches a nearer instant than .NET does: at scale 9 the Int64 nanosecond count stops at
+        // 2262-04-11, well inside DateTimeOffset's range, so a 2300 instant has to be refused. The message has to
+        // carry the value and the type, which is what an OverflowException out of the multiply does not.
+        const string type = "DateTime64(9)";
+        DateTime64ColumnCodec codec = Codec(type, "UTC");
+        var column = new ArrayColumn<DateTimeOffset>("c", type, new[] { new DateTimeOffset(2300, 1, 1, 0, 0, 0, TimeSpan.Zero) });
+
+        var thrown = Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("2300-01-01"));
+            Assert.That(thrown.Message, Does.Contain(type));
+        });
+    }
+
     // Scale 8 sets one digit finer than a .NET tick, scale 9 two. The raw count keeps them; the DateTimeOffset
     // view truncates toward zero, it does not round.
     [TestCase("DateTime64(8)", 170_000_000_012_345_678L)]

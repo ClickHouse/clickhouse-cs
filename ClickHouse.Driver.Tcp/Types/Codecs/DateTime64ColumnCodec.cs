@@ -200,7 +200,19 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         int places = scale - DotNetTickScale;
         if (places >= 0)
         {
-            return FixedPointScaling.ShiftDecimalPlaces(dotNetTicksSinceEpoch, places);
+            // The count is an Int64 of sub-second units, so a fine scale reaches a nearer instant than .NET does:
+            // scale 9 stops at 2262-04-11. Range-checked rather than left to the multiply, whose OverflowException
+            // would name neither the value nor the column.
+            long scaleUp = FixedPointScaling.Pow10(places);
+            if (dotNetTicksSinceEpoch > long.MaxValue / scaleUp || dotNetTicksSinceEpoch < long.MinValue / scaleUp)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value),
+                    value,
+                    $"{value:o} cannot be written to {TypeName} (scale {scale}): the count of sub-second units since 1970-01-01 does not fit in an Int64.");
+            }
+
+            return dotNetTicksSinceEpoch * scaleUp;
         }
 
         long factor = FixedPointScaling.Pow10(-places);
