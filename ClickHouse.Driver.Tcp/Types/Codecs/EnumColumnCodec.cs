@@ -198,43 +198,21 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     /// <summary>Parses a single <c>'label' = ordinal</c> member token into its label and ordinal.</summary>
     private static (string Label, long Ordinal) ParseMember(string token, TypeNode node)
     {
-        // A member is a single-quoted label, then '=', then a signed integer, e.g. 'a' = -1. The label may
-        // contain escaped quotes (\') and backslashes (\\), and may itself contain '=' inside the quotes, so
-        // scan the quoted run rather than splitting naively on '='.
+        // A member is a single-quoted label, then '=', then a signed integer, e.g. 'a' = -1. The label carries the
+        // server's own escaping (a label with a newline arrives as 'a\nb'), and may contain '=' or a comma inside
+        // the quotes, so scan and decode the quoted run rather than splitting naively on '='.
         int open = token.IndexOf('\'');
         if (open < 0)
         {
             throw new FormatException($"Malformed enum member '{token}' in type '{node}': expected a quoted label.");
         }
 
-        var label = new System.Text.StringBuilder();
-        int i = open + 1;
-        bool closed = false;
-        for (; i < token.Length; i++)
-        {
-            char c = token[i];
-            if (c == '\\' && i + 1 < token.Length)
-            {
-                label.Append(token[++i]);
-                continue;
-            }
-
-            if (c == '\'')
-            {
-                closed = true;
-                i++;
-                break;
-            }
-
-            label.Append(c);
-        }
-
-        if (!closed)
+        if (!QuotedText.TryRead(token, open, out string label, out int afterLabel))
         {
             throw new FormatException($"Malformed enum member '{token}' in type '{node}': unterminated label.");
         }
 
-        string rest = token.Substring(i).Trim();
+        string rest = token.Substring(afterLabel).Trim();
         if (rest.Length == 0 || rest[0] != '=')
         {
             throw new FormatException($"Malformed enum member '{token}' in type '{node}': expected '= ordinal' after the label.");
@@ -246,7 +224,7 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
             throw new FormatException($"Malformed enum member '{token}' in type '{node}': '{ordinalText}' is not a valid ordinal.");
         }
 
-        return (label.ToString(), ordinal);
+        return (label, ordinal);
     }
 }
 
