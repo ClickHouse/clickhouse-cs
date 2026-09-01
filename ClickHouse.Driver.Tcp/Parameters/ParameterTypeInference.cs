@@ -46,7 +46,9 @@ internal static class ParameterTypeInference
             case string or char or byte[] or ReadOnlyMemory<byte>: return "String";
             case Guid: return "UUID";
             case DateOnly: return "Date";
-            case TimeSpan: return "Time64(9)";
+
+            // Scale 9 holds every tick either one can carry, so neither loses a digit.
+            case TimeSpan or TimeOnly: return "Time64(9)";
 
             // Sub-second precision is kept, and the instant is anchored to UTC rather than to a session zone.
             case DateTime or DateTimeOffset: return "DateTime64(7, 'UTC')";
