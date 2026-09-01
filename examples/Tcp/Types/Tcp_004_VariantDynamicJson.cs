@@ -18,6 +18,13 @@ public static class TcpVariantDynamicJson
         builder["set_allow_experimental_dynamic_type"] = 1;
         builder["set_allow_experimental_json_type"] = 1;
 
+        // The client asks the server for the JSON and Dynamic serializations it reads, by sending two
+        // output_format_native_* settings with every operation. Both server defaults are 0, so that makes every
+        // operation a setting modification, which a user under a readonly profile is not allowed to make. Clear
+        // SendJsonAndDynamicSerializationSettings for such a user: every other column type is unaffected, and
+        // only JSON and Dynamic may then arrive in a serialization this client does not read.
+        builder.SendJsonAndDynamicSerializationSettings = true;
+
         await using var client = new ClickHouseTcpClient(builder.ToOptions());
         string[] tables = { VariantTable, DynamicTable, JsonTable };
 
