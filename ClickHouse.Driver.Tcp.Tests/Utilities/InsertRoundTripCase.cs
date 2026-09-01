@@ -509,6 +509,14 @@ public sealed class InsertRoundTripCase
             "Tuple(a Int32, b String)",
             name => new TupleColumn<int, string>(name, "Tuple(a Int32, b String)", new (int, string)[] { (1, "a"), (-5, string.Empty), (int.MaxValue, "héllo✓") }));
 
+        // A field name the server has to quote. The comma inside the backticks would split the argument list, and
+        // the type name the client rebuilds is what the insert header carries, so only a real server proves both
+        // spellings agree. The server also normalizes a double-quoted name into a backticked one.
+        yield return Same(
+            "Tuple(`a,b` Int64, c String) [quoted field name]",
+            "Tuple(`a,b` Int64, c String)",
+            name => new TupleColumn<long, string>(name, "Tuple(`a,b` Int64, c String)", new (long, string)[] { (1L, "x"), (long.MinValue, string.Empty) }));
+
         // A named tuple whose elements are themselves parametric — the name/type split must survive nesting.
         yield return Same(
             "Tuple(a Array(Int32), b Nullable(String)) [named parametric]",
@@ -666,6 +674,22 @@ public sealed class InsertRoundTripCase
                     new ArrayColumn<byte>(name, "UInt8", new byte[] { 1, 2, 3 }),
                     new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
                 },
+                new[] { 0, 2, 2, 3 },
+                rowCount: 3,
+                pooledOffsets: false,
+                ownsFields: false),
+            NestedSettings);
+
+        // A field name the server has to quote: it arrives backticked in the header, and the insert header has to
+        // carry the same spelling back or the server rejects the block.
+        yield return Same(
+            "Nested(`a b` UInt8) [quoted field name]",
+            "Nested(`a b` UInt8)",
+            name => new NestedColumn(
+                name,
+                "Nested(`a b` UInt8)",
+                new[] { "a b" },
+                new IColumn[] { new ArrayColumn<byte>(name, "UInt8", new byte[] { 1, 2, 3 }) },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
                 pooledOffsets: false,
@@ -1209,6 +1233,15 @@ public sealed class InsertRoundTripCase
                 "{\"a\":1,\"b\":\"\",\"x\":\"p\"}",
                 "{\"a\":2,\"b\":\"q\"}",
             }),
+            JsonSettings);
+
+        // A typed path the server has to quote. The paren inside the backticks would end the argument list early,
+        // and the read fails on the header before a row decodes, so this case only ever fails at the header.
+        yield return new InsertRoundTripCase(
+            "JSON(`a(b` Int64) [quoted typed path]",
+            "JSON(`a(b` Int64)",
+            name => new ArrayColumn<string>(name, "JSON(`a(b` Int64)", new[] { "{\"a(b\":5}", "{}" }),
+            name => new ArrayColumn<string>(name, "JSON(`a(b` Int64)", new[] { "{\"a(b\":5}", "{\"a(b\":0}" }),
             JsonSettings);
 
         // The server parses a JSON value rather than storing the text, so what comes back is its own rendering:
