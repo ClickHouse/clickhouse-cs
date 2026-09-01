@@ -236,14 +236,29 @@ public class ConnectionPoolIntegrationTests
             Is.EqualTo(1UL),
             "the marker must exist to begin with, or the assertion below proves nothing");
 
-        // Four seconds against a one-second server timeout: the server notices an idle connection on its own
-        // schedule, and the suites for the other frameworks are on the same server.
-        await Task.Delay(TimeSpan.FromSeconds(4));
-
-        // Has to be asserted rather than thrown out of: the failure this defends against is the query failing,
-        // and the marker count then says whether the connection was replaced or kept.
+        // Polled, not slept: the server notices an idle connection on its own schedule, and the suites for the
+        // other frameworks share the server, so a fixed wait is a race this can lose. Each gap is longer than the
+        // one-second server timeout, so a poll that finds the connection alive resets the timer and still leaves
+        // the next gap long enough to expire it. The control has nothing to wait for and takes the first reading,
+        // after the same gap.
+        //
+        // Asserted rather than thrown out of: the failure this defends against is the query failing, and the
+        // marker count then says whether the connection was replaced or kept.
         ulong markerAfterwards = 0;
-        Assert.DoesNotThrowAsync(async () => markerAfterwards = await TemporaryTableExistsAsync(client, marker, options));
+        int attempts = serverIdleTimeout is null ? 1 : 12;
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            for (int attempt = 0; attempt < attempts; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                markerAfterwards = await TemporaryTableExistsAsync(client, marker, options);
+                if (markerAfterwards == markerAfterTheWait)
+                {
+                    return;
+                }
+            }
+        });
+
         Assert.That(markerAfterwards, Is.EqualTo(markerAfterTheWait));
     }
 
