@@ -40,6 +40,11 @@ internal sealed class ColumnCodecRegistry
     /// </summary>
     public ColumnReadProjections Projections { get; }
 
+    /// <summary>Whether a codec is registered for a base type name, i.e. whether this client knows the type.</summary>
+    /// <param name="name">The base type name, as ClickHouse spells it.</param>
+    /// <returns>True when the name is one this client resolves.</returns>
+    public bool KnowsTypeName(string name) => byName.ContainsKey(name);
+
     /// <summary>Resolves the codec for a ClickHouse type string.</summary>
     /// <param name="typeString">The type string from a column header (e.g. <c>UInt64</c>, <c>DateTime('UTC')</c>).</param>
     /// <param name="context">The resolution context (server timezone, etc.); use the sample block's context when
