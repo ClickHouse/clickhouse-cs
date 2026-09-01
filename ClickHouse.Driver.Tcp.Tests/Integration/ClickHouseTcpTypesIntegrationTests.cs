@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -143,6 +144,63 @@ public class ClickHouseTcpTypesIntegrationTests
                 Assert.That(failure, Is.TypeOf<InvalidCastException>());
             }
         }
+    }
+
+    /// <summary>
+    /// <see cref="TypeAliases"/> is a copy of <c>system.data_type_families</c>, so this is the test that notices
+    /// when the server's copy changes: an alias added, an alias whose target moved, or a spelling mistyped in the
+    /// copy. Both directions are checked, and every disagreement is reported at once rather than one per run.
+    /// </summary>
+    [Test]
+    public async Task TypeAliases_TheTable_AgreesWithTheServersOwn()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        var serverFamilies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        await foreach (Block block in client.StreamAsync(
+            "SELECT name, alias_to FROM system.data_type_families",
+            cancellationToken: None))
+        {
+            IColumn<string> names = block.ReadAs<string>("name");
+            IColumn<string> targets = block.ReadAs<string>("alias_to");
+            for (int row = 0; row < block.RowCount; row++)
+            {
+                serverFamilies[names[row]] = targets[row];
+            }
+        }
+
+        Assert.That(serverFamilies, Is.Not.Empty, "the server reported no type families");
+
+        var missing = new List<string>();
+        foreach (KeyValuePair<string, string> family in serverFamilies)
+        {
+            // Only the aliases whose target this client has a codec for: the server also aliases types the
+            // client does not support, and those are TT-14/TT-48 decisions rather than table entries.
+            if (family.Value.Length == 0 || !ColumnCodecRegistry.Default.KnowsTypeName(family.Value))
+            {
+                continue;
+            }
+
+            if (TypeAliases.Canonical(family.Key) != family.Value)
+            {
+                missing.Add($"the server aliases '{family.Key}' to '{family.Value}'; the table says '{TypeAliases.Canonical(family.Key)}'");
+            }
+        }
+
+        var unknown = new List<string>();
+        foreach (KeyValuePair<string, string> alias in TypeAliases.All())
+        {
+            if (!serverFamilies.ContainsKey(alias.Key))
+            {
+                unknown.Add($"the table has '{alias.Key}', which is not a family this server reports");
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(missing, Is.Empty, string.Join("; ", missing));
+            Assert.That(unknown, Is.Empty, string.Join("; ", unknown));
+        });
     }
 
     // The candidate CLR type has to be the sample's static type, so the column is built by a generic helper rather
