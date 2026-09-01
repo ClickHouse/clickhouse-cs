@@ -133,7 +133,7 @@ internal static class ParameterTypeInference
             byte[] or ReadOnlyMemory<byte> => node.Name is "String" or "FixedString" ? node.Name : "String",
 
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
-            string or char => node.Name is "String" or "FixedString" or "Enum8" or "Enum16" ? node.Name : "String",
+            string or char => node.Name is "String" or "FixedString" or "Enum" or "Enum8" or "Enum16" ? node.Name : "String",
             DateTime or DateTimeOffset => node.Name is "DateTime" or "DateTime64" or "Date" or "Date32" ? node.Name : "DateTime64",
             decimal or ClickHouseTcpDecimal => node.Name.StartsWith("Decimal", StringComparison.Ordinal) ? node.Name : "Decimal128",
             not string and IEnumerable => "Array",

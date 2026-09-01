@@ -159,6 +159,11 @@ public class ClickHouseTcpParameterIntegrationTests
         // An Enum bound by its numeric value rather than its label. Neither transport had a case for it.
         yield return new TestCaseData("Enum8('a' = 1, 'b' = 2)", 2).Returns("b").SetName("Enum by number");
 
+        // A bare Enum, whose width the client has to pick before it can format the value. The hint reaches the
+        // server verbatim, so this is what shows the server reads the same spelling the client resolved.
+        yield return new TestCaseData("Enum('a' = 1, 'b' = 2)", "b").Returns("b").SetName("Enum with no width");
+        yield return new TestCaseData("Enum('a' = 1, 'b' = 200)", "b").Returns("b").SetName("Enum with no width, past the Int8 range");
+
         // A wide decimal past what a CLR decimal can hold, so the BigInteger path is the one under test.
         yield return new TestCaseData("Decimal128(0)", new string('1', 30)).Returns(new string('1', 30)).SetName("Decimal128 of 30 digits");
         yield return new TestCaseData("Decimal256(0)", new string('1', 50)).Returns(new string('1', 50)).SetName("Decimal256 of 50 digits");

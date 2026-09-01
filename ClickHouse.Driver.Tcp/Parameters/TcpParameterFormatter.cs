@@ -127,7 +127,7 @@ internal static class TcpParameterFormatter
             case "String" or "FixedString" when value is ReadOnlyMemory<byte> bytesMemory:
                 return QuoteIfNeeded(BytesToSqlText(bytesMemory.Span), quote);
 
-            case "String" or "FixedString" or "Enum8" or "Enum16" or "IPv4" or "IPv6" or "UUID":
+            case "String" or "FixedString" or "Enum" or "Enum8" or "Enum16" or "IPv4" or "IPv6" or "UUID":
                 return QuoteIfNeeded(value.ToString().Escape(), quote);
 
             case "Identifier":

@@ -158,6 +158,10 @@ internal sealed class ColumnCodecRegistry
         AddFactory("Enum8", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum8ColumnCodec.Create(node));
         AddFactory("Enum16", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum16ColumnCodec.Create(node));
 
+        // A header always names a width, so the bare name only ever arrives from a caller: a {p:Enum(...)} hint
+        // or a CanRead/CanWrite question. The shipped HTTP driver resolves it, so a moved query keeps working.
+        AddFactory("Enum", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => EnumColumnCodec.Create(node));
+
         // Decimal(P, S) and the fixed-width aliases share the width-by-precision codec factory.
         foreach (string name in new[] { "Decimal", "Decimal32", "Decimal64", "Decimal128", "Decimal256" })
         {

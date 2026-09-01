@@ -94,7 +94,7 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
 
         foreach (TypeNode argument in node.Arguments)
         {
-            (string label, long ordinal) = ParseMember(argument.Name, node);
+            (string label, long ordinal) = EnumColumnCodec.ParseMember(argument.Name, node);
             T value = parseOrdinal(ordinal, node.Name);
             if (!labelToOrdinal.TryAdd(label, value))
             {
@@ -194,9 +194,37 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
         => label is not null && LabelToOrdinal.TryGetValue(label, out T ordinal)
             ? ordinal
             : throw members.NoSuchLabel(label, nameof(label));
+}
+
+/// <summary>
+/// Factory for the bare <c>Enum</c> name, and the member parsing the three factories share.
+/// </summary>
+internal static class EnumColumnCodec
+{
+    /// <summary>Builds the codec for a bare <c>Enum</c>, whose width comes from the declared ordinals.</summary>
+    /// <param name="node">The parsed <c>Enum</c> type node.</param>
+    /// <returns>An <c>Enum8</c> or <c>Enum16</c> codec, named for the width chosen.</returns>
+    /// <exception cref="FormatException">A member is malformed, or no member is declared.</exception>
+    public static IColumnCodec Create(TypeNode node)
+    {
+        // Verified on 26.6: the server takes Enum8 while every ordinal is in the Int8 range and Enum16
+        // otherwise, and reports the column under the width it chose.
+        bool fitsInt8 = true;
+        foreach (TypeNode argument in node.Arguments)
+        {
+            (_, long ordinal) = ParseMember(argument.Name, node);
+            if (ordinal is < sbyte.MinValue or > sbyte.MaxValue)
+            {
+                fitsInt8 = false;
+            }
+        }
+
+        var sized = new TypeNode(fitsInt8 ? "Enum8" : "Enum16", node.Arguments, node.HasArgumentList);
+        return fitsInt8 ? Enum8ColumnCodec.Create(sized) : Enum16ColumnCodec.Create(sized);
+    }
 
     /// <summary>Parses a single <c>'label' = ordinal</c> member token into its label and ordinal.</summary>
-    private static (string Label, long Ordinal) ParseMember(string token, TypeNode node)
+    internal static (string Label, long Ordinal) ParseMember(string token, TypeNode node)
     {
         // A member is a single-quoted label, then '=', then a signed integer, e.g. 'a' = -1. The label carries the
         // server's own escaping (a label with a newline arrives as 'a\nb'), and may contain '=' or a comma inside
