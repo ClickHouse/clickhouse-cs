@@ -14,20 +14,21 @@ public class TcpParameterFormatterEdgeCaseTests
     private static string Format(object value, string typeName)
         => TcpParameterFormatter.FormatSqlText(value, typeName, "p");
 
-    // A type hint the shipped HTTP driver accepts, a case variant, and two names no ClickHouse version has. All
-    // of them reach the same arm as a value that simply does not fit, and blaming the value there sends a caller
-    // to inspect a value that was never the problem.
-    [TestCase("VARCHAR", TestName = "An alias the HTTP driver accepts")]
-    [TestCase("BIGINT", TestName = "An alias whose spelling is SQL's")]
-    [TestCase("string", TestName = "A case variant the server rejects too")]
-    [TestCase("Boolean", TestName = "A name no version has, spelled like one that does")]
+    // Names the server does not have either (26.6 answers "Unknown data type family" for all four). They reach
+    // the same arm as a value that simply does not fit, and blaming the value there sends a caller to inspect a
+    // value that was never the problem.
+    [TestCase("MultiPoint", TestName = "A geo name no version has")]
+    [TestCase("Object", TestName = "A name a past version had")]
+    [TestCase("string", TestName = "A case variant of a case-sensitive family")]
+    [TestCase("array(uint8)", TestName = "A case variant with arguments")]
     public void FormatSqlText_TypeNameThisClientDoesNotKnow_SaysSoRatherThanBlamingTheValue(string typeName)
     {
         var exception = Assert.Throws<ArgumentException>(() => Format("abc", typeName));
 
         Assert.Multiple(() =>
         {
-            Assert.That(exception.Message, Does.Contain($"'{typeName}' is not a ClickHouse type name this client knows"));
+            Assert.That(exception.Message, Does.Contain("is not a ClickHouse type name this client knows"));
+            Assert.That(exception.Message, Does.Contain(typeName), "shows the type as it was written");
             Assert.That(exception.Message, Does.Contain("toTypeName"), "says how to find the name to write");
             Assert.That(exception.Message, Does.Contain("case-sensitive"), "says why a spelling that looks right can fail");
             Assert.That(exception.Message, Does.Not.Contain("Cannot convert value"), "the value is not the problem");

@@ -93,7 +93,9 @@ internal static class TcpParameterFormatter
     /// <returns>The formatted value.</returns>
     internal static string Format(TypeNode type, object value, bool quote)
     {
-        string name = type.Name;
+        // The arms below are the canonical names, so an alias or a case variant is mapped to one first. Every
+        // recursion into a child type comes back through here, which is what makes {p:Array(BIGINT)} format.
+        string name = TypeAliases.Canonical(type.Name);
 
         if (Array.IndexOf(IntegerTypeNames, name) >= 0
             || Array.IndexOf(FloatTypeNames, name) >= 0
@@ -178,8 +180,7 @@ internal static class TcpParameterFormatter
             case "Variant":
                 return FormatVariant(type, value, quote);
 
-            // The server takes either spelling and reports the type as JSON, so both must format.
-            case "JSON" or "Json":
+            case "JSON":
                 return (value is string json ? json : JsonSerializer.Serialize(value)).Escape();
 
             // A QBit is a fixed-width vector of its element type, written as an array.

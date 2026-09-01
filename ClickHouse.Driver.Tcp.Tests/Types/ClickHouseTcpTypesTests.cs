@@ -37,6 +37,20 @@ public class ClickHouseTcpTypesTests
     }
 
     [Test]
+    public void CanReadAndCanWrite_AnAliasOrACaseVariant_AnswerForTheTypeItNames()
+    {
+        // A caller asking about a type writes it the way their query does, and the server takes any of these.
+        Assert.Multiple(() =>
+        {
+            Assert.That(ClickHouseTcpTypes.CanWrite("VARCHAR", typeof(string)), Is.True);
+            Assert.That(ClickHouseTcpTypes.CanRead("BIGINT", typeof(long)), Is.True);
+            Assert.That(ClickHouseTcpTypes.CanRead("datetime64(3)", typeof(long)), Is.True);
+            Assert.That(ClickHouseTcpTypes.CanWrite("Array(TINYINT UNSIGNED)", typeof(byte[])), Is.True);
+            Assert.That(ClickHouseTcpTypes.CanWrite("VARCHAR", typeof(int)), Is.False, "the alias does not change what fits");
+        });
+    }
+
+    [Test]
     public void CanReadAndCanWrite_NullArgument_Throws()
     {
         Assert.Multiple(() =>

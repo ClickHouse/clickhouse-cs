@@ -83,6 +83,15 @@ internal sealed class ColumnCodecRegistry
             return factory(node, in context, this);
         }
 
+        // A header always names the canonical type, so this second lookup is for the names a caller writes: a
+        // {p:VARCHAR} hint, ClickHouseType, CanRead/CanWrite. Resolving under the canonical name also stamps the
+        // codec with it, so DEC(4, 2) reports itself as Decimal(4, 2). Child nodes come back through here, which
+        // is what makes an alias resolve inside a composite.
+        if (TypeAliases.TryCanonical(node.Name, out string canonical) && byName.TryGetValue(canonical, out factory))
+        {
+            return factory(new TypeNode(canonical, node.Arguments, node.HasArgumentList), in context, this);
+        }
+
         // No "yet": some of what lands here is not a type any supported server has — Object('json') was removed
         // from ClickHouse, and MultiPoint never existed — so promising it later would be wrong.
         throw new NotSupportedException($"ClickHouse type '{node}' is not supported by this client.");

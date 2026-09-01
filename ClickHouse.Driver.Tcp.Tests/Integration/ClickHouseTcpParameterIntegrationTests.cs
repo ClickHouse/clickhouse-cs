@@ -31,6 +31,17 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Bool", false).Returns("false").SetName("Bool false");
         yield return new TestCaseData("Decimal64(4)", 1.2345m).Returns("1.2345").SetName("Decimal64");
 
+        // The names a caller writes rather than the ones a header carries. The hint reaches the server verbatim,
+        // so these prove the server takes the same spellings the client resolves — including a two-word alias and
+        // one nested inside a composite.
+        yield return new TestCaseData("VARCHAR", "abc").Returns("abc").SetName("VARCHAR, an alias of String");
+        yield return new TestCaseData("BIGINT", -5L).Returns("-5").SetName("BIGINT, an alias of Int64");
+        yield return new TestCaseData("DOUBLE PRECISION", 1.5d).Returns("1.5").SetName("DOUBLE PRECISION, a two-word alias");
+        yield return new TestCaseData("Boolean", true).Returns("true").SetName("Boolean, an alias of Bool");
+        yield return new TestCaseData("datetime64(3)", new DateTime(2024, 1, 2, 3, 4, 5, 123, DateTimeKind.Unspecified))
+            .Returns("2024-01-02 03:04:05.123").SetName("A case variant of a case-insensitive family");
+        yield return new TestCaseData("Array(TINYINT UNSIGNED)", new byte[] { 1, 2 }).Returns("[1,2]").SetName("An alias inside a composite");
+
         // The server accepts .NET's NaN and Infinity spellings.
         yield return new TestCaseData("Float64", double.NaN).Returns("nan").SetName("Float64 NaN");
         yield return new TestCaseData("Float64", double.PositiveInfinity).Returns("inf").SetName("Float64 +Infinity");
