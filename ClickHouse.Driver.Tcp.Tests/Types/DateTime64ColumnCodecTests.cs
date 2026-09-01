@@ -214,6 +214,26 @@ public class DateTime64ColumnCodecTests
         Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(expectedMillis));
     }
 
+    [Test]
+    public async Task ReadColumn_FixedUtcOffsetTimeZoneInfoCannotHold_ReadsTheCountsAndReportsOnlyTheZone()
+    {
+        // The counts are the wire value and need no zone, so a zone TimeZoneInfo cannot hold (26.6 applies
+        // Fixed/UTC+05:30:15, which is not a whole number of minutes) must not fail the read. DateTime64 carries
+        // its own zone field and projection, so it is not covered by the DateTime codec's case.
+        const string type = "DateTime64(3, 'Fixed/UTC+05:30:15')";
+        byte[] bytes = await WriteAsync(w => w.WriteInt64(1_700_000_000_123));
+        using var reader = ReaderOver(bytes);
+
+        using var column = (DateTime64Column)await Codec(type).ReadColumnAsync(reader, "c", type, 1, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[0], Is.EqualTo(1_700_000_000_123L));
+            Assert.That(Assert.Throws<FormatException>(() => _ = column.TimeZone).Message, Does.Contain("+05:30:15"));
+            Assert.Throws<FormatException>(() => column.GetDateTimeOffset(0));
+        });
+    }
+
     // DateTime64 shares DateTimeColumnCodec.ToUtc; covered here too because a refactor could separate them.
     [Test]
     public void WriteColumn_UnspecifiedKindInDaylightSavingGap_ThrowsNamingTheZone()

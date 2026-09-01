@@ -10,12 +10,14 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <summary>
 /// Encodes ClickHouse <c>DateTime</c> as Unix seconds. The explicit or session timezone controls
 /// <see cref="DateTimeOffset"/> projections and how unspecified <see cref="DateTime"/> values are interpreted.
+/// The raw seconds need no timezone, so a zone this platform cannot represent surfaces only where a calendar
+/// value is asked for.
 /// </summary>
 internal sealed class DateTimeColumnCodec : IColumnCodec
 {
-    private readonly TimeZoneInfo timeZone;
+    private readonly ResolvedTimeZone timeZone;
 
-    private DateTimeColumnCodec(string typeName, TimeZoneInfo timeZone)
+    private DateTimeColumnCodec(string typeName, ResolvedTimeZone timeZone)
     {
         TypeName = typeName;
         this.timeZone = timeZone;
@@ -70,7 +72,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     public static DateTimeColumnCodec Create(TypeNode node, string serverTimezone)
     {
         string explicitTz = node.Arguments.Count > 0 ? DateTimeZones.UnquoteTimezone(node.Arguments[0]) : null;
-        TimeZoneInfo tz = DateTimeZones.Resolve(explicitTz, serverTimezone);
+        ResolvedTimeZone tz = DateTimeZones.Resolve(explicitTz, serverTimezone);
         return new DateTimeColumnCodec(node.ToString(), tz);
     }
 
@@ -89,15 +91,17 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
             return true;
         }
 
+        // A calendar target is where the zone is needed, so an unrepresentable one is reported here rather than
+        // when the column was resolved, where it would fail a read that only wanted the seconds.
         if (targetType == typeof(DateTimeOffset))
         {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToOffset), value, timeZone);
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToOffset), value, timeZone.Value);
             return true;
         }
 
         if (targetType == typeof(DateTime))
         {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToDateTime), value, timeZone);
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToDateTime), value, timeZone.Value);
             return true;
         }
 
@@ -228,7 +232,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         return (uint)seconds;
     }
 
-    private uint ToWireValue(DateTime value) => ToUnixSeconds(ToUtc(value, timeZone));
+    private uint ToWireValue(DateTime value) => ToUnixSeconds(ToUtc(value, timeZone.Value));
 
     private static uint ToWireValue(DateTimeOffset value) => ToUnixSeconds(value.UtcDateTime);
 }

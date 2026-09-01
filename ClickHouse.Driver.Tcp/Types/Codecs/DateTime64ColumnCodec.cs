@@ -20,9 +20,9 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     private static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
 
     private readonly int scale;
-    private readonly TimeZoneInfo timeZone;
+    private readonly ResolvedTimeZone timeZone;
 
-    private DateTime64ColumnCodec(string typeName, int scale, TimeZoneInfo timeZone)
+    private DateTime64ColumnCodec(string typeName, int scale, ResolvedTimeZone timeZone)
     {
         TypeName = typeName;
         this.scale = scale;
@@ -89,7 +89,7 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         }
 
         string explicitTz = node.Arguments.Count > 1 ? DateTimeZones.UnquoteTimezone(node.Arguments[1]) : null;
-        TimeZoneInfo tz = DateTimeZones.Resolve(explicitTz, serverTimezone);
+        ResolvedTimeZone tz = DateTimeZones.Resolve(explicitTz, serverTimezone);
         return new DateTime64ColumnCodec(node.ToString(), scale, tz);
     }
 
@@ -108,15 +108,17 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
             return true;
         }
 
+        // A calendar target is where the zone is needed, so an unrepresentable one is reported here rather than
+        // when the column was resolved, where it would fail a read that only wanted the counts.
         if (targetType == typeof(DateTimeOffset))
         {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToOffset), value, scale, timeZone);
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToOffset), value, scale, timeZone.Value);
             return true;
         }
 
         if (targetType == typeof(DateTime))
         {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToDateTime), value, scale, timeZone);
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToDateTime), value, scale, timeZone.Value);
             return true;
         }
 
@@ -211,5 +213,5 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     }
 
     private long CountFromDateTime(DateTime value)
-        => CountFromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(value, timeZone)));
+        => CountFromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(value, timeZone.Value)));
 }

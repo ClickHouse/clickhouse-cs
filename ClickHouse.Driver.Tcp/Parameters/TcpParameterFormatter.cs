@@ -381,7 +381,9 @@ internal static class TcpParameterFormatter
     /// <returns>The wall-clock time in that timezone.</returns>
     private static DateTime InTargetTimezone(DateTimeOffset value, string declaredTimezone)
     {
-        TimeZoneInfo timeZone = DateTimeZones.Resolve(declaredTimezone, serverTimezone: null);
+        // Formatting a wall clock is exactly the calendar use the zone is needed for, so an unrepresentable one
+        // is reported here.
+        TimeZoneInfo timeZone = DateTimeZones.Resolve(declaredTimezone, serverTimezone: null).Value;
         return TimeZoneInfo.ConvertTime(value, timeZone).DateTime;
     }
 
