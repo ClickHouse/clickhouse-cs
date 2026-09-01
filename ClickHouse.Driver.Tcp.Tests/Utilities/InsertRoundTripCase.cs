@@ -87,6 +87,10 @@ public sealed class InsertRoundTripCase
         yield return EnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, "a", "b");
         yield return EnumLabels("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 }, "x", "y");
 
+        // A label carrying an escape. The header spells it 'a\nb' — on 26.6 the label's stored bytes are 61 0A 62 —
+        // so the label a caller writes has to be the decoded one, and only a server proves the two agree.
+        yield return EnumLabels(@"Enum8('a\nb' = 1, 't\tab' = 2)", new sbyte[] { 1, 2 }, "a\nb", "t\tab");
+
         // And through the wrappers, where the shape has to survive composition: the nullable substitute needs a
         // placeholder label for its null rows, and the array path flattens the labels before the enum sees them.
         yield return NullableEnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte?[] { -1, null, 127 }, "a", null, "b");
