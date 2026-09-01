@@ -12,7 +12,12 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// A codec for the ClickHouse <c>Time64(scale)</c> column: a little-endian <c>Int64</c> tick count at
 /// 10^-<c>scale</c> seconds (a signed time-of-day/duration), surfaced as the raw <see cref="long"/> count that
 /// retains the exact wire value at any scale (including scales 8 and 9, which are finer than a .NET tick). A
-/// <see cref="TimeSpan"/> can also be written for convenience, truncated toward zero to the column scale.
+/// <see cref="TimeSpan"/> or a <see cref="TimeOnly"/> can also be written for convenience, truncated toward zero
+/// to the column scale.
+/// <para>
+/// Reading as a <see cref="TimeOnly"/> is a narrowing: a column value may be negative or past 24 hours, which no
+/// time of day is, and such a row is refused rather than reduced modulo a day.
+/// </para>
 /// </summary>
 internal sealed class Time64ColumnCodec : IColumnCodec
 {
@@ -37,10 +42,10 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     public Type ElementType => typeof(long);
 
     /// <inheritdoc/>
-    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(long), typeof(TimeSpan) };
+    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(long), typeof(TimeSpan), typeof(TimeOnly) };
 
     /// <inheritdoc/>
-    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(long), typeof(TimeSpan) };
+    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(long), typeof(TimeSpan), typeof(TimeOnly) };
 
     /// <inheritdoc/>
     public object NullPlaceholder => 0L;
@@ -58,12 +63,17 @@ internal sealed class Time64ColumnCodec : IColumnCodec
             return TimeSpan.Zero;
         }
 
+        if (writeType == typeof(TimeOnly))
+        {
+            return TimeOnly.MinValue;
+        }
+
         throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
     }
 
     /// <inheritdoc/>
-    // A TimeSpan is encoded as a count at this column's scale, so two values inside one tick of it encode
-    // identically.
+    // Both clock surfaces are encoded as a count at this column's scale, so two values inside one tick of it
+    // encode identically.
     public object WireEqualityComparer(Type writeType)
     {
         if (writeType == typeof(long))
@@ -71,7 +81,12 @@ internal sealed class Time64ColumnCodec : IColumnCodec
             return WireEquality.Default<long>();
         }
 
-        return writeType == typeof(TimeSpan) ? WireEquality.Projected<TimeSpan, long>(ToCount) : null;
+        if (writeType == typeof(TimeSpan))
+        {
+            return WireEquality.Projected<TimeSpan, long>(ToCount);
+        }
+
+        return writeType == typeof(TimeOnly) ? WireEquality.Projected<TimeOnly, long>(ToCount) : null;
     }
 
     /// <summary>Builds a <c>Time64</c> codec from its scale argument.</summary>
@@ -114,12 +129,18 @@ internal sealed class Time64ColumnCodec : IColumnCodec
             return true;
         }
 
+        if (targetType == typeof(TimeOnly))
+        {
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.Time64ToTimeOnly), value, scale);
+            return true;
+        }
+
         projected = null;
         return false;
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<long> or IColumn<TimeSpan>;
+    public bool CanWrite(IColumn column) => column is IColumn<long> or IColumn<TimeSpan> or IColumn<TimeOnly>;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
@@ -140,10 +161,22 @@ internal sealed class Time64ColumnCodec : IColumnCodec
                 }
 
                 break;
+            case IColumn<TimeOnly> times:
+                for (int i = 0; i < length; i++)
+                {
+                    writer.WriteInt64(ToCount(times[start + i]));
+                }
+
+                break;
             default:
-                throw new ArgumentException($"A Time64 column must hold long or TimeSpan values, not {column.GetType()}.", nameof(column));
+                throw new ArgumentException($"A Time64 column must hold long, TimeSpan or TimeOnly values, not {column.GetType()}.", nameof(column));
         }
     }
+
+    // A time of day is always inside the column's range, so this needs no bound of its own; only the scale
+    // shift, which truncates toward zero exactly as the TimeSpan path does.
+    private long ToCount(TimeOnly value)
+        => FixedPointScaling.ShiftDecimalPlaces(value.Ticks, scale - DotNetTickScale);
 
     private long ToCount(TimeSpan value)
     {

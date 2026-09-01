@@ -183,8 +183,8 @@ public class ColumnReadProjectionTests
             Assert.That(
                 Codec("DateTime64(3, 'UTC')").ReadableElementTypes,
                 Is.EqualTo(new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) }));
-            Assert.That(Codec("Time").ReadableElementTypes, Is.EqualTo(new[] { typeof(int), typeof(TimeSpan) }));
-            Assert.That(Codec("Time64(3)").ReadableElementTypes, Is.EqualTo(new[] { typeof(long), typeof(TimeSpan) }));
+            Assert.That(Codec("Time").ReadableElementTypes, Is.EqualTo(new[] { typeof(int), typeof(TimeSpan), typeof(TimeOnly) }));
+            Assert.That(Codec("Time64(3)").ReadableElementTypes, Is.EqualTo(new[] { typeof(long), typeof(TimeSpan), typeof(TimeOnly) }));
         });
     }
 
@@ -352,6 +352,48 @@ public class ColumnReadProjectionTests
         Func<long, TimeSpan> project = Project<long, TimeSpan>(Codec($"Time64({scale})"));
 
         Assert.That(project(count), Is.EqualTo(TimeSpan.Parse(expected)));
+    }
+
+    [Test]
+    public void TryProjectRead_TimeToTimeOnly_IsTheTimeOfDay()
+    {
+        Func<int, TimeOnly> project = Project<int, TimeOnly>(Codec("Time"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(project(3661), Is.EqualTo(new TimeOnly(1, 1, 1)));
+            Assert.That(project(0), Is.EqualTo(TimeOnly.MinValue));
+            Assert.That(project((23 * 3600) + (59 * 60) + 59), Is.EqualTo(new TimeOnly(23, 59, 59)));
+        });
+    }
+
+    [Test]
+    [TestCase(3, 3_661_500L, "01:01:01.5000000")]
+    [TestCase(9, 3_661_000_000_000L, "01:01:01")]
+    public void TryProjectRead_Time64ToTimeOnly_HonorsTheColumnScale(int scale, long count, string expected)
+    {
+        Func<long, TimeOnly> project = Project<long, TimeOnly>(Codec($"Time64({scale})"));
+
+        Assert.That(project(count), Is.EqualTo(TimeOnly.Parse(expected)));
+    }
+
+    // The one narrowing in the read surface: a Time column holds a signed duration of up to 999 hours, and the
+    // part of that range outside a day has no TimeOnly. Refused, not reduced modulo a day, which would be a
+    // different value presented as the stored one.
+    [TestCase(-1, TestName = "A negative duration")]
+    [TestCase(24 * 3600, TestName = "Exactly 24 hours")]
+    [TestCase(100 * 3600, TestName = "A duration of 100 hours")]
+    public void TryProjectRead_TimeToTimeOnlyOfAValueThatIsNoTimeOfDay_Throws(int seconds)
+    {
+        Func<int, TimeOnly> project = Project<int, TimeOnly>(Codec("Time"));
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => project(seconds));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("is not a time of day"));
+            Assert.That(thrown.Message, Does.Contain("TimeSpan"), "the message has to name the reading that does work");
+        });
     }
 
     [Test]
