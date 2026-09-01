@@ -62,6 +62,78 @@ public class TypeParserTests
         });
     }
 
+    [TestCase(",")]
+    [TestCase("(")]
+    [TestCase(")")]
+    [TestCase(" ")]
+    public void Parse_BacktickedIdentifierWithBreakCharacter_IsOneArgument(string inside)
+    {
+        // A backticked identifier is opaque, like a quoted label. The server emits these itself — a JSON typed
+        // path, a Tuple or Nested field name — and normalizes a double-quoted name into a backticked one, so a
+        // header carrying one must parse or the whole read fails before a row decodes.
+        TypeNode node = TypeParser.Parse($"JSON(`a{inside}b` Int64)");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.Name, Is.EqualTo("JSON"));
+            Assert.That(node.Arguments.Select(a => a.Name), Is.EqualTo(new[] { $"`a{inside}b` Int64" }));
+        });
+    }
+
+    [TestCase("JSON(`a,b` Int64)")]
+    [TestCase("Tuple(`a b` Int64, c String)")]
+    [TestCase("Nested(`a(b` UInt8)")]
+    [TestCase(@"Tuple(`a\`b` Int8)")]
+    [TestCase(@"Tuple(`a\nb` Int8)")]
+    public void Parse_BacktickedIdentifier_RoundTripsThroughToString(string type)
+    {
+        // ToString rebuilds from the tokens, so a name split across tokens would come back respelled — and the
+        // type name is what an insert header echoes. The last two are the server's own printed spelling for a
+        // backtick and a newline inside a name (verified on 26.6).
+        Assert.That(TypeParser.Parse(type).ToString(), Is.EqualTo(type));
+    }
+
+    [Test]
+    public void Parse_DoubledBacktick_ClosesAtTheFinalBacktick()
+    {
+        // The server accepts the doubled form on input, though it prints the backslash form.
+        TypeNode node = TypeParser.Parse("Tuple(`a``b` Int8)");
+        Assert.That(node.Arguments.Single().Name, Is.EqualTo("`a``b` Int8"));
+    }
+
+    [Test]
+    public void Parse_EmptyQuotedLabel_ClosesTheSpan()
+    {
+        // Enum8('' = 1) is a legal type. The two quotes are an empty label, not one escaped quote, so the span
+        // must close at the second one rather than swallow the rest of the type.
+        TypeNode node = TypeParser.Parse("Enum8('' = 1)");
+        Assert.That(node.Arguments.Single().Name, Is.EqualTo("'' = 1"));
+    }
+
+    [TestCase("Array( Array(Int32) )", "Array(Array(Int32))")]
+    [TestCase("Tuple(a UInt8, b Tuple(c UInt8) )", "Tuple(a UInt8, b Tuple(c UInt8))")]
+    [TestCase("Map( String , UInt64 )", "Map(String, UInt64)")]
+    [TestCase("Array(Int32) ", "Array(Int32)")]
+    public void Parse_WhitespaceBetweenStructuralCharacters_ParsesLikeTheCompactSpelling(string type, string expected)
+    {
+        // A run of only whitespace is no token at all. Whitespace after a closing paren is how a person
+        // pretty-prints a nested type, and it reaches the parser through a parameter type hint.
+        Assert.That(TypeParser.Parse(type).ToString(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Parse_SpacedEmptyArgumentList_IsTheZeroElementNode()
+    {
+        TypeNode node = TypeParser.Parse("Tuple( )");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.Arguments, Is.Empty);
+            Assert.That(node.HasArgumentList, Is.True);
+            Assert.That(node.ToString(), Is.EqualTo("Tuple()"));
+        });
+    }
+
     [Test]
     public void Parse_NestedType_DoesNotSplitInsideNestedParens()
     {
@@ -154,6 +226,8 @@ public class TypeParserTests
     [TestCase("Array(String)junk")]
     [TestCase("Enum8('a")]
     [TestCase("DateTime('UTC")]
+    [TestCase("Tuple(`a b Int64)")]
+    [TestCase("Tuple( , )")]
     public void Parse_Malformed_ThrowsFormat(string type)
         => Assert.Throws<FormatException>(() => TypeParser.Parse(type));
 }
