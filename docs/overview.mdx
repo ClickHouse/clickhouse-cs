@@ -573,7 +573,50 @@ A registered type must have:
 
 Column matching is case-sensitive. Missing result columns leave properties at their default value; extra result columns are ignored.
 
-There are no automatic conversions and a type mismatch throws `InvalidOperationException`.
+The driver does not widen or narrow values. Apart from the alternate representations listed below,
+the column's framework type must be assignable to the property type, and a mismatch throws
+`InvalidOperationException`. An `object` property therefore accepts any column.
+
+##### Supported property types {#poco-read-types}
+
+`QueryAsync<T>` reads each of these columns straight into a matching property:
+
+| ClickHouse column | Property type(s) |
+|---|---|
+| `Int8`/`Int16`/`Int32`/`Int64` | `sbyte`/`short`/`int`/`long` |
+| `UInt8`/`UInt16`/`UInt32`/`UInt64` | `byte`/`ushort`/`uint`/`ulong` |
+| `Int128`/`UInt128` | `BigInteger`, or native `System.Int128`/`System.UInt128` on .NET 8 and later |
+| `Int256`/`UInt256` | `BigInteger` |
+| `Float32`/`Float64`/`BFloat16` | `float`/`double`/`float` |
+| `Bool` | `bool` |
+| `Decimal` | `decimal` or `ClickHouseDecimal` |
+| `Date`/`Date32`/`DateTime`/`DateTime64` | `DateTime`, `DateTimeOffset` or `DateOnly` |
+| `Time`/`Time64` | `TimeSpan` |
+| `UUID` | `Guid` |
+| `IPv4`/`IPv6` | `IPAddress` |
+| `Enum8`/`Enum16` | `string` (the label) or `int` (the wire ordinal) |
+| `String`/`FixedString` | `string` or `byte[]` |
+
+Every row also accepts the nullable form of its property type (`long?`, `DateOnly?`, and so on),
+whether or not the column is `Nullable(...)`. A non-nullable value-type property on a `Nullable(T)`
+column is accepted at registration, but throws when a NULL arrives.
+
+Wrappers like `LowCardinality(T)`, `SimpleAggregateFunction(f, T)` and `Object(T)` map exactly as `T`.
+
+Composite columns are supported too, and take the framework type given in the
+[reading type reference](#clickhouse-native-type-map-reading): `Array(T)` into `T[]`, `Tuple(...)`
+into `System.Tuple<...>`, `Nested(...)` into `Tuple<...>[]`, `JSON` into `JsonObject` (or `string`
+under [`JsonReadMode=String`](#type-map-reading-json)), and `Variant`/`Dynamic` into `object`.
+
+A `Map(K, V)` column is a special case: a `List<KeyValuePair<K, V>>` or `KeyValuePair<K, V>[]`
+property reads on the box-free path and keeps the on-wire order and any repeated keys, in either
+[`MapReadMode`](#type-map-reading-map). A `Dictionary<K, V>` property works in the default mode
+only. The key and value types must match exactly, so
+`Map(String, Nullable(Int32))` needs `KeyValuePair<string, int?>`.
+
+Where a column offers more than one property type (a `DateTime` column as `DateTime`,
+`DateTimeOffset` or `DateOnly`, a `String` column as `string` or `byte[]`) the declared property type selects the representation. These alternate representations
+belong to the POCO path, so `QueryAsync<T>` has them and `MapTo<T>` does not.
 
 ##### Materializing a single row {#poco-read-mapto}
 
@@ -588,6 +631,20 @@ while (reader.Read())
     Console.WriteLine($"{reading.SensorName}: {reading.Value}");
 }
 ```
+
+Use `MapTo<T>` when you must drive the reader loop yourself — for example to mix raw column access
+with POCO materialization. It reads the row through the reader's boxed values, so it does not offer
+the alternate property types above, and it allocates more than `QueryAsync<T>` does. Prefer
+`QueryAsync<T>` when you only need the rows; see
+[choose the materialization path](#perf-read-path) for the numbers.
+
+##### Read value converters {#poco-read-converters}
+
+A client-level or per-query [read value converter](#read-value-conversion) applies to both paths and
+does not disable the box-free read. The driver converts each column on the overload that matches how
+it read the column: the typed `ConvertValue<T>` for a box-free
+column, and the boxed `ConvertValue` for a composite column. Implement the two overloads
+consistently, or the same column gives different results on different paths.
 
 ##### Registration diagnostics {#poco-read-diagnostics}
 
@@ -615,6 +672,22 @@ INSERT INTO table VALUES ({val1:Int32}, {val2:Array(UInt8)})
 
 <Note>
 SQL 'bind' parameters are passed as HTTP URI query parameters, so using too many of them may result in a "URL too long" exception. Use `InsertBinaryAsync` for bulk data insertion to avoid this limitation.
+</Note>
+
+#### ADO-style `@name` placeholders {#at-style-placeholders}
+
+The driver also accepts `@name` placeholders, which ORMs such as Dapper emit. These are a
+client-side convenience: before the request is sent, each one is rewritten to
+`{name:ResolvedType}`, so the server never sees an `@`. See
+[type resolution](#parameter-type-mapping) for how the type is chosen. It is recommended to use the explicit {name:type} format whenever possible.
+
+A `@name` with no matching parameter is left untouched for the server to reject. Matching is
+case-sensitive, so `@ID` does not bind a parameter named `id`.
+
+<Note>
+To turn the rewrite off, set the `ClickHouse.Driver.DisableReplacingParameters` AppContext switch
+before the first use of the driver. Only the text rewrite stops; parameters are still sent, so
+queries written with native `{name:Type}` syntax keep working.
 </Note>
 
 #### Identifier parameters {#identifier-parameters}
@@ -845,6 +918,22 @@ You can also set a converter per-query via `QueryOptions.ReadValueConverter`; wh
 
 The converter is invoked once per column with the entire deserialized cell value, it does **not** recurse into composite containers. For an `Array(Int32)` column the value passed in is an `int[]`; for `Tuple(Int32, String)` it is an `ITuple`.
 
+**Which overload runs:**
+
+Both overloads must agree, because the one the driver calls depends on how the caller read the
+column:
+
+- `ConvertValue<T>` — the typed accessors `GetByte`, `GetSByte`, `GetInt16`/`32`/`64`,
+  `GetUInt16`/`32`/`64`, `GetFloat`, `GetDouble`, `GetGuid`, `GetDateTime`, `GetIPAddress`,
+  `GetBigInteger` and `GetFieldValue<T>`, plus every box-free column on the
+  [POCO read path](#poco-read-converters).
+- `ConvertValue` (boxed) — `GetValue`, `GetValues`, the indexers, `GetChar`, `GetTuple`, and the
+  coercing paths in `GetBoolean`, `GetDecimal` and `GetString`.
+
+`IsDBNull` runs no converter at all: it reads the null flag directly, so a converter can never
+change whether a value counts as null. `TryGetEnumOrdinal` likewise bypasses it — see
+[reading an enum's ordinal](#ado-net-reader-enum-ordinal).
+
 The converter works with the ADO.NET `ClickHouseConnection` path — the settings are inherited by connections created from the client.
 
 ---
@@ -929,6 +1018,16 @@ Host=localhost;AcceptEncoding=br, gzip
 
 Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends no `Accept-Encoding` at all.
 
+`Accept-Encoding` can be set in four places. The first of these that names a codec wins:
+
+1. `QueryOptions.AcceptEncoding` (or `ClickHouseCommand.AcceptEncoding`)
+2. `CustomHeaders["Accept-Encoding"]` on the query
+3. `CustomHeaders["Accept-Encoding"]` on the client
+4. `ClickHouseClientSettings.AcceptEncoding`, or the `AcceptEncoding` connection-string keyword
+
+If none of them does, the driver sends its default list. A value that names no codec (null, empty,
+whitespace, or only commas) counts as unset and falls through to the next place. To turn off compression, use `identity`.
+
 **The server, not the client, picks the codec.** ClickHouse scans `Accept-Encoding` for tokens in its own fixed preference order — `zstd` > `br` > `lz4` > `snappy` > `gzip` > `deflate` — and ignores both the order you list them in and any q-values. So the header is a capability announcement rather than a demand, and the only way to steer the choice is which tokens you leave out. The default includes `zstd`, so a default query is answered with zstd; the remaining tokens act as a fallback. `br` is decodable but not advertised by default.
 
 How the codecs compare on payload size, server CPU and client CPU depends on your data, your link and the server's `http_zlib_compression_level` (shipped default: 3) — see [Tuning compression](#tuning-compression).
@@ -968,19 +1067,55 @@ See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse
 
 #### Insert (request) compression {#insert-compression}
 
-Zstd is the default codec for inserts. The library includes a number of classes that allow you to control the codec and compression level:
-
-- `ZstdCompressor`
-- `Lz4Compressor`
-- `GZipCompressor`
-- `BrotliCompressor`
-
-Set the compressor of your choice in `InsertOptions`:
+Zstd is the default codec for inserts: `InsertOptions.Compressor` starts as `ZstdCompressor.Default`,
+which is zstd at level 3. Set it to another compressor to change the codec, or to `null` to send the
+body uncompressed.
 
 ```csharp
 var options = new InsertOptions { Compressor = GZipCompressor.Default };  // Content-Encoding: gzip
 await client.InsertBinaryAsync("events", columns, rows, options);
 ```
+
+Four codecs ship with the driver. Each has a `Default` instance, and a constructor that takes a level
+and the size of the write buffer:
+
+| Compressor | `Content-Encoding` | Constructor | `Default` |
+|---|---|---|---|
+| `ZstdCompressor` | `zstd` | `(int level = 3, int bufferSize = 262144)` | level 3 |
+| `Lz4Compressor` | `lz4` | `(Lz4Level level = Lz4Level.Fast, int bufferSize = 262144)` | `Lz4Level.Fast` |
+| `GZipCompressor` | `gzip` | `(CompressionLevel level = CompressionLevel.Fastest, int bufferSize = 262144)` | `Fastest` |
+| `BrotliCompressor` | `br` | `(CompressionLevel level = CompressionLevel.Fastest, int bufferSize = 262144)` | `Fastest` |
+
+```csharp
+var options = new InsertOptions { Compressor = new ZstdCompressor(level: 1) };
+```
+
+<Note>
+*Share compressor instances.* Every `Default` is one shared instance, and all four compressors are
+safe to use from several threads at the same time — which is what happens when
+`InsertOptions.MaxDegreeOfParallelism` is above 1, since one insert uses one compressor for every
+batch. None of them implements `IDisposable`. Construct your own instance once and reuse it, the
+same way `Default` is used.
+</Note>
+
+##### A custom codec {#custom-compressor}
+
+`IClickHouseCompressor` is public, and an implementation must provide only two members:
+
+```csharp
+public sealed class MyCompressor : IClickHouseCompressor
+{
+    public string ContentEncoding => "my-codec";
+
+    public Stream Compress(Stream destination, bool leaveOpen) => /* a compressing write stream */;
+}
+```
+
+The server must accept the `Content-Encoding` you name. The remaining members —
+`Decompress`, `MethodByte`, `MaxEncodedLength`, `Encode` and `Decode` — have default
+implementations that throw `NotSupportedException`, so override only the ones your codec needs.
+Implement `Decompress` to decode response bodies as well as compress requests, and raise
+`InvalidDataException` from the stream it returns when a body is corrupt or in the wrong format.
 
 `InsertOptions.Compressor` governs a binary insert only. The driver's other request bodies are compressed by different rules, and none of them goes through it:
 
@@ -1095,15 +1230,27 @@ Use `InsertRawStreamAsync` to insert data directly from file or memory streams i
 **Insert from a CSV file:**
 
 ```csharp
-await using var fileStream = File.OpenRead("data.csv");
-
 using var response = await client.InsertRawStreamAsync(
     table: "my_table",
-    stream: fileStream,
+    stream: File.OpenRead("data.csv"),
     format: "CSV",
     columns: ["id", "product", "price"] // Optional: specify columns
 );
 ```
+
+<Warning>
+*The driver takes ownership of the stream.* `InsertRawStreamAsync` and `PostStreamAsync` dispose the
+stream you give them once the request finishes, whether it succeeded or failed. Do not dispose it
+yourself and do not reuse it afterwards — which is why the example above does not wrap the
+`FileStream` in a `using`.
+
+A `using` of your own runs after the driver has already disposed the stream. For a `FileStream` or
+`MemoryStream` that second call is harmless, but for a stream whose `Dispose` returns a pooled
+buffer or drops a reference count it releases the resource twice.
+
+Ownership passes only once the arguments are accepted: if the call throws `ArgumentException` or
+`ArgumentNullException` for a missing table, stream or format, the stream is still yours.
+</Warning>
 
 <Note>
 See the [format settings documentation](/reference/settings/formats) for options to control data ingestion behavior.
@@ -1231,6 +1378,25 @@ while (reader.Read())
     }
 }
 ```
+
+#### Reading an enum's ordinal {#ado-net-reader-enum-ordinal}
+
+An `Enum8` or `Enum16` column materializes as its label: `GetFieldType` reports `string`, and
+`GetString`, `GetValue` and `GetFieldValue<string>` all give you the label. The numeric accessors
+throw `InvalidCastException` on an enum column, because the value being held is a string.
+
+Use `TryGetEnumOrdinal` to get the number behind the label:
+
+```csharp
+if (reader.TryGetEnumOrdinal(ordinal, out int value))
+    Console.WriteLine(value);   // e.g. 1 for 'Active' in Enum8('Active' = 1)
+```
+
+It returns `true` and sets `value` for an `Enum8`/`Enum16` column, and for a `Nullable(Enum...)`
+column whose cell is not NULL. It returns `false`, with `value` set to `0`, for a NULL cell or for
+any column that is not an enum. The ordinal is the
+signed value from the wire, so it can be negative, and an `Enum16` ordinal can be larger than a
+byte.
 
 ## Best practices {#best-practices}
 
@@ -1437,6 +1603,10 @@ Decimal type conversion is controlled via the UseCustomDecimals setting.
 
 <Note>
 By default, both `String` and `FixedString(N)` columns are returned as `string`. Set `ReadStringsAsByteArrays=true` in your connection string to read them as `byte[]` instead. This is useful when storing binary data that may not be valid UTF-8.
+
+The setting reaches strings nested inside other types too, so `Array(String)` reads as `byte[][]`
+and `Map(String, String)` as `Dictionary<byte[], byte[]>` — keys included. The one exception is a
+`JSON` column, whose string leaves are always text; see [JSON type](#type-map-reading-json).
 </Note>
 
 ---
@@ -1505,6 +1675,56 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 // Or via connection string
 // "Host=localhost;JsonReadMode=String"
 ```
+
+`None` is a third mode. It reads exactly as `Binary` does, but sends no server setting with the
+query — use it on a connection that is not allowed to set one.
+
+##### Typed paths and nulls {#type-map-reading-json-nulls}
+
+A path declared in the column type is a **typed path**; any other path in the document is a
+**dynamic path**. The two differ when a value is null.
+
+A typed path always appears in the `JsonObject`. Declared `Nullable(T)` or `Dynamic`, it comes back
+as a JSON null both when the stored value is null and when the document has no such path — the two
+cases are indistinguishable:
+
+```csharp
+// Column type JSON(x Nullable(Int64))
+// stored '{"x":null}'  ->  {"x":null}
+// stored '{}'          ->  {"x":null}
+```
+
+Declared with a non-nullable type, an absent path takes the type's default instead — `JSON(x String)`
+gives `{"x":""}` and `JSON(x Int64)` gives `{"x":0}`.
+
+A dynamic path whose value is null is dropped from the object entirely, so `ContainsKey` returns
+false for it. Reading `{"x":null}` from a plain `JSON` column gives `{}`.
+
+Nested typed paths build their parents, so `JSON(a.b Nullable(Int64))` yields `{"a":{"b":null}}`
+even for an empty document.
+
+<Note>
+This is what the server itself renders, so `Binary` and `String` modes now agree. Before 1.4.0 a
+typed path holding null was dropped from the `JsonObject`, which made `{"x":null}` read back as
+`{}` — and for a nested path such as `JSON(a.b Nullable(Int64))` the whole `a` subtree disappeared.
+</Note>
+
+##### Strings inside a JSON column {#type-map-reading-json-strings}
+
+String leaves inside a `JSON` column are always returned as text, whatever
+`ReadStringsAsByteArrays` is set to — `JsonValue` has no byte-array form, so a `byte[]` would
+render as base64. This holds for `String`, `FixedString`, and for those wrapped in
+`LowCardinality`, `Nullable` or `SimpleAggregateFunction`, and for strings inside `Array` and `Map`,
+map keys included.
+
+<Note>
+A byte array the JSON reader cannot see the type of does still render as base64: a
+`Variant` or `Dynamic` typed path holds a value whose type is known only for each row, so a string
+under `Variant(Array(UInt8), String)` comes back base64-encoded. That is the same in both settings.
+
+A JSON map key type other than exactly `String` — `Map(LowCardinality(String), String)`, for
+example — throws `NotSupportedException`.
+</Note>
 
 ---
 
@@ -1642,8 +1862,8 @@ When inserting data, the driver converts .NET types to their corresponding Click
 | DateTime | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | See below for details; supported range `[1970-01-01, 2106-02-07 06:28:15]` UTC |
 | DateTime32 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Same as DateTime |
 | DateTime64 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Precision based on Scale parameter |
-| Time | `TimeSpan`, `int` | Clamped to ±999:59:59; int treated as seconds |
-| Time64 | `TimeSpan`, `decimal`, `double`, `float`, `int`, `long`, `string` | String parsed as `[-]HHH:MM:SS[.fraction]`; clamped to ±999:59:59.999999999 |
+| Time | `TimeSpan`, `TimeOnly`, `int` | Clamped to ±999:59:59; int treated as seconds |
+| Time64 | `TimeSpan`, `TimeOnly`, `decimal`, `double`, `float`, `int`, `long`, `string` | String parsed as `[-]HHH:MM:SS[.fraction]`; clamped to ±999:59:59.999999999 |
 
 <Note>
 **Out-of-range values**
