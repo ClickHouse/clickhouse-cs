@@ -160,12 +160,17 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     // Reduces a DateTime to the UTC instant to encode. Utc and Local already denote an instant; a Local value
     // resolves against the host machine's timezone, under the BCL's daylight-saving rules and not the ones below.
     // An Unspecified value has no offset, so its wall-clock is read in the column's timezone.
-    internal static DateTime ToUtc(DateTime value, TimeZoneInfo timeZone)
+    //
+    // Takes the resolved zone rather than the zone, so the two Kinds that name an instant never ask for it: a
+    // column may declare an offset .NET cannot represent, which must not stop a value that does not need it.
+    internal static DateTime ToUtc(DateTime value, ResolvedTimeZone resolved)
     {
         if (value.Kind != DateTimeKind.Unspecified)
         {
             return value.ToUniversalTime();
         }
+
+        TimeZoneInfo timeZone = resolved.Value;
 
         // A skipped wall-clock names no instant, so it is rejected instead of guessed. Deriving the pre-gap offset
         // from TimeZoneInfo is not reliable: GetUtcOffset answers with the zone's base offset, which differs from
@@ -216,7 +221,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         return (uint)seconds;
     }
 
-    private uint ToWireValue(DateTime value) => ToUnixSeconds(ToUtc(value, timeZone.Value));
+    private uint ToWireValue(DateTime value) => ToUnixSeconds(ToUtc(value, timeZone));
 
     private static uint ToWireValue(DateTimeOffset value) => ToUnixSeconds(value.UtcDateTime);
 }
