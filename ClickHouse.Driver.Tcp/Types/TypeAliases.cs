@@ -5,8 +5,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
 /// The alternative spellings ClickHouse accepts for a type name, and the canonical name each one means. The
-/// table is <c>system.data_type_families</c> on 26.6: every row with a non-empty <c>alias_to</c>, plus the
-/// families the server itself matches without regard to case.
+/// table is every row of <c>system.data_type_families</c> on 26.6 with a non-empty <c>alias_to</c>.
 ///
 /// <para>
 /// A column header never carries one of these — the server always reports the canonical name — so this exists
@@ -16,40 +15,21 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </para>
 ///
 /// <para>
-/// Case is per family, not global: the server marks <c>case_insensitive = 1</c> for the families listed here and
-/// <c>0</c> for the rest, so <c>datetime64(3)</c> resolves while <c>string</c>, <c>int64</c>, <c>array(uint8)</c>
-/// and <c>geometry</c> are unknown families to it. Matching every name without regard to case would accept what
-/// the server rejects.
+/// Every name here matches without regard to case, and so does every name the codec registry knows. The server
+/// marks only some families <c>case_insensitive</c>, but which ones is the server's business: a spelling it
+/// rejects it rejects with a better message than a copy of that rule here would give, and the rule moves between
+/// versions and settings. A name this client cannot resolve at all is a different matter, and is still refused.
 /// </para>
 /// </summary>
 internal static class TypeAliases
 {
-    /// <summary>
-    /// The spellings the server matches without regard to case: the <c>case_insensitive = 1</c> families, whether
-    /// they are an alias of another family or the canonical name of their own.
-    /// </summary>
-    private static readonly Dictionary<string, string> AnyCase = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>Every alias, keyed without regard to case.</summary>
+    private static readonly Dictionary<string, string> Aliases = new(StringComparer.OrdinalIgnoreCase)
     {
-        // The families that are their own canonical name. Each is here so that any case of it resolves, and so
-        // that the canonical spelling is what a codec is stamped with.
-        ["Bool"] = "Bool",
-        ["Date"] = "Date",
-        ["Date32"] = "Date32",
-        ["DateTime"] = "DateTime",
-        ["DateTime64"] = "DateTime64",
-        ["Decimal"] = "Decimal",
-        ["Decimal32"] = "Decimal32",
-        ["Decimal64"] = "Decimal64",
-        ["Decimal128"] = "Decimal128",
-        ["Decimal256"] = "Decimal256",
-        ["Enum"] = "Enum",
-        ["JSON"] = "JSON",
-        ["Time"] = "Time",
-        ["Time64"] = "Time64",
-
         // A family of its own on the server, which resolves to DateTime rather than aliasing it.
         ["DateTime32"] = "DateTime",
 
+        ["GEOMETRY"] = "Geometry",
         ["boolean"] = "Bool",
         ["TIMESTAMP"] = "DateTime",
         ["DEC"] = "Decimal",
@@ -125,21 +105,15 @@ internal static class TypeAliases
         ["VARCHAR2"] = "String",
     };
 
-    /// <summary>
-    /// The one alias the server marks <c>case_insensitive = 0</c>: it takes <c>GEOMETRY</c> and the canonical
-    /// <c>Geometry</c>, and answers "Unknown data type family" for <c>geometry</c>.
-    /// </summary>
-    private static readonly Dictionary<string, string> ExactCase = new(StringComparer.Ordinal)
-    {
-        ["GEOMETRY"] = "Geometry",
-    };
-
     /// <summary>Finds the canonical name an alternative spelling means.</summary>
     /// <param name="name">The base type name as the caller wrote it.</param>
-    /// <param name="canonical">The canonical name, or null when the spelling is not one the server accepts.</param>
-    /// <returns>True when <paramref name="name"/> is an alias or a case variant of a canonical name.</returns>
+    /// <param name="canonical">The canonical name, or null when the name is not an alias.</param>
+    /// <returns>True when <paramref name="name"/> is an alias of a canonical name.</returns>
     public static bool TryCanonical(string name, out string canonical)
-        => ExactCase.TryGetValue(name, out canonical) || AnyCase.TryGetValue(name, out canonical);
+    {
+        canonical = null;
+        return name is not null && Aliases.TryGetValue(name, out canonical);
+    }
 
     /// <summary>The canonical name an alternative spelling means, or <paramref name="name"/> unchanged.</summary>
     /// <param name="name">The base type name as the caller wrote it.</param>
@@ -147,17 +121,6 @@ internal static class TypeAliases
     public static string Canonical(string name) => TryCanonical(name, out string canonical) ? canonical : name;
 
     /// <summary>Every alternative spelling and the canonical name it means, for the tests that check the table.</summary>
-    /// <returns>One pair per spelling, the case-sensitive <c>GEOMETRY</c> included.</returns>
-    public static IEnumerable<KeyValuePair<string, string>> All()
-    {
-        foreach (KeyValuePair<string, string> alias in ExactCase)
-        {
-            yield return alias;
-        }
-
-        foreach (KeyValuePair<string, string> alias in AnyCase)
-        {
-            yield return alias;
-        }
-    }
+    /// <returns>One pair per spelling.</returns>
+    public static IEnumerable<KeyValuePair<string, string>> All() => Aliases;
 }
