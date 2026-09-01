@@ -694,7 +694,8 @@ SQL 'bind' parameters are passed as HTTP URI query parameters, so using too many
 The driver also accepts `@name` placeholders, which ORMs such as Dapper emit. These are a
 client-side convenience: before the request is sent, each one is rewritten to
 `{name:ResolvedType}`, so the server never sees an `@`. See
-[type resolution](#parameter-type-mapping) for how the type is chosen. It is recommended to use the explicit {name:type} format whenever possible.
+[type resolution](#parameter-type-mapping) for how the type is chosen. Use the explicit
+`{name:Type}` form where you can.
 
 A `@name` with no matching parameter is left untouched for the server to reject. Matching is
 case-sensitive, so `@ID` does not bind a parameter named `id`.
