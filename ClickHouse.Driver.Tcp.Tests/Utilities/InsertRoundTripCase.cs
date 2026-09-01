@@ -289,6 +289,21 @@ public sealed class InsertRoundTripCase
         yield return NullableValues<float>("Float32", 0f, null, -1.5f, float.MaxValue, float.NaN, null, float.PositiveInfinity, -0f);
         yield return NullableValues<double>("Float64", 1.5, null, -1.5e100, null, double.NaN, double.NegativeInfinity, -0d);
         yield return NullableValues<bool>("Bool", true, null, false);
+
+        // Nullable over a composite, which the server allows for Tuple behind a setting. The write path has to
+        // project the inner column before the state-prefix phase: the tuple builds its write state there and
+        // needs a column of (byte, string), not of (byte, string)?. A null row beside a row of inner defaults
+        // keeps the two distinguishable.
+        yield return Same(
+            "Nullable(Tuple(UInt8, String))",
+            "Nullable(Tuple(UInt8, String))",
+            name => new ArrayColumn<(byte, string)?>(name, "Nullable(Tuple(UInt8, String))", new (byte, string)?[]
+            {
+                ((byte)7, "x"),
+                null,
+                ((byte)0, string.Empty),
+            }),
+            NullableTupleSettings);
         yield return NullableValues<sbyte>("Enum8('a' = -1, 'b' = 127)", -1, null, 127);
         yield return NullableValues<short>("Enum16('x' = -32768, 'y' = 32767)", -32768, null, 32767);
         yield return NullableValues<DateOnly>("Date", new DateOnly(1970, 1, 1), null, new DateOnly(2149, 6, 6));
@@ -1488,8 +1503,8 @@ public sealed class InsertRoundTripCase
         // The geo aliases name structures already covered above — Point is Tuple(Float64, Float64) and the rest
         // are arrays over it — so what these cases prove is not the layout but that the alias resolves to it: the
         // server puts "Point"/"Ring"/… in the column header, and the client has to accept that name in both
-        // directions. Like Array and Tuple, they take no Nullable case: Nullable(Point) needs
-        // enable_nullable_tuple_type and the server rejects a Nullable array outright.
+        // directions. Nullable(Point) is covered below, behind enable_nullable_tuple_type; the array-shaped
+        // aliases take no Nullable case, the server rejecting a Nullable array outright.
         // Supplied as a flat column of tuples rather than a dense TupleColumn: that column's convenience
         // constructor derives its children's types by re-parsing its own type name, which an alias is not. The
         // dense shape is still covered — the read comes back as one, and the dense-readback case re-inserts it.
@@ -1551,11 +1566,19 @@ public sealed class InsertRoundTripCase
         // whole column type.
         yield return Arrays("Point", new[] { (0d, 0d), (1d, 2d) }, Array.Empty<(double, double)>());
 
-        // No Nullable(Point) case, though the server accepts the type behind enable_nullable_tuple_type and this
-        // client reads it correctly. Writing it hits a pre-existing defect that has nothing to do with geo:
-        // NullableColumnCodec forwards the *outer* column to the inner's state-prefix phase, and TupleColumnCodec
-        // builds its write state there, so it is handed a column of (double, double)? where it needs
-        // (double, double). Any Nullable(Tuple(...)) fails the same way. Tracked as an I6 residual.
+        // Nullable over an alias for a tuple: the null map sits outside, and the inner tuple is still resolved
+        // from the alias name. The bare Nullable(Tuple(...)) case is in the nullable section above; this one adds
+        // the alias.
+        yield return Same(
+            "Nullable(Point)",
+            "Nullable(Point)",
+            name => new ArrayColumn<(double, double)?>(name, "Nullable(Point)", new (double, double)?[]
+            {
+                (1.5d, -2.5d),
+                null,
+                (0d, 0d),
+            }),
+            NullableTupleSettings);
 
         // Geometry is a Variant over the six aliases, and the column header carries only "Geometry", so the client
         // expands it and picks the discriminator order itself. A row against each of the six discriminators, plus a
@@ -2032,6 +2055,12 @@ public sealed class InsertRoundTripCase
 
         return values;
     }
+
+    /// <summary>Enables Nullable over a Tuple, which the server refuses by default.</summary>
+    private static readonly IReadOnlyDictionary<string, string> NullableTupleSettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["enable_nullable_tuple_type"] = "1",
+    };
 
     /// <summary>Enables the experimental BFloat16 type for the round-trip.</summary>
     private static readonly IReadOnlyDictionary<string, string> BFloat16Settings = new Dictionary<string, string>(StringComparer.Ordinal)
