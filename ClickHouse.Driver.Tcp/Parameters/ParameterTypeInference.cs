@@ -135,6 +135,7 @@ internal static class ParameterTypeInference
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
             string or char => node.Name is "String" or "FixedString" or "Enum" or "Enum8" or "Enum16" ? node.Name : "String",
             DateTime or DateTimeOffset => node.Name is "DateTime" or "DateTime64" or "Date" or "Date32" ? node.Name : "DateTime64",
+            TimeSpan or TimeOnly => node.Name is "Time" or "Time64" ? node.Name : "Time64",
             decimal or ClickHouseTcpDecimal => node.Name.StartsWith("Decimal", StringComparison.Ordinal) ? node.Name : "Decimal128",
             not string and IEnumerable => "Array",
             _ => InferOrNothing(value),

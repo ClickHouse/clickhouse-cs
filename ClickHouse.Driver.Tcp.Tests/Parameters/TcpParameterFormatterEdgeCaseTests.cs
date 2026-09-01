@@ -533,6 +533,33 @@ public class TcpParameterFormatterEdgeCaseTests
     }
 
     [Test]
+    public void FormatSqlText_VariantWithATimeAlternative_PicksIt()
+    {
+        // A time value matched no alternative at all, and a Variant with nothing matching is refused whole rather
+        // than by the arm, so no Variant took a time value in either spelling.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format(new TimeSpan(1, 1, 1), "Variant(Time, String)"), Is.EqualTo("1:01:01"));
+            Assert.That(Format(new TimeOnly(1, 1, 1), "Variant(Time, String)"), Is.EqualTo("1:01:01"));
+        });
+    }
+
+    [Test]
+    public void FormatSqlText_VariantOfTwoTimeAlternatives_PicksTheFirstThatAccepts()
+    {
+        // Both arms accept a time value, so the order decides and a sub-second value lands on the
+        // second-resolution one, rounded. The instant types behave the same way, which is the second assertion:
+        // first-match, not best-match, is the matcher's rule throughout.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format(new TimeSpan(0, 1, 1, 1, 500), "Variant(Time, Time64(3))"), Is.EqualTo("1:01:02"));
+            Assert.That(
+                Format(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), "Variant(Date, DateTime64(3))"),
+                Is.EqualTo("2024-01-02"));
+        });
+    }
+
+    [Test]
     public void FormatSqlText_VariantWhereNoArrayElementTypeFits_Throws()
     {
         var exception = Assert.Throws<ArgumentException>(
