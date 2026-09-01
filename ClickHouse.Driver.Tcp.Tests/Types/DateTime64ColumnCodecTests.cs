@@ -253,6 +253,19 @@ public class DateTime64ColumnCodecTests
         });
     }
 
+    // The write side of the same rule. A Utc DateTime names an instant, so the zone the column declares is not
+    // needed and must not be resolved: this codec's own scaling is what has to run.
+    [Test]
+    public async Task WriteColumn_UtcDateTimeIntoAZoneTimeZoneInfoCannotHold_WritesTheInstant()
+    {
+        const string type = "DateTime64(3, 'Fixed/UTC+19:00:00')";
+        var value = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+
+        byte[] bytes = await WriteAsync(w => Codec(type).WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { value })));
+
+        Assert.That(BitConverter.ToInt64(bytes, 0), Is.EqualTo(1_705_314_600_000L));
+    }
+
     // DateTime64 shares DateTimeColumnCodec.ToUtc; covered here too because a refactor could separate them.
     [Test]
     public void WriteColumn_UnspecifiedKindInDaylightSavingGap_ThrowsNamingTheZone()

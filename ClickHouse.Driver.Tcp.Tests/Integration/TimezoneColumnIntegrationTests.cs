@@ -70,4 +70,39 @@ public class TimezoneColumnIntegrationTests
             await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
         }
     }
+
+    /// <summary>
+    /// A column may declare an offset <see cref="TimeZoneInfo"/> cannot hold — 26.6 takes
+    /// <c>Fixed/UTC+19:00:00</c>, past .NET's ±14 hours — and a value that already names an instant does not need
+    /// that zone. So the write has to land, and only the calendar readings may report the zone.
+    /// </summary>
+    [TestCase("DateTime('Fixed/UTC+19:00:00')", "2024-01-15 10:30:00")]
+    [TestCase("DateTime64(3, 'Fixed/UTC+19:00:00')", "2024-01-15 10:30:00.000")]
+    public async Task InsertAsync_UtcDateTimeIntoAZoneTimeZoneInfoCannotHold_StoresTheInstant(
+        string columnType,
+        string inUtc)
+    {
+        await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
+        string table = $"tcp_timezone_test_{Guid.NewGuid():N}";
+
+        await client.ExecuteAsync($"CREATE TABLE {table} (c {columnType}) ENGINE = MergeTree ORDER BY tuple()", cancellationToken: None);
+        try
+        {
+            var value = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+            IColumn[] columns = [new ArrayColumn<DateTime>("c", columnType, [value])];
+            await client.InsertAsync($"INSERT INTO {table} (c) VALUES", columns, cancellationToken: None);
+
+            object stored = null;
+            await foreach (object[] row in client.QueryAsync($"SELECT toString(c, 'UTC') FROM {table}", cancellationToken: None))
+            {
+                stored = row[0];
+            }
+
+            Assert.That(stored, Is.EqualTo(inUtc));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
 }
