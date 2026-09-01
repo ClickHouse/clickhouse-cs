@@ -91,17 +91,18 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
             return true;
         }
 
-        // A calendar target is where the zone is needed, so an unrepresentable one is reported here rather than
-        // when the column was resolved, where it would fail a read that only wanted the seconds.
+        // The resolved zone is embedded, not the zone: a calendar target is where the zone is needed, and that is
+        // the projected row rather than this method, which also answers CanRead and the POCO tier's mapping
+        // discovery. Asking for it here would refuse the reading instead of the value.
         if (targetType == typeof(DateTimeOffset))
         {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToOffset), value, timeZone.Value);
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToOffset), value, timeZone);
             return true;
         }
 
         if (targetType == typeof(DateTime))
         {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToDateTime), value, timeZone.Value);
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToDateTime), value, timeZone);
             return true;
         }
 

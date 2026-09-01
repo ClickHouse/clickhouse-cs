@@ -108,17 +108,17 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
             return true;
         }
 
-        // A calendar target is where the zone is needed, so an unrepresentable one is reported here rather than
-        // when the column was resolved, where it would fail a read that only wanted the counts.
+        // The resolved zone is embedded, not the zone, for the reason the DateTime codec gives: this method also
+        // answers CanRead and the POCO tier's mapping discovery, where no row and so no calendar value exists.
         if (targetType == typeof(DateTimeOffset))
         {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToOffset), value, scale, timeZone.Value);
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToOffset), value, scale, timeZone);
             return true;
         }
 
         if (targetType == typeof(DateTime))
         {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToDateTime), value, scale, timeZone.Value);
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToDateTime), value, scale, timeZone);
             return true;
         }
 

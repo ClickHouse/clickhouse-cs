@@ -219,6 +219,37 @@ public class ColumnReadProjectionTests
         });
     }
 
+    /// <summary>
+    /// Where an unrepresentable zone is reported, and where it is not. Building the projection must succeed:
+    /// <c>CanRead</c> and the POCO tier's mapping discovery both come through here with no row in hand, so a
+    /// throw at build time refuses the reading rather than the value. The row is what needs the zone.
+    /// </summary>
+    [TestCase("DateTime('Fixed/UTC+19:00:00')", "+19:00:00")]
+    [TestCase("DateTime('Fixed/UTC+05:30:15')", "+05:30:15")]
+    public void TryProjectRead_ACalendarTargetOfAZoneTimeZoneInfoCannotHold_BuildsAndThrowsOnTheRow(
+        string columnType,
+        string offset)
+    {
+        Func<uint, DateTimeOffset> project = Project<uint, DateTimeOffset>(Codec(columnType));
+
+        var thrown = Assert.Throws<FormatException>(() => project(1_700_000_000));
+
+        Assert.That(thrown.Message, Does.Contain(offset));
+    }
+
+    [TestCase("DateTime64(3, 'Fixed/UTC+19:00:00')", "+19:00:00")]
+    [TestCase("DateTime64(9, 'Fixed/UTC+05:30:15')", "+05:30:15")]
+    public void TryProjectRead_ADateTime64CalendarTargetOfAZoneTimeZoneInfoCannotHold_BuildsAndThrowsOnTheRow(
+        string columnType,
+        string offset)
+    {
+        Func<long, DateTimeOffset> project = Project<long, DateTimeOffset>(Codec(columnType));
+
+        var thrown = Assert.Throws<FormatException>(() => project(1_700_000_000_000));
+
+        Assert.That(thrown.Message, Does.Contain(offset));
+    }
+
     [Test]
     public void TryProjectRead_DateTimeToDateTime_UtcColumnYieldsUtcKind()
     {

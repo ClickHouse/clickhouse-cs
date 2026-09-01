@@ -158,5 +158,5 @@ internal sealed class DateTime64Column : IColumn<long>, IDateTimeColumn, IStored
     // Projects a raw count onto the .NET calendar and presents it in the column's timezone. Sub-100 ns digits at
     // scale 8/9 are truncated toward zero here; the exact value stays in Values. The offset is resolved from the
     // instant so both daylight-saving transitions and historical base-offset changes are honored.
-    private DateTimeOffset ToDateTimeOffset(long count) => ColumnValueProjections.DateTime64ToOffset(count, scale, timeZone.Value);
+    private DateTimeOffset ToDateTimeOffset(long count) => ColumnValueProjections.DateTime64ToOffset(count, scale, timeZone);
 }

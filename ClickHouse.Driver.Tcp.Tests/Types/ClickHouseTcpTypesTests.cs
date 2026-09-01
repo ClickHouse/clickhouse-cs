@@ -77,4 +77,21 @@ public class ClickHouseTcpTypesTests
             Assert.Throws<NotSupportedException>(() => ClickHouseTcpTypes.CanRead("NoSuchType", typeof(int)));
         });
     }
+
+    /// <summary>
+    /// A zone this platform cannot represent is a property of the value, not of the type: the type does offer the
+    /// calendar readings, and only a row actually projected needs the zone. So the answer is yes, and the read is
+    /// where the zone is reported. Asking is also how the POCO tier discovers a mapping, so a throw here would
+    /// fail a mapping that never asked for a calendar value.
+    /// </summary>
+    [TestCase("DateTime('Fixed/UTC+19:00:00')")]
+    [TestCase("DateTime64(3, 'Fixed/UTC+05:30:15')")]
+    public void CanRead_ACalendarReadingOfAZoneTimeZoneInfoCannotHold_AnswersYes(string clickHouseType)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ClickHouseTcpTypes.CanRead(clickHouseType, typeof(DateTimeOffset)), Is.True);
+            Assert.That(ClickHouseTcpTypes.CanRead(clickHouseType, typeof(DateTime)), Is.True);
+        });
+    }
 }
