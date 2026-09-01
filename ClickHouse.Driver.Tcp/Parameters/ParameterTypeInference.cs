@@ -140,6 +140,7 @@ internal static class ParameterTypeInference
             // A float is the only value BFloat16 accepts, so it matches that alternative as well as Float32.
             float => node.Name is "Float32" or "BFloat16" ? node.Name : "Float32",
             DateTime or DateTimeOffset => node.Name is "DateTime" or "DateTime64" or "Date" or "Date32" ? node.Name : "DateTime64",
+            TimeSpan or TimeOnly => node.Name is "Time" or "Time64" ? node.Name : "Time64",
             decimal or ClickHouseTcpDecimal => node.Name.StartsWith("Decimal", StringComparison.Ordinal) ? node.Name : "Decimal128",
             not string and IEnumerable => "Array",
             _ => InferOrNothing(value),

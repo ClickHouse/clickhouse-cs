@@ -192,6 +192,15 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Variant(Array(LowCardinality(Nullable(String))), Int64)", new[] { "a", null })
             .Returns("['a',NULL]").SetName("Variant holding a low-cardinality array with a null element");
 
+        // A Variant holding Time: the value has to match that arm, not only a Time64 one. Matching nothing
+        // refuses the whole Variant rather than the one alternative, so a time value reached no Variant at all.
+        // The server renders a Time inside a Variant without the leading zero it gives a bare Time column, hence
+        // 1:01:01 here against 01:01:01 above.
+        yield return new TestCaseData("Variant(Time, String)", new TimeSpan(1, 1, 1))
+            .Returns("1:01:01").SetName("Variant picks the Time arm from a TimeSpan");
+        yield return new TestCaseData("Variant(Time, String)", new TimeOnly(1, 1, 1))
+            .Returns("1:01:01").SetName("Variant picks the Time arm from a TimeOnly");
+
         // Covers both JSON spellings and geo types backed by tuple/array shapes.
         yield return new TestCaseData("Json", "{\"a\":1}").Returns("{\"a\":1}").SetName("Json in the lowercase spelling");
         yield return new TestCaseData("JSON", "{\"a\":1}").Returns("{\"a\":1}").SetName("JSON in the uppercase spelling");
