@@ -103,12 +103,30 @@ public class ColumnCodecRegistryTests
     // be a query that actually runs: the combinator attaches to the bare name, and a parameterized function keeps its
     // parameters in their own list ahead of the column. "quantiles(0.5, 0.9)Merge" is not a function, and a bare
     // "quantilesMerge(column)" is rejected by the server for wanting its parameters — verified on 26.6.
+    // A leading integer is a serialization version rather than a function: 26.6 reports sumMapState(...) as
+    // AggregateFunction(1, sumMap, Array(UInt64), Array(UInt64)), and sumMapMerge / sumMapFilteredMerge([1, 2])
+    // are the queries that run — both verified on 26.6.
     [TestCase("AggregateFunction(sum, UInt64)", "sumMerge(column)")]
     [TestCase("AggregateFunction(quantiles(0.5, 0.9), UInt64)", "quantilesMerge(0.5, 0.9)(column)")]
+    [TestCase("AggregateFunction(1, sumMap, Array(UInt64), Array(UInt64))", "sumMapMerge(column)")]
+    [TestCase("AggregateFunction(1, sumMapFiltered([1, 2]), Array(UInt64), Array(UInt64))", "sumMapFilteredMerge([1, 2])(column)")]
     public void Resolve_AggregateFunction_ThrowsSuggestingAMergeQueryThatRuns(string type, string expectedHint)
     {
         var exception = Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve(type, default));
         Assert.That(exception.Message, Does.Contain(expectedHint));
+    }
+
+    [Test]
+    public void Resolve_AggregateFunctionWithASerializationVersion_NamesTheFunctionAndNotTheVersion()
+    {
+        var exception = Assert.Throws<NotSupportedException>(
+            () => ColumnCodecRegistry.Default.Resolve("AggregateFunction(1, sumMap, Array(UInt64), Array(UInt64))", default));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("'sumMap' aggregate function"));
+            Assert.That(exception.Message, Does.Not.Contain("'1' aggregate function"));
+        });
     }
 
     [Test]
