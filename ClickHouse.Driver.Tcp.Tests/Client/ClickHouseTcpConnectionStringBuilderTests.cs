@@ -327,6 +327,24 @@ public class ClickHouseTcpConnectionStringBuilderTests
         });
     }
 
+    // A readonly user reaches this switch through a connection string more often than through options, since that
+    // is what a host application takes from configuration.
+    [Test]
+    public void ToOptions_SendJsonAndDynamicSerializationSettings_CarriesTheKeyAndDefaultsToOn()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                ClickHouseTcpClientOptions.FromConnectionString("Host=h;SendJsonAndDynamicSerializationSettings=false")
+                    .SendJsonAndDynamicSerializationSettings,
+                Is.False);
+            Assert.That(
+                ClickHouseTcpClientOptions.FromConnectionString("Host=h").SendJsonAndDynamicSerializationSettings,
+                Is.True,
+                "no key means the injection stays on");
+        });
+    }
+
     [Test]
     public void ToOptions_UseTlsWithNoPortKey_ResolvesToTheSecureNativePort()
     {
