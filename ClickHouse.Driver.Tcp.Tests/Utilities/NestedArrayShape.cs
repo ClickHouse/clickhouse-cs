@@ -47,12 +47,14 @@ public sealed class NestedArrayShape
     /// <summary>The shapes, for use as an NUnit <c>TestCaseSource</c>.</summary>
     public static IEnumerable<NestedArrayShape> Shapes()
     {
-        // The UInt8 ladder, depth 2 to 5: a fixed-width leaf, so the innermost write is the bulk blit reached through
-        // the whole ConcatColumn stack.
+        // The UInt8 ladder, depth 2 to 7: a fixed-width leaf, so the innermost write is the bulk blit reached through
+        // the whole ConcatColumn stack. Depth 7 stacks six of those views, and the type-parsing corpus goes to 10.
         yield return Shape<byte[]>(2, "Array(UInt8)", Depth2Rows);
         yield return Shape<byte[][]>(3, "Array(Array(UInt8))", Depth3Rows);
         yield return Shape<byte[][][]>(4, "Array(Array(Array(UInt8)))", Depth4Rows);
         yield return Shape<byte[][][][]>(5, "Array(Array(Array(Array(UInt8))))", Depth5Rows);
+        yield return Shape<byte[][][][][]>(6, "Array(Array(Array(Array(Array(UInt8)))))", Depth6Rows);
+        yield return Shape<byte[][][][][][]>(7, "Array(Array(Array(Array(Array(Array(UInt8))))))", Depth7Rows);
 
         // Two other leaf kinds under the same skeleton, at depth 3 — enough to put more than one Array level above
         // the leaf, which is all that distinguishes them. Deeper adds another ConcatColumn but no new branch, so the
@@ -105,6 +107,24 @@ public sealed class NestedArrayShape
         new[] { Array.Empty<byte[][][]>() },
         new[] { Depth4Rows[3], Depth4Rows[4] },
         new[] { new[] { new[] { new[] { Array.Empty<byte>() } } } },
+    };
+
+    private static readonly byte[][][][][][][] Depth6Rows =
+    {
+        new[] { Depth5Rows[0] },
+        Array.Empty<byte[][][][][]>(),
+        new[] { Array.Empty<byte[][][][]>() },
+        new[] { Depth5Rows[3], Depth5Rows[4] },
+        new[] { new[] { new[] { new[] { new[] { Array.Empty<byte>() } } } } },
+    };
+
+    private static readonly byte[][][][][][][][] Depth7Rows =
+    {
+        new[] { Depth6Rows[0] },
+        Array.Empty<byte[][][][][][]>(),
+        new[] { Array.Empty<byte[][][][][]>() },
+        new[] { Depth6Rows[3], Depth6Rows[4] },
+        new[] { new[] { new[] { new[] { new[] { new[] { Array.Empty<byte>() } } } } } },
     };
 
     // The depth-2 skeleton over a variable-width leaf. The empty string is a distinct value from an empty row, so
