@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
@@ -27,7 +28,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </summary>
 internal sealed class DateTimeColumn : IColumn<uint>, IDateTimeColumn, IStoredValuesColumn
 {
-    private readonly TimeZoneInfo timeZone;
+    private readonly ResolvedTimeZone timeZone;
     private readonly int length;
     private readonly bool pooled;
     private byte[] buffer;
@@ -39,7 +40,7 @@ internal sealed class DateTimeColumn : IColumn<uint>, IDateTimeColumn, IStoredVa
     /// <param name="buffer">The little-endian column bytes (may be longer than <paramref name="length"/>).</param>
     /// <param name="length">The logical byte length; must be a whole multiple of <c>sizeof(uint)</c>.</param>
     /// <param name="pooled">Whether <paramref name="buffer"/> was rented and should be returned on dispose.</param>
-    public DateTimeColumn(string name, string typeName, TimeZoneInfo timeZone, byte[] buffer, int length, bool pooled)
+    public DateTimeColumn(string name, string typeName, ResolvedTimeZone timeZone, byte[] buffer, int length, bool pooled)
     {
         Name = name;
         TypeName = typeName;
@@ -60,7 +61,9 @@ internal sealed class DateTimeColumn : IColumn<uint>, IDateTimeColumn, IStoredVa
 
     /// <summary>The timezone the seconds are presented in, shared by every value in the column. Use it to
     /// interpret the raw <see cref="Values"/> seconds.</summary>
-    public TimeZoneInfo TimeZone => timeZone;
+    /// <exception cref="FormatException">The header named a timezone this platform cannot represent. The
+    /// <see cref="Values"/> seconds are unaffected.</exception>
+    public TimeZoneInfo TimeZone => timeZone.Value;
 
     /// <summary>Zero: <c>DateTime</c> counts whole seconds. <c>DateTime64(scale)</c> is where this varies.</summary>
     public int Scale => 0;
@@ -123,7 +126,7 @@ internal sealed class DateTimeColumn : IColumn<uint>, IDateTimeColumn, IStoredVa
         ClickHouseBinaryReader reader,
         string name,
         string typeName,
-        TimeZoneInfo timeZone,
+        ResolvedTimeZone timeZone,
         int rowCount,
         CancellationToken cancellationToken)
     {
@@ -147,5 +150,5 @@ internal sealed class DateTimeColumn : IColumn<uint>, IDateTimeColumn, IStoredVa
         return new DateTimeColumn(name, typeName, timeZone, rented, byteCount, pooled: true);
     }
 
-    private DateTimeOffset ToDateTimeOffset(uint seconds) => ColumnValueProjections.DateTimeToOffset(seconds, timeZone);
+    private DateTimeOffset ToDateTimeOffset(uint seconds) => ColumnValueProjections.DateTimeToOffset(seconds, timeZone.Value);
 }
