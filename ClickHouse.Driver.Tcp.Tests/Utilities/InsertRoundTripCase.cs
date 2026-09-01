@@ -76,8 +76,25 @@ public sealed class InsertRoundTripCase
         yield return Primitive("Int64", new[] { long.MinValue, -1, 0, long.MaxValue });
         yield return Primitive("UInt128", new[] { UInt128.Zero, UInt128.One, UInt128.MaxValue });
         yield return Primitive("Int128", new[] { Int128.MinValue, -Int128.One, Int128.Zero, Int128.MaxValue });
-        yield return Primitive("UInt256", new[] { UInt256.Zero, UInt256.FromBigInteger(1), UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)) });
-        yield return Primitive("Int256", new[] { Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)), Int256.FromBigInteger(-1), Int256.Zero, Int256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)) });
+        // 2^200 pins the limb order; the values after it pin the top limb and the sign bit, which everything
+        // below 2^255 leaves clear.
+        yield return Primitive("UInt256", new[]
+        {
+            UInt256.Zero,
+            UInt256.FromBigInteger(1),
+            UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)),
+            UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 255)),
+            UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 256) - 1),
+        });
+        yield return Primitive("Int256", new[]
+        {
+            Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)),
+            Int256.FromBigInteger(-1),
+            Int256.Zero,
+            Int256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)),
+            Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 255)),
+            Int256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 255) - 1),
+        });
 
         // Enum columns are inserted and read as their raw underlying ordinals; the ordinals must be declared members.
         yield return Primitive("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 });
@@ -184,13 +201,30 @@ public sealed class InsertRoundTripCase
         yield return Uuids("UUID", Guid.Empty, new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff"));
 
         yield return IpAddresses("IPv4", "0.0.0.0", "127.0.0.1", "192.168.1.1", "255.255.255.255");
-        yield return IpAddresses("IPv6", "::", "::1", "2001:db8::1", "fe80::1");
+        yield return IpAddresses("IPv6", "::", "::1", "2001:db8::1", "fe80::1", "2001:db8:85a3:8d3:1319:8a2e:370:7348");
+
+        // An IPv4 address written to an IPv6 column comes back in its IPv4-mapped form, so the insert value and
+        // the expected value differ. Nothing else in the corpus reads that mapping back off a server.
+        var mappedIpv4 = new[] { IPAddress.Parse("192.168.1.1"), IPAddress.Parse("0.0.0.0") };
+        yield return new InsertRoundTripCase(
+            "IPv6 <- IPv4",
+            "IPv6",
+            name => new ArrayColumn<IPAddress>(name, "IPv6", mappedIpv4),
+            name => new ArrayColumn<IPAddress>(name, "IPv6", new[] { IPAddress.Parse("::ffff:192.168.1.1"), IPAddress.Parse("::ffff:0.0.0.0") }),
+            settings: null);
 
         // Decimal32/64 surface as System.Decimal; Decimal128/256 as ClickHouseTcpDecimal.
         yield return Decimals("Decimal(9, 2)", 0m, 1.23m, -1.23m, 9999999.99m);
         yield return Decimals("Decimal(18, 4)", 0m, 12345.6789m, -12345.6789m, 99999999999999.9999m);
         yield return WideDecimals("Decimal(38, 10)", "0", "12345.6789", "-98765.4321");
         yield return WideDecimals("Decimal(76, 20)", "0", "1.00000000000000000001", "-1.00000000000000000001");
+
+        // Scale 0 takes neither of FixedPointScaling.ShiftDecimalPlaces's branches, and scale == precision leaves
+        // no integer part at all. The last case holds the largest magnitude a Decimal(76, 0) can, which pins the
+        // top limb of the 256-bit mantissa.
+        yield return WideDecimals("Decimal(38, 0)", "0", "-1", "99999999999999999999999999999999999999");
+        yield return WideDecimals("Decimal(38, 38)", "0.00000000000000000000000000000000000001", "-0.99999999999999999999999999999999999999");
+        yield return WideDecimals("Decimal(76, 0)", "0", "9999999999999999999999999999999999999999999999999999999999999999999999999999", "-9999999999999999999999999999999999999999999999999999999999999999999999999999");
 
         // The DecimalN(S) alias spellings resolve to the same codecs as Decimal(P, S); one case proves the server
         // round-trips the alias type name as declared.
@@ -898,9 +932,55 @@ public sealed class InsertRoundTripCase
                 new byte[] { 0xFF, 0, 0xFF, 0 },
             }));
 
+        // The dictionary is a bare column of the inner type, so its element width is the inner's and not the key
+        // stream's. The cases above are all four bytes wide; these are one, eight and sixteen.
+        yield return Same(
+            "LowCardinality(UInt8)",
+            "LowCardinality(UInt8)",
+            name => PrimitiveColumn<byte>.FromValues(name, "LowCardinality(UInt8)", new byte[] { 3, 3, 0, 255, 3 }),
+            LowCardinalitySettings);
+
+        yield return Same(
+            "LowCardinality(Int64)",
+            "LowCardinality(Int64)",
+            name => PrimitiveColumn<long>.FromValues(name, "LowCardinality(Int64)", new[] { long.MinValue, 0L, long.MaxValue, 0L }),
+            LowCardinalitySettings);
+
+        yield return Same(
+            "LowCardinality(UUID)",
+            "LowCardinality(UUID)",
+            name => new ArrayColumn<Guid>(name, "LowCardinality(UUID)", new[]
+            {
+                Guid.Empty,
+                new Guid("00112233-4455-6677-8899-aabbccddeeff"),
+                Guid.Empty,
+            }),
+            LowCardinalitySettings);
+
         // Array(LowCardinality(String)) flattens its jagged rows into one values stream handed to the
         // low-cardinality codec; empty rows and repeated values ride along.
         yield return Arrays("LowCardinality(String)", new[] { "a", "b" }, Array.Empty<string>(), new[] { "a", "a", "c" });
+
+        // Two levels of offsets over a dictionary-bearing leaf, where the flattening view is built over a view.
+        // The deep-nesting ladder uses prefix-free leaves only.
+        yield return Same(
+            "Array(Array(LowCardinality(String)))",
+            "Array(Array(LowCardinality(String)))",
+            name => new ArrayColumn<string[][]>(name, "Array(Array(LowCardinality(String)))", new[]
+            {
+                new[] { new[] { "a", "b" }, Array.Empty<string>(), new[] { "a" } },
+                Array.Empty<string[]>(),
+                new[] { new[] { "c", "a", "c" } },
+            }));
+
+        yield return Same(
+            "Array(Array(LowCardinality(Nullable(String))))",
+            "Array(Array(LowCardinality(Nullable(String))))",
+            name => new ArrayColumn<string[][]>(name, "Array(Array(LowCardinality(Nullable(String))))", new[]
+            {
+                new[] { new[] { "a", null }, Array.Empty<string>() },
+                new[] { new string[] { null, null }, new[] { "a", "b" } },
+            }));
 
         // A dictionary past 255 entries forces the client to widen the key stream from UInt8 to UInt16
         // (SelectKeyWidthCode switches on dictSize < byte.MaxValue). Unit tests assert the client picks that
@@ -1198,6 +1278,22 @@ public sealed class InsertRoundTripCase
                 (42UL, "a"), ("x", "b"), (null, "c"),
             }),
             DynamicSettings);
+
+        // The key column has its own state, built separately from the value's: MapShape.WriteStatePrefix writes
+        // the key's prefix first. Every other map case has a prefix-free key, so nothing reached that order.
+        yield return Maps<string, byte>(
+            "LowCardinality(String)",
+            "UInt8",
+            Pairs<string, byte>(("a", 1), ("b", 2)),
+            Array.Empty<KeyValuePair<string, byte>>(),
+            Pairs<string, byte>(("a", 3)));
+
+        // A composite key, where the key column is itself two child columns.
+        yield return Maps<(int, int), int>(
+            "Tuple(Int32, Int32)",
+            "Int32",
+            Pairs<(int, int), int>(((1, 2), 3), ((-1, 0), 4)),
+            Array.Empty<KeyValuePair<(int, int), int>>());
 
         // Map(String, Dynamic): a Dynamic value column inside a map, flattened like Array(Tuple(String, Dynamic)).
         yield return Maps<string, object>("String", "Dynamic", DynamicSettings,
@@ -1500,6 +1596,18 @@ public sealed class InsertRoundTripCase
                     Ramp(17, i => i % 2 == 0 ? float.MaxValue : float.MinValue),
                 }));
 
+            // An embedding-shaped width: 768 is the dimension of a common sentence embedding, and the widest the
+            // suite reaches otherwise is 17. Every row spans 96 bytes per plane, so QBitLayout's stride arithmetic
+            // and the dense plane copy are exercised at a size where an off-by-one row stride cannot look right.
+            yield return Same(
+                "QBit(Float32, 768)",
+                "QBit(Float32, 768)",
+                name => new ArrayColumn<float[]>(name, "QBit(Float32, 768)", new[]
+                {
+                    Ramp(768, i => (i * 0.25f) - 96f),
+                    Ramp(768, i => i % 3 == 0 ? float.MaxValue : (i % 3 == 1 ? -0f : float.NaN)),
+                }));
+
             yield return Same(
                 "QBit(Float64, 17)",
                 "QBit(Float64, 17)",
@@ -1601,6 +1709,18 @@ public sealed class InsertRoundTripCase
                 new ulong[] { 1, 2, 3 },
                 Array.Empty<ulong>(),
             }));
+
+        // A prefix-carrying inner: the alias has to echo the type name into the insert header exactly as declared
+        // and still write JSON's version word, which the four cases above (prefix-free inners) cannot show.
+        yield return Same(
+            "SimpleAggregateFunction(anyLast, JSON)",
+            "SimpleAggregateFunction(anyLast, JSON)",
+            name => new ArrayColumn<string>(name, "SimpleAggregateFunction(anyLast, JSON)", new[]
+            {
+                "{\"a\":1}",
+                "{}",
+            }),
+            JsonSettings);
 
         // A parameterized function keeps its parameters in the type name, on the wire as well as in the DDL. It
         // parses as one node carrying its own arguments, so the type still has exactly two arguments and the
