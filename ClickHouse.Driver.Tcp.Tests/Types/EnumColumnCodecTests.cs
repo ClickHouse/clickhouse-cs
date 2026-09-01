@@ -43,11 +43,22 @@ public class EnumColumnCodecTests
     public void Create_DuplicateOrdinal_Throws()
         => Assert.Throws<FormatException>(() => Enum8ColumnCodec.Create(TypeParser.Parse("Enum8('a' = 1, 'b' = 1)")));
 
-    [Test]
-    public void Create_LabelWithEscapedQuote_IsUnescaped()
+    [TestCase(@"'a\'b' = 1", "a'b")]
+    [TestCase(@"'a\\b' = 1", @"a\b")]
+    [TestCase(@"'a\nb' = 1", "a\nb")]
+    [TestCase(@"'a\tb' = 1", "a\tb")]
+    [TestCase(@"'a\0b' = 1", "a\0b")]
+    [TestCase(@"'a\x41b' = 1", "aAb")]
+    [TestCase(@"'a\zb' = 1", @"a\zb")]
+    [TestCase("'a''b' = 1", "a'b")]
+    [TestCase("'' = 1", "")]
+    public void Create_LabelWithAnEscape_DecodesItLikeTheServer(string member, string expected)
     {
-        var codec = (EnumColumnCodec<sbyte>)Enum8ColumnCodec.Create(TypeParser.Parse(@"Enum8('a\'b' = 1)"));
-        Assert.That(codec.OrdinalToLabel[(sbyte)1], Is.EqualTo("a'b"));
+        // The label in a header carries the server's escaping, and the label a caller reads or writes is the
+        // decoded one. Checked against 26.6: hex('\a') is 07 … hex('\x41') is 41, an escape the server does not
+        // define keeps both characters (hex('\z') is 5C7A), and a doubled quote is one quote.
+        var codec = (EnumColumnCodec<sbyte>)Enum8ColumnCodec.Create(TypeParser.Parse($"Enum8({member})"));
+        Assert.That(codec.OrdinalToLabel[(sbyte)1], Is.EqualTo(expected));
     }
 
     [Test]
