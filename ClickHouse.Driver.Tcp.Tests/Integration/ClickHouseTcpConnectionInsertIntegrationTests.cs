@@ -535,6 +535,11 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     /// Such a column cannot use the dense shortcut, which pairs alternative <c>i</c> with alternative <c>i</c>, so
     /// it is scattered by each value's own type instead — and only a server can say where the values then landed.
     /// This is the case where the counts match, which is the one no arity check separates.
+    /// <para>
+    /// The alternative the value belongs to has to change index between the two types, or the shortcut reaches
+    /// the same answer and the test cannot fail: here the source's Int64 is alternative 0 and the target's is
+    /// alternative 1, so reusing the source discriminators would name Bool for every row.
+    /// </para>
     /// </summary>
     [Test]
     public async Task InsertAsync_DenseVariantOfAnotherVariantsAlternatives_LandsInTheAlternativeTheValueNames()
@@ -544,12 +549,14 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         string target = UniqueTableName();
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Date, Int64)) ENGINE = Memory");
-            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Date32, Int64)) ENGINE = Memory");
-            // toInt64: a bare 7 is UInt8, and a Variant takes only its own alternatives.
+            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = Memory");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = Memory");
+            // toInt64: a bare 7 is UInt8, and a Variant takes only its own alternatives. Both rows are Int64 so
+            // that both fit the target, while the source column still declares the String alternative that makes
+            // the two alternative lists differ.
             await ExecuteAsync(
                 connection,
-                $"INSERT INTO {source} VALUES (CAST(toDate('2024-06-15') AS Variant(Date, Int64))), (CAST(toInt64(7) AS Variant(Date, Int64)))");
+                $"INSERT INTO {source} VALUES (CAST(toInt64(-3) AS Variant(Int64, String))), (CAST(toInt64(7) AS Variant(Int64, String)))");
 
             // Inside the loop: the block owns the column's pooled buffers, so it has to still be alive. The read
             // needs its own connection — one connection carries one in-flight operation.
@@ -575,7 +582,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
 
             Assert.Multiple(() =>
             {
-                Assert.That(readBack, Is.EqualTo(new[] { "2024-06-15 as Date32", "7 as Int64" }));
+                Assert.That(readBack, Is.EqualTo(new[] { "-3 as Int64", "7 as Int64" }));
                 Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
             });
         }

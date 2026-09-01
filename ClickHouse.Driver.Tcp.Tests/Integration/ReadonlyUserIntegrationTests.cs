@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -81,8 +82,13 @@ public class ReadonlyUserIntegrationTests
 
     /// <summary>
     /// Turning the injection off costs exactly one thing, and this is it: a JSON column may arrive in a
-    /// serialization this client does not read. The test asserts the cost is paid by JSON alone — an ordinary
-    /// column in the same session is unaffected — so anyone weighing the switch can see its price.
+    /// serialization this client does not read. The test asserts the cost is paid by JSON alone — ordinary
+    /// columns in the same session are unaffected — so anyone weighing the switch can see its price.
+    /// <para>
+    /// The columns arrive as themselves rather than as one <c>toString</c> expression, and are read through the
+    /// typed accessors. A server-computed string would come back through the String decoder alone, so the test
+    /// would pass with the DateTime, Array and LowCardinality codecs broken and could not support its name.
+    /// </para>
     /// </summary>
     [Test]
     public async Task QueryAsync_SerializationSettingsOff_LeavesEveryTypeButJsonAndDynamicWorking()
@@ -93,10 +99,29 @@ public class ReadonlyUserIntegrationTests
 
         await using var client = new ClickHouseTcpClient(options);
 
-        var readBack = (string)await client.ExecuteScalarAsync(
-            "SELECT concat(toString(toDateTime('2024-06-15 12:00:00', 'UTC')), '/', toString([1, 2]))",
-            cancellationToken: None);
+        DateTimeOffset instant = default;
+        int[] numbers = null;
+        string label = null;
+        decimal amount = 0;
+        await foreach (Block block in client.StreamAsync(
+            @"SELECT toDateTime('2024-06-15 12:00:00', 'UTC') AS instant,
+                     [toInt32(1), toInt32(2)] AS numbers,
+                     toLowCardinality('lc') AS label,
+                     toDecimal64(1.25, 2) AS amount",
+            cancellationToken: None))
+        {
+            instant = ((IDateTimeColumn)block["instant"]).GetDateTimeOffset(0);
+            numbers = (int[])block["numbers"].GetValue(0);
+            label = (string)block["label"].GetValue(0);
+            amount = (decimal)block["amount"].GetValue(0);
+        }
 
-        Assert.That(readBack, Is.EqualTo("2024-06-15 12:00:00/[1,2]"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(instant, Is.EqualTo(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)));
+            Assert.That(numbers, Is.EqualTo(new[] { 1, 2 }));
+            Assert.That(label, Is.EqualTo("lc"));
+            Assert.That(amount, Is.EqualTo(1.25m));
+        });
     }
 }
