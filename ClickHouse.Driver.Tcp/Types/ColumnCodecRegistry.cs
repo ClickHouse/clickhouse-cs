@@ -46,11 +46,21 @@ internal sealed class ColumnCodecRegistry
     /// resolving an INSERT target, or <see cref="ResolveContext.ForWrite"/> when no server context exists.</param>
     /// <returns>The codec for that type.</returns>
     /// <exception cref="FormatException"><paramref name="typeString"/> is malformed.</exception>
-    /// <exception cref="NotSupportedException">The type is well-formed but not yet supported by this client.</exception>
+    /// <exception cref="NotSupportedException">The type is well-formed but this client has no codec for it.</exception>
     public IColumnCodec Resolve(string typeString, in ResolveContext context)
     {
         TypeNode node = TypeParser.Parse(typeString);
-        return ResolveNode(node, in context);
+        try
+        {
+            return ResolveNode(node, in context);
+        }
+        catch (NotSupportedException refusal) when (!refusal.Message.Contains($"'{node}'", StringComparison.Ordinal))
+        {
+            // A refusal from a child names only the child, and 'Boolean' on its own sends a caller searching
+            // their code for a name they never wrote. Keep that message and add the type they did write. The
+            // exception type stays NotSupportedException, which is what the contract promises and callers catch.
+            throw new NotSupportedException($"{refusal.Message} It is inside the column type '{node}'.", refusal);
+        }
     }
 
     /// <summary>
@@ -60,7 +70,7 @@ internal sealed class ColumnCodecRegistry
     /// <param name="node">The parsed type node.</param>
     /// <param name="context">The resolution context (server timezone, etc.).</param>
     /// <returns>The codec for that type.</returns>
-    /// <exception cref="NotSupportedException">The type is well-formed but not yet supported by this client.</exception>
+    /// <exception cref="NotSupportedException">The type is well-formed but this client has no codec for it.</exception>
     public IColumnCodec ResolveNode(TypeNode node, in ResolveContext context)
     {
         if (byName.TryGetValue(node.Name, out CodecFactory factory))
@@ -68,7 +78,9 @@ internal sealed class ColumnCodecRegistry
             return factory(node, in context, this);
         }
 
-        throw new NotSupportedException($"ClickHouse type '{node}' is not supported by this client yet.");
+        // No "yet": some of what lands here is not a type any supported server has — Object('json') was removed
+        // from ClickHouse, and MultiPoint never existed — so promising it later would be wrong.
+        throw new NotSupportedException($"ClickHouse type '{node}' is not supported by this client.");
     }
 
     private static ColumnCodecRegistry CreateDefault()
