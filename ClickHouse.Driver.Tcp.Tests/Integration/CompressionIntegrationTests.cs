@@ -4,6 +4,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Compression;
+using ClickHouse.Driver.Tcp.Client;
+using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -236,6 +239,91 @@ public class CompressionIntegrationTests
         Assert.That(values, Has.Count.EqualTo(3000));
     }
 
+    [TestCaseSource(nameof(Codecs))]
+    public async Task MixedCompressedWorkload_ManySizesBackToBack_RunsEntirelyOnOneConnection(IClickHouseCompressor codec)
+    {
+        // The other tests each prove one operation is correct. This one proves the state an operation leaves
+        // behind is correct: DDL, inserts and selects, from empty to several megabytes, run back to back over a
+        // pool of one, so each starts from whatever the last left in the frame reader, the frame writer and
+        // their buffers.
+        //
+        // The dial count is the assertion that carries the test. A connection the pool judges unusable is
+        // discarded and the next operation opens a fresh one, so leftover plaintext or a desynchronized buffer
+        // still produces correct rows and a passing test; only the count shows it happened.
+        var options = TcpServerFixture.Options() with { Compressor = codec, MaxPoolSize = 1 };
+        var factory = new DialCountingFactory(options);
+
+        // A clock the test never advances: the pool's sweep timer is inert under it, so no idle or lifetime
+        // reaping can retire the connection and inflate the dial count on a slow run.
+        var pool = new ConnectionPool(options, factory, new ControlledTimeProvider());
+        await using var client = new ClickHouseTcpClient(pool, options);
+
+        string table = UniqueTableName();
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, payload String) ENGINE = Memory", null, None);
+
+            // Sizes chosen to land either side of the frame layer's boundaries: no rows at all, a single value,
+            // a body near the 16 KiB plaintext buffer, the 50,000-row block split, and a body the server cuts
+            // into several frames. Payload widths vary per row, so values straddle the boundaries rather than
+            // lining up with them.
+            foreach (int size in new[] { 0, 1, 7, 2048, 2049, 60_000, 150_000 })
+            {
+                await client.ExecuteAsync($"TRUNCATE TABLE {table}", null, None);
+
+                object[][] rows = Enumerable.Range(0, size)
+                    .Select(i => new object[] { (ulong)i, Payload(i) })
+                    .ToArray();
+                await client.InsertRowsAsync($"INSERT INTO {table} (id, payload) VALUES", rows, null, None);
+
+                ulong count = 0;
+                ulong idSum = 0;
+                int corrupt = 0;
+                await foreach (object[] row in client.QueryAsync($"SELECT id, payload FROM {table} ORDER BY id", null, None))
+                {
+                    var id = (ulong)row[0];
+                    if (!string.Equals((string)row[1], Payload((int)id), StringComparison.Ordinal))
+                    {
+                        corrupt++;
+                    }
+
+                    count++;
+                    idSum += id;
+                }
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(count, Is.EqualTo((ulong)size), $"rows read back at size {size}");
+                    Assert.That(idSum, Is.EqualTo(TriangleSum(size)), $"sum of ids at size {size}");
+                    Assert.That(corrupt, Is.Zero, $"payloads that did not match their id at size {size}");
+                });
+            }
+
+            // One value larger than a frame rather than many values across frames: this is the bulk read path,
+            // which drains the buffered prefix and then reads the remainder straight out of the frames.
+            string single = null;
+            await foreach (object[] row in client.QueryAsync("SELECT repeat('ab', 1000000)", null, None))
+            {
+                single = (string)row[0];
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(single, Has.Length.EqualTo(2_000_000), "length of the single large value");
+                Assert.That(factory.Dials, Is.EqualTo(1), "connections opened for the whole workload");
+                Assert.That(pool.IdleCount, Is.EqualTo(1), "connections idle once the workload finishes");
+            });
+        }
+        finally
+        {
+            await DropAsync(client, table);
+        }
+
+        static string Payload(int i) => $"p-{i}-{new string('x', i % 37)}";
+
+        static ulong TriangleSum(int n) => n == 0 ? 0UL : (ulong)n * (ulong)(n - 1) / 2UL;
+    }
+
     private static async ValueTask DropAsync(ClickHouseTcpClient client, string table)
     {
         try
@@ -249,4 +337,28 @@ public class CompressionIntegrationTests
     }
 
     private static string UniqueTableName() => $"tcp_compression_test_{Guid.NewGuid():N}";
+
+    /// <summary>
+    /// Opens real connections and counts them, so a test can assert the pool never replaced one. Reuse is
+    /// otherwise invisible: the pool discards an unusable connection and dials again without telling the caller,
+    /// and the operations still succeed.
+    /// </summary>
+    private sealed class DialCountingFactory : IConnectionFactory
+    {
+        private readonly TcpConnectionFactory inner;
+        private int dials;
+
+        public DialCountingFactory(ClickHouseTcpClientOptions options) => inner = new TcpConnectionFactory(options);
+
+        /// <summary>How many connections the pool has opened through this factory.</summary>
+        public int Dials => Volatile.Read(ref dials);
+
+        public ValueTask<ClickHouseTcpConnection> CreateAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref dials);
+            return inner.CreateAsync(cancellationToken);
+        }
+
+        public void Dispose() => inner.Dispose();
+    }
 }
