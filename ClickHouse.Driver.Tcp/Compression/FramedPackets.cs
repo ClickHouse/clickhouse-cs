@@ -15,6 +15,10 @@ namespace ClickHouse.Driver.Tcp.Compression;
 /// The list matches the server's own notion of a compressible message, and the Go client's
 /// <c>ServerCode.Compressible</c>, which admits the same three.
 /// </para>
+/// <para>
+/// It governs block-bearing packets only: the one caller is the block reader. An <c>Exception</c> body is read
+/// from the raw stream by the code that decodes it, never through here, so this is not where that decision lives.
+/// </para>
 /// </summary>
 internal static class FramedPackets
 {
