@@ -1153,6 +1153,15 @@ public sealed class InsertRoundTripCase
             Array.Empty<object>(),
             new object[] { "b", 2UL, null });
 
+        // Array(Dynamic) with every row empty: the inner Dynamic has no rows while the block has, so the array
+        // still writes and reads the Dynamic prefix, and the zero-row body path runs with the prefix consumed
+        // rather than skipped. The only all-empty case otherwise is Array(UInt32), a leaf that carries no prefix.
+        yield return Same(
+            "Array(Dynamic) [every row empty]",
+            "Array(Dynamic)",
+            name => new ArrayColumn<object[]>(name, "Array(Dynamic)", new[] { Array.Empty<object>(), Array.Empty<object>() }),
+            DynamicSettings);
+
         // Tuple(Dynamic, String): a Dynamic element inside a tuple. Each element position is its own child column,
         // so the Dynamic child's type list (state prefix) is written from its own projected values.
         yield return Same(
@@ -1284,6 +1293,14 @@ public sealed class InsertRoundTripCase
         // Array(JSON): JSON carries a state prefix, so the array has to emit the version once ahead of its offsets
         // rather than treat JSON as a flat leaf. Empty rows and an all-empty column ride along.
         yield return Arrays("JSON", JsonSettings, new[] { "{\"a\":1}", "{}" }, Array.Empty<string>(), new[] { "{\"b\":\"hi\"}" });
+
+        // Array(JSON) with every row empty: the same shape as the all-empty Array(Dynamic) case, for the codec
+        // whose prefix is a version word rather than a type list.
+        yield return Same(
+            "Array(JSON) [every row empty]",
+            "Array(JSON)",
+            name => new ArrayColumn<string[]>(name, "Array(JSON)", new[] { Array.Empty<string>(), Array.Empty<string>() }),
+            JsonSettings);
 
         // Tuple(JSON, String): each element is its own child column, so the JSON version is written from the
         // element the tuple projects.
