@@ -27,7 +27,4 @@ public sealed class ClickHouseTcpTransportException : ClickHouseTcpException
         : base(message, innerException)
     {
     }
-
-    /// <summary>Always true: a fresh connection may well succeed.</summary>
-    public override bool IsTransient => true;
 }
