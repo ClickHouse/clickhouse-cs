@@ -95,7 +95,7 @@ internal static class TcpParameterFormatter
     {
         // The arms below are the canonical names, so an alias or a case variant is mapped to one first. Every
         // recursion into a child type comes back through here, which is what makes {p:Array(BIGINT)} format.
-        string name = TypeAliases.Canonical(type.Name);
+        string name = ColumnCodecRegistry.Default.TryCanonicalName(type.Name, out string registered) ? registered : type.Name;
 
         if (Array.IndexOf(IntegerTypeNames, name) >= 0
             || Array.IndexOf(FloatTypeNames, name) >= 0
@@ -230,8 +230,7 @@ internal static class TcpParameterFormatter
         {
             return new ArgumentException(
                 $"'{name}' is not a ClickHouse type name this client knows, so no value formats as '{type}'. " +
-                "Write the name the server reports for the column — SELECT toTypeName(expr) — as ClickHouse spells it, " +
-                "which is case-sensitive for most types.");
+                "Write the name the server reports for the column — SELECT toTypeName(expr).");
         }
 
         return new ArgumentException(

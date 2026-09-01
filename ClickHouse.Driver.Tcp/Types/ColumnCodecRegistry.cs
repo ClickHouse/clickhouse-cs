@@ -28,9 +28,18 @@ internal sealed class ColumnCodecRegistry
 
     private readonly Dictionary<string, CodecFactory> byName;
 
+    /// <summary>Every registered name keyed without regard to case, so any case a caller writes resolves.</summary>
+    private readonly Dictionary<string, string> canonicalByAnyCase;
+
     private ColumnCodecRegistry(Dictionary<string, CodecFactory> byName)
     {
         this.byName = byName;
+        canonicalByAnyCase = new Dictionary<string, string>(byName.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (string name in byName.Keys)
+        {
+            canonicalByAnyCase[name] = name;
+        }
+
         Projections = new ColumnReadProjections(this);
     }
 
@@ -41,9 +50,33 @@ internal sealed class ColumnCodecRegistry
     public ColumnReadProjections Projections { get; }
 
     /// <summary>Whether a codec is registered for a base type name, i.e. whether this client knows the type.</summary>
-    /// <param name="name">The base type name, as ClickHouse spells it.</param>
+    /// <param name="name">The base type name, in any case and under any of its aliases.</param>
     /// <returns>True when the name is one this client resolves.</returns>
-    public bool KnowsTypeName(string name) => byName.ContainsKey(name);
+    public bool KnowsTypeName(string name) => TryCanonicalName(name, out _);
+
+    /// <summary>
+    /// The spelling this client registers a type under, for a name a caller wrote: an alias, or any case of a
+    /// registered name. Case is not checked against the server's own per-family rules — a name the server
+    /// happens to reject is the server's to reject, and it says so far better than a guess here would.
+    /// </summary>
+    /// <param name="name">The base type name as the caller wrote it.</param>
+    /// <param name="canonical">The registered spelling, or null when no codec matches the name.</param>
+    /// <returns>True when a codec is registered under some spelling of the name.</returns>
+    public bool TryCanonicalName(string name, out string canonical)
+    {
+        if (name is not null && byName.ContainsKey(name))
+        {
+            canonical = name;
+            return true;
+        }
+
+        if (TypeAliases.TryCanonical(name, out canonical) && byName.ContainsKey(canonical))
+        {
+            return true;
+        }
+
+        return canonicalByAnyCase.TryGetValue(name ?? string.Empty, out canonical);
+    }
 
     /// <summary>Resolves the codec for a ClickHouse type string.</summary>
     /// <param name="typeString">The type string from a column header (e.g. <c>UInt64</c>, <c>DateTime('UTC')</c>).</param>
@@ -84,12 +117,12 @@ internal sealed class ColumnCodecRegistry
         }
 
         // A header always names the canonical type, so this second lookup is for the names a caller writes: a
-        // {p:VARCHAR} hint, ClickHouseType, CanRead/CanWrite. Resolving under the canonical name also stamps the
+        // {p:VARCHAR} hint, ClickHouseType, CanRead/CanWrite. Resolving under the registered name also stamps the
         // codec with it, so DEC(4, 2) reports itself as Decimal(4, 2). Child nodes come back through here, which
         // is what makes an alias resolve inside a composite.
-        if (TypeAliases.TryCanonical(node.Name, out string canonical) && byName.TryGetValue(canonical, out factory))
+        if (TryCanonicalName(node.Name, out string canonical))
         {
-            return factory(new TypeNode(canonical, node.Arguments, node.HasArgumentList), in context, this);
+            return byName[canonical](new TypeNode(canonical, node.Arguments, node.HasArgumentList), in context, this);
         }
 
         // No "yet": some of what lands here is not a type any supported server has — Object('json') was removed

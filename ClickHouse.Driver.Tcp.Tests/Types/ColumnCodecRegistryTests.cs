@@ -204,17 +204,22 @@ public class ColumnCodecRegistryTests
         });
     }
 
-    // Case is per family. The server marks these case_insensitive = 0, so it answers "Unknown data type family"
-    // for every spelling here — matching them would accept what the server rejects.
-    [TestCase("string")]
-    [TestCase("int64")]
-    [TestCase("array(uint8)")]
-    [TestCase("nullable(string)")]
-    [TestCase("tuple(uint8)")]
-    [TestCase("geometry")]
-    [TestCase("variant(int64, string)")]
-    public void Resolve_CaseVariantOfACaseSensitiveFamily_ThrowsNotSupported(string written)
-        => Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve(written, ResolveContext.ForWrite));
+    // The server marks only some families case_insensitive, and this client does not copy that rule: which
+    // spellings a server takes is its own business, it changes between versions and settings, and it reports a
+    // name it rejects far better than a stale copy of the rule here could. So any case resolves, and the codec
+    // is stamped with the registered spelling.
+    // As with an alias, only the node whose own name was rewritten reports the registered spelling: a child
+    // keeps what the caller wrote, because canonicalizing a whole tree would mean walking it on every resolve.
+    [TestCase("string", "String")]
+    [TestCase("int64", "Int64")]
+    [TestCase("array(uint8)", "Array(uint8)")]
+    [TestCase("nullable(string)", "Nullable(string)")]
+    [TestCase("geometry", "Geometry")]
+    [TestCase("VARIANT(Int64, String)", "Variant(Int64, String)")]
+    public void Resolve_AnyCaseOfAKnownName_Resolves(string written, string expectedTypeName)
+        => Assert.That(
+            ColumnCodecRegistry.Default.Resolve(written, ResolveContext.ForWrite).TypeName,
+            Is.EqualTo(expectedTypeName));
 
     [Test]
     public void Resolve_AggregateFunctionNamingNoFunction_ThrowsFormat()

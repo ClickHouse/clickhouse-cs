@@ -14,13 +14,11 @@ public class TcpParameterFormatterEdgeCaseTests
     private static string Format(object value, string typeName)
         => TcpParameterFormatter.FormatSqlText(value, typeName, "p");
 
-    // Names the server does not have either (26.6 answers "Unknown data type family" for all four). They reach
-    // the same arm as a value that simply does not fit, and blaming the value there sends a caller to inspect a
+    // Names the server does not have either (26.6 answers "Unknown data type family" for both). They reach the
+    // same arm as a value that simply does not fit, and blaming the value there sends a caller to inspect a
     // value that was never the problem.
     [TestCase("MultiPoint", TestName = "A geo name no version has")]
     [TestCase("Object", TestName = "A name a past version had")]
-    [TestCase("string", TestName = "A case variant of a case-sensitive family")]
-    [TestCase("array(uint8)", TestName = "A case variant with arguments")]
     public void FormatSqlText_TypeNameThisClientDoesNotKnow_SaysSoRatherThanBlamingTheValue(string typeName)
     {
         var exception = Assert.Throws<ArgumentException>(() => Format("abc", typeName));
@@ -30,9 +28,21 @@ public class TcpParameterFormatterEdgeCaseTests
             Assert.That(exception.Message, Does.Contain("is not a ClickHouse type name this client knows"));
             Assert.That(exception.Message, Does.Contain(typeName), "shows the type as it was written");
             Assert.That(exception.Message, Does.Contain("toTypeName"), "says how to find the name to write");
-            Assert.That(exception.Message, Does.Contain("case-sensitive"), "says why a spelling that looks right can fail");
             Assert.That(exception.Message, Does.Not.Contain("Cannot convert value"), "the value is not the problem");
             Assert.That(exception.Message, Does.Contain("Parameter 'p'"), "names the parameter");
+        });
+    }
+
+    // A name in a case the server may or may not take is not this client's to refuse: it formats the value, the
+    // hint reaches the server verbatim, and the server answers for its own spelling rules.
+    [Test]
+    public void FormatSqlText_TypeNameInAnyCase_FormatsRatherThanRefusing()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format("abc", "string"), Is.EqualTo("abc"));
+            Assert.That(Format(new[] { "abc" }, "array(string)"), Is.EqualTo("['abc']"));
+            Assert.That(Format(1L, "bigint"), Is.EqualTo("1"));
         });
     }
 
