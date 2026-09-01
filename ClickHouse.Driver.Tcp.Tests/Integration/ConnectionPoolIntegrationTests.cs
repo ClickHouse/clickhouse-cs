@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -271,6 +272,71 @@ public class ConnectionPoolIntegrationTests
         });
     }
 
+    /// <summary>
+    /// Retiring a connection closes the socket on the server, not only in the client. <c>ConnectionPoolTests</c>
+    /// proves the pool calls <c>Close</c>, but against a double whose "closed" is a flag the test itself watches;
+    /// only the server's own connection count says the socket went away. A leak here is invisible until a
+    /// long-running process runs the server out of <c>max_connections</c>.
+    ///
+    /// <para>
+    /// A one-tick lifetime retires a connection the moment the operation using it ends, so every query below runs
+    /// on a connection of its own. How many that really was comes from the server too: <c>system.query_log</c>
+    /// records the client port each query arrived on, which is the connection's identity. Without that the
+    /// connection count could be flat because nothing was ever opened rather than because everything was closed.
+    /// </para>
+    ///
+    /// <para>
+    /// The count is read over a second client held open for the whole test, which therefore contributes one
+    /// connection to both readings. The tolerance is for the other framework suites, which share the server and
+    /// open connections of their own; forty leaked sockets sit far outside it.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Retirement_AfterChurningManyConnections_LeavesNoneOpenOnTheServer()
+    {
+        const int churns = 40;
+        const int tolerance = churns / 4;
+
+        await using ClickHouseTcpClient observer = CreateClient(maxPoolSize: 1);
+        long baseline = await ServerConnectionsAsync(observer);
+        Assert.That(baseline, Is.GreaterThan(0), "the observer's own connection must be in the count, or this is not the count");
+
+        string tag = $"tcp_churn_{Guid.NewGuid():N}";
+        await using (var churning = new ClickHouseTcpClient(TcpServerFixture.Options() with
+        {
+            MaxPoolSize = 1,
+            MaxConnectionLifetime = TimeSpan.FromTicks(1),
+        }))
+        {
+            for (int churn = 0; churn < churns; churn++)
+            {
+                await churning.ExecuteAsync(
+                    "SELECT 1",
+                    new ClickHouseTcpQueryOptions { QueryId = $"{tag}_{churn}" },
+                    None);
+            }
+        }
+
+        // HAVING, so the lookup matches no row until every record is flushed: uniqExact over a partial set would
+        // answer with a lower number and the retry would stop at it.
+        object ports = await QueryLog.ScalarAsync(
+            observer,
+            $"SELECT toUInt64(uniqExact(port)) FROM system.query_log WHERE query_id LIKE '{tag}%' AND type = 'QueryStart' HAVING count() = {churns}");
+        long open = await WaitForServerConnectionsAsync(observer, baseline + tolerance);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Convert.ToInt64(ports),
+                Is.EqualTo(churns),
+                "the server must have seen each query on a client port of its own");
+            Assert.That(
+                open - baseline,
+                Is.LessThanOrEqualTo(tolerance),
+                $"connections the pool retired must not stay open on the server (baseline {baseline})");
+        });
+    }
+
     [Test]
     public async Task ExecuteAsync_UnparseableSetting_ReplacesClosedConnectionBeforeNextOperation()
     {
@@ -294,6 +360,40 @@ public class ConnectionPoolIntegrationTests
                 async () => await client.ExecuteAsync("SELECT 1", cancellationToken: None),
                 $"iteration {iteration + 1}: the valid statement must not inherit the closed connection");
         }
+    }
+
+    // How many native connections the server has open, this client's own among them.
+    private static async Task<long> ServerConnectionsAsync(ClickHouseTcpClient client)
+    {
+        long open = 0;
+        await foreach (ValueRow row in client.QueryAsync<ValueRow>(
+            "SELECT toUInt64(value) AS id FROM system.metrics WHERE metric = 'TCPConnection'",
+            cancellationToken: None))
+        {
+            open = (long)row.Id;
+        }
+
+        return open;
+    }
+
+    // Waits for the server's connection count to come down to a limit, and returns the last value read. A
+    // close is asynchronous on the server's side, and the count is shared with the other framework suites, so
+    // one reading taken right after the churn is not the answer.
+    private static async Task<long> WaitForServerConnectionsAsync(ClickHouseTcpClient client, long limit)
+    {
+        long open = 0;
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            open = await ServerConnectionsAsync(client);
+            if (open <= limit)
+            {
+                return open;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+        }
+
+        return open;
     }
 
     private static async Task<ulong> TemporaryTableExistsAsync(
