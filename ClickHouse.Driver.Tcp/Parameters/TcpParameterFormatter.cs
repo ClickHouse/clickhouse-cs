@@ -143,10 +143,17 @@ internal static class TcpParameterFormatter
             case "DateTime64":
                 return QuoteIfNeeded(FormatDateTime64(type, value), quote);
 
+            // A TimeOnly is a time of day and a TimeSpan an elapsed time, but both print as one clock reading.
+            case "Time" when value is TimeOnly timeOfDay:
+                return FormatTime(timeOfDay.ToTimeSpan());
+
             case "Time":
                 return value is TimeSpan timeSpan
                     ? FormatTime(timeSpan)
                     : FormatTime(Convert.ToInt32(value, CultureInfo.InvariantCulture));
+
+            case "Time64" when value is TimeOnly time64OfDay:
+                return FormatTime64(time64OfDay.ToTimeSpan(), ScaleOf(type, defaultScale: 3));
 
             case "Time64" when value is TimeSpan time64:
                 return FormatTime64(time64, ScaleOf(type, defaultScale: 3));

@@ -143,6 +143,27 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
+    // A TimeOnly reaches a different arm than a TimeSpan, and the whole day is what a time of day spans: the
+    // last representable tick is 23:59:59.9999999, which scale 7 prints in full and a coarser scale rounds up
+    // into the next hour rather than clamping.
+    [TestCase("Time", ExpectedResult = "1:02:03", TestName = "Time from a TimeOnly")]
+    [TestCase("Time64(3)", ExpectedResult = "1:02:03.123", TestName = "Time64 from a TimeOnly")]
+    [TestCase("Time64(1)", ExpectedResult = "1:02:03.1", TestName = "Time64 from a TimeOnly, truncated to the scale")]
+    public string FormatSqlText_TimeFromATimeOnly_UsesTheClockReading(string typeName)
+        => Format(new TimeOnly(1, 2, 3, 123), typeName);
+
+    [Test]
+    public void FormatSqlText_TimeOnlyAtTheEndOfTheDay_KeepsEveryTick()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format(TimeOnly.MaxValue, "Time64(7)"), Is.EqualTo("23:59:59.9999999"));
+            Assert.That(Format(TimeOnly.MaxValue, "Time64(9)"), Is.EqualTo("23:59:59.999999900"));
+            Assert.That(Format(TimeOnly.MinValue, "Time64(3)"), Is.EqualTo("0:00:00.000"));
+            Assert.That(Format(TimeOnly.MaxValue, "Time"), Is.EqualTo("24:00:00"), "rounded, not clamped to the day");
+        });
+    }
+
     [Test]
     public void FormatSqlText_NestedRows_WrapsTupleRowsInAnArray()
     {
@@ -677,6 +698,7 @@ public class ParameterTypeInferenceTests
         yield return new TestCaseData(Guid.Empty).Returns("UUID").SetName("Guid");
         yield return new TestCaseData(new DateOnly(2024, 1, 2)).Returns("Date").SetName("DateOnly");
         yield return new TestCaseData(TimeSpan.Zero).Returns("Time64(9)").SetName("TimeSpan");
+        yield return new TestCaseData(new TimeOnly(1, 2, 3)).Returns("Time64(9)").SetName("TimeOnly");
         yield return new TestCaseData(new DateTime(2024, 1, 2)).Returns("DateTime64(7, 'UTC')").SetName("DateTime");
         yield return new TestCaseData(IPAddress.Parse("1.2.3.4")).Returns("IPv4").SetName("IPv4 address");
         yield return new TestCaseData(IPAddress.Parse("::1")).Returns("IPv6").SetName("IPv6 address");

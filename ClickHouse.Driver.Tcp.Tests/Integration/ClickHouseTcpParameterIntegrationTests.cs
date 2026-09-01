@@ -112,6 +112,11 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Date32", new DateOnly(1950, 3, 4)).Returns("1950-03-04").SetName("Date32");
         yield return new TestCaseData("Time", new TimeSpan(1, 1, 1)).Returns("01:01:01").SetName("Time");
         yield return new TestCaseData("Time64(3)", new TimeSpan(0, 1, 1, 1, 500)).Returns("01:01:01.500").SetName("Time64");
+
+        // The time-of-day type, which the shipped HTTP driver takes for both of these.
+        yield return new TestCaseData("Time", new TimeOnly(1, 1, 1)).Returns("01:01:01").SetName("Time from a TimeOnly");
+        yield return new TestCaseData("Time64(3)", new TimeOnly(1, 1, 1, 500)).Returns("01:01:01.500").SetName("Time64 from a TimeOnly");
+        yield return new TestCaseData("Time64(7)", TimeOnly.MaxValue).Returns("23:59:59.9999999").SetName("Time64 from the last tick of the day");
         yield return new TestCaseData("FixedString(3)", Encoding.UTF8.GetBytes("abc")).Returns("abc").SetName("FixedString from bytes");
         yield return new TestCaseData("String", Encoding.UTF8.GetBytes("abc")).Returns("abc").SetName("String from bytes");
         yield return new TestCaseData("IntervalSecond", 5L).Returns("5").SetName("IntervalSecond");
