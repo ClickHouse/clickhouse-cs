@@ -219,4 +219,41 @@ public class ColumnCodecRegistryTests
     [Test]
     public void Resolve_AggregateFunctionNamingNoFunction_ThrowsFormat()
         => Assert.Throws<FormatException>(() => ColumnCodecRegistry.Default.Resolve("AggregateFunction()", default));
+
+    // A bare Enum names no width, so the client has to pick the one the server would. Verified on 26.6: Enum8
+    // while every ordinal is in the Int8 range, Enum16 otherwise, and the column is reported under the width
+    // chosen. No round trip can check this — the server normalizes the name away — so the codec's own name is
+    // the only place the choice is visible.
+    [TestCase("Enum('A' = 1, 'B' = 2)", "Enum8('A' = 1, 'B' = 2)")]
+    [TestCase("Enum('A' = -128, 'B' = 127)", "Enum8('A' = -128, 'B' = 127)")]
+    [TestCase("Enum('A' = 1, 'B' = 200)", "Enum16('A' = 1, 'B' = 200)")]
+    [TestCase("Enum('A' = -129)", "Enum16('A' = -129)")]
+    [TestCase("enum('a' = 1)", "Enum8('a' = 1)")]
+    public void Resolve_BareEnum_PicksTheWidthTheServerWould(string written, string expectedTypeName)
+        => Assert.That(ColumnCodecRegistry.Default.Resolve(written, ResolveContext.ForWrite).TypeName, Is.EqualTo(expectedTypeName));
+
+    [Test]
+    public void Resolve_BareEnumDeclaringNoMembers_ThrowsFormat()
+        => Assert.Throws<FormatException>(() => ColumnCodecRegistry.Default.Resolve("Enum()", ResolveContext.ForWrite));
+
+    /// <summary>
+    /// Forms a real server accepts and this client refuses on purpose. Each one either has no generator — no
+    /// header carries it and no tool writes it, so accepting it would only hide a typo in a hand-written type —
+    /// or needs grammar this client has no caller for. The assertion is the refusal *type*, because that is what
+    /// separates "malformed" from "not supported" for anyone catching them.
+    /// </summary>
+    [TestCase("Enum8('a', 'b')", typeof(FormatException), TestName = "Enum members with implicit ordinals")]
+    [TestCase("DateTime64", typeof(FormatException), TestName = "DateTime64 with no scale, which the server defaults to 3")]
+    [TestCase("Decimal", typeof(FormatException), TestName = "Decimal with no precision, which the server defaults to (10, 0)")]
+    [TestCase("Decimal(4)", typeof(FormatException), TestName = "Decimal with no scale, which the server defaults to 0")]
+    [TestCase("Tuple(UInt8,)", typeof(FormatException), TestName = "A trailing comma")]
+    [TestCase("Array(/* c */ String)", typeof(NotSupportedException), TestName = "A comment inside a type")]
+    [TestCase("`Int64`", typeof(NotSupportedException), TestName = "A backticked type name")]
+    [TestCase("\"String\"", typeof(NotSupportedException), TestName = "A double-quoted type name")]
+    [TestCase("INT(10) UNSIGNED", typeof(FormatException), TestName = "A trailing word after the arguments")]
+    public void Resolve_FormTheServerAcceptsAndThisClientDoesNot_RefusesWithTheTypeThatSaysWhy(string written, Type refusal)
+        => Assert.That(
+            Assert.Throws(refusal, () => ColumnCodecRegistry.Default.Resolve(written, ResolveContext.ForWrite)).Message,
+            Does.Contain(written),
+            "a refusal that does not quote what was written leaves the caller nothing to search for");
 }
