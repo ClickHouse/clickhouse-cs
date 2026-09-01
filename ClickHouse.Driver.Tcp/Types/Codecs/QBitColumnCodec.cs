@@ -70,6 +70,9 @@ internal abstract class QBitColumnCodec : IColumnCodec
                 $"QBit type '{node}' has an invalid vector length '{token}'; expected a positive integer.");
         }
 
+        // The four element types this codec encodes, each stored the same way — bits(T) planes over the element's
+        // raw bit pattern, most significant first. A fifth would need its own plane width here, so this is what
+        // the client implements rather than a copy of what the server permits.
         return element switch
         {
             "Int8" => new QBitSByteColumnCodec(typeName, dimension),
@@ -77,7 +80,7 @@ internal abstract class QBitColumnCodec : IColumnCodec
             "Float32" => new QBitFloatColumnCodec(typeName, dimension, bitWidth: 32),
             "Float64" => new QBitDoubleColumnCodec(typeName, dimension),
             _ => throw new NotSupportedException(
-                $"QBit type '{node}' has element type '{element}'; only Int8, BFloat16, Float32 and Float64 are supported."),
+                $"QBit type '{node}' has element type '{element}'; this client encodes Int8, BFloat16, Float32 and Float64."),
         };
     }
 
