@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
@@ -54,12 +55,30 @@ internal static class AggregateFunctionColumnCodecs
         // A parameterized function ("quantiles(0.5, 0.9)") parses as a node of its own: the Merge combinator
         // attaches to the bare name, and the parameters move to their own list ahead of the column —
         // quantilesMerge(0.5, 0.9)(column). Suggesting the bare form there hands back a query the server rejects.
-        TypeNode function = node.Arguments[0];
+        TypeNode function = FunctionOf(node);
         string parameters = function.Arguments.Count > 0 ? $"({string.Join(", ", function.Arguments)})" : string.Empty;
 
         throw new NotSupportedException(
             $"Column type '{node}' holds the intermediate states of the '{function.Name}' aggregate function, whose encoding is the " +
             $"function's own; this client cannot decode it. Merge the state in the query instead — " +
             $"'SELECT {function.Name}Merge{parameters}(column) ...' — which returns an ordinary column.");
+    }
+
+    /// <summary>Picks out the argument that names the aggregate function.</summary>
+    /// <param name="node">The parsed <c>AggregateFunction</c> node, with at least one argument.</param>
+    /// <returns>The argument naming the function.</returns>
+    private static TypeNode FunctionOf(TypeNode node)
+    {
+        // Some states carry a leading serialization version, which is not a function name: 26.6 reports
+        // sumMapState(...) as AggregateFunction(1, sumMap, Array(UInt64), Array(UInt64)), and the same for
+        // minMap, maxMap and sumMapFiltered([1, 2]). Naming that argument suggests '1Merge(column)'.
+        if (node.Arguments.Count > 1
+            && node.Arguments[0].Arguments.Count == 0
+            && uint.TryParse(node.Arguments[0].Name, NumberStyles.None, CultureInfo.InvariantCulture, out _))
+        {
+            return node.Arguments[1];
+        }
+
+        return node.Arguments[0];
     }
 }
