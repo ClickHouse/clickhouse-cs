@@ -118,6 +118,8 @@ public class SerializationErrorClassificationTests : AbstractConnectionTestFixtu
             .Append(new DateRow { Id = ulong.MaxValue, Value = OutOfRangeValue })
             .ToList();
 
+        var invalidRowIndex = rows.Count - 1;
+
         var ex = Assert.CatchAsync<ClickHouseBulkCopySerializationException>(
             () => InsertDateRowsAsync(client, path, table, rows, Uncompressed()));
 
@@ -129,6 +131,7 @@ public class SerializationErrorClassificationTests : AbstractConnectionTestFixtu
             Assert.That(ex.InnerException?.Message, Does.Contain("ClickHouse DateTime"));
             Assert.That(ex.Row, Is.Not.Null);
             Assert.That(ex.Row[1], Is.EqualTo(OutOfRangeValue));
+            Assert.That(ex.RowIndex, Is.EqualTo(invalidRowIndex));
         });
 
         // A truncated insert commits nothing, so none of the rows the server did receive land.

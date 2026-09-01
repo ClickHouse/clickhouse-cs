@@ -59,6 +59,7 @@ internal class PocoBatchSerializer
         var types = batch.Types;
 
         T current = default;
+        int currentRowIndex = 0;
 
         // See BatchSerializer.Serialize: in URL mode the body must start at the first row, so no
         // prologue is written and the row/prologue discriminator starts out set.
@@ -75,9 +76,9 @@ internal class PocoBatchSerializer
             if (writers != null)
             {
                 // RowBinary path
-                for (int i = 0; i < batch.Size; i++)
+                for (; currentRowIndex < batch.Size; currentRowIndex++)
                 {
-                    current = batch.Rows[i];
+                    current = batch.Rows[currentRowIndex];
                     for (int col = 0; col < writers.Length; col++)
                         writers[col](current, writer);
                 }
@@ -85,9 +86,9 @@ internal class PocoBatchSerializer
             else
             {
                 // RowBinaryWithDefaults path
-                for (int i = 0; i < batch.Size; i++)
+                for (; currentRowIndex < batch.Size; currentRowIndex++)
                 {
-                    current = batch.Rows[i];
+                    current = batch.Rows[currentRowIndex];
                     rowSerializer.Serialize(current, getters, types, writer);
                 }
             }
@@ -119,7 +120,7 @@ internal class PocoBatchSerializer
                 }
             }
 
-            throw new ClickHouseBulkCopySerializationException(failedRow, e);
+            throw new ClickHouseBulkCopySerializationException(currentRowIndex, failedRow, e);
         }
 
         writer.Dispose();
