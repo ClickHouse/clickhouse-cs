@@ -150,5 +150,5 @@ internal sealed class DateTimeColumn : IColumn<uint>, IDateTimeColumn, IStoredVa
         return new DateTimeColumn(name, typeName, timeZone, rented, byteCount, pooled: true);
     }
 
-    private DateTimeOffset ToDateTimeOffset(uint seconds) => ColumnValueProjections.DateTimeToOffset(seconds, timeZone.Value);
+    private DateTimeOffset ToDateTimeOffset(uint seconds) => ColumnValueProjections.DateTimeToOffset(seconds, timeZone);
 }
