@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Compression;
@@ -103,6 +104,31 @@ public class ClickHouseRawResultDecompressionTests
         var decompressed = await raw.ReadDecompressedStreamAsync();
 
         Assert.That(decompressed, Is.SameAs(contentStream), "nothing to decode, so nothing to wrap");
+    }
+    
+    [Test]
+    public async Task ReadDecompressedStreamAsync_WithCancellationToken_ReturnsTheRawContentStream()
+    {
+        using var cts = new CancellationTokenSource();
+        using var response = CreateResponse(Plaintext, contentEncoding: null);
+        using var raw = new ClickHouseRawResult(response);
+
+        var contentStream = await raw.ReadAsStreamAsync(cts.Token);
+        var decompressed = await raw.ReadDecompressedStreamAsync(cts.Token);
+
+        Assert.That(decompressed, Is.SameAs(contentStream), "nothing to decode, so nothing to wrap");
+    }
+    
+    [Test]
+    public async Task ReadDecompressedStreamAsync_WithCanceledToken_ThrowsOperationCanceledException()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        
+        using var response = CreateResponse(Plaintext, contentEncoding: null);
+        using var raw = new ClickHouseRawResult(response);
+        
+        Assert.CatchAsync<OperationCanceledException>(() => raw.ReadDecompressedStreamAsync(cts.Token));
     }
 
     [Test]
