@@ -135,7 +135,7 @@ internal static class ParameterTypeInference
             byte[] or ReadOnlyMemory<byte> => node.Name is "String" or "FixedString" ? node.Name : "String",
 
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
-            string or char => node.Name is "String" or "FixedString" or "Enum8" or "Enum16" ? node.Name : "String",
+            string or char => node.Name is "String" or "FixedString" or "Enum" or "Enum8" or "Enum16" ? node.Name : "String",
 
             // A float is the only value BFloat16 accepts, so it matches that alternative as well as Float32.
             float => node.Name is "Float32" or "BFloat16" ? node.Name : "Float32",
