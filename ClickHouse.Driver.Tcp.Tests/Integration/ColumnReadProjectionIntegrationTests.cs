@@ -101,6 +101,39 @@ public class ColumnReadProjectionIntegrationTests
     }
 
     /// <summary>
+    /// The server accepts and applies fixed offsets .NET cannot represent — on 26.6 both of these are past
+    /// <see cref="TimeZoneInfo"/>'s ±14 hours — and it is the server that decides what a header carries. The
+    /// seconds are the wire value and need no zone, so the read has to arrive; only a calendar value reports it.
+    /// </summary>
+    [TestCase("Fixed/UTC+19:00:00", "+19:00:00")]
+    [TestCase("Fixed/UTC-18:00:00", "-18:00:00")]
+    public async Task StreamAsync_DateTimeOffsetTimeZoneInfoCannotHold_ReadsTheSecondsAndReportsOnlyTheZone(string zone, string offset)
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        uint canonical = 0;
+        FormatException fromTimeZone = null;
+        FormatException fromProjection = null;
+
+        await foreach (Block block in client.StreamAsync(
+            $"SELECT toDateTime(1700000000, '{zone}')",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            canonical = ((IColumn<uint>)column).Values[0];
+            fromTimeZone = Assert.Throws<FormatException>(() => _ = ((IDateTimeColumn)column).TimeZone);
+            fromProjection = Assert.Throws<FormatException>(() => ProjectRow<DateTime>(column, 0));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(canonical, Is.EqualTo(1_700_000_000u));
+            Assert.That(fromTimeZone?.Message, Does.Contain(zone).And.Contain(offset));
+            Assert.That(fromProjection?.Message, Does.Contain(offset));
+        });
+    }
+
+    /// <summary>
     /// A daylight-saving date, where the offset differs from the zone's standard offset. A projection that used a
     /// fixed base offset instead of resolving it per instant would pass the winter case above and fail here.
     /// </summary>

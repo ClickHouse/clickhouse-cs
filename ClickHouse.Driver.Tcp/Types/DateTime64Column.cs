@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
@@ -23,7 +24,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 internal sealed class DateTime64Column : IColumn<long>, IDateTimeColumn, IStoredValuesColumn
 {
     private readonly int scale;
-    private readonly TimeZoneInfo timeZone;
+    private readonly ResolvedTimeZone timeZone;
     private readonly int length;
     private readonly bool pooled;
     private byte[] buffer;
@@ -36,7 +37,7 @@ internal sealed class DateTime64Column : IColumn<long>, IDateTimeColumn, IStored
     /// <param name="buffer">The little-endian column bytes (may be longer than <paramref name="length"/>).</param>
     /// <param name="length">The logical byte length; must be a whole multiple of <c>sizeof(long)</c>.</param>
     /// <param name="pooled">Whether <paramref name="buffer"/> was rented and should be returned on dispose.</param>
-    public DateTime64Column(string name, string typeName, int scale, TimeZoneInfo timeZone, byte[] buffer, int length, bool pooled)
+    public DateTime64Column(string name, string typeName, int scale, ResolvedTimeZone timeZone, byte[] buffer, int length, bool pooled)
     {
         Name = name;
         TypeName = typeName;
@@ -61,7 +62,9 @@ internal sealed class DateTime64Column : IColumn<long>, IDateTimeColumn, IStored
 
     /// <summary>The timezone the counts are presented in, shared by every value in the column. Combine with
     /// <see cref="Scale"/> to interpret the raw <see cref="Values"/> counts.</summary>
-    public TimeZoneInfo TimeZone => timeZone;
+    /// <exception cref="FormatException">The header named a timezone this platform cannot represent. The
+    /// <see cref="Values"/> counts are unaffected.</exception>
+    public TimeZoneInfo TimeZone => timeZone.Value;
 
     /// <summary>
     /// The raw signed tick counts (at <c>10^-Scale</c> seconds since the epoch), as a zero-copy view. This is the
@@ -128,7 +131,7 @@ internal sealed class DateTime64Column : IColumn<long>, IDateTimeColumn, IStored
         string name,
         string typeName,
         int scale,
-        TimeZoneInfo timeZone,
+        ResolvedTimeZone timeZone,
         int rowCount,
         CancellationToken cancellationToken)
     {
@@ -155,5 +158,5 @@ internal sealed class DateTime64Column : IColumn<long>, IDateTimeColumn, IStored
     // Projects a raw count onto the .NET calendar and presents it in the column's timezone. Sub-100 ns digits at
     // scale 8/9 are truncated toward zero here; the exact value stays in Values. The offset is resolved from the
     // instant so both daylight-saving transitions and historical base-offset changes are honored.
-    private DateTimeOffset ToDateTimeOffset(long count) => ColumnValueProjections.DateTime64ToOffset(count, scale, timeZone);
+    private DateTimeOffset ToDateTimeOffset(long count) => ColumnValueProjections.DateTime64ToOffset(count, scale, timeZone.Value);
 }
