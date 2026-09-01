@@ -123,4 +123,145 @@ public class ComputedColumnInsertIntegrationTests
             await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {table}");
         }
     }
+
+    /// <summary>
+    /// An insert with no column list. The schema block names the three insertable columns and omits the
+    /// <c>MATERIALIZED</c> and <c>ALIAS</c> ones, so what a caller must supply is not the table's column list —
+    /// which is what makes building columns from the table definition go wrong.
+    /// </summary>
+    [Test]
+    public async Task InsertAsync_NoColumnList_SchemaBlockNamesTheInsertableColumnsOnly()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = await CreateTableAsync(connection);
+        try
+        {
+            var schemaColumns = new List<string>();
+            await connection.InsertAsync(
+                $"INSERT INTO {table} VALUES",
+                rowCount: 2,
+                buildColumns: schema =>
+                {
+                    for (int i = 0; i < schema.ColumnCount; i++)
+                    {
+                        schemaColumns.Add(schema[i].Name);
+                    }
+
+                    return new FixedColumnSource(
+                    [
+                        PrimitiveColumn<ulong>.FromValues("id", "UInt64", [1, 2]),
+                        new ArrayColumn<string>("plain", "String", ["a", "b"]),
+                        new ArrayColumn<string>("withDefault", "String", ["given", "given"]),
+                    ]);
+                },
+                settings: null,
+                parameters: null,
+                queryId: null,
+                maxRowsPerBlock: null,
+                cancellationToken: None);
+
+            List<string> rows = await ReadEveryColumnAsync(connection, table);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(schemaColumns, Is.EqualTo(new[] { "id", "plain", "withDefault" }));
+                Assert.That(rows[0], Is.EqualTo("1/a/given/2/2"), "a supplied DEFAULT column keeps its value");
+            });
+        }
+        finally
+        {
+            await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    /// <summary>
+    /// Supplying a <c>MATERIALIZED</c> column, the mistake a caller makes after reading the table definition.
+    /// The client refuses it against the schema block before writing anything, and names the column.
+    /// </summary>
+    [Test]
+    public async Task InsertAsync_SupplyingAMaterializedColumn_RefusesAndNamesTheColumn()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = await CreateTableAsync(connection);
+        try
+        {
+            IColumn[] columns =
+            [
+                PrimitiveColumn<ulong>.FromValues("id", "UInt64", [1, 2]),
+                new ArrayColumn<string>("plain", "String", ["a", "b"]),
+                PrimitiveColumn<ulong>.FromValues("materialized", "UInt64", [9, 9]),
+            ];
+
+            var refusal = Assert.ThrowsAsync<ArgumentException>(
+                async () => await connection.InsertAsync($"INSERT INTO {table} (id, plain) VALUES", columns, cancellationToken: None));
+
+            // The mismatch writes no row block and closes the row stream cleanly, so the caller's mistake costs
+            // neither rows nor the connection. Counted on the same connection, which is the proof it survived.
+            long committed = 0;
+            await foreach (Block block in connection.QueryAsync($"SELECT count() FROM {table}", cancellationToken: None))
+            {
+                committed = Convert.ToInt64(block[0].GetValue(0));
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refusal.Message, Does.Contain("materialized"), "the caller has to be told which column");
+                Assert.That(committed, Is.Zero);
+                Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+            });
+        }
+        finally
+        {
+            await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    /// <summary>
+    /// Naming the <c>MATERIALIZED</c> column in the statement instead. Now it is the server's refusal, not the
+    /// client's, and it arrives before the schema block — so the two mistakes fail on different sides and a
+    /// caller sees a different exception type for each.
+    /// </summary>
+    [Test]
+    public async Task InsertAsync_StatementNamesAMaterializedColumn_IsRefusedByTheServer()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = await CreateTableAsync(connection);
+        try
+        {
+            IColumn[] columns =
+            [
+                PrimitiveColumn<ulong>.FromValues("id", "UInt64", [1, 2]),
+                new ArrayColumn<string>("plain", "String", ["a", "b"]),
+                PrimitiveColumn<ulong>.FromValues("materialized", "UInt64", [9, 9]),
+            ];
+
+            var refusal = Assert.ThrowsAsync<ClickHouseTcpServerException>(
+                async () => await connection.InsertAsync(
+                    $"INSERT INTO {table} (id, plain, materialized) VALUES", columns, cancellationToken: None));
+
+            Assert.That(refusal.Message, Does.Contain("MATERIALIZED"));
+        }
+        finally
+        {
+            await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    // A row-stream source over columns already built: the insert calls Gather per block, and these columns hold
+    // every row already, so there is nothing to gather.
+    private sealed class FixedColumnSource(IReadOnlyList<IColumn> columns) : IInsertColumnSource
+    {
+        public IReadOnlyList<IColumn> Columns { get; } = columns;
+
+        public void Gather(int start, int length)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+    }
 }
