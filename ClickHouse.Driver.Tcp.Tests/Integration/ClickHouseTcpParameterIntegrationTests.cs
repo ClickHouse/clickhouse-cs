@@ -11,9 +11,7 @@ using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
-// Parameterized queries end to end. These are the cases that prove the wire contract: the server restores the
-// parameter value as a Field before the {name:Type} substitution reads it, so the value crosses two unescape
-// stages. Only a live server can show that the client's escaping survives both.
+// Live-server coverage for the two parsing stages native parameter values cross.
 [TestFixture]
 [Category("Integration")]
 public class ClickHouseTcpParameterIntegrationTests
@@ -33,14 +31,12 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Bool", false).Returns("false").SetName("Bool false");
         yield return new TestCaseData("Decimal64(4)", 1.2345m).Returns("1.2345").SetName("Decimal64");
 
-        // .NET spells these NaN/Infinity and ClickHouse spells them nan/inf. The server's reader accepts both,
-        // so the formatter needs no special case — but only a round-trip can show that.
+        // The server accepts .NET's NaN and Infinity spellings.
         yield return new TestCaseData("Float64", double.NaN).Returns("nan").SetName("Float64 NaN");
         yield return new TestCaseData("Float64", double.PositiveInfinity).Returns("inf").SetName("Float64 +Infinity");
         yield return new TestCaseData("Float64", double.NegativeInfinity).Returns("-inf").SetName("Float64 -Infinity");
 
-        // A Bool inside a composite must stay true/false. The server rejects 1/0 there, though it takes them
-        // for a scalar Bool, so a formatter that emitted digits would pass the scalar case and fail this one.
+        // Composite Bool values require true/false; 1/0 works only for scalars.
         yield return new TestCaseData("Array(Bool)", new[] { true, false }).Returns("[true,false]").SetName("Array of Bool");
 
         yield return new TestCaseData("String", "plain").Returns("plain").SetName("String");
@@ -50,8 +46,7 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("String", "a\tb").Returns("a\tb").SetName("String with a tab");
         yield return new TestCaseData("String", string.Empty).Returns(string.Empty).SetName("Empty string");
 
-        // A carriage return and a NUL need no escape, unlike a newline and a tab, which end the server's
-        // reader. Pinned because the escape set is easy to widen or narrow by accident.
+        // Carriage return and NUL are data; newline and tab terminate the reader unless escaped.
         yield return new TestCaseData("String", "a\rb").Returns("a\rb").SetName("String with a carriage return");
         yield return new TestCaseData("String", "a\0b").Returns("a\0b").SetName("String with a NUL");
         yield return new TestCaseData("String", @"ends\").Returns(@"ends\").SetName("String ending in a backslash");
@@ -92,8 +87,7 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Tuple(String, Int32)", ("a", 1)).Returns("('a',1)").SetName("Tuple");
         yield return new TestCaseData("Tuple(String, Int32)", ("O'B", 1)).Returns(@"('O\'B',1)").SetName("Tuple element with a quote");
 
-        // Map shapes past the one-pair case: the empty literal, a key needing escapes, a non-string key, and
-        // two levels of nesting. Each has its own way of producing text the server will not read back.
+        // Covers empty, escaped-key, non-string-key, and nested map literals.
         yield return new TestCaseData("Map(String, String)", new Dictionary<string, string>())
             .Returns("{}").SetName("Empty map");
         yield return new TestCaseData("Map(String, UInt8)", new Dictionary<string, byte> { [@"a'b\c"] = 1 })
@@ -103,8 +97,7 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Map(String, Array(Bool))", new Dictionary<string, bool[]> { ["a"] = [true, false] })
             .Returns("{'a':[true,false]}").SetName("Map holding an array");
 
-        // Types whose text form the unit tests pin but no round-trip reached, so nothing proved the server
-        // reads back what the formatter writes.
+        // Adds live-server coverage for formatter-only unit cases.
         yield return new TestCaseData("Date32", new DateOnly(1950, 3, 4)).Returns("1950-03-04").SetName("Date32");
         yield return new TestCaseData("Time", new TimeSpan(1, 1, 1)).Returns("01:01:01").SetName("Time");
         yield return new TestCaseData("Time64(3)", new TimeSpan(0, 1, 1, 1, 500)).Returns("01:01:01.500").SetName("Time64");
@@ -117,8 +110,7 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Variant(Int64, String)", 7L).Returns("7").SetName("Variant picks the integer");
         yield return new TestCaseData("Variant(Int64, String)", "x").Returns("x").SetName("Variant picks the string");
 
-        // Types the HTTP formatter accepts and this one used to reject. The server takes both JSON spellings,
-        // and the geo names stand for shapes over Point, so each must reach the arm it stands for.
+        // Covers both JSON spellings and geo types backed by tuple/array shapes.
         yield return new TestCaseData("Json", "{\"a\":1}").Returns("{\"a\":1}").SetName("Json in the lowercase spelling");
         yield return new TestCaseData("JSON", "{\"a\":1}").Returns("{\"a\":1}").SetName("JSON in the uppercase spelling");
         yield return new TestCaseData("Point", (10.0, 20.0)).Returns("(10,20)").SetName("Point");
@@ -155,10 +147,7 @@ public class ClickHouseTcpParameterIntegrationTests
             (1, 2, 3, 4, 5, 6, 7, "eight", "nine")).Returns("(1,2,3,4,5,6,7,'eight','nine')").SetName("Tuple of nine");
     }
 
-    // A ClickHouse String holds bytes, not characters, so a value can hold a sequence that is not UTF-8 —
-    // which is exactly what the read path returns for a byte-array column. Decoding it turned every bad byte
-    // into U+FFFD and sent EF BF BD, changing the value with no error. Compared as hex, because the whole
-    // point is the bytes rather than the text.
+    // Compare hex to verify non-UTF-8 bytes survive without replacement-character conversion.
     [TestCase("String", "FFFE41", TestName = "String keeps bytes that are not UTF-8")]
     [TestCase("FixedString(3)", "FFFE41", TestName = "FixedString keeps bytes that are not UTF-8")]
     public async Task QueryAsync_ByteArrayThatIsNotUtf8_ArrivesByteForByte(string clickHouseType, string expectedHex)
@@ -206,8 +195,7 @@ public class ClickHouseTcpParameterIntegrationTests
     [Test]
     public async Task QueryAsync_MapReadBackAsPairs_CanBeBoundAgain()
     {
-        // A Map column reads back as KeyValuePair[] so duplicate keys and pair order survive. Binding that
-        // value straight back used to hit the "cannot convert" arm, because only IDictionary was accepted.
+        // Map reads as KeyValuePair[] to preserve order and duplicate keys; that shape must be reusable.
         await using var client = TcpServerFixture.CreateClient();
         KeyValuePair<string, int>[] pairs = [new("b", 2), new("a", 1)];
         var options = new ClickHouseTcpQueryOptions
@@ -223,9 +211,7 @@ public class ClickHouseTcpParameterIntegrationTests
     [Test]
     public async Task QueryAsync_SqlStringHoldingABackslashEscapedQuote_RunsAsWritten()
     {
-        // Coverage of the scanner fix itself lives in SqlParameterTypeExtractorTests, where the mis-scan is
-        // observable. It is not observable here: whichever type the client resolves, a plain value formats to
-        // the same text, so this only pins that the server accepts the query and the escape survives it.
+        // Scanner unit tests cover hint detection; this verifies the escaped SQL reaches the server unchanged.
         await using var client = TcpServerFixture.CreateClient();
         var options = new ClickHouseTcpQueryOptions
         {
@@ -240,8 +226,7 @@ public class ClickHouseTcpParameterIntegrationTests
     [Test]
     public async Task QueryAsync_KindedDateTimeWithATimezoneInTheHint_KeepsTheInstant()
     {
-        // The safe form. The client moves the instant into the timezone the hint declares, and the server reads
-        // the wall-clock text back in that same timezone, so the two agree whatever the session is set to.
+        // A declared timezone keeps the instant independent of the session timezone.
         await using var client = TcpServerFixture.CreateClient();
         var instant = new DateTimeOffset(2020, 1, 2, 12, 0, 0, TimeSpan.FromHours(9));
         var options = new ClickHouseTcpQueryOptions
@@ -258,9 +243,7 @@ public class ClickHouseTcpParameterIntegrationTests
     [Test]
     public async Task QueryAsync_KindedDateTimeWithABareHint_IsRefusedBeforeItReachesTheServer()
     {
-        // A bare {d:DateTime} hint names no timezone, so the server would read the wall-clock text in
-        // session_timezone and the instant would move with no error raised. The client refuses instead. This
-        // runs against the server to prove the refusal happens first, so no wrong value is ever stored.
+        // Refuse before the server can reinterpret the instant in its session timezone.
         await using var client = TcpServerFixture.CreateClient();
         var options = new ClickHouseTcpQueryOptions
         {
@@ -280,9 +263,7 @@ public class ClickHouseTcpParameterIntegrationTests
     [Test]
     public async Task QueryAsync_UnspecifiedDateTimeWithABareHint_IsReadInTheSessionTimezone()
     {
-        // The other half, and the reason the refusal above is limited to a value that names an instant. An
-        // unspecified DateTime is a wall-clock time with no instant attached, so reading it in the session
-        // timezone is what the caller asked for. It stays legal.
+        // An unspecified DateTime is wall-clock time, so the session timezone may interpret it.
         await using var client = TcpServerFixture.CreateClient();
         var wallClock = new DateTime(2020, 1, 2, 12, 0, 0, DateTimeKind.Unspecified);
         var options = new ClickHouseTcpQueryOptions
@@ -315,10 +296,8 @@ public class ClickHouseTcpParameterIntegrationTests
     [TestCase("offset")]
     public async Task QueryAsync_ParameterNamedAfterAServerSetting_NeverBindsToTheWrongValue(string name)
     {
-        // The parameter list is the settings list, so a server that reads the name as that setting applies it
-        // instead of binding it. Whether it does is version-dependent: 25.8 through 26.6 reject the query, and
-        // newer servers bind it correctly. Both are acceptable; a wrong count is not, and that is the outcome
-        // this pins. See the remark on ClickHouseTcpQueryOptions.Parameters.
+        // ClickHouse 25.8 through 26.6 may treat this as a setting and reject it; newer versions bind it.
+        // Either result is safe, but binding the wrong value is not.
         await using var client = TcpServerFixture.CreateClient();
         var options = new ClickHouseTcpQueryOptions
         {
@@ -355,9 +334,7 @@ public class ClickHouseTcpParameterIntegrationTests
     [Test]
     public async Task QueryAsync_LazySequenceParameter_ReachesTheServerWhole()
     {
-        // A lazy sequence must reach the server whole. The placeholder here means inference does not run, so
-        // this covers the formatter's own single pass; BuildParametersTests covers the inference pass, which
-        // needs SQL that does not name the parameter and so cannot be observed through a query at all.
+        // A typed placeholder must enumerate the lazy value only once.
         await using var client = TcpServerFixture.CreateClient();
         IEnumerable<int> lazy = Enumerable.Range(1, 3).Select(i => i);
         var options = new ClickHouseTcpQueryOptions
@@ -459,7 +436,7 @@ public class ClickHouseTcpParameterIntegrationTests
         await using var client = TcpServerFixture.CreateClient();
         var options = new ClickHouseTcpQueryOptions
         {
-            Parameters = new ClickHouseTcpParameterCollection { { "used", 1 }, { "unused", "spare" } },
+            Parameters = new ClickHouseTcpParameterCollection { { "used", 1 }, { "unused", "spare", "String" } },
         };
 
         object value = await ScalarAsync(client, "SELECT {used:Int32}", options);
@@ -507,10 +484,7 @@ public class ClickHouseTcpParameterIntegrationTests
         }
     }
 
-    // The insert methods take their own options type and their own call paths, so the test above — which goes
-    // through ExecuteAsync — proves nothing about them. A dropped parameters argument here would have
-    // passed the whole suite. The target table is the parameter, which is the only place one fits in an
-    // INSERT whose values arrive as a data block.
+    // Exercise both insert paths by parameterizing the target; ExecuteAsync uses a different path.
     [Test]
     public async Task InsertRowsAsync_ParameterizedTarget_WritesToTheNamedTable()
     {

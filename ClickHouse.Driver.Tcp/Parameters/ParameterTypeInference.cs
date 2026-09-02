@@ -10,14 +10,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Parameters;
 
 /// <summary>
-/// Infers a ClickHouse type name from a CLR value, for the last rung of the parameter type-resolution chain.
+/// Retained for future client-side placeholder support and used to match Variant alternatives.
 /// </summary>
-/// <remarks>
-/// This is a fallback, not the normal path. A native-protocol query carries its parameter types in the SQL
-/// (<c>{name:Type}</c>), so the extracted hint almost always answers first and the server parses the value
-/// against the declared type either way. Inference covers the two cases the hint cannot: a parameter that the
-/// SQL does not reference, and SQL whose hint the scanner did not see.
-/// </remarks>
 internal static class ParameterTypeInference
 {
     /// <summary>Infers the ClickHouse type name to format a value as.</summary>
@@ -95,16 +89,13 @@ internal static class ParameterTypeInference
             return Accepts(node.Arguments[0], value);
         }
 
-        // A composite matches only when its contents do. Comparing the outer name alone would let
-        // Variant(Array(Int32), Array(String)) take a string[] on its first arm and format the strings as
-        // integers, which the server then rejects or, worse, reads as something else.
+        // Match composite alternatives recursively; their outer names are insufficient.
         switch (value)
         {
             case IDictionary dictionary when node.Name is "Map":
                 return node.Arguments.Count == 2 && AcceptsPairs(node, dictionary);
 
-            // The shape this client reads a Map column back as. It is also an IEnumerable, so it has to be
-            // decided here or the Array arm below would claim it.
+            // Handle the Map read shape before the general Array case.
             case not string and IEnumerable pairs when MapPairs.IsPairSequence(value):
                 return node.Name is "Map"
                     && node.Arguments.Count == 2
@@ -122,8 +113,7 @@ internal static class ParameterTypeInference
 
         string inferred = value switch
         {
-            // A byte array reads as text or as an array of bytes, so an Array alternative takes it first. The
-            // string arms would otherwise win and print the CLR type name instead of the contents.
+            // Prefer Array for byte[] when offered; otherwise treat it as String.
             byte[] => node.Name is "Array" or "String" or "FixedString" ? node.Name : "String",
 
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
@@ -137,10 +127,7 @@ internal static class ParameterTypeInference
         return string.Equals(inferred, node.Name, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// Reports whether every element of a sequence fits the element type. An empty sequence fits any element
-    /// type, because there is nothing to contradict it.
-    /// </summary>
+    /// <summary>Reports whether every element fits; an empty sequence fits any element type.</summary>
     /// <param name="elementType">The candidate element type.</param>
     /// <param name="elements">The sequence.</param>
     /// <returns>True when every element fits.</returns>
@@ -198,8 +185,7 @@ internal static class ParameterTypeInference
     /// <returns>True when the arity and every element fit.</returns>
     private static bool AcceptsTupleElements(TypeNode node, ITuple value)
     {
-        // Split does not validate arity — ElementTypeStrings is what raises FormatException — so there is
-        // nothing to guard against here and the arity check below is the one that matters.
+        // Split does not validate arity, so compare it explicitly.
         TypeNode[] elementTypes = NamedElementParser.Split(node).Select(element => element.Type).ToArray();
 
         if (elementTypes.Length != value.Length)
@@ -218,11 +204,7 @@ internal static class ParameterTypeInference
         return true;
     }
 
-    /// <summary>
-    /// The type a value maps to, or null when it maps to none. Used only when matching a Variant alternative,
-    /// where an unmappable value must simply fail to match and let the caller report the Variant as a whole. An
-    /// exception here would name a parameter the caller never wrote.
-    /// </summary>
+    /// <summary>Infers a Variant candidate, returning null instead of a parameter-level error.</summary>
     /// <param name="value">The value to place.</param>
     /// <returns>The base type name, or null.</returns>
     private static string InferOrNothing(object value)

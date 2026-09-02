@@ -29,34 +29,19 @@ public record ClickHouseTcpQueryOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Each value is formatted as the type its placeholder declares, so the query text must carry the type —
-    /// <c>SELECT * FROM t WHERE id = {id:Int32}</c>. A parameter can override that type; see
-    /// <see cref="ClickHouseTcpParameter.ClickHouseType"/>. Parameters need a server whose protocol revision is
-    /// 54459 or above; an older one rejects the query rather than running it without them.
+    /// Each parameter needs a type from its placeholder, for example <c>{id:Int32}</c>, or from
+    /// <see cref="ClickHouseTcpParameter.ClickHouseType"/>. The operation throws when neither supplies one.
     /// </para>
     /// <para>
-    /// <b>Declare a timezone when the value names an instant.</b> A <see cref="DateTime"/> whose
-    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Utc"/> or <see cref="DateTimeKind.Local"/>, and
-    /// any <see cref="DateTimeOffset"/>, names a point in time. The wire carries a wall-clock time and no
-    /// timezone, so the server reads it in its session timezone: a type that declares none moves the instant
-    /// whenever that session is not UTC, and reports no error. The client refuses such a parameter rather than
-    /// send it. Write <c>{t:DateTime('UTC')}</c> or <c>{t:DateTime64(3, 'UTC')}</c>, or pass a
-    /// <see cref="DateTime"/> of <see cref="DateTimeKind.Unspecified"/> when you do mean a wall-clock time for
-    /// the server to read in its own timezone.
+    /// Declare a timezone for <see cref="DateTimeOffset"/> and for <see cref="DateTime"/> values whose
+    /// <see cref="DateTime.Kind"/> is not <see cref="DateTimeKind.Unspecified"/>, for example
+    /// <c>{t:DateTime('UTC')}</c>. Without one, the client refuses the value to prevent the server's session
+    /// timezone from changing the instant. Use <see cref="DateTimeKind.Unspecified"/> only for wall-clock time.
     /// </para>
     /// <para>
-    /// <b>Avoid naming a parameter after a server setting.</b> The native protocol carries parameters in the
-    /// settings list, so a server that reads the name as a setting applies it as that setting instead of
-    /// binding it. The query then fails with a parse error about a quoted string, which names neither the
-    /// parameter nor the cause. The common traps are <c>limit</c> and <c>offset</c>; <c>max_threads</c>,
-    /// <c>readonly</c> and <c>log_comment</c> behave the same way. Rename the parameter (<c>row_limit</c>) and
-    /// the query works.
-    /// </para>
-    /// <para>
-    /// This is the server's behaviour, not this client's — <c>clickhouse-client --param_limit=</c> fails the
-    /// same way — and it is version-dependent: it affects 25.8 through 26.6, while newer servers bind such a
-    /// name correctly. It does not affect this driver's HTTP transport, which carries the name separately.
-    /// Rename the parameter if you support any server in that range.
+    /// On ClickHouse 25.8 through 26.6, names matching server settings, such as <c>limit</c> or <c>offset</c>,
+    /// may be treated as settings and rejected. Rename them (for example, <c>row_limit</c>) when supporting
+    /// those versions. Newer servers and this driver's HTTP transport are unaffected.
     /// </para>
     /// </remarks>
     public ClickHouseTcpParameterCollection Parameters { get; init; }

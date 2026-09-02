@@ -404,17 +404,12 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     private IReadOnlyDictionary<string, string> BuildSettings(ClickHouseTcpQueryOptions options)
         => MergeSettings(Options.CustomSettings, options?.Settings);
 
-    /// <summary>
-    /// Resolves each bound parameter to the wire text for the Query packet's parameter list.
-    /// </summary>
+    /// <summary>Formats bound parameters for the Query packet.</summary>
     /// <param name="sql">The SQL text, scanned for the <c>{name:Type}</c> placeholders that give the types.</param>
     /// <param name="options">The per-query options carrying the parameters, or null for none.</param>
     /// <returns>The formatted parameters by name, or null when none are bound.</returns>
     /// <remarks>
-    /// The type each value is formatted as comes from, in order: the parameter's own
-    /// <see cref="ClickHouseTcpParameter.ClickHouseType"/>, the query's <c>{name:Type}</c> placeholder, then the
-    /// value's CLR type. The last rung only carries a parameter the query does not name, because a query that
-    /// does name it must declare the type for the server to read.
+    /// Types resolve from <see cref="ClickHouseTcpParameter.ClickHouseType"/>, then the query hint.
     /// </remarks>
     internal static IReadOnlyDictionary<string, string> BuildParameters(string sql, ClickHouseTcpQueryOptions options)
     {
@@ -430,42 +425,26 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         {
             object value = parameter.Value;
             string typeName = parameter.ClickHouseType;
-            if (string.IsNullOrWhiteSpace(typeName) && !hints.TryGetValue(parameter.Name, out typeName))
+            if (typeName is not null && string.IsNullOrWhiteSpace(typeName))
             {
-                // Inference reads the sequence to find its element type, and formatting reads it again. A
-                // sequence that can only be read once (a LINQ chain, an iterator with side effects) would come
-                // up empty the second time, so take a copy before the first read.
-                value = Materialize(value);
-                typeName = ParameterTypeInference.Infer(value, parameter.Name);
+                throw new ArgumentException(
+                    $"Parameter '{parameter.Name}' has an empty ClickHouseType. Set it to a type name or leave " +
+                    "it null to use the SQL hint.",
+                    parameter.Name);
+            }
+
+            if (typeName is null && !hints.TryGetValue(parameter.Name, out typeName))
+            {
+                throw new ArgumentException(
+                    $"Parameter '{parameter.Name}' has no ClickHouse type. Declare it in the SQL as " +
+                    $"{{{parameter.Name}:Type}}, or set ClickHouseType.",
+                    parameter.Name);
             }
 
             formatted[parameter.Name] = TcpParameterFormatter.Format(value, typeName, parameter.Name);
         }
 
         return formatted;
-    }
-
-    /// <summary>Copies a sequence that may only be readable once, so it can be read twice.</summary>
-    /// <param name="value">The parameter value.</param>
-    /// <returns>The value, or a copy of it when it is a sequence with no known count.</returns>
-    /// <remarks>
-    /// A string is a sequence but is read as one value, and anything with a count (an array, a list, a
-    /// dictionary) is already re-readable, so neither is copied.
-    /// </remarks>
-    private static object Materialize(object value)
-    {
-        if (value is string || value is System.Collections.ICollection || value is not System.Collections.IEnumerable sequence)
-        {
-            return value;
-        }
-
-        var copy = new List<object>();
-        foreach (object element in sequence)
-        {
-            copy.Add(element);
-        }
-
-        return copy;
     }
 
     /// <summary>

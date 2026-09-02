@@ -29,9 +29,7 @@ public class SqlParameterTypeExtractorTests
         });
     }
 
-    // ClickHouse accepts a backslash-escaped quote in a string literal as well as a doubled one. Treating \'
-    // as the end of the string made everything after it look like SQL, so the real placeholder was skipped
-    // and its type was silently lost.
+    // Backslash-escaped quotes must not hide a later placeholder.
     [TestCase(@"SELECT 'it\'s', {p:Int32}", TestName = "A backslash-escaped quote in a literal")]
     [TestCase(@"SELECT 'ends with a backslash\\', {p:Int32}", TestName = "An escaped backslash at the end of a literal")]
     [TestCase(@"SELECT 'a\'b\'c', {p:Int32}", TestName = "Several escaped quotes")]
