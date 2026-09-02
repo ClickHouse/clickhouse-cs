@@ -5,7 +5,7 @@ using NodaTime;
 
 namespace ClickHouse.Driver.Types;
 
-internal class DateTimeType : AbstractDateTimeType
+internal class DateTimeType : AbstractDateTimeType, IInstantReader
 {
     public override string Name => "DateTime";
 
@@ -24,6 +24,8 @@ internal class DateTimeType : AbstractDateTimeType
     protected override DateTime ReadDateTime(ExtendedBinaryReader reader) => ToDateTime(ReadInstant(reader));
 
     protected override DateTimeOffset ReadDateTimeOffset(ExtendedBinaryReader reader) => ToDateTimeOffset(ReadInstant(reader));
+
+    Instant IInstantReader.ReadInstant(ExtendedBinaryReader reader) => ReadInstant(reader);
 
     private static Instant ReadInstant(ExtendedBinaryReader reader) => Instant.FromUnixTimeSeconds(reader.ReadUInt32());
 
