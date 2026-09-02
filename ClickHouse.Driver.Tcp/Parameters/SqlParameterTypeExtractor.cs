@@ -4,26 +4,18 @@ using System.Collections.Generic;
 namespace ClickHouse.Driver.Tcp.Parameters;
 
 /// <summary>
-/// Extracts parameter type hints from SQL queries using ClickHouse's native parameter syntax, {parameter_name:type}.
-/// This is a port of the HTTP scanner <c>ClickHouse.Driver.ADO.Parameters.SqlParameterTypeExtractor</c>. The TCP
-/// assembly cannot reference <c>ClickHouse.Driver</c>, because the project reference runs the other way. Keep the
-/// two copies in step: a change to one must be applied to the other.
-/// <para>
-/// The two have already diverged in one place. This copy treats a backslash as an escape inside a string
-/// literal, which the HTTP copy does not, so a query holding <c>\'</c> keeps its type hints here and loses
-/// them there. That is a defect in the HTTP copy; fixing it changes a shipped client, so it is filed rather
-/// than done — see the parity-check entry in the TCP TODO.
-/// </para>
+/// Extracts ClickHouse-native <c>{name:Type}</c> hints while ignoring SQL strings and comments.
 /// </summary>
+/// <remarks>
+/// Ported from the HTTP scanner because the TCP assembly cannot reference it. Keep shared behavior aligned;
+/// this copy additionally handles backslash-escaped quotes.
+/// </remarks>
 internal static class SqlParameterTypeExtractor
 {
-    /// <summary>
-    /// Extracts type hints from a SQL query string.
-    /// </summary>
+    /// <summary>Extracts parameter names and types from a SQL query.</summary>
     /// <param name="sql">The SQL query containing parameter placeholders.</param>
     /// <returns>
-    /// A dictionary mapping parameter names to their type definitions.
-    /// Parameters without type hints (e.g., <c>{name}</c>) are not included.
+    /// Parameter names mapped to their types; placeholders without types are omitted.
     /// </returns>
     /// <exception cref="ArgumentException">The same parameter name has two different type hints.</exception>
     public static Dictionary<string, string> ExtractTypeHints(string sql)
@@ -44,8 +36,7 @@ internal static class SqlParameterTypeExtractor
 
             if (inSqlString)
             {
-                // A backslash escapes whatever follows, so \' stays inside the string. Without this the
-                // string appears to end early and the real placeholder after it is never seen.
+                // A backslash escapes the next character, including a quote.
                 if (c == '\\' && i + 1 < sql.Length)
                 {
                     i += 2;
@@ -116,10 +107,7 @@ internal static class SqlParameterTypeExtractor
         return result;
     }
 
-    /// <summary>
-    /// Tries to extract a parameter from the given position.
-    /// Returns (name, type, endIndex) if successful, or (null, null, 0) if not a valid parameter.
-    /// </summary>
+    /// <summary>Extracts a parameter at the given position, or returns null values when it is invalid.</summary>
     /// <param name="sql">The SQL query.</param>
     /// <param name="startIndex">The index of the opening brace.</param>
     /// <returns>The parameter name, its type, and the index after the closing brace.</returns>
@@ -154,8 +142,7 @@ internal static class SqlParameterTypeExtractor
 
             if (inQuote)
             {
-                // A backslash escapes whatever follows, so \' stays inside the quoted argument. Without this
-                // an enum label such as 'it\'s' ends early and the type is truncated.
+                // A backslash escapes the next character inside the type argument.
                 if (c == '\\' && i + 1 < sql.Length)
                 {
                     i += 2;
@@ -203,10 +190,7 @@ internal static class SqlParameterTypeExtractor
         return (null, null, 0);
     }
 
-    /// <summary>
-    /// Skips to the end of a line.
-    /// Returns the index of the first character after the newline, or sql.Length if no newline found.
-    /// </summary>
+    /// <summary>Returns the index after the next newline, or the end of the SQL.</summary>
     /// <param name="sql">The SQL query.</param>
     /// <param name="startIndex">The index to scan from.</param>
     /// <returns>The index after the newline.</returns>
@@ -216,10 +200,7 @@ internal static class SqlParameterTypeExtractor
         return newlineIndex < 0 ? sql.Length : newlineIndex + 1;
     }
 
-    /// <summary>
-    /// Skips a C-style block comment (after /*).
-    /// Returns the index of the first character after */, or sql.Length if not found.
-    /// </summary>
+    /// <summary>Returns the index after the block comment, or the end of the SQL.</summary>
     /// <param name="sql">The SQL query.</param>
     /// <param name="startIndex">The index to scan from.</param>
     /// <returns>The index after the closing marker.</returns>

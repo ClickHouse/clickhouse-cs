@@ -6,9 +6,7 @@ using ClickHouse.Driver.Tcp.Parameters;
 
 namespace ClickHouse.Driver.Tcp.Tests.Parameters;
 
-// The SQL-text half of the formatter: the representation the server parses against the declared type. This is
-// also the text the HTTP transport sends verbatim, so these expectations are the parity contract between the
-// two formatters. The native protocol's extra escape and quote is covered separately below.
+// Covers the inner SQL representation shared with the HTTP formatter; wire escaping is tested separately.
 [TestFixture]
 public class TcpParameterFormatterTests
 {
@@ -97,8 +95,7 @@ public class TcpParameterFormatterTests
     [Test]
     public void FormatSqlText_IdentifierType_LeavesTheValueUnescaped()
     {
-        // The server substitutes an Identifier as a bare SQL name and quotes it itself, so escaping here would
-        // corrupt it. This is the one type whose text is not escaped.
+        // The server quotes Identifier values, so client-side escaping would change the name.
         Assert.That(TcpParameterFormatter.FormatSqlText(@"we'ird\name", "Identifier", "p"), Is.EqualTo(@"we'ird\name"));
     }
 
@@ -146,9 +143,7 @@ public class TcpParameterFormatterTests
     public void FormatSqlText_MalformedTypeName_ThrowsFormatException()
         => Assert.Throws<FormatException>(() => TcpParameterFormatter.FormatSqlText(1, "Array(", "p"));
 
-    // The native protocol's own layer. A parameter value crosses two server-side unescape stages, so the SQL
-    // text above is escaped a second time and quoted as a whole. Every expectation here was confirmed against a
-    // live server by reading the value back with hex().
+    // Native parameter values add a second escape pass and an outer quote.
     private static IEnumerable<TestCaseData> WireValueCases()
     {
         yield return new TestCaseData(42, "Int32").Returns("'42'").SetName("Int32 is quoted too");

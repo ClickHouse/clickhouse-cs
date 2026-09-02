@@ -116,8 +116,7 @@ public class ClickHouseTcpParameterCollectionTests
     }
 }
 
-// The resolution chain that turns bound values into the wire parameter list: the parameter's own type first,
-// then the query's {name:Type} placeholder, then the value's CLR type.
+// Type precedence: parameter override, then SQL hint.
 [TestFixture]
 public class BuildParametersTests
 {
@@ -158,31 +157,40 @@ public class BuildParametersTests
     }
 
     [Test]
-    public void BuildParameters_NoPlaceholderForTheName_FallsBackToTheValueType()
+    public void BuildParameters_NoExplicitTypeOrSqlHint_ThrowsNamingTheParameter()
     {
-        // A parameter the query never names still has to format, because the server ignores the extra entry.
-        IReadOnlyDictionary<string, string> wire = Build(
-            "SELECT 1",
-            new ClickHouseTcpParameterCollection { { "unused", 42 } });
+        var parameters = new ClickHouseTcpParameterCollection { { "unused", 42 } };
 
-        Assert.That(wire["unused"], Is.EqualTo("'42'"));
+        var exception = Assert.Throws<ArgumentException>(() => Build("SELECT 1", parameters));
+
+        Assert.That(exception.Message, Does.Contain("unused").And.Contain("{unused:Type}"));
+    }
+
+    [TestCase("")]
+    [TestCase(" ")]
+    public void BuildParameters_ExplicitTypeIsEmpty_ThrowsEvenWhenSqlHasAHint(string clickHouseType)
+    {
+        var parameters = new ClickHouseTcpParameterCollection { { "p", 42, clickHouseType } };
+
+        var exception = Assert.Throws<ArgumentException>(() => Build("SELECT {p:Int32}", parameters));
+
+        Assert.That(exception.Message, Does.Contain("p").And.Contain("empty ClickHouseType"));
     }
 
     [Test]
     public void BuildParameters_PlaceholderInsideAComment_IsNotUsedAsAHint()
     {
-        // The scanner skips comments, so this falls through to the value's CLR type rather than to Date.
-        IReadOnlyDictionary<string, string> wire = Build(
-            "SELECT 1 -- {p:Date}\n",
-            new ClickHouseTcpParameterCollection { { "p", 7 } });
+        var parameters = new ClickHouseTcpParameterCollection { { "p", 7 } };
 
-        Assert.That(wire["p"], Is.EqualTo("'7'"));
+        var exception = Assert.Throws<ArgumentException>(() => Build("SELECT 1 -- {p:Date}\n", parameters));
+
+        Assert.That(exception.Message, Does.Contain("p").And.Contain("no ClickHouse type"));
     }
 
     [Test]
     public void BuildParameters_ValueOfAnUnmappableType_ThrowsNamingTheParameter()
     {
-        var parameters = new ClickHouseTcpParameterCollection { { "p", new object() } };
+        var parameters = new ClickHouseTcpParameterCollection { { "p", new object(), "DateTime" } };
 
         var exception = Assert.Throws<ArgumentException>(() => Build("SELECT 1", parameters));
 
@@ -190,29 +198,24 @@ public class BuildParametersTests
     }
 
     [Test]
-    public void BuildParameters_SequenceReadableOnlyOnce_IsNotConsumedByTypeInference()
+    public void BuildParameters_SequenceReadableOnlyOnceWithAnExplicitType_IsReadOnce()
     {
-        // Inference reads the sequence to find the element type and formatting reads it again, so a sequence
-        // that can only be read once used to arrive empty. The SQL must not name the parameter: a placeholder
-        // supplies the type and inference never runs, which is what made the earlier version of this test pass
-        // against the unfixed code.
         var once = new SingleUseSequence(1, 2, 3);
 
         IReadOnlyDictionary<string, string> wire = Build(
             "SELECT 1",
-            new ClickHouseTcpParameterCollection { { "p", once } });
+            new ClickHouseTcpParameterCollection { { "p", once, "Array(Int32)" } });
 
         Assert.Multiple(() =>
         {
             Assert.That(wire["p"], Is.EqualTo("'[1,2,3]'"));
-            Assert.That(once.EnumerationCount, Is.EqualTo(1), "the sequence was copied, so it was read once");
+            Assert.That(once.EnumerationCount, Is.EqualTo(1));
         });
     }
 
     [Test]
     public void BuildParameters_SequenceReadableOnlyOnceWithAPlaceholder_IsAlsoSafe()
     {
-        // With a placeholder there is no inference pass, so the sequence is read only by the formatter.
         var once = new SingleUseSequence(4, 5);
 
         IReadOnlyDictionary<string, string> wire = Build(
@@ -225,10 +228,7 @@ public class BuildParametersTests
     private static IReadOnlyDictionary<string, string> Build(string sql, ClickHouseTcpParameterCollection parameters)
         => ClickHouseTcpClient.BuildParameters(sql, new ClickHouseTcpQueryOptions { Parameters = parameters });
 
-    /// <summary>
-    /// A sequence that yields its values once and is empty afterwards. An iterator method will not do: it
-    /// returns a fresh enumerator per enumeration, so it survives being read twice and hides the defect.
-    /// </summary>
+    /// <summary>A sequence that returns its values only on the first enumeration.</summary>
     private sealed class SingleUseSequence(params int[] values) : IEnumerable<int>
     {
         private bool consumed;

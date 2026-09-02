@@ -136,8 +136,7 @@ public class TcpParameterFormatterEdgeCaseTests
         Assert.That(Format(value, "Array(Nullable(DateTime))"), Is.EqualTo("['2024-01-02T03:04:05',null]"));
     }
 
-    // A rank-2 array whose indices do not start at zero. GetLowerBound must drive the walk; using 0..Length
-    // reads outside the array and throws, and the emitted text must not differ from the zero-based equivalent.
+    // Non-zero lower bounds require GetLowerBound; zero-based indexing would throw.
     [Test]
     public void FormatSqlText_ArrayWithANonZeroLowerBound_ReadsFromItsOwnBounds()
     {
@@ -167,8 +166,7 @@ public class TcpParameterFormatterEdgeCaseTests
         Assert.That(Format(value, "Map(String, Int32)"), Is.EqualTo("{'A' : 1,'a' : 2}"));
     }
 
-    // A value that names an instant cannot go into a type with no timezone without the instant moving, so the
-    // formatter refuses instead of guessing. See RequireDeclaredTimezone.
+    // Refuse instants without a declared timezone rather than guessing the session timezone.
     private static IEnumerable<TestCaseData> InstantWithoutATimezoneCases()
     {
         yield return new TestCaseData(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), "DateTime")
@@ -239,16 +237,14 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_VariantHoldingAByteArray_PrefersTheArrayAlternative()
     {
-        // A byte array matched the string alternatives first, and the string arm prints the CLR type name, so
-        // the value silently became "System.Byte[]" instead of its contents.
+        // Prefer Array for byte[] so String does not format the CLR type name.
         Assert.That(Format(new byte[] { 1, 2 }, "Variant(Array(UInt8), String)"), Is.EqualTo("[1,2]"));
     }
 
     [Test]
     public void FormatSqlText_VariantHoldingAnUnmappableValue_NamesTheVariantNotAnInventedParameter()
     {
-        // Matching an alternative used to infer with a placeholder name, so an unmappable value reported advice
-        // about a parameter the caller never wrote.
+        // Report the declared Variant, not an internal placeholder used during matching.
         var exception = Assert.Throws<ArgumentException>(() => Format(new object(), "Variant(Int64, String)"));
 
         Assert.Multiple(() =>
@@ -268,7 +264,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_Time64AtAMidpoint_RoundsToEven()
     {
-        // decimal.ToString rounds away from zero, which put a midpoint one tick above the HTTP formatter.
+        // Explicit pre-rounding is required because decimal formatting rounds midpoints away from zero.
         Assert.Multiple(() =>
         {
             Assert.That(Format(TimeSpan.FromSeconds(0.5), "Time64(0)"), Is.EqualTo("0:00:00"));
@@ -276,8 +272,7 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
-    // Matching an alternative on its outer name alone let the first Array arm take any sequence, so a
-    // string[] was formatted as Array(Int32) and every element went out unquoted.
+    // Match Array alternatives by element type, not only by the outer name.
     [TestCase("Variant(Array(Int32), Array(String))", ExpectedResult = "['a','b']", TestName = "Array picks by element type")]
     [TestCase("Variant(Array(String), Array(Int32))", ExpectedResult = "['a','b']", TestName = "Array picks by element type, declared the other way round")]
     public string FormatSqlText_VariantOfTwoArrays_PicksTheOneWhoseElementsFit(string typeName)
@@ -321,8 +316,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_VariantWithAnEmptyArray_TakesTheFirstArrayAlternative()
     {
-        // Nothing in an empty sequence can contradict an element type, so the first Array arm is as good as
-        // any. Pinned so the recursive match does not start rejecting empties.
+        // An empty sequence fits any element type, so select the first Array alternative.
         Assert.That(Format(Array.Empty<string>(), "Variant(Array(Int32), Array(String))"), Is.EqualTo("[]"));
     }
 
@@ -384,8 +378,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_MapGivenAsKeyValuePairs_FormatsInSequenceOrder()
     {
-        // The shape a Map column reads back as. Order is kept, and duplicate keys are not collapsed, which is
-        // why the read path uses pairs rather than a dictionary in the first place.
+        // Preserve the ordered, duplicate-key Map shape returned by the read path.
         KeyValuePair<string, int>[] pairs = [new("b", 2), new("a", 1), new("b", 3)];
 
         Assert.That(Format(pairs, "Map(String, Int32)"), Is.EqualTo("{'b' : 2,'a' : 1,'b' : 3}"));
@@ -418,9 +411,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_DateTime64WithATimezoneAndAPrecision_ReadsTheTimezoneNotThePrecision()
     {
-        // The timezone is the last argument, so the precision digit must not be mistaken for one. The pair
-        // shows both halves: the named zone shifts the value, and the lone digit counts as no zone at all —
-        // if it were read as one, the second call would format instead of refusing.
+        // The final argument is a timezone only when it is not the precision.
         var instant = new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.Zero);
 
         Assert.Multiple(() =>
@@ -461,7 +452,7 @@ public class TcpParameterFormatterEdgeCaseTests
     }
 }
 
-// The last rung of type resolution: what a value formats as when the query names no type for it.
+// Retained for future client-side placeholders and used today for Variant matching.
 [TestFixture]
 public class ParameterTypeInferenceTests
 {

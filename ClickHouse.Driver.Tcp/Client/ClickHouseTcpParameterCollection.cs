@@ -8,13 +8,8 @@ namespace ClickHouse.Driver.Tcp;
 /// The parameters bound to one query, keyed by name and kept in the order they were added.
 /// </summary>
 /// <remarks>
-/// Names are matched with ordinal comparison, because ClickHouse parameter names are case-sensitive. A name may
-/// appear only once: the wire format is a name/value list, so a repeated name has no defined meaning.
-/// <para>
-/// This type is mutable and is not thread-safe. A <see cref="ClickHouseTcpClient"/> is meant to be shared, so
-/// build a collection and then leave it alone: adding to one while an operation reads it is a data race. To
-/// vary the values per operation, build a collection per operation.
-/// </para>
+/// Names are case-sensitive and must be unique. This mutable collection is not thread-safe; do not modify it
+/// while an operation is using it.
 /// </remarks>
 public sealed class ClickHouseTcpParameterCollection : IEnumerable<ClickHouseTcpParameter>
 {

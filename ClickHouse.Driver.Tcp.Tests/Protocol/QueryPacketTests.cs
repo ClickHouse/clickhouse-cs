@@ -70,8 +70,7 @@ public class QueryPacketTests
     [Test]
     public async Task Write_WithParameters_EndsWithTheNameFlagsValueTripleAndTerminator()
     {
-        // The parameter list is the packet's last field, so the expected triple can be matched at the tail:
-        // name, the Custom flag (0x02), the value, then the empty key that ends the list.
+        // The final field contains name, Custom flag, value, and an empty-key terminator.
         using var ms = new MemoryStream();
         using (var writer = new ClickHouseBinaryWriter(ms))
         {

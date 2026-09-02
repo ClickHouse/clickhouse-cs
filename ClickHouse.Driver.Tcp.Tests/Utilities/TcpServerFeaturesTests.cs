@@ -2,8 +2,7 @@ using System;
 
 namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 
-// A wrong answer here does not fail a test, it silently skips one, so the mapping is pinned rather than
-// trusted. The versions asserted are the ones the CI matrix actually runs.
+// Pin CI-matrix versions because an incorrect feature gate silently skips tests.
 [TestFixture]
 public class TcpServerFeaturesTests
 {
