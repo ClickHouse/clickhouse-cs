@@ -33,6 +33,7 @@ internal class BatchSerializer : IBatchSerializer
         var writer = new ExtendedBinaryWriter(target, leaveOpen: false);
 
         object[] row = null;
+        int currentRowIndex = 0;
 
         // With the statement in the URL the body is rows alone: not even a newline may precede them,
         // as the server would read it as row data. Nothing can fail before the rows then, so the flag
@@ -49,9 +50,9 @@ internal class BatchSerializer : IBatchSerializer
 
             var rows = batch.Rows.AsSpan()[..batch.Size];
             var types = batch.Types;
-            for (int i = 0; i < rows.Length; i++)
+            for (; currentRowIndex < rows.Length; currentRowIndex++)
             {
-                row = rows[i];
+                row = rows[currentRowIndex];
                 rowSerializer.Serialize(row, types, writer);
             }
         }
@@ -63,7 +64,7 @@ internal class BatchSerializer : IBatchSerializer
             if (!serializingRows)
                 throw;
 
-            throw new ClickHouseBulkCopySerializationException(row, e);
+            throw new ClickHouseBulkCopySerializationException(currentRowIndex, row, e);
         }
 
         writer.Dispose();

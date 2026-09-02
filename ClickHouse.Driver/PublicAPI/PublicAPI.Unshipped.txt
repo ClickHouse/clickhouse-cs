@@ -268,3 +268,5 @@ ClickHouse.Driver.InsertOptions.QueryPlacement.init -> void
 ClickHouse.Driver.InsertQueryPlacement
 ClickHouse.Driver.InsertQueryPlacement.Body = 0 -> ClickHouse.Driver.InsertQueryPlacement
 ClickHouse.Driver.InsertQueryPlacement.Url = 1 -> ClickHouse.Driver.InsertQueryPlacement
+ClickHouse.Driver.Copy.ClickHouseBulkCopySerializationException.ClickHouseBulkCopySerializationException(int rowIndex, object[] row, System.Exception innerException) -> void
+ClickHouse.Driver.Copy.ClickHouseBulkCopySerializationException.RowIndex.get -> int
