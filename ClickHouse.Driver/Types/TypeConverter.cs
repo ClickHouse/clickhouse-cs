@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using ClickHouse.Driver.Numerics;
@@ -496,6 +498,43 @@ internal static class TypeConverter
 
         // 3. No ambiguity for this type; delegate to type-based inference
         return ToClickHouseType(type);
+    }
+
+    /// <summary>
+    /// Infers the narrowest ClickHouse <c>Decimal</c> type that represents <paramref name="value"/>
+    /// without losing precision, deriving the scale from the value's own scale.
+    /// <para>
+    /// Unlike the type-based mapping (which fixes the scale at a constant), this is value-aware and
+    /// is required wherever the target type is chosen from the value rather than a column definition
+    /// — e.g. writing into a <c>Dynamic</c> column. A fixed scale silently truncates any value whose
+    /// scale exceeds it (issue #466).
+    /// </para>
+    /// </summary>
+    /// <param name="value">The decimal value to infer a type for.</param>
+    /// <returns>A <see cref="DecimalType"/> whose <see cref="DecimalType.Scale"/> equals the value's scale.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The value needs more than 76 significant digits, which exceeds the capacity of ClickHouse's widest Decimal256.
+    /// </exception>
+    internal static ClickHouseType InferDecimalType(ClickHouseDecimal value)
+    {
+        var scale = value.Scale;
+        // Significant digits of the mantissa == the digits stored when the ClickHouse scale equals
+        // the value's own scale. The precision must cover those digits, and can never be smaller
+        // than the scale (ClickHouse requires scale <= precision).
+        var digits = BigInteger.Abs(value.Mantissa).ToString(CultureInfo.InvariantCulture).Length;
+        var precision = Math.Max(Math.Max(digits, scale), 1);
+
+        return precision switch
+        {
+            <= 9 => new Decimal32Type { Scale = scale },
+            <= 18 => new Decimal64Type { Scale = scale },
+            <= 38 => new Decimal128Type { Scale = scale },
+            <= 76 => new Decimal256Type { Scale = scale },
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(value),
+                value,
+                $"Decimal value requires a precision of {precision} digits, which exceeds the maximum of 76 supported by ClickHouse (Decimal256)."),
+        };
     }
 
     private static bool IsKeyValuePairType(Type type) =>
