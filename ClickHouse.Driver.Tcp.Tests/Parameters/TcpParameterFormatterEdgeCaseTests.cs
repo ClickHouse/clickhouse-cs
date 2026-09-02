@@ -115,6 +115,64 @@ public class TcpParameterFormatterEdgeCaseTests
     }
 
     [Test]
+    public void FormatSqlText_VariantHoldingJson_PicksTheJsonAlternative()
+    {
+        var value = new Dictionary<string, int> { ["a"] = 1 };
+
+        Assert.That(Format(value, "Variant(JSON, UInt64)"), Is.EqualTo(@"{""a"":1}"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantHoldingAMap_PrefersItToJson()
+    {
+        var value = new Dictionary<string, int> { ["a"] = 1 };
+
+        Assert.That(
+            Format(value, "Variant(JSON, Map(String, Int32))"),
+            Is.EqualTo("{'a' : 1}"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantHoldingAMapThatDoesNotFit_FallsBackToJson()
+    {
+        var value = new Dictionary<string, string> { ["a"] = "x" };
+
+        Assert.That(
+            Format(value, "Variant(Map(String, Int32), JSON)"),
+            Is.EqualTo(@"{""a"":""x""}"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantWithAnUnrelatedArrayAlternative_PreservesTheJsonTupleShape()
+    {
+        object value = Tuple.Create(1, "x");
+
+        Assert.That(
+            Format(value, "Variant(JSON, Array(Int32))"),
+            Is.EqualTo(@"{""Item1"":1,""Item2"":""x""}"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantWithARejectedMapAlternative_PreservesTheNestedJsonTupleShape()
+    {
+        var value = new Dictionary<string, Tuple<int, string>> { ["a"] = Tuple.Create(1, "x") };
+
+        Assert.That(
+            Format(value, "Variant(Map(String, Int32), JSON)"),
+            Is.EqualTo(@"{""a"":{""Item1"":1,""Item2"":""x""}}"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantWithARejectedArrayAlternative_PreservesTheNestedJsonTupleShape()
+    {
+        Tuple<int, string>[] value = [Tuple.Create(1, "x")];
+
+        Assert.That(
+            Format(value, "Variant(Array(Int32), JSON)"),
+            Is.EqualTo(@"[{""Item1"":1,""Item2"":""x""}]"));
+    }
+
+    [Test]
     public void FormatSqlText_NullInsideAMap_ProducesTheLiteralNull()
     {
         var value = new Dictionary<string, string> { ["k"] = null };
@@ -450,6 +508,7 @@ public class TcpParameterFormatterEdgeCaseTests
 
         Assert.That(exception.Message, Does.Contain("Point"));
     }
+
 }
 
 // Retained for future client-side placeholders and used today for Variant matching.
