@@ -6,7 +6,7 @@ using ClickHouse.Driver.Tcp.Parameters;
 
 namespace ClickHouse.Driver.Tcp.Tests.Parameters;
 
-// Covers the inner SQL representation shared with the HTTP formatter; wire escaping is tested separately.
+// Covers the inner SQL representation shared with HTTP, except for documented transport differences.
 [TestFixture]
 public class TcpParameterFormatterTests
 {

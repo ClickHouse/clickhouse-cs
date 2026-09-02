@@ -178,7 +178,7 @@ internal static class TcpParameterFormatter
 
             // The server takes either spelling and reports the type as JSON, so both must format.
             case "JSON" or "Json":
-                return value is string json ? json : JsonSerializer.Serialize(value);
+                return (value is string json ? json : JsonSerializer.Serialize(value)).Escape();
 
             // A QBit is a fixed-width vector of its element type, written as an array.
             case "QBit" when value is IEnumerable components && type.Arguments.Count == 2:
@@ -486,12 +486,24 @@ internal static class TcpParameterFormatter
             return quote ? "null" : NullValueString;
         }
 
+        TypeNode jsonAlternative = null;
         foreach (TypeNode alternative in type.Arguments)
         {
+            if (string.Equals(alternative.Name, "JSON", StringComparison.OrdinalIgnoreCase))
+            {
+                jsonAlternative ??= alternative;
+                continue;
+            }
+
             if (ParameterTypeInference.Accepts(alternative, value))
             {
                 return Format(alternative, value, quote);
             }
+        }
+
+        if (jsonAlternative is not null)
+        {
+            return Format(jsonAlternative, value, quote);
         }
 
         throw new ArgumentException(
