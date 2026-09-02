@@ -17,28 +17,13 @@ namespace ClickHouse.Driver.Tcp.Parameters;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The inner text is the same SQL representation the HTTP transport sends as <c>param_&lt;name&gt;</c>, so this
-/// mirrors <c>HttpParameterFormatter</c> arm for arm. It cannot call it: the project reference runs from
-/// <c>ClickHouse.Driver</c> to <c>ClickHouse.Driver.Tcp</c>, so a reference back would be circular, and the HTTP
-/// formatter is written against the RowBinary <c>ClickHouseType</c> tree, which this assembly does not have. The
-/// two must be changed together — see the parity-check entry in the TCP TODO.
+/// This duplicates <c>HttpParameterFormatter</c> because the assemblies cannot reference each other and use
+/// different type trees. Keep shared cases aligned; known differences are listed in the TCP TODO's
+/// parity check.
 /// </para>
 /// <para>
-/// The transport difference is the outer <see cref="ParameterText.Escape"/> and
-/// <see cref="ParameterText.QuoteSingle"/> in <see cref="Format"/>. HTTP puts the value in the query string,
-/// where the server reads it directly. The native protocol carries it in the settings list as a custom entry,
-/// which the server first restores as a Field, so the whole value must arrive as a quoted SQL literal — for
-/// every type, not only for strings. An unquoted <c>42</c> for an <c>Int32</c> parameter is rejected.
-/// </para>
-/// <para>
-/// The rest of the differences are places where this formatter is ahead. <c>Interval&lt;Unit&gt;</c>,
-/// <c>QBit</c> and the six geo names format here and throw there, and <c>Json</c> in its lowercase spelling
-/// works here only. Interval is a type-system difference rather than a formatter one: the RowBinary tree has
-/// no Interval type, so an HTTP query fails while resolving the name. These are defects on the HTTP side:
-/// a <c>byte[]</c> that is not valid UTF-8 is decoded there and loses its bytes, a Variant alternative is
-/// matched on its outer name alone, a Map cannot be given as key/value pairs, and a value naming an instant
-/// is accepted for a type with no timezone and silently moved. Each is fixable, and each changes a shipped
-/// client, so none is fixed here — see the parity-check entry in the TCP TODO.
+/// Native parameters are custom settings, so <see cref="Format"/> escapes and quotes every value for the
+/// server's outer Field-parsing stage. <see cref="FormatSqlText"/> returns the inner SQL representation.
 /// </para>
 /// </remarks>
 internal static class TcpParameterFormatter
@@ -55,10 +40,7 @@ internal static class TcpParameterFormatter
 
     private static readonly string[] DecimalTypeNames = ["Decimal", "Decimal32", "Decimal64", "Decimal128", "Decimal256"];
 
-    /// <summary>
-    /// The <c>Interval&lt;Unit&gt;</c> family, which the server reads as its underlying <c>Int64</c> count. The
-    /// list mirrors the codec registry's; a unit missing from both is reported as an unformattable type.
-    /// </summary>
+    /// <summary>Interval types, formatted as their underlying <c>Int64</c> count.</summary>
     private static readonly string[] IntervalTypeNames =
     [
         "IntervalNanosecond", "IntervalMicrosecond", "IntervalMillisecond", "IntervalSecond", "IntervalMinute",
@@ -78,10 +60,7 @@ internal static class TcpParameterFormatter
     public static string Format(object value, string typeName, string parameterName)
         => FormatSqlText(value, typeName, parameterName).Escape().QuoteSingle();
 
-    /// <summary>
-    /// Formats the SQL representation alone, without the native protocol's outer escape and quote. This is the
-    /// exact text the HTTP transport sends, and is the level the two formatters are compared at.
-    /// </summary>
+    /// <summary>Formats the inner SQL representation before native-protocol escaping and quoting.</summary>
     /// <param name="value">The parameter value.</param>
     /// <param name="typeName">The resolved ClickHouse type name.</param>
     /// <param name="parameterName">The parameter name, for error messages.</param>
@@ -100,9 +79,7 @@ internal static class TcpParameterFormatter
         }
         catch (ArgumentException ex) when (ex.GetType() == typeof(ArgumentException))
         {
-            // Inner arms describe only the leaf type and value they saw. This is the one place that knows the
-            // parameter name and the outer type. Filter to the exact base type so a subclass propagates as
-            // itself, and forward ParamName so it is not lost.
+            // Add parameter context without wrapping specialized ArgumentException subclasses.
             throw new ArgumentException(
                 $"Parameter '{parameterName}' (type {parsed}): {ex.Message}",
                 ex.ParamName,
@@ -150,9 +127,7 @@ internal static class TcpParameterFormatter
                 return QuoteIfNeeded(value.ToString().Escape(), quote);
 
             case "Identifier":
-                // The server substitutes this as a bare SQL identifier and applies its own backtick quoting, so
-                // the value goes through unescaped. Escaping here would corrupt an identifier that contains a
-                // quote or a backslash, and is not needed for safety because the value is never parsed as SQL.
+                // The server quotes Identifier values; escaping here would change the name.
                 return value.ToString();
 
             case "LowCardinality" when type.Arguments.Count == 1:
@@ -194,8 +169,7 @@ internal static class TcpParameterFormatter
             case "Map" when value is IDictionary dictionary && type.Arguments.Count == 2:
                 return FormatMap(type, dictionary);
 
-            // Must follow the dictionary arm, which is the common shape, and precede the Array arm below,
-            // which would otherwise take a pair sequence and write it as a list of tuples.
+            // Keep pair sequences out of the general Array arm while preferring dictionaries.
             case "Map" when type.Arguments.Count == 2 && MapPairs.IsPairSequence(value):
                 return FormatMapPairs(type, (IEnumerable)value);
 
@@ -210,8 +184,7 @@ internal static class TcpParameterFormatter
             case "QBit" when value is IEnumerable components && type.Arguments.Count == 2:
                 return "[" + string.Join(",", components.Cast<object>().Select(c => Format(type.Arguments[0], c, quote: true))) + "]";
 
-            // The geo types are named shapes over Point, which is itself a pair of Float64. Formatting them as
-            // the shape they stand for is what the HTTP formatter does, where they subclass Tuple and Array.
+            // Geo types format as their underlying tuple/array shapes.
             case "Point" or "Ring" or "LineString" or "Polygon" or "MultiLineString" or "MultiPolygon":
                 return Format(GeoShapeOf(name), value, quote);
 
@@ -237,12 +210,8 @@ internal static class TcpParameterFormatter
     /// <param name="bytes">The bytes.</param>
     /// <returns>The escaped text the server reads back as those exact bytes.</returns>
     /// <remarks>
-    /// A ClickHouse <c>String</c> holds bytes, not characters, so a value can hold a byte sequence that is not
-    /// UTF-8 — the read path returns one whenever <c>ReadAsByteArray</c> is used. Decoding such a sequence
-    /// turns every bad byte into U+FFFD and sends <c>EF BF BD</c>, which changes the value with no error. Text
-    /// that is valid UTF-8 keeps the readable form; anything else goes out as <c>\xHH</c> per byte, which the
-    /// server's escaped-text reader restores exactly. Probed on 26.6.1. The HTTP formatter still decodes, so
-    /// this is a divergence — see the parity-check entry in the TCP TODO.
+    /// ClickHouse strings store bytes. Valid UTF-8 remains readable; invalid UTF-8 uses <c>\xHH</c> escapes to
+    /// avoid replacement-character corruption.
     /// </remarks>
     private static string BytesToSqlText(byte[] bytes)
     {
@@ -276,10 +245,7 @@ internal static class TcpParameterFormatter
     /// <returns>The parsed value.</returns>
     /// <exception cref="ArgumentException"><paramref name="text"/> is not a decimal.</exception>
     /// <remarks>
-    /// Tries <see cref="decimal"/> first, which accepts the forms the HTTP formatter does — an exponent,
-    /// thousands separators, accounting parentheses. Falls back to reading the digits as a
-    /// <see cref="BigInteger"/>, because a decimal caps at 29 digits and the wider ClickHouse decimals exceed
-    /// that; only the plain form reaches that path, which is the only form that can be that wide.
+    /// Uses <see cref="decimal"/> for its supported forms and <see cref="BigInteger"/> for wider plain values.
     /// </remarks>
     private static ClickHouseDecimal ParseDecimalText(string text)
     {
@@ -315,8 +281,7 @@ internal static class TcpParameterFormatter
 
     private static string FormatDateTime(TypeNode type, object value)
     {
-        // A DateTime with no kind is already in the parameter's timezone, so it is sent as it stands. A kinded
-        // value or an offset names an instant, which is moved into that timezone to keep the instant.
+        // Unspecified is a wall clock; kinded values and offsets are instants converted to the declared timezone.
         if (value is DateTime { Kind: DateTimeKind.Unspecified } unspecified)
         {
             return unspecified.ToString("s", CultureInfo.InvariantCulture);
@@ -345,11 +310,9 @@ internal static class TcpParameterFormatter
     /// <returns>The declared timezone.</returns>
     /// <exception cref="ArgumentException">The type declares no timezone.</exception>
     /// <remarks>
-    /// Only a value that names an instant reaches this. Such a value has a timezone and the type must too,
-    /// because the wire carries a wall-clock time and nothing else: the server reads that text in whatever
-    /// <c>session_timezone</c> is in force, so if the two disagree the instant moves and no error is raised.
-    /// Sending the instant as an epoch count instead would avoid the question, but the server rejects a count
-    /// below five digits — it reads it as a year — so that encoding cannot carry the first hours of 1970.
+    /// The wire carries only wall-clock text. Without a declared timezone, the server may silently change the
+    /// instant by interpreting it in <c>session_timezone</c>. Epoch text is not a safe fallback because the
+    /// server parses values of four digits or fewer as years.
     /// </remarks>
     private static string RequireDeclaredTimezone(TypeNode type, object value)
     {
@@ -413,11 +376,7 @@ internal static class TcpParameterFormatter
         return builder.ToString();
     }
 
-    /// <summary>
-    /// Peels the declared array nesting down to the element type, and checks it is as deep as the CLR array's
-    /// rank. A mismatch is reported here, where the two depths can be named, rather than as a value/type error
-    /// from the arm that would otherwise be handed the wrong level.
-    /// </summary>
+    /// <summary>Returns the element type after validating the declared array depth against the CLR rank.</summary>
     /// <param name="outer">The declared array type.</param>
     /// <param name="rank">The CLR array's rank.</param>
     /// <returns>The element type.</returns>
@@ -471,8 +430,7 @@ internal static class TcpParameterFormatter
 
     private static string FormatNested(TypeNode type, object value)
     {
-        // A Nested value is the whole set of rows, so an enumerable is the rows and each row is a tuple of the
-        // declared fields. The result has the same shape as Array(Tuple(...)). A bare tuple is one row.
+        // Nested formats as Array(Tuple(...)); a bare tuple represents one row.
         if (value is IEnumerable rows and not ITuple)
         {
             return "[" + string.Join(",", rows.Cast<object>().Select(row => FormatTuple(type, row))) + "]";
@@ -502,11 +460,7 @@ internal static class TcpParameterFormatter
         return "{" + string.Join(",", pairs) + "}";
     }
 
-    /// <summary>
-    /// Formats a Map given as a sequence of key/value pairs, which is how this client reads one back. The
-    /// codec surfaces a row as <c>KeyValuePair&lt;K, V&gt;[]</c> rather than a dictionary so that duplicate
-    /// keys and pair order survive, so a value read from a Map column must be bindable in that shape.
-    /// </summary>
+    /// <summary>Formats the Map read shape while preserving pair order and duplicate keys.</summary>
     /// <param name="type">The Map type.</param>
     /// <param name="pairs">The pairs, in order.</param>
     /// <returns>The map literal.</returns>
@@ -565,8 +519,7 @@ internal static class TcpParameterFormatter
         int minutes = (int)(remainder / 60m);
         decimal seconds = remainder % 60m;
 
-        // Round before formatting, and to even, because decimal.ToString rounds away from zero. Without this a
-        // midpoint lands one tick above where the HTTP formatter puts it.
+        // Pre-round to even because decimal formatting rounds midpoint digits away from zero.
         string secondsText = Math.Round(seconds, scale, MidpointRounding.ToEven)
             .ToString("00." + new string('0', scale), CultureInfo.InvariantCulture);
         string text = $"{hours}:{minutes:D2}:{secondsText}";

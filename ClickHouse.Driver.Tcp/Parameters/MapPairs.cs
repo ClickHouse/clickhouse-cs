@@ -6,14 +6,8 @@ using System.Linq;
 namespace ClickHouse.Driver.Tcp.Parameters;
 
 /// <summary>
-/// Recognises a Map given as a sequence of key/value pairs, which is the shape this client reads a
-/// <c>Map(K, V)</c> column back as.
+/// Recognises the key/value sequence returned for a Map column, preserving pair order and duplicate keys.
 /// </summary>
-/// <remarks>
-/// <c>MapColumnCodec</c> surfaces a row as <c>KeyValuePair&lt;K, V&gt;[]</c> rather than a dictionary so that
-/// duplicate keys and pair order survive the read. A value taken from a Map column therefore has to be
-/// bindable as a parameter in that same shape, or reading a row and sending it back would fail.
-/// </remarks>
 internal static class MapPairs
 {
     /// <summary>Reports whether a value is a sequence of <see cref="KeyValuePair{TKey, TValue}"/>.</summary>
@@ -35,13 +29,9 @@ internal static class MapPairs
                 && element.GetGenericTypeDefinition() == typeof(KeyValuePair<,>));
     }
 
-    /// <summary>Reads the key and the value out of a pair of any two types.</summary>
+    /// <summary>Reads a key/value pair whose generic types are known only at runtime.</summary>
     /// <param name="pair">The pair.</param>
     /// <returns>The key and the value.</returns>
-    /// <remarks>
-    /// Reflection rather than a generic overload, because the caller reaches the pair as <c>object</c> through
-    /// a non-generic <see cref="IEnumerable"/> and the two type arguments are not known at this point.
-    /// </remarks>
     public static (object Key, object Value) Read(object pair)
     {
         Type type = pair.GetType();

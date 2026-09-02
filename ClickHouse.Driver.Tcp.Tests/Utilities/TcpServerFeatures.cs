@@ -5,22 +5,11 @@ using System.Reflection;
 namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 
 /// <summary>
-/// Resolves which <see cref="TcpFeature"/> flags the server under test has, so a test for a type the server
-/// predates is skipped rather than failed.
+/// Resolves the <see cref="TcpFeature"/> flags supported by the server under test.
 /// </summary>
 /// <remarks>
-/// <para>
-/// The version comes from <c>CLICKHOUSE_VERSION</c>, which is the same variable the CI matrix sets to choose
-/// the server image and <see cref="Integration.TcpServerFixture"/> reads to tag the container. That is the
-/// only source available here: a <c>TestCaseSource</c> is enumerated while tests are being discovered, before
-/// the fixture has started the container, so asking the server is not an option at the point the answer is
-/// needed. In CI, where the gating has to be right, the variable is always set.
-/// </para>
-/// <para>
-/// Anything the variable cannot be read as a version — unset, <c>latest</c>, <c>head</c>, a digest — resolves
-/// to <see cref="TcpFeature.All"/>. Those all mean a recent server, so assuming full support keeps the tests
-/// running and lets a genuine gap fail loudly instead of being skipped in silence.
-/// </para>
+/// Reads <c>CLICKHOUSE_VERSION</c> because case sources run before the server starts. Unparseable values such as
+/// <c>latest</c> resolve to <see cref="TcpFeature.All"/> so unsupported features fail instead of being skipped.
 /// </remarks>
 public static class TcpServerFeatures
 {

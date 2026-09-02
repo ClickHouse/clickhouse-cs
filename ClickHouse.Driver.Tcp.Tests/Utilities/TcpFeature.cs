@@ -6,10 +6,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 /// Server capabilities the integration tests gate on, each tagged with the release that introduced it.
 /// </summary>
 /// <remarks>
-/// This mirrors <c>ClickHouse.Driver.ADO.Feature</c> in the HTTP suite, and is a separate copy on purpose: the
-/// TCP projects do not reference <c>ClickHouse.Driver</c>, which is what lets the TCP CI job build and test
-/// only the two TCP projects. Keep the versions here in step with that enum when a shared one changes.
-/// Only add a flag when a test needs it; an unused flag is a version claim nothing checks.
+/// Mirrors <c>ClickHouse.Driver.ADO.Feature</c>; keep shared versions aligned and add only flags used by tests.
 /// </remarks>
 [Flags]
 public enum TcpFeature

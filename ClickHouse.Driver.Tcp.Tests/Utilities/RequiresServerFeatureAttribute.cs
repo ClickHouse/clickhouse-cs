@@ -8,10 +8,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 /// Skips a test when the server under test predates the feature it needs, instead of letting it fail.
 /// </summary>
 /// <remarks>
-/// The TCP equivalent of the HTTP suite's <c>RequiredFeatureAttribute</c>. Use it on a whole test; for one
-/// case of a <c>TestCaseSource</c>, guard the <c>yield return</c> with
-/// <see cref="TcpServerFeatures.Has(TcpFeature)"/> instead, because a case that is never yielded cannot carry
-/// an attribute.
+/// Use this on whole tests. For one <c>TestCaseSource</c> case, guard its <c>yield return</c> with
+/// <see cref="TcpServerFeatures.Has(TcpFeature)"/>.
 /// </remarks>
 /// <param name="feature">The feature the test needs.</param>
 [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
