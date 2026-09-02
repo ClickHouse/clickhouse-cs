@@ -113,6 +113,10 @@ public class ClickHouseTcpParameterIntegrationTests
         // Covers both JSON spellings and geo types backed by tuple/array shapes.
         yield return new TestCaseData("Json", "{\"a\":1}").Returns("{\"a\":1}").SetName("Json in the lowercase spelling");
         yield return new TestCaseData("JSON", "{\"a\":1}").Returns("{\"a\":1}").SetName("JSON in the uppercase spelling");
+        yield return new TestCaseData("JSON", "{\n\t\"a\": 1,\n\t\"b\": \"x\"\n}")
+            .Returns("{\"a\":1,\"b\":\"x\"}").SetName("JSON with formatting whitespace");
+        yield return new TestCaseData("Variant(JSON, UInt64)", new Dictionary<string, int> { ["a"] = 1 })
+            .Returns("{\"a\":1}").SetName("Variant picks the JSON alternative");
         yield return new TestCaseData("Point", (10.0, 20.0)).Returns("(10,20)").SetName("Point");
         yield return new TestCaseData("Ring", new[] { (0.0, 0.0), (1.0, 1.0) }).Returns("[(0,0),(1,1)]").SetName("Ring");
         yield return new TestCaseData("LineString", new[] { (0.0, 0.0), (1.0, 1.0) }).Returns("[(0,0),(1,1)]").SetName("LineString");
