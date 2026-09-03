@@ -9,8 +9,9 @@ using ClickHouse.Driver.Tcp.Tests.Utilities;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// Exercises queries, blocks, inserts, and pooled reuse through a real <see cref="SslStream"/>.
-/// <see cref="TlsTerminatingProxy"/> terminates TLS before forwarding to the test server.
+/// Exercises queries, blocks, inserts, and pooled reuse through a real <see cref="SslStream"/> on the standard
+/// matrix. This is excluded from Cloud because <see cref="TlsTerminatingProxy"/> forwards plaintext to the
+/// configured port and clients connect to loopback instead of the service certificate name.
 /// </summary>
 [TestFixture]
 [Category("Integration")]

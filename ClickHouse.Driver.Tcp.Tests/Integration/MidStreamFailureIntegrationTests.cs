@@ -13,6 +13,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class MidStreamFailureIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
