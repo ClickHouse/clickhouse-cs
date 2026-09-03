@@ -25,6 +25,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class InsertSlicingIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -37,6 +38,8 @@ public class InsertSlicingIntegrationTests
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
     public async Task InsertAsync_ColumnarDataOneRowPerBlock_RoundTripsEveryRow(InsertRoundTripCase testCase)
     {
+        TcpServerFixture.SkipIfCloudLocksASetting(testCase.Settings);
+
         await using var connection = await TcpServerFixture.ConnectAsync(None);
         string table = UniqueTableName();
         try
