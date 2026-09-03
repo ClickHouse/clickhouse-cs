@@ -15,6 +15,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // reuse, retirement, queueing, drain — are covered without a server in ConnectionPoolTests.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ConnectionPoolIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -126,9 +127,17 @@ public class ConnectionPoolIntegrationTests
                 Enumerable.Range(batch * 50, 50).Select(i => new ValueRow { Id = (ulong)i }).ToList(),
                 cancellationToken: None).AsTask()));
 
+            // The eight inserts commit on whichever replica their connection reached, so the count has to be
+            // read with sequential consistency to include all of them. On a single server there is nothing to
+            // wait for and the setting does nothing.
+            var readAll = new ClickHouseTcpQueryOptions
+            {
+                Settings = new Dictionary<string, string> { ["select_sequential_consistency"] = "1" },
+            };
+
             ulong count = 0;
             await foreach (ValueRow row in client.QueryAsync<ValueRow>(
-                $"SELECT count() AS id FROM {table}", cancellationToken: None))
+                $"SELECT count() AS id FROM {table}", readAll, None))
             {
                 count = row.Id;
             }

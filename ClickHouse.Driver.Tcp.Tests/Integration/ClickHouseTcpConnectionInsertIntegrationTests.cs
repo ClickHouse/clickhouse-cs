@@ -13,6 +13,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // await foreach, never retaining the block.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpConnectionInsertIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -20,6 +21,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
     public async Task InsertAsync_ColumnarData_RoundTripsThroughSelect(InsertRoundTripCase testCase)
     {
+        TcpServerFixture.SkipIfCloudLocksASetting(testCase.Settings);
+
         await using var connection = await TcpServerFixture.ConnectAsync(None);
         string table = UniqueTableName();
         try
@@ -58,6 +61,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
     public async Task InsertAsync_DenseReadbackReinserted_RoundTripsThroughSelect(InsertRoundTripCase testCase)
     {
+        TcpServerFixture.SkipIfCloudLocksASetting(testCase.Settings);
+
         await using var source = await TcpServerFixture.ConnectAsync(None);
         await using var sink = await TcpServerFixture.ConnectAsync(None);
         string seedTable = UniqueTableName();
