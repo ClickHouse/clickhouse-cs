@@ -45,8 +45,8 @@ internal interface IInsertColumnSource : IDisposable
 /// multiplexing, so a connection carries exactly one request/response at a time. A connection is deliberately
 /// <b>not</b> thread-safe; the owner (a pool or a session) must guarantee single-caller access, including for
 /// disposal and teardown. Active operations observe cancellation through their I/O token and terminate the
-/// connection only after the cancelled I/O has unwound. Any transport or protocol failure terminates the
-/// connection, and a terminated connection is never reused.
+/// connection only after the cancelled I/O has unwound. Any server, transport, or protocol failure terminates
+/// the connection, and a terminated connection is never reused.
 /// </para>
 /// </summary>
 internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
@@ -81,6 +81,59 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
     /// <summary>The current lifecycle state.</summary>
     public TcpConnectionState State => state;
+
+    /// <summary>
+    /// Whether this connection is fit to carry another operation, as far as can be told without sending
+    /// anything. Ready, with a transport the peer has not closed and no bytes left over from the last response.
+    /// The pool asks at both ends of every lease, so it must stay cheap: one non-blocking poll of the socket.
+    /// </summary>
+    /// <remarks>
+    /// A readable idle socket means one of two things, and neither allows reuse: the peer closed and a zero-byte read
+    /// is pending, or bytes the last operation did not consume are waiting, which means this side's idea of the stream
+    /// position no longer matches the server's.
+    ///
+    /// <para>
+    /// This detects only a peer that closed in an orderly way. A connection dropped without a FIN, by a partition or a
+    /// machine that lost power, still looks alive here, and the operation sent over it stalls until TCP itself gives
+    /// up, which on Linux takes about fifteen minutes. That is inherent to a client-side check, so the pool does not
+    /// rely on this alone: it also refuses a connection that has sat idle past <c>IdleTimeout</c>, which covers the
+    /// common case of an intermediary dropping a connection nobody was using. Neither catches a drop that strikes a
+    /// connection in active use. The answer to that is an idle read deadline rather than a stricter probe, and
+    /// <b>that deadline does not exist yet</b>: <c>ReadTimeout</c> is parsed and stored but nothing enforces it, so a
+    /// caller's own <see cref="System.Threading.CancellationToken"/> is currently the only bound on such a stall.
+    /// </para>
+    /// </remarks>
+    internal bool IsReusable
+    {
+        get
+        {
+            if (state != TcpConnectionState.Ready)
+            {
+                return false;
+            }
+
+            // Bytes already buffered from the socket are invisible to a poll, so check our own buffer first.
+            if (reader.BufferedBytes != 0)
+            {
+                return false;
+            }
+
+            // The scripted-stream seam has no socket; there is nothing to poll, so trust the state.
+            if (socket is null)
+            {
+                return true;
+            }
+
+            try
+            {
+                return !socket.Poll(0, SelectMode.SelectRead);
+            }
+            catch (Exception e) when (e is SocketException or ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+    }
 
     /// <summary>
     /// Builds the context passed to the codec registry when reading an operation's blocks, carrying the
@@ -163,8 +216,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Sends a Ping and awaits the reply. Returns when the server answers with Pong. A server Exception is
-    /// decoded and thrown, leaving the connection reusable (the exception is a complete response). Any other
-    /// packet, or a transport failure, terminates the connection.
+    /// decoded and thrown. Any error or unexpected packet terminates the connection.
     /// </summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when Pong is received.</returns>
@@ -213,9 +265,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     throw;
                 }
 
-                // The Exception is itself a complete response and leaves the stream at a packet boundary, so
-                // the connection stays usable.
-                state = TcpConnectionState.Ready;
+                Terminate();
                 throw exception;
 
             default:
@@ -327,7 +377,6 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 if (packet == ServerPacketType.Exception)
                 {
                     pending = await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
-                    completed = true;
                     break;
                 }
 
@@ -523,10 +572,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     throw new ClickHouseProtocolException("The server ended the INSERT response without sending a schema block.");
                 }
 
-                // Server Exception instead of the schema: the stream is at a packet boundary, so rethrow once
-                // the state is back to Ready.
+                // The Exception packet does not say whether the server accepted the query and returned to its
+                // request loop, so leave completed false and retire the connection in the finally below.
                 pending = error;
-                completed = true;
             }
             else
             {
@@ -568,9 +616,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 Exception gatherFailure = await StreamInsertRowsAsync(plan, source, rowCount, maxRowsPerBlock, maxSendBufferBytes, negotiated, cancellationToken).ConfigureAwait(false);
                 buildFailure ??= gatherFailure;
 
-                // Rethrow any server error once the state is back to Ready.
+                // A clean acknowledgement leaves the connection reusable. A server Exception is parked for the
+                // caller but retires the connection, because its packet does not prove the server will accept
+                // another request.
                 pending = await DrainToEndOfStreamAsync(negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
-                completed = true;
+                completed = pending is null;
             }
         }
         finally
@@ -722,7 +772,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Drains the response and returns its server error, if any, while leaving the connection reusable.
+    /// Reads and releases blocks until the response ends, returning the server
+    /// <see cref="ClickHouseServerException"/> that terminated it, or null on a clean end-of-stream. The caller
+    /// keeps the connection only after the clean end-of-stream case.
     /// </summary>
     /// <param name="negotiated">The negotiated protocol.</param>
     /// <param name="context">The codec-resolution context (timezone) for decoding blocks.</param>
@@ -903,13 +955,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// then releases the reader and writer's pooled buffers. Idempotent, but not safe to call concurrently with
     /// another operation. Once terminated a connection is never reused.
     /// </summary>
+    /// <remarks>
+    /// There is deliberately no early return for an already-terminated connection. Every step below is
+    /// idempotent, and the buffer release has to run even when the state was set elsewhere — after
+    /// <see cref="AbortTransport"/>, this call as the operation unwinds is the only thing that returns those
+    /// buffers to the pool.
+    /// </remarks>
     public void Terminate()
     {
-        if (state == TcpConnectionState.Terminated)
-        {
-            return;
-        }
-
         state = TcpConnectionState.Terminated;
         try
         {
@@ -933,6 +986,46 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     writer.Dispose();
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Closes the transport under an operation that is still running, marking the connection final but leaving
+    /// the reader and writer alone. Unlike <see cref="Terminate"/> this <i>is</i> safe to call concurrently with
+    /// an operation, and it is the only teardown that is: it is how the pool frees a connection whose caller
+    /// abandoned it, typically parked on a read that will never arrive.
+    /// </summary>
+    /// <remarks>
+    /// The pooled reader and writer buffers are deliberately not returned here: a buffer a pending read or write
+    /// still points at must not go back to the pool, or that memory is handed to an unrelated caller while it is
+    /// still in use. The operation returns them itself, through the <see cref="Terminate"/> its own unwinding
+    /// calls — which closing the socket provokes, and which runs only once the I/O has actually stopped. That
+    /// release is exactly-once even against this call, because the reader and writer guard their disposal with
+    /// an interlocked flag. If the operation never unwinds at all, two pooled arrays are left to the garbage
+    /// collector: an allocation lost, nothing corrupted.
+    /// </remarks>
+    internal void AbortTransport()
+    {
+        // Marks the connection unusable so it is never handed out again. Terminate has no early return, so the
+        // operation's own call still releases the buffers afterwards despite the state already being final.
+        state = TcpConnectionState.Terminated;
+
+        try
+        {
+            // Socket disposal is thread-safe and aborts the pending I/O, which is the whole point. With no
+            // socket (the scripted-stream seam) the stream itself is the transport.
+            if (socket is not null)
+            {
+                socket.Dispose();
+            }
+            else
+            {
+                stream.Dispose();
+            }
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
+        {
+            // Best effort: this runs during disposal, with nothing left to report a teardown failure to.
         }
     }
 

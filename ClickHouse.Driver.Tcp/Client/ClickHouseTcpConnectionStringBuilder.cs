@@ -92,6 +92,75 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["MaxSendBufferBytes"] = value;
     }
 
+    /// <summary>
+    /// The number of connections the pool keeps open, counting the ones in use as well as the idle ones. An
+    /// expired connection is still retired, and a fresh one opened in its place. Defaults to 0.
+    /// </summary>
+    public int MinPoolSize
+    {
+        get => GetIntOrDefault("MinPoolSize", ClickHouseTcpClientOptions.DefaultMinPoolSize);
+        set => this["MinPoolSize"] = value;
+    }
+
+    /// <summary>The cap on connections, and so on concurrent operations. Defaults to 20.</summary>
+    public int MaxPoolSize
+    {
+        get => GetIntOrDefault("MaxPoolSize", ClickHouseTcpClientOptions.DefaultMaxPoolSize);
+        set => this["MaxPoolSize"] = value;
+    }
+
+    /// <summary>How long an operation waits for a free connection, in seconds. Defaults to 30.</summary>
+    public TimeSpan PoolTimeout
+    {
+        get => GetTimeSpanSecondsOrDefault("PoolTimeout", ClickHouseTcpClientOptions.DefaultPoolTimeout);
+        set => this["PoolTimeout"] = value.TotalSeconds;
+    }
+
+    /// <summary>How long a connection may be reused after opening, in seconds; 0 disables. Defaults to 1800.</summary>
+    public TimeSpan MaxConnectionLifetime
+    {
+        get => GetTimeSpanSecondsOrDefault("MaxConnectionLifetime", ClickHouseTcpClientOptions.DefaultMaxConnectionLifetime);
+        set => this["MaxConnectionLifetime"] = value.TotalSeconds;
+    }
+
+    /// <summary>
+    /// How long a connection may sit unused before it is retired rather than reused, in seconds; 0 disables.
+    /// Defaults to 300. Keep it below the shortest idle timeout on the path to the server.
+    /// </summary>
+    public TimeSpan IdleTimeout
+    {
+        get => GetTimeSpanSecondsOrDefault("IdleTimeout", ClickHouseTcpClientOptions.DefaultIdleTimeout);
+        set => this["IdleTimeout"] = value.TotalSeconds;
+    }
+
+    /// <summary>
+    /// How often the pool looks for connections to retire, in seconds. Absent, the default, derives the period
+    /// from the limits in force; a value overrides that and must be positive. Setting null removes the key.
+    /// </summary>
+    public TimeSpan? SweepInterval
+    {
+        get => GetTimeSpanSecondsOrNull("SweepInterval");
+        set
+        {
+            if (value is { } interval)
+            {
+                this["SweepInterval"] = interval.TotalSeconds;
+            }
+            else
+            {
+                Remove("SweepInterval");
+            }
+        }
+    }
+
+    /// <summary>Which idle connection is handed out next, <c>Lifo</c> or <c>Fifo</c>. Defaults to <c>Lifo</c>.</summary>
+    /// <exception cref="ArgumentException">The stored value names no policy.</exception>
+    public ClickHouseTcpPoolReusePolicy PoolReusePolicy
+    {
+        get => GetEnumOrDefault("PoolReusePolicy", ClickHouseTcpClientOptions.DefaultPoolReusePolicy);
+        set => this["PoolReusePolicy"] = value.ToString();
+    }
+
     /// <summary>Materializes these keys into a <see cref="ClickHouseTcpClientOptions"/>, folding <c>set_*</c> keys into <see cref="ClickHouseTcpClientOptions.CustomSettings"/>.</summary>
     /// <returns>The equivalent options.</returns>
     public ClickHouseTcpClientOptions ToOptions()
@@ -124,6 +193,13 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             DialTimeout = DialTimeout,
             ReadTimeout = ReadTimeout,
             MaxSendBufferBytes = MaxSendBufferBytes,
+            MinPoolSize = MinPoolSize,
+            MaxPoolSize = MaxPoolSize,
+            PoolTimeout = PoolTimeout,
+            MaxConnectionLifetime = MaxConnectionLifetime,
+            IdleTimeout = IdleTimeout,
+            SweepInterval = SweepInterval,
+            PoolReusePolicy = PoolReusePolicy,
             CustomSettings = customSettings,
         };
     }
@@ -153,6 +229,46 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             int i => i,
             string s when int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result) => result,
             _ => @default,
+        };
+    }
+
+    // An enum value read back is normally the name a connection string carried (the typed setter stores a name
+    // too); a boxed enum arrives only through the untyped indexer. Names are matched case-insensitively, as
+    // connection-string keys are, and an unrecognized name throws here rather than silently defaulting. A
+    // numeric name parses, so an out-of-range number reaches ClickHouseTcpClientOptions.Validate instead. Any
+    // other stored type falls back to the default, matching how the numeric getters behave.
+    private TEnum GetEnumOrDefault<TEnum>(string name, TEnum @default)
+        where TEnum : struct, Enum
+    {
+        if (!TryGetValue(name, out object value))
+        {
+            return @default;
+        }
+
+        return value switch
+        {
+            TEnum typed => typed,
+            string s when Enum.TryParse(s, ignoreCase: true, out TEnum parsed) => parsed,
+            string s => throw new ArgumentException(
+                $"Connection-string key '{name}' has value '{s}', which is not one of: {string.Join(", ", Enum.GetNames<TEnum>())}."),
+            _ => @default,
+        };
+    }
+
+    // The nullable form, for a key whose absence means "derive it" rather than "use the default". An unparseable
+    // value reads as absent, matching how the non-nullable helper falls back.
+    private TimeSpan? GetTimeSpanSecondsOrNull(string name)
+    {
+        if (!TryGetValue(name, out object value))
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            double d => TimeSpan.FromSeconds(d),
+            string s when double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) => TimeSpan.FromSeconds(seconds),
+            _ => null,
         };
     }
 
