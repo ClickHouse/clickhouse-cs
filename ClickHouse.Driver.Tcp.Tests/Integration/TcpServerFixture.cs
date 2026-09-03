@@ -24,10 +24,10 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// <para>
 /// One thing to know when writing a test that will also run on Cloud: <c>ENGINE = Memory</c> data is
 /// node-local, and a Cloud service has several replicas. Sequential operations on one client stay on one
-/// connection, and so on one replica, because the pool hands back the connection it just took in. A test that
-/// makes its connection retire — a server error, an enumerator dropped mid-response — and then reads a
-/// <c>Memory</c> table it wrote earlier would redial, possibly onto another replica, and read nothing. Use
-/// <c>MergeTree</c> for that shape.
+/// connection, and so on one replica, because the pool hands back the connection it just took in. Two shapes
+/// leave that guarantee and read an empty table on Cloud: a second connection opened to read what the first
+/// wrote, and a connection that retires mid-test — a server error, an enumerator dropped mid-response — before
+/// the table it wrote is read back. Use <c>MergeTree ORDER BY tuple()</c> for either.
 /// </para>
 /// </summary>
 [SetUpFixture]
@@ -67,7 +67,14 @@ public sealed class TcpServerFixture
     /// Settings a Cloud service will not let a query change. It answers such a query with "Setting ... should
     /// not be changed" instead of applying its own value, so a test that needs one cannot run there at all.
     /// </summary>
-    private static readonly string[] CloudLockedSettings = ["allow_suspicious_low_cardinality_types"];
+    private static readonly string[] CloudLockedSettings =
+    [
+        "allow_suspicious_low_cardinality_types",
+
+        // Both names for the one setting: a test may set either, and the server reports the second.
+        "enable_nullable_tuple_type",
+        "allow_experimental_nullable_tuple_type",
+    ];
 
     /// <summary>
     /// Ignores the calling test when it needs a setting Cloud locks. Keyed on the settings a test asks for
