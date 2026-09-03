@@ -16,6 +16,7 @@ internal static class BlockReader
     /// <param name="reader">The reader positioned at the block name.</param>
     /// <param name="negotiated">The negotiated protocol, for version-gated header fields.</param>
     /// <param name="registry">The registry that resolves each column's type string to a codec.</param>
+    /// <param name="context">The resolution context (e.g. the server timezone) passed to each column's codec factory.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The decoded block.</returns>
     /// <exception cref="ClickHouseProtocolException">A column uses unsupported custom serialization, or a count is implausible.</exception>
@@ -23,6 +24,7 @@ internal static class BlockReader
         ClickHouseBinaryReader reader,
         NegotiatedProtocol negotiated,
         ColumnCodecRegistry registry,
+        ResolveContext context,
         CancellationToken cancellationToken)
     {
         string name = await reader.ReadStringAsync(cancellationToken).ConfigureAwait(false);
@@ -49,7 +51,7 @@ internal static class BlockReader
                     }
                 }
 
-                IColumnCodec codec = registry.Resolve(columnType);
+                IColumnCodec codec = registry.Resolve(columnType, in context);
 
                 // A zero-row block (a schema header, or an end-of-input marker) carries no state prefix and no body.
                 // TODO: this holds for every type with default serialization, but dictionary-bearing types

@@ -173,6 +173,41 @@ var users = connection.Query<User>("SELECT * FROM users");
   - Scenario under which the method is being tested
   - Expected behavior when the scenario is invoked
 
+### Native/TCP codec test layering
+
+`ClickHouse.Driver.Tcp.Tests` splits per-type coverage between two layers. Putting a test in the wrong one produces
+a test that passes while proving nothing the other layer did not already prove.
+
+**`InsertRoundTripCase` owns per-type values.** Adding a type means adding a case there: it creates a one-column
+table, inserts the column, selects it back, and compares. That exercises the real `WriteColumn` → server →
+`ReadColumnAsync` path, so it subsumes any unit test that writes an ergonomic column and reads it back. Add a bare
+case *and* a `Nullable(that type)` case — `Nullable` has its own write path (null-map plus a per-type placeholder).
+
+**A codec unit test should only assert what no server round-trip can reach:**
+
+- exact wire bytes — encodings, offsets, discriminators, dictionary key widths, state prefixes;
+- error paths — type-resolution `FormatException`/`NotSupportedException`, and exceptions thrown by a direct
+  `WriteColumn` call;
+- API surface — `CanWrite` (especially rejections), `ElementType`, `WritableElementTypes`, `NullPlaceholderAs`,
+  `TypeName`, `FixedRowByteSize`, field/label metadata;
+- `internal` column shapes no integration case constructs;
+- zero-row columns, bounds behavior past `RowCount`, and `Dispose`/pooling;
+- anything the server normalizes away, so a round-trip could not observe it (duplicate map keys, client-side
+  dictionary construction, which precision or key width the client chose).
+
+Two subtleties that decide whether an accessor needs unit coverage:
+
+- **`.Values` sometimes needs it, sometimes not.** It depends on whether `GetValue` delegates to it. For
+  `ArrayColumn<T>`, `GetValue(row) => Values[row]`, so integration's per-row comparison already covers it. For the
+  `Nullable`, `LowCardinality`, `Map`, `Nested`, and `Tuple` columns, `GetValue` reads its own state directly and
+  `Values` is a separately-materialized pooled cache that integration never touches — cover those.
+- **Dense write paths are integration-covered from epic I2 onward.**
+  `InsertAsync_DenseReadbackReinserted_RoundTripsThroughSelect` re-inserts the dense read-back of every case, so a
+  unit test for "the dense column writes without rebuilding" is redundant unless it builds a shape the server
+  cannot produce.
+
+`VariantColumnCodecTests` is the reference: no `RoundTripAsync` calls at all, wire bytes and error paths only.
+
 ### Code Style
 - **Namespaces**: File-scoped namespaces (warning-level)
 - **Analyzers**: Respect `.editorconfig`, StyleCop suppressions, nullable contexts
