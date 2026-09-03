@@ -34,7 +34,7 @@ public class ColumnCodecRegistryTests
 
     [Test]
     public void Resolve_UnsupportedButWellFormedType_ThrowsNotSupported()
-        => Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve("Array(String)", default));
+        => Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve("Tuple(String)", default));
 
     [Test]
     public void Resolve_MalformedType_ThrowsFormat()
