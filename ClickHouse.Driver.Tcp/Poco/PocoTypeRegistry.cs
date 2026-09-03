@@ -1,34 +1,43 @@
 using System;
 using System.Collections.Concurrent;
+using ClickHouse.Driver.Tcp.Format;
 
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// Caches the POCO mapping work, so a type is reflected over and its constructor compiled once instead of once per
-/// query or insert. One registry lives per <see cref="ClickHouseTcpClient"/>: the client is meant to be held as a
-/// singleton, so the cost is amortized anyway, and a per-client cache cannot pin types loaded into an
-/// <see cref="System.Runtime.Loader.AssemblyLoadContext"/> the caller later wants to unload.
-///
-/// <para>
-/// Only the per-type level lives here. The compiled loops are per <c>(type, wire shape)</c> — the column types come
-/// from the server, not from the type — so they cache separately, keyed by the block or sample-block signature.
-/// </para>
+/// Caches descriptors per POCO type and read plans per type and result shape. The per-client caches do not evict;
+/// disposing the client releases their type keys and compiled delegates.
 /// </summary>
 internal sealed class PocoTypeRegistry
 {
     private readonly ConcurrentDictionary<Type, PocoTypeDescriptor> descriptors = new();
 
-    /// <summary>
-    /// Gets the descriptor for <typeparamref name="T"/>, building it on first use.
-    /// </summary>
+    private readonly ConcurrentDictionary<(Type PocoType, string Signature, PocoScatterTier? ForcedTier), object> readPlans = new();
+
+    /// <summary>Gets or builds the descriptor for <typeparamref name="T"/>.</summary>
     /// <typeparam name="T">The POCO type.</typeparam>
     /// <returns>The cached descriptor.</returns>
-    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot be mapped at all — see
-    /// <see cref="PocoTypeDescriptor{T}.Build"/>. Nothing is cached in that case, so the same failure is reported
-    /// every time rather than only to the first caller.</exception>
+    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot be mapped.</exception>
     public PocoTypeDescriptor<T> DescriptorFor<T>()
         where T : class
         // Keyed by the Type object, not its name, so two same-named types from different assemblies stay distinct.
         // A race can build twice; the build is pure, so the loser's copy is simply dropped.
         => (PocoTypeDescriptor<T>)descriptors.GetOrAdd(typeof(T), static _ => PocoTypeDescriptor<T>.Build());
+
+    /// <summary>
+    /// Gets or builds the read plan for <typeparamref name="T"/>, the block shape, and the requested tier.
+    /// </summary>
+    /// <typeparam name="T">The POCO type.</typeparam>
+    /// <param name="block">A block of the shape to plan for.</param>
+    /// <param name="forcedTier">A scatter tier to compile regardless of the runtime, or null to choose one.</param>
+    /// <returns>The cached plan.</returns>
+    /// <exception cref="InvalidOperationException">The shape cannot be read into <typeparamref name="T"/>.</exception>
+    public PocoReadPlan<T> ReadPlanFor<T>(Block block, PocoScatterTier? forcedTier)
+        where T : class
+    {
+        PocoTypeDescriptor<T> descriptor = DescriptorFor<T>();
+        return (PocoReadPlan<T>)readPlans.GetOrAdd(
+            (typeof(T), PocoReadPlan.SignatureOf(block), forcedTier),
+            _ => PocoReadPlan<T>.Build(descriptor, block, forcedTier));
+    }
 }

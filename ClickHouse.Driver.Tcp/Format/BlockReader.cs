@@ -75,7 +75,7 @@ internal static class BlockReader
             throw;
         }
 
-        return new Block(name, info, rowCount, columns);
+        return new Block(name, info, rowCount, columns, registry, context);
     }
 
     /// <summary>

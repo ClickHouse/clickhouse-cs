@@ -52,6 +52,9 @@ public interface IClickHouseTcpClient : IAsyncDisposable
     /// Runs a query and streams its result one row at a time as <c>object[]</c>, each entry the boxed value of a
     /// column in header order. Each returned array is owned and safe to retain past the enumeration.
     /// </summary>
+    /// <remarks>
+    /// <c>LowCardinality</c> values may be shared within a block; array-valued entries must not be mutated in place.
+    /// </remarks>
     /// <param name="sql">The SQL text.</param>
     /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
@@ -61,6 +64,28 @@ public interface IClickHouseTcpClient : IAsyncDisposable
         string sql,
         ClickHouseTcpQueryOptions options = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs a query and streams its result one row at a time as <typeparamref name="T"/>, filling each property
+    /// from the column of the same name (ignoring case, and then underscores). A column no property maps to is
+    /// skipped, and a property no column maps to keeps its default.
+    /// </summary>
+    /// <remarks>
+    /// Rows remain valid after enumeration advances. Element instances may still be shared where the column's
+    /// representation does; see <see cref="ClickHouseTcpClient.QueryAsync{T}"/>.
+    /// </remarks>
+    /// <typeparam name="T">The row type.</typeparam>
+    /// <param name="sql">The SQL text.</param>
+    /// <param name="options">Per-query options (query id, settings), or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>An async stream of result rows.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
+    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot be mapped to the result.</exception>
+    IAsyncEnumerable<T> QueryAsync<T>(
+        string sql,
+        ClickHouseTcpQueryOptions options = null,
+        CancellationToken cancellationToken = default)
+        where T : class;
 
     /// <summary>
     /// Runs a statement that produces no result rows (DDL, or DML other than an <c>INSERT ... VALUES</c>) and
