@@ -21,7 +21,7 @@ public sealed record ClickHouseTcpClientOptions
     internal const int DefaultPort = 9000;
     internal const string DefaultUsername = "default";
     internal const string DefaultDatabase = "default";
-    internal const int DefaultMaxSendBufferBytes = 10 * 1024 * 1024;
+    internal const int DefaultMaxSendBufferBytes = Format.BlockWriter.DefaultFlushThresholdBytes;
     internal static readonly TimeSpan DefaultDialTimeout = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(300);
 
@@ -56,9 +56,15 @@ public sealed record ClickHouseTcpClientOptions
 
     /// <summary>
     /// The soft cap, in bytes, on the client's send buffer during an insert: while a wire block is written, the
-    /// buffered bytes are flushed to the socket whenever they exceed this, bounding peak memory for a large
-    /// insert (a single column larger than the cap still buffers in full). Independent of the block-split target,
-    /// so blocks stay their natural size and simply stream out within this cap. Defaults to 10 MiB.
+    /// buffered bytes are flushed to the socket once they pass this, bounding peak memory for a large insert.
+    /// Independent of the block-split target, so blocks stay their natural size and simply stream out within this
+    /// cap. Defaults to 1 MiB.
+    ///
+    /// <para>
+    /// The cap is checked after each column, so peak buffered bytes are the cap plus the column that crossed it,
+    /// and a single column larger than the cap buffers in full. Raising it also raises what the send buffer keeps:
+    /// it grows by doubling, and every size it passes through stays in the array pool.
+    /// </para>
     /// </summary>
     public int MaxSendBufferBytes { get; init; } = DefaultMaxSendBufferBytes;
 

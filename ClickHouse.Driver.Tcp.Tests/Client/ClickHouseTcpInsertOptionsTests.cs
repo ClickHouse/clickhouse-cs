@@ -8,7 +8,7 @@ public class ClickHouseTcpInsertOptionsTests
     [Test]
     public void MaxRowsPerBlock_NotSet_DefaultsToTheBlockRowCap()
     {
-        Assert.That(new ClickHouseTcpInsertOptions().MaxRowsPerBlock, Is.EqualTo(1_000_000));
+        Assert.That(new ClickHouseTcpInsertOptions().MaxRowsPerBlock, Is.EqualTo(50_000));
     }
 
     [Test]
@@ -23,13 +23,13 @@ public class ClickHouseTcpInsertOptionsTests
     [Test]
     public void ResolveMaxRowsPerBlock_NoOptions_UsesTheDefaultCap()
     {
-        Assert.That(ClickHouseTcpClient.ResolveMaxRowsPerBlock(null), Is.EqualTo(1_000_000));
+        Assert.That(ClickHouseTcpClient.ResolveMaxRowsPerBlock(null), Is.EqualTo(50_000));
     }
 
     [Test]
     public void ResolveMaxRowsPerBlock_OptionsWithoutTheCapSet_UsesTheDefaultCap()
     {
-        Assert.That(ClickHouseTcpClient.ResolveMaxRowsPerBlock(new ClickHouseTcpInsertOptions()), Is.EqualTo(1_000_000));
+        Assert.That(ClickHouseTcpClient.ResolveMaxRowsPerBlock(new ClickHouseTcpInsertOptions()), Is.EqualTo(50_000));
     }
 
     [Test]

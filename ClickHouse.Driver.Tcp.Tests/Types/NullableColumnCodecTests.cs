@@ -129,6 +129,34 @@ public class NullableColumnCodecTests
     }
 
     [Test]
+    public void WritableElementTypes_ListWhatCanWriteAccepts_CanonicalFirst()
+    {
+        // The list has to agree with CanWrite: a caller choosing a write type from it — a POCO insert picking the
+        // spelling to gather a property into — never gets to probe with a column first.
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Resolve("Nullable(DateTime('UTC'))").WritableElementTypes,
+                Is.EqualTo(new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) }));
+            Assert.That(Resolve("Nullable(Int32)").WritableElementTypes, Is.EqualTo(new[] { typeof(int?) }));
+            Assert.That(Resolve("Nullable(String)").WritableElementTypes, Is.EqualTo(new[] { typeof(string) }));
+        });
+    }
+
+    [Test]
+    public void NullPlaceholderAs_EveryWritableSpelling_IsNullAndAnythingElseThrows()
+    {
+        IColumnCodec codec = Resolve("Nullable(DateTime('UTC'))");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.NullPlaceholderAs(typeof(uint?)), Is.Null);
+            Assert.That(codec.NullPlaceholderAs(typeof(DateTime?)), Is.Null);
+            Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(DateTime)));
+        });
+    }
+
+    [Test]
     public void CanWrite_NullableDateTime_AcceptsBothOffsetAndDateTimeSpellings()
     {
         IColumnCodec codec = Resolve("Nullable(DateTime('UTC'))");

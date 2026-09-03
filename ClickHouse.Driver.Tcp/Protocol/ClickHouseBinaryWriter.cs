@@ -24,10 +24,13 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
 
     /// <summary>Initializes a new writer over <paramref name="stream"/>.</summary>
     /// <param name="stream">The destination stream to write to.</param>
-    /// <param name="bufferSize">Initial buffer capacity in bytes; must be at least 32. Buffer can grow if necessary.</param>
+    /// <param name="bufferSize">Initial buffer capacity in bytes; must be at least 32. The buffer grows by
+    /// doubling when a write does not fit, so a larger start means fewer grow-and-copy steps before an insert
+    /// reaches its flush threshold. The default (64 KiB) is the largest that stays off the large-object
+    /// heap.</param>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferSize"/> is below 32.</exception>
-    public ClickHouseBinaryWriter(Stream stream, int bufferSize = 16384)
+    public ClickHouseBinaryWriter(Stream stream, int bufferSize = 65536)
     {
         this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
         if (bufferSize < 32)
