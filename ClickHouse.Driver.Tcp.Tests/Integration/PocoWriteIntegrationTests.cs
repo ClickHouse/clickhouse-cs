@@ -15,6 +15,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class PocoWriteIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -33,6 +34,8 @@ public class PocoWriteIntegrationTests
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
     public async Task InsertRowsAsync_EveryCorpusType_WritesThePropertyIntoTheColumn(InsertRoundTripCase testCase)
     {
+        TcpServerFixture.SkipIfCloudLocksASetting(testCase.Settings);
+
         await using var client = TcpServerFixture.CreateClient();
         var queryOptions = new ClickHouseTcpQueryOptions { Settings = testCase.Settings };
         var insertOptions = new ClickHouseTcpInsertOptions { Settings = testCase.Settings };

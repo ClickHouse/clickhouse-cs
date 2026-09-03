@@ -13,6 +13,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // await foreach, never retaining the block. The object[] rows from QueryAsync are owned and may be retained.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpClientIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -201,15 +202,7 @@ public class ClickHouseTcpClientIntegrationTests
         // A send buffer far smaller than the encoded block forces repeated between-column flushes while the
         // single block is written. The data must still arrive intact — this proves the cap is threaded through
         // and that mid-block flushing does not corrupt the wire stream.
-        var options = TcpServerFixture.Options();
-        await using var client = new ClickHouseTcpClient(new ClickHouseTcpClientOptions
-        {
-            Host = options.Host,
-            Port = options.Port,
-            Username = options.Username,
-            Password = options.Password,
-            MaxSendBufferBytes = 4096,
-        });
+        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { MaxSendBufferBytes = 4096 });
 
         string table = UniqueTableName();
         try
@@ -434,12 +427,8 @@ public class ClickHouseTcpClientIntegrationTests
     [Test]
     public async Task Options_AfterConstruction_ExposesTheConfigurationIncludingTheSendBufferCap()
     {
-        await using var client = new ClickHouseTcpClient(new ClickHouseTcpClientOptions
+        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with
         {
-            Host = TcpServerFixture.Host,
-            Port = TcpServerFixture.Port,
-            Username = TcpServerFixture.Username,
-            Password = TcpServerFixture.Password,
             MaxSendBufferBytes = 4096,
             CustomSettings = new Dictionary<string, string> { ["max_threads"] = "4" },
         });
@@ -502,14 +491,7 @@ public class ClickHouseTcpClientIntegrationTests
         const string ReadSetting = "SELECT toString(getSetting('max_block_size'))";
 
         var callerSettings = new Dictionary<string, string> { ["max_block_size"] = "1234" };
-        await using var client = new ClickHouseTcpClient(new ClickHouseTcpClientOptions
-        {
-            Host = TcpServerFixture.Host,
-            Port = TcpServerFixture.Port,
-            Username = TcpServerFixture.Username,
-            Password = TcpServerFixture.Password,
-            CustomSettings = callerSettings,
-        });
+        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { CustomSettings = callerSettings });
 
         var configured = await client.QueryAsync(ReadSetting).ToListAsync();
         Assert.That((string)configured[0][0], Is.EqualTo("1234"), "the client-level setting should reach the server");
