@@ -616,8 +616,10 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         string target = UniqueTableName();
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = Memory");
-            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = Memory");
+            // MergeTree, not Memory: the reader and the counter below are their own connections, and Memory data
+            // belongs to the replica that took the insert, so a multi-replica server hands them empty tables.
+            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = MergeTree ORDER BY tuple()");
             await ExecuteAsync(connection, $"INSERT INTO {source} VALUES (CAST('abc' AS Variant(Int64, String)))");
 
             ArgumentException refusal = null;
