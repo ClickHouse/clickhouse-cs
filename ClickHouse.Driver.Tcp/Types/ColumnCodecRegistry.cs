@@ -92,6 +92,9 @@ internal sealed class ColumnCodecRegistry
         AddConstant(new FixedWidthColumnCodec<bool>("Bool"));
         AddConstant(StringColumnCodec.Instance);
 
+        // FixedString(N): N contiguous bytes per row, the length parsed from the type argument.
+        AddFactory("FixedString", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => FixedStringColumnCodec.Create(node));
+
         // Dates and times.
         AddConstant(DateColumnCodec.Instance);
         AddConstant(Date32ColumnCodec.Instance);
