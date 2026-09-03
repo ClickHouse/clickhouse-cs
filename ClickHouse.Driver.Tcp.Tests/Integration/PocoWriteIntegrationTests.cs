@@ -420,6 +420,8 @@ public class PocoWriteIntegrationTests
         {
             ["enable_nullable_tuple_type"] = "1",
         };
+        TcpServerFixture.SkipIfCloudLocksASetting(settings);
+
         var queryOptions = new ClickHouseTcpQueryOptions { Settings = settings };
         var insertOptions = new ClickHouseTcpInsertOptions { Settings = settings };
         string table = CreateTableName();
@@ -458,6 +460,7 @@ public class PocoWriteIntegrationTests
         {
             ["allow_suspicious_low_cardinality_types"] = "1",
         };
+        TcpServerFixture.SkipIfCloudLocksASetting(settings);
         var options = new ClickHouseTcpQueryOptions { Settings = settings };
         string table = CreateTableName();
         try
@@ -511,6 +514,8 @@ public class PocoWriteIntegrationTests
         {
             ["allow_suspicious_low_cardinality_types"] = "1",
         };
+        TcpServerFixture.SkipIfCloudLocksASetting(settings);
+
         var queryOptions = new ClickHouseTcpQueryOptions { Settings = settings };
         var insertOptions = new ClickHouseTcpInsertOptions { Settings = settings };
         string table = CreateTableName();
