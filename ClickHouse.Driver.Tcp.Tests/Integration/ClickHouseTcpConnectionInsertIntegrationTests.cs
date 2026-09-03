@@ -527,8 +527,9 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         string target = UniqueTableName();
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = Memory");
-            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = Memory");
+            // The reader uses another connection, so use replicated storage for multi-replica Cloud services.
+            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = MergeTree ORDER BY tuple()");
             // Force both values into the source Int64 alternative.
             await ExecuteAsync(
                 connection,
