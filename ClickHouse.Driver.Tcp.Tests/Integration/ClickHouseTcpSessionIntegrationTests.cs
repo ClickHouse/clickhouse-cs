@@ -16,6 +16,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // claim anything about its own pool.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpSessionIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;

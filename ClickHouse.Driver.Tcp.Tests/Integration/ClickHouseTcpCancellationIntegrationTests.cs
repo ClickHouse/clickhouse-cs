@@ -16,6 +16,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // than because the connection went away.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpCancellationIntegrationTests
 {
     private const int QueryWasCancelledByClient = 735;

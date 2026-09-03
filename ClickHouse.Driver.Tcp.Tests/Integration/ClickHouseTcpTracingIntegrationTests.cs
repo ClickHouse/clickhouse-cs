@@ -16,6 +16,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // order rather than merely proving the writer agrees with the reader.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpTracingIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
