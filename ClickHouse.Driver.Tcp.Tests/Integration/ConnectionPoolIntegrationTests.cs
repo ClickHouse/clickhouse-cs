@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
-using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -240,9 +239,9 @@ public class ConnectionPoolIntegrationTests
 
         for (int iteration = 0; iteration < iterations; iteration++)
         {
-            var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+            var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
                 await client.ExecuteAsync("SELECT 1", invalid, None));
-            Assert.That(thrown.Code, Is.EqualTo(27), $"iteration {iteration + 1}");
+            Assert.That(thrown.Code, Is.EqualTo(ClickHouseErrorCode.CannotParseInputAssertionFailed), $"iteration {iteration + 1}");
 
             Assert.DoesNotThrowAsync(
                 async () => await client.ExecuteAsync("SELECT 1", cancellationToken: None),

@@ -86,7 +86,7 @@ internal sealed class ClickHouseBinaryReader : IDisposable
     /// <summary>Reads a LEB-128 variable-length unsigned integer (native-format VarUInt).</summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The decoded value.</returns>
-    /// <exception cref="InvalidDataException">The encoding exceeds 10 bytes or the range of <see cref="ulong"/>.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The encoding exceeds 10 bytes or the range of <see cref="ulong"/>.</exception>
     public async ValueTask<ulong> ReadVarUIntAsync(CancellationToken cancellationToken)
     {
         ulong result = 0;
@@ -115,7 +115,7 @@ internal sealed class ClickHouseBinaryReader : IDisposable
         byte last = buffer.ReadByte();
         if ((last & 0xFE) != 0)
         {
-            throw new InvalidDataException("VarUInt exceeds the UInt64 range (corrupt stream).");
+            throw new ClickHouseTcpProtocolException("VarUInt exceeds the UInt64 range (corrupt stream).");
         }
 
         return result | ((ulong)last << 63);
@@ -127,7 +127,7 @@ internal sealed class ClickHouseBinaryReader : IDisposable
     /// </summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The decoded packet type code.</returns>
-    /// <exception cref="InvalidDataException">The VarUInt encoding exceeds 10 bytes (corrupt stream).</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The VarUInt encoding exceeds 10 bytes (corrupt stream).</exception>
     public async ValueTask<ServerPacketType> ReadServerPacketTypeAsync(CancellationToken cancellationToken)
         => (ServerPacketType)await ReadVarUIntAsync(cancellationToken).ConfigureAwait(false);
 
@@ -139,7 +139,7 @@ internal sealed class ClickHouseBinaryReader : IDisposable
     /// </summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The decoded string.</returns>
-    /// <exception cref="InvalidDataException">The declared length exceeds the supported maximum.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The declared length exceeds the supported maximum.</exception>
     public async ValueTask<string> ReadStringAsync(CancellationToken cancellationToken)
     {
         int length = await ReadStringLengthAsync(cancellationToken).ConfigureAwait(false);
@@ -163,7 +163,7 @@ internal sealed class ClickHouseBinaryReader : IDisposable
     /// <summary>Reads a native-format String as raw bytes (ClickHouse <c>String</c> is byte-oriented, not necessarily UTF-8).</summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The raw string bytes.</returns>
-    /// <exception cref="InvalidDataException">The declared length exceeds the supported maximum.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The declared length exceeds the supported maximum.</exception>
     public async ValueTask<byte[]> ReadStringBytesAsync(CancellationToken cancellationToken)
     {
         int length = await ReadStringLengthAsync(cancellationToken).ConfigureAwait(false);
@@ -276,13 +276,13 @@ internal sealed class ClickHouseBinaryReader : IDisposable
     /// <summary>Reads a VarUInt string-length prefix and validates it against the supported maximum.</summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The length in bytes.</returns>
-    /// <exception cref="InvalidDataException">The declared length exceeds <see cref="MaxStringLength"/>.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The declared length exceeds <see cref="MaxStringLength"/>.</exception>
     public async ValueTask<int> ReadStringLengthAsync(CancellationToken cancellationToken)
     {
         ulong length = await ReadVarUIntAsync(cancellationToken).ConfigureAwait(false);
         if (length > MaxStringLength)
         {
-            throw new InvalidDataException($"String length {length} exceeds the supported maximum of {MaxStringLength} bytes (corrupt stream).");
+            throw new ClickHouseTcpProtocolException($"String length {length} exceeds the supported maximum of {MaxStringLength} bytes (corrupt stream).");
         }
 
         return (int)length;

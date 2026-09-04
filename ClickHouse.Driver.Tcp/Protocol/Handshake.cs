@@ -46,7 +46,7 @@ internal static class Handshake
         ulong revisionRaw = await reader.ReadVarUIntAsync(cancellationToken).ConfigureAwait(false);
         if (revisionRaw > int.MaxValue)
         {
-            throw new InvalidDataException($"Server reported an implausible protocol revision {revisionRaw} (corrupt stream).");
+            throw new ClickHouseTcpProtocolException($"Server reported an implausible protocol revision {revisionRaw} (corrupt stream).");
         }
 
         int revision = (int)revisionRaw;
@@ -99,8 +99,8 @@ internal static class Handshake
     /// <param name="parameters">The client-supplied handshake values.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The decoded server handshake, including the negotiated version.</returns>
-    /// <exception cref="ClickHouseServerException">The server rejected the handshake (e.g. authentication failure).</exception>
-    /// <exception cref="ClickHouseProtocolException">The server sent neither Hello nor Exception.</exception>
+    /// <exception cref="ClickHouseTcpServerException">The server rejected the handshake (e.g. authentication failure).</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The server sent neither Hello nor Exception.</exception>
     /// <exception cref="NotSupportedException">The server negotiated below the minimum protocol version this client supports.</exception>
     public static async ValueTask<ServerHandshake> PerformAsync(
         ClickHouseBinaryReader reader,
@@ -117,9 +117,9 @@ internal static class Handshake
             case ServerPacketType.Hello:
                 break;
             case ServerPacketType.Exception:
-                throw await ClickHouseServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+                throw await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
             default:
-                throw new ClickHouseProtocolException($"Unexpected packet type {reply} ({(ulong)reply}) during handshake; expected Hello or Exception.");
+                throw new ClickHouseTcpProtocolException($"Unexpected packet type {reply} ({(ulong)reply}) during handshake; expected Hello or Exception.");
         }
 
         ServerHandshake server = await ReadServerHelloAsync(reader, cancellationToken).ConfigureAwait(false);
@@ -129,7 +129,7 @@ internal static class Handshake
         // instead of corrupting the connection.
         if (server.Negotiated.Version < NegotiatedProtocol.MinimumTcpProtocolVersion)
         {
-            throw new NotSupportedException(
+            throw new ClickHouseTcpProtocolException(
                 $"The ClickHouse server's protocol revision {server.Revision} is older than the minimum " +
                 $"{NegotiatedProtocol.MinimumTcpProtocolVersion} this client supports.");
         }

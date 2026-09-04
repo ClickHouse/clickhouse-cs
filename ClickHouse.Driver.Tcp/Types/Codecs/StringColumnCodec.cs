@@ -59,7 +59,7 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
                     long end = (long)pos + length;
                     if (end > Array.MaxLength)
                     {
-                        throw new ClickHouseProtocolException(
+                        throw new ClickHouseTcpProtocolException(
                             $"String column '{columnName}' exceeds the maximum blob size ({Array.MaxLength} bytes) this client can buffer.");
                     }
 

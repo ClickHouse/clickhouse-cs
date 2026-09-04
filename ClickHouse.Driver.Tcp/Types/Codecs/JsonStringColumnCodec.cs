@@ -66,7 +66,7 @@ internal sealed class JsonStringColumnCodec : IColumnCodec
         ulong version = await reader.ReadUInt64Async(cancellationToken).ConfigureAwait(false);
         if (version != StringVersion)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"JSON column '{TypeName}' uses serialization version {version}; this client supports only the String version {StringVersion}. " +
                 "Enable it with the query setting output_format_native_write_json_as_string=1.");
         }

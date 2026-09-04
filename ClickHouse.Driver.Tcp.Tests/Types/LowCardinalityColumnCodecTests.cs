@@ -145,7 +145,7 @@ public class LowCardinalityColumnCodecTests
         byte[] bytes = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // version 2
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None));
     }
 
     [Test]
@@ -156,7 +156,7 @@ public class LowCardinalityColumnCodecTests
         BinaryPrimitives.WriteUInt64LittleEndian(metadata, 0x600 | (1UL << 8)); // NeedGlobalDictionaryBit
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(metadata);
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
     }
 
     [Test]
@@ -167,7 +167,7 @@ public class LowCardinalityColumnCodecTests
         BinaryPrimitives.WriteUInt64LittleEndian(metadata, 1UL << 10); // NeedUpdateDictionary only, no HasAdditionalKeys
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(metadata);
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
     }
 
     [Test]
@@ -178,7 +178,7 @@ public class LowCardinalityColumnCodecTests
         BinaryPrimitives.WriteUInt64LittleEndian(metadata, 0x600 | 4); // key code 4 is undefined
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(metadata);
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
     }
 
     [Test]
@@ -189,7 +189,7 @@ public class LowCardinalityColumnCodecTests
         byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)); // keys_count = 2
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 3, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 3, CodecTestHarness.None));
     }
 
     [Test]
@@ -208,7 +208,7 @@ public class LowCardinalityColumnCodecTests
         });
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
     }
 
     [Test]
@@ -304,7 +304,7 @@ public class LowCardinalityColumnCodecTests
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(8, 8), (ulong)int.MaxValue + 1); // dict_size overflows int
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", 1, CodecTestHarness.None));
     }
 
     [Test]

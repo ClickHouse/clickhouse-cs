@@ -208,7 +208,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
         ulong mode = await reader.ReadUInt64Async(cancellationToken).ConfigureAwait(false);
         if (mode != VariantWire.BasicDiscriminatorsMode)
         {
-            throw new NotSupportedException(
+            throw new ClickHouseTcpProtocolException(
                 $"Variant column '{TypeName}' uses discriminators mode {mode}; this client only supports BASIC (0).");
         }
 
@@ -330,7 +330,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
             // neither the column nor the row.
             if (d >= children.Length)
             {
-                throw new FormatException(
+                throw new ClickHouseTcpProtocolException(
                     $"Variant column '{columnName}' ({columnType}) has discriminator {d} at row {row}, but the type declares only {children.Length} alternative(s).");
             }
 

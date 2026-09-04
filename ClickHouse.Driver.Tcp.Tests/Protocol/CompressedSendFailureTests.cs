@@ -31,7 +31,7 @@ public class CompressedSendFailureTests
 
         transport.FailWrites = true;
 
-        Assert.ThrowsAsync<IOException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () =>
         {
             await foreach (Block _ in connection.QueryAsync("SELECT 1", cancellationToken: None))
             {
@@ -54,7 +54,7 @@ public class CompressedSendFailureTests
 
         transport.FailWrites = true;
 
-        Assert.ThrowsAsync<IOException>(
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(
             async () => await connection.InsertAsync("INSERT INTO t VALUES", Array.Empty<IColumn>(), cancellationToken: None));
 
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
