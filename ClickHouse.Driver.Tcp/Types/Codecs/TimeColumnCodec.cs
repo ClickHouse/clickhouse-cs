@@ -41,6 +41,12 @@ internal sealed class TimeColumnCodec : IColumnCodec
     public object NullPlaceholder => 0;
 
     /// <inheritdoc/>
+    public Type CanonicalWriteElementType => typeof(int);
+
+    /// <inheritdoc/>
+    public object CanonicalWritePlaceholder => 0;
+
+    /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
         if (writeType == typeof(int))
@@ -85,39 +91,59 @@ internal sealed class TimeColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<int> or IColumn<TimeSpan>;
 
     /// <inheritdoc/>
+    public IColumn ToCanonicalWriteColumn(IColumn column)
+    {
+        if (column is IColumn<int>)
+        {
+            return column;
+        }
+
+        if (column is IColumn<TimeSpan> spans)
+        {
+            return new ProjectedColumn<TimeSpan, int>(TypeName, spans, ToSeconds);
+        }
+
+        throw new ArgumentException($"A Time column must hold int or TimeSpan values, not {column.GetType()}.", nameof(column));
+    }
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         switch (column)
         {
             case IColumn<int> seconds:
-                // Raw seconds are the wire representation, so they are written verbatim.
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteInt32(seconds[start + i]);
-                }
-
+                WriteCanonicalColumn(writer, seconds, start, length);
                 break;
-
             case IColumn<TimeSpan> spans:
                 for (int i = 0; i < length; i++)
                 {
-                    TimeSpan value = spans[start + i];
-
-                    // Time stores whole seconds; any sub-second component is truncated toward zero (the caller
-                    // owns the precision trade-off, and Time64 is available when sub-second precision matters).
-                    long secondsValue = value.Ticks / TimeSpan.TicksPerSecond;
-                    if (secondsValue is < MinSeconds or > MaxSeconds)
-                    {
-                        throw new ArgumentOutOfRangeException(nameof(column), value, "Time is outside the range ClickHouse Time can hold ([-999:59:59, 999:59:59]).");
-                    }
-
-                    writer.WriteInt32((int)secondsValue);
+                    writer.WriteInt32(ToSeconds(spans[start + i]));
                 }
 
                 break;
-
             default:
                 throw new ArgumentException($"A Time column must hold int or TimeSpan values, not {column.GetType()}.", nameof(column));
         }
+    }
+
+    /// <inheritdoc/>
+    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        var seconds = (IColumn<int>)column;
+        for (int i = 0; i < length; i++)
+        {
+            writer.WriteInt32(seconds[start + i]);
+        }
+    }
+
+    private static int ToSeconds(TimeSpan value)
+    {
+        long seconds = value.Ticks / TimeSpan.TicksPerSecond;
+        if (seconds is < MinSeconds or > MaxSeconds)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Time is outside the range ClickHouse Time can hold ([-999:59:59, 999:59:59]).");
+        }
+
+        return (int)seconds;
     }
 }

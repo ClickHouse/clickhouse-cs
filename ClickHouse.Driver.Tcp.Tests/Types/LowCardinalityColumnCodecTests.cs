@@ -1,5 +1,7 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Net;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -308,8 +310,8 @@ public class LowCardinalityColumnCodecTests
     [Test]
     public async Task WriteColumn_FixedStringWithEqualValues_DeduplicatesByContent()
     {
-        // byte[] defaults to reference equality; the codec must use structural equality so two distinct-but-equal
-        // FixedString values collapse to one dictionary slot (dict = ["", {1,2,3,4}] → dict_size 2), not two.
+        // FixedString's canonical write value is its byte content, so distinct arrays with the same bytes share a
+        // dictionary slot.
         IColumnCodec codec = Resolve("LowCardinality(FixedString(4))");
         var column = new ArrayColumn<byte[]>("c", "LowCardinality(FixedString(4))", new[]
         {
@@ -325,6 +327,302 @@ public class LowCardinalityColumnCodecTests
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
         using IColumn read = await codec.ReadColumnAsync(reader, "c", "LowCardinality(FixedString(4))", 3, CodecTestHarness.None);
         Assert.That(((IColumn<byte[]>)read).Values.ToArray(), Is.EqualTo(new[] { new byte[] { 1, 2, 3, 4 }, new byte[] { 1, 2, 3, 4 }, new byte[] { 9, 9, 9, 9 } }));
+    }
+
+    [Test]
+    public async Task WriteColumn_DateTimesEqualByClrTicksButEncodingDifferentInstants_KeepsBothEntries()
+    {
+        const string type = "LowCardinality(DateTime('America/New_York'))";
+        IColumnCodec codec = Resolve(type);
+        long ticks = new DateTime(2024, 1, 15, 12, 0, 0).Ticks;
+        DateTime utc = new(ticks, DateTimeKind.Utc);
+        DateTime newYorkWallClock = new(ticks, DateTimeKind.Unspecified);
+        var column = new ArrayColumn<DateTime>("c", type, new[] { utc, newYorkWallClock });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, 2, CodecTestHarness.None);
+        var lowCardinality = (ILowCardinalityColumn<uint>)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowCardinality.Dictionary.RowCount, Is.EqualTo(3));
+            Assert.That(((IColumn<uint>)read)[0], Is.Not.EqualTo(((IColumn<uint>)read)[1]));
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_DateTimesDifferentByClrTicksButEncodingTheSameSecond_ReusesOneEntry()
+    {
+        const string type = "LowCardinality(DateTime('UTC'))";
+        IColumnCodec codec = Resolve(type);
+        DateTime second = DateTime.UnixEpoch.AddSeconds(1_700_000_000);
+        var values = new[] { second.AddMilliseconds(100), second.AddMilliseconds(900) };
+        var column = new ArrayColumn<DateTime>("c", type, values);
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, values.Length, CodecTestHarness.None);
+        var lowCardinality = (ILowCardinalityColumn<uint>)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowCardinality.Dictionary.RowCount, Is.EqualTo(2));
+            Assert.That(((IColumn<uint>)read).Values.ToArray(), Is.EqualTo(new[] { 1_700_000_000u, 1_700_000_000u }));
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_DateTime64ValuesEqualByClrTicksButEncodingDifferentInstants_KeepsBothEntries()
+    {
+        const string type = "LowCardinality(DateTime64(0, 'America/New_York'))";
+        IColumnCodec codec = Resolve(type);
+        long ticks = new DateTime(2024, 1, 15, 12, 0, 0).Ticks;
+        var values = new[]
+        {
+            new DateTime(ticks, DateTimeKind.Utc),
+            new DateTime(ticks, DateTimeKind.Unspecified),
+        };
+        var column = new ArrayColumn<DateTime>("c", type, values);
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, values.Length, CodecTestHarness.None);
+        var lowCardinality = (ILowCardinalityColumn<long>)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowCardinality.Dictionary.RowCount, Is.EqualTo(3));
+            Assert.That(((IColumn<long>)read)[0], Is.Not.EqualTo(((IColumn<long>)read)[1]));
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_NullableDateTimesEncodingDifferentInstants_KeepsBothEntriesAndNull()
+    {
+        const string type = "LowCardinality(Nullable(DateTime('America/New_York')))";
+        IColumnCodec codec = Resolve(type);
+        long ticks = new DateTime(2024, 1, 15, 12, 0, 0).Ticks;
+        var values = new DateTime?[]
+        {
+            new DateTime(ticks, DateTimeKind.Utc),
+            null,
+            new DateTime(ticks, DateTimeKind.Unspecified),
+        };
+        var column = new ArrayColumn<DateTime?>("c", type, values);
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, values.Length, CodecTestHarness.None);
+        var lowCardinality = (ILowCardinalityColumn<uint>)read;
+        var typed = (IColumn<uint?>)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowCardinality.Dictionary.RowCount, Is.EqualTo(4));
+            Assert.That(typed[0], Is.Not.EqualTo(typed[2]));
+            Assert.That(typed[1], Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_FloatValuesEqualByClrButDifferentOnWire_KeepsBothBitPatterns()
+    {
+        const string type = "LowCardinality(Float32)";
+        IColumnCodec codec = Resolve(type);
+        var column = new ArrayColumn<float>("c", type, new[] { 0f, -0f });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, 2, CodecTestHarness.None);
+        var lowCardinality = (ILowCardinalityColumn<float>)read;
+        var typed = (IColumn<float>)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowCardinality.Dictionary.RowCount, Is.EqualTo(2));
+            Assert.That(BitConverter.SingleToInt32Bits(typed[0]), Is.EqualTo(BitConverter.SingleToInt32Bits(0f)));
+            Assert.That(BitConverter.SingleToInt32Bits(typed[1]), Is.EqualTo(BitConverter.SingleToInt32Bits(-0f)));
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_DoubleValuesEqualByClrButDifferentOnWire_KeepsBothBitPatterns()
+    {
+        const string type = "LowCardinality(Float64)";
+        IColumnCodec codec = Resolve(type);
+        var column = new ArrayColumn<double>("c", type, new[] { 0d, -0d });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, 2, CodecTestHarness.None);
+        var lowCardinality = (ILowCardinalityColumn<double>)read;
+        var typed = (IColumn<double>)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowCardinality.Dictionary.RowCount, Is.EqualTo(2));
+            Assert.That(BitConverter.DoubleToInt64Bits(typed[0]), Is.EqualTo(BitConverter.DoubleToInt64Bits(0d)));
+            Assert.That(BitConverter.DoubleToInt64Bits(typed[1]), Is.EqualTo(BitConverter.DoubleToInt64Bits(-0d)));
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_DateTimeOffsetsEncodingTheSameSecond_ReusesOneEntry()
+    {
+        const string type = "LowCardinality(DateTime('UTC'))";
+        IColumnCodec codec = Resolve(type);
+        DateTimeOffset second = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000);
+        var values = new[] { second.AddMilliseconds(100), second.AddMilliseconds(900) };
+        var column = new ArrayColumn<DateTimeOffset>("c", type, values);
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, values.Length, CodecTestHarness.None);
+        var lowCardinality = (ILowCardinalityColumn<uint>)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowCardinality.Dictionary.RowCount, Is.EqualTo(2));
+            Assert.That(((IColumn<uint>)read).Values.ToArray(), Is.EqualTo(new[] { 1_700_000_000u, 1_700_000_000u }));
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_ProjectedNonZeroSlice_WritesOnlyTheRequestedRows()
+    {
+        const string type = "LowCardinality(DateTime('UTC'))";
+        IColumnCodec codec = Resolve(type);
+        DateTime second = DateTime.UnixEpoch.AddSeconds(1_700_000_000);
+        var column = new ArrayColumn<DateTime>("c", type, new[]
+        {
+            second.AddSeconds(-10),
+            second.AddMilliseconds(100),
+            second.AddMilliseconds(900),
+            second.AddSeconds(1),
+            second.AddSeconds(10),
+        });
+
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(codec, column, start: 1, length: 3);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, 3, CodecTestHarness.None);
+
+        Assert.That(
+            ((IColumn<uint>)read).Values.ToArray(),
+            Is.EqualTo(new[] { 1_700_000_000u, 1_700_000_000u, 1_700_000_001u }));
+    }
+
+    [Test]
+    public async Task WriteColumn_ProjectedNullableNonZeroSlice_PreservesNullsInsideTheSlice()
+    {
+        const string type = "LowCardinality(Nullable(DateTime('UTC')))";
+        IColumnCodec codec = Resolve(type);
+        DateTime second = DateTime.UnixEpoch.AddSeconds(1_700_000_000);
+        var column = new ArrayColumn<DateTime?>("c", type, new DateTime?[]
+        {
+            null,
+            second.AddMilliseconds(100),
+            null,
+            second.AddMilliseconds(900),
+            second.AddSeconds(10),
+        });
+
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(codec, column, start: 1, length: 3);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, 3, CodecTestHarness.None);
+
+        Assert.That(
+            ((IColumn<uint?>)read).Values.ToArray(),
+            Is.EqualTo(new uint?[] { 1_700_000_000u, null, 1_700_000_000u }));
+    }
+
+    private static IEnumerable<TestCaseData> CanonicalSourceCases()
+    {
+        yield return CanonicalSourceCase(
+            "LowCardinality(DateTime('UTC'))",
+            new ArrayColumn<uint>("c", "LowCardinality(DateTime('UTC'))", new uint[] { 0, 7, 7 }));
+        yield return CanonicalSourceCase(
+            "LowCardinality(DateTime64(3, 'UTC'))",
+            new ArrayColumn<long>("c", "LowCardinality(DateTime64(3, 'UTC'))", new long[] { 0, 7, 7 }));
+        yield return CanonicalSourceCase(
+            "LowCardinality(Time)",
+            new ArrayColumn<int>("c", "LowCardinality(Time)", new[] { 0, 7, 7 }));
+        yield return CanonicalSourceCase(
+            "LowCardinality(Time64(3))",
+            new ArrayColumn<long>("c", "LowCardinality(Time64(3))", new long[] { 0, 7, 7 }));
+    }
+
+    private static TestCaseData CanonicalSourceCase(string type, IColumn column)
+        => new TestCaseData(type, column).SetName($"WriteColumn_CanonicalSourceType_ReusesDictionaryEntries({type})");
+
+    [TestCaseSource(nameof(CanonicalSourceCases))]
+    public async Task WriteColumn_CanonicalSourceType_ReusesDictionaryEntries(string type, IColumn column)
+    {
+        IColumnCodec codec = Resolve(type);
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+
+        Assert.That(BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(8, 8)), Is.EqualTo(2UL));
+    }
+
+    [TestCase("LowCardinality(BFloat16)", 10_001L, 10_002L)]
+    [TestCase("LowCardinality(Time)", 11_000_001L, 11_999_999L)]
+    [TestCase("LowCardinality(Time64(3))", 10_001L, 10_999L)]
+    public async Task WriteColumn_ClrValuesThatEncodeIdentically_ReusesOneEntry(string type, long firstTicks, long secondTicks)
+    {
+        IColumnCodec codec = Resolve(type);
+        IColumn column = type.Contains("BFloat16", StringComparison.Ordinal)
+            ? new ArrayColumn<float>("c", type, new[]
+            {
+                BitConverter.Int32BitsToSingle((int)(0x3F80_0000u + (uint)firstTicks)),
+                BitConverter.Int32BitsToSingle((int)(0x3F80_0000u + (uint)secondTicks)),
+            })
+            : new ArrayColumn<TimeSpan>("c", type, new[] { TimeSpan.FromTicks(firstTicks), TimeSpan.FromTicks(secondTicks) });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+
+        Assert.That(BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(8, 8)), Is.EqualTo(2UL));
+    }
+
+    [Test]
+    public async Task WriteColumn_IPv4AndItsMappedIPv6Address_ReusesOneEntry()
+    {
+        const string type = "LowCardinality(IPv6)";
+        IColumnCodec codec = Resolve(type);
+        IPAddress ipv4 = IPAddress.Parse("192.0.2.1");
+        var column = new ArrayColumn<IPAddress>("c", type, new[] { ipv4, ipv4.MapToIPv6() });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, 2, CodecTestHarness.None);
+        var lowCardinality = (ILowCardinalityColumn<IPAddress>)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowCardinality.Dictionary.RowCount, Is.EqualTo(2));
+            Assert.That(((IColumn<IPAddress>)read)[0], Is.EqualTo(((IColumn<IPAddress>)read)[1]));
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_NullableIPv4WithRepeatedAndDefaultValues_PreservesNullAndDeduplicates()
+    {
+        const string type = "LowCardinality(Nullable(IPv4))";
+        IColumnCodec codec = Resolve(type);
+        IPAddress address = IPAddress.Parse("192.0.2.1");
+        var expected = new[] { IPAddress.Any, address, null, address };
+        var column = new ArrayColumn<IPAddress>("c", type, expected);
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteColumn(writer, column));
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, expected.Length, CodecTestHarness.None);
+        var lowCardinality = (ILowCardinalityColumn<IPAddress>)read;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowCardinality.Dictionary.RowCount, Is.EqualTo(3));
+            Assert.That(((IColumn<IPAddress>)read).Values.ToArray(), Is.EqualTo(expected));
+        });
     }
 
     [Test]

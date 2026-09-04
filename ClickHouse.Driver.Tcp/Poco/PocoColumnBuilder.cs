@@ -182,10 +182,11 @@ internal static class PocoColumnBuilderFactory
             offered[i] = accepted[i].ToString();
         }
 
-        // An empty list means the codec requires a column shape that rows cannot provide.
+        // Empty means the codec requires a specialized column shape.
         string remedy = accepted.Count == 0
             ? $"No property type can fill a '{column.TypeName}' column: insert it through the columnar API, which can build the column shape it needs."
-            : $"It accepts {string.Join(" or ", offered)}. Give the property one of those types, or insert that column through the columnar API.";
+            : $"It accepts {string.Join(" or ", offered)}, and — for a composite type — rows whose elements are any type its element codecs accept. " +
+              "Give the property one of those types, or insert that column through the columnar API.";
 
         return new InvalidOperationException(
             $"Column '{column.Name}' ({column.TypeName}) is filled from property '{pocoType.Name}.{member.MemberName}' of type {member.MemberType}, which it cannot be written from. " + remedy);

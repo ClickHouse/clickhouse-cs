@@ -35,6 +35,23 @@ public class WritePathEquivalenceTests
             new[] { new KeyValuePair<string, int>("a", 1), new KeyValuePair<string, int>("b", 2) },
             Array.Empty<KeyValuePair<string, int>>(),
         }));
+
+        // Lifted rows must encode identically to canonical rows.
+        var stamps = new[] { DateTimeOffset.FromUnixTimeSeconds(0).UtcDateTime, DateTimeOffset.FromUnixTimeSeconds(1_705_314_600).UtcDateTime };
+        yield return Case("Array(DateTime('UTC'))", new ArrayColumn<DateTime[]>("c", "Array(DateTime('UTC'))", new[] { stamps, Array.Empty<DateTime>() }));
+        yield return Case("Array(Array(DateTime('UTC')))", new ArrayColumn<DateTime[][]>("c", "Array(Array(DateTime('UTC')))", new[] { new[] { stamps, Array.Empty<DateTime>() }, Array.Empty<DateTime[]>() }));
+        yield return Case("Array(Nullable(DateTime('UTC')))", new ArrayColumn<DateTime?[]>("c", "Array(Nullable(DateTime('UTC')))", new[] { new DateTime?[] { stamps[0], null, stamps[1] }, new DateTime?[] { null } }));
+        yield return Case("Tuple(DateTime('UTC'), String)", new ArrayColumn<(DateTime, string)>("c", "Tuple(DateTime('UTC'), String)", new[] { (stamps[0], "a"), (stamps[1], "bb") }));
+        yield return Case("Nullable(Tuple(DateTime('UTC'), String))", new ArrayColumn<(DateTime, string)?>("c", "Nullable(Tuple(DateTime('UTC'), String))", new (DateTime, string)?[] { (stamps[0], "a"), null, (stamps[1], "bb") }));
+        yield return Case("Map(String, DateTime('UTC'))", new ArrayColumn<KeyValuePair<string, DateTime>[]>("c", "Map(String, DateTime('UTC'))", new[]
+        {
+            new[] { new KeyValuePair<string, DateTime>("a", stamps[0]), new KeyValuePair<string, DateTime>("b", stamps[1]) },
+            Array.Empty<KeyValuePair<string, DateTime>>(),
+        }));
+
+        // Cover a nested lift whose inner codec writes a state prefix.
+        yield return Case("Array(LowCardinality(DateTime('UTC')))", new ArrayColumn<DateTime[]>("c", "Array(LowCardinality(DateTime('UTC')))", new[] { new[] { stamps[0], stamps[1], stamps[0] }, Array.Empty<DateTime>() }));
+        yield return Case("LowCardinality(DateTime('UTC'))", new ArrayColumn<DateTime>("c", "LowCardinality(DateTime('UTC'))", new[] { stamps[0], stamps[1], stamps[0] }));
     }
 
     private static TestCaseData Case(string type, IColumn ergonomic) => new TestCaseData(type, ergonomic).SetName($"WritePathEquivalence({type})");

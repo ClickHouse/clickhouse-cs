@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -74,17 +75,11 @@ internal static class ArrayColumnCodec
 internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 {
     private readonly IColumnCodec inner;
-    private readonly bool projectedInnerCanWrite;
 
     internal ArrayColumnCodec(string typeName, IColumnCodec inner)
     {
         TypeName = typeName;
         this.inner = inner;
-
-        // Whether the ergonomic jagged path can project its flattened values through the inner codec (e.g.
-        // Nothing cannot, and Nested requires its dense NestedColumn). A dense ArrayValueColumn is checked against
-        // its actual inner column instead, so Array(Nested(...)) can re-insert the wire-shaped column a read yields.
-        projectedInnerCanWrite = inner.CanWrite(new ArrayColumn<TElement>(string.Empty, inner.TypeName, Array.Empty<TElement>()));
     }
 
     /// <inheritdoc/>
@@ -99,6 +94,18 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     /// placeholder.
     /// </summary>
     public object NullPlaceholder => Array.Empty<TElement>();
+
+    /// <inheritdoc/>
+    public object NullPlaceholderAs(Type writeType)
+    {
+        if (!CompositeElementProjections.TryGetArrayElement(writeType, out Type sourceElement)
+            || !inner.CanWriteElementType(sourceElement))
+        {
+            throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+        }
+
+        return writeType == ElementType ? NullPlaceholder : Array.CreateInstance(sourceElement, 0);
+    }
 
     /// <inheritdoc/>
     public ValueTask ReadStatePrefixAsync(ClickHouseBinaryReader reader, CancellationToken cancellationToken)
@@ -196,18 +203,61 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     }
 
     /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, typeof(TElement[]), TypeName);
+
+        if (targetType == typeof(TElement[]))
+        {
+            projected = value;
+            return true;
+        }
+
+        projected = null;
+
+        // Only T[] has the required row shape.
+        if (!CompositeElementProjections.TryGetArrayElement(targetType, out Type targetElement))
+        {
+            return false;
+        }
+
+        ParameterExpression element = Expression.Variable(typeof(TElement), "element");
+        if (!inner.TryProjectRead(element, targetElement, out Expression elementProjection))
+        {
+            return false;
+        }
+
+        projected = CompositeElementProjections.ProjectArray(value, element, elementProjection);
+        return true;
+    }
+
+    /// <inheritdoc/>
+    public bool CanWriteElementType(Type elementType)
+        => CompositeElementProjections.TryGetArrayElement(elementType, out Type sourceElement)
+            && inner.CanWriteElementType(sourceElement);
+
+    /// <inheritdoc/>
     public bool CanWrite(IColumn column)
         => column is ArrayValueColumn<TElement> dense
             ? inner.CanWrite(dense.Inner)
-            : projectedInnerCanWrite && column is IColumn<TElement[]>;
+            : ResolveWriteShape(column) is not null;
+
+    // Resolve the shape from the row's CLR element type.
+    private IArrayWriteShape ResolveWriteShape(IColumn column)
+    {
+        if (!CompositeElementProjections.TryGetArrayElement(column.ElementType, out Type sourceElement)
+            || !inner.CanWriteElementType(sourceElement))
+        {
+            return null;
+        }
+
+        return ArrayWriteShapes.For(sourceElement);
+    }
 
     /// <inheritdoc/>
-    // Computed once per slice and handed to both the prefix and body phases; see BuildState for what it holds.
     public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
 
     /// <inheritdoc/>
-    // The Array's own state prefix is the inner codec's, written once over every element of the slice (a leaf inner
-    // has none). Callers that already hold the slice's state use the overload below; this one builds its own.
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         using ArrayWriteState state = BuildState(column, start, length);
@@ -241,14 +291,12 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         WriteBody(writer, column, start, length, state.Expect<ArrayWriteState>(TypeName));
     }
 
-    // Writes this slice's offsets stream — one UInt64 per row, the cumulative element end after that row — then its
-    // elements.
+    // Write cumulative offsets, then the flattened elements.
     private void WriteBody(ClickHouseBinaryWriter writer, IColumn column, int start, int length, ArrayWriteState state)
     {
         if (column is ArrayValueColumn<TElement> dense)
         {
-            // A dense column already carries offsets, but they count from the start of the whole column; rebase them
-            // on this slice's first element so each block's stream starts from zero.
+            // Rebase the stored offsets to this slice.
             ReadOnlySpan<int> offsets = dense.Offsets;
             int elementBase = offsets[start];
             for (int i = 0; i < length; i++)
@@ -258,8 +306,6 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         }
         else
         {
-            // An ergonomic column has no offsets of its own; BuildState summed its per-row lengths into
-            // slice-relative ones.
             int[] sliceOffsets = state.SliceOffsets;
             for (int i = 0; i < length; i++)
             {
@@ -269,106 +315,61 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 
         if (state.Elements is not null)
         {
-            // Every element of the slice handed over as one column: the dense column's own flat inner (borrowed, so a
-            // re-insert copies nothing), or a flattening view over the ergonomic rows. A sectioned inner needs this —
-            // it emits each section (Nullable's null-map, LowCardinality's dictionary, a nested Array's offsets,
-            // Dynamic's discriminators) once spanning the whole run, so driving it a row at a time would interleave
-            // those sections and corrupt the stream.
+            // Sectioned codecs must see the whole flattened element column.
             inner.WriteColumn(writer, state.Elements, state.ElementBase, state.ElementCount, state.InnerState);
             return;
         }
 
-        // A leaf inner (see ISpanWritableCodec) encodes as a flat per-element stream with no sections, so each row's
-        // array goes out as its own contiguous run — a bulk blit for a fixed-width inner — read straight from the
-        // ergonomic column with no flattened view or buffer in between.
-        var spanCodec = (ISpanWritableCodec<TElement>)inner;
-        var source = (IColumn<TElement[]>)column;
-        for (int i = 0; i < length; i++)
-        {
-            spanCodec.WriteValues(writer, source[start + i]);
-        }
+        // Span-writable leaves can write each source row directly.
+        state.Shape.WriteRuns(inner, writer, column, start, length);
     }
 
-    // Builds the scratch the prefix and body phases of one slice share: which elements the slice covers, plus
-    // whatever the inner codec needs to write them.
+    // Prepare the element range and the inner codec's state once per slice.
     private ArrayWriteState BuildState(IColumn column, int start, int length)
     {
         if (column is ArrayValueColumn<TElement> dense)
         {
-            // A dense column is already the wire's shape: its flat inner is the element column, and the slice's
-            // element range is the gap between the offsets bracketing the rows. Nothing is summed, and the inner
-            // column is borrowed rather than copied.
+            // Dense columns already contain the flattened element column.
             ReadOnlySpan<int> offsets = dense.Offsets;
             int elementBase = offsets[start];
             int elementCount = offsets[start + length] - elementBase;
             IColumnWriteState innerState = inner.BeginWrite(dense.Inner, elementBase, elementCount);
-            return new ArrayWriteState((IColumn<TElement>)dense.Inner, elementBase, elementCount, innerState, sliceOffsets: null);
+            return new ArrayWriteState(dense.Inner, elementBase, elementCount, innerState, sliceOffsets: null, shape: null);
         }
 
-        // An ergonomic column has to have its offsets derived from the per-row lengths; doing it here means neither
-        // phase re-walks the rows.
-        var source = (IColumn<TElement[]>)column;
-        int[] sliceOffsets = ComputeOffsets(source, start, length);
+        // Compute ergonomic offsets once for both write phases.
+        IArrayWriteShape shape = ResolveWriteShape(column)
+            ?? throw new ArgumentException(
+                $"A {TypeName} column must hold rows of a CLR type its element codec accepts, not {column.GetType()}.",
+                nameof(column));
+
+        int[] sliceOffsets = shape.ComputeOffsets(column, start, length);
         int total = sliceOffsets[length];
-        if (inner is ISpanWritableCodec<TElement>)
+        if (shape.InnerWritesSpans(inner))
         {
-            // A leaf inner emits no state prefix and needs no element column — the body writes each row as its own
-            // run straight from the source arrays — so the offsets are the whole of the scratch.
-            return new ArrayWriteState(elements: null, elementBase: 0, total, innerState: null, sliceOffsets);
+            return new ArrayWriteState(elements: null, elementBase: 0, total, innerState: null, sliceOffsets, shape);
         }
 
-        // A sectioned inner has to see every element as one column, so give it a lazy flattening view over the rows
-        // instead of copying the elements into a flat buffer.
-        var view = new ConcatColumn<TElement>(inner.TypeName, source, start, sliceOffsets, total);
+        // Give sectioned codecs a lazy flattened view.
+        IColumn view = shape.CreateFlatteningView(inner.TypeName, column, start, sliceOffsets, total);
         IColumnWriteState viewState = inner.BeginWrite(view, 0, total);
-        return new ArrayWriteState(view, elementBase: 0, total, viewState, sliceOffsets);
+        return new ArrayWriteState(view, elementBase: 0, total, viewState, sliceOffsets, shape);
     }
 
-    // Sums each row's element count into a slice-relative cumulative offsets array (offsets[0] = 0), rejecting null
-    // rows (Array(T) is element-nullable only through Array(Nullable(T))) and guarding that the run fits one array.
-    private static int[] ComputeOffsets(IColumn<TElement[]> source, int start, int length)
-    {
-        var offsets = new int[length + 1];
-        ulong total64 = 0;
-        for (int i = 0; i < length; i++)
-        {
-            TElement[] row = source[start + i];
-            if (row is null)
-            {
-                throw new ArgumentException(
-                    $"Array column '{source.Name}' has a null value at row {start + i}; Array(T) rows are non-nullable. Use an empty array for an empty row, or declare the column Array(Nullable(T)) to carry null elements.",
-                    nameof(source));
-            }
-
-            total64 += (ulong)row.Length;
-            if (total64 > (ulong)Array.MaxLength)
-            {
-                throw new NotSupportedException(
-                    $"Array column '{source.Name}' holds more than {Array.MaxLength} elements in one block, exceeding the maximum this client can buffer.");
-            }
-
-            offsets[i + 1] = (int)total64;
-        }
-
-        return offsets;
-    }
-
-    // The write scratch of one slice, shared across the prefix and body phases; BuildState decides what goes in it.
-    // Elements is the slice's element column, null only for a leaf inner written as runs; SliceOffsets is the
-    // ergonomic slice's cumulative element ends, null for a dense column, which reads its own. Nothing here is
-    // pooled; disposing releases the inner state.
+    // State shared by the prefix and body writes for one slice.
     private sealed class ArrayWriteState : IColumnWriteState
     {
-        public ArrayWriteState(IColumn<TElement> elements, int elementBase, int elementCount, IColumnWriteState innerState, int[] sliceOffsets)
+        public ArrayWriteState(IColumn elements, int elementBase, int elementCount, IColumnWriteState innerState, int[] sliceOffsets, IArrayWriteShape shape)
         {
             Elements = elements;
             ElementBase = elementBase;
             ElementCount = elementCount;
             InnerState = innerState;
             SliceOffsets = sliceOffsets;
+            Shape = shape;
         }
 
-        public IColumn<TElement> Elements { get; }
+        public IColumn Elements { get; }
 
         public int ElementBase { get; }
 
@@ -377,6 +378,8 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         public IColumnWriteState InnerState { get; }
 
         public int[] SliceOffsets { get; }
+
+        public IArrayWriteShape Shape { get; }
 
         public void Dispose() => InnerState?.Dispose();
     }

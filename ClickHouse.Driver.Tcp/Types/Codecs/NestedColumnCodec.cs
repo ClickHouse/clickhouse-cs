@@ -201,6 +201,10 @@ internal sealed class NestedColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
+    // Nested requires its specialized column shape.
+    public bool CanWriteElementType(Type elementType) => false;
+
+    /// <inheritdoc/>
     public bool CanWrite(IColumn column)
     {
         if (column is not NestedColumn nested || nested.FieldCount != children.Length)

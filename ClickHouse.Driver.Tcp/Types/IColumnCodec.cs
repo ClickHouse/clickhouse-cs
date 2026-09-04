@@ -7,76 +7,32 @@ using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
-/// <summary>
-/// Reads and writes one ClickHouse column type over the wire. A codec is resolved from a type string by the
-/// registry and knows how to turn <c>num_rows</c> wire values into an <see cref="IColumn"/> and back.
-///
-/// <para>
-/// A column may carry a serialization state prefix before its values (used by dictionary-bearing types such
-/// as LowCardinality). Most types have none, so the prefix hooks default to no-ops; composite codecs that own
-/// child codecs recurse into them. The block layer always calls the prefix hook before the value read/write,
-/// so a codec that needs a prefix can rely on the ordering without the block layer knowing which types do.
-/// </para>
-/// </summary>
+/// <summary>Reads and writes one ClickHouse column type.</summary>
 internal interface IColumnCodec
 {
-    /// <summary>The canonical base type name this codec handles (e.g. <c>UInt64</c>, <c>String</c>).</summary>
+    /// <summary>The ClickHouse type name handled by this codec.</summary>
     string TypeName { get; }
 
-    /// <summary>
-    /// The CLR element type the decoded column surfaces — the <c>T</c> of the <see cref="IColumn{T}"/> that
-    /// <see cref="ReadColumnAsync"/> produces (e.g. <see cref="ulong"/> for <c>UInt64</c>, <see cref="string"/>
-    /// for <c>String</c>, <see cref="uint"/> — the raw epoch-second count — for <c>DateTime</c>). Composite codecs
-    /// consult a child codec's element type to build the right typed wrapper column (e.g. <c>Nullable(T)</c>
-    /// surfaces <c>T?</c> for a value-type inner and the nullable reference for a reference-type inner).
-    /// <para>
-    /// The one type the column is <em>decoded</em> into. A codec may accept more on the write path
-    /// (<see cref="WritableElementTypes"/>, which leads with this type) and project to more on the read path
-    /// (<see cref="TryProjectRead"/>).
-    /// </para>
-    /// </summary>
+    /// <summary>The canonical CLR type returned by <see cref="ReadColumnAsync"/>.</summary>
     Type ElementType { get; }
 
     /// <summary>
-    /// The CLR element types <see cref="WriteColumn"/> accepts, in preference order (the canonical
-    /// <see cref="ElementType"/> first). Defaults to just <see cref="ElementType"/>; a codec that also takes
-    /// convenience write types (e.g. a date-time codec accepting <see cref="System.DateTime"/> as well as
-    /// <see cref="System.DateTimeOffset"/>) lists them all here, so a composite such as <c>Nullable(T)</c> can
-    /// re-offer the same write types through its own write path. Every type listed must be answerable by both
-    /// <see cref="CanWrite"/> and <see cref="NullPlaceholderAs"/>.
+    /// Preferred CLR write types. Composite combinations may be omitted; test them with
+    /// <see cref="CanWriteElementType"/>.
     /// </summary>
     IReadOnlyList<Type> WritableElementTypes => new[] { ElementType };
 
     /// <summary>
-    /// The readings this codec offers, canonical <see cref="ElementType"/> first — <b>for diagnostics only</b>, to
-    /// tell a caller what a column can be read as once nothing matched. Defaults to just <see cref="ElementType"/>.
-    /// <para>
-    /// <b>Do not use this to decide whether a projection exists</b> — ask <see cref="TryProjectRead"/>, the authority.
-    /// This list cannot be exhaustive: a composite that lifts its children answers for their cartesian product, which
-    /// is too large to enumerate. Only read on a failure path, so it is not hot and may allocate.
-    /// </para>
+    /// Common readable CLR types. Composite combinations may be omitted; test them with <see cref="TryProjectRead"/>.
     /// </summary>
     IReadOnlyList<Type> ReadableElementTypes => new[] { ElementType };
 
-    /// <summary>
-    /// Projects <paramref name="value"/> to <paramref name="targetType"/>; the identity for <see cref="ElementType"/>.
-    /// The authority on which readings exist: it answers the one type a caller asks about instead of publishing a list
-    /// to search, so a codec cannot advertise a projection it does not have, and a composite can recurse into its
-    /// children without enumerating their cartesian product.
-    /// <para>
-    /// An <em>expression</em>, not a delegate, so a compiled per-column read loop can inline the conversion; a
-    /// <c>Func&lt;,&gt;</c> would cost an indirect call per row. Scale and timezone are embedded as constants, so the
-    /// result closes over nothing.
-    /// </para>
-    /// </summary>
-    /// <param name="value">An expression of type <see cref="ElementType"/>. Spliced more than once by some
-    /// projections, so it must be a variable or another repeatable expression.</param>
-    /// <param name="targetType">The CLR type to project to. Must not be null — a caller with a possibly-absent target
-    /// checks before asking, as implementations need not agree on what a null does.</param>
+    /// <summary>Builds an expression that projects a canonical value to <paramref name="targetType"/>.</summary>
+    /// <param name="value">An expression of type <see cref="ElementType"/>.</param>
+    /// <param name="targetType">The requested CLR type.</param>
     /// <param name="projected">An expression of type <paramref name="targetType"/>, or null when none is offered.</param>
     /// <returns>Whether a projection to <paramref name="targetType"/> exists.</returns>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is not of type <see cref="ElementType"/> — a
-    /// caller mistake, distinct from a target this codec does not offer.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is not of type <see cref="ElementType"/>.</exception>
     bool TryProjectRead(Expression value, Type targetType, out Expression projected)
     {
         ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
@@ -84,29 +40,12 @@ internal interface IColumnCodec
         return projected is not null;
     }
 
-    /// <summary>
-    /// A value of <see cref="ElementType"/> to encode where a row has no value of its own — the placeholder
-    /// written at the null positions of a <c>Nullable(T)</c> column's values stream. The codec must be handed a
-    /// value it accepts, so this is the type's canonical zero/epoch (e.g. <c>0</c>, <c>1970-01-01</c>,
-    /// <c>0.0.0.0</c>, the empty string) rather than the CLR default, which a range-checked type would reject.
-    /// A codec whose values cannot be written throws when this is read.
-    ///
-    /// <para>
-    /// The server discards these bytes for most types, but not for one whose values it <em>parses</em> rather than
-    /// copies: a <c>Nullable(JSON)</c> values stream is parsed at every position, so an unparseable placeholder is
-    /// rejected outright. The placeholder must therefore be valid input for the type, not merely well-formed bytes.
-    /// </para>
-    /// </summary>
+    /// <summary>A valid canonical value for the hidden inner value of a null.</summary>
     object NullPlaceholder { get; }
 
     /// <summary>
-    /// <see cref="NullPlaceholder"/> expressed in <paramref name="writeType"/> — one of
-    /// <see cref="WritableElementTypes"/>. A composite filling a placeholder buffer needs the placeholder in the
-    /// same CLR write type as the buffer it materializes (e.g. a <c>Nullable(DateTime)</c> written as
-    /// <see cref="System.DateTime"/> needs a <see cref="System.DateTime"/> placeholder, not the canonical
-    /// <see cref="System.DateTimeOffset"/> one). Defaults to <see cref="NullPlaceholder"/> for the canonical
-    /// <see cref="ElementType"/> and throws for any other write type; a codec advertising extra
-    /// <see cref="WritableElementTypes"/> overrides this to answer each of them.
+    /// Returns a writable placeholder of <paramref name="writeType"/>. This must support every type accepted by
+    /// <see cref="CanWriteElementType"/>.
     /// </summary>
     /// <param name="writeType">The CLR write type to express the placeholder in.</param>
     /// <returns>The placeholder value, assignable to <paramref name="writeType"/>.</returns>
@@ -130,39 +69,58 @@ internal interface IColumnCodec
     /// <returns>The decoded column.</returns>
     ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken);
 
-    /// <summary>
-    /// Whether <see cref="WriteColumn"/> accepts <paramref name="column"/>'s CLR element type. A codec may
-    /// accept several (e.g. a date-time codec taking both <see cref="System.DateTime"/> and
-    /// <see cref="System.DateTimeOffset"/>), so this is a membership test. Inserts check it up front so a bad
-    /// column type is a clear error rather than a mid-write cast failure.
-    /// </summary>
+    /// <summary>Whether <see cref="WriteColumn"/> accepts this concrete column.</summary>
     /// <param name="column">The column to test.</param>
     /// <returns><see langword="true"/> if <see cref="WriteColumn"/> accepts <paramref name="column"/>.</returns>
     bool CanWrite(IColumn column);
 
+    /// <summary>Whether a row-oriented column with <paramref name="elementType"/> can be written.</summary>
+    /// <param name="elementType">The candidate CLR element type.</param>
+    /// <returns>Whether a column of that element type can be written.</returns>
+    bool CanWriteElementType(Type elementType)
+    {
+        if (elementType == ElementType)
+        {
+            return true;
+        }
+
+        IReadOnlyList<Type> writable = WritableElementTypes;
+        for (int i = 0; i < writable.Count; i++)
+        {
+            if (writable[i] == elementType)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The CLR type accepted by <see cref="WriteCanonicalColumn"/> after write conversion.</summary>
+    Type CanonicalWriteElementType => ElementType;
+
+    /// <summary>A valid placeholder expressed as <see cref="CanonicalWriteElementType"/>.</summary>
+    object CanonicalWritePlaceholder => NullPlaceholder;
+
     /// <summary>
-    /// Computes any per-operation scratch this codec needs to write rows [<paramref name="start"/>,
-    /// <paramref name="start"/> + <paramref name="length"/>), shared across the following state-prefix and body
-    /// phases so a data-dependent prefix or an element-flattening composite does its discovery/flatten exactly
-    /// once. Default: none — the codec's prefix is absent or a fixed constant, so the phases share nothing.
-    /// When non-null, the returned state is passed to the state-aware
-    /// <see cref="WriteStatePrefix(ClickHouseBinaryWriter, IColumn, int, int, IColumnWriteState)"/> and
-    /// <see cref="WriteColumn(ClickHouseBinaryWriter, IColumn, int, int, IColumnWriteState)"/> overloads, and the
-    /// caller disposes it after the body.
+    /// Projects a writable column to <see cref="CanonicalWriteElementType"/>. Equal projected values must produce
+    /// identical bytes through <see cref="WriteCanonicalColumn"/>. The returned column borrows the source and
+    /// preserves its row indexes.
     /// </summary>
+    IColumn ToCanonicalWriteColumn(IColumn column) => column;
+
+    /// <summary>Writes values already converted to <see cref="CanonicalWriteElementType"/>.</summary>
+    void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+        => WriteColumn(writer, column, start, length);
+
+    /// <summary>Prepares state shared by the prefix and body. The caller disposes it after the body.</summary>
     /// <param name="column">The column about to be written; must match this codec's element type.</param>
     /// <param name="start">The zero-based first row the write will cover.</param>
     /// <param name="length">The number of rows the write will cover.</param>
     /// <returns>The per-operation write state, or <see langword="null"/> when the codec needs none.</returns>
     IColumnWriteState BeginWrite(IColumn column, int start, int length) => null;
 
-    /// <summary>
-    /// Writes the column's serialization state prefix for rows [<paramref name="start"/>,
-    /// <paramref name="start"/> + <paramref name="length"/>), if any. Default: none. The slice is supplied
-    /// because a type whose prefix is data-dependent (its bytes derive from the values themselves) must see the
-    /// same rows the following body will write, and each block's prefix reflects only that block's rows. Types
-    /// whose prefix is a fixed constant — or absent — ignore these arguments.
-    /// </summary>
+    /// <summary>Writes the serialization prefix. The default writes nothing.</summary>
     /// <param name="writer">The writer to encode into.</param>
     /// <param name="column">The column whose prefix to write; must match this codec's element type.</param>
     /// <param name="start">The zero-based first row the following body will write.</param>
@@ -171,19 +129,7 @@ internal interface IColumnCodec
     {
     }
 
-    /// <summary>
-    /// Writes the state prefix reusing the scratch from <see cref="BeginWrite"/>. Defaults to the state-free
-    /// <see cref="WriteStatePrefix(ClickHouseBinaryWriter, IColumn, int, int)"/>; a codec that returns non-null
-    /// from <see cref="BeginWrite"/> overrides this to emit its data-dependent prefix from the shared state.
-    ///
-    /// <para>
-    /// A codec that overrides this requires <paramref name="state"/> to be the state its own
-    /// <see cref="BeginWrite"/> returned, and rejects anything else. Call this overload only with that state; to
-    /// write a slice without one, call the state-free overload, which builds and disposes its own. The two must
-    /// not both be reachable inside one codec — a state-aware path that quietly rebuilt a discarded state would
-    /// write correct bytes and hide the caller's mistake.
-    /// </para>
-    /// </summary>
+    /// <summary>Writes the prefix using state from <see cref="BeginWrite"/>.</summary>
     /// <param name="writer">The writer to encode into.</param>
     /// <param name="column">The column whose prefix to write; must match this codec's element type.</param>
     /// <param name="start">The zero-based first row the following body will write.</param>
@@ -192,24 +138,14 @@ internal interface IColumnCodec
     void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
         => WriteStatePrefix(writer, column, start, length);
 
-    /// <summary>
-    /// Writes rows [<paramref name="start"/>, <paramref name="start"/> + <paramref name="length"/>) of the
-    /// column, slicing <see cref="IColumn{T}.Values"/> directly so a large insert splits into bounded blocks
-    /// with no copying. To write the whole column use the
-    /// <see cref="ColumnCodecExtensions.WriteColumn(IColumnCodec, ClickHouseBinaryWriter, IColumn)"/> overload.
-    /// </summary>
+    /// <summary>Writes the selected column rows.</summary>
     /// <param name="writer">The writer to encode into.</param>
     /// <param name="column">The column whose values to write; must match this codec's element type.</param>
     /// <param name="start">The zero-based first row to write.</param>
     /// <param name="length">The number of rows to write.</param>
     void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length);
 
-    /// <summary>
-    /// Writes the column body reusing the scratch from <see cref="BeginWrite"/>. Defaults to the state-free
-    /// <see cref="WriteColumn(ClickHouseBinaryWriter, IColumn, int, int)"/>; a codec that returns non-null from
-    /// <see cref="BeginWrite"/> overrides this to write its body (discriminators, flattened elements) from the
-    /// shared state instead of recomputing it.
-    /// </summary>
+    /// <summary>Writes the body using state from <see cref="BeginWrite"/>.</summary>
     /// <param name="writer">The writer to encode into.</param>
     /// <param name="column">The column whose values to write; must match this codec's element type.</param>
     /// <param name="start">The zero-based first row to write.</param>

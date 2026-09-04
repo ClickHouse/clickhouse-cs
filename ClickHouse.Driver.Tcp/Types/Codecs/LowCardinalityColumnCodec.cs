@@ -106,9 +106,8 @@ internal static class LowCardinalityWire
 ///
 /// <para>
 /// Each Native block ships a self-contained, block-local dictionary — there is no cross-block dictionary state,
-/// so the codec instance holds none and stays a shared singleton. The codec is non-generic; the generic work —
-/// building the typed column and deduplicating values on write — is delegated to a cached, per-element-type
-/// <see cref="ILowCardinalityShape"/>.
+/// so the codec keeps none. Cached <see cref="ILowCardinalityShape"/> instances handle typed columns and write-time
+/// deduplication.
 /// </para>
 /// </summary>
 internal sealed class LowCardinalityColumnCodec : IColumnCodec
@@ -160,6 +159,17 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// so this is not exercised by a nullable wrapper.
     /// </summary>
     public object NullPlaceholder => nullable ? null : inner.NullPlaceholder;
+
+    /// <inheritdoc/>
+    public object NullPlaceholderAs(Type writeType)
+    {
+        if (!TryInnerWriteType(writeType, out Type innerType) || !inner.CanWriteElementType(innerType))
+        {
+            throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+        }
+
+        return nullable ? null : inner.NullPlaceholderAs(innerType);
+    }
 
     /// <summary>Builds a <c>LowCardinality(T)</c> codec, resolving the inner type <c>T</c> through the registry.</summary>
     /// <param name="node">The parsed <c>LowCardinality</c> type node; its single argument is the inner type.</param>
@@ -389,8 +399,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
 
         projected = null;
 
-        // A nullable inner wraps the inner spelling exactly as Nullable(T) does, so the same unwrap applies — see
-        // NullableColumnCodec.TryProjectRead.
+        // Nullable LowCardinality uses the same CLR surface as Nullable(T).
         Type innerTarget = Nullable.GetUnderlyingType(targetType);
         if (innerTarget is null)
         {
@@ -406,14 +415,63 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => innerCanWrite && shape.CanWrite(column);
+    public bool CanWriteElementType(Type elementType)
+        => TryInnerWriteType(elementType, out Type innerType) && inner.CanWriteElementType(innerType);
 
     /// <inheritdoc/>
-    // The prefix is a fixed version marker, independent of the data; the column/slice is unused.
+    public bool CanWrite(IColumn column) => WriteShapeFor(column) is not null;
+
+    /// <summary>Maps a LowCardinality CLR type to the type expected by its inner codec.</summary>
+    private bool TryInnerWriteType(Type elementType, out Type innerType)
+    {
+        if (!nullable)
+        {
+            innerType = elementType;
+            return true;
+        }
+
+        innerType = Nullable.GetUnderlyingType(elementType);
+        if (innerType is not null)
+        {
+            return true;
+        }
+
+        if (elementType.IsValueType)
+        {
+            return false;
+        }
+
+        innerType = elementType;
+        return true;
+    }
+
+    // Resolve the canonical or child-lifted write shape.
+    private ILowCardinalityShape WriteShapeFor(IColumn column)
+    {
+        Type elementType = column.ElementType;
+        if (elementType == ElementType)
+        {
+            return innerCanWrite && shape.CanWrite(column) ? shape : null;
+        }
+
+        if (!TryInnerWriteType(elementType, out Type innerType) || !inner.CanWriteElementType(innerType))
+        {
+            return null;
+        }
+
+        ILowCardinalityShape lifted = LowCardinalityShapes.For(innerType, nullable);
+        return lifted.CanWrite(column) ? lifted : null;
+    }
+
+    /// <inheritdoc/>
+    // The prefix is a fixed version marker.
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
         => writer.WriteInt64(LowCardinalityWire.StatePrefixVersion);
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-        => shape.WriteBody(inner, writer, column, start, length);
+        => (WriteShapeFor(column) ?? throw new ArgumentException(
+                $"A {TypeName} column must hold a CLR type its inner codec accepts, not {column.GetType()}.",
+                nameof(column)))
+            .WriteBody(inner, writer, column, start, length);
 }
