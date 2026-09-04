@@ -355,6 +355,20 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
+    // Accepts saw no byte payload in a ReadOnlyMemory, so a text alternative refused it. With a JSON
+    // alternative present the fallback took it instead and serialized it as base64.
+    [TestCase("Variant(String, Int64)", ExpectedResult = "AB", TestName = "Variant holding a ReadOnlyMemory")]
+    [TestCase("Variant(Int64, FixedString(2))", ExpectedResult = "AB", TestName = "Variant with only a FixedString alternative")]
+    [TestCase("Variant(String, JSON)", ExpectedResult = "AB", TestName = "Variant preferring String to the JSON fallback")]
+    public string FormatSqlText_VariantHoldingAReadOnlyMemory_PicksTheTextAlternative(string typeName)
+        => Format(new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("AB")), typeName);
+
+    [Test]
+    public void Infer_ReadOnlyMemory_MapsToStringAsAByteArrayDoes()
+    {
+        Assert.That(ParameterTypeInference.Infer(new ReadOnlyMemory<byte>(new byte[] { 1 }), "p"), Is.EqualTo("String"));
+    }
+
     [Test]
     public void FormatSqlText_ReadOnlyMemoryThatIsNotValidUtf8_UsesByteEscapes()
     {
