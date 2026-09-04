@@ -89,8 +89,11 @@ internal sealed class CompressedFrameWriter : IDisposable
         int required = CompressionFrame.MaxFrameSize(codec, plaintext.Length);
         if (frame.Length < required)
         {
+            // Rent before returning, so a rent that throws cannot leave the field aliasing a pooled array that
+            // Dispose would then return a second time.
+            byte[] replacement = ArrayPool<byte>.Shared.Rent(required);
             ArrayPool<byte>.Shared.Return(frame);
-            frame = ArrayPool<byte>.Shared.Rent(required);
+            frame = replacement;
         }
 
         int written = CompressionFrame.Write(plaintext.Span, codec, frame);

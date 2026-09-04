@@ -130,8 +130,11 @@ internal sealed class CompressedFrameReader : IDisposable
             return;
         }
 
+        // Rent before returning, so a rent that throws cannot leave the field aliasing a pooled array that
+        // Dispose would then return a second time.
+        byte[] replacement = ArrayPool<byte>.Shared.Rent(needed);
         ArrayPool<byte>.Shared.Return(buffer);
-        buffer = ArrayPool<byte>.Shared.Rent(needed);
+        buffer = replacement;
     }
 
     /// <summary>
