@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using System.Numerics;
 
-namespace ClickHouse.Driver.Tcp.Numerics;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// A fixed-point decimal whose unscaled value (mantissa) is a signed 256-bit integer with an associated scale
@@ -12,8 +12,13 @@ namespace ClickHouse.Driver.Tcp.Numerics;
 /// <para>
 /// Equality and comparison are value-based: <c>1.0</c> and <c>1.00</c> compare equal despite different scales.
 /// </para>
+///
+/// <para>
+/// There is one text form, invariant fixed-point, and no format string or culture selects another. See
+/// <see cref="ToString(string, IFormatProvider)"/>.
+/// </para>
 /// </summary>
-public readonly struct ClickHouseDecimal : IEquatable<ClickHouseDecimal>, IComparable<ClickHouseDecimal>, IFormattable
+public readonly struct ClickHouseTcpDecimal : IEquatable<ClickHouseTcpDecimal>, IComparable<ClickHouseTcpDecimal>, IFormattable
 {
     private readonly Int256 mantissa;
     private readonly int scale;
@@ -22,7 +27,7 @@ public readonly struct ClickHouseDecimal : IEquatable<ClickHouseDecimal>, ICompa
     /// <param name="mantissa">The unscaled value.</param>
     /// <param name="scale">The number of fractional digits; must be non-negative.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="scale"/> is negative.</exception>
-    public ClickHouseDecimal(Int256 mantissa, int scale)
+    public ClickHouseTcpDecimal(Int256 mantissa, int scale)
     {
         if (scale < 0)
         {
@@ -36,7 +41,7 @@ public readonly struct ClickHouseDecimal : IEquatable<ClickHouseDecimal>, ICompa
     /// <summary>Initializes a value from a 128-bit mantissa (sign-extended to 256 bits) and a scale.</summary>
     /// <param name="mantissa">The unscaled value.</param>
     /// <param name="scale">The number of fractional digits; must be non-negative.</param>
-    public ClickHouseDecimal(Int128 mantissa, int scale)
+    public ClickHouseTcpDecimal(Int128 mantissa, int scale)
         : this(Int256.FromBigInteger(mantissa), scale)
     {
     }
@@ -44,7 +49,7 @@ public readonly struct ClickHouseDecimal : IEquatable<ClickHouseDecimal>, ICompa
     /// <summary>Initializes a value from an arbitrary-precision mantissa and a scale.</summary>
     /// <param name="mantissa">The unscaled value; must fit in a signed 256-bit integer.</param>
     /// <param name="scale">The number of fractional digits; must be non-negative.</param>
-    public ClickHouseDecimal(BigInteger mantissa, int scale)
+    public ClickHouseTcpDecimal(BigInteger mantissa, int scale)
         : this(Int256.FromBigInteger(mantissa), scale)
     {
     }
@@ -60,8 +65,8 @@ public readonly struct ClickHouseDecimal : IEquatable<ClickHouseDecimal>, ICompa
 
     /// <summary>Builds a value from a <see cref="decimal"/>, preserving its scale exactly.</summary>
     /// <param name="value">The value to convert.</param>
-    /// <returns>The equivalent <see cref="ClickHouseDecimal"/>.</returns>
-    public static ClickHouseDecimal FromDecimal(decimal value)
+    /// <returns>The equivalent <see cref="ClickHouseTcpDecimal"/>.</returns>
+    public static ClickHouseTcpDecimal FromDecimal(decimal value)
     {
         int[] bits = decimal.GetBits(value);
         int decimalScale = (bits[3] >> 16) & 0xFF;
@@ -69,7 +74,7 @@ public readonly struct ClickHouseDecimal : IEquatable<ClickHouseDecimal>, ICompa
 
         BigInteger magnitude = ((BigInteger)(uint)bits[2] << 64) | ((BigInteger)(uint)bits[1] << 32) | (uint)bits[0];
         BigInteger mantissa = negative ? -magnitude : magnitude;
-        return new ClickHouseDecimal(mantissa, decimalScale);
+        return new ClickHouseTcpDecimal(mantissa, decimalScale);
     }
 
     /// <summary>Converts this value to a <see cref="decimal"/>.</summary>
@@ -120,13 +125,13 @@ public readonly struct ClickHouseDecimal : IEquatable<ClickHouseDecimal>, ICompa
     }
 
     /// <inheritdoc/>
-    public bool Equals(ClickHouseDecimal other) => CompareTo(other) == 0;
+    public bool Equals(ClickHouseTcpDecimal other) => CompareTo(other) == 0;
 
     /// <inheritdoc/>
-    public override bool Equals(object obj) => obj is ClickHouseDecimal other && Equals(other);
+    public override bool Equals(object obj) => obj is ClickHouseTcpDecimal other && Equals(other);
 
     /// <inheritdoc/>
-    public int CompareTo(ClickHouseDecimal other)
+    public int CompareTo(ClickHouseTcpDecimal other)
     {
         // Equal-scale is the common case and stays off BigInteger: the mantissas order directly.
         if (scale == other.scale)
@@ -176,12 +181,34 @@ public readonly struct ClickHouseDecimal : IEquatable<ClickHouseDecimal>, ICompa
         return HashCode.Combine(m, s);
     }
 
-    /// <inheritdoc/>
+    /// <summary>Renders the value as invariant fixed-point: sign, integer part, then a <c>.</c> and exactly <see cref="Scale"/> digits.</summary>
+    /// <returns>The rendered value.</returns>
     public override string ToString() => ToString(null, CultureInfo.InvariantCulture);
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Renders the value as invariant fixed-point, the same text <see cref="ToString()"/> gives. Neither argument
+    /// changes the result: <paramref name="format"/> selects nothing, and <paramref name="formatProvider"/> is
+    /// ignored because the rendering is always invariant.
+    /// </summary>
+    /// <remarks>
+    /// A format string other than the general one is <b>rejected</b> rather than ignored, so a call that asks for
+    /// a rendering this type cannot give fails loudly instead of returning differently formatted text than it
+    /// asked for. To format the value some other way, convert it with <see cref="ToDecimal"/> or
+    /// <see cref="TryToDecimal"/> and format that.
+    /// </remarks>
+    /// <param name="format">Null, empty, <c>"G"</c> or <c>"g"</c>; any other value throws.</param>
+    /// <param name="formatProvider">Ignored.</param>
+    /// <returns>The rendered value.</returns>
+    /// <exception cref="FormatException"><paramref name="format"/> is not null, empty, <c>"G"</c> or <c>"g"</c>.</exception>
     public string ToString(string format, IFormatProvider formatProvider)
     {
+        if (!string.IsNullOrEmpty(format) && format != "G" && format != "g")
+        {
+            throw new FormatException(
+                $"'{format}' is not a format {nameof(ClickHouseTcpDecimal)} can render; it has one text form, invariant fixed-point, selected by a null, empty, \"G\" or \"g\" format. " +
+                $"Convert the value with {nameof(ToDecimal)}() to format it another way.");
+        }
+
         // A fixed-point rendering, always invariant: sign, integer part, then a '.' and exactly `scale` digits.
         BigInteger m = mantissa.ToBigInteger();
         bool negative = m.Sign < 0;
@@ -203,19 +230,50 @@ public readonly struct ClickHouseDecimal : IEquatable<ClickHouseDecimal>, ICompa
         return string.Concat(sign.AsSpan(), digits.AsSpan(0, pointIndex), ".".AsSpan(), digits.AsSpan(pointIndex));
     }
 
-    public static bool operator ==(ClickHouseDecimal left, ClickHouseDecimal right) => left.Equals(right);
+    /// <summary>Compares two values for equality, aligning their scales first.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when they represent the same number.</returns>
+    public static bool operator ==(ClickHouseTcpDecimal left, ClickHouseTcpDecimal right) => left.Equals(right);
 
-    public static bool operator !=(ClickHouseDecimal left, ClickHouseDecimal right) => !left.Equals(right);
+    /// <summary>Compares two values for inequality, aligning their scales first.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when they represent different numbers.</returns>
+    public static bool operator !=(ClickHouseTcpDecimal left, ClickHouseTcpDecimal right) => !left.Equals(right);
 
-    public static bool operator <(ClickHouseDecimal left, ClickHouseDecimal right) => left.CompareTo(right) < 0;
+    /// <summary>Orders two values, aligning their scales first.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is the smaller number.</returns>
+    public static bool operator <(ClickHouseTcpDecimal left, ClickHouseTcpDecimal right) => left.CompareTo(right) < 0;
 
-    public static bool operator >(ClickHouseDecimal left, ClickHouseDecimal right) => left.CompareTo(right) > 0;
+    /// <summary>Orders two values, aligning their scales first.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is the larger number.</returns>
+    public static bool operator >(ClickHouseTcpDecimal left, ClickHouseTcpDecimal right) => left.CompareTo(right) > 0;
 
-    public static bool operator <=(ClickHouseDecimal left, ClickHouseDecimal right) => left.CompareTo(right) <= 0;
+    /// <summary>Orders two values, aligning their scales first.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is not the larger number.</returns>
+    public static bool operator <=(ClickHouseTcpDecimal left, ClickHouseTcpDecimal right) => left.CompareTo(right) <= 0;
 
-    public static bool operator >=(ClickHouseDecimal left, ClickHouseDecimal right) => left.CompareTo(right) >= 0;
+    /// <summary>Orders two values, aligning their scales first.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is not the smaller number.</returns>
+    public static bool operator >=(ClickHouseTcpDecimal left, ClickHouseTcpDecimal right) => left.CompareTo(right) >= 0;
 
-    public static explicit operator decimal(ClickHouseDecimal value) => value.ToDecimal();
+    /// <summary>Narrows to a <see cref="decimal"/>, which holds fewer digits.</summary>
+    /// <param name="value">The value to narrow.</param>
+    /// <returns>The same number as a <see cref="decimal"/>.</returns>
+    /// <exception cref="OverflowException">The value does not fit a <see cref="decimal"/>; use <see cref="TryToDecimal"/> to test first.</exception>
+    public static explicit operator decimal(ClickHouseTcpDecimal value) => value.ToDecimal();
 
-    public static explicit operator ClickHouseDecimal(decimal value) => FromDecimal(value);
+    /// <summary>Widens a <see cref="decimal"/>, which always fits.</summary>
+    /// <param name="value">The value to widen.</param>
+    /// <returns>The same number, with the <see cref="decimal"/>'s own scale.</returns>
+    public static explicit operator ClickHouseTcpDecimal(decimal value) => FromDecimal(value);
 }

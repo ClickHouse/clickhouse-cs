@@ -5,7 +5,7 @@ namespace ClickHouse.Driver.Tcp.Poco;
 /// </summary>
 internal enum PocoScatterTier
 {
-    /// <summary>Hoists <see cref="Types.IColumn{T}.Values"/> and indexes its span.</summary>
+    /// <summary>Hoists <see cref="IColumn{T}.Values"/> and indexes its span.</summary>
     Span,
 
     /// <summary>

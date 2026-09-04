@@ -18,6 +18,7 @@ public class ClickHouseTcpExceptionIntegrationTests
     [TestCase("SELECT * FROM system.tables WHERE", ClickHouseErrorCode.SyntaxError, 62)]
     [TestCase("SELECT notAFunction123(1)", ClickHouseErrorCode.UnknownFunction, 46)]
     [TestCase("SELECT * FROM db_that_does_not_exist_xyz.t", ClickHouseErrorCode.UnknownDatabase, 81)]
+    [TestCase("SELECT CAST('(a, 1)', 'Tuple(String, UInt8)')", ClickHouseErrorCode.CannotParseQuotedString, 26)]
     public async Task ExecuteAsync_ServerRejectsTheQuery_MapsTheCodeToItsNamedConstant(
         string sql,
         ClickHouseErrorCode expected,
@@ -34,6 +35,11 @@ public class ClickHouseTcpExceptionIntegrationTests
             Assert.That(thrown.RawCode, Is.EqualTo(expectedRaw));
             Assert.That(thrown.ErrorCode, Is.EqualTo(expectedRaw), "DbException.ErrorCode carries the same number.");
             Assert.That(thrown.Name, Is.Not.Empty);
+
+            // The server writes its class name into the message as well as into the name field. Only a real
+            // server proves the prefix is there to strip.
+            Assert.That(thrown.Message, Does.Not.StartWith(thrown.Name), "Name is not repeated at the head of Message.");
+            Assert.That(thrown.Message, Is.Not.Empty, "stripping the prefix leaves the message text.");
         });
     }
 

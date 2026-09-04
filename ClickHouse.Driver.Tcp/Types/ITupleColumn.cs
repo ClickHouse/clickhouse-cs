@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// The read surface of a decoded <c>Tuple(...)</c> column. A tuple is stored on the wire — and here — as its N
@@ -24,10 +24,12 @@ public interface ITupleColumn : IColumn
     IReadOnlyList<IColumn> Children { get; }
 
     /// <summary>
-    /// The element names for a named tuple (<c>Tuple(a Int32, b String)</c>) — one entry per element, aligned
-    /// with <see cref="Children"/>, with a null entry for an unnamed element; null when the tuple carries no
-    /// names at all. Names are metadata only: they do not affect the wire layout or the materialized
-    /// <c>ValueTuple</c> value.
+    /// The element names for a named tuple (<c>Tuple(a Int32, b String)</c>) — one entry per element, aligned with
+    /// <see cref="Children"/>. <b>Empty, never null</b>, for an unnamed tuple (<c>Tuple(Int32, String)</c>), so it
+    /// can be enumerated without a null check; test <see cref="System.Collections.Generic.IReadOnlyCollection{T}.Count"/>
+    /// to tell the two apart. A tuple is named or unnamed as a whole — the server rejects a type that names some
+    /// elements and not others — so every entry of a non-empty list is a name. Names are metadata only: they do
+    /// not affect the wire layout or the materialized <c>ValueTuple</c> value.
     /// </summary>
     IReadOnlyList<string> FieldNames { get; }
 }
