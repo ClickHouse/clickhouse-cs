@@ -94,7 +94,8 @@ internal static class BlockReader
 
                 // A zero-row block (a schema header, or an end-of-input marker) carries no state prefix and no
                 // body — this holds for dictionary-bearing types too: LowCardinality emits its version prefix only
-                // for a block whose row count is greater than zero, matching the writer.
+                // for a block whose row count is greater than zero. One prefix per non-empty block, verified on
+                // 26.6 over multi-block reads in MultiBlockStateIntegrationTests.
                 if (rowCount != 0)
                 {
                     await codec.ReadStatePrefixAsync(reader, cancellationToken).ConfigureAwait(false);

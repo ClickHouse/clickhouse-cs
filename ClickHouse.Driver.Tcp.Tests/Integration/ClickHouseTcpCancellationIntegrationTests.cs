@@ -104,6 +104,57 @@ public class ClickHouseTcpCancellationIntegrationTests
         Assert.That(rows, Is.EqualTo(100));
     }
 
+    /// <summary>
+    /// The same one-second deadline against a query that sends nothing at all, which is what it takes to make it
+    /// fire. A <c>Progress</c> packet counts as the server speaking, and the server sends one every
+    /// <c>interactive_delay</c> microseconds (100 ms by default), so <c>sleep(3)</c> on its own finishes under a
+    /// one-second deadline — see the case below. Raising <c>interactive_delay</c> past the sleep buys the silence.
+    /// </summary>
+    [Test]
+    public async Task StreamAsync_ServerSilentForLongerThanReadTimeout_FailsWithTimeoutAndGivesThePoolSlotBack()
+    {
+        ClickHouseTcpClientOptions options = TcpServerFixture.Options() with
+        {
+            ReadTimeout = TimeSpan.FromSeconds(1),
+            MaxPoolSize = 1,
+        };
+        await using var client = new ClickHouseTcpClient(options);
+
+        var queryOptions = new ClickHouseTcpQueryOptions
+        {
+            Settings = new Dictionary<string, string>(StringComparer.Ordinal) { ["interactive_delay"] = "10000000" },
+        };
+
+        // TimeoutException comes from nowhere else, so the type alone proves the deadline fired. Asserted instead
+        // of the elapsed time, which would make this a race on a loaded machine.
+        var timeout = Assert.ThrowsAsync<TimeoutException>(
+            async () => await client.ExecuteScalarAsync("SELECT sleep(3)", queryOptions, None));
+
+        // The deadline unwinds a socket read that was genuinely blocked, and the cancel attempt on the way out
+        // must not block behind the same silence. A slot that never came back would fail here instead.
+        object next = await client.ExecuteScalarAsync("SELECT toUInt64(7)", cancellationToken: None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(timeout.Message, Does.Contain("ReadTimeout"), "the message has to name the option to change");
+            Assert.That(next, Is.EqualTo(7UL));
+        });
+    }
+
+    /// <summary>
+    /// The complement, and the reason the case above has to silence the server: three seconds of work that
+    /// produces no row until the end still survives a one-second deadline, because the periodic
+    /// <c>Progress</c> packets keep resetting it.
+    /// </summary>
+    [Test]
+    public async Task StreamAsync_QuerySilentApartFromProgressPackets_SurvivesAShorterReadTimeout()
+    {
+        ClickHouseTcpClientOptions options = TcpServerFixture.Options() with { ReadTimeout = TimeSpan.FromSeconds(1) };
+        await using var client = new ClickHouseTcpClient(options);
+
+        Assert.That(await client.ExecuteScalarAsync("SELECT sleep(3)", cancellationToken: None), Is.EqualTo((byte)0));
+    }
+
     // A result with no end, so the server is certainly still producing it when the client stops reading. Slow and
     // small on purpose: a result that saturates the socket blocks the server in a write, where it reads nothing.
     private static IAsyncEnumerable<Block> Unbounded(ClickHouseTcpClient client, string queryId, CancellationToken cancellationToken)

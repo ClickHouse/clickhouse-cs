@@ -10,12 +10,14 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <summary>
 /// Encodes ClickHouse <c>DateTime</c> as Unix seconds. The explicit or session timezone controls
 /// <see cref="DateTimeOffset"/> projections and how unspecified <see cref="DateTime"/> values are interpreted.
+/// The raw seconds need no timezone, so a zone this platform cannot represent surfaces only where a calendar
+/// value is asked for.
 /// </summary>
 internal sealed class DateTimeColumnCodec : IColumnCodec
 {
-    private readonly TimeZoneInfo timeZone;
+    private readonly ResolvedTimeZone timeZone;
 
-    private DateTimeColumnCodec(string typeName, TimeZoneInfo timeZone)
+    private DateTimeColumnCodec(string typeName, ResolvedTimeZone timeZone)
     {
         TypeName = typeName;
         this.timeZone = timeZone;
@@ -70,7 +72,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     public static DateTimeColumnCodec Create(TypeNode node, string serverTimezone)
     {
         string explicitTz = node.Arguments.Count > 0 ? DateTimeZones.UnquoteTimezone(node.Arguments[0]) : null;
-        TimeZoneInfo tz = DateTimeZones.Resolve(explicitTz, serverTimezone);
+        ResolvedTimeZone tz = DateTimeZones.Resolve(explicitTz, serverTimezone);
         return new DateTimeColumnCodec(node.ToString(), tz);
     }
 
@@ -89,6 +91,9 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
             return true;
         }
 
+        // The resolved zone is embedded, not the zone: a calendar target is where the zone is needed, and that is
+        // the projected row rather than this method, which also answers CanRead and the POCO tier's mapping
+        // discovery. Asking for it here would refuse the reading instead of the value.
         if (targetType == typeof(DateTimeOffset))
         {
             projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToOffset), value, timeZone);
@@ -172,12 +177,17 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
 
     // Reduces a DateTime to the UTC instant to encode. Utc and Local already denote an instant. An Unspecified
     // value has no offset, so its wall-clock is read in the column's timezone.
-    internal static DateTime ToUtc(DateTime value, TimeZoneInfo timeZone)
+    //
+    // Takes the resolved zone rather than the zone, so the two Kinds that name an instant never ask for it: a
+    // column may declare an offset .NET cannot represent, which must not stop a value that does not need it.
+    internal static DateTime ToUtc(DateTime value, ResolvedTimeZone resolved)
     {
         if (value.Kind != DateTimeKind.Unspecified)
         {
             return value.ToUniversalTime();
         }
+
+        TimeZoneInfo timeZone = resolved.Value;
 
         // A skipped wall-clock names no instant, so it is rejected instead of guessed. Deriving the pre-gap offset
         // from TimeZoneInfo is not reliable: GetUtcOffset answers with the zone's base offset, which differs from

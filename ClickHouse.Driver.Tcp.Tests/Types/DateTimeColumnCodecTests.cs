@@ -259,9 +259,26 @@ public class DateTimeColumnCodecTests
         Assert.That(BitConverter.ToUInt32(bytes), Is.EqualTo((uint)expected));
     }
 
-    [Test]
-    public void Create_UnknownTimezone_Throws()
-        => Assert.Throws<FormatException>(() => Codec("DateTime('Not/AZone')"));
+    [TestCase("DateTime('Not/AZone')", "Not/AZone")]
+    [TestCase("DateTime('Fixed/UTC+19:00:00')", "+19:00:00")]
+    public async Task ReadColumn_TimezoneThisPlatformCannotResolve_ReadsTheSecondsAndReportsOnlyTheZone(string type, string named)
+    {
+        // Neither a zone with no tzdata here nor an offset TimeZoneInfo cannot hold (26.6 accepts and applies
+        // Fixed/UTC+19:00:00, past its ±14 hours) may fail the read: the seconds are the wire value and need no
+        // zone. Only a calendar value does, so only a calendar value reports it.
+        byte[] bytes = await WriteAsync(w => w.WriteUInt32(1_700_000_000));
+        using var reader = ReaderOver(bytes);
+
+        using var column = (DateTimeColumn)await Codec(type).ReadColumnAsync(reader, "c", type, 1, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[0], Is.EqualTo(1_700_000_000u));
+            Assert.That(Assert.Throws<FormatException>(() => _ = column.TimeZone).Message, Does.Contain(named));
+            Assert.Throws<FormatException>(() => column.GetDateTimeOffset(0));
+            Assert.Throws<FormatException>(() => column.ToDateTimeOffsets());
+        });
+    }
 
     [TestCase("Fixed/UTC+05:30:00", 5, 30)]
     [TestCase("Fixed/UTC-08:00:00", -8, 0)]
@@ -296,8 +313,63 @@ public class DateTimeColumnCodecTests
     }
 
     [Test]
-    public void Create_FixedUtcOffsetOutOfRange_Throws()
-        => Assert.Throws<FormatException>(() => Codec("DateTime('Fixed/UTC+15:00:00')"));
+    public void WriteColumn_DateTimeIntoAZoneTimeZoneInfoCannotHold_ThrowsNamingTheZone()
+    {
+        // An Unspecified DateTime is a wall clock, so writing one needs the zone the raw seconds did not.
+        DateTimeColumnCodec codec = Codec("DateTime('Fixed/UTC+19:00:00')");
+        var values = new ArrayColumn<DateTime>("c", "DateTime", new[] { new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Unspecified) });
+
+        FormatException thrown = Assert.ThrowsAsync<FormatException>(() => WriteAsync(w => codec.WriteColumn(w, values)));
+        Assert.That(thrown.Message, Does.Contain("Fixed/UTC+19:00:00"));
+    }
+
+    // The other side of the same rule: a Utc DateTime already names an instant, so the zone the column declares
+    // is irrelevant to it and asking for one must not be what fails the write.
+    [Test]
+    public async Task WriteColumn_UtcDateTimeIntoAZoneTimeZoneInfoCannotHold_WritesTheInstant()
+    {
+        var value = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+        DateTimeColumnCodec codec = Codec("DateTime('Fixed/UTC+19:00:00')");
+
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(
+            w,
+            new ArrayColumn<DateTime>("c", "DateTime('Fixed/UTC+19:00:00')", new[] { value })));
+
+        Assert.That(BitConverter.ToUInt32(bytes, 0), Is.EqualTo(1_705_314_600U));
+    }
+
+    // A Local value names an instant too. Compared against the same conversion, since a literal would pin the
+    // machine's own zone; what this asserts is that the column's zone is not consulted, not the arithmetic.
+    [Test]
+    public async Task WriteColumn_LocalDateTimeIntoAZoneTimeZoneInfoCannotHold_WritesTheInstant()
+    {
+        var value = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Local);
+        DateTimeColumnCodec codec = Codec("DateTime('Fixed/UTC+19:00:00')");
+
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(
+            w,
+            new ArrayColumn<DateTime>("c", "DateTime('Fixed/UTC+19:00:00')", new[] { value })));
+
+        Assert.That(
+            BitConverter.ToUInt32(bytes, 0),
+            Is.EqualTo((uint)new DateTimeOffset(value.ToUniversalTime(), TimeSpan.Zero).ToUnixTimeSeconds()));
+    }
+
+    // The null placeholder is DateTime.UnixEpoch, whose Kind is Utc, so a null row must not need the zone either.
+    [Test]
+    public async Task WriteColumn_NullableNullIntoAZoneTimeZoneInfoCannotHold_WritesThePlaceholder()
+    {
+        const string type = "Nullable(DateTime('Fixed/UTC+19:00:00'))";
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite);
+
+        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime?>("c", type, new DateTime?[] { null })));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bytes[0], Is.EqualTo(1), "the null map marks the row absent");
+            Assert.That(BitConverter.ToUInt32(bytes, 1), Is.EqualTo(0U), "the placeholder is the epoch");
+        });
+    }
 
     [Test]
     public void CanWrite_AcceptsRawSecondsDateTimeAndDateTimeOffset_RejectsOthers()

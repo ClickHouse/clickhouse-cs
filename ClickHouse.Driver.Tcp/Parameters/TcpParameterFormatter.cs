@@ -93,7 +93,9 @@ internal static class TcpParameterFormatter
     /// <returns>The formatted value.</returns>
     internal static string Format(TypeNode type, object value, bool quote)
     {
-        string name = type.Name;
+        // The arms below are the canonical names, so an alias or a case variant is mapped to one first. Every
+        // recursion into a child type comes back through here, which is what makes {p:Array(BIGINT)} format.
+        string name = ColumnCodecRegistry.Default.TryCanonicalName(type.Name, out string registered) ? registered : type.Name;
 
         if (Array.IndexOf(IntegerTypeNames, name) >= 0
             || Array.IndexOf(FloatTypeNames, name) >= 0
@@ -125,7 +127,7 @@ internal static class TcpParameterFormatter
             case "String" or "FixedString" when value is ReadOnlyMemory<byte> bytesMemory:
                 return QuoteIfNeeded(BytesToSqlText(bytesMemory.Span), quote);
 
-            case "String" or "FixedString" or "Enum8" or "Enum16" or "IPv4" or "IPv6" or "UUID":
+            case "String" or "FixedString" or "Enum" or "Enum8" or "Enum16" or "IPv4" or "IPv6" or "UUID":
                 return QuoteIfNeeded(value.ToString().Escape(), quote);
 
             case "Identifier":
@@ -141,10 +143,17 @@ internal static class TcpParameterFormatter
             case "DateTime64":
                 return QuoteIfNeeded(FormatDateTime64(type, value), quote);
 
+            // A TimeOnly is a time of day and a TimeSpan an elapsed time, but both print as one clock reading.
+            case "Time" when value is TimeOnly timeOfDay:
+                return FormatTime(timeOfDay.ToTimeSpan());
+
             case "Time":
                 return value is TimeSpan timeSpan
                     ? FormatTime(timeSpan)
                     : FormatTime(Convert.ToInt32(value, CultureInfo.InvariantCulture));
+
+            case "Time64" when value is TimeOnly time64OfDay:
+                return FormatTime64(time64OfDay.ToTimeSpan(), ScaleOf(type, defaultScale: 3));
 
             case "Time64" when value is TimeSpan time64:
                 return FormatTime64(time64, ScaleOf(type, defaultScale: 3));
@@ -178,8 +187,7 @@ internal static class TcpParameterFormatter
             case "Variant":
                 return FormatVariant(type, value, quote);
 
-            // The server takes either spelling and reports the type as JSON, so both must format.
-            case "JSON" or "Json":
+            case "JSON":
                 return (value is string json ? json : JsonSerializer.Serialize(value)).Escape();
 
             // A QBit is a fixed-width vector of its element type, written as an array.
@@ -190,10 +198,46 @@ internal static class TcpParameterFormatter
             case "Point" or "Ring" or "LineString" or "Polygon" or "MultiLineString" or "MultiPolygon":
                 return Format(GeoShapeOf(name), value, quote);
 
-            default:
+            case "AggregateFunction":
                 throw new ArgumentException(
-                    $"Cannot convert value of type '{value.GetType().FullName}' ({value}) to ClickHouse type {type}");
+                    $"ClickHouse type '{type}' holds serialized aggregate states, so no parameter value spells it; " +
+                    "the server rejects one too. Pass the arguments the state is built from instead.");
+
+            // The alias is transparent: the value is written as T, which is also what the codec resolves the
+            // column to. The function only tells the server how to merge rows.
+            case "SimpleAggregateFunction" when type.Arguments.Count == 2:
+                return Format(type.Arguments[1], value, quote);
+
+            // Neither of these names a layout for the value on its own, so the value's own type does. A Geometry
+            // is ambiguous by construction — an array of points is both a Ring and a LineString — but the text is
+            // the same either way, and the server's parse is what picks the shape.
+            case "Dynamic" or "Geometry":
+                return Format(TypeParser.Parse(ParameterTypeInference.Infer(value, name)), value, quote);
+
+            default:
+                throw NotFormattable(type, name, value);
         }
+    }
+
+    /// <summary>Explains why a value reached no formatting arm.</summary>
+    /// <param name="type">The parsed type.</param>
+    /// <param name="name">The type's base name.</param>
+    /// <param name="value">The value, which is never null here.</param>
+    /// <returns>The exception to throw.</returns>
+    private static ArgumentException NotFormattable(TypeNode type, string name, object value)
+    {
+        // Two unrelated failures arrive here and used to read the same: a type name this client does not know,
+        // and a known type an arm declined this value's shape for. Blaming the value for the first sends a
+        // caller looking at the value they wrote, which is fine, for a type name that never existed.
+        if (!ColumnCodecRegistry.Default.KnowsTypeName(name))
+        {
+            return new ArgumentException(
+                $"'{name}' is not a ClickHouse type name this client knows, so no value formats as '{type}'. " +
+                "Write the name the server reports for the column — SELECT toTypeName(expr).");
+        }
+
+        return new ArgumentException(
+            $"Cannot convert value of type '{value.GetType().FullName}' ({value}) to ClickHouse type {type}");
     }
 
     /// <summary>Expands a geo type name into the Tuple/Array shape it stands for.</summary>
@@ -381,7 +425,9 @@ internal static class TcpParameterFormatter
     /// <returns>The wall-clock time in that timezone.</returns>
     private static DateTime InTargetTimezone(DateTimeOffset value, string declaredTimezone)
     {
-        TimeZoneInfo timeZone = DateTimeZones.Resolve(declaredTimezone, serverTimezone: null);
+        // Formatting a wall clock is exactly the calendar use the zone is needed for, so an unrepresentable one
+        // is reported here.
+        TimeZoneInfo timeZone = DateTimeZones.Resolve(declaredTimezone, serverTimezone: null).Value;
         return TimeZoneInfo.ConvertTime(value, timeZone).DateTime;
     }
 

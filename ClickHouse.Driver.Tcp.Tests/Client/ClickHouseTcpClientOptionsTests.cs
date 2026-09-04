@@ -487,6 +487,9 @@ public class ClickHouseTcpClientOptionsTests
             IncludeSqlInActivityTags = true,
             StatementMaxLength = 42,
 
+            // Defaults to true, so false is the non-default value here.
+            SendJsonAndDynamicSerializationSettings = false,
+
             // Zstd rather than Lz4 so this stays non-default whichever codec the default becomes.
             Compressor = ZstdCompressor.Default,
         };

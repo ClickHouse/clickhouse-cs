@@ -31,6 +31,17 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Bool", false).Returns("false").SetName("Bool false");
         yield return new TestCaseData("Decimal64(4)", 1.2345m).Returns("1.2345").SetName("Decimal64");
 
+        // The names a caller writes rather than the ones a header carries. The hint reaches the server verbatim,
+        // so these prove the server takes the same spellings the client resolves — including a two-word alias and
+        // one nested inside a composite.
+        yield return new TestCaseData("VARCHAR", "abc").Returns("abc").SetName("VARCHAR, an alias of String");
+        yield return new TestCaseData("BIGINT", -5L).Returns("-5").SetName("BIGINT, an alias of Int64");
+        yield return new TestCaseData("DOUBLE PRECISION", 1.5d).Returns("1.5").SetName("DOUBLE PRECISION, a two-word alias");
+        yield return new TestCaseData("Boolean", true).Returns("true").SetName("Boolean, an alias of Bool");
+        yield return new TestCaseData("datetime64(3)", new DateTime(2024, 1, 2, 3, 4, 5, 123, DateTimeKind.Unspecified))
+            .Returns("2024-01-02 03:04:05.123").SetName("A case variant of a case-insensitive family");
+        yield return new TestCaseData("Array(TINYINT UNSIGNED)", new byte[] { 1, 2 }).Returns("[1,2]").SetName("An alias inside a composite");
+
         // The server accepts .NET's NaN and Infinity spellings.
         yield return new TestCaseData("Float64", double.NaN).Returns("nan").SetName("Float64 NaN");
         yield return new TestCaseData("Float64", double.PositiveInfinity).Returns("inf").SetName("Float64 +Infinity");
@@ -101,6 +112,11 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Date32", new DateOnly(1950, 3, 4)).Returns("1950-03-04").SetName("Date32");
         yield return new TestCaseData("Time", new TimeSpan(1, 1, 1)).Returns("01:01:01").SetName("Time");
         yield return new TestCaseData("Time64(3)", new TimeSpan(0, 1, 1, 1, 500)).Returns("01:01:01.500").SetName("Time64");
+
+        // The time-of-day type, which the shipped HTTP driver takes for both of these.
+        yield return new TestCaseData("Time", new TimeOnly(1, 1, 1)).Returns("01:01:01").SetName("Time from a TimeOnly");
+        yield return new TestCaseData("Time64(3)", new TimeOnly(1, 1, 1, 500)).Returns("01:01:01.500").SetName("Time64 from a TimeOnly");
+        yield return new TestCaseData("Time64(7)", TimeOnly.MaxValue).Returns("23:59:59.9999999").SetName("Time64 from the last tick of the day");
         yield return new TestCaseData("FixedString(3)", Encoding.UTF8.GetBytes("abc")).Returns("abc").SetName("FixedString from bytes");
         yield return new TestCaseData("String", Encoding.UTF8.GetBytes("abc")).Returns("abc").SetName("String from bytes");
         yield return new TestCaseData("IntervalSecond", 5L).Returns("5").SetName("IntervalSecond");
@@ -109,6 +125,21 @@ public class ClickHouseTcpParameterIntegrationTests
             .Returns("[(1,'x'),(2,'y')]").SetName("Nested rows");
         yield return new TestCaseData("Variant(Int64, String)", 7L).Returns("7").SetName("Variant picks the integer");
         yield return new TestCaseData("Variant(Int64, String)", "x").Returns("x").SetName("Variant picks the string");
+
+        // Picking the alternative is a separate match from formatting the value, and it reads the name as the
+        // caller wrote it. The server resolves both declarations to Variant(Int64, String).
+        yield return new TestCaseData("Variant(BIGINT, String)", 7L).Returns("7").SetName("An alias as a Variant alternative");
+        yield return new TestCaseData("Variant(Array(BIGINT), String)", new[] { 7L, 8L })
+            .Returns("[7,8]").SetName("An alias nested inside a Variant alternative");
+
+        // A Variant holding Time: the value has to match that arm, not only a Time64 one. Matching nothing
+        // refuses the whole Variant rather than the one alternative, so a time value reached no Variant at all.
+        // The server renders a Time inside a Variant without the leading zero it gives a bare Time column, hence
+        // 1:01:01 here against 01:01:01 above.
+        yield return new TestCaseData("Variant(Time, String)", new TimeSpan(1, 1, 1))
+            .Returns("1:01:01").SetName("Variant picks the Time arm from a TimeSpan");
+        yield return new TestCaseData("Variant(Time, String)", new TimeOnly(1, 1, 1))
+            .Returns("1:01:01").SetName("Variant picks the Time arm from a TimeOnly");
 
         // Covers both JSON spellings and geo types backed by tuple/array shapes.
         yield return new TestCaseData("Json", "{\"a\":1}").Returns("{\"a\":1}").SetName("Json in the lowercase spelling");
@@ -143,6 +174,11 @@ public class ClickHouseTcpParameterIntegrationTests
         // An Enum bound by its numeric value rather than its label. Neither transport had a case for it.
         yield return new TestCaseData("Enum8('a' = 1, 'b' = 2)", 2).Returns("b").SetName("Enum by number");
 
+        // A bare Enum, whose width the client has to pick before it can format the value. The hint reaches the
+        // server verbatim, so this is what shows the server reads the same spelling the client resolved.
+        yield return new TestCaseData("Enum('a' = 1, 'b' = 2)", "b").Returns("b").SetName("Enum with no width");
+        yield return new TestCaseData("Enum('a' = 1, 'b' = 200)", "b").Returns("b").SetName("Enum with no width, past the Int8 range");
+
         // A wide decimal past what a CLR decimal can hold, so the BigInteger path is the one under test.
         yield return new TestCaseData("Decimal128(0)", new string('1', 30)).Returns(new string('1', 30)).SetName("Decimal128 of 30 digits");
         yield return new TestCaseData("Decimal256(0)", new string('1', 50)).Returns(new string('1', 50)).SetName("Decimal256 of 50 digits");
@@ -155,6 +191,23 @@ public class ClickHouseTcpParameterIntegrationTests
 
         // A surrogate pair, which a formatter that walks chars rather than runes can split.
         yield return new TestCaseData("String", "a\U0001F600b").Returns("a\U0001F600b").SetName("String with an emoji");
+
+        // Three types whose name does not fix the value's layout, so the client writes the value's own text and the
+        // server's parse decides. Geometry is the ambiguous one — this ring is equally a LineString — and the text
+        // is the same either way.
+        yield return new TestCaseData("SimpleAggregateFunction(sum, UInt64)", 42UL)
+            .Returns("42").SetName("SimpleAggregateFunction as its inner type");
+        yield return new TestCaseData("SimpleAggregateFunction(groupArrayArray, Array(UInt64))", new ulong[] { 1, 2, 3 })
+            .Returns("[1,2,3]").SetName("SimpleAggregateFunction over an array inner");
+        yield return new TestCaseData("Dynamic", -7L).Returns("-7").SetName("Dynamic holding an integer");
+        yield return new TestCaseData("Dynamic", "x").Returns("x").SetName("Dynamic holding a string");
+        yield return new TestCaseData("Dynamic", new ulong[] { 1, 2, 3 }).Returns("[1,2,3]").SetName("Dynamic holding an array");
+        if (TcpServerFeatures.Has(TcpFeature.Geometry))
+        {
+            yield return new TestCaseData("Geometry", (10.0, 20.0)).Returns("(10,20)").SetName("Geometry as a point");
+            yield return new TestCaseData("Geometry", new[] { (0.0, 0.0), (1.0, 1.0), (0.0, 1.0) })
+                .Returns("[(0,0),(1,1),(0,1)]").SetName("Geometry as a ring");
+        }
 
         // A ValueTuple past 7 elements nests its tail in TRest, which ITuple flattens back out.
         yield return new TestCaseData("Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, String, String)",
@@ -304,6 +357,38 @@ public class ClickHouseTcpParameterIntegrationTests
         object read = await ScalarAsync(client, "SELECT toString({p:Map(String, String)})", options);
 
         Assert.That(read, Is.EqualTo(@"{'k\'1':'v\\1'}"));
+    }
+
+    /// <summary>
+    /// A Map row comes back as <c>KeyValuePair&lt;K, V&gt;[]</c>, not as a dictionary, so that duplicate keys and
+    /// pair order survive. A <c>Dynamic</c> parameter names no layout, so the value's own type has to, and the
+    /// inference had no reading for a pair sequence: a value read from a Map column could not be sent back as
+    /// one at all.
+    /// <para>
+    /// The server holds a <c>Dynamic</c> parameter as a String whatever the text looks like — checked on 26.6,
+    /// where <c>{p:Dynamic}</c> reports <c>dynamicType</c> String for <c>42</c> as well. It does parse the text
+    /// first, which is why the map comes back with the pair separator normalized.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task QueryAsync_MapReadBackSentAsADynamicParameter_IsParsedAsAMap()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        object pairs = await ScalarAsync(client, "SELECT map('a', toInt32(1), 'b', toInt32(2))", null);
+        Assert.That(pairs, Is.InstanceOf<KeyValuePair<string, int>[]>(), "the shape this test is about");
+
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", pairs } },
+        };
+
+        object read = await ScalarAsync(
+            client,
+            "SELECT concat(toString(dynamicType({p:Dynamic})), ' = ', toString({p:Dynamic}))",
+            options);
+
+        Assert.That(read, Is.EqualTo("String = {'a':1,'b':2}"));
     }
 
     [TestCase("limit")]

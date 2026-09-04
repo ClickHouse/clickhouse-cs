@@ -44,6 +44,40 @@ public class ClickHouseTcpClientSettingsTests
         Assert.That(merged[setting], Is.EqualTo("0"));
     }
 
+    // Sending either setting is a modification, which a readonly profile refuses outright, so a caller has to be
+    // able to send neither. Sending "0" is not the same thing: the server takes it as a no-op change from a
+    // full-rights user, and still refuses it from a readonly one.
+    [Test]
+    public void MergeSettings_SendSerializationSettingsOff_SendsNeither()
+    {
+        var merged = ClickHouseTcpClient.MergeSettings(
+            clientSettings: null, perQuerySettings: null, sendSerializationSettings: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.ContainsKey(FlattenedSetting), Is.False);
+            Assert.That(merged.ContainsKey(JsonAsStringSetting), Is.False);
+        });
+    }
+
+    // The switch governs the injection only. A caller who names one of the settings themselves has asked for it,
+    // and a readonly user asking for it is their own error to see.
+    [TestCase(FlattenedSetting)]
+    [TestCase(JsonAsStringSetting)]
+    public void MergeSettings_SendSerializationSettingsOffAndCallerNamesOne_KeepsTheCallersOwn(string setting)
+    {
+        var perQuery = new Dictionary<string, string> { [setting] = "1" };
+
+        var merged = ClickHouseTcpClient.MergeSettings(
+            clientSettings: null, perQuery, sendSerializationSettings: false);
+
+        Assert.That(merged[setting], Is.EqualTo("1"));
+    }
+
+    [Test]
+    public void SendJsonAndDynamicSerializationSettings_NotSet_DefaultsToOn()
+        => Assert.That(new ClickHouseTcpClientOptions().SendJsonAndDynamicSerializationSettings, Is.True);
+
     [Test]
     public void MergeSettings_PerQueryOverridesClientLevelForSameKey()
     {
