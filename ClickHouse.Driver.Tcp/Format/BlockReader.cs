@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -19,7 +20,7 @@ internal static class BlockReader
     /// <param name="context">The resolution context (e.g. the server timezone) passed to each column's codec factory.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The decoded block.</returns>
-    /// <exception cref="ClickHouseProtocolException">A column uses unsupported custom serialization, or a count is implausible.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">A column uses unsupported custom serialization, or a count is implausible.</exception>
     public static async ValueTask<Block> ReadBlockAsync(
         ClickHouseBinaryReader reader,
         NegotiatedProtocol negotiated,
@@ -46,7 +47,7 @@ internal static class BlockReader
     /// <param name="context">The resolution context (e.g. the server timezone) passed to each column's codec factory.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The decoded block.</returns>
-    /// <exception cref="ClickHouseProtocolException">A column uses unsupported custom serialization, or a count is implausible.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">A column uses unsupported custom serialization, or a count is implausible.</exception>
     public static async ValueTask<Block> ReadBodyAsync(
         ClickHouseBinaryReader reader,
         string name,
@@ -73,12 +74,23 @@ internal static class BlockReader
                     bool hasCustomSerialization = await reader.ReadBoolAsync(cancellationToken).ConfigureAwait(false);
                     if (hasCustomSerialization)
                     {
-                        throw new ClickHouseProtocolException(
+                        throw new ClickHouseTcpProtocolException(
                             $"Column '{columnName}' ({columnType}) uses custom serialization, which this client does not support.");
                     }
                 }
 
-                IColumnCodec codec = registry.Resolve(columnType, in context);
+                // The type name came off the wire, so a name this client cannot resolve is a disagreement with
+                // the server, not a caller error. Resolution reports that as a parse or support failure.
+                IColumnCodec codec;
+                try
+                {
+                    codec = registry.Resolve(columnType, in context);
+                }
+                catch (Exception e) when (e is FormatException or NotSupportedException)
+                {
+                    throw new ClickHouseTcpProtocolException(
+                        $"Column '{columnName}' has type '{columnType}', which this client cannot read: {e.Message}", e);
+                }
 
                 // A zero-row block (a schema header, or an end-of-input marker) carries no state prefix and no
                 // body — this holds for dictionary-bearing types too: LowCardinality emits its version prefix only
@@ -113,7 +125,7 @@ internal static class BlockReader
     /// <param name="reader">The reader positioned at the start of the block info.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>The decoded block info.</returns>
-    /// <exception cref="ClickHouseProtocolException">An unknown field id was encountered.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">An unknown field id was encountered.</exception>
     internal static async ValueTask<BlockInfo> ReadBlockInfoAsync(ClickHouseBinaryReader reader, CancellationToken cancellationToken)
     {
         bool isOverflows = false;
@@ -133,7 +145,7 @@ internal static class BlockReader
                     bucketNumber = await reader.ReadInt32Async(cancellationToken).ConfigureAwait(false);
                     break;
                 default:
-                    throw new ClickHouseProtocolException($"Unknown BlockInfo field id {fieldId} (corrupt stream or unsupported protocol feature).");
+                    throw new ClickHouseTcpProtocolException($"Unknown BlockInfo field id {fieldId} (corrupt stream or unsupported protocol feature).");
             }
         }
     }
@@ -144,12 +156,12 @@ internal static class BlockReader
     /// <summary>Narrows the column count to int and rejects a value beyond the defensive ceiling.</summary>
     /// <param name="value">The raw count.</param>
     /// <returns>The count as an int.</returns>
-    /// <exception cref="ClickHouseProtocolException">The count exceeds <see cref="MaxColumnsPerBlock"/>.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The count exceeds <see cref="MaxColumnsPerBlock"/>.</exception>
     private static int ToColumnCount(ulong value)
     {
         if (value > MaxColumnsPerBlock)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"Block declares {value} columns, exceeding the supported maximum of {MaxColumnsPerBlock} (corrupt stream).");
         }
 
@@ -160,12 +172,12 @@ internal static class BlockReader
     /// <param name="value">The raw count.</param>
     /// <param name="what">The count's name, for error messages.</param>
     /// <returns>The count as an int.</returns>
-    /// <exception cref="ClickHouseProtocolException">The count exceeds <see cref="int.MaxValue"/>.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The count exceeds <see cref="int.MaxValue"/>.</exception>
     private static int ToCount(ulong value, string what)
     {
         if (value > int.MaxValue)
         {
-            throw new ClickHouseProtocolException($"Block declares {value} {what}, exceeding the supported maximum (corrupt stream).");
+            throw new ClickHouseTcpProtocolException($"Block declares {value} {what}, exceeding the supported maximum (corrupt stream).");
         }
 
         return (int)value;

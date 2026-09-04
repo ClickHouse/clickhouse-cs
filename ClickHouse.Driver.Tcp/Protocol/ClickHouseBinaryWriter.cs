@@ -18,6 +18,7 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
 {
     private readonly Stream stream;
     private readonly int initialBufferSize;
+    private readonly bool writesToTransport;
     private byte[] buffer;
     private int position;
     // An int rather than a bool so disposal can be made exactly-once with Interlocked; see Dispose.
@@ -29,9 +30,13 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
     /// doubling when a write does not fit, so a larger start means fewer grow-and-copy steps before an insert
     /// reaches its flush threshold. The default (64 KiB) is the largest that stays off the large-object
     /// heap.</param>
+    /// <param name="writesToTransport">
+    /// Whether <paramref name="stream"/> is the connection itself, so that a failed write is the transport failing.
+    /// False for an adapter stream, whose own layer decides what its failures mean.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferSize"/> is below 32.</exception>
-    public ClickHouseBinaryWriter(Stream stream, int bufferSize = 65536)
+    public ClickHouseBinaryWriter(Stream stream, int bufferSize = 65536, bool writesToTransport = true)
     {
         this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
         if (bufferSize < 32)
@@ -40,6 +45,7 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
         }
 
         initialBufferSize = bufferSize;
+        this.writesToTransport = writesToTransport;
         buffer = ArrayPool<byte>.Shared.Rent(bufferSize);
     }
 
@@ -286,16 +292,27 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
     /// <summary>Flushes buffered bytes to the underlying stream and flushes the stream.</summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <exception cref="ObjectDisposedException">The writer has been disposed.</exception>
+    /// <exception cref="ClickHouseTcpTransportException">
+    /// The connection failed while the bytes were being sent. Only when this writer is over the transport.
+    /// </exception>
     public async ValueTask FlushAsync(CancellationToken cancellationToken)
     {
+        // Outside the try: a disposed writer is the caller's mistake, not the transport failing.
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-        if (position > 0)
+        try
         {
-            await stream.WriteAsync(buffer.AsMemory(0, position), cancellationToken).ConfigureAwait(false);
-            position = 0;
-        }
+            if (position > 0)
+            {
+                await stream.WriteAsync(buffer.AsMemory(0, position), cancellationToken).ConfigureAwait(false);
+                position = 0;
+            }
 
-        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception e) when (writesToTransport && TransportFailure.IsTransportFailure(e))
+        {
+            throw TransportFailure.Write(e);
+        }
     }
 
     /// <inheritdoc/>

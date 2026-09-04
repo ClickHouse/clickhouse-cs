@@ -85,7 +85,7 @@ public class HandshakeTests
 
         // The decode must have consumed exactly the four always-present fields — no more (which would throw
         // here) and no fewer (proven by the stream now being at its end).
-        Assert.ThrowsAsync<EndOfStreamException>(async () => await reader.ReadByteAsync(None));
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () => await reader.ReadByteAsync(None));
     }
 
     [Test]
@@ -106,13 +106,13 @@ public class HandshakeTests
         });
 
         using var reader = ReaderOver(body);
-        ClickHouseServerException ex = await ClickHouseServerException.ReadAsync(reader, None);
+        ClickHouseTcpServerException ex = await ClickHouseTcpServerException.ReadAsync(reader, None);
 
-        Assert.That(ex.Code, Is.EqualTo(10));
+        Assert.That(ex.RawCode, Is.EqualTo(10));
         Assert.That(ex.Message, Is.EqualTo("outer"));
-        var inner = ex.InnerException as ClickHouseServerException;
+        var inner = ex.InnerException as ClickHouseTcpServerException;
         Assert.That(inner, Is.Not.Null);
-        Assert.That(inner!.Code, Is.EqualTo(20));
+        Assert.That(inner!.RawCode, Is.EqualTo(20));
         Assert.That(inner.Message, Is.EqualTo("inner cause"));
         Assert.That(inner.InnerException, Is.Null);
     }
