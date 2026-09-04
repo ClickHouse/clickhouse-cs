@@ -71,6 +71,7 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
 {
     private readonly List<ClickHouseTcpConnection> created = [];
     private readonly object gate = new();
+    private int disposeCount;
 
     /// <summary>Set to make the next create fail with this exception instead of returning a connection.</summary>
     public Exception FailNextWith { get; set; }
@@ -100,6 +101,22 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
     /// — the race that a dial which simply observes the token never reaches.
     /// </summary>
     public bool IgnoresCancellation { get; set; }
+
+    /// <summary>Runs when the pool disposes the factory. Null for none.</summary>
+    public Action OnDispose { get; set; }
+
+    /// <summary>Whether the pool disposed this factory during its teardown.</summary>
+    public bool Disposed => DisposeCount != 0;
+
+    /// <summary>How many times the pool disposed this factory.</summary>
+    public int DisposeCount => Volatile.Read(ref disposeCount);
+
+    /// <summary>Records the call. This double holds nothing to release; the real factory holds TLS certificates.</summary>
+    public void Dispose()
+    {
+        Interlocked.Increment(ref disposeCount);
+        OnDispose?.Invoke();
+    }
 
     /// <summary>How many connections have been opened.</summary>
     public int CreateCount
