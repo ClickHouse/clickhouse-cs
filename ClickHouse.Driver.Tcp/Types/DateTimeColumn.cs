@@ -25,7 +25,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// out to retain.
 /// </para>
 /// </summary>
-internal sealed class DateTimeColumn : IColumn<uint>, IStoredValuesColumn
+internal sealed class DateTimeColumn : IColumn<uint>, IDateTimeColumn, IStoredValuesColumn
 {
     private readonly TimeZoneInfo timeZone;
     private readonly int length;
@@ -61,6 +61,9 @@ internal sealed class DateTimeColumn : IColumn<uint>, IStoredValuesColumn
     /// <summary>The timezone the seconds are presented in, shared by every value in the column. Use it to
     /// interpret the raw <see cref="Values"/> seconds.</summary>
     public TimeZoneInfo TimeZone => timeZone;
+
+    /// <summary>Zero: <c>DateTime</c> counts whole seconds. <c>DateTime64(scale)</c> is where this varies.</summary>
+    public int Scale => 0;
 
     /// <summary>The raw epoch-second counts, as a zero-copy view. Use <see cref="ToDateTimeOffsets"/> for a
     /// calendar view presented in the column's timezone.</summary>

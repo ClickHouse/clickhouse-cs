@@ -1,0 +1,538 @@
+ClickHouse.Driver.Tcp.Block
+ClickHouse.Driver.Tcp.Block.Column<T>(int index) -> ClickHouse.Driver.Tcp.IColumn<T>
+ClickHouse.Driver.Tcp.Block.Column<T>(string name) -> ClickHouse.Driver.Tcp.IColumn<T>
+ClickHouse.Driver.Tcp.Block.ColumnCount.get -> int
+ClickHouse.Driver.Tcp.Block.ColumnNames.get -> System.Collections.Generic.IReadOnlyList<string>
+ClickHouse.Driver.Tcp.Block.Columns.get -> System.Collections.Generic.IReadOnlyList<ClickHouse.Driver.Tcp.IColumn>
+ClickHouse.Driver.Tcp.Block.Dispose() -> void
+ClickHouse.Driver.Tcp.Block.Name.get -> string
+ClickHouse.Driver.Tcp.Block.RowCount.get -> int
+ClickHouse.Driver.Tcp.Block.this[int index].get -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.Block.this[string name].get -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.Block.TryGetColumn(string name, out ClickHouse.Driver.Tcp.IColumn column) -> bool
+ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.Aborted = 236 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.AccessDenied = 497 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.AllConnectionTriesFailed = 279 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.AttemptToReadAfterEof = 32 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.AuthenticationFailed = 516 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.CannotConvertType = 70 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.CannotInsertNullInOrdinaryColumn = 349 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.CannotParseInputAssertionFailed = 27 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.CannotParseQuotedString = 26 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.CannotParseText = 6 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.CannotReadAllData = 33 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.ClientHasConnectedToWrongPort = 217 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.DatabaseAlreadyExists = 82 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.DuplicateColumn = 15 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.IllegalColumn = 44 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.IllegalTypeOfArgument = 43 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.IpAddressNotAllowed = 195 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.KeeperException = 999 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.LogicalError = 49 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.MemoryLimitExceeded = 241 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.NetworkError = 210 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.NoFreeConnection = 203 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.NoSuchColumnInTable = 16 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.NotImplemented = 48 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.NumberOfArgumentsDoesntMatch = 42 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.QueryWasCancelled = 394 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.ReadOnly = 164 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.RequiredPassword = 194 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.ServerOverloaded = 745 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.SessionIsLocked = 373 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.SessionNotFound = 372 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.SocketTimeout = 209 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.SyntaxError = 62 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TableAlreadyExists = 57 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TableIsDropped = 218 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TableIsReadOnly = 242 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TimeoutExceeded = 159 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TooManyBytes = 307 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TooManyParts = 252 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TooManyRows = 158 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TooManySimultaneousQueries = 202 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TooSlow = 160 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.TypeMismatch = 53 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnexpectedPacketFromServer = 102 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.Unknown = -1 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnknownDatabase = 81 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnknownFunction = 46 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnknownIdentifier = 47 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnknownPacketFromClient = 99 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnknownSetting = 115 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnknownTable = 60 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnknownType = 50 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnknownUser = 192 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.UnsupportedMethod = 1 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.ValueIsOutOfRangeOfDataType = 321 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseErrorCode.WrongPassword = 193 -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten
+ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.BlockIndex.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.ClickHouseTcpBlockWritten() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.ClickHouseTcpBlockWritten(int blockIndex, int rowCount, long uncompressedBytes, long compressedBytes) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.CompressedBytes.get -> long
+ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten other) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.RowCount.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.UncompressedBytes.get -> long
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.<Clone>$() -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ClickHouseTcpClientOptions() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Compressor.get -> ClickHouse.Driver.Compression.IClickHouseCompressor
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Compressor.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ConfigureTls.get -> System.Action<System.Net.Security.SslClientAuthenticationOptions>
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ConfigureTls.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.CustomSettings.get -> System.Collections.Generic.IReadOnlyDictionary<string, string>
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.CustomSettings.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Database.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Database.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.DialTimeout.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.DialTimeout.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions other) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Host.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Host.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.IdleTimeout.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.IdleTimeout.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.IncludeSqlInActivityTags.get -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.IncludeSqlInActivityTags.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.LoggerFactory.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MaxConnectionLifetime.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MaxConnectionLifetime.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MaxPoolSize.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MaxPoolSize.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MaxSendBufferBytes.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MaxSendBufferBytes.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MinPoolSize.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MinPoolSize.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Password.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Password.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.PoolReusePolicy.get -> ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.PoolReusePolicy.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.PoolTimeout.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.PoolTimeout.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Port.get -> int?
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Port.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.QuotaKey.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.QuotaKey.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ReadTimeout.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ReadTimeout.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.StatementMaxLength.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.StatementMaxLength.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ResolvedPort.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.SweepInterval.get -> System.TimeSpan?
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.SweepInterval.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.TlsAllowInvalidCertificates.get -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.TlsAllowInvalidCertificates.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.TlsCaCertificatePath.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.TlsCaCertificatePath.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.TlsServerName.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.TlsServerName.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Username.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Username.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.UseTls.get -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.UseTls.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpColumn
+ClickHouse.Driver.Tcp.ClickHouseTcpColumnAttribute
+ClickHouse.Driver.Tcp.ClickHouseTcpColumnAttribute.ClickHouseTcpColumnAttribute() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpColumnAttribute.Name.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpColumnAttribute.Name.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.ClickHouseTcpConnectionStringBuilder() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.ClickHouseTcpConnectionStringBuilder(string connectionString) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Compression.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Compression.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Database.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Database.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.DialTimeout.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.DialTimeout.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Host.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Host.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.IdleTimeout.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.IdleTimeout.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MaxConnectionLifetime.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MaxConnectionLifetime.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MaxPoolSize.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MaxPoolSize.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MaxSendBufferBytes.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MaxSendBufferBytes.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MinPoolSize.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MinPoolSize.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Password.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Password.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.PoolReusePolicy.get -> ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.PoolReusePolicy.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.PoolTimeout.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.PoolTimeout.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Port.get -> int?
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Port.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.QuotaKey.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.QuotaKey.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.ReadTimeout.get -> System.TimeSpan
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.ReadTimeout.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.SweepInterval.get -> System.TimeSpan?
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.SweepInterval.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.TlsAllowInvalidCertificates.get -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.TlsAllowInvalidCertificates.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.TlsCaCertificatePath.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.TlsCaCertificatePath.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.TlsServerName.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.TlsServerName.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.ToOptions() -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Username.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Username.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.UseTls.get -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.UseTls.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.ClickHouseTcpDecimal() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.ClickHouseTcpDecimal(ClickHouse.Driver.Tcp.Int256 mantissa, int scale) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.ClickHouseTcpDecimal(System.Int128 mantissa, int scale) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.ClickHouseTcpDecimal(System.Numerics.BigInteger mantissa, int scale) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.CompareTo(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal other) -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal other) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.Mantissa.get -> ClickHouse.Driver.Tcp.Int256
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.Scale.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.Sign.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.ToDecimal() -> decimal
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.ToString(string format, System.IFormatProvider formatProvider) -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.TryToDecimal(out decimal value) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpDiagnostics
+ClickHouse.Driver.Tcp.ClickHouseTcpException
+ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions
+ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.ClickHouseTcpInsertOptions() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.DeduplicationToken.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.DeduplicationToken.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions other) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.MaxRowsPerBlock.get -> int?
+ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.MaxRowsPerBlock.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpNotMappedAttribute
+ClickHouse.Driver.Tcp.ClickHouseTcpNotMappedAttribute.ClickHouseTcpNotMappedAttribute() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.<Clone>$() -> ClickHouse.Driver.Tcp.ClickHouseTcpParameter
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.ClickHouseTcpParameter(string Name, object Value, string ClickHouseType = null) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.ClickHouseType.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.ClickHouseType.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.Deconstruct(out string Name, out object Value, out string ClickHouseType) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpParameter other) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.Name.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.Name.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.Value.get -> object
+ClickHouse.Driver.Tcp.ClickHouseTcpParameter.Value.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.Add(ClickHouse.Driver.Tcp.ClickHouseTcpParameter parameter) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.Add(string name, object value) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.Add(string name, object value, string clickHouseType) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.ClickHouseTcpParameterCollection() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.ClickHouseTcpParameterCollection(System.Collections.Generic.IEnumerable<ClickHouse.Driver.Tcp.ClickHouseTcpParameter> parameters) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.Contains(string name) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.Count.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.GetEnumerator() -> System.Collections.Generic.IEnumerator<ClickHouse.Driver.Tcp.ClickHouseTcpParameter>
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.this[string name].get -> ClickHouse.Driver.Tcp.ClickHouseTcpParameter
+ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection.TryGetValue(string name, out ClickHouse.Driver.Tcp.ClickHouseTcpParameter parameter) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy
+ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy.Fifo = 1 -> ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy
+ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy.Lifo = 0 -> ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.AppliedLimit.get -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.Blocks.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.Bytes.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.CalculatedRowsBeforeLimit.get -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.ClickHouseTcpProfileInfo() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.ClickHouseTcpProfileInfo(ulong rows, ulong blocks, ulong bytes, bool appliedLimit, ulong rowsBeforeLimit, bool calculatedRowsBeforeLimit) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo other) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.Rows.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.RowsBeforeLimit.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress.Bytes.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress.ClickHouseTcpProgress() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress.ClickHouseTcpProgress(ulong rows, ulong bytes, ulong totalRows, ulong wroteRows, ulong wroteBytes, ulong elapsedNs) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress.ElapsedNs.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpProgress other) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress.Rows.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress.TotalRows.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress.WroteBytes.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProgress.WroteRows.get -> ulong
+ClickHouse.Driver.Tcp.ClickHouseTcpProtocolException
+ClickHouse.Driver.Tcp.ClickHouseTcpProtocolException.ClickHouseTcpProtocolException(string message) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpProtocolException.ClickHouseTcpProtocolException(string message, System.Exception innerException) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.ClickHouseTcpQueryCallbacks() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnBlockWritten.get -> System.Action<ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten>
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnBlockWritten.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnExtremes.get -> System.Action<ClickHouse.Driver.Tcp.Block>
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnExtremes.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnLog.get -> System.Action<ClickHouse.Driver.Tcp.Block>
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnLog.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnProfileEvents.get -> System.Action<ClickHouse.Driver.Tcp.Block>
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnProfileEvents.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnProfileInfo.get -> System.Action<ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo>
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnProfileInfo.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnProgress.get -> System.Action<ClickHouse.Driver.Tcp.ClickHouseTcpProgress>
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnProgress.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnTotals.get -> System.Action<ClickHouse.Driver.Tcp.Block>
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks.OnTotals.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.Callbacks.get -> ClickHouse.Driver.Tcp.ClickHouseTcpQueryCallbacks
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.Callbacks.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.ClickHouseTcpQueryOptions() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.ClickHouseTcpQueryOptions(ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions original) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.Parameters.get -> ClickHouse.Driver.Tcp.ClickHouseTcpParameterCollection
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.Parameters.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.QueryId.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.QueryId.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.Settings.get -> System.Collections.Generic.IReadOnlyDictionary<string, string>
+ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.Settings.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerException
+ClickHouse.Driver.Tcp.ClickHouseTcpServerException.ClickHouseTcpServerException(int code, string name, string message, string serverStackTrace, System.Exception innerException = null) -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerException.Code.get -> ClickHouse.Driver.Tcp.ClickHouseErrorCode
+ClickHouse.Driver.Tcp.ClickHouseTcpServerException.Name.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpServerException.RawCode.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpServerException.ServerStackTrace.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.<Clone>$() -> ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.ClickHouseTcpServerInfo() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.ClientProtocolRevision.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.ClientProtocolRevision.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.DisplayName.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.DisplayName.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo other) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.Name.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.Name.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.ProtocolRevision.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.ProtocolRevision.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.ServerProtocolRevision.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.ServerProtocolRevision.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.Timezone.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.Timezone.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.Version.get -> System.Version
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionMajor.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionMajor.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionMinor.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionMinor.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionPatch.get -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.VersionPatch.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpTransportException
+ClickHouse.Driver.Tcp.ClickHouseTcpTransportException.ClickHouseTcpTransportException(string message, System.Exception innerException) -> void
+ClickHouse.Driver.Tcp.IArrayColumn<TElement>
+ClickHouse.Driver.Tcp.IArrayColumn<TElement>.Inner.get -> ClickHouse.Driver.Tcp.IColumn<TElement>
+ClickHouse.Driver.Tcp.IArrayColumn<TElement>.InnerValues.get -> System.ReadOnlySpan<TElement>
+ClickHouse.Driver.Tcp.IArrayColumn<TElement>.Offsets.get -> System.ReadOnlySpan<int>
+ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.IColumn.ElementType.get -> System.Type
+ClickHouse.Driver.Tcp.IColumn.GetValue(int row) -> object
+ClickHouse.Driver.Tcp.IColumn.Name.get -> string
+ClickHouse.Driver.Tcp.IColumn.RowCount.get -> int
+ClickHouse.Driver.Tcp.IColumn.TypeName.get -> string
+ClickHouse.Driver.Tcp.IColumn<T>
+ClickHouse.Driver.Tcp.IColumn<T>.this[int row].get -> T
+ClickHouse.Driver.Tcp.IColumn<T>.Values.get -> System.ReadOnlySpan<T>
+ClickHouse.Driver.Tcp.IDateTimeColumn
+ClickHouse.Driver.Tcp.IDateTimeColumn.GetDateTimeOffset(int row) -> System.DateTimeOffset
+ClickHouse.Driver.Tcp.IDateTimeColumn.Scale.get -> int
+ClickHouse.Driver.Tcp.IDateTimeColumn.TimeZone.get -> System.TimeZoneInfo
+ClickHouse.Driver.Tcp.IDateTimeColumn.ToDateTimeOffsets() -> System.DateTimeOffset[]
+ClickHouse.Driver.Tcp.IDynamicColumn
+ClickHouse.Driver.Tcp.IDynamicColumn.Discriminators.get -> System.ReadOnlySpan<int>
+ClickHouse.Driver.Tcp.IDynamicColumn.GetTypeColumn(int discriminator) -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.IDynamicColumn.LocalIndices.get -> System.ReadOnlySpan<int>
+ClickHouse.Driver.Tcp.IDynamicColumn.TypeCount.get -> int
+ClickHouse.Driver.Tcp.IDynamicColumn.TypeNames.get -> System.Collections.Generic.IReadOnlyList<string>
+ClickHouse.Driver.Tcp.ILowCardinalityColumn<T>
+ClickHouse.Driver.Tcp.ILowCardinalityColumn<T>.Dictionary.get -> ClickHouse.Driver.Tcp.IColumn<T>
+ClickHouse.Driver.Tcp.ILowCardinalityColumn<T>.Keys.get -> System.ReadOnlySpan<int>
+ClickHouse.Driver.Tcp.ILowCardinalityColumn<T>.ReservedSlotCount.get -> int
+ClickHouse.Driver.Tcp.IMapColumn<TKey, TValue>
+ClickHouse.Driver.Tcp.IMapColumn<TKey, TValue>.KeyColumn.get -> ClickHouse.Driver.Tcp.IColumn<TKey>
+ClickHouse.Driver.Tcp.IMapColumn<TKey, TValue>.Offsets.get -> System.ReadOnlySpan<int>
+ClickHouse.Driver.Tcp.IMapColumn<TKey, TValue>.ValueColumn.get -> ClickHouse.Driver.Tcp.IColumn<TValue>
+ClickHouse.Driver.Tcp.INestedColumn
+ClickHouse.Driver.Tcp.INestedColumn.FieldCount.get -> int
+ClickHouse.Driver.Tcp.INestedColumn.FieldNames.get -> System.Collections.Generic.IReadOnlyList<string>
+ClickHouse.Driver.Tcp.INestedColumn.GetField(int index) -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.INestedColumn.GetField(string name) -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.INestedColumn.Offsets.get -> System.ReadOnlySpan<int>
+ClickHouse.Driver.Tcp.Int256
+ClickHouse.Driver.Tcp.Int256.CompareTo(ClickHouse.Driver.Tcp.Int256 other) -> int
+ClickHouse.Driver.Tcp.Int256.Equals(ClickHouse.Driver.Tcp.Int256 other) -> bool
+ClickHouse.Driver.Tcp.Int256.Int256() -> void
+ClickHouse.Driver.Tcp.Int256.Int256(ulong e0, ulong e1, ulong e2, ulong e3) -> void
+ClickHouse.Driver.Tcp.Int256.IsNegative.get -> bool
+ClickHouse.Driver.Tcp.Int256.ToBigInteger() -> System.Numerics.BigInteger
+ClickHouse.Driver.Tcp.Int256.WriteLittleEndian(System.Span<byte> destination) -> void
+ClickHouse.Driver.Tcp.INullableColumn<T>
+ClickHouse.Driver.Tcp.INullableColumn<T>.Inner.get -> ClickHouse.Driver.Tcp.IColumn<T>
+ClickHouse.Driver.Tcp.INullableColumn<T>.NullMap.get -> System.ReadOnlySpan<byte>
+ClickHouse.Driver.Tcp.IQBitColumn
+ClickHouse.Driver.Tcp.IQBitColumn.BitWidth.get -> int
+ClickHouse.Driver.Tcp.IQBitColumn.BytesPerRow.get -> int
+ClickHouse.Driver.Tcp.IQBitColumn.Dimension.get -> int
+ClickHouse.Driver.Tcp.IQBitColumn.GetPlane(int bit) -> System.ReadOnlySpan<byte>
+ClickHouse.Driver.Tcp.IQBitColumn.GetPlane(int bit, int group) -> System.ReadOnlySpan<byte>
+ClickHouse.Driver.Tcp.IQBitColumn.GroupCount.get -> int
+ClickHouse.Driver.Tcp.IQBitColumn.Stride.get -> int
+ClickHouse.Driver.Tcp.ITimeColumn
+ClickHouse.Driver.Tcp.ITimeColumn.GetTimeSpan(int row) -> System.TimeSpan
+ClickHouse.Driver.Tcp.ITimeColumn.Scale.get -> int
+ClickHouse.Driver.Tcp.ITimeColumn.ToTimeSpans() -> System.TimeSpan[]
+ClickHouse.Driver.Tcp.ITupleColumn
+ClickHouse.Driver.Tcp.ITupleColumn.Children.get -> System.Collections.Generic.IReadOnlyList<ClickHouse.Driver.Tcp.IColumn>
+ClickHouse.Driver.Tcp.ITupleColumn.FieldNames.get -> System.Collections.Generic.IReadOnlyList<string>
+ClickHouse.Driver.Tcp.IVariantColumn
+ClickHouse.Driver.Tcp.IVariantColumn.Discriminators.get -> System.ReadOnlySpan<byte>
+ClickHouse.Driver.Tcp.IVariantColumn.GetTypeColumn(int discriminator) -> ClickHouse.Driver.Tcp.IColumn
+ClickHouse.Driver.Tcp.IVariantColumn.LocalIndices.get -> System.ReadOnlySpan<int>
+ClickHouse.Driver.Tcp.IVariantColumn.TypeCount.get -> int
+ClickHouse.Driver.Tcp.UInt256
+ClickHouse.Driver.Tcp.UInt256.CompareTo(ClickHouse.Driver.Tcp.UInt256 other) -> int
+ClickHouse.Driver.Tcp.UInt256.Equals(ClickHouse.Driver.Tcp.UInt256 other) -> bool
+ClickHouse.Driver.Tcp.UInt256.ToBigInteger() -> System.Numerics.BigInteger
+ClickHouse.Driver.Tcp.UInt256.UInt256() -> void
+ClickHouse.Driver.Tcp.UInt256.UInt256(ulong e0, ulong e1, ulong e2, ulong e3) -> void
+ClickHouse.Driver.Tcp.UInt256.WriteLittleEndian(System.Span<byte> destination) -> void
+const ClickHouse.Driver.Tcp.ClickHouseTcpDiagnostics.ActivitySourceName = "ClickHouse.Driver.Tcp" -> string
+const ClickHouse.Driver.Tcp.ClickHouseTcpDiagnostics.ClientLogCategory = "ClickHouse.Driver.Tcp.Client" -> string
+const ClickHouse.Driver.Tcp.ClickHouseTcpDiagnostics.ConnectionLogCategory = "ClickHouse.Driver.Tcp.Connection" -> string
+const ClickHouse.Driver.Tcp.ClickHouseTcpDiagnostics.PoolLogCategory = "ClickHouse.Driver.Tcp.Pool" -> string
+const ClickHouse.Driver.Tcp.Int256.Size = 32 -> int
+const ClickHouse.Driver.Tcp.IVariantColumn.NullDiscriminator = 255 -> byte
+const ClickHouse.Driver.Tcp.UInt256.Size = 32 -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.ToString() -> string
+override ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ToString() -> string
+override ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Remove(string keyword) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.this[string keyword].get -> object
+override ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.this[string keyword].set -> void
+override ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.ToString() -> string
+override ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.<Clone>$() -> ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions
+override ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.ToString() -> string
+override ClickHouse.Driver.Tcp.ClickHouseTcpParameter.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpParameter.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpParameter.ToString() -> string
+override ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.ToString() -> string
+override ClickHouse.Driver.Tcp.ClickHouseTcpProgress.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpProgress.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpProgress.ToString() -> string
+override ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.ToString() -> string
+override ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.ToString() -> string
+override ClickHouse.Driver.Tcp.Int256.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.Int256.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.Int256.ToString() -> string
+override ClickHouse.Driver.Tcp.UInt256.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.UInt256.GetHashCode() -> int
+override ClickHouse.Driver.Tcp.UInt256.ToString() -> string
+override sealed ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions other) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten left, ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten left, ClickHouse.Driver.Tcp.ClickHouseTcpBlockWritten right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.FromConnectionString(string connectionString) -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
+static ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpColumn.Create<T>(string name, System.Collections.Generic.IEnumerable<T> values) -> ClickHouse.Driver.Tcp.IColumn<T>
+static ClickHouse.Driver.Tcp.ClickHouseTcpColumn.Create<T>(string name, T[] values) -> ClickHouse.Driver.Tcp.IColumn<T>
+static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.explicit operator ClickHouse.Driver.Tcp.ClickHouseTcpDecimal(decimal value) -> ClickHouse.Driver.Tcp.ClickHouseTcpDecimal
+static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.explicit operator decimal(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal value) -> decimal
+static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.FromDecimal(decimal value) -> ClickHouse.Driver.Tcp.ClickHouseTcpDecimal
+static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal left, ClickHouse.Driver.Tcp.ClickHouseTcpDecimal right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.operator <(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal left, ClickHouse.Driver.Tcp.ClickHouseTcpDecimal right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.operator <=(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal left, ClickHouse.Driver.Tcp.ClickHouseTcpDecimal right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal left, ClickHouse.Driver.Tcp.ClickHouseTcpDecimal right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.operator >(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal left, ClickHouse.Driver.Tcp.ClickHouseTcpDecimal right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.operator >=(ClickHouse.Driver.Tcp.ClickHouseTcpDecimal left, ClickHouse.Driver.Tcp.ClickHouseTcpDecimal right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpParameter.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpParameter left, ClickHouse.Driver.Tcp.ClickHouseTcpParameter right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpParameter.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpParameter left, ClickHouse.Driver.Tcp.ClickHouseTcpParameter right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo left, ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo left, ClickHouse.Driver.Tcp.ClickHouseTcpProfileInfo right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpProgress.Add(ClickHouse.Driver.Tcp.ClickHouseTcpProgress left, ClickHouse.Driver.Tcp.ClickHouseTcpProgress right) -> ClickHouse.Driver.Tcp.ClickHouseTcpProgress
+static ClickHouse.Driver.Tcp.ClickHouseTcpProgress.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpProgress left, ClickHouse.Driver.Tcp.ClickHouseTcpProgress right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpProgress.operator +(ClickHouse.Driver.Tcp.ClickHouseTcpProgress left, ClickHouse.Driver.Tcp.ClickHouseTcpProgress right) -> ClickHouse.Driver.Tcp.ClickHouseTcpProgress
+static ClickHouse.Driver.Tcp.ClickHouseTcpProgress.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpProgress left, ClickHouse.Driver.Tcp.ClickHouseTcpProgress right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo left, ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo left, ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo right) -> bool
+static ClickHouse.Driver.Tcp.Int256.FromBigInteger(System.Numerics.BigInteger value) -> ClickHouse.Driver.Tcp.Int256
+static ClickHouse.Driver.Tcp.Int256.operator !=(ClickHouse.Driver.Tcp.Int256 left, ClickHouse.Driver.Tcp.Int256 right) -> bool
+static ClickHouse.Driver.Tcp.Int256.operator <(ClickHouse.Driver.Tcp.Int256 left, ClickHouse.Driver.Tcp.Int256 right) -> bool
+static ClickHouse.Driver.Tcp.Int256.operator <=(ClickHouse.Driver.Tcp.Int256 left, ClickHouse.Driver.Tcp.Int256 right) -> bool
+static ClickHouse.Driver.Tcp.Int256.operator ==(ClickHouse.Driver.Tcp.Int256 left, ClickHouse.Driver.Tcp.Int256 right) -> bool
+static ClickHouse.Driver.Tcp.Int256.operator >(ClickHouse.Driver.Tcp.Int256 left, ClickHouse.Driver.Tcp.Int256 right) -> bool
+static ClickHouse.Driver.Tcp.Int256.operator >=(ClickHouse.Driver.Tcp.Int256 left, ClickHouse.Driver.Tcp.Int256 right) -> bool
+static ClickHouse.Driver.Tcp.Int256.ReadLittleEndian(System.ReadOnlySpan<byte> source) -> ClickHouse.Driver.Tcp.Int256
+static ClickHouse.Driver.Tcp.Int256.Zero.get -> ClickHouse.Driver.Tcp.Int256
+static ClickHouse.Driver.Tcp.UInt256.FromBigInteger(System.Numerics.BigInteger value) -> ClickHouse.Driver.Tcp.UInt256
+static ClickHouse.Driver.Tcp.UInt256.operator !=(ClickHouse.Driver.Tcp.UInt256 left, ClickHouse.Driver.Tcp.UInt256 right) -> bool
+static ClickHouse.Driver.Tcp.UInt256.operator <(ClickHouse.Driver.Tcp.UInt256 left, ClickHouse.Driver.Tcp.UInt256 right) -> bool
+static ClickHouse.Driver.Tcp.UInt256.operator <=(ClickHouse.Driver.Tcp.UInt256 left, ClickHouse.Driver.Tcp.UInt256 right) -> bool
+static ClickHouse.Driver.Tcp.UInt256.operator ==(ClickHouse.Driver.Tcp.UInt256 left, ClickHouse.Driver.Tcp.UInt256 right) -> bool
+static ClickHouse.Driver.Tcp.UInt256.operator >(ClickHouse.Driver.Tcp.UInt256 left, ClickHouse.Driver.Tcp.UInt256 right) -> bool
+static ClickHouse.Driver.Tcp.UInt256.operator >=(ClickHouse.Driver.Tcp.UInt256 left, ClickHouse.Driver.Tcp.UInt256 right) -> bool
+static ClickHouse.Driver.Tcp.UInt256.ReadLittleEndian(System.ReadOnlySpan<byte> source) -> ClickHouse.Driver.Tcp.UInt256
+static ClickHouse.Driver.Tcp.UInt256.Zero.get -> ClickHouse.Driver.Tcp.UInt256
+virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.<Clone>$() -> ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions
+virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.EqualityContract.get -> System.Type
+virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions other) -> bool
+virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.PrintMembers(System.Text.StringBuilder builder) -> bool
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ClickHouseTcpClient(ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions options) -> void
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ClickHouseTcpClient(string connectionString) -> void
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.Dispose() -> void
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.DisposeAsync() -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ExecuteAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ExecuteScalarAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<object>
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.GetServerInfoAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo>
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.InsertAsync(string sql, System.Collections.Generic.IReadOnlyList<ClickHouse.Driver.Tcp.IColumn> columns, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.InsertRowsAsync(string sql, System.Collections.Generic.IReadOnlyList<object[]> rows, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.InsertRowsAsync<T>(string sql, System.Collections.Generic.IReadOnlyList<T> rows, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.OpenSessionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.Options.get -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.PingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.QueryAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<object[]>
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.QueryAsync<T>(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.StreamAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<ClickHouse.Driver.Tcp.Block>
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.ClickHouseTcpDataSource(ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions options) -> void
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.ClickHouseTcpDataSource(string connectionString) -> void
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.Dispose() -> void
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.DisposeAsync() -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.GetClient() -> ClickHouse.Driver.Tcp.IClickHouseTcpClient
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.OpenSessionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.Options.get -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpClient
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpClient.OpenSessionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpDataSource
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpDataSource.GetClient() -> ClickHouse.Driver.Tcp.IClickHouseTcpClient
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpDataSource.OpenSessionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpDataSource.Options.get -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.ExecuteAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.ExecuteScalarAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<object>
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.GetServerInfoAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo>
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.InsertAsync(string sql, System.Collections.Generic.IReadOnlyList<ClickHouse.Driver.Tcp.IColumn> columns, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.InsertRowsAsync(string sql, System.Collections.Generic.IReadOnlyList<object[]> rows, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.InsertRowsAsync<T>(string sql, System.Collections.Generic.IReadOnlyList<T> rows, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.Options.get -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.PingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.QueryAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<object[]>
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.QueryAsync<T>(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.StreamAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<ClickHouse.Driver.Tcp.Block>
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpSession
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpSession.IsOpen.get -> bool
+[CHTCP0001]Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions
+[CHTCP0001]static Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions.AddClickHouseTcpDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions options, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
+[CHTCP0001]static Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions.AddClickHouseTcpDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, string connectionString, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
+[CHTCP0001]static Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions.AddClickHouseTcpDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Func<System.IServiceProvider, ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions> optionsFactory, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection
+[CHTCP0001]static Microsoft.Extensions.DependencyInjection.ClickHouseTcpServiceCollectionExtensions.AddClickHouseTcpDataSource(this Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Func<System.IServiceProvider, object, ClickHouse.Driver.Tcp.ClickHouseTcpDataSource> dataSourceFactory, object serviceKey = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection

@@ -6,7 +6,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
@@ -19,12 +18,12 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 ///
 /// <para>
 /// The 4- and 8-byte widths surface as <see cref="decimal"/>; the wider ones, which exceed the range of
-/// <see cref="decimal"/>, surface as <see cref="ClickHouseDecimal"/>. The mantissa bytes are read in one bulk
+/// <see cref="decimal"/>, surface as <see cref="ClickHouseTcpDecimal"/>. The mantissa bytes are read in one bulk
 /// transfer, then converted to the CLR value.
 /// </para>
 /// </summary>
 /// <typeparam name="TMantissa">The unmanaged backing integer (int, long, Int128, or Int256).</typeparam>
-/// <typeparam name="TValue">The CLR value type (decimal or ClickHouseDecimal).</typeparam>
+/// <typeparam name="TValue">The CLR value type (decimal or ClickHouseTcpDecimal).</typeparam>
 internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec
     where TMantissa : unmanaged, IComparable<TMantissa>
 {
@@ -173,8 +172,8 @@ internal static class DecimalColumnCodec
         {
             4 => new DecimalColumnCodec<int, decimal>(typeName, precision, scale, (int)minMantissa, (int)maxMantissa, DecimalConvert.DecodeInt32, DecimalConvert.EncodeInt32),
             8 => new DecimalColumnCodec<long, decimal>(typeName, precision, scale, (long)minMantissa, (long)maxMantissa, DecimalConvert.DecodeInt64, DecimalConvert.EncodeInt64),
-            16 => new DecimalColumnCodec<Int128, ClickHouseDecimal>(typeName, precision, scale, Int128.CreateChecked(minMantissa), Int128.CreateChecked(maxMantissa), DecimalConvert.DecodeInt128, DecimalConvert.EncodeInt128),
-            _ => new DecimalColumnCodec<Int256, ClickHouseDecimal>(typeName, precision, scale, Int256.FromBigInteger(minMantissa), Int256.FromBigInteger(maxMantissa), DecimalConvert.DecodeInt256, DecimalConvert.EncodeInt256),
+            16 => new DecimalColumnCodec<Int128, ClickHouseTcpDecimal>(typeName, precision, scale, Int128.CreateChecked(minMantissa), Int128.CreateChecked(maxMantissa), DecimalConvert.DecodeInt128, DecimalConvert.EncodeInt128),
+            _ => new DecimalColumnCodec<Int256, ClickHouseTcpDecimal>(typeName, precision, scale, Int256.FromBigInteger(minMantissa), Int256.FromBigInteger(maxMantissa), DecimalConvert.DecodeInt256, DecimalConvert.EncodeInt256),
         };
     }
 
@@ -218,13 +217,13 @@ internal static class DecimalConvert
 
     public static long EncodeInt64(decimal value, int scale) => EncodeDecimalMantissa(value, scale);
 
-    public static ClickHouseDecimal DecodeInt128(Int128 mantissa, int scale) => new(mantissa, scale);
+    public static ClickHouseTcpDecimal DecodeInt128(Int128 mantissa, int scale) => new(mantissa, scale);
 
-    public static ClickHouseDecimal DecodeInt256(Int256 mantissa, int scale) => new(mantissa, scale);
+    public static ClickHouseTcpDecimal DecodeInt256(Int256 mantissa, int scale) => new(mantissa, scale);
 
-    public static Int128 EncodeInt128(ClickHouseDecimal value, int scale) => Int128.CreateChecked(RescaleMantissa(value, scale));
+    public static Int128 EncodeInt128(ClickHouseTcpDecimal value, int scale) => Int128.CreateChecked(RescaleMantissa(value, scale));
 
-    public static Int256 EncodeInt256(ClickHouseDecimal value, int scale) => Int256.FromBigInteger(RescaleMantissa(value, scale));
+    public static Int256 EncodeInt256(ClickHouseTcpDecimal value, int scale) => Int256.FromBigInteger(RescaleMantissa(value, scale));
 
     private static decimal MakeDecimal(long mantissa, int scale)
     {
@@ -255,7 +254,7 @@ internal static class DecimalConvert
         return (long)truncated;
     }
 
-    private static BigInteger RescaleMantissa(ClickHouseDecimal value, int scale)
+    private static BigInteger RescaleMantissa(ClickHouseTcpDecimal value, int scale)
     {
         BigInteger mantissa = value.Mantissa.ToBigInteger();
         int diff = scale - value.Scale;
