@@ -23,4 +23,26 @@ public record ClickHouseTcpQueryOptions
     /// <see cref="ClickHouseTcpClientOptions.CustomSettings"/> for any key present in both. Null means none.
     /// </summary>
     public IReadOnlyDictionary<string, string> Settings { get; init; }
+
+    /// <summary>
+    /// The values bound to the query's <c>{name:Type}</c> placeholders. Null means none.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each parameter needs a type from its placeholder, for example <c>{id:Int32}</c>, or from
+    /// <see cref="ClickHouseTcpParameter.ClickHouseType"/>. The operation throws when neither supplies one.
+    /// </para>
+    /// <para>
+    /// Declare a timezone for <see cref="DateTimeOffset"/> and for <see cref="DateTime"/> values whose
+    /// <see cref="DateTime.Kind"/> is not <see cref="DateTimeKind.Unspecified"/>, for example
+    /// <c>{t:DateTime('UTC')}</c>. Without one, the client refuses the value to prevent the server's session
+    /// timezone from changing the instant. Use <see cref="DateTimeKind.Unspecified"/> only for wall-clock time.
+    /// </para>
+    /// <para>
+    /// On ClickHouse 25.8 through 26.6, names matching server settings, such as <c>limit</c> or <c>offset</c>,
+    /// may be treated as settings and rejected. Rename them (for example, <c>row_limit</c>) when supporting
+    /// those versions. Newer servers and this driver's HTTP transport are unaffected.
+    /// </para>
+    /// </remarks>
+    public ClickHouseTcpParameterCollection Parameters { get; init; }
 }
