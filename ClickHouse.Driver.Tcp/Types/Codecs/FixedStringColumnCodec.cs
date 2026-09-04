@@ -1,6 +1,10 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq.Expressions;
+using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -20,6 +24,14 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<byte[]>
 {
+    private static readonly Func<IColumn, int, string> ReadRowText = RowText;
+
+    private static readonly ColumnReadProjection ProjectText =
+        static source => new ProjectedReadColumn<string>(source, ReadRowText);
+
+    private static readonly MethodInfo Utf8Method =
+        typeof(Encoding).GetMethod(nameof(Encoding.GetString), new[] { typeof(byte[]) });
+
     private readonly int size;
 
     // N zero bytes, shared: the write path only ever reads it, and it is the exact width a null position must
@@ -46,11 +58,64 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     /// </summary>
     public object NullPlaceholder => nullPlaceholder ??= new byte[size];
 
+    /// <summary>
+    /// A <c>FixedString(N)</c> is a byte string, so the bytes are the lossless reading and the UTF-8 text of them
+    /// is the other. The text is every one of the <c>N</c> bytes decoded, the zero padding a shorter stored value
+    /// was widened with included: trimming it would be a guess, since a value may legitimately end in a zero. Same
+    /// as the HTTP path's <c>FixedStringType</c>, and as <see cref="FixedStringColumn.GetString"/>.
+    /// </summary>
+    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(byte[]), typeof(string) };
+
     /// <inheritdoc/>
     public Type CanonicalWriteElementType => typeof(ByteArrayWireValue);
 
     /// <inheritdoc/>
     public object CanonicalWritePlaceholder => new ByteArrayWireValue((byte[])NullPlaceholder);
+
+    /// <summary>
+    /// The text reading decodes off the column's own blob, so no <c>byte[]</c> is materialized per row to decode
+    /// from. <see cref="TryProjectRead"/> offers the same reading from a value, for a caller holding one element
+    /// rather than the column.
+    /// </summary>
+    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
+    {
+        projection = targetType == typeof(string) ? ProjectText : null;
+        return projection is not null;
+    }
+
+    /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
+
+        if (targetType == ElementType)
+        {
+            projected = value;
+            return true;
+        }
+
+        projected = targetType == typeof(string)
+            ? Expression.Call(Expression.Constant(Encoding.UTF8), Utf8Method, value)
+            : null;
+        return projected is not null;
+    }
+
+    /// <summary>One row decoded as UTF-8, off the column's blob where it has one.</summary>
+    /// <param name="column">The decoded column, which must hold the row's bytes.</param>
+    /// <param name="row">The zero-based row index.</param>
+    /// <returns>That row's text, including any zero padding, and U+FFFD for any byte UTF-8 cannot express.</returns>
+    /// <exception cref="InvalidOperationException"><paramref name="column"/> holds no bytes to decode.</exception>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="row"/> is negative or not less than the row count.</exception>
+    // A column this client decoded holds its rows in one blob, so the row is decoded from a slice of it with no
+    // intermediate array. A column built by a caller is read through the indexer instead, which materializes one.
+    public static string RowText(IColumn column, int row) => column switch
+    {
+        FixedStringColumn dense => Encoding.UTF8.GetString(dense.GetBytes(row)),
+        IColumn<byte[]> bytes => Encoding.UTF8.GetString(bytes[row]),
+        _ => throw new InvalidOperationException(
+            $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which holds no bytes to decode, " +
+            "so its values cannot be read as a string."),
+    };
 
     /// <summary>Builds a <c>FixedString(N)</c> codec from its type node's single integer length argument.</summary>
     /// <param name="node">The parsed <c>FixedString</c> type node.</param>

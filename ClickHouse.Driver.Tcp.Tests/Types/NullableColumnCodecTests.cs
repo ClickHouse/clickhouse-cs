@@ -139,7 +139,10 @@ public class NullableColumnCodecTests
                 Resolve("Nullable(DateTime('UTC'))").WritableElementTypes,
                 Is.EqualTo(new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) }));
             Assert.That(Resolve("Nullable(Int32)").WritableElementTypes, Is.EqualTo(new[] { typeof(int?) }));
-            Assert.That(Resolve("Nullable(String)").WritableElementTypes, Is.EqualTo(new[] { typeof(string) }));
+
+            // A reference type is already nullable, so the wrapper lists the inner spellings unchanged: String
+            // takes text or the bytes themselves.
+            Assert.That(Resolve("Nullable(String)").WritableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
         });
     }
 
@@ -321,4 +324,21 @@ public class NullableColumnCodecTests
     [Test]
     public void Resolve_Nullable_StampsFullTypeName()
         => Assert.That(Resolve("Nullable(UInt8)").TypeName, Is.EqualTo("Nullable(UInt8)"));
+
+    /// <summary>
+    /// Forwarding a reading to the inner column needs this column's null-map to say which rows to read, and only a
+    /// decoded <c>Nullable</c> column has one. A column a caller built and labelled <c>Nullable(String)</c> is told
+    /// so by name rather than failing with a bare cast error, and told when the view is built rather than at
+    /// whichever row is read first. Not reachable through a query, whose columns the codec decodes.
+    /// </summary>
+    [Test]
+    public void ReadAs_NullableColumnWithoutANullMap_SaysWhichColumnHasNone()
+    {
+        var text = new ArrayColumn<string>("c", "Nullable(String)", new[] { "a" });
+
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => ColumnCodecRegistry.Default.Projections.ReadAs<byte[]>(text, new ResolveContext { ServerTimezone = "UTC" }));
+
+        Assert.That(thrown.Message, Does.Contain("Column 'c' (Nullable(String))").And.Contain("INullableColumn"));
+    }
 }

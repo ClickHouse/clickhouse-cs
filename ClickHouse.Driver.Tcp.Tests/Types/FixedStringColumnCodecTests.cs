@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
@@ -169,6 +170,29 @@ public class FixedStringColumnCodecTests
             Assert.That(Codec(4).CanWrite(new ArrayColumn<byte[]>("c", "FixedString(4)", new[] { new byte[4] })), Is.True);
             Assert.That(Codec(4).CanWrite(new ArrayColumn<string>("c", "String", new[] { "x" })), Is.False);
         });
+    }
+
+    [Test]
+    public void ReadableElementTypes_OffersTheBytesAndTheirText()
+    {
+        // Diagnostics only, so it has to agree with what the projections actually build; the bytes lead, being the
+        // type's own reading.
+        IColumnCodec codec = Codec(4);
+
+        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(byte[]), typeof(string) }));
+    }
+
+    [Test]
+    public void RowText_ColumnHoldingNoBytes_SaysWhichColumnCannotBeDecoded()
+    {
+        // A column a caller built and labelled FixedString(N) need not hold bytes at all. The reading is compiled
+        // from the type string, so the mismatch surfaces here rather than as a bare cast failure naming neither
+        // the column nor the reading.
+        using var notBytes = new ArrayColumn<int>("c", "FixedString(4)", new[] { 1 });
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => FixedStringColumnCodec.RowText(notBytes, 0));
+
+        Assert.That(thrown.Message, Does.Contain("'c'").And.Contain("FixedString(4)").And.Contain("read as a string"));
     }
 
     private static IColumnCodec Codec(int size) => ColumnCodecRegistry.Default.Resolve($"FixedString({size})", ResolveContext.ForWrite);
