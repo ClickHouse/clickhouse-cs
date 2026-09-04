@@ -195,7 +195,7 @@ public class ClickHouseRawResultDecompressionTests
 
     /// <summary>
     /// Contrast case: the four original members are verbatim pass-throughs and must stay that way —
-    /// <c>examples/Select/Select_005_CompressedRawExport.cs</c> writes the compressed bytes to a file.
+    /// <c>examples/Http/Select/Select_005_CompressedRawExport.cs</c> writes the compressed bytes to a file.
     /// </summary>
     [Test]
     public async Task TheOriginalRawResultMembers_WithCompressedResponse_ReturnTheRawBytesVerbatim()
