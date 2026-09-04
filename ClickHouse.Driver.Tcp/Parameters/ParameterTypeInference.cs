@@ -89,6 +89,19 @@ internal static class ParameterTypeInference
             return Accepts(node.Arguments[0], value);
         }
 
+        // A geo name stands for a Tuple/Array shape, which is what the formatter writes it as. Matching the
+        // name alone would reject every value, because no CLR type infers to "Point".
+        if (TcpParameterFormatter.TryGeoShapeOf(node.Name, out TypeNode geoShape))
+        {
+            return Accepts(geoShape, value);
+        }
+
+        // A QBit is a fixed-width vector of its element type, so it takes what an Array of that type takes.
+        if (node.Name is "QBit" && node.Arguments.Count == 2)
+        {
+            return value is not string and IEnumerable components && AcceptsElements(node.Arguments[0], components);
+        }
+
         // Match composite alternatives recursively; their outer names are insufficient.
         switch (value)
         {
@@ -104,7 +117,8 @@ internal static class ParameterTypeInference
             case ITuple tuple when node.Name is "Tuple":
                 return AcceptsTupleElements(node, tuple);
 
-            case not string and not byte[] and IEnumerable elements when node.Name is "Array":
+            // A byte[] is checked element by element here too, so it takes Array(UInt8) but not Array(String).
+            case not string and IEnumerable elements when node.Name is "Array":
                 return node.Arguments.Count == 1 && AcceptsElements(node.Arguments[0], elements);
 
             case IDictionary or ITuple:
@@ -113,8 +127,8 @@ internal static class ParameterTypeInference
 
         string inferred = value switch
         {
-            // Prefer Array for byte[] when offered; otherwise treat it as String.
-            byte[] => node.Name is "Array" or "String" or "FixedString" ? node.Name : "String",
+            // The Array case above already took a byte[] an element type accepts, so only the text arms remain.
+            byte[] => node.Name is "String" or "FixedString" ? node.Name : "String",
 
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
             string or char => node.Name is "String" or "FixedString" or "Enum8" or "Enum16" ? node.Name : "String",

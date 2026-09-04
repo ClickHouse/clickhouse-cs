@@ -119,9 +119,12 @@ internal static class TcpParameterFormatter
             case "Date" or "Date32":
                 return FormatDate(value, quote);
 
-            // Must precede the arm below, which would otherwise print the CLR type name for a byte array.
+            // Must precede the arm below, which would otherwise print the CLR type name for a byte payload.
             case "String" or "FixedString" when value is byte[] bytes:
                 return QuoteIfNeeded(BytesToSqlText(bytes), quote);
+
+            case "String" or "FixedString" when value is ReadOnlyMemory<byte> bytesMemory:
+                return QuoteIfNeeded(BytesToSqlText(bytesMemory.Span), quote);
 
             case "String" or "FixedString" or "Enum8" or "Enum16" or "IPv4" or "IPv6" or "UUID":
                 return QuoteIfNeeded(value.ToString().Escape(), quote);
@@ -197,14 +200,28 @@ internal static class TcpParameterFormatter
     /// <summary>Expands a geo type name into the Tuple/Array shape it stands for.</summary>
     /// <param name="name">The geo type name.</param>
     /// <returns>The parsed structural equivalent.</returns>
-    private static TypeNode GeoShapeOf(string name) => TypeParser.Parse(name switch
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a geo type.</exception>
+    private static TypeNode GeoShapeOf(string name)
+        => TryGeoShapeOf(name, out TypeNode shape) ? shape : throw new ArgumentException($"'{name}' is not a geo type");
+
+    /// <summary>Expands a geo type name into its shape, reporting whether the name is a geo one at all.</summary>
+    /// <param name="name">The type name, which need not be a geo one.</param>
+    /// <param name="shape">The parsed structural equivalent, or null.</param>
+    /// <returns>True when the name is a geo type.</returns>
+    internal static bool TryGeoShapeOf(string name, out TypeNode shape)
     {
-        "Point" => "Tuple(Float64, Float64)",
-        "Ring" or "LineString" => "Array(Point)",
-        "Polygon" or "MultiLineString" => "Array(Ring)",
-        "MultiPolygon" => "Array(Polygon)",
-        _ => throw new ArgumentException($"'{name}' is not a geo type"),
-    });
+        string structural = name switch
+        {
+            "Point" => "Tuple(Float64, Float64)",
+            "Ring" or "LineString" => "Array(Point)",
+            "Polygon" or "MultiLineString" => "Array(Ring)",
+            "MultiPolygon" => "Array(Polygon)",
+            _ => null,
+        };
+
+        shape = structural is null ? null : TypeParser.Parse(structural);
+        return shape is not null;
+    }
 
     /// <summary>Writes raw bytes as escaped SQL text without changing any of them.</summary>
     /// <param name="bytes">The bytes.</param>
@@ -213,7 +230,7 @@ internal static class TcpParameterFormatter
     /// ClickHouse strings store bytes. Valid UTF-8 remains readable; invalid UTF-8 uses <c>\xHH</c> escapes to
     /// avoid replacement-character corruption.
     /// </remarks>
-    private static string BytesToSqlText(byte[] bytes)
+    private static string BytesToSqlText(ReadOnlySpan<byte> bytes)
     {
         try
         {

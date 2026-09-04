@@ -142,7 +142,6 @@ public class SqlParameterTypeExtractorTests
     [TestCase("SELECT {val:Int32} -- {val:String}")]
     [TestCase("SELECT {val:Int32} --{val:String}")]
     [TestCase("SELECT {val:Int32} # {val:String}")]
-    [TestCase("SELECT {val:Int32} #{val:String}")]
     [TestCase("SELECT {val:Int32} #! {val:String}")]
     [TestCase("SELECT {val:Int32} #!{val:String}")]
     [TestCase("SELECT {val:Int32} -- /* {val:String} */")]
@@ -226,6 +225,119 @@ public class SqlParameterTypeExtractorTests
         {
             Assert.That(hints, Has.Count.EqualTo(1));
             Assert.That(hints["other"], Is.EqualTo("String"));
+        });
+    }
+
+    [Test]
+    public void ExtractTypeHints_BareHash_NotTreatedAsComment()
+    {
+        // Only "# " and "#!" start a comment; the server rejects a query holding a bare "#" token.
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints("SELECT {val:Int32} #{other:String}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hints, Has.Count.EqualTo(2));
+            Assert.That(hints["val"], Is.EqualTo("Int32"));
+            Assert.That(hints["other"], Is.EqualTo("String"));
+        });
+    }
+
+    // A brace that is not a type hint must not reach past its own name for a colon, or it takes the colon of
+    // the parameter after it and that parameter loses its hint. Every one of these is a query the server runs.
+    [TestCase("SELECT 1 AS \"col{x}\", {p:Int32}")]
+    [TestCase("SELECT 1 AS `col{x}`, {p:Int32}")]
+    [TestCase("SELECT $$ {x} $$, {p:Int32}")]
+    public void ExtractTypeHints_BraceThatIsNotATypeHint_KeepsTheLaterHint(string sql)
+    {
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hints, Has.Count.EqualTo(1));
+            Assert.That(hints["p"], Is.EqualTo("Int32"));
+        });
+    }
+
+    // A name is a bare word, so anything else before the colon means this brace is not a placeholder at all.
+    [TestCase("SELECT {x}, {p:Int32}")]
+    [TestCase("SELECT {}, {p:Int32}")]
+    [TestCase("SELECT {a b:Int32}, {p:Int32}")]
+    [TestCase("SELECT {'a':1}, {p:Int32}")]
+    public void ExtractTypeHints_BraceWithoutAParameterName_YieldsOnlyTheRealHint(string sql)
+    {
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hints, Has.Count.EqualTo(1));
+            Assert.That(hints["p"], Is.EqualTo("Int32"));
+        });
+    }
+
+    // A quoted identifier, a heredoc and a // comment each hide their contents, as a string literal does.
+    [TestCase("SELECT 1 AS \"a{val:Int32}b\", {other:String}")]
+    [TestCase("SELECT 1 AS `a{val:Int32}b`, {other:String}")]
+    [TestCase("SELECT $tag$ {val:Int32} $tag$, {other:String}")]
+    [TestCase("SELECT 1 // {val:Int32}\n, {other:String}")]
+    [TestCase("SELECT /* /* {val:Int32} */ */ {other:String}")]
+    public void ExtractTypeHints_HintInsideAHiddenToken_IsSkipped(string sql)
+    {
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hints, Has.Count.EqualTo(1));
+            Assert.That(hints["other"], Is.EqualTo("String"));
+        });
+    }
+
+    // A $ opens a heredoc only at a token boundary and only when a closing tag follows. The server lexes
+    // a$b$ as one identifier, so neither dollar there starts one even though the tag repeats later.
+    [TestCase("SELECT $x, {p:Int32}")]
+    [TestCase("SELECT 1 AS a$b$, {p:Int32}, 2 AS c$b$")]
+    public void ExtractTypeHints_DollarThatOpensNoHeredoc_IsAnOrdinaryCharacter(string sql)
+    {
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints(sql);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hints, Has.Count.EqualTo(1));
+            Assert.That(hints["p"], Is.EqualTo("Int32"));
+        });
+    }
+
+    // Shapes that end the scan without a hint: no colon before the end, an unterminated quote, and a brace
+    // inside what would be the type, which no type definition contains.
+    [TestCase("SELECT {abc", TestName = "name runs to the end with no colon")]
+    [TestCase("SELECT 'abc", TestName = "unterminated string literal")]
+    [TestCase("SELECT \"abc", TestName = "unterminated quoted identifier")]
+    [TestCase("SELECT {p:Int{32}", TestName = "brace inside the type")]
+    public void ExtractTypeHints_ScanThatNeverCompletesAHint_ReturnsEmptyDictionary(string sql)
+    {
+        Assert.That(SqlParameterTypeExtractor.ExtractTypeHints(sql), Is.Empty);
+    }
+
+    [Test]
+    public void ExtractTypeHints_BraceInsideTheType_LeavesALaterHintVisible()
+    {
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints("SELECT {p:Int{32}, {q:Int32}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hints, Has.Count.EqualTo(1));
+            Assert.That(hints["q"], Is.EqualTo("Int32"));
+        });
+    }
+
+    [Test]
+    public void ExtractTypeHints_UnterminatedHeredoc_DoesNotSwallowTheRestOfTheQuery()
+    {
+        Dictionary<string, string> hints = SqlParameterTypeExtractor.ExtractTypeHints("SELECT $tag$ oops, {p:Int32}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hints, Has.Count.EqualTo(1));
+            Assert.That(hints["p"], Is.EqualTo("Int32"));
         });
     }
 }
