@@ -83,12 +83,26 @@ public sealed class InsertRoundTripCase
         yield return Primitive("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 });
         yield return Primitive("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 });
 
+        // A column of labels is the other write shape: it converts to the declared ordinals, which is what reads back.
+        yield return EnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, "a", "b");
+        yield return EnumLabels("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 }, "x", "y");
+
+        // And through the wrappers, where the shape has to survive composition: the nullable substitute needs a
+        // placeholder label for its null rows, and the array path flattens the labels before the enum sees them.
+        yield return NullableEnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte?[] { -1, null, 127 }, "a", null, "b");
+        yield return ArrayEnumLabels("Enum8('a' = -1, 'b' = 127)", new[] { new sbyte[] { -1, 127 }, Array.Empty<sbyte>() }, new[] { "a", "b" }, Array.Empty<string>());
+
         // Floats and Bool are direct blittable maps, so the primitive factory covers them.
         yield return Primitive("Float32", new[] { 0f, 1.5f, -1.5f, float.MinValue, float.MaxValue });
         yield return Primitive("Float64", new[] { 0d, 1.5, -1.5e100, double.MinValue, double.MaxValue });
         yield return Primitive("Bool", new[] { false, true, true, false });
 
         yield return Strings("String", string.Empty, "hello", "héllo✓", "a\0b", new string('x', 500));
+
+        // A String is a byte string, so a byte[] per row is the other write shape; it reads back as the text those
+        // bytes spell. The non-UTF-8 case is in StringBytesIntegrationTests, where the point is that it survives.
+        yield return StringBytes(new[] { new byte[] { 0x61 }, Array.Empty<byte>(), new byte[] { 0x62, 0x63 } }, "a", string.Empty, "bc");
+        yield return NullableStringBytes(new[] { new byte[] { 0x61 }, null, Array.Empty<byte>() }, "a", null, string.Empty);
 
         // FixedString(N): N contiguous bytes per row, surfaced as a per-row byte[] of exactly N bytes. The bytes
         // are byte-oriented, so embedded NULs and non-UTF-8 bytes ride along unchanged. A wider N crosses the
@@ -306,6 +320,10 @@ public sealed class InsertRoundTripCase
         yield return Arrays<uint>("DateTime", new uint[] { 1_700_000_000, 0 }, Array.Empty<uint>());
         yield return Arrays<long>("DateTime64(3)", new[] { 0L, 1_700_000_000_123L });
         yield return Arrays<long>("DateTime64(9)", new[] { 1_700_000_000_123_456_789L }, Array.Empty<long>());
+
+        // The dense shape built by a caller rather than received from a read: flat elements plus per-row offsets,
+        // which is what the codec writes with no rebuilding. Same rows as the jagged Array(UInt32) case above.
+        yield return DenseArrays("UInt32", new uint[] { 10, 20, 30, 40, 50 }, new[] { 0, 3, 3, 5 });
 
         yield return Arrays("UUID", new[] { Guid.Empty }, new[] { new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff") });
         yield return Arrays<IPAddress>("IPv4", new[] { IPAddress.Parse("0.0.0.0"), IPAddress.Parse("255.255.255.255") }, Array.Empty<IPAddress>());
@@ -1595,6 +1613,24 @@ public sealed class InsertRoundTripCase
         return Same($"{type} [{rows.Length} rows]", type, name => new ArrayColumn<T[]>(name, type, rows), settings);
     }
 
+    // Inserted from the dense shape (flat elements + offsets), read back as the rows those offsets describe.
+    private static InsertRoundTripCase DenseArrays<T>(string innerType, T[] elements, int[] offsets)
+    {
+        string type = $"Array({innerType})";
+        var rows = new T[offsets.Length - 1][];
+        for (int row = 0; row < rows.Length; row++)
+        {
+            rows[row] = elements[offsets[row]..offsets[row + 1]];
+        }
+
+        return new InsertRoundTripCase(
+            $"{type} dense [{rows.Length} rows]",
+            type,
+            name => ClickHouseTcpColumn.CreateArray(name, ClickHouseTcpColumn.Create(name, elements), offsets),
+            name => new ArrayColumn<T[]>(name, type, rows),
+            settings: null);
+    }
+
     private static InsertRoundTripCase NullableValues<T>(string innerType, params T?[] values)
         where T : struct
         => NullableValues(innerType, settings: null, values);
@@ -1633,6 +1669,24 @@ public sealed class InsertRoundTripCase
 
     private static InsertRoundTripCase NullableStrings(params string[] values)
         => Same($"Nullable(String) [{values.Length} rows]", "Nullable(String)", name => new ArrayColumn<string>(name, "Nullable(String)", values));
+
+    // Written from the bytes, read back as the text they spell.
+    private static InsertRoundTripCase StringBytes(byte[][] rows, params string[] expected)
+        => new(
+            $"String from bytes [{rows.Length} rows]",
+            "String",
+            name => new ArrayColumn<byte[]>(name, "String", rows),
+            name => new ArrayColumn<string>(name, "String", expected),
+            settings: null);
+
+    // As above, and a null row is a NULL rather than a rejected value, because the wrapper carries the nulls.
+    private static InsertRoundTripCase NullableStringBytes(byte[][] rows, params string[] expected)
+        => new(
+            $"Nullable(String) from bytes [{rows.Length} rows]",
+            "Nullable(String)",
+            name => new ArrayColumn<byte[]>(name, "Nullable(String)", rows),
+            name => new ArrayColumn<string>(name, "Nullable(String)", expected),
+            settings: null);
 
     // JSON is inserted and read back as its compact text, so the column is an ArrayColumn<string> like String's.
     // Values must already be canonical for insert to equal read-back; see the normalization case.
@@ -1700,6 +1754,40 @@ public sealed class InsertRoundTripCase
     // returned verbatim regardless of the timezone the server presents.
     private static InsertRoundTripCase DateTime64s(string clickHouseType, params long[] counts)
         => Same($"{clickHouseType} [{counts.Length} rows]", clickHouseType, name => new ArrayColumn<long>(name, clickHouseType, counts));
+
+    // An enum written from its labels reads back as the ordinals they are declared with, so the two columns differ.
+    private static InsertRoundTripCase EnumLabels<T>(string clickHouseType, T[] ordinals, params string[] labels)
+        => new(
+            $"{clickHouseType} from labels [{labels.Length} rows]",
+            clickHouseType,
+            name => new ArrayColumn<string>(name, clickHouseType, labels),
+            name => new ArrayColumn<T>(name, clickHouseType, ordinals),
+            settings: null);
+
+    // As above, wrapped: a null label is a NULL row, whose hidden inner value is the codec's placeholder label.
+    private static InsertRoundTripCase NullableEnumLabels<T>(string innerType, T?[] ordinals, params string[] labels)
+        where T : struct
+    {
+        string type = $"Nullable({innerType})";
+        return new InsertRoundTripCase(
+            $"{type} from labels [{labels.Length} rows]",
+            type,
+            name => new ArrayColumn<string>(name, type, labels),
+            name => new ArrayColumn<T?>(name, type, ordinals),
+            settings: null);
+    }
+
+    // As above, one row per array of labels: the array path flattens them before the enum converts each one.
+    private static InsertRoundTripCase ArrayEnumLabels<T>(string innerType, T[][] ordinals, params string[][] labels)
+    {
+        string type = $"Array({innerType})";
+        return new InsertRoundTripCase(
+            $"{type} from labels [{labels.Length} rows]",
+            type,
+            name => new ArrayColumn<string[]>(name, type, labels),
+            name => new ArrayColumn<T[]>(name, type, ordinals),
+            settings: null);
+    }
 
     private static InsertRoundTripCase Uuids(string clickHouseType, params Guid[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<Guid>(name, clickHouseType, values));

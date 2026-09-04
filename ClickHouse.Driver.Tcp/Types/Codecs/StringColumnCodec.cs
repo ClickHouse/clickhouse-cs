@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -17,6 +18,11 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     /// <summary>The shared, stateless instance.</summary>
     public static readonly StringColumnCodec Instance = new();
 
+    private static readonly Func<IColumn, int, byte[]> ReadRowBytes = RowBytes;
+
+    private static readonly ColumnReadProjection ProjectBytes =
+        static source => new ProjectedReadColumn<byte[]>(source, ReadRowBytes);
+
     // A modest starting guess for the blob (16 bytes/row), clamped, that grows on demand as rows are read.
     private const int MinInitialBlobBytes = 256;
     private const int MaxInitialBlobBytes = 1 << 20;
@@ -33,6 +39,63 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
 
     /// <inheritdoc/>
     public object NullPlaceholder => string.Empty;
+
+    /// <summary>
+    /// A <c>String</c> is a byte string, so a column of <c>byte[]</c> rows writes as well as a column of text, and
+    /// stores those bytes verbatim. That is the only way to store bytes UTF-8 cannot spell, and the counterpart of
+    /// reading them back through <see cref="IStringColumn"/>.
+    /// </summary>
+    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
+
+    /// <summary>
+    /// A <c>byte[]</c> per row is a reading as well as the text, and the only lossless one. Diagnostics only;
+    /// <see cref="TryProjectColumnRead"/> is the authority.
+    /// </summary>
+    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
+
+    /// <inheritdoc/>
+    // Raw bytes have no lossless spelling as a string, so they cannot go through the canonical form. That refuses
+    // LowCardinality(String) from a byte column up front instead of faulting once the write is under way; giving
+    // it a byte-oriented canonical form would make every LowCardinality(String) dictionary encode its text first.
+    public bool CanCanonicalizeWriteType(Type writeType) => writeType == typeof(string);
+
+    /// <inheritdoc/>
+    public object NullPlaceholderAs(Type writeType)
+    {
+        if (writeType == typeof(string))
+        {
+            return NullPlaceholder;
+        }
+
+        return writeType == typeof(byte[])
+            ? Array.Empty<byte>()
+            : throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+    }
+
+    /// <summary>
+    /// The bytes are read off the column, not projected from its text: the text reading spells a byte UTF-8 cannot
+    /// express as U+FFFD, so re-encoding it would hand back the replacement character rather than the data.
+    /// </summary>
+    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
+    {
+        projection = targetType == typeof(byte[]) ? ProjectBytes : null;
+        return projection is not null;
+    }
+
+    /// <summary>One row's bytes, copied out of the column's blob into an array the caller owns.</summary>
+    /// <param name="column">The decoded column, which must expose its bytes.</param>
+    /// <param name="row">The zero-based row index.</param>
+    /// <returns>That row's bytes.</returns>
+    /// <exception cref="InvalidOperationException"><paramref name="column"/> does not expose its bytes.</exception>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="row"/> is negative or not less than the row count.</exception>
+    // The type test is per row rather than once, which an isinst beside a byte[] allocation does not measurably
+    // cost. Every column this codec decodes exposes the bytes; a column built by a caller and labelled String
+    // need not, and would otherwise fail with a bare cast error naming neither the column nor the reading.
+    public static byte[] RowBytes(IColumn column, int row) => column is IStringColumn text
+        ? text.GetBytes(row).ToArray()
+        : throw new InvalidOperationException(
+            $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which does not expose the wire bytes through IStringColumn, " +
+            $"so its values cannot be read as a byte[]. Only a String column decoded from a server response does.");
 
     /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -87,13 +150,45 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<string>;
+    public bool CanWrite(IColumn column) => column is IColumn<string> or IColumn<byte[]>;
 
     /// <inheritdoc/>
     // Read per element through the indexer so a scattered write-path view (a substitute for a nullable string, a
-    // Tuple field) writes with no materialized copy; a dense StringColumn decodes each row on demand just the same.
+    // Tuple field) writes with no materialized copy.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
+        // A column this client decoded still holds the bytes the wire carried, so re-emit those rather than the
+        // UTF-8 of its decoded text: a byte string UTF-8 cannot spell decodes to U+FFFD, and re-encoding that would
+        // store the replacement character instead of the original bytes.
+        if (column is StringColumn decoded)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                writer.WriteString(decoded.GetBytes(start + i));
+            }
+
+            return;
+        }
+
+        if (column is IColumn<byte[]> rawBytes)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                int row = start + i;
+                byte[] value = rawBytes[row];
+                if (value is null)
+                {
+                    throw new ArgumentException(
+                        $"A {TypeName} column cannot hold a null value (at row {row}); wrap the type in Nullable to write nulls.",
+                        nameof(column));
+                }
+
+                writer.WriteString(value);
+            }
+
+            return;
+        }
+
         var typed = (IColumn<string>)column;
         for (int i = 0; i < length; i++)
         {

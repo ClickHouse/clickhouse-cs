@@ -106,14 +106,173 @@ public class StringColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_AcceptsStringColumn_RejectsOthers()
+    public void CanWrite_AcceptsStringOrByteColumn_RejectsOthers()
     {
+        IColumnCodec codec = StringColumnCodec.Instance;
+
         Assert.Multiple(() =>
         {
-            Assert.That(StringColumnCodec.Instance.CanWrite(new ArrayColumn<string>("c", "String", new[] { "x" })), Is.True);
-            Assert.That(StringColumnCodec.Instance.CanWrite(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.False);
+            Assert.That(codec.CanWrite(new ArrayColumn<string>("c", "String", new[] { "x" })), Is.True);
+            Assert.That(codec.CanWrite(new ArrayColumn<byte[]>("c", "String", new[] { new byte[] { 1 } })), Is.True);
+            Assert.That(codec.CanWrite(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.False);
+            Assert.That(codec.CanWriteElementType(typeof(byte[])), Is.True);
+            Assert.That(codec.NullPlaceholderAs(typeof(byte[])), Is.EqualTo(Array.Empty<byte>()));
+            Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(int)));
         });
     }
+
+    /// <summary>
+    /// Bytes are a write shape String takes directly, but not one it can express as its canonical <c>string</c>,
+    /// which is what <c>LowCardinality</c> deduplicates. Saying so here is what makes that combination refuse
+    /// before the write rather than fault once the body is under way — the codec accepts the type, the wrapper
+    /// does not.
+    /// </summary>
+    [Test]
+    public void CanCanonicalizeWriteType_Bytes_IsRefusedEvenThoughTheyCanBeWritten()
+    {
+        IColumnCodec codec = StringColumnCodec.Instance;
+        IColumnCodec lowCardinality = ColumnCodecRegistry.Default.Resolve("LowCardinality(String)", ResolveContext.ForWrite);
+        IColumnCodec nullableLowCardinality = ColumnCodecRegistry.Default.Resolve("LowCardinality(Nullable(String))", ResolveContext.ForWrite);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWriteElementType(typeof(byte[])), Is.True);
+            Assert.That(codec.CanCanonicalizeWriteType(typeof(byte[])), Is.False);
+            Assert.That(codec.CanCanonicalizeWriteType(typeof(string)), Is.True);
+
+            Assert.That(lowCardinality.CanWriteElementType(typeof(string)), Is.True, "text still goes through");
+            Assert.That(lowCardinality.CanWriteElementType(typeof(byte[])), Is.False);
+            Assert.That(lowCardinality.CanWrite(new ArrayColumn<byte[]>("c", null, new[] { new byte[] { 0xFF } })), Is.False);
+            Assert.That(nullableLowCardinality.CanWriteElementType(typeof(byte[])), Is.False);
+            Assert.Throws<NotSupportedException>(() => lowCardinality.NullPlaceholderAs(typeof(byte[])));
+        });
+    }
+
+    /// <summary>
+    /// The layout <see cref="IStringColumn"/> exposes has to be sliced to the rows, not to the pooled buffers the
+    /// read path rents — a blob is normally longer than the data, and an offsets array longer than the row count.
+    /// </summary>
+    [Test]
+    public async Task ReadColumn_TheBlobAndOffsets_AreSlicedToTheRowsRatherThanThePooledBuffers()
+    {
+        var values = new[] { "a", string.Empty, "bcd" };
+        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<string>("c", "String", values)));
+        using var reader = ReaderOver(bytes);
+        using var column = (IStringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", values.Length, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column.Offsets.ToArray(), Is.EqualTo(new[] { 0, 1, 1, 4 }), "one entry per row plus the leading 0");
+            Assert.That(column.Bytes.ToArray(), Is.EqualTo(new byte[] { (byte)'a', (byte)'b', (byte)'c', (byte)'d' }));
+            Assert.That(column.Bytes.Length, Is.EqualTo(column.Offsets[column.RowCount]));
+            Assert.That(column.GetBytes(1).Length, Is.EqualTo(0), "an empty row is two equal offsets");
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_ByteColumn_StoresTheBytesVerbatim()
+    {
+        // The bytes are not text, so a null row is refused rather than written as anything, and 0xFF 0xFE goes out
+        // as itself: routing it through the string surface would spell it U+FFFD U+FFFD instead.
+        var rows = new[] { new byte[] { 0x41 }, new byte[] { 0xFF, 0xFE }, Array.Empty<byte>() };
+
+        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<byte[]>("c", "String", rows)));
+        using var reader = ReaderOver(bytes);
+        using var column = (IStringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", rows.Length, None);
+
+        var withNull = new ArrayColumn<byte[]>("c", "String", new[] { new byte[] { 0x41 }, null });
+        ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(
+            () => WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, withNull)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bytes, Is.EqualTo(new byte[] { 0x01, 0x41, 0x02, 0xFF, 0xFE, 0x00 }), "each row is a VarUInt length then its bytes");
+            Assert.That(column.GetBytes(1).ToArray(), Is.EqualTo(new byte[] { 0xFF, 0xFE }));
+            Assert.That(thrown.Message, Does.Contain("null value (at row 1)"));
+        });
+    }
+
+    /// <summary>
+    /// Re-emitting a column this client decoded must write the bytes it read, not the UTF-8 of the text they
+    /// decoded to. Otherwise a read followed by an insert — which every dense re-insert does — replaces any byte
+    /// UTF-8 cannot spell with U+FFFD, and the row that comes back is not the row that went in.
+    /// </summary>
+    [Test]
+    public async Task WriteColumn_DecodedColumnWithNonUtf8Bytes_ReEmitsTheSameBytes()
+    {
+        byte[] wire = { 0x02, 0xFF, 0xFE };
+        using var reader = ReaderOver(wire);
+        using var decoded = (IStringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", 1, None);
+
+        byte[] reEmitted = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, decoded));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reEmitted, Is.EqualTo(wire));
+            Assert.That(decoded[0], Is.EqualTo("��"), "which is what the text surface makes of those bytes");
+        });
+    }
+
+    /// <summary>
+    /// The byte reading is taken off the column's storage, so it survives what the text reading cannot. Asserted
+    /// against a decoded column rather than a round-trip because the point is which of the column's two forms the
+    /// projection read: the text of this row is U+FFFD, and a projection from it would hand that back.
+    /// </summary>
+    [Test]
+    public async Task ReadAs_NonUtf8Column_ReadsTheBytesRatherThanTheDamagedText()
+    {
+        // Two rows: 'A', 0xFF, 'B', then an empty one.
+        byte[] wire = { 0x03, 0x41, 0xFF, 0x42, 0x00 };
+        using var reader = ReaderOver(wire);
+        using IColumn column = await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", 2, None);
+
+        IColumn<byte[]> bytes = ReadAs<byte[]>(column);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bytes, Is.Not.SameAs(column), "byte[] is not the column's own element type, so this is a converting view");
+            Assert.That(bytes[0], Is.EqualTo(new byte[] { 0x41, 0xFF, 0x42 }));
+            Assert.That(bytes[1], Is.EqualTo(Array.Empty<byte>()));
+            Assert.That(bytes.Values.ToArray(), Is.EqualTo(new[] { new byte[] { 0x41, 0xFF, 0x42 }, Array.Empty<byte>() }));
+            Assert.That(((IColumn<string>)column)[0], Is.EqualTo("A\uFFFDB"), "the reading the bytes exist to avoid");
+            Assert.Throws<IndexOutOfRangeException>(() => _ = bytes[2]);
+        });
+    }
+
+    [Test]
+    public async Task ReadAs_ZeroRowColumn_ReadsAsAnEmptyByteColumn()
+    {
+        using var reader = ReaderOver(Array.Empty<byte>());
+        using IColumn column = await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", 0, None);
+
+        IColumn<byte[]> bytes = ReadAs<byte[]>(column);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bytes.RowCount, Is.EqualTo(0));
+            Assert.That(bytes.Values.Length, Is.EqualTo(0));
+            Assert.Throws<IndexOutOfRangeException>(() => _ = bytes[0]);
+        });
+    }
+
+    /// <summary>
+    /// The reading needs the column's own byte storage, which only a decoded <c>String</c> column has. A column a
+    /// caller built and labelled <c>String</c> has text and nothing else, so it is told so by name rather than
+    /// failing with a bare cast error. Not reachable through a query, whose columns this codec decodes.
+    /// </summary>
+    [Test]
+    public void ReadAs_StringColumnWithoutByteStorage_SaysWhichColumnHasNoBytes()
+    {
+        var text = new ArrayColumn<string>("c", "String", new[] { "a" });
+
+        IColumn<byte[]> bytes = ReadAs<byte[]>(text);
+        var thrown = Assert.Throws<InvalidOperationException>(() => _ = bytes[0]);
+
+        Assert.That(thrown.Message, Does.Contain("Column 'c' (String)").And.Contain("IStringColumn"));
+    }
+
+    private static IColumn<T> ReadAs<T>(IColumn column)
+        => ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, new ResolveContext { ServerTimezone = "UTC" });
 
     private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)
     {
