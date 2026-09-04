@@ -55,6 +55,12 @@ public class ComparisonConfig : ManualConfig
             SummaryStyle = SummaryStyle.Default
                 .WithRatioStyle(RatioStyle.Percentage);
 
+            // Group each method's two jobs together, so the ratio reads pr-against-baseline for that
+            // method. Without this a class carrying [Benchmark(Baseline = true)] makes that one method
+            // the baseline for the whole table, and every other row's ratio mixes the transport change
+            // with the method difference — unreadable as a regression signal.
+            AddLogicalGroupRules(BenchmarkLogicalGroupRule.ByMethod);
+
             HideColumns(Column.Arguments);
             AddColumn(StatisticColumn.P95);
         }
@@ -63,6 +69,9 @@ public class ComparisonConfig : ManualConfig
         {
             AddJob(job.WithId("current"));
         }
+
+        // The CI runs filter on categories, so the report has to say which ones it covered.
+        AddColumn(CategoriesColumn.Default);
     }
 
     // Reads a non-negative integer from an env var, falling back to the default when unset/invalid.

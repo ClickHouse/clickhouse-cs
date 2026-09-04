@@ -11,6 +11,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// <see cref="SensorReading"/> instance per row, isolating the per-row materialization overhead
 /// from any disk/network dependency on a user-created table.
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.HttpRegression)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class PocoReadBenchmark
@@ -44,7 +45,7 @@ public class PocoReadBenchmark
         client?.Dispose();
     }
 
-    [Benchmark(Baseline = true)]
+    [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
     public async Task<long> ManualGetValue()
     {
         long count = 0;

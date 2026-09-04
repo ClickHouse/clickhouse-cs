@@ -112,16 +112,45 @@ ClickHouse.Driver.Tests/coverage.net9.0.opencover.xml
 
 ### Running benchmarks
 
-Benchmarks use BenchmarkDotNet and require a running ClickHouse instance:
+Benchmarks use BenchmarkDotNet and require a running ClickHouse instance. `CLICKHOUSE_CONNECTION`
+carries the HTTP connection string. `CLICKHOUSE_TCP_CONNECTION_STRING` carries the native one; with
+it unset, the native endpoint is derived from the HTTP string on port 9000.
 
 ```bash
 dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
-  --framework net9.0 \
   --configuration Release \
-  -- --join --filter "*" --artifacts ./results --job Short
+  -- --join --filter "*" --artifacts ./results
 ```
 
 Results will be saved in the `results/` directory.
+
+Every benchmark class carries a category, and the CI runs select on them:
+
+| Category | Covers |
+| --- | --- |
+| `http-regression` | HTTP throughput and allocation |
+| `tcp-regression` | Native protocol throughput and allocation |
+| `cross` | The same workload over both transports |
+| `http-investigation`, `tcp-investigation` | One issue or one past optimization |
+| `compression` | Codecs and framing, shared by both transports |
+
+```bash
+dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
+  --configuration Release \
+  -- --join --filter "*" --anyCategories tcp-regression cross --artifacts ./results
+```
+
+A pull request runs the categories its changed files select, in
+`.github/workflows/benchmark-compare.yml`. The nightly build runs all of them.
+
+The full iteration counts take hours. For a quick local pass, `BENCH_WARMUP`, `BENCH_ITERATIONS` and
+`BENCH_LAUNCHES` override them:
+
+```bash
+BENCH_WARMUP=1 BENCH_ITERATIONS=5 BENCH_LAUNCHES=1 \
+  dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
+  --configuration Release -- --join --filter "*TcpReadTiers*" --artifacts ./results
+```
 
 ### Testing against different ClickHouse versions
 

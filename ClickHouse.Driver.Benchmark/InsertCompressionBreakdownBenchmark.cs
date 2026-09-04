@@ -41,6 +41,7 @@ namespace ClickHouse.Driver.Benchmark;
 ///
 /// Run against both endpoints via CLICKHOUSE_CONNECTION; the payload sizes are printed at setup.
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.Compression)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class InsertCompressionBreakdownBenchmark
