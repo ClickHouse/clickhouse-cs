@@ -25,7 +25,7 @@ public class ServerPacketDecoderTests
         });
         using var reader = ReaderOver(bytes);
 
-        Progress progress = await Progress.ReadAsync(reader, new NegotiatedProtocol(NegotiatedProtocol.ClientTcpProtocolVersion), None);
+        ClickHouseTcpProgress progress = await ClickHouseTcpProgress.ReadAsync(reader, new NegotiatedProtocol(NegotiatedProtocol.ClientTcpProtocolVersion), None);
 
         Assert.Multiple(() =>
         {
@@ -50,7 +50,7 @@ public class ServerPacketDecoderTests
         using var reader = ReaderOver(bytes);
 
         // A server negotiating below 54420 sends no wrote_rows/wrote_bytes/elapsed_ns.
-        Progress progress = await Progress.ReadAsync(reader, new NegotiatedProtocol(54419), None);
+        ClickHouseTcpProgress progress = await ClickHouseTcpProgress.ReadAsync(reader, new NegotiatedProtocol(54419), None);
 
         Assert.Multiple(() =>
         {
@@ -74,7 +74,7 @@ public class ServerPacketDecoderTests
         });
         using var reader = ReaderOver(bytes);
 
-        ProfileInfo info = await ProfileInfo.ReadAsync(reader, None);
+        ClickHouseTcpProfileInfo info = await ClickHouseTcpProfileInfo.ReadAsync(reader, None);
 
         Assert.Multiple(() =>
         {
