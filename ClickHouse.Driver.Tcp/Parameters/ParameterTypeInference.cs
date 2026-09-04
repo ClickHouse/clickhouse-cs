@@ -44,7 +44,7 @@ internal static class ParameterTypeInference
             case decimal d: return $"Decimal128({(decimal.GetBits(d)[3] >> 16) & 0x7F})";
             case ClickHouseDecimal chd: return $"Decimal128({chd.Scale})";
 
-            case string or char or byte[]: return "String";
+            case string or char or byte[] or ReadOnlyMemory<byte>: return "String";
             case Guid: return "UUID";
             case DateOnly: return "Date";
             case TimeSpan: return "Time64(9)";
@@ -128,7 +128,8 @@ internal static class ParameterTypeInference
         string inferred = value switch
         {
             // The Array case above already took a byte[] an element type accepts, so only the text arms remain.
-            byte[] => node.Name is "String" or "FixedString" ? node.Name : "String",
+            // A ReadOnlyMemory is not IEnumerable, so it never reaches that case and only the text arms format it.
+            byte[] or ReadOnlyMemory<byte> => node.Name is "String" or "FixedString" ? node.Name : "String",
 
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
             string or char => node.Name is "String" or "FixedString" or "Enum8" or "Enum16" ? node.Name : "String",
