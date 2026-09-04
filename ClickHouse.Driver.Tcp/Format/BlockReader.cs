@@ -28,6 +28,33 @@ internal static class BlockReader
         CancellationToken cancellationToken)
     {
         string name = await reader.ReadStringAsync(cancellationToken).ConfigureAwait(false);
+        return await ReadBodyAsync(reader, name, negotiated, registry, context, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads a block whose name has already been consumed, starting at the block info.
+    /// <para>
+    /// The split exists because the name belongs to the packet envelope rather than to the block: with
+    /// compression on, the name arrives uncompressed and everything from here on arrives in frames, so the
+    /// caller reads the name from the raw reader and passes a plaintext reader here.
+    /// </para>
+    /// </summary>
+    /// <param name="reader">The reader positioned at the block info, plaintext if the body is framed.</param>
+    /// <param name="name">The block name the caller already read.</param>
+    /// <param name="negotiated">The negotiated protocol, for version-gated header fields.</param>
+    /// <param name="registry">The registry that resolves each column's type string to a codec.</param>
+    /// <param name="context">The resolution context (e.g. the server timezone) passed to each column's codec factory.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The decoded block.</returns>
+    /// <exception cref="ClickHouseProtocolException">A column uses unsupported custom serialization, or a count is implausible.</exception>
+    public static async ValueTask<Block> ReadBodyAsync(
+        ClickHouseBinaryReader reader,
+        string name,
+        NegotiatedProtocol negotiated,
+        ColumnCodecRegistry registry,
+        ResolveContext context,
+        CancellationToken cancellationToken)
+    {
         BlockInfo info = await ReadBlockInfoAsync(reader, cancellationToken).ConfigureAwait(false);
 
         int columnCount = ToColumnCount(await reader.ReadVarUIntAsync(cancellationToken).ConfigureAwait(false));
