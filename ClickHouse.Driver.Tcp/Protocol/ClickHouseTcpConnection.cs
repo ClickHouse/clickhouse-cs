@@ -1003,8 +1003,18 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         Block block = await BlockReader.ReadBodyAsync(frameReader.Reader, name, negotiated, ColumnCodecRegistry.Default, context, cancellationToken).ConfigureAwait(false);
 
         // A block end coincides with a frame boundary, so anything left decoded means the peer and the column
-        // decoders disagree about the body's length.
-        frameReader.EndBlock();
+        // decoders disagree about the body's length. The block is never handed out when that check fails, so
+        // return its pooled buffers here.
+        try
+        {
+            frameReader.EndBlock();
+        }
+        catch
+        {
+            block.Dispose();
+            throw;
+        }
+
         return block;
     }
 
