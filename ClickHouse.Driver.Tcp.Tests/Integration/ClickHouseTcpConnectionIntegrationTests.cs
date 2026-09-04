@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpConnectionIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -62,10 +64,12 @@ public class ClickHouseTcpConnectionIntegrationTests
     [Test]
     public void ConnectAsync_ToUnreachablePort_ThrowsTransportExceptionNamingTheEndpointAndKeepingTheSocketError()
     {
-        // Port 1 is reserved and never accepts native-protocol connections.
+        // Loopback rather than the server host, and nothing binds port 1 on either. A closed loopback port is
+        // refused at once; a Cloud endpoint drops the packet, leaving the connect on the OS timeout for minutes.
+        // What is under test is the client's own behaviour, which does not depend on which server it dials.
         var thrown = Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () =>
             await ClickHouseTcpConnection.ConnectAsync(
-                TcpServerFixture.Host,
+                IPAddress.Loopback.ToString(),
                 1,
                 new ClientHandshakeParameters { Username = "default" },
                 tls: null,
@@ -73,7 +77,7 @@ public class ClickHouseTcpConnectionIntegrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(thrown.Message, Does.Contain($"{TcpServerFixture.Host}:1"));
+            Assert.That(thrown.Message, Does.Contain($"{IPAddress.Loopback}:1"));
             Assert.That(thrown.InnerException, Is.InstanceOf<SocketException>());
         });
     }

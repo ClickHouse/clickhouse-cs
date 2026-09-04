@@ -25,6 +25,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ColumnarReadSurfaceIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;

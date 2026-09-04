@@ -15,6 +15,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // the await foreach, never retaining the block.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpClientQueryIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;

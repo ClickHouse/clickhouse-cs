@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
+using ClickHouse.Driver.Tcp.Tests.Integration;
 
 namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 
@@ -27,6 +28,26 @@ internal static class QueryLog
     /// <summary>Number of flush-and-read attempts before giving up.</summary>
     internal const int MaxAttempts = 40;
 
+    /// <summary>
+    /// Ignores the calling test where <c>system.query_log</c> cannot answer for the query under test. On a
+    /// multi-replica service the table is local to each replica, and both the flush and the lookup go over
+    /// whichever connection the pool hands out, so the record is written on one replica and looked for on
+    /// another. Retrying cannot fix that, and a read that finds nothing is indistinguishable from a query that
+    /// never ran.
+    /// </summary>
+    /// <remarks>
+    /// Reading through <c>clusterAllReplicas</c>, with a flush on every replica, would make these assertions
+    /// work on Cloud. It is not done here because the flush would have to reach every replica too, and the
+    /// column one caller wants (<c>port</c>) means something different behind a load balancer.
+    /// </remarks>
+    private static void SkipWhereTheLogIsNotSharedAcrossReplicas()
+    {
+        if (TcpServerFixture.IsCloud)
+        {
+            Assert.Ignore("system.query_log is local to each replica on a Cloud service, so it cannot confirm a query that ran on another.");
+        }
+    }
+
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
@@ -42,6 +63,8 @@ internal static class QueryLog
     /// <returns>The value read once the row became visible.</returns>
     internal static async Task<object> ScalarAsync(ClickHouseTcpClient client, string sql)
     {
+        SkipWhereTheLogIsNotSharedAcrossReplicas();
+
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             await client.ExecuteAsync("SYSTEM FLUSH LOGS query_log", cancellationToken: CancellationToken.None);

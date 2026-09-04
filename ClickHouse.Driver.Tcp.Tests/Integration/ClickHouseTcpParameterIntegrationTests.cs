@@ -14,6 +14,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // Live-server coverage for the two parsing stages native parameter values cross.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpParameterIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
