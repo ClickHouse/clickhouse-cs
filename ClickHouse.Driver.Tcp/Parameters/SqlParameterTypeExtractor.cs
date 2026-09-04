@@ -4,11 +4,11 @@ using System.Collections.Generic;
 namespace ClickHouse.Driver.Tcp.Parameters;
 
 /// <summary>
-/// Extracts ClickHouse-native <c>{name:Type}</c> hints while ignoring SQL strings and comments.
+/// Extracts ClickHouse-native <c>{name:Type}</c> hints while ignoring SQL strings, quoted identifiers,
+/// heredocs and comments.
 /// </summary>
 /// <remarks>
-/// Ported from the HTTP scanner because the TCP assembly cannot reference it. Keep shared behavior aligned;
-/// this copy additionally handles backslash-escaped quotes.
+/// Ported from the HTTP scanner because the TCP assembly cannot reference it. Keep the two aligned.
 /// </remarks>
 internal static class SqlParameterTypeExtractor
 {
@@ -28,55 +28,39 @@ internal static class SqlParameterTypeExtractor
         }
 
         int i = 0;
-        bool inSqlString = false;
 
         while (i < sql.Length)
         {
             char c = sql[i];
 
-            if (inSqlString)
+            if (c is '\'' or '`' or '"')
             {
-                // A backslash escapes the next character, including a quote.
-                if (c == '\\' && i + 1 < sql.Length)
-                {
-                    i += 2;
-                    continue;
-                }
-
-                // An escaped quote ('') stays inside the string.
-                if (c == '\'' && i + 1 < sql.Length && sql[i + 1] == '\'')
-                {
-                    i += 2;
-                    continue;
-                }
-
-                if (c == '\'')
-                {
-                    inSqlString = false;
-                }
-
-                i++;
-                continue;
+                // String literal or quoted identifier.
+                i = SkipQuotedToken(sql, i);
             }
-
-            if (c == '\'')
+            else if (c == '$' && TrySkipHeredoc(sql, i, out int afterHeredoc))
             {
-                inSqlString = true;
-                i++;
+                // Heredoc: $tag$ ... $tag$.
+                i = afterHeredoc;
             }
             else if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
             {
                 // SQL-style line comment: -- (skip to end of line).
                 i = SkipToEndOfLine(sql, i + 2);
             }
-            else if (c == '#')
+            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '/')
             {
-                // SQL-style line comment: # or #! (skip to end of line).
-                i = SkipToEndOfLine(sql, i + 1);
+                // C++-style line comment: // (skip to end of line).
+                i = SkipToEndOfLine(sql, i + 2);
+            }
+            else if (c == '#' && i + 1 < sql.Length && (sql[i + 1] == ' ' || sql[i + 1] == '!'))
+            {
+                // MySQL-style line comment: only "# " and "#!" start one, a bare "#x" does not.
+                i = SkipToEndOfLine(sql, i + 2);
             }
             else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
             {
-                // C-style block comment: /* ... */ (skip to the closing */).
+                // C-style block comment: /* ... */, nestable (skip to the matching */).
                 i = SkipBlockComment(sql, i + 2);
             }
             else if (c == '{')
@@ -118,15 +102,43 @@ internal static class SqlParameterTypeExtractor
             return (null, null, 0);
         }
 
-        // The colon separates the name from the type.
-        int colonIndex = sql.IndexOf(':', startIndex + 1);
+        // Find the colon that separates name from type, searching only within this parameter's own
+        // name: it must be a single run of parameter name characters, optionally surrounded by
+        // whitespace. Otherwise a brace that is not a type hint, such as one inside a backtick-quoted
+        // alias, would consume the colon of a later parameter and silently drop its hint.
+        int colonIndex = -1;
+        int nameLength = 0;
+        bool afterName = false;
+
+        for (int j = startIndex + 1; j < sql.Length; j++)
+        {
+            char nameChar = sql[j];
+            if (nameChar == ':')
+            {
+                colonIndex = j;
+                break;
+            }
+
+            if (char.IsWhiteSpace(nameChar))
+            {
+                afterName = nameLength > 0;
+                continue;
+            }
+
+            if (afterName || !IsParameterNameChar(nameChar))
+            {
+                return (null, null, 0);
+            }
+
+            nameLength++;
+        }
+
         if (colonIndex < 0)
         {
             return (null, null, 0);
         }
 
-        int nameStart = startIndex + 1;
-        string paramName = sql[nameStart..colonIndex].Trim();
+        string paramName = sql[(startIndex + 1)..colonIndex].Trim();
         if (string.IsNullOrEmpty(paramName))
         {
             return (null, null, 0);
@@ -134,41 +146,21 @@ internal static class SqlParameterTypeExtractor
 
         int i = colonIndex + 1;
         int typeStart = i;
-        bool inQuote = false;
 
         while (i < sql.Length)
         {
             char c = sql[i];
 
-            if (inQuote)
+            if (c is '\'' or '`' or '"')
             {
-                // A backslash escapes the next character inside the type argument.
-                if (c == '\\' && i + 1 < sql.Length)
-                {
-                    i += 2;
-                    continue;
-                }
-
-                // An escaped quote ('') stays inside the string.
-                if (c == '\'' && i + 1 < sql.Length && sql[i + 1] == '\'')
-                {
-                    i += 2;
-                    continue;
-                }
-
-                if (c == '\'')
-                {
-                    inQuote = false;
-                }
-
-                i++;
-                continue;
+                // Quoted token within the type, e.g. an Enum value or a named tuple element.
+                i = SkipQuotedToken(sql, i);
             }
-
-            if (c == '\'')
+            else if (c == '{')
             {
-                inQuote = true;
-                i++;
+                // A type definition never contains an opening brace, so this parameter is
+                // unterminated and the brace starts a new one.
+                return (null, null, 0);
             }
             else if (c == '}')
             {
@@ -190,6 +182,16 @@ internal static class SqlParameterTypeExtractor
         return (null, null, 0);
     }
 
+    /// <summary>
+    /// Reports whether the character can appear in a ClickHouse query parameter name. The server parses
+    /// the name as a bare word, which is narrower than an identifier: a quoted identifier such as
+    /// <c>{`a`:Int32}</c> or <c>{"a":Int32}</c> is rejected as a syntax error. Only ASCII word characters and $.
+    /// </summary>
+    /// <param name="c">The character.</param>
+    /// <returns>True when the character can appear in a parameter name.</returns>
+    private static bool IsParameterNameChar(char c) =>
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
+
     /// <summary>Returns the index after the next newline, or the end of the SQL.</summary>
     /// <param name="sql">The SQL query.</param>
     /// <param name="startIndex">The index to scan from.</param>
@@ -200,13 +202,134 @@ internal static class SqlParameterTypeExtractor
         return newlineIndex < 0 ? sql.Length : newlineIndex + 1;
     }
 
-    /// <summary>Returns the index after the block comment, or the end of the SQL.</summary>
+    /// <summary>Skips a nestable C-style block comment, starting after the opening marker.</summary>
     /// <param name="sql">The SQL query.</param>
     /// <param name="startIndex">The index to scan from.</param>
-    /// <returns>The index after the closing marker.</returns>
+    /// <returns>The index after the matching closing marker, or the end of the SQL.</returns>
     private static int SkipBlockComment(string sql, int startIndex)
     {
-        int endIndex = sql.IndexOf("*/", startIndex, StringComparison.Ordinal);
-        return endIndex < 0 ? sql.Length : endIndex + 2;
+        int depth = 1;
+        int i = startIndex;
+
+        while (i + 1 < sql.Length)
+        {
+            if (sql[i] == '/' && sql[i + 1] == '*')
+            {
+                depth++;
+                i += 2;
+            }
+            else if (sql[i] == '*' && sql[i + 1] == '/')
+            {
+                i += 2;
+                if (--depth == 0)
+                {
+                    return i;
+                }
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        return sql.Length;
     }
+
+    /// <summary>
+    /// Skips a single-quoted string literal or a backtick/double-quote quoted identifier, starting at the
+    /// opening quote. Both doubling (<c>''</c>) and backslash (<c>\'</c>) escapes are honored.
+    /// </summary>
+    /// <param name="sql">The SQL query.</param>
+    /// <param name="startIndex">The index of the opening quote.</param>
+    /// <returns>The index after the closing quote, or the end of the SQL when unterminated.</returns>
+    private static int SkipQuotedToken(string sql, int startIndex)
+    {
+        char quote = sql[startIndex];
+        int i = startIndex + 1;
+
+        while (i < sql.Length)
+        {
+            char c = sql[i];
+
+            if (c == '\\')
+            {
+                i += 2;
+            }
+            else if (c == quote)
+            {
+                if (i + 1 < sql.Length && sql[i + 1] == quote)
+                {
+                    i += 2;
+                    continue;
+                }
+
+                return i + 1;
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        return sql.Length;
+    }
+
+    /// <summary>
+    /// Tries to skip a heredoc starting at a <c>$</c>: <c>$tag$ ... $tag$</c>, where the tag is empty or
+    /// ASCII word characters. Returns false when this <c>$</c> does not open a terminated heredoc, in which
+    /// case it is an ordinary character. A heredoc can only begin at a token boundary, see <see cref="IsTokenChar"/>.
+    /// </summary>
+    /// <param name="sql">The SQL query.</param>
+    /// <param name="startIndex">The index of the dollar sign.</param>
+    /// <param name="endIndex">The index after the closing tag.</param>
+    /// <returns>True when a terminated heredoc starts here.</returns>
+    private static bool TrySkipHeredoc(string sql, int startIndex, out int endIndex)
+    {
+        endIndex = 0;
+
+        // A $ that continues a token cannot open a heredoc: the server lexes b$c$ as one identifier.
+        if (startIndex > 0 && IsTokenChar(sql[startIndex - 1]))
+        {
+            return false;
+        }
+
+        int i = startIndex + 1;
+        while (i < sql.Length && IsHeredocTagChar(sql[i]))
+        {
+            i++;
+        }
+
+        if (i >= sql.Length || sql[i] != '$')
+        {
+            return false;
+        }
+
+        string tag = sql[startIndex..(i + 1)];
+        int closeIndex = sql.IndexOf(tag, i + 1, StringComparison.Ordinal);
+        if (closeIndex < 0)
+        {
+            return false;
+        }
+
+        endIndex = closeIndex + tag.Length;
+        return true;
+    }
+
+    /// <summary>Reports whether the character can appear in a heredoc tag.</summary>
+    /// <param name="c">The character.</param>
+    /// <returns>True when the character can appear in a heredoc tag.</returns>
+    private static bool IsHeredocTagChar(char c) =>
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+
+    /// <summary>
+    /// Reports whether the character can continue an ordinary token, so that a <c>$</c> following it is part
+    /// of that token rather than the start of a heredoc. The server lexes a word token as a run of ASCII word
+    /// characters and dollar signs, so <c>b$c$</c> is one identifier and not a heredoc opener. Looking only at
+    /// the preceding character misses the case where it ends a literal instead of a word, as in
+    /// <c>1$tag$...$tag$</c>, where the server does open a heredoc. That shape places two literals next to each
+    /// other, which the server rejects as a syntax error, so no query it accepts is affected.
+    /// </summary>
+    /// <param name="c">The character.</param>
+    /// <returns>True when a dollar sign after this character continues a token.</returns>
+    private static bool IsTokenChar(char c) => IsHeredocTagChar(c) || c == '$';
 }

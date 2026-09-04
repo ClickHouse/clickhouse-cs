@@ -125,6 +125,16 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("MultiPolygon", new[] { new[] { new[] { (0.0, 0.0), (1.0, 0.0), (1.0, 1.0) } } })
             .Returns("[[[(0,0),(1,0),(1,1)]]]").SetName("MultiPolygon");
 
+        // A geo alternative is matched by the shape its name stands for; the name alone fits no CLR value.
+        yield return new TestCaseData("Variant(Point, String)", (10.0, 20.0)).Returns("(10,20)")
+            .SetName("Variant holding a Point");
+        yield return new TestCaseData("Variant(Ring, String)", new[] { (0.0, 0.0), (1.0, 1.0) }).Returns("[(0,0),(1,1)]")
+            .SetName("Variant holding a Ring");
+
+        // Bytes reach the String arm from a ReadOnlyMemory as well, which used to print the CLR type name.
+        yield return new TestCaseData("String", new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("héllo"))).Returns("héllo")
+            .SetName("String from a ReadOnlyMemory of bytes");
+
         if (TcpServerFeatures.Has(TcpFeature.QBit))
         {
             yield return new TestCaseData("QBit(Float32, 4)", new[] { 1f, 2f, 3f, 4f }).Returns("[1,2,3,4]").SetName("QBit");
@@ -550,6 +560,30 @@ public class ClickHouseTcpParameterIntegrationTests
 
         Assert.ThrowsAsync<ClickHouseServerException>(
             async () => await ScalarAsync(client, "SELECT {p:Int32}", options));
+    }
+
+    // Each of these is a query the server runs, holding a brace the scanner must not read as a placeholder.
+    // Reaching past the brace for a colon took the hint of the parameter after it, and binding then failed
+    // on a query the server would have answered.
+    [TestCase("SELECT 1 AS \"col{x}\", {p:Int32}", TestName = "brace inside a double-quoted identifier")]
+    [TestCase("SELECT 1 AS `col{x}`, {p:Int32}", TestName = "brace inside a backtick-quoted identifier")]
+    [TestCase("SELECT $$ {x} $$ != '', {p:Int32}", TestName = "brace inside a heredoc")]
+    [TestCase("SELECT 1 // {x}\n, {p:Int32}", TestName = "brace inside a double-slash comment")]
+    public async Task QueryAsync_BraceThatIsNotAPlaceholder_StillBindsTheRealParameter(string sql)
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", 7 } },
+        };
+
+        object read = null;
+        await foreach (object[] row in client.QueryAsync(sql, options, None))
+        {
+            read = row[1];
+        }
+
+        Assert.That(read, Is.EqualTo(7));
     }
 
     private static async Task<object> ScalarAsync(ClickHouseTcpClient client, string sql, ClickHouseTcpQueryOptions options)

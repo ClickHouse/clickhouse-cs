@@ -300,6 +300,70 @@ public class TcpParameterFormatterEdgeCaseTests
     }
 
     [Test]
+    public void FormatSqlText_VariantHoldingAByteArray_ChecksTheArrayElementType()
+    {
+        // Matching an Array alternative by name alone let Array(String) take the bytes and print them as
+        // quoted decimals, which the server stores without complaint because it is a valid Array(String).
+        Assert.That(Format(new byte[] { 65, 66 }, "Variant(Array(String), Array(UInt8))"), Is.EqualTo("[65,66]"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantWithOnlyATextArrayAlternative_RejectsAByteArray()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format(new byte[] { 65 }, "Variant(Array(String), Int64)"));
+
+        Assert.That(exception.Message, Does.Contain("no alternative"));
+    }
+
+    // A geo name stands for a Tuple/Array shape, so matching it by name rejected every value even though the
+    // formatter writes that shape. Ring nests, which checks that the expansion recurses.
+    [TestCase("Variant(Point, String)", ExpectedResult = "(1.5,2.5)", TestName = "Variant holding a Point")]
+    [TestCase("Variant(String, Point)", ExpectedResult = "(1.5,2.5)", TestName = "Variant holding a Point declared last")]
+    public string FormatSqlText_VariantHoldingAPoint_PicksTheGeoAlternative(string typeName)
+        => Format((1.5, 2.5), typeName);
+
+    [Test]
+    public void FormatSqlText_VariantHoldingARing_PicksTheGeoAlternative()
+    {
+        Assert.That(Format(new[] { (1.0, 2.0), (3.0, 4.0) }, "Variant(Ring, String)"), Is.EqualTo("[(1,2),(3,4)]"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantHoldingAQBit_PicksTheQBitAlternative()
+    {
+        Assert.That(Format(new[] { 1f, 2f }, "Variant(QBit(Float32, 2), String)"), Is.EqualTo("[1,2]"));
+    }
+
+    [Test]
+    public void FormatSqlText_VariantWithAQBitOfAnotherElementType_RejectsTheValue()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format(new[] { 1f, 2f }, "Variant(QBit(Int8, 2), Int64)"));
+
+        Assert.That(exception.Message, Does.Contain("no alternative"));
+    }
+
+    [Test]
+    public void FormatSqlText_StringFromReadOnlyMemory_ReadsTheBytes()
+    {
+        // Only byte[] was read, so a ReadOnlyMemory<byte> printed the CLR type name instead of its contents.
+        ReadOnlyMemory<byte> memory = Encoding.UTF8.GetBytes("héllo");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format(memory, "String"), Is.EqualTo("héllo"));
+            Assert.That(Format(memory, "FixedString(8)"), Is.EqualTo("héllo"));
+        });
+    }
+
+    [Test]
+    public void FormatSqlText_ReadOnlyMemoryThatIsNotValidUtf8_UsesByteEscapes()
+    {
+        ReadOnlyMemory<byte> memory = new byte[] { 0xFF, 0xFE, 0x41 };
+
+        Assert.That(Format(memory, "String"), Is.EqualTo(@"\xff\xfe\x41"));
+    }
+
+    [Test]
     public void FormatSqlText_VariantHoldingAnUnmappableValue_NamesTheVariantNotAnInventedParameter()
     {
         // Report the declared Variant, not an internal placeholder used during matching.
