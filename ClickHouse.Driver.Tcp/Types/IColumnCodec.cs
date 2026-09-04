@@ -103,6 +103,30 @@ internal interface IColumnCodec
     object CanonicalWritePlaceholder => NullPlaceholder;
 
     /// <summary>
+    /// Whether <paramref name="value"/> belongs to this type rather than to a sibling that surfaces the same CLR
+    /// element type. Asked only to break a tie between <c>Variant</c> alternatives that collide on
+    /// <see cref="ElementType"/>, and only for a value whose type already reached this codec, so it is never on
+    /// the path of an unambiguous write.
+    ///
+    /// <para>
+    /// Exactly one alternative must claim the value for the tie to resolve; zero or several is a refusal. The
+    /// default therefore claims everything, which is the safe answer for a codec with no value-level test: it can
+    /// never win a tie on its own, so a genuine ambiguity (<c>Variant(JSON, String)</c> given a string) stays a
+    /// refusal rather than becoming a silent pick.
+    /// </para>
+    ///
+    /// <para>
+    /// This is narrower than <see cref="CanWrite"/>: a codec may decline a value here that its writer would
+    /// otherwise accept, because the question is which alternative the value <em>means</em>, not which one could
+    /// store it. <c>IPv6</c> writes an IPv4 address by mapping it, but declines it beside an <c>IPv4</c>
+    /// alternative that is the better home for it.
+    /// </para>
+    /// </summary>
+    /// <param name="value">The non-null value being placed, of this codec's element type.</param>
+    /// <returns>Whether this codec claims the value.</returns>
+    bool ClaimsValue(object value) => true;
+
+    /// <summary>
     /// Projects a writable column to <see cref="CanonicalWriteElementType"/>. Equal projected values must produce
     /// identical bytes through <see cref="WriteCanonicalColumn"/>. The returned column borrows the source and
     /// preserves its row indexes.
