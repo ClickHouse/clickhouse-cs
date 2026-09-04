@@ -27,7 +27,12 @@ public sealed class InsertRoundTripCase
     private readonly Func<string, IColumn> buildInsert;
     private readonly Func<string, IColumn> buildExpected;
 
-    private InsertRoundTripCase(string label, string clickHouseType, Func<string, IColumn> buildInsert, Func<string, IColumn> buildExpected, IReadOnlyDictionary<string, string> settings)
+    private InsertRoundTripCase(
+        string label,
+        string clickHouseType,
+        Func<string, IColumn> buildInsert,
+        Func<string, IColumn> buildExpected,
+        IReadOnlyDictionary<string, string> settings)
     {
         Label = label;
         ClickHouseType = clickHouseType;
@@ -1367,6 +1372,115 @@ public sealed class InsertRoundTripCase
             yield return Same("Geometry", "Geometry", name => BuildGeometryColumn(name));
         }
 
+        if (TcpServerFeatures.Has(TcpFeature.QBit))
+        {
+            yield return Same(
+                "QBit(Float32, 4)",
+                "QBit(Float32, 4)",
+                name => new ArrayColumn<float[]>(name, "QBit(Float32, 4)", new[]
+                {
+                    new[] { 1f, 2f, 3f, 4f },
+                    new[] { 0f, -0f, float.MaxValue, float.MinValue },
+                    new[] { float.Epsilon, float.PositiveInfinity, float.NegativeInfinity, float.NaN },
+                }));
+
+            yield return Same(
+                "QBit(Float64, 3)",
+                "QBit(Float64, 3)",
+                name => new ArrayColumn<double[]>(name, "QBit(Float64, 3)", new[]
+                {
+                    new[] { 1d, -2d, 3.5d },
+                    new[] { double.MaxValue, double.MinValue, double.Epsilon },
+                    new[] { 0d, -0d, double.NaN },
+                }));
+
+            yield return Same(
+                "QBit(Float32, 17)",
+                "QBit(Float32, 17)",
+                name => new ArrayColumn<float[]>(name, "QBit(Float32, 17)", new[]
+                {
+                    Ramp(17, i => (i * 0.5f) - 4f),
+                    Ramp(17, i => i % 2 == 0 ? float.MaxValue : float.MinValue),
+                }));
+
+            yield return Same(
+                "QBit(Float64, 17)",
+                "QBit(Float64, 17)",
+                name => new ArrayColumn<double[]>(name, "QBit(Float64, 17)", new[]
+                {
+                    Ramp(17, i => (i * 0.25d) - 2d),
+                    Ramp(17, i => i % 2 == 0 ? double.MaxValue : double.MinValue),
+                }));
+
+            yield return new InsertRoundTripCase(
+                "QBit(BFloat16, 4)",
+                "QBit(BFloat16, 4)",
+                name => new ArrayColumn<float[]>(name, "QBit(BFloat16, 4)", new[]
+                {
+                    new[] { 1.0001f, 2f, -3f, 0f },
+                    new[] { -0f, 0.5f, -0.5f, 256f },
+                }),
+                name => new ArrayColumn<float[]>(name, "QBit(BFloat16, 4)", new[]
+                {
+                    new[] { 1f, 2f, -3f, 0f },
+                    new[] { -0f, 0.5f, -0.5f, 256f },
+                }),
+                settings: null);
+
+            yield return Same(
+                "Nullable(QBit(Float32, 4))",
+                "Nullable(QBit(Float32, 4))",
+                name => new ArrayColumn<float[]>(name, "Nullable(QBit(Float32, 4))", new[]
+                {
+                    new[] { 1f, 2f, 3f, 4f },
+                    null,
+                    new[] { -1f, -2f, -3f, -4f },
+                }));
+
+            yield return Same(
+                "Nullable(QBit(BFloat16, 4))",
+                "Nullable(QBit(BFloat16, 4))",
+                name => new ArrayColumn<float[]>(name, "Nullable(QBit(BFloat16, 4))", new[]
+                {
+                    new[] { 1f, 2f, -3f, 0f },
+                    null,
+                    new[] { -0f, 0.5f, -0.5f, 256f },
+                }));
+
+            yield return Same(
+                "Nullable(QBit(Float64, 3))",
+                "Nullable(QBit(Float64, 3))",
+                name => new ArrayColumn<double[]>(name, "Nullable(QBit(Float64, 3))", new[]
+                {
+                    new[] { 1d, -2d, 3.5d },
+                    null,
+                    new[] { 0d, -0d, double.NaN },
+                }));
+
+            if (TcpServerFeatures.Has(TcpFeature.QBitInt8))
+            {
+                yield return Same(
+                    "QBit(Int8, 17)",
+                    "QBit(Int8, 17)",
+                    name => new ArrayColumn<sbyte[]>(name, "QBit(Int8, 17)", new[]
+                    {
+                        Ramp(17, i => (sbyte)(i - 8)),
+                        Ramp(17, i => i % 2 == 0 ? sbyte.MaxValue : sbyte.MinValue),
+                        Ramp(17, i => i == 0 ? (sbyte)-1 : (sbyte)0),
+                    }));
+
+                yield return Same(
+                    "Nullable(QBit(Int8, 4))",
+                    "Nullable(QBit(Int8, 4))",
+                    name => new ArrayColumn<sbyte[]>(name, "Nullable(QBit(Int8, 4))", new[]
+                    {
+                        new sbyte[] { 1, -2, sbyte.MaxValue, sbyte.MinValue },
+                        null,
+                        new sbyte[] { 0, -1, 0, -1 },
+                    }));
+            }
+        }
+
         // SimpleAggregateFunction(func, T) encodes as a bare T — the function only tells the server how to merge
         // rows — so these cases prove the alias is transparent, including when T is itself composite or nullable
         // and when the function carries parameters.
@@ -1613,6 +1727,17 @@ public sealed class InsertRoundTripCase
     /// <summary>A case that inserts and reads back the same column — the common shape.</summary>
     private static InsertRoundTripCase Same(string label, string clickHouseType, Func<string, IColumn> build, IReadOnlyDictionary<string, string> settings = null)
         => new(label, clickHouseType, build, build, settings);
+
+    private static T[] Ramp<T>(int length, Func<int, T> value)
+    {
+        var values = new T[length];
+        for (int i = 0; i < length; i++)
+        {
+            values[i] = value(i);
+        }
+
+        return values;
+    }
 
     /// <summary>Enables the experimental BFloat16 type for the round-trip.</summary>
     private static readonly IReadOnlyDictionary<string, string> BFloat16Settings = new Dictionary<string, string>(StringComparer.Ordinal)
