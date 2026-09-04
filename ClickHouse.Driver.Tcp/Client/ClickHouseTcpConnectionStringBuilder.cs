@@ -171,7 +171,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["DialTimeout"] = value.TotalSeconds;
     }
 
-    /// <summary>The idle read deadline, in seconds. Defaults to 300.</summary>
+    /// <summary>How long the server may stay silent mid-response, in seconds. Defaults to 300; 0 disables it.</summary>
     public TimeSpan ReadTimeout
     {
         get => GetTimeSpanSecondsOrDefault("ReadTimeout", ClickHouseTcpClientOptions.DefaultReadTimeout);

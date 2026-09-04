@@ -16,14 +16,16 @@ internal sealed class ScriptedDuplexStream : Stream
     private readonly byte[] script;
     private readonly int maxChunk;
     private readonly bool blockWhenExhausted;
+    private readonly TimeSpan readDelay;
     private readonly MemoryStream sink = new();
     private int position;
 
-    public ScriptedDuplexStream(byte[] script, int maxChunk = int.MaxValue, bool blockWhenExhausted = false)
+    public ScriptedDuplexStream(byte[] script, int maxChunk = int.MaxValue, bool blockWhenExhausted = false, TimeSpan readDelay = default)
     {
         this.script = script;
         this.maxChunk = maxChunk < 1 ? 1 : maxChunk;
         this.blockWhenExhausted = blockWhenExhausted;
+        this.readDelay = readDelay;
     }
 
     /// <summary>The bytes the connection has written (the client → server side of the exchange).</summary>
@@ -68,6 +70,13 @@ internal sealed class ScriptedDuplexStream : Stream
         if (blockWhenExhausted && position >= script.Length)
         {
             await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+        }
+
+        // A server that answers, but slowly. Paired with maxChunk it makes a response whose total time exceeds an
+        // idle deadline while no single gap in it does.
+        if (readDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(readDelay, cancellationToken).ConfigureAwait(false);
         }
 
         return Read(buffer.Span);
