@@ -10,7 +10,12 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <summary>
 /// A codec for the ClickHouse <c>Time</c> column: a little-endian <c>Int32</c> second count (a signed
 /// time-of-day/duration, not tied to a date), surfaced as the raw <see cref="int"/> second count. The
-/// representable range is [-999:59:59, 999:59:59]. A <see cref="TimeSpan"/> can also be written for convenience.
+/// representable range is [-999:59:59, 999:59:59]. A <see cref="TimeSpan"/> or a <see cref="TimeOnly"/> can also
+/// be written for convenience.
+/// <para>
+/// Reading as a <see cref="TimeOnly"/> is a narrowing: a column value may be negative or past 24 hours, which no
+/// time of day is, and such a row is refused rather than reduced modulo a day.
+/// </para>
 /// </summary>
 internal sealed class TimeColumnCodec : IColumnCodec
 {
@@ -32,10 +37,10 @@ internal sealed class TimeColumnCodec : IColumnCodec
     public Type ElementType => typeof(int);
 
     /// <inheritdoc/>
-    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(int), typeof(TimeSpan) };
+    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(int), typeof(TimeSpan), typeof(TimeOnly) };
 
     /// <inheritdoc/>
-    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(int), typeof(TimeSpan) };
+    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(int), typeof(TimeSpan), typeof(TimeOnly) };
 
     /// <inheritdoc/>
     public object NullPlaceholder => 0;
@@ -57,6 +62,11 @@ internal sealed class TimeColumnCodec : IColumnCodec
         if (writeType == typeof(TimeSpan))
         {
             return TimeSpan.Zero;
+        }
+
+        if (writeType == typeof(TimeOnly))
+        {
+            return TimeOnly.MinValue;
         }
 
         throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
@@ -83,12 +93,18 @@ internal sealed class TimeColumnCodec : IColumnCodec
             return true;
         }
 
+        if (targetType == typeof(TimeOnly))
+        {
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.TimeToTimeOnly), value);
+            return true;
+        }
+
         projected = null;
         return false;
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<int> or IColumn<TimeSpan>;
+    public bool CanWrite(IColumn column) => column is IColumn<int> or IColumn<TimeSpan> or IColumn<TimeOnly>;
 
     /// <inheritdoc/>
     public IColumn ToCanonicalWriteColumn(IColumn column)
@@ -103,7 +119,12 @@ internal sealed class TimeColumnCodec : IColumnCodec
             return new ProjectedColumn<TimeSpan, int>(TypeName, spans, ToSeconds);
         }
 
-        throw new ArgumentException($"A Time column must hold int or TimeSpan values, not {column.GetType()}.", nameof(column));
+        if (column is IColumn<TimeOnly> times)
+        {
+            return new ProjectedColumn<TimeOnly, int>(TypeName, times, ToSeconds);
+        }
+
+        throw new ArgumentException($"A Time column must hold int, TimeSpan or TimeOnly values, not {column.GetType()}.", nameof(column));
     }
 
     /// <inheritdoc/>
@@ -121,8 +142,15 @@ internal sealed class TimeColumnCodec : IColumnCodec
                 }
 
                 break;
+            case IColumn<TimeOnly> times:
+                for (int i = 0; i < length; i++)
+                {
+                    writer.WriteInt32(ToSeconds(times[start + i]));
+                }
+
+                break;
             default:
-                throw new ArgumentException($"A Time column must hold int or TimeSpan values, not {column.GetType()}.", nameof(column));
+                throw new ArgumentException($"A Time column must hold int, TimeSpan or TimeOnly values, not {column.GetType()}.", nameof(column));
         }
     }
 
@@ -135,6 +163,9 @@ internal sealed class TimeColumnCodec : IColumnCodec
             writer.WriteInt32(seconds[start + i]);
         }
     }
+
+    // A time of day is always inside the column's range, so this needs no bound of its own.
+    private static int ToSeconds(TimeOnly value) => (int)(value.Ticks / TimeSpan.TicksPerSecond);
 
     private static int ToSeconds(TimeSpan value)
     {

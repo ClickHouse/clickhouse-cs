@@ -214,6 +214,25 @@ public class TupleColumnCodecTests
         Assert.That(codec.ElementType, Is.EqualTo(typeof((int, string))));
     }
 
+    [TestCase("Tuple(`a b` Int32, `c,d` String)", new[] { "a b", "c,d" })]
+    [TestCase(@"Tuple(`a\`b` Int32, `x\ny` String)", new[] { "a`b", "x\ny" })]
+    public async Task ReadColumn_BacktickedElementNames_DecodeToTheNameTheServerHolds(string type, string[] expectedNames)
+    {
+        // A quoted field name is split off at the closing backtick, not at the first space inside it, and its
+        // escapes are decoded: on 26.6 a column created as Tuple(`a``b` Int8) reports Tuple(`a\`b` Int8). The type
+        // name keeps the wire spelling, since it is what an insert header echoes.
+        IColumnCodec codec = Resolve(type);
+        var column = new TupleColumn<int, string>("c", type, new (int, string)[] { (1, "a") });
+
+        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, type, 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.TypeName, Is.EqualTo(type));
+            Assert.That(((TupleColumnBase)read).FieldNames, Is.EqualTo(expectedNames));
+        });
+    }
+
     [Test]
     public void CanWrite_NonWritableElement_IsFalse()
     {

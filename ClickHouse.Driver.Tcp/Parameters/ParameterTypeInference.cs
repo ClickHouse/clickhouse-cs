@@ -46,7 +46,9 @@ internal static class ParameterTypeInference
             case string or char or byte[] or ReadOnlyMemory<byte>: return "String";
             case Guid: return "UUID";
             case DateOnly: return "Date";
-            case TimeSpan: return "Time64(9)";
+
+            // Scale 9 holds every tick either one can carry, so neither loses a digit.
+            case TimeSpan or TimeOnly: return "Time64(9)";
 
             // Sub-second precision is kept, and the instant is anchored to UTC rather than to a session zone.
             case DateTime or DateTimeOffset: return "DateTime64(7, 'UTC')";
@@ -59,6 +61,13 @@ internal static class ParameterTypeInference
 
             case IDictionary dictionary:
                 return InferMap(dictionary, parameterName);
+
+            // The shape this client reads a Map column back as, which Accepts already knows. It is also an
+            // IEnumerable, so it has to be decided before the Array arm below, whose element inference has no
+            // reading for a KeyValuePair. Without this arm a row read from a Map column could not be sent back
+            // as a Dynamic or an untyped parameter.
+            case not string and IEnumerable pairs when MapPairs.IsPairSequence(value):
+                return InferPairSequence(pairs, parameterName);
 
             case IEnumerable enumerable:
                 return $"Array({InferElement(enumerable, parameterName)})";
@@ -77,26 +86,33 @@ internal static class ParameterTypeInference
     /// <returns>True when the alternative accepts the value.</returns>
     public static bool Accepts(TypeNode node, object value)
     {
+        // The names below are canonical, so an alias or a case variant is mapped to one first, as the formatter
+        // does before its own dispatch. Without this Variant(BIGINT, String) accepted no Int64 at all, while the
+        // server resolves that declaration to Variant(Int64, String).
+        string name = ColumnCodecRegistry.Default.TryCanonicalName(node.Name, out string registered)
+            ? registered
+            : node.Name;
+
         if (value is null or DBNull)
         {
-            return node.Name is "Nothing";
+            return name is "Nothing";
         }
 
         // An alternative may itself be a wrapper; match against what it ultimately holds.
-        if (node.Name is "Nullable" or "LowCardinality" && node.Arguments.Count == 1)
+        if (name is "Nullable" or "LowCardinality" && node.Arguments.Count == 1)
         {
             return Accepts(node.Arguments[0], value);
         }
 
         // A geo name stands for a Tuple/Array shape, which is what the formatter writes it as. Matching the
         // name alone would reject every value, because no CLR type infers to "Point".
-        if (TcpParameterFormatter.TryGeoShapeOf(node.Name, out TypeNode geoShape))
+        if (TcpParameterFormatter.TryGeoShapeOf(name, out TypeNode geoShape))
         {
             return Accepts(geoShape, value);
         }
 
         // A QBit is a fixed-width vector of its element type, so it takes what an Array of that type takes.
-        if (node.Name is "QBit" && node.Arguments.Count == 2)
+        if (name is "QBit" && node.Arguments.Count == 2)
         {
             return value is not string and IEnumerable components && AcceptsElements(node.Arguments[0], components);
         }
@@ -104,20 +120,20 @@ internal static class ParameterTypeInference
         // Match composite alternatives recursively; their outer names are insufficient.
         switch (value)
         {
-            case IDictionary dictionary when node.Name is "Map":
+            case IDictionary dictionary when name is "Map":
                 return node.Arguments.Count == 2 && AcceptsPairs(node, dictionary);
 
             // Handle the Map read shape before the general Array case.
             case not string and IEnumerable pairs when MapPairs.IsPairSequence(value):
-                return node.Name is "Map"
+                return name is "Map"
                     && node.Arguments.Count == 2
                     && AcceptsPairSequence(node, pairs);
 
-            case ITuple tuple when node.Name is "Tuple":
+            case ITuple tuple when name is "Tuple":
                 return AcceptsTupleElements(node, tuple);
 
             // A byte[] is checked element by element here too, so it takes Array(UInt8) but not Array(String).
-            case not string and IEnumerable elements when node.Name is "Array":
+            case not string and IEnumerable elements when name is "Array":
                 return node.Arguments.Count == 1 && AcceptsElements(node.Arguments[0], elements);
 
             case IDictionary or ITuple:
@@ -128,17 +144,18 @@ internal static class ParameterTypeInference
         {
             // The Array case above already took a byte[] an element type accepts, so only the text arms remain.
             // A ReadOnlyMemory is not IEnumerable, so it never reaches that case and only the text arms format it.
-            byte[] or ReadOnlyMemory<byte> => node.Name is "String" or "FixedString" ? node.Name : "String",
+            byte[] or ReadOnlyMemory<byte> => name is "String" or "FixedString" ? name : "String",
 
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
-            string or char => node.Name is "String" or "FixedString" or "Enum8" or "Enum16" ? node.Name : "String",
-            DateTime or DateTimeOffset => node.Name is "DateTime" or "DateTime64" or "Date" or "Date32" ? node.Name : "DateTime64",
-            decimal or ClickHouseTcpDecimal => node.Name.StartsWith("Decimal", StringComparison.Ordinal) ? node.Name : "Decimal128",
+            string or char => name is "String" or "FixedString" or "Enum" or "Enum8" or "Enum16" ? name : "String",
+            DateTime or DateTimeOffset => name is "DateTime" or "DateTime64" or "Date" or "Date32" ? name : "DateTime64",
+            TimeSpan or TimeOnly => name is "Time" or "Time64" ? name : "Time64",
+            decimal or ClickHouseTcpDecimal => name.StartsWith("Decimal", StringComparison.Ordinal) ? name : "Decimal128",
             not string and IEnumerable => "Array",
             _ => InferOrNothing(value),
         };
 
-        return string.Equals(inferred, node.Name, StringComparison.Ordinal);
+        return string.Equals(inferred, name, StringComparison.Ordinal);
     }
 
     /// <summary>Reports whether every element fits; an empty sequence fits any element type.</summary>
@@ -241,6 +258,18 @@ internal static class ParameterTypeInference
             return $"Map({Infer(entry.Key, parameterName)}, {Infer(entry.Value, parameterName)})";
         }
 
+        return "Map(String, String)";
+    }
+
+    private static string InferPairSequence(IEnumerable pairs, string parameterName)
+    {
+        foreach (object pair in pairs)
+        {
+            (object key, object value) = MapPairs.Read(pair);
+            return $"Map({Infer(key, parameterName)}, {Infer(value, parameterName)})";
+        }
+
+        // Empty, so no sample pair: the same fallback an empty dictionary takes.
         return "Map(String, String)";
     }
 

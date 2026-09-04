@@ -664,7 +664,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     private IReadOnlyDictionary<string, string> BuildSettings(ClickHouseTcpQueryOptions options)
-        => MergeSettings(Options.CustomSettings, options?.Settings);
+        => MergeSettings(Options.CustomSettings, options?.Settings, Options.SendJsonAndDynamicSerializationSettings);
 
     /// <summary>
     /// The settings for one insert: the query settings, plus
@@ -740,10 +740,15 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     /// </summary>
     /// <param name="clientSettings">The client-level custom settings, or null for none.</param>
     /// <param name="perQuerySettings">The per-query settings that override the client-level ones, or null for none.</param>
+    /// <param name="sendSerializationSettings">
+    /// Whether to inject the two serialization settings, from
+    /// <see cref="ClickHouseTcpClientOptions.SendJsonAndDynamicSerializationSettings"/>.
+    /// </param>
     /// <returns>The merged settings to send with the operation.</returns>
     internal static IReadOnlyDictionary<string, string> MergeSettings(
         IReadOnlyDictionary<string, string> clientSettings,
-        IReadOnlyDictionary<string, string> perQuerySettings)
+        IReadOnlyDictionary<string, string> perQuerySettings,
+        bool sendSerializationSettings = true)
     {
         var merged = new Dictionary<string, string>(StringComparer.Ordinal);
         if (clientSettings is not null)
@@ -775,14 +780,20 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
             }
         }
 
-        if (!merged.ContainsKey(FlattenedSerializationSetting))
+        // Both server defaults are 0, so sending either is a setting modification, which a readonly profile
+        // refuses outright (Code 164). A caller who cannot modify settings turns this off and gives up only
+        // JSON and Dynamic reads.
+        if (sendSerializationSettings)
         {
-            merged[FlattenedSerializationSetting] = "1";
-        }
+            if (!merged.ContainsKey(FlattenedSerializationSetting))
+            {
+                merged[FlattenedSerializationSetting] = "1";
+            }
 
-        if (!merged.ContainsKey(JsonAsStringSetting))
-        {
-            merged[JsonAsStringSetting] = "1";
+            if (!merged.ContainsKey(JsonAsStringSetting))
+            {
+                merged[JsonAsStringSetting] = "1";
+            }
         }
 
         return merged;

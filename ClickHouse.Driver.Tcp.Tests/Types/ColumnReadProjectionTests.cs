@@ -183,8 +183,8 @@ public class ColumnReadProjectionTests
             Assert.That(
                 Codec("DateTime64(3, 'UTC')").ReadableElementTypes,
                 Is.EqualTo(new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) }));
-            Assert.That(Codec("Time").ReadableElementTypes, Is.EqualTo(new[] { typeof(int), typeof(TimeSpan) }));
-            Assert.That(Codec("Time64(3)").ReadableElementTypes, Is.EqualTo(new[] { typeof(long), typeof(TimeSpan) }));
+            Assert.That(Codec("Time").ReadableElementTypes, Is.EqualTo(new[] { typeof(int), typeof(TimeSpan), typeof(TimeOnly) }));
+            Assert.That(Codec("Time64(3)").ReadableElementTypes, Is.EqualTo(new[] { typeof(long), typeof(TimeSpan), typeof(TimeOnly) }));
         });
     }
 
@@ -217,6 +217,37 @@ public class ColumnReadProjectionTests
             Assert.That(result.UtcDateTime, Is.EqualTo(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc)));
             Assert.That(result.Offset, Is.EqualTo(TimeSpan.FromHours(1)));
         });
+    }
+
+    /// <summary>
+    /// Where an unrepresentable zone is reported, and where it is not. Building the projection must succeed:
+    /// <c>CanRead</c> and the POCO tier's mapping discovery both come through here with no row in hand, so a
+    /// throw at build time refuses the reading rather than the value. The row is what needs the zone.
+    /// </summary>
+    [TestCase("DateTime('Fixed/UTC+19:00:00')", "+19:00:00")]
+    [TestCase("DateTime('Fixed/UTC+05:30:15')", "+05:30:15")]
+    public void TryProjectRead_ACalendarTargetOfAZoneTimeZoneInfoCannotHold_BuildsAndThrowsOnTheRow(
+        string columnType,
+        string offset)
+    {
+        Func<uint, DateTimeOffset> project = Project<uint, DateTimeOffset>(Codec(columnType));
+
+        var thrown = Assert.Throws<FormatException>(() => project(1_700_000_000));
+
+        Assert.That(thrown.Message, Does.Contain(offset));
+    }
+
+    [TestCase("DateTime64(3, 'Fixed/UTC+19:00:00')", "+19:00:00")]
+    [TestCase("DateTime64(9, 'Fixed/UTC+05:30:15')", "+05:30:15")]
+    public void TryProjectRead_ADateTime64CalendarTargetOfAZoneTimeZoneInfoCannotHold_BuildsAndThrowsOnTheRow(
+        string columnType,
+        string offset)
+    {
+        Func<long, DateTimeOffset> project = Project<long, DateTimeOffset>(Codec(columnType));
+
+        var thrown = Assert.Throws<FormatException>(() => project(1_700_000_000_000));
+
+        Assert.That(thrown.Message, Does.Contain(offset));
     }
 
     [Test]
@@ -352,6 +383,85 @@ public class ColumnReadProjectionTests
         Func<long, TimeSpan> project = Project<long, TimeSpan>(Codec($"Time64({scale})"));
 
         Assert.That(project(count), Is.EqualTo(TimeSpan.Parse(expected)));
+    }
+
+    [Test]
+    public void TryProjectRead_TimeToTimeOnly_IsTheTimeOfDay()
+    {
+        Func<int, TimeOnly> project = Project<int, TimeOnly>(Codec("Time"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(project(3661), Is.EqualTo(new TimeOnly(1, 1, 1)));
+            Assert.That(project(0), Is.EqualTo(TimeOnly.MinValue));
+            Assert.That(project((23 * 3600) + (59 * 60) + 59), Is.EqualTo(new TimeOnly(23, 59, 59)));
+        });
+    }
+
+    [Test]
+    [TestCase(3, 3_661_500L, "01:01:01.5000000")]
+    [TestCase(9, 3_661_000_000_000L, "01:01:01")]
+    public void TryProjectRead_Time64ToTimeOnly_HonorsTheColumnScale(int scale, long count, string expected)
+    {
+        Func<long, TimeOnly> project = Project<long, TimeOnly>(Codec($"Time64({scale})"));
+
+        Assert.That(project(count), Is.EqualTo(TimeOnly.Parse(expected)));
+    }
+
+    // The one narrowing in the read surface: a Time column holds a signed duration of up to 999 hours, and the
+    // part of that range outside a day has no TimeOnly. Refused, not reduced modulo a day, which would be a
+    // different value presented as the stored one.
+    [TestCase(-1, TestName = "A negative duration")]
+    [TestCase(24 * 3600, TestName = "Exactly 24 hours")]
+    [TestCase(100 * 3600, TestName = "A duration of 100 hours")]
+    public void TryProjectRead_TimeToTimeOnlyOfAValueThatIsNoTimeOfDay_Throws(int seconds)
+    {
+        Func<int, TimeOnly> project = Project<int, TimeOnly>(Codec("Time"));
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => project(seconds));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("is not a time of day"));
+            Assert.That(thrown.Message, Does.Contain("TimeSpan"), "the message has to name the reading that does work");
+        });
+    }
+
+    // The Time64 refusal is on the raw count, not on the TimeSpan it shifts to: at scale 8 and 9 the shift to
+    // 100 ns ticks truncates toward zero, so every count from -1 to -99 at scale 9 reaches TimeSpan.Zero and a
+    // check made after it reads a negative value as midnight.
+    [TestCase(9, -1L, TestName = "A nanosecond before midnight, scale 9")]
+    [TestCase(9, -99L, TestName = "The last count scale 9 truncates to zero")]
+    [TestCase(9, -100L, TestName = "One tick before midnight, scale 9")]
+    [TestCase(8, -1L, TestName = "Ten nanoseconds before midnight, scale 8")]
+    [TestCase(8, -9L, TestName = "The last count scale 8 truncates to zero")]
+    [TestCase(3, -1L, TestName = "A millisecond before midnight, scale 3")]
+    [TestCase(3, 86_400_000L, TestName = "Exactly 24 hours, scale 3")]
+    [TestCase(0, 86_400L, TestName = "Exactly 24 hours, scale 0")]
+    [TestCase(0, 100 * 3600L, TestName = "A duration of 100 hours, scale 0")]
+    public void TryProjectRead_Time64ToTimeOnlyOfAValueThatIsNoTimeOfDay_Throws(int scale, long count)
+    {
+        Func<long, TimeOnly> project = Project<long, TimeOnly>(Codec($"Time64({scale})"));
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => project(count));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("is not a time of day"));
+            Assert.That(thrown.Message, Does.Contain("TimeSpan"));
+        });
+    }
+
+    // The bounds on the accepting side of the same check, so it cannot pass by refusing everything.
+    [TestCase(9, 0L, "00:00:00")]
+    [TestCase(9, 86_399_999_999_999L, "23:59:59.9999999")]
+    [TestCase(3, 86_399_999L, "23:59:59.999")]
+    [TestCase(0, 86_399L, "23:59:59")]
+    public void TryProjectRead_Time64ToTimeOnlyAtTheEndsOfTheDay_IsAccepted(int scale, long count, string expected)
+    {
+        Func<long, TimeOnly> project = Project<long, TimeOnly>(Codec($"Time64({scale})"));
+
+        Assert.That(project(count), Is.EqualTo(TimeOnly.Parse(expected)));
     }
 
     [Test]
