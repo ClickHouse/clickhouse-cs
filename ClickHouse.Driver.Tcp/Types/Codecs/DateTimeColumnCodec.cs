@@ -37,12 +37,6 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     public object NullPlaceholder => 0u;
 
     /// <inheritdoc/>
-    public Type CanonicalWriteElementType => typeof(uint);
-
-    /// <inheritdoc/>
-    public object CanonicalWritePlaceholder => 0u;
-
-    /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
         if (writeType == typeof(uint))
@@ -61,6 +55,24 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         }
 
         throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+    }
+
+    /// <inheritdoc/>
+    // Two DateTime values with equal ticks but different Kind are Equals-equal and encode to different instants,
+    // so both surfaces compare on the second they reduce to.
+    public object WireEqualityComparer(Type writeType)
+    {
+        if (writeType == typeof(uint))
+        {
+            return WireEquality.Default<uint>();
+        }
+
+        if (writeType == typeof(DateTimeOffset))
+        {
+            return WireEquality.Projected<DateTimeOffset, uint>(ToWireValue);
+        }
+
+        return writeType == typeof(DateTime) ? WireEquality.Projected<DateTime, uint>(ToWireValue) : null;
     }
 
     /// <summary>Builds a <c>DateTime</c> codec, resolving its timezone from the type string or the session.</summary>
@@ -109,35 +121,16 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<uint> or IColumn<DateTimeOffset> or IColumn<DateTime>;
 
     /// <inheritdoc/>
-    public IColumn ToCanonicalWriteColumn(IColumn column)
-    {
-        if (column is IColumn<uint>)
-        {
-            return column;
-        }
-
-        if (column is IColumn<DateTimeOffset> offsets)
-        {
-            return new ProjectedColumn<DateTimeOffset, uint>(TypeName, offsets, ToWireValue);
-        }
-
-        if (column is IColumn<DateTime> dateTimes)
-        {
-            return new ProjectedColumn<DateTime, uint>(TypeName, dateTimes, ToWireValue);
-        }
-
-        throw new ArgumentException(
-            $"A DateTime column must hold uint, DateTimeOffset, or DateTime values, not {column.GetType()}.",
-            nameof(column));
-    }
-
-    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         switch (column)
         {
             case IColumn<uint> seconds:
-                WriteCanonicalColumn(writer, seconds, start, length);
+                for (int i = 0; i < length; i++)
+                {
+                    writer.WriteUInt32(seconds[start + i]);
+                }
+
                 break;
             case IColumn<DateTimeOffset> offsets:
                 for (int i = 0; i < length; i++)
@@ -157,16 +150,6 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
                 throw new ArgumentException(
                     $"A DateTime column must hold uint, DateTimeOffset, or DateTime values, not {column.GetType()}.",
                     nameof(column));
-        }
-    }
-
-    /// <inheritdoc/>
-    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var seconds = (IColumn<uint>)column;
-        for (int i = 0; i < length; i++)
-        {
-            writer.WriteUInt32(seconds[start + i]);
         }
     }
 

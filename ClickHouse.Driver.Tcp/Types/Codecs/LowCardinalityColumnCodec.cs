@@ -415,8 +415,15 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWriteElementType(Type elementType)
-        => TryInnerWriteType(elementType, out Type innerType) && inner.CanWriteElementType(innerType);
+    public bool CanWriteElementType(Type elementType) => InnerAccepts(elementType, out _);
+
+    // A LowCardinality write has to decide which rows share a dictionary entry, so the inner codec must offer a
+    // wire-equality comparer for the surface as well as being able to write it. Only the dense re-emit path could
+    // do without one, and a dense column can only come from a type the server accepted, all of which have one.
+    private bool InnerAccepts(Type elementType, out Type innerType)
+        => TryInnerWriteType(elementType, out innerType)
+            && inner.CanWriteElementType(innerType)
+            && inner.WireEqualityComparer(innerType) is not null;
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => WriteShapeFor(column) is not null;
@@ -454,7 +461,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
             return innerCanWrite && shape.CanWrite(column) ? shape : null;
         }
 
-        if (!TryInnerWriteType(elementType, out Type innerType) || !inner.CanWriteElementType(innerType))
+        if (!InnerAccepts(elementType, out Type innerType))
         {
             return null;
         }

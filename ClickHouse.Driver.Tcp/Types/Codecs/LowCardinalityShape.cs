@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
@@ -18,7 +19,8 @@ internal sealed class LowCardinalityShape<T> : ILowCardinalityShape
     public bool CanWrite(IColumn column) => column is IColumn<T>;
 
     /// <inheritdoc/>
-    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWriteElementType(typeof(T));
+    public bool CanInnerWrite(IColumnCodec inner)
+        => inner.CanWriteElementType(typeof(T)) && inner.WireEqualityComparer(typeof(T)) is IEqualityComparer<T>;
 
     /// <inheritdoc/>
     public void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length)
@@ -56,17 +58,12 @@ internal sealed class LowCardinalityShape<T> : ILowCardinalityShape
         WriteErgonomic(inner, writer, (IColumn<T>)column, start, length);
     }
 
-    // Convert through the inner codec first, then deduplicate the values its canonical writer consumes.
+    // The inner codec decides which rows share a dictionary entry; CanInnerWrite has already established that it
+    // offers a comparer for this surface.
     private static void WriteErgonomic(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn<T> source, int start, int length)
     {
-        IColumn canonical = inner.ToCanonicalWriteColumn(source);
-        if (canonical.ElementType != inner.CanonicalWriteElementType)
-        {
-            throw new InvalidOperationException(
-                $"The '{inner.TypeName}' codec projected {canonical.ElementType}, expected {inner.CanonicalWriteElementType}.");
-        }
-
-        CanonicalLowCardinalityWriters.For(canonical.ElementType)
-            .Write(inner, writer, canonical, source, nullMap: null, start, length);
+        var comparer = (IEqualityComparer<T>)inner.WireEqualityComparer(typeof(T));
+        var placeholder = (T)inner.NullPlaceholderAs(typeof(T));
+        LowCardinalityValueWriter.Write(inner, comparer, writer, source, placeholder, source, nullMap: null, start, length);
     }
 }

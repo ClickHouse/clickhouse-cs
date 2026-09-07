@@ -46,12 +46,6 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     public object NullPlaceholder => 0L;
 
     /// <inheritdoc/>
-    public Type CanonicalWriteElementType => typeof(long);
-
-    /// <inheritdoc/>
-    public object CanonicalWritePlaceholder => 0L;
-
-    /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
         if (writeType == typeof(long))
@@ -65,6 +59,19 @@ internal sealed class Time64ColumnCodec : IColumnCodec
         }
 
         throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+    }
+
+    /// <inheritdoc/>
+    // A TimeSpan is encoded as a count at this column's scale, so two values inside one tick of it encode
+    // identically.
+    public object WireEqualityComparer(Type writeType)
+    {
+        if (writeType == typeof(long))
+        {
+            return WireEquality.Default<long>();
+        }
+
+        return writeType == typeof(TimeSpan) ? WireEquality.Projected<TimeSpan, long>(ToCount) : null;
     }
 
     /// <summary>Builds a <c>Time64</c> codec from its scale argument.</summary>
@@ -115,28 +122,16 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<long> or IColumn<TimeSpan>;
 
     /// <inheritdoc/>
-    public IColumn ToCanonicalWriteColumn(IColumn column)
-    {
-        if (column is IColumn<long>)
-        {
-            return column;
-        }
-
-        if (column is IColumn<TimeSpan> spans)
-        {
-            return new ProjectedColumn<TimeSpan, long>(TypeName, spans, ToCount);
-        }
-
-        throw new ArgumentException($"A Time64 column must hold long or TimeSpan values, not {column.GetType()}.", nameof(column));
-    }
-
-    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         switch (column)
         {
             case IColumn<long> counts:
-                WriteCanonicalColumn(writer, counts, start, length);
+                for (int i = 0; i < length; i++)
+                {
+                    writer.WriteInt64(counts[start + i]);
+                }
+
                 break;
             case IColumn<TimeSpan> spans:
                 for (int i = 0; i < length; i++)
@@ -147,16 +142,6 @@ internal sealed class Time64ColumnCodec : IColumnCodec
                 break;
             default:
                 throw new ArgumentException($"A Time64 column must hold long or TimeSpan values, not {column.GetType()}.", nameof(column));
-        }
-    }
-
-    /// <inheritdoc/>
-    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var counts = (IColumn<long>)column;
-        for (int i = 0; i < length; i++)
-        {
-            writer.WriteInt64(counts[start + i]);
         }
     }
 

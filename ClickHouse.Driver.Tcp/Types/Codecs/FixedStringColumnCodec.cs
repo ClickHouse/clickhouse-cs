@@ -47,10 +47,10 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     public object NullPlaceholder => nullPlaceholder ??= new byte[size];
 
     /// <inheritdoc/>
-    public Type CanonicalWriteElementType => typeof(ByteArrayWireValue);
-
-    /// <inheritdoc/>
-    public object CanonicalWritePlaceholder => new ByteArrayWireValue((byte[])NullPlaceholder);
+    // The array is written verbatim, so two rows share an entry when their bytes match. Default equality on
+    // byte[] is reference equality, which would give nearly every row its own dictionary entry.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(byte[]) ? WireEquality.Bytes() : null;
 
     /// <summary>Builds a <c>FixedString(N)</c> codec from its type node's single integer length argument.</summary>
     /// <param name="node">The parsed <c>FixedString</c> type node.</param>
@@ -100,15 +100,6 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     public bool CanWrite(IColumn column) => column is IColumn<byte[]>;
 
     /// <inheritdoc/>
-    public IColumn ToCanonicalWriteColumn(IColumn column)
-        => column is IColumn<byte[]> values
-            ? new ProjectedColumn<byte[], ByteArrayWireValue>(
-                TypeName,
-                values,
-                static value => new ByteArrayWireValue(value))
-            : throw new ArgumentException($"A {TypeName} column must hold byte[] values, not {column.GetType()}.", nameof(column));
-
-    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         // A dense FixedStringColumn of this width already holds its rows back-to-back at the stride the wire uses,
@@ -128,16 +119,6 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
         for (int i = 0; i < length; i++)
         {
             WriteValue(writer, typed[start + i], start + i, "row");
-        }
-    }
-
-    /// <inheritdoc/>
-    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var typed = (IColumn<ByteArrayWireValue>)column;
-        for (int i = 0; i < length; i++)
-        {
-            WriteValue(writer, typed[start + i].Bytes, start + i, "row");
         }
     }
 

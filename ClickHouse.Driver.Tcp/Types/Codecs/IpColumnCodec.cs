@@ -34,10 +34,9 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     public object NullPlaceholder => IPAddress.Any;
 
     /// <inheritdoc/>
-    public Type CanonicalWriteElementType => typeof(uint);
-
-    /// <inheritdoc/>
-    public object CanonicalWritePlaceholder => ToWireValue((IPAddress)NullPlaceholder);
+    // IPAddress.Equals also compares the ScopeId, which is not encoded, so the wire integer is the relation.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(IPAddress) ? WireEquality.Projected<IPAddress, uint>(ToWireValue) : null;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -62,28 +61,12 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<IPAddress>;
 
     /// <inheritdoc/>
-    public IColumn ToCanonicalWriteColumn(IColumn column)
-        => column is IColumn<IPAddress> values
-            ? new ProjectedColumn<IPAddress, uint>(TypeName, values, ToWireValue)
-            : throw new ArgumentException($"An IPv4 column must hold IPAddress values, not {column.GetType()}.", nameof(column));
-
-    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         var values = (IColumn<IPAddress>)column;
         for (int i = 0; i < length; i++)
         {
             writer.WriteUInt32(ToWireValue(values[start + i]));
-        }
-    }
-
-    /// <inheritdoc/>
-    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var values = (IColumn<uint>)column;
-        for (int i = 0; i < length; i++)
-        {
-            writer.WriteUInt32(values[start + i]);
         }
     }
 
@@ -125,12 +108,6 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     public object NullPlaceholder => IPAddress.IPv6Any;
 
     /// <inheritdoc/>
-    public Type CanonicalWriteElementType => typeof(IPv6WireValue);
-
-    /// <inheritdoc/>
-    public object CanonicalWritePlaceholder => ToWireValue((IPAddress)NullPlaceholder);
-
-    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => ArrayColumn<IPAddress>.ReadAsync(reader, columnName, columnType, rowCount, checked(rowCount * Size), Fill, cancellationToken);
 
@@ -146,44 +123,29 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<IPAddress>;
 
     /// <inheritdoc/>
-    public IColumn ToCanonicalWriteColumn(IColumn column)
-        => column is IColumn<IPAddress> values
-            ? new ProjectedColumn<IPAddress, IPv6WireValue>(TypeName, values, ToWireValue)
-            : throw new ArgumentException($"An IPv6 column must hold IPAddress values, not {column.GetType()}.", nameof(column));
+    // IPAddress.Equals also compares the ScopeId, which is not encoded, and holds an IPv4 address distinct from
+    // its own mapped form, which encodes the same. The 16 encoded bytes are the relation.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(IPAddress) ? WireEquality.Projected<IPAddress, (ulong, ulong)>(ToWireKey) : null;
 
-    /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var values = (IColumn<IPAddress>)column;
-        for (int i = 0; i < length; i++)
-        {
-            WriteWireValue(writer, ToWireValue(values[start + i]));
-        }
-    }
-
-    /// <inheritdoc/>
-    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var values = (IColumn<IPv6WireValue>)column;
-        for (int i = 0; i < length; i++)
-        {
-            WriteWireValue(writer, values[start + i]);
-        }
-    }
-
-    private static void WriteWireValue(ClickHouseBinaryWriter writer, IPv6WireValue value)
-    {
-        writer.WriteUInt64(value.First);
-        writer.WriteUInt64(value.Second);
-    }
-
-    private static IPv6WireValue ToWireValue(IPAddress value)
+    private static (ulong, ulong) ToWireKey(IPAddress value)
     {
         Span<byte> network = stackalloc byte[Size];
         WriteNetworkBytes(value, network);
-        return new IPv6WireValue(
-            BinaryPrimitives.ReadUInt64LittleEndian(network),
-            BinaryPrimitives.ReadUInt64LittleEndian(network.Slice(sizeof(ulong))));
+        return (BinaryPrimitives.ReadUInt64LittleEndian(network), BinaryPrimitives.ReadUInt64LittleEndian(network.Slice(sizeof(ulong))));
+    }
+
+    /// <inheritdoc/>
+    // The wire form is the 16 network-order bytes verbatim.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        var values = (IColumn<IPAddress>)column;
+        Span<byte> network = stackalloc byte[Size];
+        for (int i = 0; i < length; i++)
+        {
+            WriteNetworkBytes(values[start + i], network);
+            writer.WriteBytes(network);
+        }
     }
 
     private static void WriteNetworkBytes(IPAddress value, Span<byte> destination)
