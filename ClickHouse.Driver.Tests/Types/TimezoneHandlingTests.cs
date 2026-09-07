@@ -1204,6 +1204,24 @@ public class ReadDateTimeFixedUtcOffsetTests : AbstractConnectionTestFixture
             wallClock, DateTimeKind.Utc, TimeSpan.Zero)
             .SetName("ReadDateTime_ZeroFixedUtcOffset_IsUtc");
 
+        // +/-14 h is the largest offset the server accepts, so it is the widest name a column
+        // can carry. Verified against 26.9, which rejects anything further from UTC.
+        yield return new TestCaseData(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+14:00:00')",
+            wallClock, DateTimeKind.Unspecified, new TimeSpan(14, 0, 0))
+            .SetName("ReadDateTime_MaxFixedUtcOffset");
+        yield return new TestCaseData(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC-14:00:00')",
+            wallClock, DateTimeKind.Unspecified, new TimeSpan(-14, 0, 0))
+            .SetName("ReadDateTime_MinFixedUtcOffset");
+
+        // A minute field above 59 carries into the hour, so the server resolves this name to
+        // +06:00 and the driver has to agree with it. Accepted by 26.3 and by 26.9.
+        yield return new TestCaseData(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+05:60:00')",
+            wallClock, DateTimeKind.Unspecified, new TimeSpan(6, 0, 0))
+            .SetName("ReadDateTime_FixedUtcOffsetWithMinuteCarry");
+
         // DateTime64 uses the same offset handling and preserves sub-second precision.
         yield return new TestCaseData(
             "SELECT toDateTime64('2024-01-15 10:30:00.123', 3, 'Fixed/UTC+05:30:00')",
@@ -1237,33 +1255,6 @@ public class ReadDateTimeFixedUtcOffsetTests : AbstractConnectionTestFixture
             Assert.That(dateTime.Kind, Is.EqualTo(expectedKind), "DateTime.Kind");
             Assert.That(dateTimeOffset.Offset, Is.EqualTo(expectedOffset), "GetDateTimeOffset offset");
             Assert.That(dateTimeOffset.DateTime, Is.EqualTo(expectedWallClock), "GetDateTimeOffset wall-clock");
-        });
-    }
-
-    /// <summary>
-    /// Out-of-range Fixed/UTC offset (>18 h) cannot be represented by NodaTime's Offset, so
-    /// ResolveTimezone returns null and the driver falls back to the UTC wall-clock with
-    /// Kind=Unspecified and a zero offset. Pins that fallback and covers the return-null branch.
-    /// </summary>
-    [Test]
-    public async Task ReadDateTime_WithOutOfRangeFixedUtcOffset_FallsBackToUtcWallClock()
-    {
-        // Fixed/UTC+19:00:00 exceeds NodaTime's ±18 h cap → ResolveTimezone returns null.
-        // The stored instant for wall-clock 2024-01-15 10:30:00 in UTC+19 is
-        // 2024-01-14 15:30:00 UTC; the null-timezone fallback returns that UTC time.
-        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
-            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+19:00:00')");
-        Assert.That(reader.Read(), Is.True);
-
-        var dateTime = reader.GetDateTime(0);
-        var dateTimeOffset = reader.GetDateTimeOffset(0);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(dateTime, Is.EqualTo(new DateTime(2024, 1, 14, 15, 30, 0)), "UTC-projected wall-clock");
-            Assert.That(dateTime.Kind, Is.EqualTo(DateTimeKind.Unspecified), "null-timezone fallback Kind");
-            Assert.That(dateTimeOffset.Offset, Is.EqualTo(TimeSpan.Zero), "UTC fallback offset");
-            Assert.That(dateTimeOffset.DateTime, Is.EqualTo(new DateTime(2024, 1, 14, 15, 30, 0)), "GetDateTimeOffset wall-clock");
         });
     }
 
@@ -1305,10 +1296,14 @@ public class ResolveTimezoneParseTests
         // Not IANA and not a Fixed/UTC offset → regex no-match → null TimeZone.
         yield return new TestCaseData("DateTime('Unknown/TZ')").SetName("ParseDateTime_UnrecognizedName");
         yield return new TestCaseData("DateTime64(3, 'Unknown/TZ')").SetName("ParseDateTime64_UnrecognizedName");
-        // Malformed Fixed/UTC: minutes/seconds outside 00-59 must be rejected by the tightened
-        // regex rather than misread as a different valid offset (e.g. 60 minutes as an extra hour).
-        yield return new TestCaseData("DateTime('Fixed/UTC+05:60:00')").SetName("ParseDateTime_FixedUtcMinutesOutOfRange");
-        yield return new TestCaseData("DateTime('Fixed/UTC+05:00:60')").SetName("ParseDateTime_FixedUtcSecondsOutOfRange");
+        // Each field has to be exactly two digits, the only spelling the server resolves.
+        yield return new TestCaseData("DateTime('Fixed/UTC+5:00:00')").SetName("ParseDateTime_FixedUtcSingleDigitHour");
+        // Past NodaTime's +/-18 h Offset range → range guard rejects → null TimeZone. Only a
+        // server older than 26.9 can send such a name; 26.9 caps a fixed offset at 14 hours.
+        yield return new TestCaseData("DateTime('Fixed/UTC+19:00:00')").SetName("ParseDateTime_FixedUtcHoursOutOfRange");
+        yield return new TestCaseData("DateTime64(3, 'Fixed/UTC-23:00:00')").SetName("ParseDateTime64_FixedUtcHoursOutOfRange");
+        // Carrying every field to its limit is ~100 h, so the range guard still rejects it.
+        yield return new TestCaseData("DateTime('Fixed/UTC+99:99:99')").SetName("ParseDateTime_FixedUtcAllFieldsOutOfRange");
     }
 
     /// <summary>
@@ -1333,12 +1328,20 @@ public class ResolveTimezoneParseTests
             .SetName("ParseDateTime_FixedUtcMaxInRangeHours");
         yield return new TestCaseData("DateTime('Fixed/UTC-18:00:00')", -18 * 3600)
             .SetName("ParseDateTime_FixedUtcMinInRangeHours");
+
+        // A field above its natural limit carries into the next one, which is how the server
+        // reads it: 26.3 and 26.9 both resolve Fixed/UTC+05:60:00 to +06:00, and 26.3 resolves
+        // Fixed/UTC+05:00:60 to +05:01:00 (26.9 rejects the name for being finer than 15 min).
+        yield return new TestCaseData("DateTime('Fixed/UTC+05:60:00')", 6 * 3600)
+            .SetName("ParseDateTime_FixedUtcMinutesCarryIntoHour");
+        yield return new TestCaseData("DateTime('Fixed/UTC+05:00:60')", (5 * 3600) + 60)
+            .SetName("ParseDateTime_FixedUtcSecondsCarryIntoMinute");
     }
 
     /// <summary>
     /// A well-formed Fixed/UTC name within NodaTime's ±18 h range resolves to a fixed-offset
     /// zone with exactly that offset. The boundary cases (59:59 minutes/seconds and the ±18 h
-    /// cap) prove the tightened MM/SS regex and the range guard accept all valid values.
+    /// cap) prove the range guard accepts all valid values.
     /// </summary>
     [TestCaseSource(nameof(ValidFixedUtcOffsetCases))]
     public void Parse_WithValidFixedUtcOffset_ResolvesToFixedOffsetZone(string typeString, int expectedOffsetSeconds)
