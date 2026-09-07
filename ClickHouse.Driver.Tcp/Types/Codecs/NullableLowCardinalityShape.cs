@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
@@ -27,7 +28,8 @@ internal abstract class NullableLowCardinalityShape<T> : ILowCardinalityShape, I
     bool ILowCardinalityNullMap.IsNull(IColumn source, int row) => IsNull(source, row);
 
     /// <inheritdoc/>
-    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWriteElementType(typeof(T));
+    public bool CanInnerWrite(IColumnCodec inner)
+        => inner.CanWriteElementType(typeof(T)) && inner.WireEqualityComparer(typeof(T)) is IEqualityComparer<T>;
 
     /// <inheritdoc/>
     public void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length)
@@ -68,20 +70,14 @@ internal abstract class NullableLowCardinalityShape<T> : ILowCardinalityShape, I
         }
     }
 
-    // Substitute a valid value at null rows, convert through the inner codec, then deduplicate only present rows.
+    // Substitute a valid value at null rows so every row encodes, then deduplicate the present rows on the bytes
+    // the inner codec produces.
     private void WriteErgonomic(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn source, int start, int length)
     {
+        var comparer = (IEqualityComparer<T>)inner.WireEqualityComparer(typeof(T));
         var placeholder = (T)inner.NullPlaceholderAs(typeof(T));
         IColumn<T> present = WithoutNulls(source, placeholder);
-        IColumn canonical = inner.ToCanonicalWriteColumn(present);
-        if (canonical.ElementType != inner.CanonicalWriteElementType)
-        {
-            throw new InvalidOperationException(
-                $"The '{inner.TypeName}' codec projected {canonical.ElementType}, expected {inner.CanonicalWriteElementType}.");
-        }
-
-        CanonicalLowCardinalityWriters.For(canonical.ElementType)
-            .Write(inner, writer, canonical, source, this, start, length);
+        LowCardinalityValueWriter.Write(inner, comparer, writer, present, placeholder, source, this, start, length);
     }
 }
 

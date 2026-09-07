@@ -50,6 +50,11 @@ internal sealed class UuidColumnCodec : IColumnCodec
     public object NullPlaceholder => Guid.Empty;
 
     /// <inheritdoc/>
+    // A Guid compares by its 16 bytes, and the encoding reorders those bytes the same way every time.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(Guid) ? WireEquality.Default<Guid>() : null;
+
+    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => ArrayColumn<Guid>.ReadAsync(reader, columnName, columnType, rowCount, checked(rowCount * UuidSize), Fill, cancellationToken);
 

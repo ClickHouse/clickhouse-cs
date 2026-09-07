@@ -48,6 +48,11 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     // an undeclared ordinal even at a Nullable(Enum) null position where it is only a placeholder.
     public object NullPlaceholder => nullPlaceholder;
 
+    /// <inheritdoc/>
+    // The ordinal is written as-is, so ordinal equality is byte equality.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(T) ? WireEquality.Default<T>() : null;
+
     /// <summary>The enum's declared members, mapping each label to its underlying ordinal.</summary>
     public IReadOnlyDictionary<string, T> LabelToOrdinal { get; }
 

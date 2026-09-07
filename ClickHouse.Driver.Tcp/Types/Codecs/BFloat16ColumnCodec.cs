@@ -31,10 +31,9 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
     public object NullPlaceholder => 0f;
 
     /// <inheritdoc/>
-    public Type CanonicalWriteElementType => typeof(ushort);
-
-    /// <inheritdoc/>
-    public object CanonicalWritePlaceholder => ToBFloat16Bits((float)NullPlaceholder);
+    // Only the top 16 bits are written, so floats that differ below them encode identically.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(float) ? WireEquality.Projected<float, ushort>(ToBFloat16Bits) : null;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -55,28 +54,12 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<float>;
 
     /// <inheritdoc/>
-    public IColumn ToCanonicalWriteColumn(IColumn column)
-        => column is IColumn<float> values
-            ? new ProjectedColumn<float, ushort>(TypeName, values, ToBFloat16Bits)
-            : throw new ArgumentException($"A BFloat16 column must hold float values, not {column.GetType()}.", nameof(column));
-
-    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         var values = (IColumn<float>)column;
         for (int i = 0; i < length; i++)
         {
             writer.WriteUInt16(ToBFloat16Bits(values[start + i]));
-        }
-    }
-
-    /// <inheritdoc/>
-    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var bits = (IColumn<ushort>)column;
-        for (int i = 0; i < length; i++)
-        {
-            writer.WriteUInt16(bits[start + i]);
         }
     }
 

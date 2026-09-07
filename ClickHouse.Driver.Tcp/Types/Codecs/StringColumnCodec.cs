@@ -35,6 +35,13 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     public object NullPlaceholder => string.Empty;
 
     /// <inheritdoc/>
+    // Equal strings encode to equal bytes. The converse can fail (two strings differing only in unpaired
+    // surrogates both encode to the replacement character), which costs a redundant dictionary entry and nothing
+    // else.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(string) ? WireEquality.Default<string>() : null;
+
+    /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         if (rowCount == 0)

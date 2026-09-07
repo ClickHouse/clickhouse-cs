@@ -96,22 +96,27 @@ internal interface IColumnCodec
         return false;
     }
 
-    /// <summary>The CLR type accepted by <see cref="WriteCanonicalColumn"/> after write conversion.</summary>
-    Type CanonicalWriteElementType => ElementType;
-
-    /// <summary>A valid placeholder expressed as <see cref="CanonicalWriteElementType"/>.</summary>
-    object CanonicalWritePlaceholder => NullPlaceholder;
-
     /// <summary>
-    /// Projects a writable column to <see cref="CanonicalWriteElementType"/>. Equal projected values must produce
-    /// identical bytes through <see cref="WriteCanonicalColumn"/>. The returned column borrows the source and
-    /// preserves its row indexes.
+    /// An <see cref="IEqualityComparer{T}"/> of <paramref name="writeType"/> that holds two values equal exactly
+    /// when this codec encodes them to the same bytes, or <see langword="null"/> when the codec offers none.
+    ///
+    /// <para>
+    /// Only LowCardinality reads this, to decide which rows share a dictionary entry. CLR equality is the right
+    /// answer surprisingly often but not always: <c>float</c> makes <c>+0</c> equal <c>-0</c> though their bit
+    /// patterns differ, <c>DateTime.Equals</c> ignores <c>Kind</c> though it changes the instant encoded, and
+    /// <c>byte[]</c> compares by reference. Where the two disagree, derive the comparer from the same conversion
+    /// the write path uses, with <see cref="Codecs.WireEquality.Projected{TSource,TKey}"/>.
+    /// </para>
+    ///
+    /// <para>
+    /// Returning <see langword="null"/> means the type cannot be a LowCardinality inner, which is what the server
+    /// says of every non-scalar type anyway. It is the safe answer: a codec that stays silent is rejected when a
+    /// write is planned, not silently deduplicated on the wrong relation.
+    /// </para>
     /// </summary>
-    IColumn ToCanonicalWriteColumn(IColumn column) => column;
-
-    /// <summary>Writes values already converted to <see cref="CanonicalWriteElementType"/>.</summary>
-    void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-        => WriteColumn(writer, column, start, length);
+    /// <param name="writeType">One of this codec's writable CLR element types.</param>
+    /// <returns>The comparer, boxed because this interface is not generic, or null.</returns>
+    object WireEqualityComparer(Type writeType) => null;
 
     /// <summary>Prepares state shared by the prefix and body. The caller disposes it after the body.</summary>
     /// <param name="column">The column about to be written; must match this codec's element type.</param>

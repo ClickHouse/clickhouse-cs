@@ -41,12 +41,6 @@ internal sealed class TimeColumnCodec : IColumnCodec
     public object NullPlaceholder => 0;
 
     /// <inheritdoc/>
-    public Type CanonicalWriteElementType => typeof(int);
-
-    /// <inheritdoc/>
-    public object CanonicalWritePlaceholder => 0;
-
-    /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
         if (writeType == typeof(int))
@@ -60,6 +54,18 @@ internal sealed class TimeColumnCodec : IColumnCodec
         }
 
         throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+    }
+
+    /// <inheritdoc/>
+    // A TimeSpan is encoded as whole seconds, so two values inside one second encode identically.
+    public object WireEqualityComparer(Type writeType)
+    {
+        if (writeType == typeof(int))
+        {
+            return WireEquality.Default<int>();
+        }
+
+        return writeType == typeof(TimeSpan) ? WireEquality.Projected<TimeSpan, int>(ToSeconds) : null;
     }
 
     /// <inheritdoc/>
@@ -91,28 +97,16 @@ internal sealed class TimeColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<int> or IColumn<TimeSpan>;
 
     /// <inheritdoc/>
-    public IColumn ToCanonicalWriteColumn(IColumn column)
-    {
-        if (column is IColumn<int>)
-        {
-            return column;
-        }
-
-        if (column is IColumn<TimeSpan> spans)
-        {
-            return new ProjectedColumn<TimeSpan, int>(TypeName, spans, ToSeconds);
-        }
-
-        throw new ArgumentException($"A Time column must hold int or TimeSpan values, not {column.GetType()}.", nameof(column));
-    }
-
-    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         switch (column)
         {
             case IColumn<int> seconds:
-                WriteCanonicalColumn(writer, seconds, start, length);
+                for (int i = 0; i < length; i++)
+                {
+                    writer.WriteInt32(seconds[start + i]);
+                }
+
                 break;
             case IColumn<TimeSpan> spans:
                 for (int i = 0; i < length; i++)
@@ -123,16 +117,6 @@ internal sealed class TimeColumnCodec : IColumnCodec
                 break;
             default:
                 throw new ArgumentException($"A Time column must hold int or TimeSpan values, not {column.GetType()}.", nameof(column));
-        }
-    }
-
-    /// <inheritdoc/>
-    public void WriteCanonicalColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var seconds = (IColumn<int>)column;
-        for (int i = 0; i < length; i++)
-        {
-            writer.WriteInt32(seconds[start + i]);
         }
     }
 
