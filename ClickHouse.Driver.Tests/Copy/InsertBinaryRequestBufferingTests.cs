@@ -182,7 +182,8 @@ public class InsertBinaryRequestBufferingTests : AbstractConnectionTestFixture
     private static byte[] ExpectedPayload(int rows)
     {
         using var expected = new MemoryStream();
-        expected.Write(Encoding.UTF8.GetBytes($"INSERT INTO {FakeEndpointTable} (`Id`) FORMAT RowBinary\n"));
+        expected.Write(Encoding.UTF8.GetBytes(
+            $"INSERT INTO `{TestUtilities.TestDatabase}`.`{TestUtilities.BareTableName(FakeEndpointTable)}` (`Id`) FORMAT RowBinary\n"));
 
         // RowBinary encodes UInt64 little-endian on every platform, so the expectation is spelled out
         // explicitly rather than inherited from the host's byte order. The scratch buffer is reused

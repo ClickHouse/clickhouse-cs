@@ -439,6 +439,7 @@ var options = new InsertOptions
 * The client automatically fetches table structure via `SELECT * FROM <table> WHERE 1=0` before inserting. Provided values must match the target column types. To skip this query, use [`InsertOptions.ColumnTypes` or `InsertOptions.UseSchemaCache`](#skip-schema-query).
 * When `MaxDegreeOfParallelism > 1`, batches are uploaded in parallel. Sessions are not compatible with parallel insertion; either disable sessions or set `MaxDegreeOfParallelism = 1`.
 * Use `RowBinaryFormat.RowBinaryWithDefaults` in `InsertOptions.Format` if you want the server to apply DEFAULT values for columns not provided.
+* The table name is a name, not a SQL fragment. Each part of `database.table` is enclosed in backticks, so a name that is not a legal unquoted identifier (`my-table`, `user events`) works as it is. A part you enclosed yourself is left as it is.
 </Note>
 
 #### POCO inserts {#poco-insert}
@@ -1269,7 +1270,8 @@ Ownership passes only once the arguments are accepted: if the call throws `Argum
 </Warning>
 
 <Note>
-See the [format settings documentation](/reference/settings/formats) for options to control data ingestion behavior.
+* See the [format settings documentation](/reference/settings/formats) for options to control data ingestion behavior.
+* The table and column names are names, not SQL fragments: they are enclosed in backticks, so names that are not legal unquoted identifiers work as they are.
 </Note>
 
 ---
