@@ -3,41 +3,36 @@ using System.Diagnostics.CodeAnalysis;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// A run of operations over one pinned connection, opened with
-/// <see cref="IClickHouseTcpClient.OpenSessionAsync"/>. State a single connection holds — temporary tables, and what
-/// a <c>SET</c> changed — therefore survives from one operation to the next.
-///
+/// Sequential operations on one connection, preserving temporary tables and <c>SET</c> settings.
+/// Created by <see cref="IClickHouseTcpClient.OpenSessionAsync"/>.
+/// </summary>
+/// <remarks>
 /// <para>
-/// <b>One operation at a time.</b> The protocol carries one query per connection, so a second operation started
-/// while the first is still running is refused rather than interleaved, and a streamed result holds the connection
-/// until it is read to the end or its enumerator is disposed.
+/// Concurrent operations are rejected. A streamed result holds the session until fully read or its enumerator
+/// is disposed. Use <c>await foreach</c> to ensure the enumerator is disposed.
 /// </para>
 ///
 /// <para>
-/// <b>Disposal closes the connection</b> instead of pooling it, so an unrelated caller cannot inherit the session's
-/// temporary tables and altered settings. A streamed result left suspended mid-enumeration and never disposed is the
-/// exception: disposal cannot free its pool slot either, and the pool stays a slot short until the client is disposed.
+/// Disposal closes the connection to prevent other callers from inheriting session state. It aborts an active
+/// operation without waiting; the pool slot is released when that operation exits. An undisposed enumerator
+/// suspended mid-stream keeps the slot occupied even after session disposal, until the client is disposed.
 /// </para>
 ///
 /// <para>
 /// This type is experimental: its surface may change in a future release. Suppress diagnostic
 /// <c>CHTCP0001</c> to acknowledge that.
 /// </para>
-/// </summary>
+/// </remarks>
 [Experimental("CHTCP0001")]
 public interface IClickHouseTcpSession : IClickHouseTcpOperations
 {
     /// <summary>
-    /// Whether anything has been seen to end the session: false once it is disposed, and false once its connection is
-    /// found unusable — which takes the session's server-side state with it, so the answer is to open another session,
-    /// not to retry on this one.
+    /// Whether the session is undisposed and its connection is not known to be unusable.
     /// </summary>
     /// <remarks>
-    /// The connection is tested when an operation ends and again before the next one starts, so a drop while the
-    /// session sat idle is caught. True is still not a promise that the next operation will work, since nothing rules
-    /// out a drop between this answer and its use: treat false as certain and true as "nothing known to be wrong". An
-    /// operation leaves the connection unusable by failing at the transport or protocol level, by receiving a
-    /// server-side error, by being cancelled, or by streaming a result abandoned part-way.
+    /// Once false, it remains false; open a new session to continue. True does not guarantee the next operation
+    /// will succeed. Transport, protocol, or server errors, cancellation, and incomplete result streams can make
+    /// the connection unusable. Connection health is checked between operations, not while one is running.
     /// </remarks>
     bool IsOpen { get; }
 }

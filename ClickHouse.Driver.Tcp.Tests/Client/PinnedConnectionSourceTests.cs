@@ -7,18 +7,14 @@ using ClickHouse.Driver.Tcp.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tcp.Tests.Client;
 
-// What a session looks like from underneath, in the cases a live session cannot show. A real server proves the
-// effects — state carried, state kept private, connection not pooled afterwards — but not the order the disposal
-// does them in, nor what happens when the session is disposed with an operation still running, which needs an
-// operation held open at an exact moment.
+// Tests lease-return ordering and disposal races with explicitly controlled operation lifetimes.
 [TestFixture]
 public class PinnedConnectionSourceTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
 
     /// <summary>
-    /// Stands in for the pool: hands over one connection and records what came back, so a test can ask whether the
-    /// lease was returned, how often, and in what state the connection was by then.
+    /// Records lease returns and the connection state at return without a pool.
     /// </summary>
     private sealed class RecordingLease : IConnectionLease
     {
@@ -30,13 +26,11 @@ public class PinnedConnectionSourceTests
         public ClickHouseTcpConnection Connection { get; }
 
         /// <summary>
-        /// How many times the lease was returned. More than once would over-release the pool's permit. Counted
-        /// with an interlocked increment, so two concurrent returns register as two rather than racing to one and
-        /// leaving the very failure this exists to catch invisible.
+        /// Return count, incremented atomically so concurrent duplicate returns cannot go undetected.
         /// </summary>
         public int Returns => Volatile.Read(ref returns);
 
-        /// <summary>The connection's state when the lease came back, or null while it has not.</summary>
+        /// <summary>Connection state at lease return, or null before return.</summary>
         public TcpConnectionState? StateOnReturn => stateOnReturn;
 
         internal static async ValueTask<RecordingLease> CreateAsync()
@@ -84,8 +78,7 @@ public class PinnedConnectionSourceTests
 
         await source.DisposeAsync();
 
-        // The order is what keeps a session's state out of the pool: the pool decides a returned connection's fate
-        // from its state, so a connection still Ready when the lease comes back is one the pool keeps.
+        // Terminate before returning the lease so the pool cannot reuse session state.
         Assert.Multiple(() =>
         {
             Assert.That(lease.Returns, Is.EqualTo(1));
@@ -102,8 +95,7 @@ public class PinnedConnectionSourceTests
 
         await source.DisposeAsync();
 
-        // The connection is unusable immediately, so nothing can be started over it, but the lease is held back:
-        // returning it would let the pool close a connection whose buffers the operation is still reading into.
+        // Abort immediately, but defer lease return until the operation stops using the connection's buffers.
         Assert.Multiple(() =>
         {
             Assert.That(lease.Connection.State, Is.EqualTo(TcpConnectionState.Terminated));
@@ -124,8 +116,7 @@ public class PinnedConnectionSourceTests
         await source.DisposeAsync();
         await source.DisposeAsync();
 
-        // A second return releases a permit the source does not hold, which lets the pool run one operation past
-        // MaxPoolSize for the rest of its life.
+        // Duplicate returns over-release the pool permit, violating MaxPoolSize.
         Assert.That(lease.Returns, Is.EqualTo(1));
     }
 
@@ -214,9 +205,7 @@ public class PinnedConnectionSourceTests
     [Test]
     public async Task IsOpen_AfterTheConnectionDiesBetweenOperations_TurnsFalseWithoutAnOperationToNoticeIt()
     {
-        // What testing the connection before each operation buys, and the one case release cannot cover: at
-        // release nothing has had time to go wrong yet. Here the connection is lost while the session sits idle —
-        // a proxy or the server dropping one nobody is using — so only a later look finds it.
+        // Idle connection loss must be detected on access, not only when an operation releases its lease.
         RecordingLease lease = await RecordingLease.CreateAsync();
         var source = new PinnedConnectionSource(lease);
 
@@ -224,8 +213,7 @@ public class PinnedConnectionSourceTests
         await operation.DisposeAsync();
         Assert.That(source.IsOpen, Is.True, "the operation left the connection fine");
 
-        // Stands in for the peer going away between operations: the session did nothing, and the connection is
-        // gone all the same.
+        // Simulate transport loss between operations.
         lease.Connection.AbortTransport();
 
         try
@@ -247,9 +235,7 @@ public class PinnedConnectionSourceTests
     [Test]
     public async Task RentAsync_WhenTheConnectionIsOutOfStepWithTheServer_RefusesItThoughItLooksReady()
     {
-        // Bytes nobody read leave the reader out of step, which is what an abandoned result leaves behind. The
-        // state is still Ready, so a check on the state alone would run the next operation over a stream whose
-        // position is wrong and read another response's bytes as its own; only the reusability test sees it.
+        // Unread bytes make a Ready connection non-reusable; checking its state alone is insufficient.
         var lease = await TrailingBytesLease.CreateAsync();
         var source = new PinnedConnectionSource(lease);
 
@@ -290,10 +276,7 @@ public class PinnedConnectionSourceTests
     [Test]
     public async Task DisposeAsync_RacedAgainstAnEndingOperationAndAnotherDisposal_ReturnsTheLeaseExactlyOnce()
     {
-        // Over-releasing is the failure that does not announce itself: a second return hands the pool a permit the
-        // source never held, and the pool then runs one operation past MaxPoolSize for good. A session has one
-        // owner by contract, so this is not the supported use — it is the proof that misuse cannot corrupt the
-        // pool the session shares with everyone else.
+        // Concurrent disposal violates single-owner usage but must not over-release the shared pool's permit.
         for (int attempt = 0; attempt < 200; attempt++)
         {
             RecordingLease lease = await RecordingLease.CreateAsync();
@@ -314,8 +297,7 @@ public class PinnedConnectionSourceTests
     }
 
     /// <summary>
-    /// A lease over a connection whose "server" said more than the handshake called for. Nothing read those bytes,
-    /// so the connection is Ready but out of step — the state an abandoned result leaves, reproduced without one.
+    /// Provides a Ready but non-reusable connection with unread bytes after the fake handshake.
     /// </summary>
     private sealed class TrailingBytesLease : IConnectionLease
     {

@@ -9,14 +9,9 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// A session over one pinned connection. Opened with <see cref="ClickHouseTcpClient.OpenSessionAsync"/>; see
-/// <see cref="IClickHouseTcpSession"/> for what pinning buys and what it costs.
+/// Implements <see cref="IClickHouseTcpSession"/> by delegating to a client backed by a
+/// <see cref="PinnedConnectionSource"/>.
 /// </summary>
-/// <remarks>
-/// The operations are the client's own, run over a source that hands out the pinned connection instead of a pooled
-/// one (<see cref="PinnedConnectionSource"/>). Nothing here re-implements a query or an insert, so a session cannot
-/// drift from the client.
-/// </remarks>
 [Experimental("CHTCP0001")]
 internal sealed class ClickHouseTcpSession : IClickHouseTcpSession
 {
@@ -97,15 +92,12 @@ internal sealed class ClickHouseTcpSession : IClickHouseTcpSession
         => operations.PingAsync(cancellationToken);
 
     /// <summary>
-    /// Ends the session, closing its connection rather than pooling it. The client the session came from is
-    /// unaffected and keeps working.
+    /// Ends the session and closes its connection without disposing the parent client.
     /// </summary>
-    /// <returns>
-    /// A task that completes when the session is closed, which is not always when its connection is: an operation
-    /// still running is aborted rather than waited for, and it is that operation's unwinding, not this call, that
-    /// gives the slot back — see <see cref="PinnedConnectionSource.DisposeAsync"/> for what that costs when nothing
-    /// can resume the operation. A second call does nothing rather than waiting for the first, a session having one
-    /// owner.
-    /// </returns>
+    /// <remarks>
+    /// Active operations are aborted without waiting for their pool slot to be released; see
+    /// <see cref="PinnedConnectionSource.DisposeAsync"/>. Repeated calls return immediately.
+    /// </remarks>
+    /// <returns>A task that completes when disposal has finished or an active operation has been aborted.</returns>
     public ValueTask DisposeAsync() => operations.DisposeAsync();
 }
