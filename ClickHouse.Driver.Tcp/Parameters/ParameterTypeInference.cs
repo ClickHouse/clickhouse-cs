@@ -80,7 +80,9 @@ internal static class ParameterTypeInference
     {
         if (value is null or DBNull)
         {
-            return node.Name is "Nothing";
+            // A null belongs to Nothing and to any Nullable, which is what carries it inside a composite.
+            return node.Name is "Nothing" or "Nullable"
+                || (node.Name is "LowCardinality" && node.Arguments.Count == 1 && Accepts(node.Arguments[0], value));
         }
 
         // An alternative may itself be a wrapper; match against what it ultimately holds.
@@ -133,6 +135,9 @@ internal static class ParameterTypeInference
 
             // These share one CLR type with several ClickHouse types, so the base name alone decides.
             string or char => node.Name is "String" or "FixedString" or "Enum8" or "Enum16" ? node.Name : "String",
+
+            // A float is the only value BFloat16 accepts, so it matches that alternative as well as Float32.
+            float => node.Name is "Float32" or "BFloat16" ? node.Name : "Float32",
             DateTime or DateTimeOffset => node.Name is "DateTime" or "DateTime64" or "Date" or "Date32" ? node.Name : "DateTime64",
             decimal or ClickHouseDecimal => node.Name.StartsWith("Decimal", StringComparison.Ordinal) ? node.Name : "Decimal128",
             not string and IEnumerable => "Array",
