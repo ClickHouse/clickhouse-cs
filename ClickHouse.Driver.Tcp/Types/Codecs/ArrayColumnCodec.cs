@@ -66,23 +66,25 @@ internal static class ArrayColumnCodec
 /// once at the read boundary. The write path takes either shape as it comes: the dense
 /// <see cref="ArrayValueColumn{TElement}"/> is the wire's own layout and is written with no copy, while the
 /// ergonomic jagged form (<c>TElement[]</c> per row) is written from its rows without its elements being copied
-/// into a flat buffer first.
+/// into a flat buffer first when the inner codec accepts that projected shape. An inner such as <c>Nested</c>,
+/// whose only write source is its dense named-field column, therefore requires the dense outer form too.
 /// </para>
 /// </summary>
 /// <typeparam name="TElement">The inner codec's CLR element type; each row surfaces as <typeparamref name="TElement"/>[].</typeparam>
 internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 {
     private readonly IColumnCodec inner;
-    private readonly bool innerCanWrite;
+    private readonly bool projectedInnerCanWrite;
 
     internal ArrayColumnCodec(string typeName, IColumnCodec inner)
     {
         TypeName = typeName;
         this.inner = inner;
 
-        // Whether the inner codec can write at all (e.g. Nothing cannot). Computed once so CanWrite can reject an
-        // Array(non-writable) column up front rather than letting the write fail mid-stream.
-        innerCanWrite = inner.CanWrite(new ArrayColumn<TElement>(string.Empty, inner.TypeName, Array.Empty<TElement>()));
+        // Whether the ergonomic jagged path can project its flattened values through the inner codec (e.g.
+        // Nothing cannot, and Nested requires its dense NestedColumn). A dense ArrayValueColumn is checked against
+        // its actual inner column instead, so Array(Nested(...)) can re-insert the wire-shaped column a read yields.
+        projectedInnerCanWrite = inner.CanWrite(new ArrayColumn<TElement>(string.Empty, inner.TypeName, Array.Empty<TElement>()));
     }
 
     /// <inheritdoc/>
@@ -194,7 +196,10 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => innerCanWrite && column is IColumn<TElement[]>;
+    public bool CanWrite(IColumn column)
+        => column is ArrayValueColumn<TElement> dense
+            ? inner.CanWrite(dense.Inner)
+            : projectedInnerCanWrite && column is IColumn<TElement[]>;
 
     /// <inheritdoc/>
     // Computed once per slice and handed to both the prefix and body phases; see BuildState for what it holds.

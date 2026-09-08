@@ -95,6 +95,30 @@ public class ArrayColumnCodecTests
     }
 
     [Test]
+    public void CanWrite_NestedInnerWithoutDenseNamedFieldColumn_ReturnsFalse()
+    {
+        const string type = "Array(Nested(a UInt8))";
+        const string nestedType = "Nested(a UInt8)";
+        IColumnCodec codec = Resolve(type);
+
+        // Flattening the ergonomic rows would leave only object[][] values, not Nested's named field columns.
+        var ergonomic = new ArrayColumn<object[][][]>("c", type, Array.Empty<object[][][]>());
+        var wrongDense = new ArrayValueColumn<object[][]>(
+            "c",
+            type,
+            new ArrayColumn<object[][]>("c", nestedType, Array.Empty<object[][]>()),
+            new[] { 0 },
+            rowCount: 0,
+            pooledOffsets: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWrite(ergonomic), Is.False, "the row-oriented projection has lost the named fields");
+            Assert.That(codec.CanWrite(wrongDense), Is.False, "a dense outer column still needs a real NestedColumn inner");
+        });
+    }
+
+    [Test]
     public void ElementType_IsInnerElementTypeArray()
     {
         Assert.Multiple(() =>

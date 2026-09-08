@@ -391,4 +391,75 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(flatValues, Is.EqualTo(new[] { 1, 2, 3 }), "in wire order, so both entries stay addressable");
         });
     }
+
+    [Test]
+    public async Task QueryAsync_NestedColumn_ExposesPerFieldColumnsAndSharedOffsetsThroughINestedColumn()
+    {
+        // Nested is the case where the columnar view is the *primary* access path rather than an optimization: a
+        // Nested can carry any number of fields, so there is no generic per-row value type for it and the
+        // IColumn<T> surface has to degrade to object[][] — a boxed object[] per record, per row. INestedColumn is
+        // how a consumer reads it typed. One offsets array is shared by every field, since within a row all fields
+        // have the same element count.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool matched = false;
+        int rowCount = 0;
+        int fieldCount = 0;
+        string[] fieldNames = null;
+        int[] offsets = null;
+        byte[] fieldA = null;
+        string[] fieldB = null;
+        bool byNameMatchesByIndex = false;
+        int[] fieldRowCounts = null;
+        var recordsOfLastRow = new List<(byte A, string B)>();
+
+        // Rows: [], [(0, 'f0')], [(0, 'f0'), (1, 'f1')].
+        await foreach (Block block in connection.QueryAsync(
+            """
+            SELECT CAST(
+                arrayMap(i -> (toUInt8(i), concat('f', toString(i))), range(number)),
+                'Nested(a UInt8, b String)')
+            FROM system.numbers LIMIT 3
+            """,
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is INestedColumn;
+
+            var nested = (INestedColumn)column;
+            rowCount = nested.RowCount;
+            fieldCount = nested.FieldCount;
+            fieldNames = nested.FieldNames.ToArray();
+            offsets = nested.Offsets.ToArray();
+            fieldA = ((IColumn<byte>)nested.GetField(0)).Values.ToArray();
+            fieldB = ((IColumn<string>)nested.GetField(1)).Values.ToArray();
+            byNameMatchesByIndex = ReferenceEquals(nested.GetField("b"), nested.GetField(1));
+            fieldRowCounts = new[] { nested.GetField(0).RowCount, nested.GetField(1).RowCount };
+
+            // Reassemble the last row's records by walking the shared offsets across both field columns — the
+            // typed, allocation-free equivalent of what the object[][] surface would box.
+            int last = nested.RowCount - 1;
+            var a = (IColumn<byte>)nested.GetField(0);
+            var b = (IColumn<string>)nested.GetField(1);
+            for (int i = nested.Offsets[last]; i < nested.Offsets[last + 1]; i++)
+            {
+                recordsOfLastRow.Add((a[i], b[i]));
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(rowCount, Is.EqualTo(3));
+            Assert.That(fieldCount, Is.EqualTo(2));
+            Assert.That(fieldNames, Is.EqualTo(new[] { "a", "b" }));
+            Assert.That(offsets, Is.EqualTo(new[] { 0, 0, 1, 3 }), "one shared offsets array, one more entry than rows");
+            Assert.That(offsets.Length, Is.EqualTo(rowCount + 1), "sliced to the row count, not the pooled buffer length");
+            Assert.That(fieldA, Is.EqualTo(new byte[] { 0, 0, 1 }), "field-major: every row's 'a' elements end-to-end");
+            Assert.That(fieldB, Is.EqualTo(new[] { "f0", "f0", "f1" }), "and every row's 'b', aligned with 'a'");
+            Assert.That(fieldRowCounts, Is.EqualTo(new[] { 3, 3 }), "every field holds the same total element count");
+            Assert.That(byNameMatchesByIndex, Is.True, "name lookup resolves to the same column as the index");
+            Assert.That(recordsOfLastRow, Is.EqualTo(new[] { ((byte)0, "f0"), ((byte)1, "f1") }));
+        });
+    }
 }

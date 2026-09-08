@@ -143,6 +143,34 @@ public class MapColumnCodecTests
     }
 
     [Test]
+    public void CanWrite_NestedValueWithoutDenseNamedFieldColumn_ReturnsFalse()
+    {
+        const string type = "Map(String, Nested(a UInt8))";
+        const string nestedType = "Nested(a UInt8)";
+        IColumnCodec codec = Resolve(type);
+
+        // Flattening the ergonomic pairs would leave object[][] values, not Nested's named field columns.
+        var ergonomic = new ArrayColumn<KeyValuePair<string, object[][]>[]>(
+            "c",
+            type,
+            Array.Empty<KeyValuePair<string, object[][]>[]>());
+        var wrongDense = new MapColumn<string, object[][]>(
+            "c",
+            type,
+            new ArrayColumn<string>("c", "String", Array.Empty<string>()),
+            new ArrayColumn<object[][]>("c", nestedType, Array.Empty<object[][]>()),
+            new[] { 0 },
+            rowCount: 0,
+            pooledOffsets: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWrite(ergonomic), Is.False, "the row-oriented projection has lost the named fields");
+            Assert.That(codec.CanWrite(wrongDense), Is.False, "a dense map still needs a real NestedColumn value");
+        });
+    }
+
+    [Test]
     public void ElementType_IsKeyValuePairArray()
     {
         Assert.Multiple(() =>

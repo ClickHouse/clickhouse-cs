@@ -34,7 +34,7 @@ public class ColumnCodecRegistryTests
 
     [Test]
     public void Resolve_UnsupportedButWellFormedType_ThrowsNotSupported()
-        => Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve("Nested(a Int32, b String)", default));
+        => Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve("LowCardinality(String)", default));
 
     [Test]
     public void Resolve_MalformedType_ThrowsFormat()

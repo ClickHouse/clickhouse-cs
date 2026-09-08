@@ -23,7 +23,8 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// The generic bridge from the non-generic key/value codecs to the right typed <see cref="MapColumn{TKey, TValue}"/>
 /// lives in the cached per-type-pair <see cref="IMapShape"/>; the codec itself stays non-generic. On the write
 /// path it accepts a column of <c>KeyValuePair&lt;K, V&gt;[]</c> (the dense <see cref="MapColumn{TKey, TValue}"/>,
-/// written with no copy, or the ergonomic jagged form, flattened through pooled key/value buffers).
+/// written with no copy, or the ergonomic jagged form when both children accept columns flattened through pooled
+/// key/value buffers). A shape-only child such as <c>Nested</c> requires the dense map form.
 /// </para>
 /// </summary>
 internal sealed class MapColumnCodec : IColumnCodec
@@ -31,7 +32,7 @@ internal sealed class MapColumnCodec : IColumnCodec
     private readonly IColumnCodec keyCodec;
     private readonly IColumnCodec valueCodec;
     private readonly IMapShape shape;
-    private readonly bool childrenCanWrite;
+    private readonly bool projectedChildrenCanWrite;
 
     private MapColumnCodec(string typeName, IColumnCodec keyCodec, IColumnCodec valueCodec)
     {
@@ -40,9 +41,10 @@ internal sealed class MapColumnCodec : IColumnCodec
         this.valueCodec = valueCodec;
         shape = MapShapes.For(keyCodec.ElementType, valueCodec.ElementType);
 
-        // Whether both the key and value codecs can write at all (e.g. Nothing cannot). Computed once so CanWrite
-        // can reject a Map(non-writable, ...) column up front rather than letting the write fail mid-stream.
-        childrenCanWrite = shape.CanInnerWrite(keyCodec, valueCodec);
+        // Whether the ergonomic jagged path can project its flattened key/value buffers through both codecs. A
+        // dense MapColumn is checked against its actual key/value columns instead, so Map(K, Nested(...)) can
+        // re-insert the wire-shaped NestedColumn value child a read yields.
+        projectedChildrenCanWrite = shape.CanInnerWrite(keyCodec, valueCodec);
     }
 
     /// <inheritdoc/>
@@ -175,7 +177,7 @@ internal sealed class MapColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => childrenCanWrite && shape.CanWrite(column);
+    public bool CanWrite(IColumn column) => shape.CanWrite(keyCodec, valueCodec, column, projectedChildrenCanWrite);
 
     /// <inheritdoc/>
     // Flatten the slice's keys and values once and create the key/value codecs' own write states over them, so a
@@ -228,10 +230,14 @@ internal interface IMapShape
     /// <summary>Wraps decoded flat key/value columns and their shared offsets into the typed map column.</summary>
     IColumn Wrap(string name, string typeName, IColumn keys, IColumn values, int[] offsets, int rowCount, bool pooledOffsets);
 
-    /// <summary>Whether <paramref name="column"/> is a map column of this key/value type pair, writable by the codec.</summary>
-    bool CanWrite(IColumn column);
+    /// <summary>
+    /// Whether <paramref name="column"/> is a writable map column of this key/value type pair. A dense column is
+    /// checked against its actual key/value children; an ergonomic jagged column relies on the flattened child
+    /// probe supplied in <paramref name="projectedChildrenCanWrite"/>.
+    /// </summary>
+    bool CanWrite(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, bool projectedChildrenCanWrite);
 
-    /// <summary>Whether both the key and value codecs can write their typed column at all (e.g. <c>Nothing</c> cannot).</summary>
+    /// <summary>Whether both codecs accept the flat typed columns projected by the ergonomic jagged write path.</summary>
     bool CanInnerWrite(IColumnCodec keyCodec, IColumnCodec valueCodec);
 
     /// <summary>
@@ -285,7 +291,15 @@ internal sealed class MapShape<TKey, TValue> : IMapShape
         => new MapColumn<TKey, TValue>(name, typeName, (IColumn<TKey>)keys, (IColumn<TValue>)values, offsets, rowCount, pooledOffsets);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<KeyValuePair<TKey, TValue>[]>;
+    public bool CanWrite(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, bool projectedChildrenCanWrite)
+    {
+        if (column is MapColumn<TKey, TValue> dense)
+        {
+            return keyCodec.CanWrite(dense.KeyColumn) && valueCodec.CanWrite(dense.ValueColumn);
+        }
+
+        return projectedChildrenCanWrite && column is IColumn<KeyValuePair<TKey, TValue>[]>;
+    }
 
     /// <inheritdoc/>
     public bool CanInnerWrite(IColumnCodec keyCodec, IColumnCodec valueCodec)
