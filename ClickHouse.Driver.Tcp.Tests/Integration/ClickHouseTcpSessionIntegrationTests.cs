@@ -9,11 +9,7 @@ using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
-// A session is only worth having if the server agrees that it is one connection, so everything that defines one —
-// state carried between operations, state kept out of everyone else's, and the connection closed rather than pooled
-// afterwards — is asserted against a real server. A temporary table is the marker throughout: the server scopes it
-// to the connection that made it, so its visibility says which connection ran a query without the client having to
-// claim anything about its own pool.
+// Uses connection-scoped temporary tables to verify session persistence, isolation, and disposal on a real server.
 [TestFixture]
 [Category("Integration")]
 public class ClickHouseTcpSessionIntegrationTests
@@ -28,8 +24,7 @@ public class ClickHouseTcpSessionIntegrationTests
     }
 
     /// <summary>
-    /// A client whose pool is one connection wide, so a session leaves nothing behind it: whatever the client does
-    /// next must use the very connection the session gave back, which is what makes "was it pooled?" observable.
+    /// Limits the pool to one slot so subsequent operations expose connection reuse or a leaked lease.
     /// </summary>
     private static ClickHouseTcpClient SingleConnectionClient()
         => new(TcpServerFixture.Options() with { MaxPoolSize = 1, PoolTimeout = TimeSpan.FromSeconds(10) });
@@ -64,8 +59,7 @@ public class ClickHouseTcpSessionIntegrationTests
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
         await using IClickHouseTcpSession session = await client.OpenSessionAsync(None);
 
-        // Read back from system.settings rather than the value we sent: that view reports what the server holds for
-        // this connection, so it answers whether the SET survived rather than whether it parsed.
+        // Read system.settings to verify SET persists across operations.
         await session.ExecuteAsync("SET max_threads = 3", cancellationToken: None);
 
         ulong threads = await ScalarAsync(
@@ -83,8 +77,7 @@ public class ClickHouseTcpSessionIntegrationTests
 
         await session.ExecuteAsync($"CREATE TEMPORARY TABLE {table} (value UInt64)", cancellationToken: None);
 
-        // The session holds its connection, so the client is served from the rest of the pool and sees no such
-        // table. This is the pinning itself: without it the client could land on the session's connection.
+        // Client operations must not reuse the session's pinned connection.
         Assert.That(
             async () => await client.ExecuteAsync($"SELECT * FROM {table}", cancellationToken: None),
             Throws.TypeOf<ClickHouseServerException>());
@@ -97,8 +90,7 @@ public class ClickHouseTcpSessionIntegrationTests
         await using IClickHouseTcpSession first = await client.OpenSessionAsync(None);
         await using IClickHouseTcpSession second = await client.OpenSessionAsync(None);
 
-        // One name, two sessions: the creates can only both succeed if each landed on its own connection, and the
-        // reads then say which rows each session's table holds.
+        // Use the same table name in both sessions to verify independent connection-local state.
         string table = UniqueTableName();
         await first.ExecuteAsync($"CREATE TEMPORARY TABLE {table} (value UInt64)", cancellationToken: None);
         await second.ExecuteAsync($"CREATE TEMPORARY TABLE {table} (value UInt64)", cancellationToken: None);
@@ -122,8 +114,7 @@ public class ClickHouseTcpSessionIntegrationTests
         await session.ExecuteAsync($"CREATE TEMPORARY TABLE {table} (value UInt64)", cancellationToken: None);
         await session.DisposeAsync();
 
-        // The pool is one wide, so this query runs on whatever the session gave back. A pooled connection would
-        // still have the temporary table on it; a closed one is replaced by a dial to a server that never saw it.
+        // With one pool slot, reusing the session's connection would expose its temporary table.
         Assert.That(
             async () => await client.ExecuteAsync($"SELECT * FROM {table}", cancellationToken: None),
             Throws.TypeOf<ClickHouseServerException>());
@@ -138,19 +129,15 @@ public class ClickHouseTcpSessionIntegrationTests
         await session.PingAsync(None);
         await session.DisposeAsync();
 
-        // The only slot the pool has. Had disposal closed the connection without returning the lease, this would
-        // wait out PoolTimeout and fail instead.
+        // A leaked lease would exhaust the single-slot pool and cause a timeout.
         Assert.That(await ScalarAsync(client, "SELECT toUInt64(1) AS value"), Is.EqualTo(1UL));
     }
 
     [Test]
     public async Task DisposeAsync_WithAStreamNobodyAdvancesOrDisposes_DoesNotGetTheSlotBack()
     {
-        // The caveat on the abort path, pinned rather than left to be discovered. Aborting the transport frees an
-        // operation parked on the socket; an enumerator the caller stopped advancing is parked at its yield
-        // instead, so nothing resumes it, nothing disposes its lease, and the slot stays out. Disposal still
-        // returns promptly and reports nothing — it cannot return the lease itself without letting the pool
-        // terminate a connection a live operation may still be reading into.
+        // Transport abort cannot resume an enumerator suspended at yield; its lease remains held until disposal.
+        // Session disposal cannot return that lease while the operation may still access connection buffers.
         await using ClickHouseTcpClient client = new(TcpServerFixture.Options() with
         {
             MaxPoolSize = 1,
@@ -182,18 +169,15 @@ public class ClickHouseTcpSessionIntegrationTests
 
         await using IClickHouseTcpSession holder = await client.OpenSessionAsync(None);
 
-        // A session competes for a connection like any other operation, and holds one for its whole life, so the
-        // pool being one wide is the pool being full.
+        // The open session holds the only pool slot.
         Assert.That(async () => await client.OpenSessionAsync(None), Throws.TypeOf<TimeoutException>());
     }
 
     [Test]
     public async Task ExecuteAsync_AfterTheClientIsDisposed_ReportsTheSessionAsOverRatherThanTheConnection()
     {
-        // Disposing the client first is the wrong order — its drain aborts the session's connection — and the
-        // session learns of it only when asked. Because it is asked before each operation, and not merely after
-        // the last one, this reports a finished session rather than letting the connection's own internal
-        // "terminated and cannot be reused" reach the caller.
+        // Client disposal aborts the pinned connection. Subsequent access must report a closed session,
+        // not an internal connection-reuse error.
         ClickHouseTcpClient client = new(TcpServerFixture.Options() with
         {
             MaxPoolSize = 1,
@@ -232,8 +216,7 @@ public class ClickHouseTcpSessionIntegrationTests
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
         await using IClickHouseTcpSession session = await client.OpenSessionAsync(None);
 
-        // The enumerator holds the connection between blocks, which is exactly when a second operation would write
-        // its Query packet into the middle of this result.
+        // Keep the stream open between blocks to test rejection of interleaved operations.
         IAsyncEnumerator<Block> stream = session
             .StreamAsync("SELECT number FROM system.numbers LIMIT 100000", cancellationToken: None)
             .GetAsyncEnumerator(None);
@@ -241,13 +224,10 @@ public class ClickHouseTcpSessionIntegrationTests
         {
             Assert.That(await stream.MoveNextAsync(), Is.True);
 
-            // Parked between blocks the connection is mid-response and so not reusable, which is the trap in
-            // testing it for liveness before each operation: a test that ran now would read "not reusable" and
-            // condemn a session that is working perfectly.
+            // A mid-response connection is not reusable, but its active session remains open.
             Assert.That(session.IsOpen, Is.True);
 
-            // The connection refuses a second operation too, so the message is what says the session caught this
-            // first — and the session's message is the one that mentions the enumerator still holding it.
+            // Match the message to verify rejection by the session rather than the connection.
             Assert.That(
                 async () => await session.ExecuteAsync("SELECT 1", cancellationToken: None),
                 Throws.InvalidOperationException.With.Message.Contains("The session is already running an operation"));
@@ -264,9 +244,7 @@ public class ClickHouseTcpSessionIntegrationTests
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
         await using IClickHouseTcpSession session = await client.OpenSessionAsync(None);
 
-        // Stopping mid-result leaves the rest of it coming, so the connection cannot carry anything else and is
-        // closed. On the client that costs a redial; on a session it is the end of the session, because the state
-        // the session existed for went with the connection.
+        // Early stream disposal closes the connection; the session cannot reconnect without losing its state.
         await foreach (Block block in session.StreamAsync("SELECT number FROM system.numbers LIMIT 100000", cancellationToken: None))
         {
             _ = block.RowCount;
@@ -294,8 +272,7 @@ public class ClickHouseTcpSessionIntegrationTests
             async () => await session.ExecuteAsync("SELECT * FROM no_such_table_here", cancellationToken: None),
             Throws.TypeOf<ClickHouseServerException>());
 
-        // An Exception packet does not say whether the server will accept another request, so the connection is
-        // retired. Unlike a pooled client, a session cannot redial without losing the state it exists to preserve.
+        // A server exception retires the connection; the session must fail rather than reconnect without its state.
         Assert.Multiple(() =>
         {
             Assert.That(session.IsOpen, Is.False);
@@ -325,8 +302,7 @@ public class ClickHouseTcpSessionIntegrationTests
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
         await using IClickHouseTcpSession session = await client.OpenSessionAsync(None);
 
-        // The session owns one connection; the pool serves the client from the others, including concurrently with
-        // the session's own operation.
+        // Client operations use other pooled connections while the session runs a query.
         Task<ulong> onTheSession = ScalarAsync(session, "SELECT toUInt64(sleep(0.5) + 1) AS value");
         ulong[] onTheClient = await Task.WhenAll(Enumerable.Range(0, 4)
             .Select(i => ScalarAsync(client, $"SELECT toUInt64({i}) AS value")));
@@ -341,9 +317,7 @@ public class ClickHouseTcpSessionIntegrationTests
     [Test]
     public async Task IClickHouseTcpSession_EveryOperationRunsOnThePinnedConnection()
     {
-        // The session delegates each operation to an inner client, so the risk is a member wired to the wrong
-        // place. A temporary table catches that: every tier below has to reach the one connection that owns it, so
-        // a misrouted member fails outright rather than quietly using another connection.
+        // Temporary-table access detects any insert or query overload routed off the pinned connection.
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
         await using IClickHouseTcpSession session = await client.OpenSessionAsync(None);
         string table = UniqueTableName();
@@ -385,9 +359,7 @@ public class ClickHouseTcpSessionIntegrationTests
     [Test]
     public async Task Options_OnASession_AreTheVeryOptionsOfTheClientItCameFrom()
     {
-        // With custom settings present, the options carry a dictionary that is copied whenever a client is built
-        // over them — so this passes only because the session is handed the copy its parent already owns. An
-        // equal-looking copy would satisfy a property-by-property check and still break record equality.
+        // Custom settings exercise dictionary copying; the session must expose the parent's options instance.
         await using ClickHouseTcpClient client = new(TcpServerFixture.Options() with
         {
             CustomSettings = new Dictionary<string, string> { ["max_threads"] = "3" },

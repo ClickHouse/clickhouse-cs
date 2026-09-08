@@ -31,10 +31,9 @@ namespace ClickHouse.Driver.Tcp;
 /// </para>
 ///
 /// <para>
-/// An operation runs on whichever connection the pool hands it, which may or may not be the one before it used.
-/// So server-side state a connection holds — a temporary table, a <c>SET</c> — is neither reliably still there for
-/// the next operation nor reliably gone from it. Where that state is the point, use
-/// <see cref="OpenSessionAsync"/>, which pins one connection for as long as the session lives.
+/// Pooled operations may reuse a connection or use different ones; connection state is neither isolated nor
+/// guaranteed to persist between calls. Use <see cref="OpenSessionAsync"/> for temporary tables and <c>SET</c>
+/// settings that must persist across operations.
 /// </para>
 ///
 /// <para>
@@ -91,12 +90,11 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     }
 
     /// <summary>Test/pool seam: builds a client over an arbitrary connection source.</summary>
-    /// <param name="source">The source the client rents its connections from.</param>
+    /// <param name="source">The connection source.</param>
     /// <param name="options">The client configuration, or null for the defaults.</param>
     /// <param name="optionsAreOwned">
-    /// True when <paramref name="options"/> already holds a private snapshot of its custom settings, so this client
-    /// can share it rather than copy it again. Only a session passes true, which also makes <c>session.Options</c>
-    /// the very instance <c>client.Options</c> is rather than an equal-looking copy.
+    /// True to reuse options whose custom settings are already privately owned. Sessions use this to share
+    /// the parent client's options instance.
     /// </param>
     internal ClickHouseTcpClient(
         IConnectionSource source,
@@ -115,9 +113,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     public ClickHouseTcpClientOptions Options { get; }
 
     /// <summary>
-    /// The compiled POCO read and write plans. Per-client, as HTTP's registry is: the client is meant to be a
-    /// singleton, so the reflection and the compiles are amortized anyway, and a per-client cache cannot pin a type
-    /// whose AssemblyLoadContext the caller unloads. A session shares the registry of the client it came from.
+    /// Compiled POCO read and write plans, shared with this client's sessions.
     /// </summary>
     internal PocoTypeRegistry PocoTypes { get; init; } = new();
 
@@ -414,34 +410,14 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     internal static int? ResolveMaxRowsPerBlock(ClickHouseTcpInsertOptions options)
         => (options ?? DefaultInsertOptions).MaxRowsPerBlock;
 
-    /// <summary>
-    /// Opens a session: one connection, taken from this client's pool and held until the session is disposed, that
-    /// every operation on the returned object runs over. Server-side state a connection owns therefore survives from
-    /// one operation to the next — a temporary table stays visible, and a <c>SET</c> keeps applying.
-    /// </summary>
-    /// <remarks>
-    /// <b>Dispose it, and keep it short.</b> The session holds one of the pool's
-    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/> connections for its whole lifetime, so as many sessions as
-    /// the pool is wide leaves nothing for anything else, including for opening the next session — which then waits
-    /// out <see cref="ClickHouseTcpClientOptions.PoolTimeout"/>. Disposal closes the connection rather than pooling
-    /// it, since it carries the session's state, so it costs the next caller a reconnect. Dispose the sessions before
-    /// the client: an open one holds a slot the client's own disposal waits out <c>PoolTimeout</c> for. A session runs
-    /// one operation at a time, while the client itself runs them concurrently; both may be used at once, the
-    /// session's connection being its own.
-    /// </remarks>
-    /// <param name="cancellationToken">A token to observe while waiting for and establishing the connection.</param>
-    /// <returns>A session pinned to one connection.</returns>
-    /// <exception cref="TimeoutException">No connection became available within
-    /// <see cref="ClickHouseTcpClientOptions.PoolTimeout"/>.</exception>
-    /// <exception cref="ObjectDisposedException">This client has been disposed.</exception>
+    /// <inheritdoc/>
     public async ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default)
     {
         IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
         var pinned = new PinnedConnectionSource(lease);
         try
         {
-            // The session's operations are this client's, run over the pinned source. The registry is shared so a
-            // plan compiled either side serves both.
+            // Reuse client operations and compiled plans on the pinned connection.
             var operations = new ClickHouseTcpClient(pinned, Options, optionsAreOwned: true)
             {
                 PocoTypes = PocoTypes,
@@ -451,8 +427,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         }
         catch
         {
-            // Nothing here is expected to throw, but a connection this method fails to hand over is one nobody can
-            // return: the caller has no session to dispose, and the pool is a slot short for the rest of its life.
+            // Release the pool slot if session construction fails.
             await pinned.DisposeAsync().ConfigureAwait(false);
             throw;
         }

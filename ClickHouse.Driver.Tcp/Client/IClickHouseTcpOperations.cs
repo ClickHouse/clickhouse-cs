@@ -9,11 +9,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// What can be run against a ClickHouse server over the native TCP protocol: queries and streamed results,
-/// statements, and inserts columnwise or row by row. Both <see cref="IClickHouseTcpClient"/>, which spreads its
-/// operations over a pool, and <see cref="IClickHouseTcpSession"/>, which runs them all on one pinned
-/// connection, offer this surface — so code that only runs operations should take this interface and work with
-/// either. Code against it to substitute a test double.
+/// Query, execution, and insert operations shared by <see cref="IClickHouseTcpClient"/> and
+/// <see cref="IClickHouseTcpSession"/>. Use this interface for code that accepts either a pooled client or a session.
 ///
 /// <para>
 /// This type is experimental: its surface may change in a future release. Suppress diagnostic
@@ -24,8 +21,7 @@ namespace ClickHouse.Driver.Tcp;
 public interface IClickHouseTcpOperations : IAsyncDisposable
 {
     /// <summary>
-    /// The configuration these operations run under, including the client-level settings applied to every one of
-    /// them. A session reports the options of the client it was opened from.
+    /// Client configuration and settings applied to every operation. Sessions share their parent client's options.
     /// </summary>
     ClickHouseTcpClientOptions Options { get; }
 

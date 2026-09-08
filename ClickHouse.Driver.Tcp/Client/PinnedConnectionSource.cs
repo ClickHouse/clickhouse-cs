@@ -6,43 +6,38 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp.Client;
 
 /// <summary>
-/// A connection source that hands out the same connection every time: the one a session pinned. It holds a lease on
-/// the underlying source for its whole lifetime, so the connection is never anyone else's in between — which is what
-/// carries a session's temporary tables and settings from one operation to the next.
+/// Holds one connection lease for a session and lends it to one operation at a time.
 /// </summary>
 /// <remarks>
-/// Being the seam the pool is, it lets a session run the ordinary client code. It adds only the bookkeeping pinning
-/// brings: one operation at a time, a lost connection reported as such, and, on disposal, the connection closed
-/// instead of handed back. Every state change is made under <c>gate</c>, and the slow parts outside it. The lock is
-/// for interlocking, not contention: a rent must not start while disposal is deciding whether the connection is idle.
+/// State changes are guarded by <c>gate</c> so renting cannot race with disposal. Transport teardown and lease
+/// return run outside the lock. The connection is closed on disposal to keep session state out of the pool.
 /// </remarks>
 internal sealed class PinnedConnectionSource : IConnectionSource
 {
-    // Not nameof: CHTCP0001 objects to naming the [Experimental] session type from ordinary internal code.
+    // A string literal avoids CHTCP0001 when referencing the experimental session type.
     private const string SessionTypeName = "ClickHouseTcpSession";
 
     private readonly IConnectionLease lease;
     private readonly object gate = new();
 
-    // An operation holds the connection: rented and not yet released.
+    // True while an operation holds the connection.
     private bool busy;
 
-    // The connection was lost, so nothing more can run on it. Latched by HasLostTheConnection.
+    // Permanently set by HasLostTheConnection when the connection becomes unusable.
     private bool faulted;
 
     private bool disposed;
 
-    // The lease has been given back to the pool. Doing that twice would release a permit the source does not hold,
-    // letting the pool run one operation over its limit.
+    // Guards the single pool return; returning twice would over-release the pool's permit.
     private bool returned;
 
     /// <summary>Pins the connection behind a lease for the lifetime of this source.</summary>
-    /// <param name="lease">The lease to hold, taken from the client's own source.</param>
+    /// <param name="lease">The lease owned by this source.</param>
     internal PinnedConnectionSource(IConnectionLease lease) => this.lease = lease;
 
     /// <summary>
-    /// Whether the pinned connection can still carry an operation. Mid-operation it reports what is known so far, a
-    /// busy connection not being reusable by definition.
+    /// Whether the session is undisposed and the connection is not known to be unusable.
+    /// Skips the reusability check during an active operation.
     /// </summary>
     internal bool IsOpen
     {
@@ -74,8 +69,7 @@ internal sealed class PinnedConnectionSource : IConnectionSource
                 throw new ObjectDisposedException(SessionTypeName);
             }
 
-            // Before the connection is tested: a connection carrying an operation is not reusable, so asking the
-            // question below while one runs would condemn a session that is merely busy.
+            // A busy connection is not reusable; reject concurrency before testing connection health.
             if (busy)
             {
                 throw new InvalidOperationException(
@@ -91,22 +85,17 @@ internal sealed class PinnedConnectionSource : IConnectionSource
             busy = true;
         }
 
-        // A token for one operation, not a second claim: disposing it releases the gate above, not the underlying
-        // lease, which this source holds until it is disposed.
+        // Disposing this lease releases the operation, not the session's underlying lease.
         return new ValueTask<IConnectionLease>(new PinnedLease(this));
     }
 
     /// <summary>
-    /// Ends the session: closes the pinned connection and gives the lease back, so the pool accounts for the slot
-    /// again. Idempotent.
+    /// Ends the session, closing an idle connection or aborting an active operation. Idempotent.
     /// </summary>
     /// <remarks>
-    /// The connection is closed rather than pooled because the next caller must not inherit a session's state. During
-    /// an operation it cannot be closed that way — the buffers being read into would go back to the pool underneath it
-    /// — so disposal aborts the transport, which is safe to race with, and leaves the return to the operation's
-    /// unwinding. That frees an operation parked on the socket but not one parked at a <c>yield</c>: a streamed result
-    /// whose consumer stopped advancing never returns its lease, and the pool is short a slot until the client is
-    /// disposed. Returning it here instead would let the pool terminate a connection a live operation still reads into.
+    /// An active operation may still use connection buffers, so only its transport is aborted here. The operation
+    /// returns the lease through <see cref="ReleaseAsync"/> when it exits. An undisposed enumerator suspended at
+    /// a <c>yield</c> cannot be resumed by aborting the transport and keeps the pool slot until client disposal.
     /// </remarks>
     public async ValueTask DisposeAsync()
     {
@@ -120,16 +109,14 @@ internal sealed class PinnedConnectionSource : IConnectionSource
 
             disposed = true;
 
-            // `returned` cannot be set yet: only this method and ReleaseAsync's disposed branch set it, and both are
-            // reachable only once `disposed` is.
+            // No return can have started before disposal; reserve it here only if idle.
             abort = busy;
             returned = !abort;
         }
 
         if (abort)
         {
-            // Marks the connection final, so the pool cannot reuse it whatever happens next, and frees an operation
-            // parked on a read that will never arrive.
+            // Unblock pending I/O without releasing buffers the operation may still use.
             lease.Connection.AbortTransport();
             return;
         }
@@ -138,8 +125,7 @@ internal sealed class PinnedConnectionSource : IConnectionSource
     }
 
     /// <summary>
-    /// Takes the connection back from a finished operation, keeping it pinned. A session disposed mid-operation is
-    /// completed here instead, this being the first moment the connection is idle enough to close.
+    /// Releases an operation's claim. Keeps the connection pinned unless the session has been disposed.
     /// </summary>
     private ValueTask ReleaseAsync()
     {
@@ -149,8 +135,7 @@ internal sealed class PinnedConnectionSource : IConnectionSource
 
             if (!disposed)
             {
-                // So an operation that broke the connection is reported as such even if nothing runs on the session
-                // again, which is what IsOpen reports.
+                // Record operation failures for IsOpen and subsequent rents.
                 HasLostTheConnection();
                 return default;
             }
@@ -167,18 +152,13 @@ internal sealed class PinnedConnectionSource : IConnectionSource
     }
 
     /// <summary>
-    /// Whether the pinned connection has been lost, latching the answer once it has. Call under <c>gate</c>, and only
-    /// when no operation is running: mid-operation the connection is legitimately not reusable, so the question does
-    /// not apply.
+    /// Checks connection reusability and permanently records failure.
     /// </summary>
-    /// <returns>True when nothing more can run on this session.</returns>
+    /// <returns>True if the connection is unusable or was previously found unusable.</returns>
     /// <remarks>
-    /// The predicate is the pool's, <see cref="ClickHouseTcpConnection.IsReusable"/>, asked at both ends of an
-    /// operation as the pool asks at both ends of a lease: on release it catches what the operation did to the
-    /// connection, before the next one what happened while the session sat idle. It latches because the causes are
-    /// final. A false positive costs more here than in the pool — a reconnect there, the temporary tables and settings
-    /// a session exists for here — so a session dying for no visible reason under TLS is the first thing to suspect
-    /// (see <see cref="ClickHouseTcpConnection.IsReusable"/> on late session tickets).
+    /// Call under <c>gate</c> only when idle: <see cref="ClickHouseTcpConnection.IsReusable"/> is false during an
+    /// operation. Checks before and after operations detect both idle disconnects and operation failures.
+    /// The same TLS liveness limitations as <see cref="ClickHouseTcpConnection.IsReusable"/> apply.
     /// </remarks>
     private bool HasLostTheConnection()
     {
@@ -188,10 +168,8 @@ internal sealed class PinnedConnectionSource : IConnectionSource
 
     /// <summary>Closes the pinned connection and returns the lease, in that order.</summary>
     /// <remarks>
-    /// The order is the whole point: the pool decides a returned connection's fate from its state, so terminating has
-    /// to come first or the pool would keep one carrying this session's temporary tables and settings. A throw from
-    /// <c>Terminate</c> is swallowed because the connection is discarded either way, and letting it escape would
-    /// leave the pool a slot short.
+    /// Terminate before returning so the pool cannot reuse session state. Suppress non-fatal termination errors
+    /// and always return the lease to release the pool slot.
     /// </remarks>
     private async ValueTask ReturnAsync()
     {
@@ -209,8 +187,7 @@ internal sealed class PinnedConnectionSource : IConnectionSource
     }
 
     /// <summary>
-    /// The lease one operation runs under. Disposing it hands the connection back to the session rather than to the
-    /// pool, which is what keeps it pinned across operations.
+    /// An operation's lease. Disposal releases it to the session rather than the pool.
     /// </summary>
     private sealed class PinnedLease : IConnectionLease
     {
