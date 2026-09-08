@@ -204,14 +204,19 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
-    [Test]
-    public void FormatSqlText_InstantForADateTime64WithNoTimezone_SuggestsAScaleAndATimezone()
+    // The suggestion has to stay valid for the type it is about: DateTime64('UTC') is not a type, and a
+    // suggestion naming another scale would change the precision the caller declared.
+    [TestCase("DateTime64(3)", "DateTime64(3, 'UTC')", TestName = "Scale three")]
+    [TestCase("DateTime64(9)", "DateTime64(9, 'UTC')", TestName = "Scale nine")]
+    [TestCase("DateTime64(0)", "DateTime64(0, 'UTC')", TestName = "Scale zero")]
+    [TestCase("DateTime64", "DateTime64(3, 'UTC')", TestName = "No scale takes the server default")]
+    public void FormatSqlText_InstantForADateTime64WithNoTimezone_SuggestsTheDeclaredScaleAndATimezone(
+        string typeName, string suggestion)
     {
-        // The suggestion has to stay valid for the type it is about: DateTime64('UTC') is not a type.
         var exception = Assert.Throws<ArgumentException>(
-            () => Format(new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc), "DateTime64(3)"));
+            () => Format(new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc), typeName));
 
-        Assert.That(exception.Message, Does.Contain("DateTime64(3, 'UTC')"));
+        Assert.That(exception.Message, Does.Contain(suggestion));
     }
 
     [Test]
@@ -413,6 +418,25 @@ public class TcpParameterFormatterEdgeCaseTests
         var exception = Assert.Throws<ArgumentException>(() => Format(new[] { 1, 2 }, "Variant(Int64, String)"));
 
         Assert.That(exception.Message, Does.Contain("no alternative"));
+    }
+
+    // A string is a sequence of chars, so a container arm that takes any IEnumerable sends one element per
+    // character and the server stores it without complaint. Every container arm has to refuse it instead.
+    [TestCase("Array(String)", TestName = "Bound as an Array")]
+    [TestCase("QBit(Float32, 3)", TestName = "Bound as a QBit")]
+    [TestCase("Nested(a String)", TestName = "Bound as Nested")]
+    public void FormatSqlText_StringBoundToAContainerType_ThrowsInsteadOfSplittingIntoCharacters(string typeName)
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format("abc", typeName));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain(typeName), "names the type");
+            Assert.That(
+                exception.Message,
+                Does.Contain("System.String"),
+                "names the value the caller passed, not one of its characters");
+        });
     }
 
     [Test]
