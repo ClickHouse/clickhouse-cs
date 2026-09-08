@@ -21,6 +21,6 @@ jobs:
 
   benchmark-full:
     name: Full benchmark suite
-    uses: ./.github/workflows/benchmark.yml
+    uses: $/.github/workflows/benchmark.yml
     with:
       categories: ''
