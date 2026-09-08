@@ -63,11 +63,13 @@ internal static class BlockWriter
             }
         }
 
+        // Writing uses each value's own instant, so the codec needs no server timezone.
+        ResolveContext context = ResolveContext.ForWrite;
         var planned = new InsertColumn[columns.Count];
         for (int i = 0; i < columns.Count; i++)
         {
             IColumn column = columns[i];
-            planned[i] = new InsertColumn(column.Name, column.TypeName, registry.Resolve(column.TypeName), column);
+            planned[i] = new InsertColumn(column.Name, column.TypeName, registry.Resolve(column.TypeName, in context), column);
         }
 
         return WriteDataBlockAsync(writer, negotiated, planned, start: 0, rowCount, flushThresholdBytes, cancellationToken);
