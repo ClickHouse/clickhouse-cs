@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -300,6 +301,94 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(childIsArray, Is.True, "a composite child re-enters the columnar surface");
             Assert.That(childOffsets, Is.EqualTo(new[] { 0, 0, 1, 3 }), "the child array's own per-row offsets");
             Assert.That(childInnerValues, Is.EqualTo(new[] { 0, 0, 1 }));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_MapColumn_ExposesFlatKeyAndValueColumnsThroughIMapColumn()
+    {
+        // A Map(K, V) is byte-identical to Array(Tuple(K, V)) on the wire: per-row offsets over two flat, aligned
+        // runs. The materialized surface builds a KeyValuePair[] per row; IMapColumn hands back the two columns, so
+        // a caller wanting only the keys — a common case — never builds a pair at all.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool matched = false;
+        int rowCount = 0;
+        int[] offsets = null;
+        string[] flatKeys = null;
+        int[] flatValues = null;
+        int keyColumnRowCount = 0;
+        var keysPerRow = new List<string[]>();
+        KeyValuePair<string, int>[][] materialized = null;
+
+        // Rows: {}, {'k0': 0}, {'k0': 0, 'k1': 100} — an empty leading row keeps a zero-length range in play.
+        await foreach (Block block in connection.QueryAsync(
+            """
+            SELECT CAST(
+                arrayMap(i -> (concat('k', toString(i)), toInt32(i * 100)), range(number)),
+                'Map(String, Int32)')
+            FROM system.numbers LIMIT 3
+            """,
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IMapColumn<string, int>;
+
+            var map = (IMapColumn<string, int>)column;
+            rowCount = map.RowCount;
+            offsets = map.Offsets.ToArray();
+            flatKeys = map.KeyColumn.Values.ToArray();
+            flatValues = map.ValueColumn.Values.ToArray();
+            keyColumnRowCount = map.KeyColumn.RowCount;
+            materialized = ((IColumn<KeyValuePair<string, int>[]>)column).Values.ToArray();
+
+            // Take just the keys of each row, without materializing the values or the pairs.
+            for (int row = 0; row < map.RowCount; row++)
+            {
+                int start = map.Offsets[row];
+                keysPerRow.Add(map.KeyColumn.Values.Slice(start, map.Offsets[row + 1] - start).ToArray());
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(rowCount, Is.EqualTo(3));
+            Assert.That(offsets, Is.EqualTo(new[] { 0, 0, 1, 3 }), "one more entry than rows");
+            Assert.That(offsets.Length, Is.EqualTo(rowCount + 1), "sliced to the row count, not the pooled buffer length");
+            Assert.That(flatKeys, Is.EqualTo(new[] { "k0", "k0", "k1" }), "every row's keys end-to-end");
+            Assert.That(flatValues, Is.EqualTo(new[] { 0, 0, 100 }), "and the values, aligned entry-for-entry");
+            Assert.That(keyColumnRowCount, Is.EqualTo(3), "the key column is flat: one entry per pair, not per row");
+            Assert.That(keysPerRow, Is.EqualTo(new[] { Array.Empty<string>(), new[] { "k0" }, new[] { "k0", "k1" } }));
+            Assert.That(materialized.Select(r => r.Length), Is.EqualTo(new[] { 0, 1, 2 }));
+            Assert.That(materialized[2], Is.EqualTo(new[] { new KeyValuePair<string, int>("k0", 0), new KeyValuePair<string, int>("k1", 100) }));
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_MapColumnWithDuplicateKeys_PreservesWireOrderAndDuplicates()
+    {
+        // The flat columns are the wire's own bytes, so they carry duplicate keys and entry order intact — the
+        // property a Dictionary-shaped view would destroy. ClickHouse itself permits a literal map with a repeated
+        // key, so this is reachable data, not a hypothetical.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        string[] flatKeys = null;
+        int[] flatValues = null;
+
+        await foreach (Block block in connection.QueryAsync(
+            "SELECT CAST([('dup', 1), ('dup', 2), ('other', 3)], 'Map(String, Int32)')",
+            cancellationToken: None))
+        {
+            var map = (IMapColumn<string, int>)block[0];
+            flatKeys = map.KeyColumn.Values.ToArray();
+            flatValues = map.ValueColumn.Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(flatKeys, Is.EqualTo(new[] { "dup", "dup", "other" }), "the duplicate survives");
+            Assert.That(flatValues, Is.EqualTo(new[] { 1, 2, 3 }), "in wire order, so both entries stay addressable");
         });
     }
 }

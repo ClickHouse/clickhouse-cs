@@ -132,6 +132,10 @@ internal sealed class ColumnCodecRegistry
         // bodies, in order); each element codec is resolved recursively and element names, if any, are kept.
         AddFactory("Tuple", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => TupleColumnCodec.Create(node, context, registry));
 
+        // Map(K, V) is byte-identical to Array(Tuple(K, V)): offsets + a keys stream + a values stream. The key
+        // and value codecs are resolved recursively; each row surfaces as a KeyValuePair<K, V>[].
+        AddFactory("Map", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => MapColumnCodec.Create(node, context, registry));
+
         return new ColumnCodecRegistry(byName);
     }
 }
