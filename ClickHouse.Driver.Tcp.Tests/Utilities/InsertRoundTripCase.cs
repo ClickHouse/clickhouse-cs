@@ -335,6 +335,211 @@ public sealed class InsertRoundTripCase
         {
             yield return Same(shape.ToString(), shape.ClickHouseType, shape.BuildColumn);
         }
+
+        // Tuple(...): a heterogeneous fixed-arity composite serialized as N side-by-side element columns. The
+        // cases below collectively touch every supported element type across various arities (1 through the
+        // supported maximum of 7), then compose tuples with named elements, nesting, Nullable and Array elements,
+        // and an Array(Tuple(...)) that flattens through the tuple codec's per-element write path. Element names
+        // do not change the CLR value (a ValueTuple either way); they only ride along in the type string.
+        yield return Same(
+            "Tuple(Int32) [arity 1]",
+            "Tuple(Int32)",
+            name => new TupleColumn<int>(name, "Tuple(Int32)", new[] { new ValueTuple<int>(1), new ValueTuple<int>(int.MinValue), new ValueTuple<int>(int.MaxValue) }));
+
+        // Arity 3 was the one arity between 1 and 7 with no case at all.
+        yield return Same(
+            "Tuple(Int32, String, Float64) [arity 3]",
+            "Tuple(Int32, String, Float64)",
+            name => new TupleColumn<int, string, double>(name, "Tuple(Int32, String, Float64)", new (int, string, double)[]
+            {
+                (1, "a", 1.5),
+                (-2, string.Empty, -1.5e100),
+            }));
+
+        // A flat ArrayColumn<ValueTuple> is not an ITupleColumn, so a top-level Tuple supplied that way takes the
+        // ergonomic boxed per-element projection instead of the dense child-column path. Every other Tuple case
+        // builds the dense TupleColumn, so the projection was only reachable at top level from a unit test; the
+        // read still comes back dense, hence the differing expected builder.
+        var flatTupleRows = new (int, string)[] { (1, "a"), (2, "bb"), (3, "ccc") };
+        yield return new InsertRoundTripCase(
+            "Tuple(Int32, String) <- flat ArrayColumn",
+            "Tuple(Int32, String)",
+            name => new ArrayColumn<(int, string)>(name, "Tuple(Int32, String)", flatTupleRows),
+            name => new TupleColumn<int, string>(name, "Tuple(Int32, String)", flatTupleRows),
+            settings: null);
+
+        yield return Same(
+            "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32)",
+            "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32)",
+            name => new TupleColumn<byte, sbyte, ushort, short, uint, int>(name, "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32)", new (byte, sbyte, ushort, short, uint, int)[]
+            {
+                (0, -128, 0, short.MinValue, 0, int.MinValue),
+                (255, 127, ushort.MaxValue, short.MaxValue, uint.MaxValue, int.MaxValue),
+            }));
+
+        yield return Same(
+            "Tuple(UInt64, Int64, UInt128, Int128, UInt256, Int256)",
+            "Tuple(UInt64, Int64, UInt128, Int128, UInt256, Int256)",
+            name => new TupleColumn<ulong, long, UInt128, Int128, UInt256, Int256>(name, "Tuple(UInt64, Int64, UInt128, Int128, UInt256, Int256)", new (ulong, long, UInt128, Int128, UInt256, Int256)[]
+            {
+                (0, long.MinValue, UInt128.Zero, Int128.MinValue, UInt256.Zero, Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200))),
+                (ulong.MaxValue, long.MaxValue, UInt128.MaxValue, Int128.MaxValue, UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)), Int256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200))),
+            }));
+
+        yield return Same(
+            "Tuple(Float32, Float64, Bool, String)",
+            "Tuple(Float32, Float64, Bool, String)",
+            name => new TupleColumn<float, double, bool, string>(name, "Tuple(Float32, Float64, Bool, String)", new (float, double, bool, string)[]
+            {
+                (0f, 0d, false, string.Empty),
+                (1.5f, -1.5e100, true, "héllo✓"),
+            }));
+
+        yield return Same(
+            "Tuple(Enum8, Enum16)",
+            "Tuple(Enum8('a' = -1, 'b' = 127), Enum16('x' = -32768, 'y' = 32767))",
+            name => new TupleColumn<sbyte, short>(name, "Tuple(Enum8('a' = -1, 'b' = 127), Enum16('x' = -32768, 'y' = 32767))", new (sbyte, short)[]
+            {
+                (-1, -32768),
+                (127, 32767),
+            }));
+
+        // DateTime reads back the raw uint epoch seconds and DateTime64 the raw long count at the column scale.
+        yield return Same(
+            "Tuple(Date, Date32, DateTime, DateTime64(3), UUID)",
+            "Tuple(Date, Date32, DateTime, DateTime64(3), UUID)",
+            name => new TupleColumn<DateOnly, DateOnly, uint, long, Guid>(name, "Tuple(Date, Date32, DateTime, DateTime64(3), UUID)", new (DateOnly, DateOnly, uint, long, Guid)[]
+            {
+                (new DateOnly(1970, 1, 1), new DateOnly(1900, 1, 1), 0u, 0L, Guid.Empty),
+                (new DateOnly(2149, 6, 6), new DateOnly(2299, 12, 31), (uint)new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero).ToUnixTimeSeconds(), 1_700_000_000_123L, new Guid("00112233-4455-6677-8899-aabbccddeeff")),
+            }));
+
+        yield return Same(
+            "Tuple(IPv4, IPv6)",
+            "Tuple(IPv4, IPv6)",
+            name => new TupleColumn<IPAddress, IPAddress>(name, "Tuple(IPv4, IPv6)", new (IPAddress, IPAddress)[]
+            {
+                (IPAddress.Parse("0.0.0.0"), IPAddress.Parse("::")),
+                (IPAddress.Parse("255.255.255.255"), IPAddress.Parse("2001:db8::1")),
+            }));
+
+        // Decimal32/64 surface as System.Decimal, Decimal128/256 as ClickHouseDecimal — one tuple spans all four.
+        yield return Same(
+            "Tuple(Decimal(9, 2), Decimal(18, 4), Decimal(38, 10), Decimal(76, 20))",
+            "Tuple(Decimal(9, 2), Decimal(18, 4), Decimal(38, 10), Decimal(76, 20))",
+            name => new TupleColumn<decimal, decimal, ClickHouseDecimal, ClickHouseDecimal>(name, "Tuple(Decimal(9, 2), Decimal(18, 4), Decimal(38, 10), Decimal(76, 20))", new (decimal, decimal, ClickHouseDecimal, ClickHouseDecimal)[]
+            {
+                (0m, 0m, ParseWide("0"), ParseWide("0")),
+                (1.23m, 12345.6789m, ParseWide("12345.6789"), ParseWide("1.00000000000000000001")),
+            }));
+
+        yield return Same(
+            "Tuple(IntervalSecond, IntervalDay)",
+            "Tuple(IntervalSecond, IntervalDay)",
+            name => new TupleColumn<long, long>(name, "Tuple(IntervalSecond, IntervalDay)", new (long, long)[] { (0L, 0L), (-5L, 7L) }));
+
+        // Experimental element types need their enabling flag on the round-trip.
+        yield return Same(
+            "Tuple(BFloat16, Float32)",
+            "Tuple(BFloat16, Float32)",
+            name => new TupleColumn<float, float>(name, "Tuple(BFloat16, Float32)", new (float, float)[] { (0f, 0f), (1f, 1.5f), (-2f, 100f) }),
+            BFloat16Settings);
+
+        yield return Same(
+            "Tuple(Time, Time64(3))",
+            "Tuple(Time, Time64(3))",
+            name => new TupleColumn<int, long>(name, "Tuple(Time, Time64(3))", new (int, long)[]
+            {
+                (0, 0L),
+                ((12 * 3600) + (34 * 60) + 56, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456),
+            }),
+            TimeSettings);
+
+        // A named tuple: element names ride in the type string; the value is the same ValueTuple as the unnamed form.
+        yield return Same(
+            "Tuple(a Int32, b String) [named]",
+            "Tuple(a Int32, b String)",
+            name => new TupleColumn<int, string>(name, "Tuple(a Int32, b String)", new (int, string)[] { (1, "a"), (-5, string.Empty), (int.MaxValue, "héllo✓") }));
+
+        // A named tuple whose elements are themselves parametric — the name/type split must survive nesting.
+        yield return Same(
+            "Tuple(a Array(Int32), b Nullable(String)) [named parametric]",
+            "Tuple(a Array(Int32), b Nullable(String))",
+            name => new TupleColumn<int[], string>(name, "Tuple(a Array(Int32), b Nullable(String))", new (int[], string)[] { (new[] { 1, 2, 3 }, "x"), (Array.Empty<int>(), null), (new[] { -1 }, string.Empty) }));
+
+        // A nested tuple recurses through the same codec one level down.
+        yield return Same(
+            "Tuple(Int32, Tuple(String, Float64)) [nested]",
+            "Tuple(Int32, Tuple(String, Float64))",
+            name => new TupleColumn<int, (string, double)>(name, "Tuple(Int32, Tuple(String, Float64))", new (int, (string, double))[] { (1, ("a", 1.5)), (2, (string.Empty, -1.5e100)) }));
+
+        // Nullable elements, interleaving nulls with present values.
+        yield return Same(
+            "Tuple(Nullable(Int32), Nullable(String)) [nullable elements]",
+            "Tuple(Nullable(Int32), Nullable(String))",
+            name => new TupleColumn<int?, string>(name, "Tuple(Nullable(Int32), Nullable(String))", new (int?, string)[] { (1, "a"), (null, null), (int.MinValue, string.Empty) }));
+
+        // An Array element inside a tuple.
+        yield return Same(
+            "Tuple(Array(UInt32), String) [array element]",
+            "Tuple(Array(UInt32), String)",
+            name => new TupleColumn<uint[], string>(name, "Tuple(Array(UInt32), String)", new (uint[], string)[] { (new uint[] { 1, 2, 3 }, "a"), (Array.Empty<uint>(), "b") }));
+
+        // A max-arity (7) tuple mixing fixed-width and variable-width elements.
+        yield return Same(
+            "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32, String) [arity 7]",
+            "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32, String)",
+            name => new TupleColumn<byte, sbyte, ushort, short, uint, int, string>(name, "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32, String)", new (byte, sbyte, ushort, short, uint, int, string)[]
+            {
+                (0, -128, 0, short.MinValue, 0, int.MinValue, string.Empty),
+                (255, 127, ushort.MaxValue, short.MaxValue, uint.MaxValue, int.MaxValue, "héllo✓"),
+            }));
+
+        // Tuple(): the zero-element tuple is a legal type, but it has none of the layout above — no element
+        // streams and no state prefix, just one placeholder byte per row, the way Nothing is serialized. Rows
+        // carry no data, so the row count is the only thing the round-trip can get wrong.
+        yield return Same(
+            "Tuple() [3 rows]",
+            "Tuple()",
+            name => new ArrayColumn<ValueTuple>(name, "Tuple()", new ValueTuple[3]));
+
+        // The empty tuple as an element of a real one: the per-element codec has to interleave a child that
+        // contributes a placeholder byte run between children that contribute values.
+        yield return Same(
+            "Tuple(Int32, Tuple(), String)",
+            "Tuple(Int32, Tuple(), String)",
+            name => new TupleColumn<int, ValueTuple, string>(name, "Tuple(Int32, Tuple(), String)", new (int, ValueTuple, string)[]
+            {
+                (1, default, "a"),
+                (int.MinValue, default, string.Empty),
+            }));
+
+        // Naming the empty element makes the parser rebuild its node from the glued "y Tuple" token, which is where
+        // the empty argument list is easiest to drop.
+        yield return Same(
+            "Tuple(x Int32, y Tuple())",
+            "Tuple(x Int32, y Tuple())",
+            name => new TupleColumn<int, ValueTuple>(name, "Tuple(x Int32, y Tuple())", new (int, ValueTuple)[]
+            {
+                (1, default),
+                (-2, default),
+            }));
+
+        // Array(Tuple()) flattens to a placeholder byte per element rather than per row, so the offsets are the
+        // only thing carrying the shape; an empty row and an uneven run keep them non-trivial.
+        yield return Arrays<ValueTuple>("Tuple()", new ValueTuple[2], Array.Empty<ValueTuple>(), new ValueTuple[1]);
+
+        // Array(Tuple(...)): the array flattens its jagged tuple rows into one values stream handed to the tuple
+        // codec, exercising the boxed per-element write path; empty rows and an empty column ride along.
+        yield return Same(
+            "Array(Tuple(Int32, String))",
+            "Array(Tuple(Int32, String))",
+            name => new ArrayColumn<(int, string)[]>(name, "Array(Tuple(Int32, String))", new[]
+            {
+                new[] { (1, "a"), (2, "b") },
+                Array.Empty<(int, string)>(),
+                new[] { (3, "c") },
+            }));
     }
 
     // Array(T) inserts and reads back the inner element arrays; the ergonomic jagged column doubles as expected.

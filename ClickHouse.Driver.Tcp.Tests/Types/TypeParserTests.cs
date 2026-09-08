@@ -104,6 +104,44 @@ public class TypeParserTests
     }
 
     [Test]
+    public void Parse_EmptyArgumentList_HasNoArgumentsButKeepsTheParentheses()
+    {
+        // Tuple() is a legal ClickHouse type, so an empty argument list parses rather than throwing. Arguments is
+        // empty either way, so HasArgumentList is what separates it from a bare Tuple, and ToString must keep the
+        // parentheses or the two collapse into one string.
+        TypeNode node = TypeParser.Parse("Tuple()");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.Name, Is.EqualTo("Tuple"));
+            Assert.That(node.Arguments, Is.Empty);
+            Assert.That(node.HasArgumentList, Is.True);
+            Assert.That(node.ToString(), Is.EqualTo("Tuple()"));
+        });
+    }
+
+    [Test]
+    public void Parse_NameWithoutParentheses_HasNoArgumentList()
+    {
+        TypeNode node = TypeParser.Parse("Tuple");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.Arguments, Is.Empty);
+            Assert.That(node.HasArgumentList, Is.False);
+            Assert.That(node.ToString(), Is.EqualTo("Tuple"));
+        });
+    }
+
+    [Test]
+    public void Parse_EmptyArgumentListNested_RoundTripsThroughToString()
+    {
+        TypeNode node = TypeParser.Parse("Array(Tuple(Int32, Tuple()))");
+
+        Assert.That(node.ToString(), Is.EqualTo("Array(Tuple(Int32, Tuple()))"));
+    }
+
+    [Test]
     public void Parse_Null_ThrowsArgumentNull()
         => Assert.Throws<ArgumentNullException>(() => TypeParser.Parse(null));
 
