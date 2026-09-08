@@ -22,7 +22,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </para>
 /// </summary>
 /// <typeparam name="T">The CLR type the ClickHouse integer maps to.</typeparam>
-internal sealed class IntegerColumnCodec<T> : IColumnCodec
+internal sealed class IntegerColumnCodec<T> : IColumnCodec, ISpanWritableCodec<T>
     where T : unmanaged
 {
     /// <summary>Initializes a new instance of the <see cref="IntegerColumnCodec{T}"/> class.</summary>
@@ -57,8 +57,30 @@ internal sealed class IntegerColumnCodec<T> : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column)
+    public bool CanWrite(IColumn column) => column is IColumn<T>;
+
+    /// <inheritdoc/>
+    // A contiguous column (the dense read-back, or a caller's array-backed column) blits its whole slice in one
+    // copy; a scattered write-path view (Nullable's substitute, a Tuple field, a Variant alternative) has no span,
+    // so each value is written on its own — the per-element cost the scattered fixed-width positions accept.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        writer.WriteBytes(MemoryMarshal.AsBytes(((IColumn<T>)column).Values));
+        var typed = (IColumn<T>)column;
+        if (typed is ISpanColumn<T> contiguous)
+        {
+            writer.WriteBytes(MemoryMarshal.AsBytes(contiguous.Span.Slice(start, length)));
+            return;
+        }
+
+        for (int i = 0; i < length; i++)
+        {
+            T value = typed[start + i];
+            writer.WriteBytes(MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1)));
+        }
     }
+
+    /// <inheritdoc/>
+    // The wire form is the raw little-endian bytes, so a run of values is one contiguous blit.
+    public void WriteValues(ClickHouseBinaryWriter writer, ReadOnlySpan<T> values)
+        => writer.WriteBytes(MemoryMarshal.AsBytes(values));
 }

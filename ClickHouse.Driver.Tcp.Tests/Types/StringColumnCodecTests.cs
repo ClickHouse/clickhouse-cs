@@ -40,6 +40,16 @@ public class StringColumnCodecTests
         Assert.That(column.RowCount, Is.EqualTo(0));
     }
 
+    [Test]
+    public void CanWrite_AcceptsStringColumn_RejectsOthers()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(StringColumnCodec.Instance.CanWrite(new ArrayColumn<string>("c", "String", new[] { "x" })), Is.True);
+            Assert.That(StringColumnCodec.Instance.CanWrite(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.False);
+        });
+    }
+
     private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)
     {
         using var ms = new MemoryStream();
