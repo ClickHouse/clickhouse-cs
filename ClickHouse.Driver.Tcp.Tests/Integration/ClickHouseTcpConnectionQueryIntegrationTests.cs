@@ -161,6 +161,38 @@ public class ClickHouseTcpConnectionQueryIntegrationTests
     }
 
     [Test]
+    public async Task QueryAsync_ServerGeneratedArrayViaRange_ReadsBackEveryRow()
+    {
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        // range(number) yields a server-authored Array(UInt64) whose offsets and values the client never wrote:
+        // row n is [0, 1, ..., n-1], so row 0 is empty and later rows grow. This validates the Array read path
+        // against offsets the server produced, independent of the client's own write path.
+        const int rowCount = 64;
+        var readBack = new List<ulong[]>(rowCount);
+        await foreach (Block block in connection.QueryAsync($"SELECT range(number) AS r FROM numbers({rowCount}) ORDER BY number", cancellationToken: None))
+        {
+            Assert.That(block[0].TypeName, Is.EqualTo("Array(UInt64)"));
+            foreach (ulong[] row in ((IColumn<ulong[]>)block[0]).Values)
+            {
+                readBack.Add(row);
+            }
+        }
+
+        Assert.That(readBack, Has.Count.EqualTo(rowCount));
+        for (int n = 0; n < rowCount; n++)
+        {
+            var expected = new ulong[n];
+            for (int i = 0; i < n; i++)
+            {
+                expected[i] = (ulong)i;
+            }
+
+            Assert.That(readBack[n], Is.EqualTo(expected), $"row {n}");
+        }
+    }
+
+    [Test]
     public async Task QueryAsync_EmptyResult_YieldsNoRowBearingBlocksAndStaysReady()
     {
         await using var connection = await TcpServerFixture.ConnectAsync(None);

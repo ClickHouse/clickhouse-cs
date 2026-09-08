@@ -125,6 +125,9 @@ internal sealed class ColumnCodecRegistry
         // Nullable(T) wraps a child codec, resolved recursively through the registry.
         AddFactory("Nullable", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => NullableColumnCodec.Create(node, context, registry));
 
+        // Array(T) wraps a child codec (offsets + flattened element values), resolved recursively.
+        AddFactory("Array", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => ArrayColumnCodec.Create(node, context, registry));
+
         return new ColumnCodecRegistry(byName);
     }
 }
