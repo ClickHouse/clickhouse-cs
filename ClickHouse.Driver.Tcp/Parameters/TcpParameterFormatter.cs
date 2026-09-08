@@ -163,7 +163,8 @@ internal static class TcpParameterFormatter
             case "Array" when value is Array multidimensional && multidimensional.Rank > 1:
                 return FormatMultidimensional(type, multidimensional);
 
-            case "Array" when value is IEnumerable elements && type.Arguments.Count == 1:
+            // A string is a sequence of chars, so taking it here would send one element per character.
+            case "Array" when value is not string and IEnumerable elements && type.Arguments.Count == 1:
                 return "[" + string.Join(",", elements.Cast<object>().Select(e => Format(type.Arguments[0], e, quote: true))) + "]";
 
             case "Nested":
@@ -187,7 +188,7 @@ internal static class TcpParameterFormatter
                 return (value is string json ? json : JsonSerializer.Serialize(value)).Escape();
 
             // A QBit is a fixed-width vector of its element type, written as an array.
-            case "QBit" when value is IEnumerable components && type.Arguments.Count == 2:
+            case "QBit" when value is not string and IEnumerable components && type.Arguments.Count == 2:
                 return "[" + string.Join(",", components.Cast<object>().Select(c => Format(type.Arguments[0], c, quote: true))) + "]";
 
             // Geo types format as their underlying tuple/array shapes.
@@ -357,12 +358,17 @@ internal static class TcpParameterFormatter
             ? "A DateTimeOffset names an instant"
             : $"A DateTime with Kind={((DateTime)value).Kind} names an instant";
 
+        // The suggestion keeps the declared scale, which the caller chose.
+        string suggestion = type.Name == "DateTime64"
+            ? $"DateTime64({ScaleOf(type, defaultScale: 3)}, 'UTC')"
+            : $"{type.Name}('UTC')";
+
         throw new ArgumentException(
             $"{valueDescription}, but the type declares no timezone, so the instant cannot be sent without " +
             $"loss. The server reads the value in its session timezone, which moves the instant when that is " +
-            $"not UTC, and reports no error. Declare the timezone in the type — {type.Name}" +
-            $"{(type.Name == "DateTime64" ? "(3, 'UTC')" : "('UTC')")} — or pass a DateTime with " +
-            $"Kind=Unspecified to send a wall-clock time for the server to read in its own timezone.");
+            $"not UTC, and reports no error. Declare the timezone in the type — {suggestion} — or pass a " +
+            $"DateTime with Kind=Unspecified to send a wall-clock time for the server to read in its own " +
+            $"timezone.");
     }
 
     /// <summary>Reads the timezone a date-and-time type declares.</summary>
@@ -461,8 +467,9 @@ internal static class TcpParameterFormatter
 
     private static string FormatNested(TypeNode type, object value)
     {
-        // Nested formats as Array(Tuple(...)); a bare tuple represents one row.
-        if (value is IEnumerable rows and not ITuple)
+        // Nested formats as Array(Tuple(...)); a bare tuple represents one row. A string is a sequence of
+        // chars, so it belongs to neither shape.
+        if (value is IEnumerable rows and not ITuple and not string)
         {
             return "[" + string.Join(",", rows.Cast<object>().Select(row => FormatTuple(type, row))) + "]";
         }
