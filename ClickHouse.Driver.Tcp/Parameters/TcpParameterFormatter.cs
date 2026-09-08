@@ -36,7 +36,7 @@ internal static class TcpParameterFormatter
         "Int8", "Int16", "Int32", "Int64", "Int128", "Int256",
     ];
 
-    private static readonly string[] FloatTypeNames = ["Float32", "Float64", "BFloat16"];
+    private static readonly string[] FloatTypeNames = ["Float32", "Float64"];
 
     private static readonly string[] DecimalTypeNames = ["Decimal", "Decimal32", "Decimal64", "Decimal128", "Decimal256"];
 
@@ -115,6 +115,9 @@ internal static class TcpParameterFormatter
 
             case "Bool":
                 return (bool)value ? "true" : "false";
+
+            case "BFloat16":
+                return FormatBFloat16(value);
 
             case "Date" or "Date32":
                 return FormatDate(value, quote);
@@ -247,6 +250,17 @@ internal static class TcpParameterFormatter
             return builder.ToString();
         }
     }
+
+    /// <summary>Formats a BFloat16 value, which only a 32-bit float carries.</summary>
+    /// <param name="value">The value.</param>
+    /// <returns>The invariant text of the float.</returns>
+    /// <exception cref="ArgumentException">The value is not a float.</exception>
+    private static string FormatBFloat16(object value) => value is float single
+        ? single.ToString(CultureInfo.InvariantCulture)
+        : throw new ArgumentException(
+            $"Cannot convert value of type '{value.GetType().FullName}' ({value}) to ClickHouse type BFloat16: " +
+            "a BFloat16 holds the top 16 bits of a 32-bit float. The server narrows a wider value with no " +
+            "error, and a value outside the float range arrives as an infinity. Pass a float.");
 
     private static string FormatDecimal(object value) => value switch
     {

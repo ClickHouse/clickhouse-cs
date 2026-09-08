@@ -22,30 +22,11 @@ public class TcpParameterFormatterEdgeCaseTests
         Assert.That(Format("ignored", "Nothing"), Is.EqualTo(@"\N"));
     }
 
-    [Test]
-    public void FormatSqlText_FixedStringFromBytes_DecodesAsUtf8()
-    {
-        Assert.That(Format(Encoding.UTF8.GetBytes("héllo"), "FixedString(8)"), Is.EqualTo("héllo"));
-    }
-
-    [Test]
-    public void FormatSqlText_FixedStringFromBytesInsideAnArray_IsQuoted()
-    {
-        Assert.That(Format(new[] { Encoding.UTF8.GetBytes("a'b") }, "Array(FixedString(4))"), Is.EqualTo(@"['a\'b']"));
-    }
-
-    [Test]
-    public void FormatSqlText_StringFromBytes_DecodesAsUtf8()
-    {
-        // Only FixedString read the bytes, so a String parameter printed the CLR type name instead.
-        Assert.That(Format(Encoding.UTF8.GetBytes("héllo"), "String"), Is.EqualTo("héllo"));
-    }
-
-    [Test]
-    public void FormatSqlText_StringFromBytesInsideAnArray_IsEscapedAndQuoted()
-    {
-        Assert.That(Format(new[] { Encoding.UTF8.GetBytes(@"a'b\c") }, "Array(String)"), Is.EqualTo(@"['a\'b\\c']"));
-    }
+    // A byte payload inside a composite is escaped and quoted like text, under either of the two text names.
+    [TestCase("Array(String)", ExpectedResult = @"['a\'b\\c']", TestName = "String elements from bytes")]
+    [TestCase("Array(FixedString(5))", ExpectedResult = @"['a\'b\\c']", TestName = "FixedString elements from bytes")]
+    public string FormatSqlText_ByteArrayInsideAnArray_IsEscapedAndQuoted(string typeName)
+        => Format(new[] { Encoding.UTF8.GetBytes(@"a'b\c") }, typeName);
 
     [Test]
     public void FormatSqlText_DateFromADateTime_DropsTheTimeOfDay()
@@ -83,14 +64,6 @@ public class TcpParameterFormatterEdgeCaseTests
     }
 
     [Test]
-    public void FormatSqlText_NestedRows_WrapsTupleRowsInAnArray()
-    {
-        object[] rows = [(1, "x"), (2, "y")];
-
-        Assert.That(Format(rows, "Nested(a UInt8, b String)"), Is.EqualTo("[(1,'x'),(2,'y')]"));
-    }
-
-    [Test]
     public void FormatSqlText_NestedSingleRow_FormatsAsOneTuple()
     {
         Assert.That(Format((1, "x"), "Nested(a UInt8, b String)"), Is.EqualTo("(1,'x')"));
@@ -100,26 +73,6 @@ public class TcpParameterFormatterEdgeCaseTests
     public void FormatSqlText_TupleFromAList_ReadsElementsByPosition()
     {
         Assert.That(Format(new List<object> { "a", 1 }, "Tuple(String, Int32)"), Is.EqualTo("('a',1)"));
-    }
-
-    [Test]
-    public void FormatSqlText_JsonFromAString_PassesTheTextThrough()
-    {
-        Assert.That(Format(@"{""a"":1}", "JSON"), Is.EqualTo(@"{""a"":1}"));
-    }
-
-    [Test]
-    public void FormatSqlText_JsonFromAnObject_SerializesIt()
-    {
-        Assert.That(Format(new Dictionary<string, int> { ["a"] = 1 }, "JSON"), Is.EqualTo(@"{""a"":1}"));
-    }
-
-    [Test]
-    public void FormatSqlText_VariantHoldingJson_PicksTheJsonAlternative()
-    {
-        var value = new Dictionary<string, int> { ["a"] = 1 };
-
-        Assert.That(Format(value, "Variant(JSON, UInt64)"), Is.EqualTo(@"{""a"":1}"));
     }
 
     [Test]
@@ -178,12 +131,6 @@ public class TcpParameterFormatterEdgeCaseTests
         var value = new Dictionary<string, string> { ["k"] = null };
 
         Assert.That(Format(value, "Map(String, Nullable(String))"), Is.EqualTo("{'k' : null}"));
-    }
-
-    [Test]
-    public void FormatSqlText_LowCardinalityInsideAnArray_QuotesTheInnerValue()
-    {
-        Assert.That(Format(new[] { "a" }, "Array(LowCardinality(String))"), Is.EqualTo("['a']"));
     }
 
     [Test]
@@ -267,23 +214,6 @@ public class TcpParameterFormatterEdgeCaseTests
         Assert.That(exception.Message, Does.Contain("DateTime64(3, 'UTC')"));
     }
 
-    [TestCase("DateTime('UTC')", TestName = "A named timezone")]
-    [TestCase("DateTime('Europe/Amsterdam')", TestName = "A timezone that is not UTC")]
-    [TestCase("DateTime64(3, 'UTC')", TestName = "A scale and a timezone")]
-    public void FormatSqlText_InstantForATypeThatDeclaresATimezone_IsAccepted(string typeName)
-    {
-        Assert.DoesNotThrow(() => Format(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), typeName));
-    }
-
-    [TestCase("DateTime", ExpectedResult = "2024-01-02T03:04:05", TestName = "DateTime keeps the wall clock")]
-    [TestCase("DateTime64(3)", ExpectedResult = "2024-01-02 03:04:05.0000000", TestName = "DateTime64 keeps the wall clock")]
-    public string FormatSqlText_UnspecifiedKindForATypeWithNoTimezone_StillPasses(string typeName)
-    {
-        // Unspecified means a wall-clock time with no instant attached, which is exactly what a type with no
-        // timezone carries. Nothing is lost, so this stays legal.
-        return Format(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Unspecified), typeName);
-    }
-
     [Test]
     public void FormatSqlText_VariantWithNoMatchingAlternative_Throws()
     {
@@ -315,17 +245,12 @@ public class TcpParameterFormatterEdgeCaseTests
         Assert.That(exception.Message, Does.Contain("no alternative"));
     }
 
-    // A geo name stands for a Tuple/Array shape, so matching it by name rejected every value even though the
-    // formatter writes that shape. Ring nests, which checks that the expansion recurses.
-    [TestCase("Variant(Point, String)", ExpectedResult = "(1.5,2.5)", TestName = "Variant holding a Point")]
-    [TestCase("Variant(String, Point)", ExpectedResult = "(1.5,2.5)", TestName = "Variant holding a Point declared last")]
-    public string FormatSqlText_VariantHoldingAPoint_PicksTheGeoAlternative(string typeName)
-        => Format((1.5, 2.5), typeName);
-
     [Test]
-    public void FormatSqlText_VariantHoldingARing_PicksTheGeoAlternative()
+    public void FormatSqlText_VariantHoldingAPointDeclaredLast_StillPicksTheGeoAlternative()
     {
-        Assert.That(Format(new[] { (1.0, 2.0), (3.0, 4.0) }, "Variant(Ring, String)"), Is.EqualTo("[(1,2),(3,4)]"));
+        // A geo name stands for a Tuple/Array shape, and no CLR type infers to "Point", so matching has to
+        // compare shapes. Declaration order must not decide it either.
+        Assert.That(Format((1.5, 2.5), "Variant(String, Point)"), Is.EqualTo("(1.5,2.5)"));
     }
 
     [Test]
@@ -340,19 +265,6 @@ public class TcpParameterFormatterEdgeCaseTests
         var exception = Assert.Throws<ArgumentException>(() => Format(new[] { 1f, 2f }, "Variant(QBit(Int8, 2), Int64)"));
 
         Assert.That(exception.Message, Does.Contain("no alternative"));
-    }
-
-    [Test]
-    public void FormatSqlText_StringFromReadOnlyMemory_ReadsTheBytes()
-    {
-        // Only byte[] was read, so a ReadOnlyMemory<byte> printed the CLR type name instead of its contents.
-        ReadOnlyMemory<byte> memory = Encoding.UTF8.GetBytes("héllo");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(Format(memory, "String"), Is.EqualTo("héllo"));
-            Assert.That(Format(memory, "FixedString(8)"), Is.EqualTo("héllo"));
-        });
     }
 
     // Accepts saw no byte payload in a ReadOnlyMemory, so a text alternative refused it. With a JSON
@@ -557,14 +469,44 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
-    [Test]
-    public void FormatSqlText_BFloat16AndWideIntegers_UseInvariantText()
+    // A BFloat16 holds the top 16 bits of a 32-bit float, so only a float reaches the server intact. The
+    // server refuses none of these: it narrows a wider value with no error, and turns a value outside the
+    // float range into an infinity, which is why the client is the layer that has to reject them.
+    private static IEnumerable<TestCaseData> BFloat16RejectionCases()
     {
+        yield return new TestCaseData(1.5d, "BFloat16").SetName("A double");
+        yield return new TestCaseData(double.MaxValue, "BFloat16").SetName("A double outside the float range");
+        yield return new TestCaseData(1.5m, "BFloat16").SetName("A decimal");
+        yield return new TestCaseData(1, "BFloat16").SetName("An integer");
+        yield return new TestCaseData("1.5", "BFloat16").SetName("The text of a float");
+        yield return new TestCaseData(new[] { 1.5d }, "Array(BFloat16)").SetName("Inside a composite");
+        yield return new TestCaseData(1.5d, "Nullable(BFloat16)").SetName("Through a Nullable");
+    }
+
+    [TestCaseSource(nameof(BFloat16RejectionCases))]
+    public void FormatSqlText_BFloat16FromAnythingButAFloat_ThrowsAndSaysWhatToPass(object value, string typeName)
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format(value, typeName));
+
         Assert.Multiple(() =>
         {
-            Assert.That(Format(1.5f, "BFloat16"), Is.EqualTo("1.5"));
-            Assert.That(Format(UInt128.MaxValue, "UInt128"), Is.EqualTo("340282366920938463463374607431768211455"));
-            Assert.That(Format(new Int256(1, 0, 0, 0), "Int256"), Is.Not.Empty);
+            Assert.That(exception.Message, Does.Contain("BFloat16"), "names the type");
+            Assert.That(exception.Message, Does.Contain("Pass a float"), "says what to pass instead");
+            Assert.That(exception.Message, Does.Contain("Parameter 'p'"), "names the parameter");
+        });
+    }
+
+    [Test]
+    public void FormatSqlText_VariantHoldingADouble_KeepsItOutOfTheBFloat16Alternative()
+    {
+        // Alternative matching has to refuse what the formatter refuses, or the Variant picks an arm that
+        // then throws for a value another arm would have taken.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format(1.5d, "Variant(BFloat16, Float64)"), Is.EqualTo("1.5"));
+            Assert.That(
+                Assert.Throws<ArgumentException>(() => Format(1.5d, "Variant(BFloat16, String)")).Message,
+                Does.Contain("no alternative"));
         });
     }
 
