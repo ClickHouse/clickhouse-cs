@@ -13,6 +13,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClickHouse.Driver.Integrati
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClickHouse.Driver.Common", "ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj", "{03F1DE45-4329-490E-9C48-7AD81ED1FF1B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClickHouse.Driver.Tcp", "ClickHouse.Driver.Tcp\ClickHouse.Driver.Tcp.csproj", "{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClickHouse.Driver.Tcp.Tests", "ClickHouse.Driver.Tcp.Tests\ClickHouse.Driver.Tcp.Tests.csproj", "{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -83,6 +87,30 @@ Global
 		{03F1DE45-4329-490E-9C48-7AD81ED1FF1B}.Release|x64.Build.0 = Release|Any CPU
 		{03F1DE45-4329-490E-9C48-7AD81ED1FF1B}.Release|x86.ActiveCfg = Release|Any CPU
 		{03F1DE45-4329-490E-9C48-7AD81ED1FF1B}.Release|x86.Build.0 = Release|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Debug|x64.Build.0 = Debug|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Debug|x86.Build.0 = Debug|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Release|x64.ActiveCfg = Release|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Release|x64.Build.0 = Release|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Release|x86.ActiveCfg = Release|Any CPU
+		{FE2D56F5-99AE-4228-8EA4-926F23EBAF04}.Release|x86.Build.0 = Release|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Debug|x64.Build.0 = Debug|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Debug|x86.Build.0 = Debug|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Release|x64.ActiveCfg = Release|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Release|x64.Build.0 = Release|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Release|x86.ActiveCfg = Release|Any CPU
+		{70DB66E2-7FEA-4677-9067-B5D7E3B8D1EE}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
