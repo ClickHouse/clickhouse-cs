@@ -317,6 +317,44 @@ public class ClickHouseClientSettingsTests
     }
 
     [Test]
+    public void Equals_WithSameCredentialsProviderInstance_ShouldReturnTrue()
+    {
+        Func<ClickHouseCredentials> provider = () => ClickHouseCredentials.CreateBasic("user", "pass");
+
+        var settings1 = new ClickHouseClientSettings { CredentialsProvider = provider };
+        var settings2 = new ClickHouseClientSettings { CredentialsProvider = provider };
+
+        Assert.That(settings1.Equals(settings2), Is.True);
+        Assert.That(settings1.GetHashCode(), Is.EqualTo(settings2.GetHashCode()));
+    }
+
+    [Test]
+    public void Equals_WithDifferentCredentialsProviderInstances_ShouldReturnFalse()
+    {
+        var settings1 = new ClickHouseClientSettings
+        {
+            CredentialsProvider = () => ClickHouseCredentials.CreateBasic("user1", "pass1")
+        };
+        var settings2 = new ClickHouseClientSettings
+        {
+            CredentialsProvider = () => ClickHouseCredentials.CreateBasic("user2", "pass2")
+        };
+
+        Assert.That(settings1.Equals(settings2), Is.False);
+    }
+
+    [Test]
+    public void CopyConstructor_ShouldCopyCredentialsProvider()
+    {
+        Func<ClickHouseCredentials> provider = () => ClickHouseCredentials.CreateBasic("user", "pass");
+        var settings = new ClickHouseClientSettings { CredentialsProvider = provider };
+
+        var copy = new ClickHouseClientSettings(settings);
+
+        Assert.That((object)copy.CredentialsProvider, Is.SameAs(provider));
+    }
+
+    [Test]
     public void Equals_WithSameReference_ShouldReturnTrue()
     {
         var settings = new ClickHouseClientSettings();
