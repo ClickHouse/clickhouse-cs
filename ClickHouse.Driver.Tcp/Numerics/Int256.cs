@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.InteropServices;
 
 namespace ClickHouse.Driver.Tcp.Numerics;
 
@@ -9,6 +10,7 @@ namespace ClickHouse.Driver.Tcp.Numerics;
 /// A signed 256-bit integer (two's complement), the CLR representation of ClickHouse <c>Int256</c>.
 /// Stored as four little-endian 64-bit limbs.
 /// </summary>
+[StructLayout(LayoutKind.Sequential)] // Necessary to match byte order on the wire
 public readonly struct Int256 : IEquatable<Int256>, IComparable<Int256>
 {
     /// <summary>The number of bytes in the little-endian wire representation.</summary>

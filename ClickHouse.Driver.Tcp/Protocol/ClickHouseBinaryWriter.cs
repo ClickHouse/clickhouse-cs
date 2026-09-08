@@ -240,6 +240,12 @@ internal sealed class ClickHouseBinaryWriter : IDisposable
         position += 8;
     }
 
+    /// <summary>
+    /// Discards any buffered bytes that have not yet been flushed, returning the writer to an empty state. Used
+    /// to drop a partially-encoded packet after an encoding failure so nothing stale is prepended to the next one.
+    /// </summary>
+    public void Reset() => position = 0;
+
     /// <summary>Flushes buffered bytes to the underlying stream and flushes the stream.</summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <exception cref="ObjectDisposedException">The writer has been disposed.</exception>
