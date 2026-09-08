@@ -12,8 +12,9 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </summary>
 /// <param name="node">The parsed type, whose <see cref="TypeNode.Arguments"/> carry any type parameters.</param>
 /// <param name="context">The resolution context (e.g. the server timezone).</param>
+/// <param name="registry">The registry itself, so a composite type can resolve its child type arguments.</param>
 /// <returns>The codec for the type.</returns>
-internal delegate IColumnCodec CodecFactory(TypeNode node, in ResolveContext context);
+internal delegate IColumnCodec CodecFactory(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry);
 
 /// <summary>
 /// Resolves a ClickHouse type string to the codec that reads/writes it. The type string is parsed into a
@@ -39,12 +40,25 @@ internal sealed class ColumnCodecRegistry
     public IColumnCodec Resolve(string typeString, in ResolveContext context)
     {
         TypeNode node = TypeParser.Parse(typeString);
+        return ResolveNode(node, in context);
+    }
+
+    /// <summary>
+    /// Resolves the codec for an already-parsed type node. Composite codecs (e.g. <c>Nullable(T)</c>) call this
+    /// to build the codecs for their child type arguments without re-serializing and re-parsing a type string.
+    /// </summary>
+    /// <param name="node">The parsed type node.</param>
+    /// <param name="context">The resolution context (server timezone, etc.).</param>
+    /// <returns>The codec for that type.</returns>
+    /// <exception cref="NotSupportedException">The type is well-formed but not yet supported by this client.</exception>
+    public IColumnCodec ResolveNode(TypeNode node, in ResolveContext context)
+    {
         if (byName.TryGetValue(node.Name, out CodecFactory factory))
         {
-            return factory(node, in context);
+            return factory(node, in context, this);
         }
 
-        throw new NotSupportedException($"ClickHouse type '{typeString}' is not supported by this client yet.");
+        throw new NotSupportedException($"ClickHouse type '{node}' is not supported by this client yet.");
     }
 
     private static ColumnCodecRegistry CreateDefault()
@@ -53,7 +67,7 @@ internal sealed class ColumnCodecRegistry
 
         // A type whose codec ignores both the parsed arguments and the resolution context registers a single
         // shared instance, wrapped in a factory that returns it unconditionally.
-        void AddConstant(IColumnCodec codec) => byName[codec.TypeName] = (TypeNode _, in ResolveContext _) => codec;
+        void AddConstant(IColumnCodec codec) => byName[codec.TypeName] = (TypeNode _, in ResolveContext _, ColumnCodecRegistry _) => codec;
 
         void AddFactory(string name, CodecFactory factory) => byName[name] = factory;
 
@@ -94,19 +108,22 @@ internal sealed class ColumnCodecRegistry
         }
 
         // Timezone-bearing types resolve their offset from the type string or, failing that, the session timezone.
-        AddFactory("DateTime", static (TypeNode node, in ResolveContext context) => DateTimeColumnCodec.Create(node, context.ServerTimezone));
-        AddFactory("DateTime64", static (TypeNode node, in ResolveContext context) => DateTime64ColumnCodec.Create(node, context.ServerTimezone));
-        AddFactory("Time64", static (TypeNode node, in ResolveContext _) => Time64ColumnCodec.Create(node));
+        AddFactory("DateTime", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry _) => DateTimeColumnCodec.Create(node, context.ServerTimezone));
+        AddFactory("DateTime64", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry _) => DateTime64ColumnCodec.Create(node, context.ServerTimezone));
+        AddFactory("Time64", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Time64ColumnCodec.Create(node));
 
         // Enum aliases: raw underlying Int8/Int16 ordinal; the label map is parsed and retained by the codec.
-        AddFactory("Enum8", static (TypeNode node, in ResolveContext _) => Enum8ColumnCodec.Create(node));
-        AddFactory("Enum16", static (TypeNode node, in ResolveContext _) => Enum16ColumnCodec.Create(node));
+        AddFactory("Enum8", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum8ColumnCodec.Create(node));
+        AddFactory("Enum16", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum16ColumnCodec.Create(node));
 
         // Decimal(P, S) and the fixed-width aliases share the width-by-precision codec factory.
         foreach (string name in new[] { "Decimal", "Decimal32", "Decimal64", "Decimal128", "Decimal256" })
         {
-            AddFactory(name, static (TypeNode node, in ResolveContext _) => DecimalColumnCodec.Create(node));
+            AddFactory(name, static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => DecimalColumnCodec.Create(node));
         }
+
+        // Nullable(T) wraps a child codec, resolved recursively through the registry.
+        AddFactory("Nullable", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => NullableColumnCodec.Create(node, context, registry));
 
         return new ColumnCodecRegistry(byName);
     }
