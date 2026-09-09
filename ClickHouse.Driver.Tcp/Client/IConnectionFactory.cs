@@ -52,7 +52,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
         try
         {
             return await ClickHouseTcpConnection.ConnectAsync(
-                options.Host, options.ResolvedPort, options.ToHandshakeParameters(), tls, linked.Token).ConfigureAwait(false);
+                options.Host, options.ResolvedPort, options.ToHandshakeParameters(), tls, linked.Token, options.Compressor).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && linked.IsCancellationRequested)
         {
