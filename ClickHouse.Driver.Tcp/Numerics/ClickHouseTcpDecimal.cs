@@ -5,18 +5,8 @@ using System.Numerics;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// A fixed-point decimal whose unscaled value (mantissa) is a signed 256-bit integer with an associated scale
-/// (the number of fractional digits): the CLR representation of ClickHouse <c>Decimal128</c> / <c>Decimal256</c>
-/// values that exceed the range of <see cref="decimal"/>. The value is <c>mantissa / 10^scale</c>.
-///
-/// <para>
-/// Equality and comparison are value-based: <c>1.0</c> and <c>1.00</c> compare equal despite different scales.
-/// </para>
-///
-/// <para>
-/// There is one text form, invariant fixed-point, and no format string or culture selects another. See
-/// <see cref="ToString(string, IFormatProvider)"/>.
-/// </para>
+/// A wide ClickHouse decimal represented as <c>Mantissa / 10^Scale</c> with a signed 256-bit mantissa. Equality
+/// ignores trailing fractional zeros, and text output is invariant fixed-point.
 /// </summary>
 public readonly struct ClickHouseTcpDecimal : IEquatable<ClickHouseTcpDecimal>, IComparable<ClickHouseTcpDecimal>, IFormattable
 {
@@ -185,17 +175,7 @@ public readonly struct ClickHouseTcpDecimal : IEquatable<ClickHouseTcpDecimal>, 
     /// <returns>The rendered value.</returns>
     public override string ToString() => ToString(null, CultureInfo.InvariantCulture);
 
-    /// <summary>
-    /// Renders the value as invariant fixed-point, the same text <see cref="ToString()"/> gives. Neither argument
-    /// changes the result: <paramref name="format"/> selects nothing, and <paramref name="formatProvider"/> is
-    /// ignored because the rendering is always invariant.
-    /// </summary>
-    /// <remarks>
-    /// A format string other than the general one is <b>rejected</b> rather than ignored, so a call that asks for
-    /// a rendering this type cannot give fails loudly instead of returning differently formatted text than it
-    /// asked for. To format the value some other way, convert it with <see cref="ToDecimal"/> or
-    /// <see cref="TryToDecimal"/> and format that.
-    /// </remarks>
+    /// <summary>Renders invariant fixed-point text; only the general format is supported.</summary>
     /// <param name="format">Null, empty, <c>"G"</c> or <c>"g"</c>; any other value throws.</param>
     /// <param name="formatProvider">Ignored.</param>
     /// <returns>The rendered value.</returns>

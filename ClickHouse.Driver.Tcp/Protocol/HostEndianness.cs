@@ -3,14 +3,8 @@ using System;
 namespace ClickHouse.Driver.Tcp.Protocol;
 
 /// <summary>
-/// Asserts the little-endian host the column codecs assume.
+/// Enforces the little-endian host required by codecs that reinterpret native-protocol bytes as CLR values.
 /// </summary>
-/// <remarks>
-/// The codecs reinterpret wire bytes as CLR values with <c>MemoryMarshal.Cast</c> and write them back with
-/// <c>MemoryMarshal.AsBytes</c>. The native protocol is little-endian, so those casts are correct only on a
-/// little-endian host. Every runtime .NET currently supports is little-endian, so this is a guard rather than
-/// the alternative to a byte-swapping path.
-/// </remarks>
 internal static class HostEndianness
 {
     /// <summary>Throws if this host is big-endian.</summary>

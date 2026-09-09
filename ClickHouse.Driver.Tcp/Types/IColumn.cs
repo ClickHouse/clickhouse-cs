@@ -4,15 +4,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// A decoded column: a named, typed sequence of values read from one block. The generic <see cref="IColumn{T}"/>
-/// exposes the values; this non-generic view lets a block hold columns of mixed element types and read a value
-/// without knowing its static type.
-///
-/// <para>
-/// A column's storage may be a pooled buffer, so it is disposable and its values are borrowed for the block's
-/// lifetime. The owning <see cref="Block"/> disposes its columns; a consumer must not read a column
-/// after the block is released (see <see cref="Block"/> for the borrowing contract).
-/// </para>
+/// A named, typed column whose storage is borrowed for the owning <see cref="Block"/>'s lifetime. Use
+/// <see cref="IColumn{T}"/> for typed access; the block owns disposal.
 /// </summary>
 public interface IColumn : IDisposable
 {
