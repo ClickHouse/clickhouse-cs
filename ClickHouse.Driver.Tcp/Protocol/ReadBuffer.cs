@@ -27,6 +27,7 @@ internal sealed class ReadBuffer : IDisposable
 
     private readonly Stream stream;
     private readonly bool readsFromTransport;
+    private readonly IdleReadDeadline deadline;
     private byte[] buffer;
     private int capacity;
     private int head;      // index of the first valid byte
@@ -42,9 +43,13 @@ internal sealed class ReadBuffer : IDisposable
     /// Whether <paramref name="stream"/> is the connection itself, so that a failed read is the transport failing.
     /// False for an adapter stream, whose own layer decides what its failures mean.
     /// </param>
+    /// <param name="deadline">
+    /// Timeout for each transport read, or null to use only the supplied cancellation token.
+    /// Adapter buffers omit this deadline; their underlying transport buffer enforces it.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="capacity"/> is below <see cref="MaxContiguous"/>.</exception>
-    public ReadBuffer(Stream stream, int capacity = 16384, bool readsFromTransport = true)
+    public ReadBuffer(Stream stream, int capacity = 16384, bool readsFromTransport = true, IdleReadDeadline deadline = null)
     {
         this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
         if (capacity < MaxContiguous)
@@ -53,6 +58,7 @@ internal sealed class ReadBuffer : IDisposable
         }
 
         this.readsFromTransport = readsFromTransport;
+        this.deadline = deadline;
         buffer = ArrayPool<byte>.Shared.Rent(capacity);
         this.capacity = buffer.Length; // Rent may return a larger array; use all of it.
     }
@@ -67,6 +73,7 @@ internal sealed class ReadBuffer : IDisposable
     /// <param name="needed">The number of contiguous bytes that must be available; must not exceed <see cref="Capacity"/>.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="needed"/> exceeds the buffer capacity.</exception>
+    /// <exception cref="TimeoutException">A transport read exceeded the configured timeout.</exception>
     /// <exception cref="ClickHouseTcpTransportException">The stream ended before enough bytes arrived, or the read failed.</exception>
     public async ValueTask EnsureAsync(int needed, CancellationToken cancellationToken)
     {
@@ -137,6 +144,7 @@ internal sealed class ReadBuffer : IDisposable
     /// </summary>
     /// <param name="destination">The region to fill completely with consumed bytes.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <exception cref="TimeoutException">A transport read exceeded the configured timeout.</exception>
     /// <exception cref="ClickHouseTcpTransportException">The stream ended before the destination was filled, or the read failed.</exception>
     public async ValueTask ReadIntoAsync(Memory<byte> destination, CancellationToken cancellationToken)
     {
@@ -150,21 +158,7 @@ internal sealed class ReadBuffer : IDisposable
 
         while (!destination.IsEmpty)
         {
-            int read;
-            try
-            {
-                read = await stream.ReadAsync(destination, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception e) when (readsFromTransport && TransportFailure.IsTransportFailure(e))
-            {
-                throw TransportFailure.Read(e);
-            }
-
-            if (read == 0)
-            {
-                throw TransportFailure.EndOfStream();
-            }
-
+            int read = await ReadFromStreamAsync(destination, cancellationToken).ConfigureAwait(false);
             destination = destination.Slice(read);
         }
     }
@@ -204,14 +198,39 @@ internal sealed class ReadBuffer : IDisposable
     private async ValueTask FillOnceAsync(CancellationToken cancellationToken)
     {
         int writeStart = head + buffered;
+        int read = await ReadFromStreamAsync(buffer.AsMemory(writeStart, capacity - writeStart), cancellationToken).ConfigureAwait(false);
+        buffered += read;
+    }
+
+    /// <summary>
+    /// Performs one stream read with the configured timeout and translates timeout, EOF, and transport failures.
+    /// </summary>
+    /// <param name="destination">Where to put the bytes; filled in part or in whole.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The number of bytes read, always at least one.</returns>
+    /// <exception cref="TimeoutException">A transport read exceeded the configured timeout.</exception>
+    /// <exception cref="ClickHouseTcpTransportException">The stream ended, or the read failed.</exception>
+    private async ValueTask<int> ReadFromStreamAsync(Memory<byte> destination, CancellationToken cancellationToken)
+    {
         int read;
+        CancellationToken readToken = deadline?.Arm(cancellationToken) ?? cancellationToken;
         try
         {
-            read = await stream.ReadAsync(buffer.AsMemory(writeStart, capacity - writeStart), cancellationToken).ConfigureAwait(false);
+            read = await stream.ReadAsync(destination, readToken).ConfigureAwait(false);
+        }
+        catch (Exception e) when (deadline is { Elapsed: true } && (e is OperationCanceledException || TransportFailure.IsTransportFailure(e)))
+        {
+            // Translate timeout cancellation to TimeoutException, including transport exceptions raised during
+            // cancellation (for example, by SslStream). Caller cancellation does not count as a timeout.
+            throw deadline.ToException();
         }
         catch (Exception e) when (readsFromTransport && TransportFailure.IsTransportFailure(e))
         {
             throw TransportFailure.Read(e);
+        }
+        finally
+        {
+            deadline?.Disarm();
         }
 
         if (read == 0)
@@ -219,6 +238,6 @@ internal sealed class ReadBuffer : IDisposable
             throw TransportFailure.EndOfStream();
         }
 
-        buffered += read;
+        return read;
     }
 }
