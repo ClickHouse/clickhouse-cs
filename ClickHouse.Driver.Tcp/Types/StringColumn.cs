@@ -17,7 +17,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// lifetime. Copy out (<see cref="GetString(int, Encoding)"/> or <c>GetBytes(row).ToArray()</c>) to retain.
 /// </para>
 /// </summary>
-internal sealed class StringColumn : IColumn<string>
+internal sealed class StringColumn : IStringColumn
 {
     private readonly int rowCount;
     private readonly bool pooled;
@@ -86,9 +86,14 @@ internal sealed class StringColumn : IColumn<string>
     /// <inheritdoc/>
     public object GetValue(int row) => this[row];
 
-    /// <summary>Returns the raw, undecoded bytes of a row as a zero-copy slice of the blob (borrowed).</summary>
-    /// <param name="row">The zero-based row index.</param>
-    /// <returns>The row's bytes.</returns>
+    /// <inheritdoc/>
+    // Sliced to the used prefix: the blob is rented and normally longer than the data.
+    public ReadOnlySpan<byte> Bytes => blob.AsSpan(0, offsets.AsSpan(0, rowCount + 1)[rowCount]);
+
+    /// <inheritdoc/>
+    public ReadOnlySpan<int> Offsets => offsets.AsSpan(0, rowCount + 1);
+
+    /// <inheritdoc/>
     public ReadOnlySpan<byte> GetBytes(int row)
     {
         // Bound the row against the logical offsets (rowCount + 1 entries): the offsets array is rented and may be
@@ -97,10 +102,7 @@ internal sealed class StringColumn : IColumn<string>
         return blob.AsSpan(bounds[row], bounds[row + 1] - bounds[row]);
     }
 
-    /// <summary>Decodes a row's bytes to a string under the given encoding.</summary>
-    /// <param name="row">The zero-based row index.</param>
-    /// <param name="encoding">The encoding to decode with.</param>
-    /// <returns>The decoded string.</returns>
+    /// <inheritdoc/>
     public string GetString(int row, Encoding encoding)
     {
         ArgumentNullException.ThrowIfNull(encoding);

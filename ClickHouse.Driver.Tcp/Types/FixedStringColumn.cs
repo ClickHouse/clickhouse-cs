@@ -15,6 +15,14 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// shorter stored value was padded with included.
 ///
 /// <para>
+/// The UTF-8 text of those bytes is a reading of the type as well, so <c>Block.ReadAs&lt;string&gt;</c> and a POCO
+/// property typed <see cref="string"/> reach it, and every wrapper composes it (<c>Nullable</c>, <c>Array</c>,
+/// <c>Map</c>, <c>Tuple</c>, <c>LowCardinality</c>). It is <see cref="GetString(int, Encoding)"/> under UTF-8: all
+/// <c>N</c> bytes, padding included, since trimming would be a guess about a value that may legitimately end in a
+/// zero.
+/// </para>
+///
+/// <para>
 /// The blob is rented from <see cref="ArrayPool{T}"/> and returned on <see cref="Dispose"/>; like every column,
 /// the bytes and any span returned by <see cref="GetBytes(int)"/> are borrowed for the block's lifetime. Copy
 /// out (<see cref="GetString(int, Encoding)"/> or <c>GetBytes(row).ToArray()</c>) to retain.

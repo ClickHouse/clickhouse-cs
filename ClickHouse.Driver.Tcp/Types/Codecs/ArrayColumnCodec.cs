@@ -77,6 +77,9 @@ internal static class ArrayColumnCodec
 /// <typeparam name="TElement">The inner codec's CLR element type; each row surfaces as <typeparamref name="TElement"/>[].</typeparam>
 internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 {
+    private static readonly MethodInfo ProjectArrayMethod =
+        typeof(ArrayColumnCodec<TElement>).GetMethod(nameof(ProjectArray), BindingFlags.NonPublic | BindingFlags.Static);
+
     private readonly IColumnCodec inner;
 
     internal ArrayColumnCodec(string typeName, IColumnCodec inner)
@@ -234,6 +237,66 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         return true;
     }
 
+    /// <summary>
+    /// Forwards a column-level reading to the element codec over the flat element column, then reslices it per row.
+    /// Offered only where the element codec has one of its own: an element whose values convert one at a time is
+    /// cheaper projected into the row array <see cref="TryProjectRead"/> already builds.
+    /// </summary>
+    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
+    {
+        projection = null;
+
+        if (targetType == ElementType || !CompositeElementProjections.TryGetArrayElement(targetType, out Type targetElement))
+        {
+            return false;
+        }
+
+        if (!inner.TryProjectColumnRead(targetElement, out ColumnReadProjection elementProjection))
+        {
+            return false;
+        }
+
+        projection = ColumnProjection.Close(ProjectArrayMethod, elementProjection, targetElement);
+        return true;
+    }
+
+    /// <summary>
+    /// Builds the view over one decoded column: the flat element column projected once, then addressed per row
+    /// through the offsets this column already holds.
+    /// </summary>
+    /// <typeparam name="T">The projected element type; the view's element type is <c>T[]</c>.</typeparam>
+    /// <param name="source">The decoded <c>Array(T)</c> column.</param>
+    /// <param name="elementProjection">The element codec's projection of the flat element column.</param>
+    /// <returns>The view.</returns>
+    private static IColumn ProjectArray<T>(IColumn source, ColumnReadProjection elementProjection)
+    {
+        IArrayColumn array = ColumnProjection.Surface<IArrayColumn>(source);
+        var elements = (IColumn<T>)elementProjection(array.Inner);
+        return new ProjectedReadColumn<T[]>(source, (column, row) => Row(((IArrayColumn)column).Offsets, elements, row));
+    }
+
+    /// <summary>Reads one row's slice of the projected element column into a new array.</summary>
+    // Read through the indexer, not Values: an element belongs to exactly one row, so there is nothing for the rows
+    // to share, and materializing the whole element column to copy one slice out of it would convert every other
+    // row's elements as well.
+    private static T[] Row<T>(ReadOnlySpan<int> offsets, IColumn<T> elements, int row)
+    {
+        int start = offsets[row];
+        int length = offsets[row + 1] - start;
+        if (length == 0)
+        {
+            return Array.Empty<T>();
+        }
+
+        var projected = new T[length];
+        for (int i = 0; i < length; i++)
+        {
+            projected[i] = elements[start + i];
+        }
+
+        return projected;
+    }
+
     /// <inheritdoc/>
     public bool CanWriteElementType(Type elementType)
         => CompositeElementProjections.TryGetArrayElement(elementType, out Type sourceElement)
@@ -241,9 +304,31 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column)
-        => column is ArrayValueColumn<TElement> dense
-            ? inner.CanWrite(dense.Inner)
-            : ResolveWriteShape(column) is not null;
+        => TryDense(column, out _) || ResolveWriteShape(column) is not null;
+
+    /// <summary>
+    /// Recognizes a column already in the wire's layout whose elements the inner codec takes as they stand, so the
+    /// offsets and the element column are re-emitted with nothing rebuilt.
+    ///
+    /// <para>
+    /// The element type is not required to be this codec's own <typeparamref name="TElement"/>: a caller building
+    /// the dense shape names the CLR type it holds, which for a convenience type differs from the canonical one an
+    /// <c>Array(DateTime)</c> decodes to. Matching only the canonical type would send those columns down the jagged
+    /// path, where the flattening view indexes the outer column per element and each access materializes the whole
+    /// row again — quadratic in the row's length for a shape that needed no work at all.
+    /// </para>
+    /// </summary>
+    private bool TryDense(IColumn column, out IDenseArrayColumn dense)
+    {
+        dense = column as IDenseArrayColumn;
+        if (dense is not null && inner.CanWrite(dense.Inner))
+        {
+            return true;
+        }
+
+        dense = null;
+        return false;
+    }
 
     // Resolve the shape from the row's CLR element type.
     private IArrayWriteShape ResolveWriteShape(IColumn column)
@@ -297,7 +382,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     // Write cumulative offsets, then the flattened elements.
     private void WriteBody(ClickHouseBinaryWriter writer, IColumn column, int start, int length, ArrayWriteState state)
     {
-        if (column is ArrayValueColumn<TElement> dense)
+        if (TryDense(column, out IDenseArrayColumn dense))
         {
             // Rebase the stored offsets to this slice.
             ReadOnlySpan<int> offsets = dense.Offsets;
@@ -330,7 +415,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     // Prepare the element range and the inner codec's state once per slice.
     private ArrayWriteState BuildState(IColumn column, int start, int length)
     {
-        if (column is ArrayValueColumn<TElement> dense)
+        if (TryDense(column, out IDenseArrayColumn dense))
         {
             // Dense columns already contain the flattened element column.
             ReadOnlySpan<int> offsets = dense.Offsets;
