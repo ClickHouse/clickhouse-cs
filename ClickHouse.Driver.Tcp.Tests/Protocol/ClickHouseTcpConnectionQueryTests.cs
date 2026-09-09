@@ -65,7 +65,25 @@ public class ClickHouseTcpConnectionQueryTests
     }
 
     [Test]
-    public async Task QueryAsync_ServerExceptionMidStream_ThrowsButStaysReusable()
+    public async Task QueryAsync_ServerExceptionBeforeResponseAndPeerCloses_ThrowsOriginalAndTerminates()
+    {
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await ExceptionPacketAsync(27, "cannot parse setting"));
+        using var connection = await ConnectedAsync(script);
+
+        var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () => await DrainAsync(connection));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Code, Is.EqualTo(27));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+            Assert.That(connection.IsReusable, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task QueryAsync_ServerExceptionMidStream_ThrowsAndTerminatesConnection()
     {
         byte[] script = Concat(
             await ServerHelloBytesAsync(54476),
@@ -88,7 +106,8 @@ public class ClickHouseTcpConnectionQueryTests
             Assert.That(thrown.Message, Is.EqualTo("memory limit exceeded"));
             Assert.That(rows, Has.Count.EqualTo(1)); // the block before the exception was still surfaced
             CollectionAssert.AreEqual(new ulong[] { 7 }, rows[0]);
-            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+            Assert.That(connection.IsReusable, Is.False);
         });
     }
 
