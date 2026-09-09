@@ -12,20 +12,29 @@ class Program
 
         try
         {
-            var filter = ParseArgs(args, out bool showList);
+            var filter = ParseArgs(args, out bool showList, out ExampleTransport? transport);
 
             if (showList)
             {
-                ExampleRunner.ListExamples();
+                ExampleRunner.ListExamples(transport);
                 return;
             }
 
             if (filter != null)
             {
-                await RunFiltered(filter, isInteractive);
+                await RunFiltered(filter, transport, isInteractive);
+            }
+            else if (transport is { } only)
+            {
+                await RunTransport(only, isInteractive);
             }
             else
             {
+                if (!await ExamplePreflight.CheckAsync(ExampleRunner.Examples))
+                {
+                    Environment.Exit(1);
+                }
+
                 await RunAllExamples(isInteractive);
             }
         }
@@ -37,9 +46,10 @@ class Program
         }
     }
 
-    private static async Task RunFiltered(string filter, bool isInteractive)
+    private static async Task RunFiltered(string filter, ExampleTransport? transport, bool isInteractive)
     {
-        var matches = ExampleRunner.FindMatches(filter);
+        // A transport flag also limits fuzzy matches.
+        var matches = ExampleRunner.FindMatches(filter, transport);
 
         if (matches.Count == 0)
         {
@@ -50,7 +60,34 @@ class Program
 
         Console.WriteLine($"Found {matches.Count} matching example(s):\n");
 
+        if (!await ExamplePreflight.CheckAsync(matches))
+        {
+            Environment.Exit(1);
+        }
+
         foreach (var example in matches)
+        {
+            await ExampleRunner.RunExample(example);
+            WaitForUser(isInteractive);
+            Console.WriteLine("\n");
+        }
+    }
+
+    private static async Task RunTransport(ExampleTransport transport, bool isInteractive)
+    {
+        var selected = ExampleRunner.ForTransport(transport);
+
+        Console.WriteLine($"Running {selected.Count} {transport} example(s):\n");
+
+        // Include endpoints needed by cross-transport examples.
+        var needed = selected.SelectMany(e => e.RequiredTransports).Append(transport).Distinct().ToArray();
+
+        if (!await ExamplePreflight.CheckAsync(needed))
+        {
+            Environment.Exit(1);
+        }
+
+        foreach (var example in selected)
         {
             await ExampleRunner.RunExample(example);
             WaitForUser(isInteractive);
@@ -107,6 +144,10 @@ class Program
 
         Console.WriteLine($"\n\nRunning: {nameof(BulkInsert)}");
         await BulkInsert.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(AsyncInsert)}");
+        await AsyncInsert.Run();
         WaitForUser(isInteractive);
 
         Console.WriteLine($"\n\nRunning: {nameof(RawStreamInsert)}");
@@ -175,6 +216,10 @@ class Program
         await SimpleTypes.Run();
         WaitForUser(isInteractive);
 
+        Console.WriteLine($"\n\nRunning: {nameof(DateTimeHandling)}");
+        await DateTimeHandling.Run();
+        WaitForUser(isInteractive);
+
         Console.WriteLine($"\n\nRunning: {nameof(ComplexTypes)}");
         await ComplexTypes.Run();
         WaitForUser(isInteractive);
@@ -189,6 +234,10 @@ class Program
 
         Console.WriteLine($"\n\nRunning: {nameof(GeometryTypes)}");
         await GeometryTypes.Run();
+        WaitForUser(isInteractive);
+
+        Console.WriteLine($"\n\nRunning: {nameof(QBitSimilaritySearch)}");
+        await QBitSimilaritySearch.Run();
         WaitForUser(isInteractive);
 
         // ORM Integration
@@ -291,14 +340,59 @@ class Program
         await Testcontainers.Run();
         WaitForUser(isInteractive);
 
+        await RunCategory("NATIVE PROTOCOL: CORE USAGE & CONFIGURATION", isInteractive,
+            (nameof(TcpBasicUsage), TcpBasicUsage.Run),
+            (nameof(TcpConnectionString), TcpConnectionString.Run),
+            (nameof(TcpDependencyInjection), TcpDependencyInjection.Run),
+            (nameof(TcpMigratingFromHttp), TcpMigratingFromHttp.Run));
+
+        await RunCategory("NATIVE PROTOCOL: READING DATA", isInteractive,
+            (nameof(TcpReadTiers), TcpReadTiers.Run),
+            (nameof(TcpBlocksAndColumns), TcpBlocksAndColumns.Run),
+            (nameof(TcpParameters), TcpParameters.Run),
+            (nameof(TcpPoco), TcpPoco.Run));
+
+        await RunCategory("NATIVE PROTOCOL: WRITING DATA", isInteractive,
+            (nameof(TcpColumnarInsert), TcpColumnarInsert.Run),
+            (nameof(TcpCompositeWrites), TcpCompositeWrites.Run));
+
+        await RunCategory("NATIVE PROTOCOL: DATA TYPES", isInteractive,
+            (nameof(TcpScalarTypes), TcpScalarTypes.Run),
+            (nameof(TcpDateTimeAndTimezones), TcpDateTimeAndTimezones.Run),
+            (nameof(TcpCompositeRead), TcpCompositeRead.Run),
+            (nameof(TcpVariantDynamicJson), TcpVariantDynamicJson.Run),
+            (nameof(TcpQBitVectorSearch), TcpQBitVectorSearch.Run));
+
+        await RunCategory("NATIVE PROTOCOL: CONNECTIONS AND SESSIONS", isInteractive,
+            (nameof(TcpSessions), TcpSessions.Run),
+            (nameof(TcpPoolTuning), TcpPoolTuning.Run),
+            (nameof(TcpTls), TcpTls.Run),
+            (nameof(TcpTimeouts), TcpTimeouts.Run));
+
+        await RunCategory("NATIVE PROTOCOL: ADVANCED", isInteractive,
+            (nameof(TcpSettingsAndQueryId), TcpSettingsAndQueryId.Run),
+            (nameof(TcpProgressAndStatistics), TcpProgressAndStatistics.Run),
+            (nameof(TcpCancellation), TcpCancellation.Run),
+            (nameof(TcpErrorsAndRetries), TcpErrorsAndRetries.Run),
+            (nameof(TcpCompression), TcpCompression.Run),
+            (nameof(TcpServerInfo), TcpServerInfo.Run));
+
+        await RunCategory("NATIVE PROTOCOL: OBSERVABILITY", isInteractive,
+            (nameof(TcpLogging), TcpLogging.Run),
+            (nameof(TcpOpenTelemetry), TcpOpenTelemetry.Run),
+            (nameof(TcpMetadataBlocks), TcpMetadataBlocks.Run),
+            (nameof(TcpHealthChecks), TcpHealthChecks.Run),
+            (nameof(TcpTestcontainers), TcpTestcontainers.Run));
+
         Console.WriteLine("\n\n" + new string('=', 70));
         Console.WriteLine("ALL EXAMPLES COMPLETED SUCCESSFULLY!");
         Console.WriteLine(new string('=', 70));
     }
 
-    private static string? ParseArgs(string[] args, out bool showList)
+    private static string? ParseArgs(string[] args, out bool showList, out ExampleTransport? transport)
     {
         showList = false;
+        transport = null;
         string? filter = null;
 
         for (int i = 0; i < args.Length; i++)
@@ -308,7 +402,19 @@ class Program
             if (arg == "--list" || arg == "-l")
             {
                 showList = true;
-                return null;
+                continue;
+            }
+
+            if (arg == "--http")
+            {
+                transport = ExampleTransport.Http;
+                continue;
+            }
+
+            if (arg == "--tcp")
+            {
+                transport = ExampleTransport.Tcp;
+                continue;
             }
 
             if (arg == "--filter" || arg == "-f")
@@ -344,6 +450,24 @@ class Program
         else
         {
             Console.WriteLine(); // Just add a blank line in non-interactive mode
+        }
+    }
+
+    private static async Task RunCategory(
+        string title,
+        bool isInteractive,
+        params (string Name, Func<Task> Run)[] examples)
+    {
+        Console.WriteLine("\n\n" + new string('=', 70));
+        Console.WriteLine(title);
+        Console.WriteLine(new string('=', 70) + "\n");
+
+        foreach (var example in examples)
+        {
+            Console.WriteLine($"Running: {example.Name}");
+            await example.Run();
+            WaitForUser(isInteractive);
+            Console.WriteLine();
         }
     }
 }

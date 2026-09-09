@@ -5,6 +5,9 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <!-- The native-protocol client is [Experimental("CHTCP0001")]. Every Tcp/ example would otherwise
+             open with the same pragma; Tcp/README.md explains the opt-in a consumer has to make. -->
+        <NoWarn>$(NoWarn);CHTCP0001</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
@@ -12,6 +15,9 @@
         <!-- Compression types (incl. the LZ4 codec used by the bulk-insert example) live in the
              bundled (PrivateAssets="all") Common assembly; reference it directly. -->
         <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
+        <!-- Same reason: ClickHouse.Driver references Tcp with PrivateAssets="all", so the native
+             client's types do not reach a consumer of the driver project transitively. -->
+        <ProjectReference Include="..\ClickHouse.Driver.Tcp\ClickHouse.Driver.Tcp.csproj" />
     </ItemGroup>
 
     <ItemGroup>
