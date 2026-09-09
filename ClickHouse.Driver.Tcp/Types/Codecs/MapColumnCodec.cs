@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -58,6 +59,19 @@ internal sealed class MapColumnCodec : IColumnCodec
     /// by zero and contributes no pairs. Relevant only if a composite nests a <c>Map</c> and asks for its placeholder.
     /// </summary>
     public object NullPlaceholder => shape.EmptyMap;
+
+    /// <inheritdoc/>
+    public object NullPlaceholderAs(Type writeType)
+    {
+        if (!TryPairArguments(writeType, out Type pairType, out Type[] arguments)
+            || !keyCodec.CanWriteElementType(arguments[0])
+            || !valueCodec.CanWriteElementType(arguments[1]))
+        {
+            throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+        }
+
+        return writeType == ElementType ? NullPlaceholder : Array.CreateInstance(pairType, 0);
+    }
 
     /// <summary>Builds a <c>Map(K, V)</c> codec, resolving the key and value types through the registry.</summary>
     /// <param name="node">The parsed <c>Map</c> type node; its two arguments are the key and value types.</param>
@@ -177,48 +191,133 @@ internal sealed class MapColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => shape.CanWrite(keyCodec, valueCodec, column, projectedChildrenCanWrite);
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
+
+        if (targetType == ElementType)
+        {
+            projected = value;
+            return true;
+        }
+
+        projected = null;
+
+        // Project the key and value independently.
+        if (!TryPairArguments(targetType, out Type targetPair, out Type[] targetArguments))
+        {
+            return false;
+        }
+
+        ParameterExpression pair = Expression.Variable(ElementType.GetElementType(), "pair");
+        if (!keyCodec.TryProjectRead(Expression.Property(pair, "Key"), targetArguments[0], out Expression projectedKey)
+            || !valueCodec.TryProjectRead(Expression.Property(pair, "Value"), targetArguments[1], out Expression projectedValue))
+        {
+            return false;
+        }
+
+        // KeyValuePair is immutable, so create a projected pair.
+        Expression rebuilt = Expression.New(
+            targetPair.GetConstructor(targetArguments) ?? throw new InvalidOperationException($"KeyValuePair<,> is missing its ({targetArguments[0]}, {targetArguments[1]}) constructor."),
+            projectedKey,
+            projectedValue);
+
+        projected = CompositeElementProjections.ProjectArray(value, pair, rebuilt);
+        return true;
+    }
 
     /// <inheritdoc/>
-    // Flatten the slice's keys and values once and create the key/value codecs' own write states over them, so a
-    // data-dependent value (Dynamic) sees its real values at prefix time and the flatten spans both phases.
+    public bool CanWriteElementType(Type elementType)
+        => TryPairArguments(elementType, out Type _, out Type[] arguments)
+            && keyCodec.CanWriteElementType(arguments[0])
+            && valueCodec.CanWriteElementType(arguments[1]);
+
+    /// <inheritdoc/>
+    public bool CanWrite(IColumn column)
+    {
+        IMapShape writeShape = WriteShapeFor(column, out bool childrenCanWrite);
+        return writeShape is not null && writeShape.CanWrite(keyCodec, valueCodec, column, childrenCanWrite);
+    }
+
+    /// <summary>Parses the CLR map-row shape <c>KeyValuePair&lt;TKey, TValue&gt;[]</c>.</summary>
+    private static bool TryPairArguments(Type candidate, out Type pairType, out Type[] arguments)
+    {
+        if (CompositeElementProjections.TryGetArrayElement(candidate, out pairType)
+            && pairType.IsGenericType
+            && pairType.GetGenericTypeDefinition() == typeof(KeyValuePair<,>))
+        {
+            arguments = pairType.GetGenericArguments();
+            return true;
+        }
+
+        pairType = null;
+        arguments = null;
+        return false;
+    }
+
+    // Resolve the canonical or child-lifted write shape.
+    private IMapShape WriteShapeFor(IColumn column, out bool childrenCanWrite)
+    {
+        Type elementType = column.ElementType;
+        if (elementType == ElementType)
+        {
+            childrenCanWrite = projectedChildrenCanWrite;
+            return shape;
+        }
+
+        childrenCanWrite = false;
+        if (!TryPairArguments(elementType, out Type _, out Type[] arguments)
+            || !keyCodec.CanWriteElementType(arguments[0])
+            || !valueCodec.CanWriteElementType(arguments[1]))
+        {
+            return null;
+        }
+
+        childrenCanWrite = true;
+        return MapShapes.For(arguments[0], arguments[1]);
+    }
+
+    private IMapShape RequireWriteShape(IColumn column)
+        => WriteShapeFor(column, out _)
+            ?? throw new ArgumentException(
+                $"A {TypeName} column must hold rows of a CLR pair type its key and value codecs accept, not {column.GetType()}.",
+                nameof(column));
+
+    /// <inheritdoc/>
+    // Flatten once so child prefixes and bodies use the same columns.
     public IColumnWriteState BeginWrite(IColumn column, int start, int length)
-        => shape.BeginWrite(keyCodec, valueCodec, column, start, length);
+        => RequireWriteShape(column).BeginWrite(keyCodec, valueCodec, column, start, length);
 
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        using IColumnWriteState state = shape.BeginWrite(keyCodec, valueCodec, column, start, length);
-        shape.WriteStatePrefix(keyCodec, valueCodec, writer, state);
+        IMapShape writeShape = RequireWriteShape(column);
+        using IColumnWriteState state = writeShape.BeginWrite(keyCodec, valueCodec, column, start, length);
+        writeShape.WriteStatePrefix(keyCodec, valueCodec, writer, state);
     }
 
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        shape.WriteStatePrefix(keyCodec, valueCodec, writer, state);
+        RequireWriteShape(column).WriteStatePrefix(keyCodec, valueCodec, writer, state);
     }
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        using IColumnWriteState state = shape.BeginWrite(keyCodec, valueCodec, column, start, length);
-        shape.WriteBody(keyCodec, valueCodec, writer, column, start, length, state);
+        IMapShape writeShape = RequireWriteShape(column);
+        using IColumnWriteState state = writeShape.BeginWrite(keyCodec, valueCodec, column, start, length);
+        writeShape.WriteBody(keyCodec, valueCodec, writer, column, start, length, state);
     }
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        shape.WriteBody(keyCodec, valueCodec, writer, column, start, length, state);
+        RequireWriteShape(column).WriteBody(keyCodec, valueCodec, writer, column, start, length, state);
     }
 }
 
-/// <summary>
-/// The generic bridge for one map key/value type pair: it knows how to build the typed
-/// <see cref="MapColumn{TKey, TValue}"/>, test a writable column, drive the offsets-plus-two-streams write, and
-/// price a row. One implementation covers every type pair (a <c>KeyValuePair&lt;K, V&gt;[]</c> is a reference
-/// type, so unlike the nullable bridge there is no value/reference split); the concrete instance is chosen once
-/// per type pair.
-/// </summary>
+/// <summary>Handles one CLR key/value shape for map reads and writes.</summary>
 internal interface IMapShape
 {
     /// <summary>The CLR element type the wrapped column surfaces (<c>KeyValuePair&lt;K, V&gt;[]</c>).</summary>
@@ -230,32 +329,19 @@ internal interface IMapShape
     /// <summary>Wraps decoded flat key/value columns and their shared offsets into the typed map column.</summary>
     IColumn Wrap(string name, string typeName, IColumn keys, IColumn values, int[] offsets, int rowCount, bool pooledOffsets);
 
-    /// <summary>
-    /// Whether <paramref name="column"/> is a writable map column of this key/value type pair. A dense column is
-    /// checked against its actual key/value children; an ergonomic jagged column relies on the flattened child
-    /// probe supplied in <paramref name="projectedChildrenCanWrite"/>.
-    /// </summary>
+    /// <summary>Whether this shape and both child codecs can write the column.</summary>
     bool CanWrite(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, bool projectedChildrenCanWrite);
 
-    /// <summary>Whether both codecs accept the flat typed columns projected by the ergonomic jagged write path.</summary>
+    /// <summary>Whether both codecs accept this shape's flattened columns.</summary>
     bool CanInnerWrite(IColumnCodec keyCodec, IColumnCodec valueCodec);
 
-    /// <summary>
-    /// Flattens the slice's keys and values into contiguous columns once and creates the key and value codecs'
-    /// own write states over them, so a data-dependent inner (Dynamic) sees its real values at prefix time and the
-    /// flatten is shared across the prefix and body phases.
-    /// </summary>
+    /// <summary>Flattens the slice and prepares both child write states.</summary>
     IColumnWriteState BeginWrite(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, int start, int length);
 
-    /// <summary>Writes the key then value serialization-state prefixes from a computed <see cref="BeginWrite"/> state.</summary>
+    /// <summary>Writes the key and value prefixes from prepared state.</summary>
     void WriteStatePrefix(IColumnCodec keyCodec, IColumnCodec valueCodec, ClickHouseBinaryWriter writer, IColumnWriteState state);
 
-    /// <summary>
-    /// Writes the map body for rows [<paramref name="start"/>, start + length): the offsets stream (each offset
-    /// relative to this slice's own pairs), then the flattened keys stream, then the flattened values stream, the
-    /// latter two from the pre-flattened <paramref name="state"/>. A dense <see cref="MapColumn{TKey, TValue}"/> is
-    /// written with no intermediate copy; the ergonomic jagged form uses the state's pooled key/value buffers.
-    /// </summary>
+    /// <summary>Writes slice-relative offsets, keys, and values.</summary>
     void WriteBody(IColumnCodec keyCodec, IColumnCodec valueCodec, ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state);
 }
 
@@ -264,20 +350,14 @@ internal static class MapShapes
 {
     private static readonly ConcurrentDictionary<(Type Key, Type Value), IMapShape> Cache = new();
 
-    /// <summary>Returns the shape for the (<paramref name="keyType"/>, <paramref name="valueType"/>) pair, building it once and caching it.</summary>
-    /// <param name="keyType">The key codec's CLR element type.</param>
-    /// <param name="valueType">The value codec's CLR element type.</param>
-    /// <returns>The shape.</returns>
+    /// <summary>Returns the cached shape for the CLR key and value types.</summary>
     public static IMapShape For(Type keyType, Type valueType) => Cache.GetOrAdd((keyType, valueType), Build);
 
-    // nonPublic: true so the shape's (implicit, but internal-assembly) constructor is always reachable here.
     private static IMapShape Build((Type Key, Type Value) pair)
         => (IMapShape)Activator.CreateInstance(typeof(MapShape<,>).MakeGenericType(pair.Key, pair.Value), nonPublic: true);
 }
 
-/// <summary>The shape for a key type <typeparamref name="TKey"/> and value type <typeparamref name="TValue"/>: the map column surfaces <c>KeyValuePair&lt;TKey, TValue&gt;[]</c>.</summary>
-/// <typeparam name="TKey">The key codec's element type.</typeparam>
-/// <typeparam name="TValue">The value codec's element type.</typeparam>
+/// <summary>Handles map rows surfaced as <c>KeyValuePair&lt;TKey, TValue&gt;[]</c>.</summary>
 internal sealed class MapShape<TKey, TValue> : IMapShape
 {
     /// <inheritdoc/>
@@ -303,8 +383,7 @@ internal sealed class MapShape<TKey, TValue> : IMapShape
 
     /// <inheritdoc/>
     public bool CanInnerWrite(IColumnCodec keyCodec, IColumnCodec valueCodec)
-        => keyCodec.CanWrite(new ArrayColumn<TKey>(string.Empty, keyCodec.TypeName, Array.Empty<TKey>()))
-        && valueCodec.CanWrite(new ArrayColumn<TValue>(string.Empty, valueCodec.TypeName, Array.Empty<TValue>()));
+        => keyCodec.CanWriteElementType(typeof(TKey)) && valueCodec.CanWriteElementType(typeof(TValue));
 
     /// <inheritdoc/>
     public IColumnWriteState BeginWrite(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, int start, int length)

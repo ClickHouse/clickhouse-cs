@@ -7,8 +7,7 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// Selects a codec-compatible write type and builds the POCO property conversion. Numeric conversions are excluded
-/// to preserve read/write symmetry.
+/// Selects writable CLR types and builds POCO property conversions.
 /// </summary>
 internal static class PocoWriteConversion
 {
@@ -16,7 +15,7 @@ internal static class PocoWriteConversion
         typeof(PocoWriteConversion).GetMethod(nameof(NullNotWritable), BindingFlags.Public | BindingFlags.Static);
 
     /// <summary>
-    /// Returns the codec's writable CLR types that work in an array-backed column.
+    /// Returns the codec's preferred writable CLR types for row columns.
     /// </summary>
     /// <param name="codec">The target column's codec.</param>
     /// <returns>The write types, possibly none.</returns>
@@ -50,6 +49,13 @@ internal static class PocoWriteConversion
                 writeType = accepted[i];
                 return true;
             }
+        }
+
+        // Composite codecs do not enumerate every writable child-type combination.
+        if (codec.CanWriteElementType(memberType))
+        {
+            writeType = memberType;
+            return true;
         }
 
         writeType = null;
@@ -151,16 +157,7 @@ internal static class PocoWriteConversion
     /// <param name="codec">The target column's codec.</param>
     /// <param name="writeType">The candidate write type.</param>
     /// <returns>Whether the codec accepts such a column.</returns>
-    private static bool Accepts(IColumnCodec codec, Type writeType)
-    {
-        var probe = (IColumn)Activator.CreateInstance(
-            typeof(ArrayColumn<>).MakeGenericType(writeType),
-            string.Empty,
-            codec.TypeName,
-            Array.CreateInstance(writeType, 0));
-
-        return codec.CanWrite(probe);
-    }
+    private static bool Accepts(IColumnCodec codec, Type writeType) => codec.CanWriteElementType(writeType);
 
     private static Expression Lift(Expression value, Type target)
         => value.Type == target ? value : Expression.Convert(value, target);

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
@@ -293,6 +294,236 @@ public class PocoWriteIntegrationTests
                 new[] { new object[] { value } },
                 options,
                 None).AsTask());
+    }
+
+    [Test]
+    public async Task InsertRowsAsync_ArrayOfDateTimeFromCalendarRows_RoundTripsThroughTheLiftedElements()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        string table = CreateTableName();
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} (value Array(DateTime('UTC'))) ENGINE = Memory", cancellationToken: None);
+
+            var first = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+            var second = new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+            var written = new[]
+            {
+                new Row<DateTime[]> { Value = new[] { first, second } },
+                new Row<DateTime[]> { Value = Array.Empty<DateTime>() },
+            };
+
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", written, cancellationToken: None);
+
+            List<object[]> raw = await client
+                .QueryAsync($"SELECT toUInt32(value[1]), length(value) FROM {table} ORDER BY length(value)", cancellationToken: None)
+                .ToListAsync();
+            List<Row<DateTime[]>> read = await client
+                .QueryAsync<Row<DateTime[]>>($"SELECT value FROM {table} ORDER BY length(value)", cancellationToken: None)
+                .ToListAsync();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(read[1].Value, Is.EqualTo(new[] { first, second }));
+                Assert.That(read[0].Value, Is.Empty);
+
+                // Also verify the canonical encoded value.
+                Assert.That(Convert.ToUInt32(raw[1][0]), Is.EqualTo(1_705_314_600u));
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task InsertRowsAsync_DeeplyNestedCompositeProperties_RoundTripThroughTheLiftedElements()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        string table = CreateTableName();
+        try
+        {
+            const string columns = "pairs, buckets, span, maybe";
+            await client.ExecuteAsync(
+                $"CREATE TABLE {table} (" +
+                $"pairs Array(Array(Tuple(DateTime('UTC'), String))), " +
+                $"buckets Map(String, Array(DateTime('UTC'))), " +
+                $"span Tuple(Array(DateTime('UTC')), Nullable(Int32)), " +
+                $"maybe Array(Nullable(DateTime('UTC')))) ENGINE = Memory",
+                cancellationToken: None);
+
+            var first = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+            var second = new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+            var written = new[]
+            {
+                new NestedCompositeRow
+                {
+                    Pairs = new[]
+                    {
+                        new[] { new ValueTuple<DateTime, string>(first, "a"), new ValueTuple<DateTime, string>(second, "b") },
+                        Array.Empty<ValueTuple<DateTime, string>>(),
+                    },
+                    Buckets = new[]
+                    {
+                        new KeyValuePair<string, DateTime[]>("x", new[] { first, second }),
+                        new KeyValuePair<string, DateTime[]>("y", Array.Empty<DateTime>()),
+                    },
+                    Span = new ValueTuple<DateTime[], int?>(new[] { second }, null),
+                    Maybe = new DateTime?[] { first, null, second },
+                },
+            };
+
+            await client.InsertRowsAsync($"INSERT INTO {table} ({columns}) VALUES", written, cancellationToken: None);
+
+            List<NestedCompositeRow> read = await client
+                .QueryAsync<NestedCompositeRow>($"SELECT {columns} FROM {table}", cancellationToken: None)
+                .ToListAsync();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(read, Has.Count.EqualTo(1));
+                Assert.That(read[0].Pairs[0], Is.EqualTo(written[0].Pairs[0]));
+                Assert.That(read[0].Pairs[1], Is.Empty);
+                Assert.That(read[0].Buckets, Is.EquivalentTo(written[0].Buckets));
+                Assert.That(read[0].Span.Item1, Is.EqualTo(new[] { second }));
+                Assert.That(read[0].Span.Item2, Is.Null);
+                Assert.That(read[0].Maybe, Is.EqualTo(new DateTime?[] { first, null, second }));
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    [RequiresServerFeature(TcpFeature.NullableTuple)]
+    public async Task InsertRowsAsync_NullableTupleWithLiftedFields_RoundTripsWhenEnabled()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["enable_nullable_tuple_type"] = "1",
+        };
+        var queryOptions = new ClickHouseTcpQueryOptions { Settings = settings };
+        var insertOptions = new ClickHouseTcpInsertOptions { Settings = settings };
+        string table = CreateTableName();
+        try
+        {
+            const string type = "Nullable(Tuple(DateTime('UTC'), String))";
+            await client.ExecuteAsync($"CREATE TABLE {table} (value {type}) ENGINE = Memory", queryOptions, None);
+
+            var present = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+            var written = new[]
+            {
+                new Row<(DateTime, string)?> { Value = (present, "present") },
+                new Row<(DateTime, string)?> { Value = null },
+            };
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", written, insertOptions, None);
+
+            List<Row<(DateTime, string)?>> read = await client
+                .QueryAsync<Row<(DateTime, string)?>>($"SELECT value FROM {table} ORDER BY isNull(value)", queryOptions, None)
+                .ToListAsync();
+
+            Assert.That(read.Select(row => row.Value), Is.EqualTo(written.Select(row => row.Value)));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", queryOptions, None);
+        }
+    }
+
+    [Test]
+    public async Task InsertRowsAsync_LowCardinalityOverACalendarInner_RoundTripsFromTheCalendarProperty()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        // ClickHouse requires this setting for LowCardinality(DateTime).
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["allow_suspicious_low_cardinality_types"] = "1",
+        };
+        var options = new ClickHouseTcpQueryOptions { Settings = settings };
+        string table = CreateTableName();
+        try
+        {
+            await client.ExecuteAsync(
+                $"CREATE TABLE {table} (value LowCardinality(DateTime('UTC'))) ENGINE = Memory",
+                options,
+                None);
+
+            var repeated = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+            var other = new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            var written = new[]
+            {
+                new Row<DateTime> { Value = repeated },
+                new Row<DateTime> { Value = other },
+                new Row<DateTime> { Value = repeated },
+            };
+
+            await client.InsertRowsAsync(
+                $"INSERT INTO {table} (value) VALUES",
+                written,
+                new ClickHouseTcpInsertOptions { Settings = settings },
+                None);
+
+            List<Row<DateTime>> read = await client
+                .QueryAsync<Row<DateTime>>($"SELECT value FROM {table} ORDER BY value", options, None)
+                .ToListAsync();
+            List<object[]> distinct = await client
+                .QueryAsync($"SELECT uniqExact(value), toUInt32(min(value)) FROM {table}", options, None)
+                .ToListAsync();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(read.Select(r => r.Value), Is.EqualTo(new[] { repeated, other, repeated }.OrderBy(v => v)));
+                Assert.That(Convert.ToUInt64(distinct[0][0]), Is.EqualTo(2ul), "two distinct values, so the dictionary really deduplicated");
+                Assert.That(Convert.ToUInt32(distinct[0][1]), Is.EqualTo(1_705_314_600u), "the wire carries epoch seconds");
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task InsertRowsAsync_NullableLowCardinalityDateTimesWithEqualClrTicks_StoresDistinctInstants()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["allow_suspicious_low_cardinality_types"] = "1",
+        };
+        var queryOptions = new ClickHouseTcpQueryOptions { Settings = settings };
+        var insertOptions = new ClickHouseTcpInsertOptions { Settings = settings };
+        string table = CreateTableName();
+        try
+        {
+            const string type = "LowCardinality(Nullable(DateTime('America/New_York')))";
+            await client.ExecuteAsync($"CREATE TABLE {table} (value {type}) ENGINE = Memory", queryOptions, None);
+
+            long ticks = new DateTime(2024, 1, 15, 12, 0, 0).Ticks;
+            var written = new[]
+            {
+                new Row<DateTime?> { Value = new DateTime(ticks, DateTimeKind.Utc) },
+                new Row<DateTime?> { Value = null },
+                new Row<DateTime?> { Value = new DateTime(ticks, DateTimeKind.Unspecified) },
+            };
+            await client.InsertRowsAsync($"INSERT INTO {table} (value) VALUES", written, insertOptions, None);
+
+            List<object[]> encoded = await client
+                .QueryAsync($"SELECT toUInt32(value) FROM {table} WHERE value IS NOT NULL ORDER BY value", queryOptions, None)
+                .ToListAsync();
+
+            Assert.That(encoded.Select(row => Convert.ToUInt32(row[0])).Distinct().ToArray(), Has.Length.EqualTo(2));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
     }
 
     [Test]
@@ -887,6 +1118,17 @@ public class PocoWriteIntegrationTests
         public DateTime? MaybeStamp { get; set; }
 
         public DateTimeOffset? MaybePrecise { get; set; }
+    }
+
+    private sealed class NestedCompositeRow
+    {
+        public ValueTuple<DateTime, string>[][] Pairs { get; set; }
+
+        public KeyValuePair<string, DateTime[]>[] Buckets { get; set; }
+
+        public ValueTuple<DateTime[], int?> Span { get; set; }
+
+        public DateTime?[] Maybe { get; set; }
     }
 
     /// <summary>A getter-only type that can be inserted but not materialized.</summary>
