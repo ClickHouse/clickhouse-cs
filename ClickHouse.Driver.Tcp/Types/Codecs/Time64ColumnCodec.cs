@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -37,6 +38,9 @@ internal sealed class Time64ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(long), typeof(TimeSpan) };
+
+    /// <inheritdoc/>
+    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(long), typeof(TimeSpan) };
 
     /// <inheritdoc/>
     public object NullPlaceholder => 0L;
@@ -79,6 +83,27 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => Time64Column.ReadAsync(reader, columnName, columnType, scale, rowCount, cancellationToken);
+
+    /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, typeof(long), TypeName);
+
+        if (targetType == typeof(long))
+        {
+            projected = value;
+            return true;
+        }
+
+        if (targetType == typeof(TimeSpan))
+        {
+            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.Time64ToTimeSpan), value, scale);
+            return true;
+        }
+
+        projected = null;
+        return false;
+    }
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => column is IColumn<long> or IColumn<TimeSpan>;

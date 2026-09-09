@@ -1,5 +1,7 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -132,6 +134,26 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     public Type ElementType => shape.SurfaceElementType;
 
     /// <summary>
+    /// The inner codec's readings on this codec's surface — so <c>LowCardinality(Nullable(DateTime))</c> reports
+    /// <c>uint?</c>, <c>DateTimeOffset?</c> and <c>DateTime?</c>. Diagnostics only, and only ever read on a failure
+    /// path, so it is built per call rather than cached.
+    /// </summary>
+    public IReadOnlyList<Type> ReadableElementTypes
+    {
+        get
+        {
+            IReadOnlyList<Type> innerTypes = inner.ReadableElementTypes;
+            var surfaced = new Type[innerTypes.Count];
+            for (int i = 0; i < innerTypes.Count; i++)
+            {
+                surfaced[i] = LowCardinalityShapes.For(innerTypes[i], nullable).SurfaceElementType;
+            }
+
+            return surfaced;
+        }
+    }
+
+    /// <summary>
     /// The placeholder for an absent value: for a nullable inner it is <see langword="null"/> itself (the reserved
     /// NULL dictionary slot), otherwise the inner codec's placeholder. Relevant only if a composite nests a
     /// <c>LowCardinality</c> and asks for its placeholder; the server rejects <c>Nullable(LowCardinality(...))</c>,
@@ -174,6 +196,16 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
         IColumnCodec inner = registry.ResolveNode(innerNode, in context);
         return new LowCardinalityColumnCodec(node.ToString(), inner, nullable);
     }
+
+    /// <summary>
+    /// Wraps an inner codec directly, bypassing the registry — see <see cref="NullableColumnCodec.Over"/> for why this
+    /// exists.
+    /// </summary>
+    /// <param name="inner">The inner codec to wrap.</param>
+    /// <param name="nullable">Whether to surface the inner as nullable, as <c>LowCardinality(Nullable(T))</c> does.</param>
+    /// <returns>The codec.</returns>
+    internal static LowCardinalityColumnCodec Over(IColumnCodec inner, bool nullable)
+        => new(nullable ? $"LowCardinality(Nullable({inner.TypeName}))" : $"LowCardinality({inner.TypeName})", inner, nullable);
 
     /// <inheritdoc/>
     public ValueTask ReadStatePrefixAsync(ClickHouseBinaryReader reader, CancellationToken cancellationToken)
@@ -335,6 +367,42 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
         }
 
         return (int)key;
+    }
+
+    /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
+
+        if (targetType == ElementType)
+        {
+            projected = value;
+            return true;
+        }
+
+        // A non-nullable LowCardinality is fully transparent on reads: its surface is the inner element type
+        // unchanged, so the target is already the inner's own spelling and there is nothing to lift.
+        if (!nullable)
+        {
+            return inner.TryProjectRead(value, targetType, out projected);
+        }
+
+        projected = null;
+
+        // A nullable inner wraps the inner spelling exactly as Nullable(T) does, so the same unwrap applies — see
+        // NullableColumnCodec.TryProjectRead.
+        Type innerTarget = Nullable.GetUnderlyingType(targetType);
+        if (innerTarget is null)
+        {
+            if (targetType.IsValueType)
+            {
+                return false;
+            }
+
+            innerTarget = targetType;
+        }
+
+        return ColumnValueProjections.TryLiftOverAbsent(value, inner, innerTarget, targetType, out projected);
     }
 
     /// <inheritdoc/>
