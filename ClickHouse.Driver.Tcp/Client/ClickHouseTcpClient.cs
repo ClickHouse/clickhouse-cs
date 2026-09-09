@@ -8,13 +8,14 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
+using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// A high-level client for a ClickHouse server over the native TCP protocol: run queries and stream results,
-/// execute statements, and insert columnar data. Build one from a <see cref="ClickHouseTcpClientOptions"/> or a
+/// execute statements, and insert data columnwise or row by row. Build one from a <see cref="ClickHouseTcpClientOptions"/> or a
 /// connection string and reuse it — it is safe to share across threads. Operations are serialized onto the
 /// underlying connection today (one in flight at a time); a future connection pool lifts that transparently.
 ///
@@ -287,6 +288,74 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
             parameters: null,
             options?.QueryId,
             ResolveMaxRowsPerBlock(options),
+            Options.MaxSendBufferBytes,
+            handlers: null,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask InsertRowsAsync<T>(
+        string sql,
+        IReadOnlyList<T> rows,
+        ClickHouseTcpInsertOptions options = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        ArgumentNullException.ThrowIfNull(rows);
+
+        // Prevent column lists from being mistaken for POCO rows.
+        if (typeof(IColumn).IsAssignableFrom(typeof(T)))
+        {
+            throw new ArgumentException(
+                $"An insert of {typeof(T).Name} rows would map that type's properties to columns. To insert columnar data, call InsertAsync with an IReadOnlyList<IColumn> — materialize the sequence (for example with ToList()) if it is not already a list.",
+                nameof(rows));
+        }
+
+        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+
+        int? maxRowsPerBlock = ResolveMaxRowsPerBlock(options);
+        int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
+        using var buffer = PocoRowBuffer<T>.Create(rows, nameof(rows), blockRows, cancellationToken);
+
+        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        await lease.Connection.InsertAsync(
+            sql,
+            buffer.Count,
+            schema => pocoTypes.WritePlanFor<T>(schema).CreateSource(buffer, blockRows),
+            settings,
+            parameters: null,
+            options?.QueryId,
+            maxRowsPerBlock,
+            Options.MaxSendBufferBytes,
+            handlers: null,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask InsertRowsAsync(
+        string sql,
+        IReadOnlyList<object[]> rows,
+        ClickHouseTcpInsertOptions options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        ArgumentNullException.ThrowIfNull(rows);
+
+        IReadOnlyDictionary<string, string> settings = BuildSettings(options);
+        int? maxRowsPerBlock = ResolveMaxRowsPerBlock(options);
+        int blockRows = ClickHouseTcpConnection.RowsPerBlock(rows.Count, maxRowsPerBlock);
+        using var buffer = PocoRowBuffer<object[]>.Create(rows, nameof(rows), blockRows, cancellationToken);
+
+        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        await lease.Connection.InsertAsync(
+            sql,
+            buffer.Count,
+            schema => UntypedRowColumns.CreateSource(schema, buffer, blockRows),
+            settings,
+            parameters: null,
+            options?.QueryId,
+            maxRowsPerBlock,
             Options.MaxSendBufferBytes,
             handlers: null,
             cancellationToken).ConfigureAwait(false);

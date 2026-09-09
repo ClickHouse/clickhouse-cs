@@ -3,12 +3,37 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Protocol;
+
+/// <summary>
+/// Compiles the row-to-column mapping once the server supplies the INSERT schema. The insert owns the returned
+/// source and disposes it.
+/// </summary>
+/// <param name="schema">The server's sample block, naming and typing the target columns. Valid only for the call.</param>
+/// <returns>The source of the columns to insert, matched to the target by name.</returns>
+internal delegate IInsertColumnSource InsertColumnFactory(Block schema);
+
+/// <summary>
+/// The columns of a row-oriented INSERT, filled one wire block at a time. Created once per insert, against the
+/// server's schema; <see cref="Columns"/> holds the same column objects throughout, and each
+/// <see cref="Gather"/> makes the next range of rows their values.
+/// </summary>
+internal interface IInsertColumnSource : IDisposable
+{
+    /// <summary>The columns, in the schema's order. Empty of rows until the first <see cref="Gather"/>.</summary>
+    IReadOnlyList<IColumn> Columns { get; }
+
+    /// <summary>Makes rows <c>[start, start + length)</c> the values of every column.</summary>
+    /// <param name="start">The zero-based first row of the block.</param>
+    /// <param name="length">The number of rows in the block.</param>
+    void Gather(int start, int length);
+}
 
 /// <summary>
 /// A single raw connection to a ClickHouse server over the native TCP protocol. Owns the socket, the buffered
@@ -350,12 +375,17 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// The default cap on the rows per wire block (1,000,000). Block geometry is bounded by row count alone, so
-    /// this cap is what splits a large insert into bounded blocks. Peak buffered bytes while a block is written
-    /// are bounded separately by the between-column flush backstop
+    /// The default cap on the rows per wire block (50,000). Block geometry is bounded by row count alone, so this
+    /// cap is what splits a large insert into bounded blocks. Peak buffered bytes while a block is written are
+    /// bounded separately by the between-column flush backstop
     /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>), which flushes mid-block rather than closing it.
+    ///
+    /// <para>
+    /// A row insert converts one block at a time, so for those the cap also bounds the memory the conversion
+    /// holds: one buffer per column, of this many values, rather than one of the whole insert's row count.
+    /// </para>
     /// </summary>
-    public const int DefaultMaxRowsPerBlock = 1_000_000;
+    public const int DefaultMaxRowsPerBlock = 50_000;
 
     /// <summary>
     /// Runs an INSERT, streaming <paramref name="columns"/> as the row data and returning once the server
@@ -396,7 +426,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <exception cref="ClickHouseServerException">The server reported an error while executing the insert.</exception>
     /// <exception cref="ClickHouseProtocolException">The server sent an unexpected packet, or no schema block.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
-    internal async ValueTask InsertAsync(
+    internal ValueTask InsertAsync(
         string sql,
         IReadOnlyList<IColumn> columns,
         IReadOnlyDictionary<string, string> settings = null,
@@ -408,17 +438,68 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ValidateInsertArguments(sql, columns, maxRowsPerBlock, maxSendBufferBytes, out int rowCount);
+        return InsertCoreAsync(sql, columns, buildColumns: null, rowCount, settings, parameters, queryId, maxRowsPerBlock, maxSendBufferBytes, handlers, cancellationToken);
+    }
 
+    /// <summary>
+    /// Runs an INSERT whose columns are built from the server's sample block, one wire block of rows at a time.
+    /// </summary>
+    /// <remarks>
+    /// The source is disposed after writing. A failure while the factory compiles the mapping sends no rows. A
+    /// failure while a block is gathered — a value the target cannot take, for one — stops at that block, so the
+    /// blocks before it have been sent and the server keeps them. Either way the row stream is closed cleanly and
+    /// the connection stays reusable, and the failure is thrown once the server has acknowledged the insert.
+    /// </remarks>
+    internal ValueTask InsertAsync(
+        string sql,
+        int rowCount,
+        InsertColumnFactory buildColumns,
+        IReadOnlyDictionary<string, string> settings = null,
+        IReadOnlyDictionary<string, string> parameters = null,
+        string queryId = null,
+        int? maxRowsPerBlock = DefaultMaxRowsPerBlock,
+        int maxSendBufferBytes = BlockWriter.DefaultFlushThresholdBytes,
+        MetadataHandlers handlers = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        ArgumentNullException.ThrowIfNull(buildColumns);
+        if (rowCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(rowCount), rowCount, "The row count must not be negative.");
+        }
+
+        ValidateInsertGeometry(maxRowsPerBlock, maxSendBufferBytes);
+        return InsertCoreAsync(sql, columns: null, buildColumns, rowCount, settings, parameters, queryId, maxRowsPerBlock, maxSendBufferBytes, handlers, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs the shared INSERT flow. Factory-built columns are owned here; caller-supplied columns are not.
+    /// </summary>
+    private async ValueTask InsertCoreAsync(
+        string sql,
+        IReadOnlyList<IColumn> columns,
+        InsertColumnFactory buildColumns,
+        int rowCount,
+        IReadOnlyDictionary<string, string> settings,
+        IReadOnlyDictionary<string, string> parameters,
+        string queryId,
+        int? maxRowsPerBlock,
+        int maxSendBufferBytes,
+        MetadataHandlers handlers,
+        CancellationToken cancellationToken)
+    {
         // Bail on cancellation before claiming the connection, so a pre-cancelled call leaves it idle.
         cancellationToken.ThrowIfCancellationRequested();
         BeginOperation();
 
         NegotiatedProtocol negotiated = server.Negotiated;
-        // The server interleaves metadata blocks (ProfileEvents, Logs, Totals, Extremes) into the insert
-        // acknowledgement, some of which carry timezone-bearing DateTime/DateTime64 columns. Decode them with the
-        // same session/server timezone a query would use, so a metadata handler sees consistent offsets.
+        // Decode metadata blocks with the operation's session timezone.
         ResolveContext readContext = ReadContextFor(settings);
         ClickHouseServerException pending = null;
+        Exception buildFailure = null;
+        IReadOnlyList<IColumn> values = null;
+        IInsertColumnSource source = null;
         bool completed = false;
         string mismatchError = null;
         try
@@ -451,15 +532,41 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             {
                 // Align the caller's columns to the schema by name. No columns is the explicit no-op insert; a
                 // mismatch leaves plan null (so only the terminator goes out) and defers the throw until Ready.
-                InsertColumn[] plan;
+                InsertColumn[] plan = null;
                 using (schema)
                 {
-                    plan = columns.Count == 0
-                        ? null
-                        : BuildInsertPlan(columns, schema, validateWritable: rowCount > 0, out mismatchError);
+                    if (buildColumns is null)
+                    {
+                        values = columns;
+                    }
+                    else
+                    {
+                        // Defer caller errors until the row stream is closed cleanly.
+                        try
+                        {
+                            source = buildColumns(schema);
+                            values = source.Columns;
+                        }
+                        catch (Exception failure)
+                        {
+                            buildFailure = failure;
+                        }
+                    }
+
+                    if (buildFailure is null)
+                    {
+                        // The plan holds the source's columns, which keep their identity as each block refills
+                        // them, so it is built once here rather than per block.
+                        plan = values.Count == 0
+                            ? null
+                            : BuildInsertPlan(values, schema, validateWritable: rowCount > 0, out mismatchError);
+                    }
                 }
 
-                await StreamInsertRowsAsync(plan, rowCount, maxRowsPerBlock, maxSendBufferBytes, negotiated, cancellationToken).ConfigureAwait(false);
+                // Always run, even after a factory failure: the row stream has to be closed for the server to
+                // finish the insert. A gather failure is deferred the same way, so the stream still closes cleanly.
+                Exception gatherFailure = await StreamInsertRowsAsync(plan, source, rowCount, maxRowsPerBlock, maxSendBufferBytes, negotiated, cancellationToken).ConfigureAwait(false);
+                buildFailure ??= gatherFailure;
 
                 // Rethrow any server error once the state is back to Ready.
                 pending = await DrainToEndOfStreamAsync(negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
@@ -468,6 +575,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
         finally
         {
+            // Only the factory's source is ours to release; a caller's own columns outlive the insert.
+            source?.Dispose();
+
             if (completed)
             {
                 state = TcpConnectionState.Ready;
@@ -478,6 +588,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             }
         }
 
+        // Prefer the build failure over the server's response to the resulting empty insert.
+        if (buildFailure is not null)
+        {
+            ExceptionDispatchInfo.Capture(buildFailure).Throw();
+        }
+
         if (pending is not null)
         {
             throw pending;
@@ -485,15 +601,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
         if (mismatchError is not null)
         {
-            throw new ArgumentException(mismatchError, nameof(columns));
+            throw new ArgumentException(mismatchError, buildColumns is null ? nameof(columns) : nameof(buildColumns));
         }
     }
 
     /// <summary>
-    /// Validates the arguments that need no server round-trip — non-null inputs, a positive
-    /// <paramref name="maxRowsPerBlock"/>, a consistent row count, and unique column names — and reports that row
-    /// count. Runs before the connection is claimed, so a malformed call leaves it idle. Name-to-schema
-    /// alignment and per-column writability need the sample block and are checked after the query round-trip.
+    /// Validates caller-supplied columns before claiming the connection.
     /// </summary>
     /// <param name="rowCount">Set to the row count every column must share (zero when there are no columns).</param>
     private static void ValidateInsertArguments(
@@ -505,21 +618,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(columns);
-        if (maxRowsPerBlock is <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maxRowsPerBlock), maxRowsPerBlock, "The rows-per-block cap must be positive.");
-        }
-
-        if (maxSendBufferBytes <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maxSendBufferBytes), maxSendBufferBytes, "The send-buffer cap must be positive.");
-        }
+        ValidateInsertGeometry(maxRowsPerBlock, maxSendBufferBytes);
 
         rowCount = 0;
         for (int i = 0; i < columns.Count; i++)
         {
-            // Reject a null element with a clear error before the connection is claimed, rather than NREing
-            // mid-validation on its RowCount/Name.
+            // Reject null before reading its row count or name.
             IColumn column = columns[i]
                 ?? throw new ArgumentException($"Column at index {i} is null; every supplied column must be non-null.", nameof(columns));
 
@@ -547,32 +651,63 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
     }
 
+    /// <summary>Validates block limits before claiming the connection.</summary>
+    /// <param name="maxRowsPerBlock">The cap on the rows per wire block, or null for a single block.</param>
+    /// <param name="maxSendBufferBytes">The buffered-byte cap that triggers a between-column flush.</param>
+    private static void ValidateInsertGeometry(int? maxRowsPerBlock, int maxSendBufferBytes)
+    {
+        if (maxRowsPerBlock is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxRowsPerBlock), maxRowsPerBlock, "The rows-per-block cap must be positive.");
+        }
+
+        if (maxSendBufferBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxSendBufferBytes), maxSendBufferBytes, "The send-buffer cap must be positive.");
+        }
+    }
+
     /// <summary>
-    /// Writes the INSERT row stream: the rows as bounded wire blocks (each read straight from the columns'
-    /// spans), then the empty terminator that closes it. A null <paramref name="plan"/> or zero
-    /// <paramref name="rowCount"/> writes only the terminator — a no-op insert. Trims the writer's pooled buffer
-    /// once everything is flushed.
+    /// Writes the row blocks and terminating empty block. A null plan or zero rows writes only the terminator.
     /// </summary>
     /// <param name="plan">The per-column write plan in schema order, or null to write only the terminator.</param>
+    /// <param name="source">The row source to fill the plan's columns from per block, or null when the caller
+    /// supplied whole columns.</param>
     /// <param name="flushThresholdBytes">The buffered-byte cap that triggers a between-column flush while a block is written.</param>
-    private async ValueTask StreamInsertRowsAsync(
+    /// <returns>The gather failure that stopped the row stream, or null if every block was written.</returns>
+    private async ValueTask<Exception> StreamInsertRowsAsync(
         InsertColumn[] plan,
+        IInsertColumnSource source,
         int rowCount,
         int? maxRowsPerBlock,
         int flushThresholdBytes,
         NegotiatedProtocol negotiated,
         CancellationToken cancellationToken)
     {
+        Exception gatherFailure = null;
         if (rowCount > 0 && plan is not null)
         {
-            // Split into wire blocks by row count alone (each column is written straight from its ergonomic form,
-            // so there is no intermediate dense buffer to build first). The flush threshold — the write memory
-            // backstop the caller's send-buffer cap tunes — is what bounds peak client memory while a block streams.
+            // Row count controls block splitting; the flush threshold bounds buffered output within each block.
             foreach ((int start, int length) in PlanInsertBlocks(rowCount, maxRowsPerBlock))
             {
+                if (source is not null)
+                {
+                    // The block is the conversion unit: fill the columns with these rows, then write them. A
+                    // failure here has not written a byte of the block, so the stream is still at a boundary.
+                    try
+                    {
+                        source.Gather(start, length);
+                    }
+                    catch (Exception failure)
+                    {
+                        gatherFailure = failure;
+                        break;
+                    }
+                }
+
                 writer.WriteClientPacketType(ClientPacketType.Data);
                 await BlockWriter.WriteDataBlockAsync(
-                    writer, negotiated, plan, start, length, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
+                    writer, negotiated, plan, source is null ? start : 0, length, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
                 await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
         }
@@ -583,12 +718,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
         // Return the pooled buffer to baseline so an idle connection doesn't retain a large insert's peak size.
         writer.TrimBuffer();
+        return gatherFailure;
     }
 
     /// <summary>
-    /// Reads and releases blocks until the response ends, returning the server
-    /// <see cref="ClickHouseServerException"/> that terminated it, or null on a clean end-of-stream. Either way
-    /// the stream is left at a packet boundary, so the connection stays usable.
+    /// Drains the response and returns its server error, if any, while leaving the connection reusable.
     /// </summary>
     /// <param name="negotiated">The negotiated protocol.</param>
     /// <param name="context">The codec-resolution context (timezone) for decoding blocks.</param>
@@ -614,11 +748,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Splits <paramref name="rowCount"/> rows into contiguous wire-block ranges of at most
-    /// <paramref name="maxRowsPerBlock"/> rows each — the block geometry is bounded by row count alone. With no
-    /// <paramref name="maxRowsPerBlock"/> the whole insert is a single block; peak client memory while it is
-    /// written is instead bounded by the between-column flush backstop
-    /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>), not by splitting the block.
+    /// Splits rows into contiguous ranges of at most <paramref name="maxRowsPerBlock"/> rows.
     /// </summary>
     /// <param name="rowCount">The number of rows to split (assumed greater than zero).</param>
     /// <param name="maxRowsPerBlock">The cap on the rows per block, or null for a single block.</param>
@@ -626,7 +756,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     internal static List<(int Start, int Length)> PlanInsertBlocks(int rowCount, int? maxRowsPerBlock)
     {
         var blocks = new List<(int Start, int Length)>();
-        int step = maxRowsPerBlock is int cap && cap > 0 ? cap : rowCount;
+        int step = RowsPerBlock(rowCount, maxRowsPerBlock);
         for (int start = 0; start < rowCount; start += step)
         {
             blocks.Add((start, Math.Min(step, rowCount - start)));
@@ -636,10 +766,17 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Aligns the caller's columns to the schema by name, returning one descriptor per schema column (in schema
-    /// order) that pairs the target's name, resolved type, and codec with the caller's values — the caller's own
-    /// type string is ignored. With <paramref name="validateWritable"/> set, a value column whose CLR type the
-    /// target cannot serialize is rejected. Returns null and sets <paramref name="error"/> on any mismatch.
+    /// Returns the largest block <see cref="PlanInsertBlocks"/> will produce, which is what a row insert has to
+    /// size its per-column gather buffers for.
+    /// </summary>
+    /// <param name="rowCount">The number of rows to insert.</param>
+    /// <param name="maxRowsPerBlock">The cap on the rows per block, or null for a single block.</param>
+    /// <returns>The rows in the largest block.</returns>
+    internal static int RowsPerBlock(int rowCount, int? maxRowsPerBlock)
+        => maxRowsPerBlock is int cap && cap > 0 ? Math.Min(cap, rowCount) : rowCount;
+
+    /// <summary>
+    /// Aligns columns to the server schema and resolves the target codecs.
     /// </summary>
     /// <param name="columns">The caller's value columns; names are unique (validated earlier).</param>
     /// <param name="schema">The server's sample block describing the target columns.</param>
@@ -656,8 +793,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             byName[column.Name] = column;
         }
 
-        // Align by name: every schema column must be supplied and every supplied column must exist in the schema.
-        // Both directions are reported so a wrong column set is actionable, not just a count mismatch.
+        // Report both missing and unexpected columns.
         var plan = new InsertColumn[schema.ColumnCount];
         List<string> missing = null;
         int matched = 0;
@@ -681,16 +817,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             return null;
         }
 
-        // Names line up one-to-one; resolve each target type to its codec (the target type, not the caller's) and
-        // confirm the value column is writable as it. Writing a value uses its own instant, so no server timezone
-        // is needed to resolve the codec.
+        // Resolve target codecs with the sample block's context, including its session timezone.
         for (int i = 0; i < plan.Length; i++)
         {
             InsertColumn slot = plan[i];
             IColumnCodec codec;
             try
             {
-                codec = ColumnCodecRegistry.Default.Resolve(slot.TypeName, ResolveContext.ForWrite);
+                codec = schema.Codecs.Resolve(slot.TypeName, schema.Context);
             }
             catch (Exception ex) when (ex is NotSupportedException or FormatException)
             {

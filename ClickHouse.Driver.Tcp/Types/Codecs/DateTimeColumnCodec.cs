@@ -8,11 +8,8 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
-/// A codec for the ClickHouse <c>DateTime</c> / <c>DateTime('tz')</c> column: a little-endian <c>UInt32</c> of
-/// seconds since the Unix epoch per row, surfaced as the raw <see cref="uint"/> second count. The wire value is
-/// a UTC instant; the column's timezone — the type string's explicit argument, or the session timezone when it
-/// has none — determines the offset a caller's <see cref="DateTimeOffset"/> projection is presented with
-/// (resolved per instant, so daylight-saving transitions are honored).
+/// Encodes ClickHouse <c>DateTime</c> as Unix seconds. The explicit or session timezone controls
+/// <see cref="DateTimeOffset"/> projections and how unspecified <see cref="DateTime"/> values are interpreted.
 /// </summary>
 internal sealed class DateTimeColumnCodec : IColumnCodec
 {
@@ -108,8 +105,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        // Both a DateTimeOffset and a DateTime resolve to the same UTC instant, which is what the epoch-second
-        // column body stores; the display timezone is irrelevant to the bytes on the wire.
+        // Interpret unspecified DateTime values as wall clocks in the resolved timezone.
         switch (column)
         {
             case IColumn<uint> seconds:

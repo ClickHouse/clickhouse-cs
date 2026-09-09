@@ -234,6 +234,151 @@ public class ClickHouseTcpConnectionInsertTests
     }
 
     [Test]
+    public async Task InsertAsync_SuppliedColumns_AreLeftForTheCallerToDispose()
+    {
+        // Caller-supplied columns remain caller-owned.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")),
+            EndOfStreamPacket());
+        using var connection = await ConnectedAsync(script);
+        var spy = new DisposeSpyColumn<ulong>("x", "UInt64", new ulong[] { 1, 2 });
+
+        await connection.InsertAsync("INSERT INTO t VALUES", Columns(spy), cancellationToken: None);
+
+        Assert.That(spy.DisposeCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task InsertAsync_ColumnFactory_SeesTheTargetSchemaAndOwnsWhatItBuilt()
+    {
+        // A factory-built source becomes insert-owned once the schema is known.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")),
+            EndOfStreamPacket());
+        using var connection = await ConnectedAsync(script);
+        var spy = new DisposeSpyColumn<ulong>("x", "UInt64", new ulong[] { 1, 2 });
+        var source = new StubInsertColumnSource(spy);
+        var targets = new List<string>();
+
+        await connection.InsertAsync(
+            "INSERT INTO t VALUES",
+            rowCount: 2,
+            schema =>
+            {
+                for (int i = 0; i < schema.ColumnCount; i++)
+                {
+                    targets.Add($"{schema[i].Name} {schema[i].TypeName}");
+                }
+
+                return source;
+            },
+            cancellationToken: None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(targets, Is.EqualTo(new[] { "x UInt64" }));
+            Assert.That(source.DisposeCount, Is.EqualTo(1));
+            Assert.That(spy.DisposeCount, Is.EqualTo(1), "the source disposes its own columns");
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+    }
+
+    [Test]
+    public async Task InsertAsync_ColumnFactoryWithMaxRowsPerBlock_GathersEachBlockBeforeWritingIt()
+    {
+        // The block is the conversion unit: one gather of each row range, in order, none of them the whole insert.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")),
+            EndOfStreamPacket());
+        using var connection = await ConnectedAsync(script);
+        var source = new StubInsertColumnSource(UInt64Column(1, 2));
+
+        await connection.InsertAsync(
+            "INSERT INTO t VALUES",
+            rowCount: 5,
+            _ => source,
+            maxRowsPerBlock: 2,
+            cancellationToken: None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source.Gathered, Is.EqualTo(new[] { (0, 2), (2, 2), (4, 1) }));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+    }
+
+    [Test]
+    public async Task InsertAsync_ColumnSourceFailingOnALaterBlock_ThrowsItAndStaysReady()
+    {
+        // The failing block is not written, the row stream still closes, and the connection survives.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")),
+            EndOfStreamPacket());
+        using var connection = await ConnectedAsync(script);
+        var failure = new InvalidOperationException("row 3 is null");
+        var source = new StubInsertColumnSource(UInt64Column(1, 2)) { FailAtStart = 2, Failure = failure };
+
+        InvalidOperationException thrown = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await connection.InsertAsync(
+                "INSERT INTO t VALUES",
+                rowCount: 4,
+                _ => source,
+                maxRowsPerBlock: 2,
+                cancellationToken: None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.SameAs(failure), "the source's own exception, not a wrapper");
+            Assert.That(source.Gathered, Is.EqualTo(new[] { (0, 2), (2, 2) }), "gathering stopped at the failure");
+            Assert.That(source.DisposeCount, Is.EqualTo(1));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+    }
+
+    [Test]
+    public async Task InsertAsync_ThrowingColumnFactory_RethrowsItAndStaysReady()
+    {
+        // A factory failure closes the row stream without terminating the connection.
+        byte[] script = Concat(
+            await ServerHelloBytesAsync(54476),
+            await SchemaBlockAsync(("x", "UInt64")),
+            EndOfStreamPacket());
+        using var connection = await ConnectedAsync(script);
+        var failure = new InvalidOperationException("no property maps to 'x'");
+
+        InvalidOperationException thrown = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await connection.InsertAsync("INSERT INTO t VALUES", rowCount: 2, _ => throw failure, cancellationToken: None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.SameAs(failure), "the factory's own exception, not a wrapper");
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+    }
+
+    [Test]
+    public void InsertAsync_NegativeRowCount_ThrowsArgumentOutOfRange()
+    {
+        using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(Array.Empty<byte>()), socket: null);
+
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
+            await connection.InsertAsync("INSERT INTO t VALUES", rowCount: -1, _ => new StubInsertColumnSource(), cancellationToken: None));
+    }
+
+    [Test]
+    public void InsertAsync_NullColumnFactory_ThrowsArgumentNull()
+    {
+        using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(Array.Empty<byte>()), socket: null);
+
+        Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await connection.InsertAsync("INSERT INTO t VALUES", rowCount: 0, buildColumns: null, cancellationToken: None));
+    }
+
+    [Test]
     public void PlanInsertBlocks_NoRowCap_ProducesOneBlock()
     {
         // With no row cap the whole insert is one block; peak memory is bounded by the flush backstop, not a split.
@@ -369,5 +514,42 @@ public class ClickHouseTcpConnectionInsertTests
         }
 
         return result;
+    }
+
+    /// <summary>A row source that records the ranges it was asked for, and can fail on one of them.</summary>
+    private sealed class StubInsertColumnSource : IInsertColumnSource
+    {
+        private readonly IColumn[] columns;
+
+        public StubInsertColumnSource(params IColumn[] columns) => this.columns = columns;
+
+        public IReadOnlyList<IColumn> Columns => columns;
+
+        public List<(int Start, int Length)> Gathered { get; } = new();
+
+        /// <summary>The block start to fail at, or null to gather every block.</summary>
+        public int? FailAtStart { get; init; }
+
+        public Exception Failure { get; init; }
+
+        public int DisposeCount { get; private set; }
+
+        public void Gather(int start, int length)
+        {
+            Gathered.Add((start, length));
+            if (FailAtStart == start)
+            {
+                throw Failure;
+            }
+        }
+
+        public void Dispose()
+        {
+            DisposeCount++;
+            foreach (IColumn column in columns)
+            {
+                column.Dispose();
+            }
+        }
     }
 }
