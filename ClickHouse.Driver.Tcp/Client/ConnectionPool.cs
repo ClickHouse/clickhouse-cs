@@ -84,6 +84,14 @@ internal sealed class ConnectionPool : IConnectionSource
     // MaxPoolSize while they are in the air. Guarded by `gate`.
     private int pending;
 
+    // Factory use has a lifetime of its own. A dial starts before it has a connection the pool can put in a set,
+    // so a drain that times out cannot tell it apart from an established lease by counting permits alone. The
+    // counter keeps the factory alive for those dials; once teardown requests disposal, the last one out releases
+    // it. Guarded by `gate`.
+    private int activeDials;
+    private bool factoryDisposalRequested;
+    private bool factoryDisposed;
+
     private int disposed;
 
     // 1 while a top-up is running. Only one at a time, or two sweeps race to fill the same gap.
@@ -275,6 +283,11 @@ internal sealed class ConnectionPool : IConnectionSource
                 }
             }
         }
+
+        // The factory owns what outlives a single connection — today the TLS certificate authorities. Established
+        // connections no longer read it, so a timed-out lease does not delay this release. A dial that ignored the
+        // shutdown token does: it is counted separately and the last such dial performs the release as it leaves.
+        RequestFactoryDisposal();
 
         // Neither the semaphore nor the shutdown source is disposed, for the same reason. Neither holds an
         // unmanaged resource here: the semaphore's AvailableWaitHandle is never touched, and the source has no
@@ -474,8 +487,7 @@ internal sealed class ConnectionPool : IConnectionSource
                 bool pooled = false;
                 try
                 {
-                    ClickHouseTcpConnection opened = await factory
-                        .CreateAsync(shutdown.Token).ConfigureAwait(false);
+                    ClickHouseTcpConnection opened = await CreateConnectionAsync(shutdown.Token).ConfigureAwait(false);
                     var connection = new PooledConnection(opened, time);
 
                     lock (gate)
@@ -583,11 +595,82 @@ internal sealed class ConnectionPool : IConnectionSource
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, shutdown.Token);
         try
         {
-            return await factory.CreateAsync(linked.Token).ConfigureAwait(false);
+            return await CreateConnectionAsync(linked.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             throw new ObjectDisposedException(ClientTypeName);
+        }
+    }
+
+    /// <summary>Uses the factory for one dial, keeping it alive until that dial has left the factory.</summary>
+    private async ValueTask<ClickHouseTcpConnection> CreateConnectionAsync(CancellationToken cancellationToken)
+    {
+        lock (gate)
+        {
+            // A dial is either counted before disposal starts or refused after it. This closes the earlier window
+            // between RentAsync's last check and entering the factory.
+            ThrowIfDisposed();
+
+            activeDials++;
+        }
+
+        try
+        {
+            return await factory.CreateAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            ReleaseFactoryUse();
+        }
+    }
+
+    /// <summary>Requests one-time factory disposal, immediately unless a dial is still using it.</summary>
+    private void RequestFactoryDisposal()
+    {
+        bool disposeFactory;
+        lock (gate)
+        {
+            factoryDisposalRequested = true;
+            disposeFactory = activeDials == 0 && !factoryDisposed;
+            if (disposeFactory)
+            {
+                factoryDisposed = true;
+            }
+        }
+
+        if (disposeFactory)
+        {
+            factory.Dispose();
+        }
+    }
+
+    /// <summary>Ends one dial and performs a deferred factory disposal when this was the last one.</summary>
+    private void ReleaseFactoryUse()
+    {
+        bool disposeFactory;
+        lock (gate)
+        {
+            activeDials--;
+            disposeFactory = activeDials == 0 && factoryDisposalRequested && !factoryDisposed;
+            if (disposeFactory)
+            {
+                factoryDisposed = true;
+            }
+        }
+
+        if (!disposeFactory)
+        {
+            return;
+        }
+
+        try
+        {
+            factory.Dispose();
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
+        {
+            // This runs in a dial's finally block. A teardown failure must not replace that dial's result.
         }
     }
 

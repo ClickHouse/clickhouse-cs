@@ -1,7 +1,10 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
@@ -17,6 +20,13 @@ namespace ClickHouse.Driver.Tcp.Tests.Client;
 [TestFixture]
 public class TcpConnectionFactoryTests
 {
+    // The name the test server's certificate carries. Not the loopback address the factory dials, so the tests
+    // also cover TlsServerName being what the certificate is matched against.
+    private const string CertificateName = "clickhouse.factory.test.invalid";
+
+    [OneTimeTearDown]
+    public void DeleteTemporaryCertificateFiles() => TestCertificates.DeleteTemporaryFiles();
+
     [Test]
     public async Task CreateAsync_ServerAcceptsButNeverCompletesTheHandshake_ThrowsTimeoutNamingDialTimeout()
     {
@@ -210,5 +220,152 @@ public class TcpConnectionFactoryTests
         {
             listener.Stop();
         }
+    }
+
+    [Test]
+    public void Constructor_TlsCaCertificatePathThatDoesNotExist_Throws()
+    {
+        // The file is read once here rather than per connect, which is also what makes a typo in the path fail
+        // where the caller can act on it instead of on whichever operation happens to dial first.
+        var options = new ClickHouseTcpClientOptions
+        {
+            Host = "127.0.0.1",
+            UseTls = true,
+            TlsCaCertificatePath = Path.Combine(Path.GetTempPath(), $"absent-ca-{Guid.NewGuid():N}.pem"),
+        };
+
+        Assert.Throws<FileNotFoundException>(() => new TcpConnectionFactory(options));
+    }
+
+    [Test]
+    public void ClickHouseTcpClient_TlsCaCertificatePathThatDoesNotExist_ThrowsAtConstruction()
+    {
+        // The client builds its pool, and so its factory, eagerly. This is the caller-facing half of the test
+        // above: nothing defers the failure to the first query.
+        var options = new ClickHouseTcpClientOptions
+        {
+            Host = "127.0.0.1",
+            UseTls = true,
+            TlsCaCertificatePath = Path.Combine(Path.GetTempPath(), $"absent-ca-{Guid.NewGuid():N}.pem"),
+        };
+
+        Assert.Throws<FileNotFoundException>(() => new ClickHouseTcpClient(options));
+    }
+
+    [Test]
+    public void ClickHouseTcpClient_TlsCaCertificatePathHoldingOnlyAnIntermediate_ThrowsAtConstruction()
+    {
+        using X509Certificate2 root = TestCertificates.CreateAuthority();
+        using X509Certificate2 intermediate = TestCertificates.CreateIntermediate(root);
+        var options = new ClickHouseTcpClientOptions
+        {
+            Host = "127.0.0.1",
+            UseTls = true,
+            TlsCaCertificatePath = TestCertificates.WritePemFile(intermediate),
+        };
+
+        var thrown = Assert.Throws<ArgumentException>(() => new ClickHouseTcpClient(options));
+
+        Assert.That(thrown.Message, Does.Contain("root certificate"));
+    }
+
+    [Test]
+    public void Constructor_NoTls_DoesNotThrow()
+    {
+        // A plaintext factory must not touch any TLS machinery, so constructing one reads no certificate file.
+        Assert.DoesNotThrow(() => new TcpConnectionFactory(new ClickHouseTcpClientOptions { Host = "127.0.0.1" }));
+    }
+
+    [Test]
+    public async Task CreateAsync_UseTlsAgainstATlsServer_HandshakesInsideTheTunnel()
+    {
+        // The only test that covers the whole wiring — options.UseTls to BuildTlsParameters to the SslStream the
+        // native handshake then runs inside. Invert the UseTls test in the factory and every other test still
+        // passes, because the rest either build TlsParameters by hand or need a Cloud service.
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 serverCertificate = TestCertificates.IssueServerCertificate(authority, CertificateName);
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        Task server = RunTlsClickHouseServerAsync(listener, serverCertificate);
+
+        try
+        {
+            var factory = new TcpConnectionFactory(new ClickHouseTcpClientOptions
+            {
+                Host = "127.0.0.1",
+                Port = ((IPEndPoint)listener.LocalEndpoint).Port,
+                UseTls = true,
+
+                // The certificate names CertificateName, not the loopback address Host carries.
+                TlsServerName = CertificateName,
+                TlsCaCertificatePath = TestCertificates.WritePemFile(authority),
+                DialTimeout = TimeSpan.FromSeconds(30),
+            });
+
+            using ClickHouseTcpConnection connection = await factory.CreateAsync(CancellationToken.None);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+                Assert.That(connection.Server.ServerName, Is.EqualTo("ClickHouse"));
+                Assert.That(connection.Server.Timezone, Is.EqualTo("UTC"), "the Hello was decoded from inside the tunnel, not guessed");
+            });
+        }
+        finally
+        {
+            await server.ContinueWith(static _ => { }, TaskScheduler.Default);
+            listener.Stop();
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_TlsServerButUseTlsLeftOff_DoesNotReachReady()
+    {
+        // The negative half: a plaintext client against a TLS port must fail rather than appear to work. Proves
+        // the previous test passes because TLS was negotiated, not because the server would take anything.
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 serverCertificate = TestCertificates.IssueServerCertificate(authority, CertificateName);
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        Task server = RunTlsClickHouseServerAsync(listener, serverCertificate);
+
+        try
+        {
+            var factory = new TcpConnectionFactory(new ClickHouseTcpClientOptions
+            {
+                Host = "127.0.0.1",
+                Port = ((IPEndPoint)listener.LocalEndpoint).Port,
+                DialTimeout = TimeSpan.FromSeconds(10),
+            });
+
+            Assert.CatchAsync(async () => await factory.CreateAsync(CancellationToken.None));
+        }
+        finally
+        {
+            await server.ContinueWith(static _ => { }, TaskScheduler.Default);
+            listener.Stop();
+        }
+    }
+
+    // A ClickHouse server just complete enough to finish a handshake, wrapped in TLS: read the ClientHello, reply
+    // with a server Hello, then absorb the Addendum the client sends next.
+    private static async Task RunTlsClickHouseServerAsync(TcpListener listener, X509Certificate2 certificate)
+    {
+        using TcpClient accepted = await listener.AcceptTcpClientAsync();
+        using var ssl = new SslStream(accepted.GetStream(), leaveInnerStreamOpen: false);
+        await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions { ServerCertificate = certificate });
+
+        var buffer = new byte[1024];
+        int clientHello = await ssl.ReadAsync(buffer);
+        Assert.That(clientHello, Is.GreaterThan(0), "the client must send its Hello inside the tunnel");
+
+        byte[] hello = await FakeConnectionFactory.ServerHelloBytesAsync(CancellationToken.None);
+        await ssl.WriteAsync(hello);
+        await ssl.FlushAsync();
+
+        // The client writes its Addendum after reading Hello; read it so the client is never blocked on a full
+        // send buffer, and so this task ends rather than being torn down mid-write. A short read is fine here —
+        // nothing inspects the bytes.
+        _ = await ssl.ReadAsync(buffer);
     }
 }

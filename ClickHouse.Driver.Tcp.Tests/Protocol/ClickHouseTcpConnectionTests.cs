@@ -207,12 +207,12 @@ public class ClickHouseTcpConnectionTests
     [Test]
     public void ConnectAsync_NullHost_ThrowsArgumentNull()
         => Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await ClickHouseTcpConnection.ConnectAsync(null, 9000, Handshake, None));
+            await ClickHouseTcpConnection.ConnectAsync(null, 9000, Handshake, tls: null, None));
 
     [Test]
     public void ConnectAsync_NullHandshake_ThrowsArgumentNull()
         => Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await ClickHouseTcpConnection.ConnectAsync("localhost", 9000, null, None));
+            await ClickHouseTcpConnection.ConnectAsync("localhost", 9000, null, tls: null, None));
 
     // IsReusable is what the pool asks before every checkout. A live server cannot be made to produce the cases
     // that matter — a stream left out of step, a connection already terminated — so they are scripted here.

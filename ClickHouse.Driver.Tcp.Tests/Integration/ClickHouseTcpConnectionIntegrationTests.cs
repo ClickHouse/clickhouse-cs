@@ -68,6 +68,7 @@ public class ClickHouseTcpConnectionIntegrationTests
                 TcpServerFixture.Host,
                 1,
                 new ClientHandshakeParameters { Username = "default" },
+                tls: null,
                 None));
     }
 }
