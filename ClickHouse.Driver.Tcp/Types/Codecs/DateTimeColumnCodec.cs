@@ -142,8 +142,9 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         }
     }
 
-    // Reduces a DateTime to the UTC instant to encode. Utc and Local already denote an instant. An Unspecified
-    // value has no offset, so its wall-clock is read in the column's timezone.
+    // Reduces a DateTime to the UTC instant to encode. Utc and Local already denote an instant; a Local value
+    // resolves against the host machine's timezone, under the BCL's daylight-saving rules and not the ones below.
+    // An Unspecified value has no offset, so its wall-clock is read in the column's timezone.
     internal static DateTime ToUtc(DateTime value, TimeZoneInfo timeZone)
     {
         if (value.Kind != DateTimeKind.Unspecified)
