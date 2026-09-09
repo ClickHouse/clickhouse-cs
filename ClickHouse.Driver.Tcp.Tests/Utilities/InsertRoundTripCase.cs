@@ -821,6 +821,21 @@ public sealed class InsertRoundTripCase
                 new byte[] { 0xFF, 0, 0xFF, 0 },
             }));
 
+        // A DateTime inner is the first low-cardinality case whose inner type is *parameterized*: its codec is
+        // built from the type node plus the resolve context (the session timezone), so this is what proves
+        // LowCardinality forwards that context to the inner factory rather than resolving the inner in isolation.
+        // It also puts a different column class under the dictionary — DateTimeColumn casts a byte buffer, where
+        // every inner above is a primitive or object array — since the dictionary is read as a normal inner column.
+        // Values are the raw epoch seconds the column surfaces (see the plain DateTime cases): at this point the
+        // shape is keyed on the inner codec's canonical ElementType, so the write source is IColumn<uint>, not the
+        // DateTime/DateTimeOffset convenience types the bare DateTime codec also accepts. The epoch (0) rides along
+        // as the inner default, so slot-0 folding is exercised on a type whose CLR default is *not* its wire zero.
+        yield return Same(
+            "LowCardinality(DateTime)",
+            "LowCardinality(DateTime)",
+            name => new ArrayColumn<uint>(name, "LowCardinality(DateTime)", new uint[] { 1_700_000_000, 1_700_000_000, 599_916_153, 0, 1_700_000_000, 599_916_153 }),
+            LowCardinalitySettings);
+
         // Array(LowCardinality(String)) flattens its jagged rows into one values stream handed to the
         // low-cardinality codec; empty rows and repeated values ride along.
         yield return Arrays("LowCardinality(String)", new[] { "a", "b" }, Array.Empty<string>(), new[] { "a", "a", "c" });
@@ -863,6 +878,17 @@ public sealed class InsertRoundTripCase
                 new byte[] { 1, 2, 3, 4 },
                 new byte[] { 0xFF, 0, 0xFF, 0 },
             }));
+
+        // The nullable counterpart of the DateTime case above, and the one that actually needs the codec's
+        // NullPlaceholderAs override: the reserved default in slot 1 is asked for as the shape's element type
+        // (uint), and DateTime answers with its wire zero — the epoch — where the CLR default would be
+        // DateTime.MinValue, which the type cannot even represent. The epoch is *also* present as a real value
+        // (row 2) next to NULLs, so the reserved NULL slot and the reserved default slot must stay distinct.
+        yield return Same(
+            "LowCardinality(Nullable(DateTime))",
+            "LowCardinality(Nullable(DateTime))",
+            name => new ArrayColumn<uint?>(name, "LowCardinality(Nullable(DateTime))", new uint?[] { 1_700_000_000, null, 0, 1_700_000_000, 599_916_153, null }),
+            LowCardinalitySettings);
     }
 
     // Map(K, V) inserts and reads back the ergonomic jagged column of KeyValuePair arrays, which doubles as expected.
