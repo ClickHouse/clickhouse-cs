@@ -38,11 +38,11 @@ public class ClickHouseTcpConnectionTests
         using var connection = new ClickHouseTcpConnection(transport, socket: null);
         await connection.HandshakeAsync(Handshake, None);
 
-        var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () => await connection.PingAsync(None));
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(async () => await connection.PingAsync(None));
 
         Assert.Multiple(() =>
         {
-            Assert.That(thrown.Code, Is.EqualTo(516));
+            Assert.That(thrown.Code, Is.EqualTo(ClickHouseErrorCode.AuthenticationFailed));
             Assert.That(thrown.Message, Is.EqualTo("something went wrong"));
 
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
@@ -59,7 +59,7 @@ public class ClickHouseTcpConnectionTests
         using var connection = new ClickHouseTcpConnection(transport, socket: null);
         await connection.HandshakeAsync(Handshake, None);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await connection.PingAsync(None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await connection.PingAsync(None));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
 
@@ -72,7 +72,7 @@ public class ClickHouseTcpConnectionTests
         using var connection = new ClickHouseTcpConnection(transport, socket: null);
         await connection.HandshakeAsync(Handshake, None);
 
-        Assert.ThrowsAsync<EndOfStreamException>(async () => await connection.PingAsync(None));
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () => await connection.PingAsync(None));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
 
@@ -86,7 +86,7 @@ public class ClickHouseTcpConnectionTests
         using var connection = new ClickHouseTcpConnection(transport, socket: null);
         await connection.HandshakeAsync(Handshake, None);
 
-        Assert.ThrowsAsync<EndOfStreamException>(async () => await connection.PingAsync(None));
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () => await connection.PingAsync(None));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
 
@@ -96,7 +96,7 @@ public class ClickHouseTcpConnectionTests
         // Pong is a valid server packet but never a valid handshake reply (only Hello or Exception are).
         using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(PacketBytes(ServerPacketType.Pong)), socket: null);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () => await connection.HandshakeAsync(Handshake, None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await connection.HandshakeAsync(Handshake, None));
     }
 
     [Test]
@@ -109,7 +109,7 @@ public class ClickHouseTcpConnectionTests
     }
 
     [Test]
-    public async Task HandshakeAsync_ServerBelowMinimumProtocol_ThrowsNotSupportedAndTerminates()
+    public async Task HandshakeAsync_ServerBelowMinimumProtocol_ThrowsProtocolExceptionAndTerminates()
     {
         // A revision below the floor the write path assumes: the settings triples we always send would desync
         // it, so the handshake must refuse rather than proceed. The revision still sits above the timezone,
@@ -127,7 +127,7 @@ public class ClickHouseTcpConnectionTests
         });
         using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(script), socket: null);
 
-        Assert.ThrowsAsync<NotSupportedException>(async () => await connection.HandshakeAsync(Handshake, None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await connection.HandshakeAsync(Handshake, None));
         Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
     }
 

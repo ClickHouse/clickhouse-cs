@@ -205,7 +205,7 @@ public class NestedColumnCodecTests
         BitConverter.TryWriteBytes(wire.AsSpan(0, 8), (ulong)int.MaxValue + 1);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(wire);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () =>
             await codec.ReadColumnAsync(reader, "c", "Nested(a UInt8)", 1, CodecTestHarness.None));
     }
 
@@ -258,7 +258,7 @@ public class NestedColumnCodecTests
         BitConverter.TryWriteBytes(wire.AsSpan(8, 8), 1UL);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(wire);
 
-        Assert.ThrowsAsync<ClickHouseProtocolException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () =>
             await codec.ReadColumnAsync(reader, "c", "Nested(a UInt8, b UInt8)", 2, CodecTestHarness.None));
     }
 

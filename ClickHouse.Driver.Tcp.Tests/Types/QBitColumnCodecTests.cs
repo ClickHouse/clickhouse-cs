@@ -371,14 +371,14 @@ public class QBitColumnCodecTests
     }
 
     [Test]
-    public void ReadColumnAsync_TruncatedPlaneBody_ThrowsEndOfStream()
+    public void ReadColumnAsync_TruncatedPlaneBody_ThrowsTransportException()
     {
         IColumnCodec codec = Codec(Float32X4);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(new byte[] { 0x00, 0x0E });
 
         Assert.That(
             async () => await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None),
-            Throws.InstanceOf<EndOfStreamException>());
+            Throws.InstanceOf<ClickHouseTcpTransportException>());
     }
 
     [TestCase("QBit(Float32)", TestName = "one argument")]

@@ -278,7 +278,7 @@ public class ClickHouseBinaryReaderWriterTests
     public void ReadPastEnd_Throws()
     {
         using var reader = ReaderOver(new byte[] { 0x01 });
-        Assert.ThrowsAsync<EndOfStreamException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () =>
         {
             await reader.ReadUInt32Async(None);
         });
@@ -295,7 +295,7 @@ public class ClickHouseBinaryReaderWriterTests
         }
 
         using var reader = ReaderOver(overlong);
-        Assert.ThrowsAsync<InvalidDataException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () =>
         {
             await reader.ReadVarUIntAsync(None);
         });
@@ -334,12 +334,12 @@ public class ClickHouseBinaryReaderWriterTests
     [TestCase(0x7F)]
     [TestCase(0x80)]
     [TestCase(0x81)]
-    public void ReadVarUIntAsync_InvalidTenthByte_ThrowsInvalidDataException(byte tenthByte)
+    public void ReadVarUIntAsync_InvalidTenthByte_ThrowsProtocolException(byte tenthByte)
     {
         byte[] overflowing = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, tenthByte };
 
         using var reader = ReaderOver(overflowing);
-        Assert.ThrowsAsync<InvalidDataException>(async () => await reader.ReadVarUIntAsync(None));
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () => await reader.ReadVarUIntAsync(None));
     }
 
     [Test]
@@ -350,7 +350,7 @@ public class ClickHouseBinaryReaderWriterTests
         byte[] oversizedPrefix = await WriteAsync(w => w.WriteVarUInt((1UL << 30) + 1));
 
         using var reader = ReaderOver(oversizedPrefix);
-        Assert.ThrowsAsync<InvalidDataException>(async () =>
+        Assert.ThrowsAsync<ClickHouseTcpProtocolException>(async () =>
         {
             await reader.ReadStringAsync(None);
         });

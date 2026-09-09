@@ -44,7 +44,10 @@ internal sealed class CompressedFrameReader : IDisposable
         prefix = ArrayPool<byte>.Shared.Rent(CompressionFrame.PrefixSize);
         headerAndBody = ArrayPool<byte>.Shared.Rent(CompressionFrame.HeaderSize);
         plaintext = ArrayPool<byte>.Shared.Rent(1);
-        Reader = new ClickHouseBinaryReader(new ReadBuffer(new PlaintextStream(this), bufferSize), ownsBuffer: true);
+        // The stream is an adapter onto this reader, not the connection. The frame pulls below it read through
+        // `raw`, which reports a failed read itself; the codec's own failures are not the transport's.
+        var decoded = new ReadBuffer(new PlaintextStream(this), bufferSize, readsFromTransport: false);
+        Reader = new ClickHouseBinaryReader(decoded, ownsBuffer: true);
     }
 
     /// <summary>Reads the decoded block body. Everything after the packet's table name comes from here.</summary>
@@ -58,13 +61,13 @@ internal sealed class CompressedFrameReader : IDisposable
     /// a block's last frame ends where the block does; anything left means the decoders and the peer
     /// disagree about the body's length, and the connection can no longer be trusted.
     /// </summary>
-    /// <exception cref="ClickHouseProtocolException">Decoded plaintext was left unread.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">Decoded plaintext was left unread.</exception>
     public void EndBlock()
     {
         int leftover = PendingPlaintext + Reader.BufferedBytes;
         if (leftover != 0)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"A compressed block left {leftover} decoded byte(s) unread, so its frames carried more than the block declared. The connection is out of step.");
         }
     }
@@ -91,35 +94,45 @@ internal sealed class CompressedFrameReader : IDisposable
     /// Reads the next frame: its prefix, its body, then verifies the checksum and decodes the body.
     /// </summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
-    /// <exception cref="InvalidDataException">The frame is malformed, its checksum fails, or it declares no plaintext.</exception>
+    /// <exception cref="ClickHouseTcpProtocolException">The frame is malformed, its checksum fails, or it declares no plaintext.</exception>
     private async ValueTask PullFrameAsync(CancellationToken cancellationToken)
     {
-        await raw.ReadBytesAsync(prefix.AsMemory(0, CompressionFrame.PrefixSize), cancellationToken).ConfigureAwait(false);
-        CompressionFrame.ReadHeader(
-            prefix.AsSpan(CompressionFrame.ChecksumSize, CompressionFrame.HeaderSize),
-            out byte method,
-            out int bodySize,
-            out int plaintextSize);
-
-        if (plaintextSize == 0)
+        // CompressionFrame is shared with the HTTP transport and reports a malformed frame as
+        // InvalidDataException. Translate it here so one frame layer does not leak a second exception type;
+        // the reads keep their own transport exception, which this filter does not match.
+        try
         {
-            // A block body is never empty (it carries at least the block info and two counts), and serving
-            // zero bytes would spin the read loop rather than make progress.
-            throw new InvalidDataException("Compression frame declares no plaintext, which cannot occur inside a block body (corrupt stream).");
+            await raw.ReadBytesAsync(prefix.AsMemory(0, CompressionFrame.PrefixSize), cancellationToken).ConfigureAwait(false);
+            CompressionFrame.ReadHeader(
+                prefix.AsSpan(CompressionFrame.ChecksumSize, CompressionFrame.HeaderSize),
+                out byte method,
+                out int bodySize,
+                out int plaintextSize);
+
+            if (plaintextSize == 0)
+            {
+                // A block body is never empty (it carries at least the block info and two counts), and serving
+                // zero bytes would spin the read loop rather than make progress.
+                throw new ClickHouseTcpProtocolException("Compression frame declares no plaintext, which cannot occur inside a block body (corrupt stream).");
+            }
+
+            // The checksum covers the header and body as one run, so keep them contiguous.
+            int framed = CompressionFrame.HeaderSize + bodySize;
+            Grow(ref headerAndBody, framed);
+            prefix.AsSpan(CompressionFrame.ChecksumSize, CompressionFrame.HeaderSize).CopyTo(headerAndBody);
+            await raw.ReadBytesAsync(headerAndBody.AsMemory(CompressionFrame.HeaderSize, bodySize), cancellationToken).ConfigureAwait(false);
+
+            CompressionFrame.VerifyChecksum(prefix.AsSpan(0, CompressionFrame.ChecksumSize), headerAndBody.AsSpan(0, framed));
+
+            Grow(ref plaintext, plaintextSize);
+            CompressionFrame.Decode(method, headerAndBody.AsSpan(CompressionFrame.HeaderSize, bodySize), plaintext.AsSpan(0, plaintextSize));
+            position = 0;
+            length = plaintextSize;
         }
-
-        // The checksum covers the header and body as one run, so keep them contiguous.
-        int framed = CompressionFrame.HeaderSize + bodySize;
-        Grow(ref headerAndBody, framed);
-        prefix.AsSpan(CompressionFrame.ChecksumSize, CompressionFrame.HeaderSize).CopyTo(headerAndBody);
-        await raw.ReadBytesAsync(headerAndBody.AsMemory(CompressionFrame.HeaderSize, bodySize), cancellationToken).ConfigureAwait(false);
-
-        CompressionFrame.VerifyChecksum(prefix.AsSpan(0, CompressionFrame.ChecksumSize), headerAndBody.AsSpan(0, framed));
-
-        Grow(ref plaintext, plaintextSize);
-        CompressionFrame.Decode(method, headerAndBody.AsSpan(CompressionFrame.HeaderSize, bodySize), plaintext.AsSpan(0, plaintextSize));
-        position = 0;
-        length = plaintextSize;
+        catch (InvalidDataException e)
+        {
+            throw new ClickHouseTcpProtocolException(e.Message, e);
+        }
     }
 
     /// <summary>Replaces <paramref name="buffer"/> with a larger pooled one when it cannot hold <paramref name="needed"/> bytes.</summary>
