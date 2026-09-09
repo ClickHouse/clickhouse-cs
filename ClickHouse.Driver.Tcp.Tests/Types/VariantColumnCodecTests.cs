@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Net;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -122,6 +124,102 @@ public class VariantColumnCodecTests
         var column = new ArrayColumn<object>("v", StringUInt64, new object[] { 3.14 }); // double matches neither String nor UInt64
 
         Assert.ThrowsAsync<ArgumentException>(async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
+    }
+
+    // The refusal lists what the variant does take, so it must include a type a collision settles: IPv4 and IPv6
+    // both surface IPAddress, and Variant(IPv4, IPv6, String) does write an address of either family. Listing only
+    // the alternatives that own their CLR type outright would report IPAddress as unsupported.
+    [Test]
+    public void WriteColumn_ValueWithNoMatchingAlternative_NamesTheTypesACollisionSettles()
+    {
+        const string type = "Variant(IPv4, IPv6, String)";
+        IColumnCodec codec = Resolve(type);
+        var column = new ArrayColumn<object>("v", type, new object[] { 3.14 });
+
+        ArgumentException refusal = Assert.ThrowsAsync<ArgumentException>(
+            async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(refusal.Message, Does.Contain(typeof(IPAddress).ToString()));
+            Assert.That(refusal.Message, Does.Contain(typeof(string).ToString()));
+        });
+    }
+
+    // Several alternatives can share a CLR element type even though the server forbids duplicate alternative types
+    // — they only have to surface the same one. JSON and String are both string; Int64, DateTime64 and Time64 are
+    // all long; Geometry collides twice over (Ring/LineString, Polygon/MultiLineString). No alternative claims
+    // such a value, and picking one would store it as the wrong type with no error. The message names the
+    // alternatives it could not choose between, and prescribes nothing: there is no way for a caller to say which
+    // one is meant.
+    [TestCaseSource(nameof(AmbiguousAlternativeCases))]
+    public void WriteColumn_ValueWhoseClrTypeSeveralAlternativesShare_ThrowsNamingThem(string type, object ambiguous, string[] expectedNames)
+    {
+        IColumnCodec codec = Resolve(type);
+        var column = new ArrayColumn<object>("v", type, new[] { ambiguous });
+
+        ArgumentException refusal = Assert.ThrowsAsync<ArgumentException>(
+            async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
+        Assert.Multiple(() =>
+        {
+            foreach (string name in expectedNames)
+            {
+                Assert.That(refusal.Message, Does.Contain($"'{name}'"));
+            }
+
+            Assert.That(refusal.Message, Does.Not.Contain("VariantColumn"));
+        });
+    }
+
+    // A collision the value itself settles: IPv4 and IPv6 both surface IPAddress, but an address carries its
+    // family, so exactly one alternative claims it and the write goes through. This is the only one of the four
+    // collision families a value-level test can resolve — a string says nothing about JSON versus String, a long
+    // nothing about Int64 versus DateTime64, and a Ring nothing about LineString.
+    [TestCase("127.0.0.1", 0, TestName = "An IPv4 address goes to the IPv4 alternative")]
+    [TestCase("::1", 1, TestName = "An IPv6 address goes to the IPv6 alternative")]
+    public async Task WriteColumn_IpValueWhoseFamilyNamesOneAlternative_WritesThatDiscriminator(string address, byte expectedDiscriminator)
+    {
+        const string Type = "Variant(IPv4, IPv6, String)";
+        IColumnCodec codec = Resolve(Type);
+        var column = new ArrayColumn<object>("v", Type, new object[] { IPAddress.Parse(address) });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
+        Assert.That(bytes[0], Is.EqualTo(expectedDiscriminator));
+    }
+
+    // The refusal above is per value, not per column: an IColumn<object> says nothing about the runtime types it
+    // holds, so refusing the whole column would also reject every unambiguous value in it. A string is unambiguous
+    // in Variant(IPv4, IPv6, String) and a UInt64 is in Variant(JSON, String, UInt64), and both still write.
+    [TestCaseSource(nameof(UnambiguousAlternativeCases))]
+    public async Task WriteColumn_ValueWhoseClrTypeOneAlternativeHas_WritesEvenWhenOthersCollide(string type, object unambiguous)
+    {
+        IColumnCodec codec = Resolve(type);
+        var column = new ArrayColumn<object>("v", type, new[] { unambiguous });
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
+        Assert.That(bytes, Is.Not.Empty);
+    }
+
+    private static IEnumerable<TestCaseData> AmbiguousAlternativeCases()
+    {
+        yield return new TestCaseData("Variant(JSON, String, UInt64)", (object)"{}", new[] { "JSON", "String" })
+            .SetName("JSON and String are both string");
+
+        // Three, not two. Striking a colliding type from the map must not free the key for the next alternative to
+        // claim: an odd-sized collision group would then resolve to its last member and write every such value as
+        // that alternative. All three of these surface the raw long the wire carries.
+        yield return new TestCaseData("Variant(DateTime64(3), Int64, Time64(3))", (object)5L, new[] { "DateTime64(3)", "Int64", "Time64(3)" })
+            .SetName("Int64, DateTime64 and Time64 are all long");
+
+        // The structural pairs inside Geometry, which no value-level test can separate.
+        yield return new TestCaseData("Geometry", (object)new[] { (0d, 0d), (1d, 1d) }, new[] { "LineString", "Ring" })
+            .SetName("LineString and Ring are both Array(Point)");
+    }
+
+    private static IEnumerable<TestCaseData> UnambiguousAlternativeCases()
+    {
+        yield return new TestCaseData("Variant(IPv4, IPv6, String)", (object)"abc").SetName("String beside the colliding IP pair");
+        yield return new TestCaseData("Variant(JSON, String, UInt64)", (object)7UL).SetName("UInt64 beside the colliding text pair");
+        yield return new TestCaseData("Variant(DateTime64(3), Int64, String, Time64(3))", (object)"abc").SetName("String beside the colliding long trio");
     }
 
     [Test]
