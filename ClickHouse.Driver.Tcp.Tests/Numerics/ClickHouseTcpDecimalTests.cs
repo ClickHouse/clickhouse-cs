@@ -2,12 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
-using ClickHouse.Driver.Tcp.Numerics;
 
 namespace ClickHouse.Driver.Tcp.Tests.Numerics;
 
 [TestFixture]
-public class ClickHouseDecimalTests
+public class ClickHouseTcpDecimalTests
 {
     [TestCase("0", 0, "0")]
     [TestCase("123", 0, "123")]
@@ -17,7 +16,7 @@ public class ClickHouseDecimalTests
     [TestCase("-5", 3, "-0.005")]
     public void ToString_RendersFixedPointInvariant(string mantissa, int scale, string expected)
     {
-        var value = new ClickHouseDecimal(BigInteger.Parse(mantissa, CultureInfo.InvariantCulture), scale);
+        var value = new ClickHouseTcpDecimal(BigInteger.Parse(mantissa, CultureInfo.InvariantCulture), scale);
         Assert.That(value.ToString(), Is.EqualTo(expected));
     }
 
@@ -28,13 +27,50 @@ public class ClickHouseDecimalTests
         try
         {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE"); // uses ',' as decimal separator
-            var value = new ClickHouseDecimal(new BigInteger(12345), 2);
+            var value = new ClickHouseTcpDecimal(new BigInteger(12345), 2);
             Assert.That(value.ToString(), Is.EqualTo("123.45"));
         }
         finally
         {
             CultureInfo.CurrentCulture = original;
         }
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("G")]
+    [TestCase("g")]
+    public void ToString_GeneralFormat_RendersFixedPointInvariant(string format)
+    {
+        var value = new ClickHouseTcpDecimal(new BigInteger(12345), 2);
+        Assert.That(value.ToString(format, CultureInfo.InvariantCulture), Is.EqualTo("123.45"));
+    }
+
+    [TestCase("F3")]
+    [TestCase("N2")]
+    [TestCase("E")]
+    [TestCase("0.00")]
+    [TestCase("D")]
+    public void ToString_FormatItCannotRender_ThrowsFormatException(string format)
+    {
+        var value = new ClickHouseTcpDecimal(new BigInteger(12345), 2);
+        var ex = Assert.Throws<FormatException>(() => value.ToString(format, CultureInfo.InvariantCulture));
+        Assert.That(ex.Message, Does.Contain(format).And.Contain(nameof(ClickHouseTcpDecimal.ToDecimal)));
+    }
+
+    [Test]
+    public void ToString_InterpolatedWithAFormat_ThrowsRatherThanIgnoringIt()
+    {
+        // Interpolation reaches IFormattable, so an ignored format would silently render unrequested text.
+        var value = new ClickHouseTcpDecimal(new BigInteger(12345), 2);
+        Assert.Throws<FormatException>(() => _ = string.Format(CultureInfo.InvariantCulture, "{0:F3}", value));
+    }
+
+    [Test]
+    public void ToString_CultureWithAnotherSeparator_IsStillInvariant()
+    {
+        var value = new ClickHouseTcpDecimal(new BigInteger(12345), 2);
+        Assert.That(value.ToString(null, CultureInfo.GetCultureInfo("de-DE")), Is.EqualTo("123.45"));
     }
 
     [TestCase("123.45")]
@@ -45,7 +81,7 @@ public class ClickHouseDecimalTests
     public void FromDecimal_ThenToDecimal_RoundTrips(string text)
     {
         decimal original = decimal.Parse(text, CultureInfo.InvariantCulture);
-        ClickHouseDecimal wide = ClickHouseDecimal.FromDecimal(original);
+        ClickHouseTcpDecimal wide = ClickHouseTcpDecimal.FromDecimal(original);
         Assert.That(wide.ToDecimal(), Is.EqualTo(original));
     }
 
@@ -53,7 +89,7 @@ public class ClickHouseDecimalTests
     public void ToDecimal_ValueBeyondDecimalRange_ThrowsAndTryReturnsFalse()
     {
         // A 20-digit fractional value cannot be a System.Decimal (max scale 28 but this mantissa exceeds 96 bits).
-        var wide = new ClickHouseDecimal(BigInteger.Pow(10, 39), scale: 0);
+        var wide = new ClickHouseTcpDecimal(BigInteger.Pow(10, 39), scale: 0);
         Assert.Multiple(() =>
         {
             Assert.That(wide.TryToDecimal(out _), Is.False);
@@ -64,10 +100,10 @@ public class ClickHouseDecimalTests
     [Test]
     public void Equals_IsValueBased_IgnoringScaleDifferences()
     {
-        var oneScale1 = new ClickHouseDecimal(new BigInteger(10), 1);   // 1.0
-        var oneScale2 = new ClickHouseDecimal(new BigInteger(100), 2);  // 1.00
-        var fractionalScale2 = new ClickHouseDecimal(new BigInteger(123), 2);   // 1.23
-        var fractionalScale3 = new ClickHouseDecimal(new BigInteger(1230), 3);  // 1.230
+        var oneScale1 = new ClickHouseTcpDecimal(new BigInteger(10), 1);   // 1.0
+        var oneScale2 = new ClickHouseTcpDecimal(new BigInteger(100), 2);  // 1.00
+        var fractionalScale2 = new ClickHouseTcpDecimal(new BigInteger(123), 2);   // 1.23
+        var fractionalScale3 = new ClickHouseTcpDecimal(new BigInteger(1230), 3);  // 1.230
 
         Assert.Multiple(() =>
         {
@@ -82,11 +118,11 @@ public class ClickHouseDecimalTests
     [Test]
     public void GetHashCode_EqualZeroValuesWithDifferentScales_ReturnsSameHashCode()
     {
-        var zero = new ClickHouseDecimal(BigInteger.Zero, 0);
-        var zeroScale1 = new ClickHouseDecimal(BigInteger.Zero, 1);
-        var zeroScale2 = new ClickHouseDecimal(BigInteger.Zero, 2);
-        var set = new HashSet<ClickHouseDecimal> { zero };
-        var dictionary = new Dictionary<ClickHouseDecimal, string> { [zero] = "zero" };
+        var zero = new ClickHouseTcpDecimal(BigInteger.Zero, 0);
+        var zeroScale1 = new ClickHouseTcpDecimal(BigInteger.Zero, 1);
+        var zeroScale2 = new ClickHouseTcpDecimal(BigInteger.Zero, 2);
+        var set = new HashSet<ClickHouseTcpDecimal> { zero };
+        var dictionary = new Dictionary<ClickHouseTcpDecimal, string> { [zero] = "zero" };
 
         Assert.Multiple(() =>
         {
@@ -100,8 +136,8 @@ public class ClickHouseDecimalTests
     [Test]
     public void CompareTo_AlignsScales()
     {
-        var half = new ClickHouseDecimal(new BigInteger(5), 1);      // 0.5
-        var twoThirds = new ClickHouseDecimal(new BigInteger(67), 2); // 0.67
+        var half = new ClickHouseTcpDecimal(new BigInteger(5), 1);      // 0.5
+        var twoThirds = new ClickHouseTcpDecimal(new BigInteger(67), 2); // 0.67
 
         Assert.Multiple(() =>
         {
@@ -114,9 +150,9 @@ public class ClickHouseDecimalTests
     [Test]
     public void CompareTo_SameScale_OrdersByMantissa()
     {
-        var negative = new ClickHouseDecimal(new BigInteger(-150), 2); // -1.50
-        var small = new ClickHouseDecimal(new BigInteger(125), 2);     //  1.25
-        var large = new ClickHouseDecimal(new BigInteger(200), 2);     //  2.00
+        var negative = new ClickHouseTcpDecimal(new BigInteger(-150), 2); // -1.50
+        var small = new ClickHouseTcpDecimal(new BigInteger(125), 2);     //  1.25
+        var large = new ClickHouseTcpDecimal(new BigInteger(200), 2);     //  2.00
 
         Assert.Multiple(() =>
         {
@@ -133,13 +169,13 @@ public class ClickHouseDecimalTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(new ClickHouseDecimal(new BigInteger(-1), 0).Sign, Is.EqualTo(-1));
-            Assert.That(new ClickHouseDecimal(BigInteger.Zero, 5).Sign, Is.EqualTo(0));
-            Assert.That(new ClickHouseDecimal(new BigInteger(1), 0).Sign, Is.EqualTo(1));
+            Assert.That(new ClickHouseTcpDecimal(new BigInteger(-1), 0).Sign, Is.EqualTo(-1));
+            Assert.That(new ClickHouseTcpDecimal(BigInteger.Zero, 5).Sign, Is.EqualTo(0));
+            Assert.That(new ClickHouseTcpDecimal(new BigInteger(1), 0).Sign, Is.EqualTo(1));
         });
     }
 
     [Test]
     public void Constructor_NegativeScale_Throws()
-        => Assert.Throws<ArgumentOutOfRangeException>(() => new ClickHouseDecimal(BigInteger.One, -1));
+        => Assert.Throws<ArgumentOutOfRangeException>(() => new ClickHouseTcpDecimal(BigInteger.One, -1));
 }

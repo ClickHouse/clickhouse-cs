@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// The columnar read surface of a decoded <c>Nested(name1 T1, ..., namen Tn)</c> column carried as one wire column

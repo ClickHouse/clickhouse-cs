@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// The read surface of a decoded <c>Tuple(...)</c> column. A tuple is stored on the wire — and here — as its N
@@ -24,10 +24,7 @@ public interface ITupleColumn : IColumn
     IReadOnlyList<IColumn> Children { get; }
 
     /// <summary>
-    /// The element names for a named tuple (<c>Tuple(a Int32, b String)</c>) — one entry per element, aligned
-    /// with <see cref="Children"/>, with a null entry for an unnamed element; null when the tuple carries no
-    /// names at all. Names are metadata only: they do not affect the wire layout or the materialized
-    /// <c>ValueTuple</c> value.
+    /// Element names aligned with <see cref="Children"/> for a named tuple; empty, never null, for an unnamed tuple.
     /// </summary>
     IReadOnlyList<string> FieldNames { get; }
 }

@@ -39,17 +39,12 @@ internal sealed class ClientOperation : IDisposable
     /// <summary>The client's own metadata observers, or null when nothing needs them.</summary>
     public ClickHouseTcpQueryCallbacks Telemetry { get; private set; }
 
-    /// <summary>Starts the span and the log line for a statement, and builds its handlers.</summary>
+    /// <summary>Starts statement telemetry, or returns null when no logger or activity listener is configured.</summary>
     /// <param name="options">The client options the span's endpoint attributes come from.</param>
     /// <param name="logger">The client-category logger, or null when none is configured.</param>
     /// <param name="sql">The statement.</param>
-    /// <param name="queryId">The caller's query id, or null to let the server assign one.</param>
+    /// <param name="queryId">The query id in force, which every line this operation logs carries.</param>
     /// <returns>The operation, or null when nothing is observing it.</returns>
-    /// <remarks>
-    /// The caller's own callbacks are not this type's concern: the connection invokes them alongside
-    /// <see cref="Telemetry"/> rather than through it, so a caller who wants progress and no tracing starts no
-    /// operation at all.
-    /// </remarks>
     public static ClientOperation Start(
         ClickHouseTcpClientOptions options,
         ILogger logger,

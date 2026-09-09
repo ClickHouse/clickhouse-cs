@@ -1,6 +1,6 @@
 using System;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// The columnar read surface of a decoded <c>Nullable(T)</c> column. A nullable column materializes each row as

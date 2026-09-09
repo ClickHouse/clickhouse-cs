@@ -314,6 +314,150 @@ public class ClickHouseTcpCallbackIntegrationTests
         }
     }
 
+    [TestCase("none")]
+    [TestCase("lz4")]
+    [TestCase("zstd")]
+    public async Task InsertAsync_OnBlockWritten_ReportsEachBlockWithItsRowsAndBothByteCounts(string compression)
+    {
+        // An insert gets no Progress packets at all, so this callback is its only progress — and the only place
+        // MaxRowsPerBlock becomes observable. Run over each codec because the two byte counts have to agree
+        // exactly when nothing compresses and differ when something does.
+        await using ClickHouseTcpClient client = new(TcpServerFixture.Options() with { Compressor = ClickHouseTcpClientOptions.ResolveCompressor(compression) });
+        string table = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, s String) ENGINE = Memory", cancellationToken: None);
+
+        try
+        {
+            const int rows = 2500;
+            var ids = new ulong[rows];
+            var text = new string[rows];
+            for (int i = 0; i < rows; i++)
+            {
+                ids[i] = (ulong)i;
+                text[i] = "value-" + i;
+            }
+
+            var seen = new List<ClickHouseTcpBlockWritten>();
+            await client.InsertAsync(
+                $"INSERT INTO {table} (id, s) VALUES",
+                new IColumn[] { ClickHouseTcpColumn.Create("id", ids), ClickHouseTcpColumn.Create("s", text) },
+                new ClickHouseTcpInsertOptions
+                {
+                    MaxRowsPerBlock = 1000,
+                    Callbacks = new ClickHouseTcpQueryCallbacks { OnBlockWritten = b => seen.Add(b) },
+                },
+                None);
+
+            var stored = (ulong)await client.ExecuteScalarAsync($"SELECT count() FROM {table}", cancellationToken: None);
+            bool compressing = compression != "none";
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(stored, Is.EqualTo((ulong)rows), "observing the write did not change what was written");
+                Assert.That(seen.Select(b => b.BlockIndex), Is.EqualTo(new[] { 0, 1, 2 }), "zero-based, in send order");
+                Assert.That(seen.Select(b => b.RowCount), Is.EqualTo(new[] { 1000, 1000, 500 }), "MaxRowsPerBlock, then the remainder");
+                Assert.That(seen.Sum(b => b.RowCount), Is.EqualTo(rows));
+                Assert.That(seen.Select(b => b.UncompressedBytes), Is.All.GreaterThan(0));
+
+                foreach (ClickHouseTcpBlockWritten block in seen)
+                {
+                    Assert.That(
+                        block.CompressedBytes,
+                        compressing ? Is.LessThan(block.UncompressedBytes) : Is.EqualTo(block.UncompressedBytes),
+                        $"block {block.BlockIndex} under {compression}");
+                }
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task InsertAsync_OnBlockWritten_ReportsTheSameBodySizeWhicheverCodecFramesIt()
+    {
+        // The uncompressed count is the body's own size, so it cannot depend on what compresses it afterwards.
+        // One assertion across two clients, which no single-client test can make.
+        var perCompression = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (string compression in new[] { "none", "lz4", "zstd" })
+        {
+            await using ClickHouseTcpClient client = new(TcpServerFixture.Options() with { Compressor = ClickHouseTcpClientOptions.ResolveCompressor(compression) });
+            string table = UniqueTableName();
+            await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = Memory", cancellationToken: None);
+
+            try
+            {
+                var ids = new ulong[500];
+                for (int i = 0; i < ids.Length; i++)
+                {
+                    ids[i] = (ulong)i;
+                }
+
+                long uncompressed = 0;
+                await client.InsertAsync(
+                    $"INSERT INTO {table} (id) VALUES",
+                    new IColumn[] { ClickHouseTcpColumn.Create("id", ids) },
+                    new ClickHouseTcpInsertOptions
+                    {
+                        Callbacks = new ClickHouseTcpQueryCallbacks { OnBlockWritten = b => uncompressed += b.UncompressedBytes },
+                    },
+                    None);
+
+                perCompression[compression] = uncompressed;
+            }
+            finally
+            {
+                await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+            }
+        }
+
+        Assert.That(perCompression["lz4"], Is.EqualTo(perCompression["none"]));
+        Assert.That(perCompression["zstd"], Is.EqualTo(perCompression["none"]));
+    }
+
+    [Test]
+    public async Task InsertAsync_ZeroRows_ReportsNoWrittenBlock()
+    {
+        // Zero rows sends only the terminator, which is not a block of the caller's rows.
+        await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TABLE {table} (id Int32) ENGINE = Memory", cancellationToken: None);
+
+        try
+        {
+            var seen = new List<ClickHouseTcpBlockWritten>();
+            await client.InsertAsync(
+                $"INSERT INTO {table} (id) VALUES",
+                new IColumn[] { ClickHouseTcpColumn.Create("id", Array.Empty<int>()) },
+                new ClickHouseTcpInsertOptions
+                {
+                    Callbacks = new ClickHouseTcpQueryCallbacks { OnBlockWritten = b => seen.Add(b) },
+                },
+                None);
+
+            Assert.That(seen, Is.Empty);
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    [Test]
+    public async Task StreamAsync_OnBlockWritten_IsNeverCalledForAQuery()
+    {
+        await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
+
+        var seen = new List<ClickHouseTcpBlockWritten>();
+        await DrainAsync(
+            client,
+            "SELECT number FROM numbers(1000)",
+            new ClickHouseTcpQueryOptions { Callbacks = new ClickHouseTcpQueryCallbacks { OnBlockWritten = b => seen.Add(b) } });
+
+        Assert.That(seen, Is.Empty, "a query sends no blocks");
+    }
+
     [Test]
     public async Task StreamAsync_ThrowingCallback_PropagatesAndLeavesTheClientUsable()
     {

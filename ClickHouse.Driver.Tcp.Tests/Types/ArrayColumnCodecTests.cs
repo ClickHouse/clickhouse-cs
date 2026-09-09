@@ -175,7 +175,11 @@ public class ArrayColumnCodecTests
         await CodecTestHarness.WriteAsync(writer =>
             thrown = Assert.Throws<ArgumentException>(() => codec.WriteColumn(writer, column, 0, 2)));
 
-        Assert.That(thrown.Message, Does.Contain("null value at row 1").And.Contain("Array(Nullable(T))"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("null value at row 1").And.Contain("Array(Nullable(T))"));
+            Assert.That(thrown.ParamName, Is.EqualTo("column"), "the argument at fault, not an internal local's name.");
+        });
     }
 
     // The state-aware overloads take the state this codec's own BeginWrite returned, and nothing else. They used to

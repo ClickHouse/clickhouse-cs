@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -251,7 +252,7 @@ public class ColumnarReadSurfaceIntegrationTests
 
             var tuple = (ITupleColumn)column;
             childCount = tuple.Children.Count;
-            fieldNames = tuple.FieldNames?.ToArray();
+            fieldNames = tuple.FieldNames.ToArray();
             childRowCounts = new[] { tuple.Children[0].RowCount, tuple.Children[1].RowCount };
             firstElement = ((IColumn<int>)tuple.Children[0]).Values.ToArray();
             secondElement = ((IColumn<string>)tuple.Children[1]).Values.ToArray();
@@ -271,14 +272,14 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task StreamAsync_UnnamedTupleWithCompositeElement_OmitsFieldNamesAndAllowsChildRecursion()
+    public async Task StreamAsync_UnnamedTupleWithCompositeElement_ReportsEmptyFieldNamesAndAllowsChildRecursion()
     {
-        // Two things the named case cannot show: an unnamed tuple carries no names at all (FieldNames is null, not
-        // a list of nulls), and a child that is itself a composite pattern-matches to its own columnar view — so a
+        // Two things the named case cannot show: an unnamed tuple reports an empty FieldNames rather than null or a
+        // list of nulls, and a child that is itself a composite pattern-matches to its own columnar view — so a
         // Tuple(Array(Int32), ...) can be walked into without materializing the tuple or the array rows.
         await using var client = TcpServerFixture.CreateClient();
 
-        bool hasFieldNames = true;
+        string[] fieldNames = null;
         bool childIsArray = false;
         int[] childOffsets = null;
         int[] childInnerValues = null;
@@ -289,7 +290,9 @@ public class ColumnarReadSurfaceIntegrationTests
             cancellationToken: None))
         {
             var tuple = (ITupleColumn)block[0];
-            hasFieldNames = tuple.FieldNames is not null;
+
+            // Enumerated without a null check, which is the point of the empty list.
+            fieldNames = tuple.FieldNames.ToArray();
 
             childIsArray = tuple.Children[0] is IArrayColumn<int>;
             var child = (IArrayColumn<int>)tuple.Children[0];
@@ -299,7 +302,7 @@ public class ColumnarReadSurfaceIntegrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(hasFieldNames, Is.False, "an unnamed tuple reports no names rather than a list of nulls");
+            Assert.That(fieldNames, Is.Empty, "an unnamed tuple reports an empty list rather than null or a list of nulls");
             Assert.That(childIsArray, Is.True, "a composite child re-enters the columnar surface");
             Assert.That(childOffsets, Is.EqualTo(new[] { 0, 0, 1, 3 }), "the child array's own per-row offsets");
             Assert.That(childInnerValues, Is.EqualTo(new[] { 0, 0, 1 }));
@@ -783,6 +786,133 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(localIndices[1], Is.EqualTo(-1), "a NULL row addresses no child");
             Assert.That(childRowCounts.Sum(), Is.EqualTo(rowCount - 1), "the children together hold every non-NULL row exactly once");
             Assert.That(materialized, Is.EqualTo(new object[] { "s0", null, 100L, "s3" }));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_DateTimeColumn_ExposesTheDeclaredTimezoneAndInstantsThroughIDateTimeColumn()
+    {
+        // A DateTime column's IColumn<T> surface is IColumn<uint>: the epoch seconds the wire carried. Turning
+        // those into an instant needs the timezone the column type declares, which no IColumn member reports, so
+        // IDateTimeColumn is the only way to do it from the block tier.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool matched = false;
+        string timeZoneId = null;
+        int scale = 0;
+        var offsets = Array.Empty<DateTimeOffset>();
+        DateTimeOffset first = default;
+        uint firstRaw = 0;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT toDateTime('2024-06-15 14:00:00', 'Europe/Amsterdam') + number FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IDateTimeColumn;
+
+            var instants = (IDateTimeColumn)column;
+            timeZoneId = instants.TimeZone.Id;
+            scale = instants.Scale;
+            offsets = instants.ToDateTimeOffsets();
+            first = instants.GetDateTimeOffset(0);
+            firstRaw = ((IColumn<uint>)column).Values[0];
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(timeZoneId, Is.EqualTo("Europe/Amsterdam"), "the timezone the column type declared, not the server's");
+            Assert.That(scale, Is.EqualTo(0), "DateTime counts whole seconds");
+            Assert.That(offsets, Has.Length.EqualTo(3));
+            Assert.That(first, Is.EqualTo(offsets[0]), "the per-row and whole-column reads agree");
+            Assert.That(first.Offset, Is.EqualTo(TimeSpan.FromHours(2)), "June is CEST, so +02:00");
+            Assert.That(first.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), Is.EqualTo("2024-06-15 14:00:00"));
+            Assert.That(first.ToUnixTimeSeconds(), Is.EqualTo(firstRaw), "the instant is the raw count, presented");
+            Assert.That(offsets[2] - offsets[0], Is.EqualTo(TimeSpan.FromSeconds(2)));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_DateTime64Column_ReportsItsScaleAndSubSecondPrecisionThroughIDateTimeColumn()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool matched = false;
+        int scale = 0;
+        DateTimeOffset first = default;
+        long firstRaw = 0;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT toDateTime64('2024-06-15 14:00:00.125', 3, 'UTC') FROM system.numbers LIMIT 1",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IDateTimeColumn;
+
+            var instants = (IDateTimeColumn)column;
+            scale = instants.Scale;
+            first = instants.GetDateTimeOffset(0);
+            firstRaw = ((IColumn<long>)column).Values[0];
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(scale, Is.EqualTo(3), "the scale of DateTime64(3), which says what unit the raw count is in");
+            Assert.That(first.Offset, Is.EqualTo(TimeSpan.Zero));
+            Assert.That(first.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture), Is.EqualTo("2024-06-15 14:00:00.125"));
+            Assert.That(firstRaw, Is.EqualTo(first.ToUnixTimeMilliseconds()), "scale 3 means the count is milliseconds");
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_TimeColumn_ExposesOffsetsFromMidnightThroughITimeColumn()
+    {
+        // Time names a time of day, not an instant, so it carries no timezone and converts to a TimeSpan.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool matchedTime = false;
+        bool matchedDateTime = false;
+        int scale = -1;
+        var spans = Array.Empty<TimeSpan>();
+        TimeSpan first = default;
+
+        // Time and Time64 are setting-gated on 25.8, the floor of the CI matrix, so the query needs both flags.
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Settings = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["enable_time_time64_type"] = "1",
+                ["allow_experimental_time_time64_type"] = "1",
+            },
+        };
+
+        // A cast, not toTime(): with the flags above set, toTime resolves to toTimeWithFixedDate, which takes a
+        // Date or DateTime and rejects a String.
+        await foreach (Block block in client.StreamAsync(
+            "SELECT '14:30:05'::Time + number FROM system.numbers LIMIT 2",
+            options,
+            None))
+        {
+            IColumn column = block[0];
+            matchedTime = column is ITimeColumn;
+            matchedDateTime = column is IDateTimeColumn;
+
+            var times = (ITimeColumn)column;
+            scale = times.Scale;
+            spans = times.ToTimeSpans();
+            first = times.GetTimeSpan(0);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matchedTime, Is.True);
+            Assert.That(matchedDateTime, Is.False, "a time of day is not an instant, so it offers no timezone");
+            Assert.That(scale, Is.EqualTo(0), "Time counts whole seconds");
+            Assert.That(spans, Has.Length.EqualTo(2));
+            Assert.That(first, Is.EqualTo(new TimeSpan(14, 30, 5)));
+            Assert.That(spans[1] - spans[0], Is.EqualTo(TimeSpan.FromSeconds(1)));
         });
     }
 }

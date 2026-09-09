@@ -19,4 +19,11 @@ public sealed record ClickHouseTcpInsertOptions : ClickHouseTcpQueryOptions
     /// </para>
     /// </summary>
     public int? MaxRowsPerBlock { get; init; } = ClickHouseTcpConnection.DefaultMaxRowsPerBlock;
+
+    /// <summary>
+    /// A stable identifier for an insert batch, sent as <c>insert_deduplication_token</c>; null sends none. The
+    /// original attempt and every retry must use the same token; use a new token for a new batch. Deduplication
+    /// lasts for the server's configured window, and this overrides <see cref="ClickHouseTcpQueryOptions.Settings"/>.
+    /// </summary>
+    public string DeduplicationToken { get; init; }
 }

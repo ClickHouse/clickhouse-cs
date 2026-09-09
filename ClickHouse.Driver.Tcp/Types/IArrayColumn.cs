@@ -1,6 +1,6 @@
 using System;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// The columnar read surface of a decoded <c>Array(T)</c> column. An array column materializes each row as a

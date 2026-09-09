@@ -1,6 +1,5 @@
 using System;
 using System.Numerics;
-using ClickHouse.Driver.Tcp.Numerics;
 
 namespace ClickHouse.Driver.Tcp.Tests.Numerics;
 

@@ -26,10 +26,15 @@ namespace ClickHouse.Driver.Tcp;
 public sealed class ClickHouseTcpQueryCallbacks
 {
     /// <summary>
-    /// Called for each progress increment the server reports as the query runs. The counters are increments, not
-    /// running totals — see <see cref="ClickHouseTcpProgress"/>.
+    /// Called for each server-reported progress increment. Frequency follows <c>interactive_delay</c>; inserts
+    /// do not report this progress, so use <see cref="OnBlockWritten"/> for them.
     /// </summary>
     public Action<ClickHouseTcpProgress> OnProgress { get; init; }
+
+    /// <summary>
+    /// Called after each insert block is sent. It reports client-side progress, not server application or success.
+    /// </summary>
+    public Action<ClickHouseTcpBlockWritten> OnBlockWritten { get; init; }
 
     /// <summary>Called once with the query's execution summary (result rows, blocks, bytes, whether a LIMIT applied).</summary>
     public Action<ClickHouseTcpProfileInfo> OnProfileInfo { get; init; }
