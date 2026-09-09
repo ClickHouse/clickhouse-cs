@@ -84,4 +84,28 @@ public sealed class TcpServerFixture
                 Password = password ?? Password,
             },
             cancellationToken);
+
+    /// <summary>Builds client options pointed at the test server, optionally overriding the credentials.</summary>
+    /// <param name="username">The username to authenticate with, or null for the fixture default.</param>
+    /// <param name="password">The password to authenticate with, or null for the fixture default.</param>
+    /// <returns>Options for a <see cref="ClickHouseTcpClient"/> against the test server.</returns>
+    internal static ClickHouseTcpClientOptions Options(string username = null, string password = null)
+        => new()
+        {
+            Host = Host,
+            Port = Port,
+            Username = username ?? Username,
+            Password = password ?? Password,
+        };
+
+    /// <summary>Creates a client connected to the test server, optionally overriding the credentials.</summary>
+    /// <param name="username">The username to authenticate with, or null for the fixture default.</param>
+    /// <param name="password">The password to authenticate with, or null for the fixture default.</param>
+    /// <returns>A client against the test server.</returns>
+    internal static ClickHouseTcpClient CreateClient(string username = null, string password = null)
+        => new(Options(username, password));
+
+    /// <summary>The connection string that addresses the test server with the fixture credentials.</summary>
+    internal static string ConnectionString
+        => $"Host={Host};Port={Port};Username={Username};Password={Password}";
 }
