@@ -1,7 +1,11 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Diagnostic;
+using ClickHouse.Driver.Tcp.Logging;
 using ClickHouse.Driver.Tcp.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace ClickHouse.Driver.Tcp.Client;
 
@@ -31,6 +35,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
 {
     private readonly ClickHouseTcpClientOptions options;
     private readonly TlsParameters tls;
+    private readonly ILogger logger;
 
     /// <summary>
     /// Initializes the factory over the client's validated options, resolving the TLS configuration once. A
@@ -42,6 +47,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
     {
         this.options = options;
         tls = BuildTlsParameters(options);
+        logger = DiagnosticLogger.Create(options.LoggerFactory, ClickHouseTcpDiagnostics.ConnectionLogCategory);
     }
 
     /// <inheritdoc/>
@@ -49,18 +55,75 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linked.CancelAfter(options.DialTimeout);
+
+        // One span over the socket connect, the TLS negotiation and the handshake, which is what a slow first
+        // operation is usually waiting on.
+        using Activity activity = TcpActivity.StartConnect(options);
+        long startedAt = Stopwatch.GetTimestamp();
+        if (logger is not null)
+        {
+            ConnectionLog.Opening(logger, options.Host, options.ResolvedPort, options.Username, options.UseTls);
+        }
+
         try
         {
-            return await ClickHouseTcpConnection.ConnectAsync(
+            ClickHouseTcpConnection connection = await ClickHouseTcpConnection.ConnectAsync(
                 options.Host, options.ResolvedPort, options.ToHandshakeParameters(), tls, linked.Token, options.Compressor).ConfigureAwait(false);
+
+            activity?.SetSuccess();
+            if (logger is not null)
+            {
+                ServerHandshake server = connection.Server;
+                ConnectionLog.Opened(
+                    logger,
+                    server.ServerName,
+                    server.VersionMajor,
+                    server.VersionMinor,
+                    server.VersionPatch,
+                    Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                    server.Revision,
+                    server.Timezone);
+            }
+
+            return connection;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && linked.IsCancellationRequested)
         {
             // The linked token, not the caller's, fired: the dial deadline elapsed. Surface it as a timeout so a
             // hung connect is distinguishable from a caller cancellation. The deadline covers the TLS handshake
             // too, which is one more round trip a wedged server can stall on.
-            throw new TimeoutException(
+            var timeout = new TimeoutException(
                 $"Connecting to {options.Host}:{options.ResolvedPort} timed out after {options.DialTimeout.TotalSeconds:0.###}s (DialTimeout).");
+            ReportFailure(activity, startedAt, timeout);
+            throw timeout;
+        }
+        catch (OperationCanceledException e)
+        {
+            // The pool dials on its shutdown token, so a client being disposed cancels any top-up in flight.
+            // That is disposal working, not a server that cannot be reached, and it is not worth a warning.
+            activity?.SetError(e);
+            if (logger is not null)
+            {
+                ConnectionLog.OpenCancelled(logger, options.Host, options.ResolvedPort, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+            }
+
+            throw;
+        }
+        catch (Exception e)
+        {
+            ReportFailure(activity, startedAt, e);
+            throw;
+        }
+    }
+
+    // Marks the connect span failed and logs it. A dial the pool started in the background has no caller to
+    // report to, so without this line it fails invisibly.
+    private void ReportFailure(Activity activity, long startedAt, Exception exception)
+    {
+        activity?.SetError(exception);
+        if (logger is not null)
+        {
+            ConnectionLog.OpenFailed(logger, options.Host, options.ResolvedPort, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, exception);
         }
     }
 
