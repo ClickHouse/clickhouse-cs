@@ -472,4 +472,55 @@ public class LowCardinalityColumnCodecTests
             Assert.That(value.CanWrite(new ArrayColumn<uint>("c", "LowCardinality(Nullable(UInt32))", Array.Empty<uint>())), Is.False, "the bare (non-nullable) element type is not accepted");
         });
     }
+
+    [Test]
+    public void Indexer_RowsSharingADictionaryEntry_GetTheSameInstance()
+    {
+        // The indexer reads the dictionary through its Values, not its own indexer, so an entry that is built on
+        // access is built once for the block instead of once per row. A String dictionary is the case that matters:
+        // its indexer decodes UTF-8 per call, so reading a 65,536-row column row by row would otherwise allocate a
+        // string per row for a dictionary holding a handful of them.
+        using var dictionary = new StringColumn("c", "String", "alphabeta"u8.ToArray(), new[] { 0, 0, 5, 9 }, rowCount: 3, pooled: false);
+        using var column = new LowCardinalityColumn<string>("c", "LowCardinality(String)", dictionary, new[] { 1, 2, 1 }, rowCount: 3, pooledKeys: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[0], Is.EqualTo("alpha"));
+            Assert.That(column[2], Is.EqualTo("alpha"));
+            Assert.That(column[0], Is.SameAs(column[2]), "both rows hold the same dictionary entry");
+            Assert.That(column[1], Is.EqualTo("beta"));
+        });
+    }
+
+    [Test]
+    public void Indexer_MutableElementTypeSharingADictionaryEntry_AliasesRatherThanCopies()
+    {
+        // The consequence of the above for the one element type a caller can mutate: the byte[] of a
+        // LowCardinality(FixedString(N)) is shared, so writing through one row's array is visible from another.
+        // Pinned deliberately, matching what IColumn<T>.Values has always done for this shape; a reader that needs
+        // its own copy has to make one.
+        using var dictionary = new FixedStringColumn("c", "FixedString(2)", 2, "\0\0aabb"u8.ToArray(), rowCount: 3, pooled: false);
+        using var column = new LowCardinalityColumn<byte[]>("c", "LowCardinality(FixedString(2))", dictionary, new[] { 1, 2, 1 }, rowCount: 3, pooledKeys: false);
+
+        Assert.That(column[0], Is.SameAs(column[2]));
+    }
+
+    [Test]
+    public void NullableReferenceIndexer_RowsSharingADictionaryEntry_GetTheSameInstanceAndKeepNullNull()
+    {
+        // The nullable-reference shape reads its dictionary the same way, and a round trip asserting equal values
+        // would still pass if it regressed to rebuilding an entry per row. Key 0 is the NULL marker here (two
+        // reserved slots), so the null has to survive the sharing.
+        using var dictionary = new StringColumn("c", "String", "alphabeta"u8.ToArray(), new[] { 0, 0, 0, 5, 9 }, rowCount: 4, pooled: false);
+        using var column = new NullableLowCardinalityReferenceColumn<string>(
+            "c", "LowCardinality(Nullable(String))", dictionary, new[] { 2, 0, 3, 2 }, rowCount: 4, pooledKeys: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[0], Is.EqualTo("alpha"));
+            Assert.That(column[1], Is.Null, "key 0 is the NULL marker");
+            Assert.That(column[2], Is.EqualTo("beta"));
+            Assert.That(column[3], Is.SameAs(column[0]), "both rows hold the same dictionary entry");
+        });
+    }
 }
