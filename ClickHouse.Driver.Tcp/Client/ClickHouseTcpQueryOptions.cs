@@ -16,23 +16,9 @@ namespace ClickHouse.Driver.Tcp;
 public record ClickHouseTcpQueryOptions
 {
     /// <summary>
-    /// The query id, which identifies the operation in <c>system.query_log</c> and <c>system.processes</c>. Null
-    /// or empty lets the client generate one — a GUID, fresh per operation.
+    /// Identifies the operation in server, client, and trace logs. Null or empty generates a GUID; supplied ids
+    /// must be unique among concurrent operations.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The client generates one rather than leaving the field empty for the server to fill, because the native
-    /// protocol never sends the server's own id back: a query that left it empty could not afterwards be found in
-    /// the log. The id in force is written to every log line the operation produces (see
-    /// <see cref="ClickHouseTcpClientOptions.LoggerFactory"/>) and to its trace span, whether the client generated
-    /// it or you supplied it.
-    /// </para>
-    /// <para>
-    /// Set it yourself to choose the id, which is what correlating with your own identifiers wants. <b>Two
-    /// operations must not run at once under one id</b> — the server rejects the second — so a value you supply
-    /// has to be unique per operation, not per caller.
-    /// </para>
-    /// </remarks>
     public string QueryId { get; init; }
 
     /// <summary>

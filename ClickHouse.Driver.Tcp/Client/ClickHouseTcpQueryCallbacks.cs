@@ -26,31 +26,14 @@ namespace ClickHouse.Driver.Tcp;
 public sealed class ClickHouseTcpQueryCallbacks
 {
     /// <summary>
-    /// Called for each progress increment the server reports as the query runs. The counters are increments, not
-    /// running totals — see <see cref="ClickHouseTcpProgress"/>.
+    /// Called for each server-reported progress increment. Frequency follows <c>interactive_delay</c>; inserts
+    /// do not report this progress, so use <see cref="OnBlockWritten"/> for them.
     /// </summary>
-    /// <remarks>
-    /// <b>How often this fires is the server's <c>interactive_delay</c> setting</b>, in microseconds, defaulting
-    /// to 100,000 — so about ten packets a second on a query that runs long enough. Lower it per query to drive a
-    /// smoother progress bar (<c>Settings = { ["interactive_delay"] = "30000" }</c>) and accept more packets for
-    /// the same result. A query that finishes inside one interval reports once or not at all, so a consumer must
-    /// not wait for a first packet before showing anything.
-    /// <para>
-    /// An <b>insert</b> gets none of these: the server reports no progress for rows a client streams to it. Use
-    /// <see cref="OnBlockWritten"/> there.
-    /// </para>
-    /// </remarks>
     public Action<ClickHouseTcpProgress> OnProgress { get; init; }
 
     /// <summary>
-    /// Called as each wire block of an insert finishes going out, with the client's own count of its rows and
-    /// bytes. Never called for a query, which sends no blocks.
+    /// Called after each insert block is sent. It reports client-side progress, not server application or success.
     /// </summary>
-    /// <remarks>
-    /// This is an insert's progress, and the only one it has — see <see cref="ClickHouseTcpBlockWritten"/> for why
-    /// <see cref="OnProgress"/> cannot serve. It reports what the client has sent, not what the server has
-    /// applied, so a callback that has seen every block still does not know the insert succeeded.
-    /// </remarks>
     public Action<ClickHouseTcpBlockWritten> OnBlockWritten { get; init; }
 
     /// <summary>Called once with the query's execution summary (result rows, blocks, bytes, whether a LIMIT applied).</summary>

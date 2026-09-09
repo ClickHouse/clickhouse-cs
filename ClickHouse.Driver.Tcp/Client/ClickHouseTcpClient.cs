@@ -392,10 +392,8 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     }
 
     /// <summary>
-    /// Inserts columnar data. The columns are matched <b>by name</b> to the columns
-    /// <paramref name="sql"/> lists — order is free, and one column is required for each of those names —
-    /// and values are serialized as the target's resolved type. The server fills any column the statement does
-    /// not list from its default. Zero rows is a no-op.
+    /// Inserts columns matched by name to the statement's column list and encoded using the target schema.
+    /// Unlisted target columns use server defaults; zero rows is a no-op.
     /// </summary>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="columns">The row data, matched to the target columns by name.</param>
@@ -551,15 +549,11 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     internal static int? ResolveMaxRowsPerBlock(ClickHouseTcpInsertOptions options)
         => (options ?? DefaultInsertOptions).MaxRowsPerBlock;
 
-    /// <summary>The query id an operation runs under: the caller's, or a fresh one when they named none.</summary>
+    /// <summary>
+    /// Returns the supplied query id, or generates one so the operation can be correlated in logs and traces.
+    /// </summary>
     /// <param name="options">The per-operation options, or null for the client defaults.</param>
     /// <returns>A non-empty query id.</returns>
-    /// <remarks>
-    /// The native protocol never sends back the id a server assigns, so an operation that leaves the field empty
-    /// cannot be found in <c>system.query_log</c> afterwards. Generating one client-side is what makes the id
-    /// knowable: every log line this operation writes carries it (see <see cref="ClientOperation"/>), as does its
-    /// trace span. An empty string is treated as absent, which is how the server reads it.
-    /// </remarks>
     internal static string ResolveQueryId(ClickHouseTcpQueryOptions options)
     {
         string supplied = options?.QueryId;
@@ -631,10 +625,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     public ValueTask DisposeAsync() => source.DisposeAsync();
 
     /// <summary>
-    /// Closes the pool, blocking until it is closed. Present so a container that tracks this client can dispose it
-    /// synchronously: <c>ServiceProvider.Dispose()</c> rejects a singleton offering only
-    /// <see cref="IAsyncDisposable"/>, and rejects it instead of disposing the rest of its list. Prefer
-    /// <see cref="DisposeAsync"/> wherever the call site can await.
+    /// Closes the pool synchronously. Prefer <see cref="DisposeAsync"/> when the caller can await.
     /// </summary>
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
@@ -642,13 +633,10 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
         => MergeSettings(Options.CustomSettings, options?.Settings);
 
     /// <summary>
-    /// The settings for one insert: the query settings, plus
-    /// <see cref="ClickHouseTcpInsertOptions.DeduplicationToken"/> as its own server setting.
+    /// Builds insert settings, with <see cref="ClickHouseTcpInsertOptions.DeduplicationToken"/> taking precedence.
     /// </summary>
     /// <param name="options">The per-insert options, or null for the client defaults.</param>
     /// <returns>The merged settings to send with the insert.</returns>
-    /// <remarks>The dedicated property wins over the same key in <see cref="ClickHouseTcpQueryOptions.Settings"/>,
-    /// being the more specific way to say it.</remarks>
     private IReadOnlyDictionary<string, string> BuildInsertSettings(ClickHouseTcpInsertOptions options)
     {
         IReadOnlyDictionary<string, string> settings = BuildSettings(options);

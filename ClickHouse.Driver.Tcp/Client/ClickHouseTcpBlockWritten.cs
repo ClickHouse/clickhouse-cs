@@ -1,21 +1,9 @@
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// One wire block an insert has finished sending. Reported through
-/// <see cref="ClickHouseTcpQueryCallbacks.OnBlockWritten"/>.
+/// Reports a wire block sent during an insert. These client-side counters do not confirm that the server applied
+/// the block and exclude the packet envelope.
 /// </summary>
-/// <remarks>
-/// <para>
-/// <b>These are the client's own counters, not the server's.</b> The server sends no Progress packet for the rows
-/// a client streams to it during a native insert, so <see cref="ClickHouseTcpProgress.WroteRows"/> stays zero and
-/// this is the only account an insert has of its own progress. A block reported here has been handed to the
-/// socket; whether the server has applied it is a separate question, answered only by the insert completing.
-/// </para>
-/// <para>
-/// The counters cover the block's body — its header, column names, types and values — and not the two-byte
-/// packet envelope around it.
-/// </para>
-/// </remarks>
 public readonly record struct ClickHouseTcpBlockWritten
 {
     /// <summary>Initializes a new instance of the <see cref="ClickHouseTcpBlockWritten"/> struct.</summary>
@@ -45,14 +33,8 @@ public readonly record struct ClickHouseTcpBlockWritten
     public long UncompressedBytes { get; }
 
     /// <summary>
-    /// The bytes this block put on the socket. Equal to <see cref="UncompressedBytes"/> when the client is not
-    /// compressing (a null <see cref="ClickHouseTcpClientOptions.Compressor"/>), and otherwise the framed and
-    /// compressed size.
+    /// The framed bytes written to the socket. Frame overhead can make this larger than
+    /// <see cref="UncompressedBytes"/> for small blocks.
     /// </summary>
-    /// <remarks>
-    /// Each frame carries a header and a checksum, so <b>this can exceed <see cref="UncompressedBytes"/> on a
-    /// small block</b> — a three-row block measured 110 bytes against 91 under LZ4. Read the two as a compression
-    /// ratio only over blocks large enough for the payload to dominate that overhead.
-    /// </remarks>
     public long CompressedBytes { get; }
 }

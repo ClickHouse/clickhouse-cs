@@ -3,25 +3,8 @@ using System;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// The columnar read surface of a decoded <c>Variant(T1, ..., Tn)</c> column: a per-row discriminator stream plus one
-/// child column per alternative type, each holding only the values of the rows that selected it, in row order. That
-/// is exactly the wire layout. It is a read view only — implementing it does not make a column insertable, because
-/// the codec's zero-copy write path accepts only columns this driver decoded, whose invariants it has checked.
-///
-/// <para>
-/// Unlike the other composites, a <c>Variant</c> has no useful materialized element type — the
-/// <see cref="IColumn{T}"/> surface is <c>IColumn&lt;object&gt;</c>, so every row read through it is boxed. Reading
-/// columnar avoids that: dispatch on <see cref="Discriminators"/>, then read the selected type's child column,
-/// which is typed. Row <c>i</c>'s value lives at <c>LocalIndices[i]</c> within
-/// <c>GetTypeColumn(Discriminators[i])</c>, unless its discriminator is
-/// <see cref="NullDiscriminator"/>, in which case the row is NULL and occupies no slot in any child.
-/// </para>
-///
-/// <para>
-/// Child columns and both spans are borrowed views over the owning block's storage: read them in place, and copy out
-/// only what must outlive the block. A child whose type is itself a composite pattern-matches to that type's own
-/// columnar view. Obtain this view by pattern-matching a column, e.g. <c>if (column is IVariantColumn variant)</c>.
-/// </para>
+/// Exposes a decoded <c>Variant</c> column as borrowed row discriminators, local indices, and one child column
+/// per alternative. <see cref="NullDiscriminator"/> marks NULL rows.
 /// </summary>
 public interface IVariantColumn : IColumn
 {

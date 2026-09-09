@@ -69,13 +69,9 @@ internal static class DynamicTypeInference
             return (ip.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6", value);
         }
 
-        // Types whose ClickHouse mapping depends on the value (scale) or that map to a canonical read-back type
-        // wider than the input CLR type. The value is coerced to that codec's element type so it round-trips:
-        //  - a decimal maps to Decimal128 (element type ClickHouseTcpDecimal), a ClickHouseTcpDecimal to Decimal256;
-        //  - a DateTimeOffset/DateTime maps to DateTime64 at nanosecond scale, coerced to the codec's Int64 count
-        //    element type (exact for either — both hold at most 100 ns ticks). A raw Int64 is Int64, not
-        //    DateTime64: there is no distinct CLR carrier to key on, so date-time semantics require a
-        //    DateTimeOffset/DateTime input.
+        // Value-dependent mappings are coerced to the codec's read-back type. Decimals choose precision by CLR
+        // type and scale; date-times become DateTime64(9) counts. A raw Int64 remains Int64 because it carries no
+        // date-time semantics.
         switch (value)
         {
             case DateTimeOffset dateTimeOffset:

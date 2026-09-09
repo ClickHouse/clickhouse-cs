@@ -3,15 +3,9 @@ using System;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// What the server said about itself in its ServerHello: its version, the protocol revision in use, and the
-/// session defaults the client resolves timestamps against. Read it with
-/// <see cref="IClickHouseTcpOperations.GetServerInfoAsync"/>.
+/// Server identity, version, timezone, and protocol revisions from the handshake. Gate features on the negotiated
+/// <see cref="ProtocolRevision"/>.
 /// </summary>
-/// <remarks>
-/// Three protocol revisions are reported, and they are usually three different numbers: what the server
-/// advertised, what this client implements, and the negotiated one those two settle on.
-/// <see cref="ProtocolRevision"/> is the one in force, and the one to gate a feature on.
-/// </remarks>
 public sealed record ClickHouseTcpServerInfo
 {
     /// <summary>The server identifier, normally <c>"ClickHouse"</c>.</summary>

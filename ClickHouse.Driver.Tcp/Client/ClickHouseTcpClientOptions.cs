@@ -285,23 +285,9 @@ public sealed record ClickHouseTcpClientOptions
     public ClickHouseTcpPoolReusePolicy PoolReusePolicy { get; init; } = DefaultPoolReusePolicy;
 
     /// <summary>
-    /// The codec the client's <b>own</b> blocks are framed with — what an insert writes — or
-    /// <see langword="null"/> to exchange blocks uncompressed. Use <see cref="Lz4Compressor"/> (cheapest, lowest
-    /// server-side load) or <see cref="ZstdCompressor"/> (smaller, more CPU); a custom
-    /// <see cref="IClickHouseCompressor"/> works if it implements the native block path.
-    /// <para>
-    /// <b>It does not choose what the server sends.</b> The request carries a flag saying whether to compress and
-    /// nothing that names a codec, so the server frames its own blocks with its <c>network_compression_method</c>
-    /// setting (LZ4 by default) and the client decodes whatever each frame's method byte declares. Asking for
-    /// ZSTD and being sent LZ4 is normal. To change what a <em>result</em> is compressed with, set that setting —
-    /// per query through <see cref="ClickHouseTcpQueryOptions.Settings"/>, or client-wide through
-    /// <see cref="CustomSettings"/>.
-    /// </para>
-    /// <para>
-    /// Compression is requested per query, so this is the default for every query the client runs. Null means the
-    /// request asks for no compression at all in either direction, which is not the same as a frame whose method
-    /// byte is NONE.
-    /// </para>
+    /// The codec for blocks sent by this client, or null to disable compression in both directions. When enabled,
+    /// the server chooses the response codec through <c>network_compression_method</c>; set it in
+    /// <see cref="CustomSettings"/> or per query.
     /// </summary>
     public IClickHouseCompressor Compressor { get; init; } = ResolveCompressor(DefaultCompression);
 

@@ -10,18 +10,7 @@ using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
-/// <summary>
-/// A codec for a ClickHouse <c>Decimal(P, S)</c> column (and the <c>Decimal32/64/128/256</c> aliases). The value
-/// is a signed two's-complement integer mantissa of a precision-dependent backing width, read little-endian, and
-/// the logical value is <c>mantissa / 10^S</c>. Backing width follows the precision <c>P</c>: 1–9 → 4 bytes,
-/// 10–18 → 8 bytes, 19–38 → 16 bytes, 39–76 → 32 bytes.
-///
-/// <para>
-/// The 4- and 8-byte widths surface as <see cref="decimal"/>; the wider ones, which exceed the range of
-/// <see cref="decimal"/>, surface as <see cref="ClickHouseTcpDecimal"/>. The mantissa bytes are read in one bulk
-/// transfer, then converted to the CLR value.
-/// </para>
-/// </summary>
+/// <summary>Encodes and decodes ClickHouse fixed-width decimal mantissas.</summary>
 /// <typeparam name="TMantissa">The unmanaged backing integer (int, long, Int128, or Int256).</typeparam>
 /// <typeparam name="TValue">The CLR value type (decimal or ClickHouseTcpDecimal).</typeparam>
 internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec

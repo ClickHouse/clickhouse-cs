@@ -545,18 +545,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     public const int DefaultMaxRowsPerBlock = 50_000;
 
     /// <summary>
-    /// Runs an INSERT, streaming <paramref name="columns"/> as the row data and returning once the server
-    /// acknowledges it.
+    /// Inserts columns matched by name and encoded using the target schema. Splits rows by
+    /// <paramref name="maxRowsPerBlock"/> and returns after server acknowledgement.
     /// </summary>
-    /// <remarks>
-    /// Columns are matched to the target's schema <b>by name</b>: order is free, and naming a subset of the
-    /// table's columns in the statement (<c>INSERT INTO t (a, c) VALUES</c>) inserts only those, with the server
-    /// filling the rest from their defaults. Values are serialized as the target's resolved type, not the type
-    /// the column declares. Zero rows is a no-op INSERT. A mismatch (wrong names, or a CLR type the target
-    /// cannot accept) writes nothing and leaves the connection usable before throwing. Large inserts are split
-    /// into wire blocks of at most <paramref name="maxRowsPerBlock"/> rows each — row count is the only bound on
-    /// block geometry — or written as a single block when the cap is null.
-    /// </remarks>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="columns">The row data, matched to the target columns by name.</param>
     /// <param name="settings">Per-query settings as textual values, or null for none.</param>
