@@ -596,6 +596,16 @@ public sealed class InsertRoundTripCase
         yield return Maps<string, int[]>("String", "Array(Int32)", Pairs<string, int[]>(("a", new[] { 1, 2, 3 }), ("b", Array.Empty<int>())), Pairs<string, int[]>(("c", new[] { -1 })));
         yield return Maps<string, (int, string)>("String", "Tuple(Int32, String)", Pairs<string, (int, string)>(("a", (1, "x")), ("b", (-5, string.Empty))), Array.Empty<KeyValuePair<string, (int, string)>>());
 
+        // A value that carries its own state prefix: the map has to emit LowCardinality's dictionary prefix for the
+        // value stream, which none of the value composites above have (Nullable, Array and Tuple of leaves emit no
+        // prefix of their own). Repeated values across rows exercise one dictionary spanning the whole value run.
+        yield return Maps<string, string>(
+            "String",
+            "LowCardinality(String)",
+            Pairs<string, string>(("a", "x"), ("b", "y")),
+            Array.Empty<KeyValuePair<string, string>>(),
+            Pairs<string, string>(("c", "x"), ("d", string.Empty)));
+
         // Both key and value fixed-width: the cases above pair a variable key with a fixed value or the reverse,
         // never both fixed.
         yield return Maps<byte, byte>("UInt8", "UInt8", Pairs<byte, byte>((1, 10), (2, 20)), Array.Empty<KeyValuePair<byte, byte>>(), Pairs<byte, byte>((3, 30)));
@@ -783,6 +793,102 @@ public sealed class InsertRoundTripCase
                     ownsFields: false);
             },
             NestedSettings);
+
+        // LowCardinality(T): the inner values are replaced by a block-local dictionary plus per-row keys. Values
+        // repeat (and include the inner default) so the dedup and the reserved slot-0 default are both exercised.
+        // Like Array/Tuple/Map/Nested, LowCardinality is an exception to the "wrap every type in Nullable" rule —
+        // the server rejects Nullable(LowCardinality(T)); nullability composes the other way as
+        // LowCardinality(Nullable(T)), covered by its own cases further below. A numeric inner is
+        // "suspicious" and needs allow_suspicious_low_cardinality_types; String/FixedString are allowed by default.
+        yield return Same(
+            "LowCardinality(String)",
+            "LowCardinality(String)",
+            name => new ArrayColumn<string>(name, "LowCardinality(String)", new[] { "a", "b", "a", "c", "b", string.Empty }));
+
+        yield return Same(
+            "LowCardinality(UInt32)",
+            "LowCardinality(UInt32)",
+            name => PrimitiveColumn<uint>.FromValues(name, "LowCardinality(UInt32)", new uint[] { 7, 7, 42, 7, 42, 0 }),
+            LowCardinalitySettings);
+
+        yield return Same(
+            "LowCardinality(FixedString(4))",
+            "LowCardinality(FixedString(4))",
+            name => new ArrayColumn<byte[]>(name, "LowCardinality(FixedString(4))", new[]
+            {
+                new byte[] { 1, 2, 3, 4 },
+                new byte[] { 1, 2, 3, 4 },
+                new byte[] { 0xFF, 0, 0xFF, 0 },
+            }));
+
+        // A DateTime inner is the first low-cardinality case whose inner type is *parameterized*: its codec is
+        // built from the type node plus the resolve context (the session timezone), so this is what proves
+        // LowCardinality forwards that context to the inner factory rather than resolving the inner in isolation.
+        // It also puts a different column class under the dictionary — DateTimeColumn casts a byte buffer, where
+        // every inner above is a primitive or object array — since the dictionary is read as a normal inner column.
+        // Values are the raw epoch seconds the column surfaces (see the plain DateTime cases): at this point the
+        // shape is keyed on the inner codec's canonical ElementType, so the write source is IColumn<uint>, not the
+        // DateTime/DateTimeOffset convenience types the bare DateTime codec also accepts. The epoch (0) rides along
+        // as the inner default, so slot-0 folding is exercised on a type whose CLR default is *not* its wire zero.
+        yield return Same(
+            "LowCardinality(DateTime)",
+            "LowCardinality(DateTime)",
+            name => new ArrayColumn<uint>(name, "LowCardinality(DateTime)", new uint[] { 1_700_000_000, 1_700_000_000, 599_916_153, 0, 1_700_000_000, 599_916_153 }),
+            LowCardinalitySettings);
+
+        // Array(LowCardinality(String)) flattens its jagged rows into one values stream handed to the
+        // low-cardinality codec; empty rows and repeated values ride along.
+        yield return Arrays("LowCardinality(String)", new[] { "a", "b" }, Array.Empty<string>(), new[] { "a", "a", "c" });
+
+        // A dictionary past 255 entries forces the client to widen the key stream from UInt8 to UInt16
+        // (SelectKeyWidthCode switches on dictSize < byte.MaxValue). Unit tests assert the client picks that
+        // width; no case had more than three distinct values, so nothing proved the server accepts a
+        // client-written wide key stream.
+        yield return Same(
+            "LowCardinality(String) [wide keys]",
+            "LowCardinality(String)",
+            name => new ArrayColumn<string>(name, "LowCardinality(String)", Enumerable.Range(0, 300).Select(i => $"v{i}").ToArray()));
+
+        // Array(LowCardinality(Nullable(String))) puts the reserved key-0-is-NULL dictionary underneath the array
+        // offsets — exactly where a reserved-slot off-by-one would surface. Neither half-case reaches it.
+        yield return Arrays("LowCardinality(Nullable(String))", new[] { "a", null }, Array.Empty<string>(), new[] { "a", null, "c" });
+
+        // LowCardinality(Nullable(T)): nullability is expressed by a reserved dictionary slot (key 0 = NULL), not a
+        // null-map — the dictionary is still bare T. This is the nullable coverage for LowCardinality (the server
+        // rejects Nullable(LowCardinality(T))). A present value equal to the inner default (empty string, 0) rides
+        // alongside NULL to prove the two are distinct on the wire.
+        yield return Same(
+            "LowCardinality(Nullable(String))",
+            "LowCardinality(Nullable(String))",
+            name => new ArrayColumn<string>(name, "LowCardinality(Nullable(String))", new[] { "a", null, string.Empty, "b", "a", null }));
+
+        yield return Same(
+            "LowCardinality(Nullable(UInt32))",
+            "LowCardinality(Nullable(UInt32))",
+            name => new ArrayColumn<uint?>(name, "LowCardinality(Nullable(UInt32))", new uint?[] { 7, null, 0, 7, 42, null }),
+            LowCardinalitySettings);
+
+        yield return Same(
+            "LowCardinality(Nullable(FixedString(4)))",
+            "LowCardinality(Nullable(FixedString(4)))",
+            name => new ArrayColumn<byte[]>(name, "LowCardinality(Nullable(FixedString(4)))", new[]
+            {
+                new byte[] { 1, 2, 3, 4 },
+                null,
+                new byte[] { 1, 2, 3, 4 },
+                new byte[] { 0xFF, 0, 0xFF, 0 },
+            }));
+
+        // The nullable counterpart of the DateTime case above, and the one that actually needs the codec's
+        // NullPlaceholderAs override: the reserved default in slot 1 is asked for as the shape's element type
+        // (uint), and DateTime answers with its wire zero — the epoch — where the CLR default would be
+        // DateTime.MinValue, which the type cannot even represent. The epoch is *also* present as a real value
+        // (row 2) next to NULLs, so the reserved NULL slot and the reserved default slot must stay distinct.
+        yield return Same(
+            "LowCardinality(Nullable(DateTime))",
+            "LowCardinality(Nullable(DateTime))",
+            name => new ArrayColumn<uint?>(name, "LowCardinality(Nullable(DateTime))", new uint?[] { 1_700_000_000, null, 0, 1_700_000_000, 599_916_153, null }),
+            LowCardinalitySettings);
     }
 
     // Map(K, V) inserts and reads back the ergonomic jagged column of KeyValuePair arrays, which doubles as expected.
@@ -973,5 +1079,11 @@ public sealed class InsertRoundTripCase
     private static readonly IReadOnlyDictionary<string, string> NestedSettings = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["flatten_nested"] = "0",
+    };
+
+    /// <summary>Allows a <c>LowCardinality</c> over a numeric inner, which the server otherwise rejects as suspicious.</summary>
+    private static readonly IReadOnlyDictionary<string, string> LowCardinalitySettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["allow_suspicious_low_cardinality_types"] = "1",
     };
 }
