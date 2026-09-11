@@ -10,6 +10,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // are part of the server's compatibility surface, so a change here is a server change worth noticing.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpExceptionIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;

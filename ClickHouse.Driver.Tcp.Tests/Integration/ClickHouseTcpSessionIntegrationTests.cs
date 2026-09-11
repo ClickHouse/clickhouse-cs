@@ -12,6 +12,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // Uses connection-scoped temporary tables to verify session persistence, isolation, and disposal on a real server.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpSessionIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;

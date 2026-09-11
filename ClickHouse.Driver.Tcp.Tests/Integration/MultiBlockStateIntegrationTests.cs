@@ -25,6 +25,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class MultiBlockStateIntegrationTests
 {
     private const int Rows = 9;

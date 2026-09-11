@@ -14,6 +14,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // which confirms that the server processed the Cancel packet.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpCancellationIntegrationTests
 {
     private const int QueryWasCancelledByClient = 735;
