@@ -15,6 +15,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// Inserts into a <c>Null</c>-engine table to isolate client serialization; the interesting
 /// columns are Allocated and Mean.
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class WideIntegerInsert
