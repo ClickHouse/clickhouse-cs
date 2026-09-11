@@ -67,9 +67,9 @@ public class ClickHouseTcpExceptionIntegrationTests
     }
 
     // A column type the client cannot resolve arrives as a type name in the block header, so the refusal is a
-    // disagreement with the server and belongs under the same base as the rest. AggregateFunction is the one
-    // type a real server produces that the client deliberately declines, so it is the only way to reach this
-    // path without hand-building a block.
+    // disagreement with the server and belongs under the same base as the rest. AggregateFunction is one of the
+    // two types a real server produces that the client deliberately declines — the other is a wide Tuple, below
+    // — so between them this path is reachable without hand-building a block.
     [Test]
     public async Task QueryAsync_ColumnTypeTheClientCannotRead_ReportsAProtocolFailureKeepingTheHint()
     {
@@ -84,6 +84,29 @@ public class ClickHouseTcpExceptionIntegrationTests
             Assert.That(thrown.Message, Does.Contain("'s'"), "the failing column is named.");
             Assert.That(thrown.Message, Does.Contain("sumMerge(column)"), "the actionable hint survives the wrapping.");
             Assert.That(thrown.InnerException, Is.InstanceOf<NotSupportedException>());
+        });
+    }
+
+    // The typed TupleColumn shapes stop at seven elements, and a server will happily send more — a wide table
+    // selected as a tuple, or any tuple() of eight. Read on a pool of one, so the follow-up query is also the
+    // proof that declining a column type costs neither the connection nor its permit.
+    [Test]
+    public async Task QueryAsync_TupleWiderThanTheClientReads_ReportsAProtocolFailureAndKeepsThePoolUsable()
+    {
+        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { MaxPoolSize = 1 });
+
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpProtocolException>(
+            async () => await client.QueryAsync("SELECT tuple(1, 2, 3, 4, 5, 6, 7, 8) AS t").ToListAsync());
+
+        object next = await client.ExecuteScalarAsync("SELECT toUInt64(7)", cancellationToken: None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.InstanceOf<ClickHouseTcpException>());
+            Assert.That(thrown.Message, Does.Contain("'t'"), "the failing column is named.");
+            Assert.That(thrown.Message, Does.Contain("at most 7"), "and the limit, so a caller knows what it has to change.");
+            Assert.That(thrown.InnerException, Is.InstanceOf<NotSupportedException>());
+            Assert.That(next, Is.EqualTo(7UL), "the only pool slot came back.");
         });
     }
 

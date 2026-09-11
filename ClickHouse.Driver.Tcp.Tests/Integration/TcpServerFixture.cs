@@ -50,6 +50,11 @@ public sealed class TcpServerFixture
         container = new ClickHouseBuilder($"clickhouse/clickhouse-server:{tag}")
             .WithUsername(Username)
             .WithPassword(Password)
+
+            // The image gives the user it creates no access management, so CREATE USER and GRANT are refused.
+            // A fixture that cannot make a second user can only ever test what a superuser sees, and
+            // ReadonlyUserIntegrationTests needs a user that is not this one.
+            .WithEnvironment("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1")
             .Build();
 
         await container.StartAsync();

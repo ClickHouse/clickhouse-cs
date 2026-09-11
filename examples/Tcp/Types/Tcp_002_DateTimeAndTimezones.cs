@@ -29,7 +29,8 @@ public static class TcpDateTimeAndTimezones
                     captured_at DateTime('Europe/Amsterdam'),
                     precise_at DateTime64(3, 'UTC'),
                     elapsed Time,
-                    precise_elapsed Time64(3)
+                    precise_elapsed Time64(3),
+                    opens_at Time
                 )
                 ENGINE = MergeTree
                 ORDER BY day
@@ -39,7 +40,7 @@ public static class TcpDateTimeAndTimezones
             var instant = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc);
             await client.InsertAsync(
                 $"INSERT INTO {TableName} " +
-                "(day, old_day, captured_at, precise_at, elapsed, precise_elapsed) VALUES",
+                "(day, old_day, captured_at, precise_at, elapsed, precise_elapsed, opens_at) VALUES",
                 new IColumn[]
                 {
                     ClickHouseTcpColumn.Create("day", new[] { new DateOnly(2026, 6, 1) }),
@@ -49,11 +50,15 @@ public static class TcpDateTimeAndTimezones
                         "precise_at",
                         new[] { instant.AddMilliseconds(123) }),
 
-                    // Time and Time64 surface as TimeSpan, including values longer than one day.
+                    // Time and Time64 hold a signed duration of up to 999 hours, so TimeSpan is the reading that
+                    // covers the whole range.
                     ClickHouseTcpColumn.Create("elapsed", new[] { TimeSpan.FromHours(27) }),
                     ClickHouseTcpColumn.Create(
                         "precise_elapsed",
                         new[] { TimeSpan.FromMilliseconds(1234) }),
+
+                    // A TimeOnly is accepted too, for a column that holds a time of day rather than a duration.
+                    ClickHouseTcpColumn.Create("opens_at", new[] { new TimeOnly(9, 30) }),
                 });
 
             await foreach (Block block in client.StreamAsync($"SELECT * FROM {TableName}"))
@@ -66,6 +71,11 @@ public static class TcpDateTimeAndTimezones
                 PrintTimestamp((IDateTimeColumn)block["precise_at"]);
                 PrintTime((ITimeColumn)block["elapsed"]);
                 PrintTime((ITimeColumn)block["precise_elapsed"]);
+
+                // Reading back as a TimeOnly is a narrowing: a value outside 00:00:00-23:59:59.9999999 is not a
+                // time of day, and such a row is refused rather than reduced modulo a day. Read it as a TimeSpan
+                // when the column can hold a duration.
+                Console.WriteLine($"opens_at as TimeOnly: {block.ReadAs<TimeOnly>("opens_at")[0]:HH:mm}");
 
                 // ReadAs converts a whole column to a reading its type offers, applying the same zone and scale.
                 IColumn<DateTimeOffset> captured = block.ReadAs<DateTimeOffset>("captured_at");

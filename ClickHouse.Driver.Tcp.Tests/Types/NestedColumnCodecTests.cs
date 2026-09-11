@@ -228,6 +228,28 @@ public class NestedColumnCodecTests
     public void Resolve_Nested_StampsFullTypeNameWithFieldNames()
         => Assert.That(Resolve("Nested(a UInt8, b String)").TypeName, Is.EqualTo("Nested(a UInt8, b String)"));
 
+    [Test]
+    public async Task ReadColumn_BacktickedFieldName_DecodesTheNameAndKeepsTheTypeName()
+    {
+        // A field name needing quotes arrives backticked in the header, so the split has to happen at the closing
+        // backtick. The name is decoded for the caller; the type name keeps the wire spelling.
+        const string type = "Nested(`a b` UInt8, `c,d` String)";
+        IColumnCodec codec = Resolve(type);
+        NestedColumn column = Nested(
+            type,
+            new[] { "a b", "c,d" },
+            new[] { Field<byte>("UInt8", 1, 2), Field<string>("String", "x", "y") },
+            new[] { 0, 1, 2 });
+
+        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, type, column.RowCount);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.TypeName, Is.EqualTo(type));
+            Assert.That(((NestedColumn)read).FieldNames, Is.EqualTo(new[] { "a b", "c,d" }));
+        });
+    }
+
     [TestCase("Nested")]  // no parens: zero fields reaches the codec's own guard
     [TestCase("Nested()")] // empty parens: rejected by the parser before the codec
     public void Resolve_NoFields_ThrowsFormat(string type)

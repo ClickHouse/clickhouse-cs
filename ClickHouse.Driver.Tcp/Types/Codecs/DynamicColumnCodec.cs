@@ -149,8 +149,9 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     {
         if (rowCount == 0)
         {
-            // A zero-row block carries neither the version/type-list prefix (the block layer skips the prefix for
-            // zero rows) nor any body; surface an empty column with no runtime types.
+            // A zero-row Dynamic puts no discriminators and no runtime-type runs on the wire, so there is nothing
+            // to read here. Its prefix was either skipped with the rest of a zero-row block, or already read by
+            // an enclosing container whose every row is empty. Surface an empty column with no runtime types.
             return new DynamicColumn(columnName, columnType, Array.Empty<string>(), Array.Empty<int>(), Array.Empty<IColumn>(), 0, pooledDiscriminators: false, ownsColumns: true);
         }
 

@@ -11,6 +11,13 @@ public interface IDateTimeColumn : IColumn
     /// <summary>
     /// The type's timezone, or the query's session timezone followed by the handshake timezone when unspecified.
     /// </summary>
+    /// <remarks>
+    /// ClickHouse accepts fixed offsets .NET cannot represent — <c>Fixed/UTC+19:00:00</c> is past
+    /// <see cref="TimeZoneInfo"/>'s ±14 hours, and <c>Fixed/UTC+05:30:15</c> is not a whole number of minutes.
+    /// The counts such a column carries still read through the <see cref="IColumn{T}"/> view; only this property
+    /// and the instants below need the zone, so only they report it.
+    /// </remarks>
+    /// <exception cref="FormatException">The column's timezone cannot be represented on this platform.</exception>
     TimeZoneInfo TimeZone { get; }
 
     /// <summary>
