@@ -29,6 +29,7 @@ namespace ClickHouse.Driver.Benchmark;
 ///   punished hardest.</item>
 /// </list>
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class AdoReadPathBenchmark
