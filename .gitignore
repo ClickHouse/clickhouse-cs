@@ -343,3 +343,6 @@ ASALocalRun/
 
 # Local History for Visual Studio
 .localhistory/
+
+# Codex review context, written by .github/workflows/codex-review.yml
+.codex-review/
