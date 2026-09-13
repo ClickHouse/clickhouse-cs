@@ -21,6 +21,39 @@ public class DataReaderTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task IsClosed_AfterClose_ReturnsTrue()
+    {
+        using var reader = await connection.ExecuteReaderAsync("SELECT 1 as value");
+        Assert.That(reader.IsClosed, Is.False);
+
+        reader.Close();
+
+        Assert.That(reader.IsClosed, Is.True);
+    }
+
+    [Test]
+    public async Task IsClosed_AfterDispose_ReturnsTrue()
+    {
+        using var reader = await connection.ExecuteReaderAsync("SELECT 1 as value");
+        Assert.That(reader.IsClosed, Is.False);
+
+        reader.Dispose();
+
+        Assert.That(reader.IsClosed, Is.True);
+    }
+
+    [Test]
+    public async Task IsClosed_AfterDisposeAsync_ReturnsTrue()
+    {
+        await using var reader = await connection.ExecuteReaderAsync("SELECT 1 as value");
+        Assert.That(reader.IsClosed, Is.False);
+
+        await reader.DisposeAsync();
+
+        Assert.That(reader.IsClosed, Is.True);
+    }
+
+    [Test]
     public async Task ShouldReadFieldByName()
     {
         using var reader = await connection.ExecuteReaderAsync("SELECT 1 as value");
