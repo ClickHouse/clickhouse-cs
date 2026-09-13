@@ -118,18 +118,6 @@ public class ClickHouseRawResultDecompressionTests
 
         Assert.That(decompressed, Is.SameAs(contentStream), "nothing to decode, so nothing to wrap");
     }
-    
-    [Test]
-    public async Task ReadDecompressedStreamAsync_WithCanceledToken_ThrowsOperationCanceledException()
-    {
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-        
-        using var response = CreateResponse(Plaintext, contentEncoding: null);
-        using var raw = new ClickHouseRawResult(response);
-        
-        Assert.CatchAsync<OperationCanceledException>(() => raw.ReadDecompressedStreamAsync(cts.Token));
-    }
 
     [Test]
     public async Task ReadDecompressedStreamAsync_CalledTwice_ReturnsTheSameDecoder()

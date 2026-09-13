@@ -103,7 +103,7 @@ public class RawResultReaderAsyncTests : AbstractConnectionTestFixture
     }
 
     [Test]
-    public async Task ReadAsStringAsync_WithoutCancellationToken_ReturnsStrung()
+    public async Task ReadAsStringAsync_WithoutCancellationToken_ReturnsString()
     {
         using var result = await ExecuteRawResultAsync();
         var @string = await result.ReadAsStringAsync();
@@ -111,7 +111,7 @@ public class RawResultReaderAsyncTests : AbstractConnectionTestFixture
     }
     
     [Test]
-    public async Task ReadAsStringAsync_WithCancellationToken_ReturnsStrung()
+    public async Task ReadAsStringAsync_WithCancellationToken_ReturnsString()
     {
         using var cts = new CancellationTokenSource();
         using var result = await ExecuteRawResultAsync();
