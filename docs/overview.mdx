@@ -1907,11 +1907,11 @@ When inserting data, the driver converts .NET types to their corresponding Click
 
 | ClickHouse Type | Accepted .NET Types | Notes |
 |-----------------|---------------------|-------|
-| Date | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Converted to Unix days as UInt16; supported range `[1970-01-01, 2149-06-06]` |
-| Date32 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Converted to Unix days as Int32; supported range `[1900-01-01, 2299-12-31]` |
-| DateTime | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | See below for details; supported range `[1970-01-01, 2106-02-07 06:28:15]` UTC |
-| DateTime32 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Same as DateTime |
-| DateTime64 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Precision based on Scale parameter |
+| Date | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | Converted to Unix days as UInt16; supported range `[1970-01-01, 2149-06-06]` |
+| Date32 | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | Converted to Unix days as Int32; supported range `[1900-01-01, 2299-12-31]` |
+| DateTime | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | See below for details; supported range `[1970-01-01, 2106-02-07 06:28:15]` UTC |
+| DateTime32 | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | Same as DateTime |
+| DateTime64 | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | Precision based on Scale parameter |
 | Time | `TimeSpan`, `TimeOnly`, `int` | Clamped to ±999:59:59; int treated as seconds |
 | Time64 | `TimeSpan`, `TimeOnly`, `decimal`, `double`, `float`, `int`, `long`, `string` | String parsed as `[-]HHH:MM:SS[.fraction]`; clamped to ±999:59:59.999999999 |
 
@@ -1930,6 +1930,12 @@ The driver respects `DateTime.Kind` when writing values:
   | Unspecified   | Treated as wall-clock in parameter type's timezone (defaults to UTC) | Treated as wall-clock in column's timezone |
 
 `DateTimeOffset` values always preserve the exact instant.
+
+A `string` value is parsed culture-invariantly. A string with an offset or `Z` (`2024-01-15T14:30:00+01:00`)
+preserves the instant; a string without one (`2024-01-15 14:30:00`) is wall-clock time, treated like an
+`Unspecified` `DateTime`. As for a `DateTime` value, sub-second precision beyond 7 fractional digits
+(100 ns) is truncated, so a `DateTime64(8)` or `DateTime64(9)` column needs a `DateTimeOffset` or a
+NodaTime value to keep its last digits. An unparseable string throws `FormatException`.
 
 **Example: UTC DateTime (instant preserved)**
 ```csharp
