@@ -1933,9 +1933,11 @@ The driver respects `DateTime.Kind` when writing values:
 
 A `string` value is parsed culture-invariantly. A string with an offset or `Z` (`2024-01-15T14:30:00+01:00`)
 preserves the instant; a string without one (`2024-01-15 14:30:00`) is wall-clock time, treated like an
-`Unspecified` `DateTime`. As for a `DateTime` value, sub-second precision beyond 7 fractional digits
-(100 ns) is truncated, so a `DateTime64(8)` or `DateTime64(9)` column needs a `DateTimeOffset` or a
-NodaTime value to keep its last digits. An unparseable string throws `FormatException`.
+`Unspecified` `DateTime`. Sub-second precision beyond 7 fractional digits (100 ns) is truncated. That
+limit is not specific to a string: the write path coerces every accepted .NET type (the NodaTime types
+included) to a `DateTimeOffset`, whose resolution is 100 ns, so a `DateTime64(8)` or `DateTime64(9)`
+column keeps at most 7 fractional digits whichever type you write. An unparseable string throws
+`FormatException`.
 
 **Example: UTC DateTime (instant preserved)**
 ```csharp
