@@ -83,6 +83,10 @@ internal static class HttpParameterFormatter
                 return QuoteIfNeeded(@dto.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
             case DateType dt when value is DateOnly @do:
                 return QuoteIfNeeded(@do.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
+            case DateType dt when value is string:
+                // Strings are coerced by the type itself, as on the binary write path. Convert.ToDateTime
+                // below would resolve an offset-bearing string against the machine timezone instead.
+                return QuoteIfNeeded(dt.CoerceToDateTimeOffset(value).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), quote);
             case DateType dt:
                 return QuoteIfNeeded(
                     Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
@@ -132,6 +136,10 @@ internal static class HttpParameterFormatter
                 // DateTimeOffset: convert to parameter timezone (or UTC if not specified) to preserve instant
                 return QuoteIfNeeded(FormatDateTimeInTargetTimezone(dto, dtt.TimeZoneOrUtc), quote);
 
+            case DateTimeType dtt when value is string:
+                // Strings are coerced by the type itself, as on the binary write path.
+                return QuoteIfNeeded(FormatDateTimeInTargetTimezone(dtt.CoerceToDateTimeOffset(value), dtt.TimeZoneOrUtc), quote);
+
             case DateTime64Type d64t when value is DateTime dtv:
                 // ClickHouse HTTP parameters expect DateTime64 as ISO-formatted strings.
                 // Unspecified: send as-is so ClickHouse interprets in parameter timezone
@@ -143,6 +151,10 @@ internal static class HttpParameterFormatter
             case DateTime64Type d64t when value is DateTimeOffset dto:
                 // DateTimeOffset: convert to parameter timezone (or UTC if not specified) to preserve instant
                 return QuoteIfNeeded(FormatDateTime64InTargetTimezone(dto, d64t.TimeZoneOrUtc), quote);
+
+            case DateTime64Type d64t when value is string:
+                // Strings are coerced by the type itself, as on the binary write path.
+                return QuoteIfNeeded(FormatDateTime64InTargetTimezone(d64t.CoerceToDateTimeOffset(value), d64t.TimeZoneOrUtc), quote);
 
             case TimeType tt when value is TimeSpan ts:
                 return TimeType.FormatTimeString(ts);
