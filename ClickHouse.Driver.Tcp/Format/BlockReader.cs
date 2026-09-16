@@ -54,9 +54,13 @@ internal static class BlockReader
                 IColumnCodec codec = registry.Resolve(columnType, in context);
 
                 // A zero-row block (a schema header, or an end-of-input marker) carries no state prefix and no body.
-                // TODO: this holds for every type with default serialization, but dictionary-bearing types
-                // (e.g. LowCardinality) write a serialization-state prefix even when empty. When such types are
-                // added, the reader and writer must emit their prefix regardless of row count or the stream desyncs.
+                // This holds for dictionary-bearing types too, which is not obvious: a serialization-state prefix is
+                // per-column state rather than per-row data, so a zero-row LowCardinality column could plausibly
+                // still owe its version marker. It does not, because ClickHouse writes that prefix from inside
+                // NativeWriter's writeData — which it calls only `if (rows)` — and NativeReader skips readData for a
+                // zero-row block symmetrically. BlockWriter gates both phases the same way, so the two halves agree.
+                // BlockWriterTests pins the byte layout and ClickHouseTcpConnectionQueryIntegrationTests pins the
+                // server's half; reading a prefix here that was never written desyncs every column after it.
                 if (rowCount != 0)
                 {
                     await codec.ReadStatePrefixAsync(reader, cancellationToken).ConfigureAwait(false);
