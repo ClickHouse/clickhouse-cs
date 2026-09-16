@@ -28,6 +28,20 @@ internal static class BlockWriter
     public static void WriteEmptyBlock(ClickHouseBinaryWriter writer)
     {
         writer.WriteString(string.Empty);
+        WriteEmptyBlockBody(writer);
+    }
+
+    /// <summary>
+    /// Writes the empty end-of-input block without its name, which the caller has already written.
+    /// <para>
+    /// The split exists because the name belongs to the packet envelope rather than to the block: with
+    /// compression on the name is written raw and the body is framed, so the caller writes the name to the
+    /// raw writer and passes a plaintext writer here.
+    /// </para>
+    /// </summary>
+    /// <param name="writer">The writer to encode the body into, plaintext if the body is framed.</param>
+    public static void WriteEmptyBlockBody(ClickHouseBinaryWriter writer)
+    {
         WriteBlockInfo(writer, BlockInfo.Default);
         writer.WriteVarUInt(0); // num_columns
         writer.WriteVarUInt(0); // num_rows
@@ -98,18 +112,46 @@ internal static class BlockWriter
         int flushThresholdBytes,
         CancellationToken cancellationToken)
     {
-        // The requested range must lie within every column, or the body would run past the values. Catch it first.
-        foreach (InsertColumn column in columns)
-        {
-            if (start < 0 || rowCount < 0 || start + (long)rowCount > column.Values.RowCount)
-            {
-                throw new ArgumentException(
-                    $"Column '{column.Name}' cannot supply rows [{start}, {start + (long)rowCount}) of its {column.Values.RowCount} row(s).",
-                    nameof(columns));
-            }
-        }
+        EnsureRangeWithinColumns(columns, start, rowCount);
 
         writer.WriteString(string.Empty); // table_name: empty for the INSERT row stream
+        await WriteDataBlockBodyCoreAsync(writer, negotiated, columns, start, rowCount, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes a populated block's body without its name, which the caller has already written. See
+    /// <see cref="WriteEmptyBlockBody"/> for why the name is written separately.
+    /// </summary>
+    /// <param name="writer">The writer to encode the body into, plaintext if the body is framed.</param>
+    /// <param name="negotiated">The negotiated protocol, gating the <c>has_custom_serialization</c> byte.</param>
+    /// <param name="columns">The columns to write, in header order.</param>
+    /// <param name="start">The zero-based first row of the range each column contributes.</param>
+    /// <param name="rowCount">The number of rows the block holds.</param>
+    /// <param name="flushThresholdBytes">The buffered-byte cap that triggers a between-column flush.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    public static async ValueTask WriteDataBlockBodyAsync(
+        ClickHouseBinaryWriter writer,
+        NegotiatedProtocol negotiated,
+        IReadOnlyList<InsertColumn> columns,
+        int start,
+        int rowCount,
+        int flushThresholdBytes,
+        CancellationToken cancellationToken)
+    {
+        EnsureRangeWithinColumns(columns, start, rowCount);
+        await WriteDataBlockBodyCoreAsync(writer, negotiated, columns, start, rowCount, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Writes the block info, the counts and every column. The row range is already validated.</summary>
+    private static async ValueTask WriteDataBlockBodyCoreAsync(
+        ClickHouseBinaryWriter writer,
+        NegotiatedProtocol negotiated,
+        IReadOnlyList<InsertColumn> columns,
+        int start,
+        int rowCount,
+        int flushThresholdBytes,
+        CancellationToken cancellationToken)
+    {
         WriteBlockInfo(writer, BlockInfo.Default);
         writer.WriteVarUInt((ulong)columns.Count); // num_columns
         writer.WriteVarUInt((ulong)rowCount);       // num_rows
@@ -146,6 +188,27 @@ internal static class BlockWriter
             if (writer.BufferedBytes >= flushThresholdBytes)
             {
                 await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks that the requested row range lies within every column, before anything is written: a range past
+    /// the values would run the body off the end of a column.
+    /// </summary>
+    /// <param name="columns">The columns the block will draw from.</param>
+    /// <param name="start">The zero-based first row of the range.</param>
+    /// <param name="rowCount">The number of rows requested.</param>
+    /// <exception cref="ArgumentException">A column cannot supply the requested range.</exception>
+    private static void EnsureRangeWithinColumns(IReadOnlyList<InsertColumn> columns, int start, int rowCount)
+    {
+        foreach (InsertColumn column in columns)
+        {
+            if (start < 0 || rowCount < 0 || start + (long)rowCount > column.Values.RowCount)
+            {
+                throw new ArgumentException(
+                    $"Column '{column.Name}' cannot supply rows [{start}, {start + (long)rowCount}) of its {column.Values.RowCount} row(s).",
+                    nameof(columns));
             }
         }
     }
