@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
 using ClickHouse.Driver.Tcp.Types.Codecs;
@@ -17,6 +18,11 @@ internal static class ColumnValueProjections
     private const int DotNetTickScale = 7;
 
     private static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
+
+    /// <summary>The exclusive upper bound of a time of day.</summary>
+    private static readonly TimeSpan OneDay = TimeSpan.FromDays(1);
+
+    private const long SecondsPerDay = 24 * 60 * 60;
 
     /// <summary>
     /// Presents an instant as a <see cref="DateTime"/>: a zero offset yields <see cref="DateTimeKind.Utc"/>, any
@@ -41,14 +47,21 @@ internal static class ColumnValueProjections
     /// <param name="seconds">The raw epoch-second count.</param>
     /// <param name="timeZone">The column's timezone.</param>
     /// <returns>The instant, presented in <paramref name="timeZone"/>.</returns>
-    public static DateTimeOffset DateTimeToOffset(uint seconds, TimeZoneInfo timeZone)
-        => TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(seconds), timeZone);
+    /// <exception cref="FormatException">The column's timezone is one this platform cannot represent.</exception>
+    /// <remarks>
+    /// Takes the resolved zone, not the zone: a codec embeds this call in an expression tree before any row
+    /// exists, and asking for the zone there would refuse the reading rather than the value. The dereference
+    /// costs a null check against a timezone conversion.
+    /// </remarks>
+    public static DateTimeOffset DateTimeToOffset(uint seconds, ResolvedTimeZone timeZone)
+        => TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(seconds), timeZone.Value);
 
     /// <summary><see cref="DateTimeToOffset"/> as a <see cref="DateTime"/>; see <see cref="PresentAsDateTime"/>.</summary>
     /// <param name="seconds">The raw epoch-second count.</param>
     /// <param name="timeZone">The column's timezone.</param>
     /// <returns>The instant as a <see cref="DateTime"/>.</returns>
-    public static DateTime DateTimeToDateTime(uint seconds, TimeZoneInfo timeZone)
+    /// <exception cref="FormatException">The column's timezone is one this platform cannot represent.</exception>
+    public static DateTime DateTimeToDateTime(uint seconds, ResolvedTimeZone timeZone)
         => PresentAsDateTime(DateTimeToOffset(seconds, timeZone));
 
     /// <summary>
@@ -60,20 +73,23 @@ internal static class ColumnValueProjections
     /// <param name="timeZone">The column's timezone.</param>
     /// <returns>The instant, presented in <paramref name="timeZone"/>.</returns>
     /// <exception cref="OverflowException">The count is decodable but outside <see cref="DateTimeOffset"/>'s range.</exception>
-    public static DateTimeOffset DateTime64ToOffset(long count, int scale, TimeZoneInfo timeZone)
+    public static DateTimeOffset DateTime64ToOffset(long count, int scale, ResolvedTimeZone timeZone)
     {
+        // Resolved once, outside the try, since the conversion below needs it either way.
+        TimeZoneInfo zone = timeZone.Value;
+
         // A count can be decodable yet outside DateTimeOffset's range. Point at the raw values rather than let a bare
         // arithmetic exception surface.
         try
         {
             long dotNetTicks = FixedPointScaling.ShiftDecimalPlaces(count, DotNetTickScale - scale);
             var utc = new DateTimeOffset(UnixEpochTicks + dotNetTicks, TimeSpan.Zero);
-            return TimeZoneInfo.ConvertTime(utc, timeZone);
+            return TimeZoneInfo.ConvertTime(utc, zone);
         }
         catch (Exception ex) when (ex is OverflowException or ArgumentOutOfRangeException)
         {
             throw new OverflowException(
-                $"A DateTime64 count of {count} at scale {scale} is outside the range presentable as a DateTimeOffset in timezone '{timeZone.Id}'; read the raw count via Values instead.",
+                $"A DateTime64 count of {count} at scale {scale} is outside the range presentable as a DateTimeOffset in timezone '{zone.Id}'; read the raw count via Values instead.",
                 ex);
         }
     }
@@ -84,7 +100,7 @@ internal static class ColumnValueProjections
     /// <param name="timeZone">The column's timezone.</param>
     /// <returns>The instant as a <see cref="DateTime"/>.</returns>
     /// <exception cref="OverflowException">The count is decodable but outside <see cref="DateTimeOffset"/>'s range.</exception>
-    public static DateTime DateTime64ToDateTime(long count, int scale, TimeZoneInfo timeZone)
+    public static DateTime DateTime64ToDateTime(long count, int scale, ResolvedTimeZone timeZone)
         => PresentAsDateTime(DateTime64ToOffset(count, scale, timeZone));
 
     /// <summary>Projects a <c>Time</c> column's raw second count to a <see cref="TimeSpan"/>. Exact — whole seconds.</summary>
@@ -101,6 +117,31 @@ internal static class ColumnValueProjections
     /// <returns>The duration.</returns>
     public static TimeSpan Time64ToTimeSpan(long count, int scale)
         => TimeSpan.FromTicks(FixedPointScaling.ShiftDecimalPlaces(count, DotNetTickScale - scale));
+
+    /// <summary>Projects a <c>Time</c> column's raw second count to a <see cref="TimeOnly"/>.</summary>
+    /// <param name="seconds">The raw signed second count.</param>
+    /// <returns>The time of day.</returns>
+    /// <exception cref="InvalidOperationException">The value is not a time of day.</exception>
+    public static TimeOnly TimeToTimeOnly(int seconds) => AsTimeOfDay(TimeToTimeSpan(seconds), "Time");
+
+    /// <summary>Projects a <c>Time64</c> count at <paramref name="scale"/> to a <see cref="TimeOnly"/>.</summary>
+    /// <param name="count">The raw signed count at <c>10^-<paramref name="scale"/></c> seconds.</param>
+    /// <param name="scale">The column's fractional-second scale (0–9).</param>
+    /// <returns>The time of day, with sub-100 ns digits truncated toward zero.</returns>
+    /// <exception cref="InvalidOperationException">The value is not a time of day.</exception>
+    public static TimeOnly Time64ToTimeOnly(long count, int scale)
+    {
+        // Checked on the raw count rather than on the TimeSpan: at scale 8 or 9 the shift to 100 ns ticks
+        // truncates toward zero, so a negative count finer than one tick reaches zero and passes a check made
+        // after it. -1 at scale 9 would read as midnight.
+        if (count < 0 || count >= SecondsPerDay * FixedPointScaling.Pow10(scale))
+        {
+            decimal seconds = (decimal)count / FixedPointScaling.Pow10(scale);
+            throw NotATimeOfDay("Time64", $"{seconds.ToString(CultureInfo.InvariantCulture)} s");
+        }
+
+        return TimeOnly.FromTimeSpan(Time64ToTimeSpan(count, scale));
+    }
 
     /// <summary>
     /// Confirms a codec was handed an expression of its canonical <see cref="IColumnCodec.ElementType"/>. Catches the
@@ -120,6 +161,22 @@ internal static class ColumnValueProjections
                 nameof(value));
         }
     }
+
+    // The narrowing a TimeOnly read is: a Time column holds a signed duration of up to 999 hours, and only the
+    // part of that range which is a time of day has a TimeOnly. Refused rather than wrapped, a duration reduced
+    // modulo a day being a different value.
+    private static TimeOnly AsTimeOfDay(TimeSpan value, string typeName)
+    {
+        if (value < TimeSpan.Zero || value >= OneDay)
+        {
+            throw NotATimeOfDay(typeName, value.ToString());
+        }
+
+        return TimeOnly.FromTimeSpan(value);
+    }
+
+    private static InvalidOperationException NotATimeOfDay(string typeName, string value)
+        => new($"A {typeName} column value of {value} is not a time of day, so it has no TimeOnly. Read the column as a TimeSpan.");
 
     /// <summary>
     /// Lifts an inner codec's projection over a source that can be absent: an absent row yields

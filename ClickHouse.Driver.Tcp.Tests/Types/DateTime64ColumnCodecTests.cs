@@ -74,6 +74,25 @@ public class DateTime64ColumnCodecTests
         Assert.ThrowsAsync<ArgumentException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
     }
 
+    [Test]
+    public void WriteColumn_DateTimeOffsetPastTheScalesRange_ThrowsNamingTheValueAndTheColumn()
+    {
+        // A fine scale reaches a nearer instant than .NET does: at scale 9 the Int64 nanosecond count stops at
+        // 2262-04-11, well inside DateTimeOffset's range, so a 2300 instant has to be refused. The message has to
+        // carry the value and the type, which is what an OverflowException out of the multiply does not.
+        const string type = "DateTime64(9)";
+        DateTime64ColumnCodec codec = Codec(type, "UTC");
+        var column = new ArrayColumn<DateTimeOffset>("c", type, new[] { new DateTimeOffset(2300, 1, 1, 0, 0, 0, TimeSpan.Zero) });
+
+        var thrown = Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain("2300-01-01"));
+            Assert.That(thrown.Message, Does.Contain(type));
+        });
+    }
+
     // Scale 8 sets one digit finer than a .NET tick, scale 9 two. The raw count keeps them; the DateTimeOffset
     // view truncates toward zero, it does not round.
     [TestCase("DateTime64(8)", 170_000_000_012_345_678L)]
@@ -212,6 +231,39 @@ public class DateTime64ColumnCodecTests
 
         long expectedMillis = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)).ToUnixTimeMilliseconds();
         Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(expectedMillis));
+    }
+
+    [Test]
+    public async Task ReadColumn_FixedUtcOffsetTimeZoneInfoCannotHold_ReadsTheCountsAndReportsOnlyTheZone()
+    {
+        // The counts are the wire value and need no zone, so a zone TimeZoneInfo cannot hold (26.6 applies
+        // Fixed/UTC+05:30:15, which is not a whole number of minutes) must not fail the read. DateTime64 carries
+        // its own zone field and projection, so it is not covered by the DateTime codec's case.
+        const string type = "DateTime64(3, 'Fixed/UTC+05:30:15')";
+        byte[] bytes = await WriteAsync(w => w.WriteInt64(1_700_000_000_123));
+        using var reader = ReaderOver(bytes);
+
+        using var column = (DateTime64Column)await Codec(type).ReadColumnAsync(reader, "c", type, 1, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column[0], Is.EqualTo(1_700_000_000_123L));
+            Assert.That(Assert.Throws<FormatException>(() => _ = column.TimeZone).Message, Does.Contain("+05:30:15"));
+            Assert.Throws<FormatException>(() => column.GetDateTimeOffset(0));
+        });
+    }
+
+    // The write side of the same rule. A Utc DateTime names an instant, so the zone the column declares is not
+    // needed and must not be resolved: this codec's own scaling is what has to run.
+    [Test]
+    public async Task WriteColumn_UtcDateTimeIntoAZoneTimeZoneInfoCannotHold_WritesTheInstant()
+    {
+        const string type = "DateTime64(3, 'Fixed/UTC+19:00:00')";
+        var value = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+
+        byte[] bytes = await WriteAsync(w => Codec(type).WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { value })));
+
+        Assert.That(BitConverter.ToInt64(bytes, 0), Is.EqualTo(1_705_314_600_000L));
     }
 
     // DateTime64 shares DateTimeColumnCodec.ToUtc; covered here too because a refactor could separate them.

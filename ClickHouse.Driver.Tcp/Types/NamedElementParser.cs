@@ -22,28 +22,53 @@ internal static class NamedElementParser
         var elements = new (string, TypeNode)[composite.Arguments.Count];
         for (int i = 0; i < composite.Arguments.Count; i++)
         {
-            TypeNode argument = composite.Arguments[i];
-            int space = IndexOfWhitespace(argument.Name);
-            if (space < 0)
-            {
-                elements[i] = (null, argument);
-            }
-            else
-            {
-                // Take the field name up to the first whitespace, then skip the whole whitespace run before the type
-                // so a hand-written type with extra spaces or a tab (e.g. "a  Int32") doesn't leave the base name
-                // with a leading space that would then fail codec resolution.
-                string fieldName = argument.Name.Substring(0, space);
-                string baseName = argument.Name.Substring(space).TrimStart();
-
-                // Carry the argument list forward rather than re-deriving it from the argument count, or a named
-                // element of the zero-element type (e.g. "y Tuple()") would come out as a bare, malformed Tuple.
-                elements[i] = (fieldName, new TypeNode(baseName, argument.Arguments, argument.HasArgumentList));
-            }
+            elements[i] = SplitElement(composite.Arguments[i]);
         }
 
         return elements;
     }
+
+    /// <summary>Separates one element's name from its type.</summary>
+    /// <param name="argument">The element's argument node.</param>
+    /// <returns>The pair; the name is null when the element is unnamed.</returns>
+    private static (string Name, TypeNode Type) SplitElement(TypeNode argument)
+    {
+        // A backtick-quoted name is opaque, so `a b` Int64 splits after the closing backtick and not inside the
+        // name. The name is decoded, because the server writes an identifier's escapes into the header it sends.
+        if (argument.Name.Length > 0 && argument.Name[0] == '`')
+        {
+            if (QuotedText.TryRead(argument.Name, 0, out string quoted, out int afterQuote)
+                && afterQuote < argument.Name.Length
+                && char.IsWhiteSpace(argument.Name[afterQuote]))
+            {
+                return (quoted, WithBaseName(argument, argument.Name.Substring(afterQuote).TrimStart()));
+            }
+
+            // A quoted run with no type after it names nothing this parser can use; leaving it whole lets the
+            // caller's own resolution report the element text it was given.
+            return (null, argument);
+        }
+
+        int space = IndexOfWhitespace(argument.Name);
+        if (space < 0)
+        {
+            return (null, argument);
+        }
+
+        // Take the field name up to the first whitespace, then skip the whole whitespace run before the type
+        // so a hand-written type with extra spaces or a tab (e.g. "a  Int32") doesn't leave the base name
+        // with a leading space that would then fail codec resolution.
+        return (argument.Name.Substring(0, space), WithBaseName(argument, argument.Name.Substring(space).TrimStart()));
+    }
+
+    /// <summary>Rebuilds an element's own type node from its base name, keeping the argument list.</summary>
+    /// <param name="argument">The element's argument node.</param>
+    /// <param name="baseName">The element's type name, with the element name removed.</param>
+    /// <returns>The element's type node.</returns>
+    // Carry the argument list forward rather than re-deriving it from the argument count, or a named element of
+    // the zero-element type (e.g. "y Tuple()") would come out as a bare, malformed Tuple.
+    private static TypeNode WithBaseName(TypeNode argument, string baseName)
+        => new(baseName, argument.Arguments, argument.HasArgumentList);
 
     private static int IndexOfWhitespace(string value)
     {
