@@ -45,7 +45,7 @@ public sealed class Block : IDisposable
     internal BlockInfo Info { get; }
 
     /// <summary>
-    /// The registry used to resolve this block's codecs, retained for POCO read projections.
+    /// The registry used to resolve this block's codecs, retained for projections and INSERT sample-block planning.
     /// </summary>
     internal ColumnCodecRegistry Codecs { get; }
 
