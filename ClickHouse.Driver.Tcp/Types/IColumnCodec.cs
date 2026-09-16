@@ -86,10 +86,16 @@ internal interface IColumnCodec
 
     /// <summary>
     /// A value of <see cref="ElementType"/> to encode where a row has no value of its own — the placeholder
-    /// written at the null positions of a <c>Nullable(T)</c> column's values stream. The server ignores those
-    /// bytes, but the codec must still be handed a value it accepts, so this is the type's canonical zero/epoch
-    /// (e.g. <c>0</c>, <c>1970-01-01</c>, <c>0.0.0.0</c>, the empty string) rather than the CLR default, which a
-    /// range-checked type would reject. A codec whose values cannot be written throws when this is read.
+    /// written at the null positions of a <c>Nullable(T)</c> column's values stream. The codec must be handed a
+    /// value it accepts, so this is the type's canonical zero/epoch (e.g. <c>0</c>, <c>1970-01-01</c>,
+    /// <c>0.0.0.0</c>, the empty string) rather than the CLR default, which a range-checked type would reject.
+    /// A codec whose values cannot be written throws when this is read.
+    ///
+    /// <para>
+    /// The server discards these bytes for most types, but not for one whose values it <em>parses</em> rather than
+    /// copies: a <c>Nullable(JSON)</c> values stream is parsed at every position, so an unparseable placeholder is
+    /// rejected outright. The placeholder must therefore be valid input for the type, not merely well-formed bytes.
+    /// </para>
     /// </summary>
     object NullPlaceholder { get; }
 
