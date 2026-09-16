@@ -15,6 +15,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // connection unusable would show.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpCallbackIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;

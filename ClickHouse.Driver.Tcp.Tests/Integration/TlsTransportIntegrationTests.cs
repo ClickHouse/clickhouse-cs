@@ -12,12 +12,18 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// The native protocol inside a TLS tunnel, against the suite's own server. <c>TcpConnectionFactoryTests</c>
 /// covers the handshake and every certificate-validation outcome, but against a listener that answers with a
 /// canned Hello and nothing else, so no test in the default suite has ever run a query, a block or an insert
-/// through an <c>SslStream</c>. The <c>Cloud/</c> fixture does, and is skipped unless a service is configured.
+/// through an <c>SslStream</c>. The Cloud job runs the whole <c>Cloud</c> category over one, but only where a
+/// service is configured, so this is what covers it on the standard matrix.
 ///
 /// <para>
 /// <see cref="TlsTerminatingProxy"/> supplies the tunnel, so what is under test is the client's side of it: a
 /// real handshake, then results large enough to span many TLS records, an insert, and a pooled connection used
 /// again. The server's own TLS implementation is not covered here, and is not the driver's to cover.
+/// </para>
+/// <para>
+/// Not in the <c>Cloud</c> category: the proxy dials the fixture's host and port in the clear, which against a
+/// Cloud service is the secure port, and the client is pointed at the proxy on loopback rather than at the
+/// certificate's name. A Cloud run covers this ground anyway, being entirely inside a tunnel.
 /// </para>
 /// </summary>
 [TestFixture]

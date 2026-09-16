@@ -19,6 +19,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ColumnReadProjectionIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -218,10 +219,10 @@ public class ColumnReadProjectionIntegrationTests
 
         // The server refuses a LowCardinality over a small fixed-width type unless this is set; it says nothing
         // about how the column decodes, which is what is under test here.
-        var options = new ClickHouseTcpQueryOptions
-        {
-            Settings = new Dictionary<string, string> { ["allow_suspicious_low_cardinality_types"] = "1" },
-        };
+        var settings = new Dictionary<string, string> { ["allow_suspicious_low_cardinality_types"] = "1" };
+        TcpServerFixture.SkipIfCloudLocksASetting(settings);
+
+        var options = new ClickHouseTcpQueryOptions { Settings = settings };
 
         await foreach (Block block in client.StreamAsync(
             "SELECT CAST(number = 0 ? NULL : 1700000000, 'LowCardinality(Nullable(DateTime(\\'UTC\\')))') FROM system.numbers LIMIT 2",

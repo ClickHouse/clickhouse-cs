@@ -21,6 +21,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class InsertInterruptionIntegrationTests
 {
     private const int RowsPerBlock = 100;

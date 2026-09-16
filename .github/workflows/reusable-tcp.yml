@@ -29,6 +29,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
+          # No step here talks to git again, so the job token does not need to stay in .git/config
+          # where the test process could read it.
+          persist-credentials: false
 
       - uses: actions/cache@v6
         name: Cache NuGet
@@ -39,13 +42,16 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Setup .NET Core
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.x
             9.x
             10.x
 
+      # No filter: the Cloud category marks the tests tests-cloud-tcp.yml also runs against a real Cloud
+      # service, not tests that need one. They run here too, against the container.
+      #
       # The framework is passed through the environment rather than interpolated into the run
       # script, so a caller-supplied input cannot inject shell.
       - name: Test

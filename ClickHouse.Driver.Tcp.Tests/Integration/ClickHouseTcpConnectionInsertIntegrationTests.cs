@@ -13,6 +13,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // await foreach, never retaining the block.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpConnectionInsertIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -20,6 +21,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
     public async Task InsertAsync_ColumnarData_RoundTripsThroughSelect(InsertRoundTripCase testCase)
     {
+        TcpServerFixture.SkipIfCloudLocksASetting(testCase.Settings);
+
         await using var connection = await TcpServerFixture.ConnectAsync(None);
         string table = UniqueTableName();
         try
@@ -58,6 +61,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
     public async Task InsertAsync_DenseReadbackReinserted_RoundTripsThroughSelect(InsertRoundTripCase testCase)
     {
+        TcpServerFixture.SkipIfCloudLocksASetting(testCase.Settings);
+
         await using var source = await TcpServerFixture.ConnectAsync(None);
         await using var sink = await TcpServerFixture.ConnectAsync(None);
         string seedTable = UniqueTableName();
@@ -549,8 +554,10 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         string target = UniqueTableName();
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = Memory");
-            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = Memory");
+            // MergeTree, not Memory: the reader below is a second connection, and Memory data belongs to the
+            // replica that took the insert, so a multi-replica server hands that reader an empty table.
+            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = MergeTree ORDER BY tuple()");
             // toInt64: a bare 7 is UInt8, and a Variant takes only its own alternatives. Both rows are Int64 so
             // that both fit the target, while the source column still declares the String alternative that makes
             // the two alternative lists differ.
@@ -609,8 +616,10 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         string target = UniqueTableName();
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = Memory");
-            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = Memory");
+            // MergeTree, not Memory: the reader and the counter below are their own connections, and Memory data
+            // belongs to the replica that took the insert, so a multi-replica server hands them empty tables.
+            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = MergeTree ORDER BY tuple()");
             await ExecuteAsync(connection, $"INSERT INTO {source} VALUES (CAST('abc' AS Variant(Int64, String)))");
 
             ArgumentException refusal = null;
