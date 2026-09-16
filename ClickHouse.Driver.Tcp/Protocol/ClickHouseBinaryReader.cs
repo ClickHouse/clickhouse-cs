@@ -116,6 +116,16 @@ internal sealed class ClickHouseBinaryReader : IDisposable
     }
 
     /// <summary>
+    /// Reads a server→client packet type code (the leading VarUInt of a packet envelope). At protocol
+    /// version 54460 there is no chunk wrapping, so this is read straight from the buffered stream.
+    /// </summary>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The decoded packet type code.</returns>
+    /// <exception cref="InvalidDataException">The VarUInt encoding exceeds 10 bytes (corrupt stream).</exception>
+    public async ValueTask<ServerPacketType> ReadServerPacketTypeAsync(CancellationToken cancellationToken)
+        => (ServerPacketType)await ReadVarUIntAsync(cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
     /// Reads a native-format String: a VarUInt length prefix followed by that many UTF-8 bytes.
     /// ClickHouse <c>String</c> is byte-oriented and not required to be valid UTF-8; invalid sequences decode
     /// to the Unicode replacement character (U+FFFD). Use <see cref="ReadStringBytesAsync"/> for a lossless
