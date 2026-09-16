@@ -57,6 +57,18 @@ internal sealed class TimeColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
+    // A TimeSpan is encoded as whole seconds, so two values inside one second encode identically.
+    public object WireEqualityComparer(Type writeType)
+    {
+        if (writeType == typeof(int))
+        {
+            return WireEquality.Default<int>();
+        }
+
+        return writeType == typeof(TimeSpan) ? WireEquality.Projected<TimeSpan, int>(ToSeconds) : null;
+    }
+
+    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => TimeColumn.ReadAsync(reader, columnName, columnType, rowCount, cancellationToken);
 
@@ -90,34 +102,32 @@ internal sealed class TimeColumnCodec : IColumnCodec
         switch (column)
         {
             case IColumn<int> seconds:
-                // Raw seconds are the wire representation, so they are written verbatim.
                 for (int i = 0; i < length; i++)
                 {
                     writer.WriteInt32(seconds[start + i]);
                 }
 
                 break;
-
             case IColumn<TimeSpan> spans:
                 for (int i = 0; i < length; i++)
                 {
-                    TimeSpan value = spans[start + i];
-
-                    // Time stores whole seconds; any sub-second component is truncated toward zero (the caller
-                    // owns the precision trade-off, and Time64 is available when sub-second precision matters).
-                    long secondsValue = value.Ticks / TimeSpan.TicksPerSecond;
-                    if (secondsValue is < MinSeconds or > MaxSeconds)
-                    {
-                        throw new ArgumentOutOfRangeException(nameof(column), value, "Time is outside the range ClickHouse Time can hold ([-999:59:59, 999:59:59]).");
-                    }
-
-                    writer.WriteInt32((int)secondsValue);
+                    writer.WriteInt32(ToSeconds(spans[start + i]));
                 }
 
                 break;
-
             default:
                 throw new ArgumentException($"A Time column must hold int or TimeSpan values, not {column.GetType()}.", nameof(column));
         }
+    }
+
+    private static int ToSeconds(TimeSpan value)
+    {
+        long seconds = value.Ticks / TimeSpan.TicksPerSecond;
+        if (seconds is < MinSeconds or > MaxSeconds)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Time is outside the range ClickHouse Time can hold ([-999:59:59, 999:59:59]).");
+        }
+
+        return (int)seconds;
     }
 }

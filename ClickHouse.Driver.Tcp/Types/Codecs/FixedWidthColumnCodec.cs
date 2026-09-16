@@ -40,6 +40,30 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
     public object NullPlaceholder => default(T);
 
     /// <inheritdoc/>
+    // The bytes are the value reinterpreted, so equal integers are equal bytes. The floats are the exception:
+    // +0 equals -0 and every NaN equals every other, none of which holds of their bit patterns, so they compare
+    // on the bit pattern instead.
+    public object WireEqualityComparer(Type writeType)
+    {
+        if (writeType != typeof(T))
+        {
+            return null;
+        }
+
+        if (typeof(T) == typeof(float))
+        {
+            return WireEquality.Projected<float, int>(BitConverter.SingleToInt32Bits);
+        }
+
+        if (typeof(T) == typeof(double))
+        {
+            return WireEquality.Projected<double, long>(BitConverter.DoubleToInt64Bits);
+        }
+
+        return WireEquality.Default<T>();
+    }
+
+    /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         if (rowCount == 0)

@@ -16,22 +16,30 @@ internal sealed class ReferenceNullableShape<T> : INullableShape
         => new NullableReferenceColumn<T>(name, typeName, (IColumn<T>)inner, nullMap, pooledMap);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<T>;
+    public bool CanWrite(IColumnCodec inner, IColumn column)
+        => column is NullableReferenceColumn<T> dense
+            ? inner.CanWrite(dense.Inner)
+            : column is IColumn<T> && inner.CanWriteElementType(typeof(T));
 
     /// <inheritdoc/>
-    public bool CanInnerWrite(IColumnCodec inner) => inner.CanWrite(new ArrayColumn<T>(string.Empty, inner.TypeName, Array.Empty<T>()));
+    public IColumn GetInnerColumn(IColumnCodec inner, IColumn column)
+    {
+        if (column is NullableReferenceColumn<T> dense)
+        {
+            return dense.Inner;
+        }
+
+        var source = (IColumn<T>)column;
+        var placeholder = (T)inner.NullPlaceholderAs(typeof(T));
+        return new SubstituteReferenceColumn<T>(inner.TypeName, source, placeholder);
+    }
 
     /// <inheritdoc/>
-    // A dense column (inner column + null-map) writes both directly with no copy. The ergonomic nullable-reference
-    // column writes the null-map from each row's nullness, then hands the inner codec a substitute view that reads
-    // the present reference or the inner placeholder per row — no flat placeholder buffer is built; the null
-    // positions the wire ignores are still written from the placeholder so the inner codec never sees a null.
-    public void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteNullMap(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         if (column is NullableReferenceColumn<T> dense)
         {
             writer.WriteBytes(dense.NullMap.Slice(start, length));
-            inner.WriteColumn(writer, dense.Inner, start, length);
             return;
         }
 
@@ -40,8 +48,5 @@ internal sealed class ReferenceNullableShape<T> : INullableShape
         {
             writer.WriteBool(source[start + i] is null);
         }
-
-        var placeholder = (T)inner.NullPlaceholderAs(typeof(T));
-        inner.WriteColumn(writer, new SubstituteReferenceColumn<T>(inner.TypeName, source, placeholder), start, length);
     }
 }

@@ -61,6 +61,19 @@ internal sealed class Time64ColumnCodec : IColumnCodec
         throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
     }
 
+    /// <inheritdoc/>
+    // A TimeSpan is encoded as a count at this column's scale, so two values inside one tick of it encode
+    // identically.
+    public object WireEqualityComparer(Type writeType)
+    {
+        if (writeType == typeof(long))
+        {
+            return WireEquality.Default<long>();
+        }
+
+        return writeType == typeof(TimeSpan) ? WireEquality.Projected<TimeSpan, long>(ToCount) : null;
+    }
+
     /// <summary>Builds a <c>Time64</c> codec from its scale argument.</summary>
     /// <param name="node">The parsed <c>Time64</c> type node.</param>
     /// <returns>The codec.</returns>
@@ -114,36 +127,32 @@ internal sealed class Time64ColumnCodec : IColumnCodec
         switch (column)
         {
             case IColumn<long> counts:
-                // Raw counts are assumed already at the column's scale (the wire representation), so they are
-                // written verbatim.
                 for (int i = 0; i < length; i++)
                 {
                     writer.WriteInt64(counts[start + i]);
                 }
 
                 break;
-
             case IColumn<TimeSpan> spans:
-                int shift = scale - DotNetTickScale;
                 for (int i = 0; i < length; i++)
                 {
-                    TimeSpan value = spans[start + i];
-
-                    // Reject durations outside ClickHouse's range up front (mirrors Time), rather than emitting a
-                    // count the server rejects or wraps. Precision finer than the column scale is truncated toward zero.
-                    long secondsValue = value.Ticks / TimeSpan.TicksPerSecond;
-                    if (secondsValue is < MinSeconds or > MaxSeconds)
-                    {
-                        throw new ArgumentOutOfRangeException(nameof(column), value, "Time64 is outside the range ClickHouse Time64 can hold ([-999:59:59, 999:59:59]).");
-                    }
-
-                    writer.WriteInt64(FixedPointScaling.ShiftDecimalPlaces(value.Ticks, shift));
+                    writer.WriteInt64(ToCount(spans[start + i]));
                 }
 
                 break;
-
             default:
                 throw new ArgumentException($"A Time64 column must hold long or TimeSpan values, not {column.GetType()}.", nameof(column));
         }
+    }
+
+    private long ToCount(TimeSpan value)
+    {
+        long seconds = value.Ticks / TimeSpan.TicksPerSecond;
+        if (seconds is < MinSeconds or > MaxSeconds)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Time64 is outside the range ClickHouse Time64 can hold ([-999:59:59, 999:59:59]).");
+        }
+
+        return FixedPointScaling.ShiftDecimalPlaces(value.Ticks, scale - DotNetTickScale);
     }
 }

@@ -144,8 +144,8 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void NullPlaceholder_IsTheDefaultValueTuple()
-        => Assert.That(Resolve("Tuple(Int32, String)").NullPlaceholder, Is.EqualTo((0, (string)null)));
+    public void NullPlaceholder_UsesWritableChildPlaceholders()
+        => Assert.That(Resolve("Tuple(Int32, String)").NullPlaceholder, Is.EqualTo((0, string.Empty)));
 
     [Test]
     public void Resolve_UnnamedTuple_StampsFullTypeName()
@@ -358,4 +358,31 @@ public class TupleColumnCodecTests
                 async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, wrong, 0, 2)));
         });
     }
+    [Test]
+    public void CanWrite_DenseTupleColumnOfADifferentArity_ReturnsFalse()
+    {
+        IColumnCodec codec = Resolve("Tuple(Int32, String)");
+        var narrower = new TupleColumn<int>(
+            "c",
+            "Tuple(Int32)",
+            new IColumn[] { new ArrayColumn<int>("c", "Int32", new[] { 1 }) },
+            fieldNames: null,
+            ownsChildren: false);
+
+        Assert.That(codec.CanWrite(narrower), Is.False);
+    }
+
+    [Test]
+    public async Task WriteColumn_FlatTupleColumnOfUnacceptableFieldTypes_ThrowsNamingTheTupleType()
+    {
+        IColumnCodec codec = Resolve("Tuple(Int32, String)");
+        var wrongFields = new ArrayColumn<(int, int)>("c", "Tuple(Int32, String)", new[] { (1, 2) });
+
+        ArgumentException thrown = null;
+        await CodecTestHarness.WriteAsync(writer =>
+            thrown = Assert.Throws<ArgumentException>(() => codec.WriteColumn(writer, wrongFields, 0, 1)));
+
+        Assert.That(thrown.Message, Does.Contain("Tuple(Int32, String)").And.Contain("field codecs accept"));
+    }
+
 }

@@ -65,6 +65,24 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
     }
 
+    /// <inheritdoc/>
+    // Both instant surfaces compare on the count at this column's scale: two values inside one tick of the scale
+    // encode identically, and equal ticks under different Kind do not.
+    public object WireEqualityComparer(Type writeType)
+    {
+        if (writeType == typeof(long))
+        {
+            return WireEquality.Default<long>();
+        }
+
+        if (writeType == typeof(DateTimeOffset))
+        {
+            return WireEquality.Projected<DateTimeOffset, long>(CountFromDateTimeOffset);
+        }
+
+        return writeType == typeof(DateTime) ? WireEquality.Projected<DateTime, long>(CountFromDateTime) : null;
+    }
+
     /// <summary>Builds a <c>DateTime64</c> codec from its scale and optional timezone arguments.</summary>
     /// <param name="node">The parsed <c>DateTime64</c> type node.</param>
     /// <param name="serverTimezone">The session timezone, used when the type string carries none.</param>
@@ -127,15 +145,12 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         switch (column)
         {
             case IColumn<long> counts:
-                // Raw counts are assumed already at the column's scale (the wire representation), so they are
-                // written verbatim.
                 for (int i = 0; i < length; i++)
                 {
                     writer.WriteInt64(counts[start + i]);
                 }
 
                 break;
-
             case IColumn<DateTimeOffset> offsets:
                 for (int i = 0; i < length; i++)
                 {
@@ -143,15 +158,13 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
                 }
 
                 break;
-
             case IColumn<DateTime> dateTimes:
                 for (int i = 0; i < length; i++)
                 {
-                    writer.WriteInt64(CountFromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(dateTimes[start + i], timeZone))));
+                    writer.WriteInt64(CountFromDateTime(dateTimes[start + i]));
                 }
 
                 break;
-
             default:
                 throw new ArgumentException(
                     $"A DateTime64 column must hold long, DateTimeOffset, or DateTime values, not {column.GetType()}.",
@@ -174,9 +187,12 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         long factor = FixedPointScaling.Pow10(-places);
         if (dotNetTicksSinceEpoch % factor != 0)
         {
-            throw new ArgumentException($"{value:o} cannot be written to {TypeName} (scale {scale}) without losing precision.", "column");
+            throw new ArgumentException($"{value:o} cannot be written to {TypeName} (scale {scale}) without losing precision.", nameof(value));
         }
 
         return dotNetTicksSinceEpoch / factor;
     }
+
+    private long CountFromDateTime(DateTime value)
+        => CountFromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(value, timeZone)));
 }

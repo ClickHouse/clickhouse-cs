@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -33,6 +34,11 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     public object NullPlaceholder => IPAddress.Any;
 
     /// <inheritdoc/>
+    // IPAddress.Equals also compares the ScopeId, which is not encoded, so the wire integer is the relation.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(IPAddress) ? WireEquality.Projected<IPAddress, uint>(ToWireValue) : null;
+
+    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => ArrayColumn<IPAddress>.ReadAsync(reader, columnName, columnType, rowCount, checked(rowCount * Size), Fill, cancellationToken);
 
@@ -57,24 +63,23 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        Span<byte> network = stackalloc byte[Size];
-        Span<byte> wire = stackalloc byte[Size];
-        var typed = (IColumn<IPAddress>)column;
+        var values = (IColumn<IPAddress>)column;
         for (int i = 0; i < length; i++)
         {
-            IPAddress value = typed[start + i];
-            if (value.AddressFamily != AddressFamily.InterNetwork || !value.TryWriteBytes(network, out _))
-            {
-                throw new ArgumentException($"An IPv4 column requires IPv4 addresses; got '{value}'.", nameof(column));
-            }
-
-            for (int j = 0; j < Size; j++)
-            {
-                wire[j] = network[Size - 1 - j];
-            }
-
-            writer.WriteBytes(wire);
+            writer.WriteUInt32(ToWireValue(values[start + i]));
         }
+    }
+
+    private static uint ToWireValue(IPAddress value)
+    {
+        Span<byte> network = stackalloc byte[Size];
+        if (value?.AddressFamily != AddressFamily.InterNetwork || !value.TryWriteBytes(network, out _))
+        {
+            throw new ArgumentException($"An IPv4 column requires IPv4 addresses; got '{value}'.", nameof(value));
+        }
+
+        // ClickHouse writes the numeric address little-endian, reversing the network-order bytes.
+        return BinaryPrimitives.ReadUInt32BigEndian(network);
     }
 }
 
@@ -118,20 +123,39 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<IPAddress>;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    // IPAddress.Equals also compares the ScopeId, which is not encoded, and holds an IPv4 address distinct from
+    // its own mapped form, which encodes the same. The 16 encoded bytes are the relation.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(IPAddress) ? WireEquality.Projected<IPAddress, (ulong, ulong)>(ToWireKey) : null;
+
+    private static (ulong, ulong) ToWireKey(IPAddress value)
     {
         Span<byte> network = stackalloc byte[Size];
-        var typed = (IColumn<IPAddress>)column;
+        WriteNetworkBytes(value, network);
+        return (BinaryPrimitives.ReadUInt64LittleEndian(network), BinaryPrimitives.ReadUInt64LittleEndian(network.Slice(sizeof(ulong))));
+    }
+
+    /// <inheritdoc/>
+    // The wire form is the 16 network-order bytes verbatim.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        var values = (IColumn<IPAddress>)column;
+        Span<byte> network = stackalloc byte[Size];
         for (int i = 0; i < length; i++)
         {
-            IPAddress value = typed[start + i];
-            IPAddress address = value.AddressFamily == AddressFamily.InterNetwork ? value.MapToIPv6() : value;
-            if (address.AddressFamily != AddressFamily.InterNetworkV6 || !address.TryWriteBytes(network, out int written) || written != Size)
-            {
-                throw new ArgumentException($"An IPv6 column requires IPv6 addresses; got '{value}'.", nameof(column));
-            }
-
+            WriteNetworkBytes(values[start + i], network);
             writer.WriteBytes(network);
+        }
+    }
+
+    private static void WriteNetworkBytes(IPAddress value, Span<byte> destination)
+    {
+        IPAddress address = value?.AddressFamily == AddressFamily.InterNetwork ? value.MapToIPv6() : value;
+        if (address?.AddressFamily != AddressFamily.InterNetworkV6
+            || !address.TryWriteBytes(destination, out int written)
+            || written != Size)
+        {
+            throw new ArgumentException($"An IPv6 column requires IPv6 addresses; got '{value}'.", nameof(value));
         }
     }
 }

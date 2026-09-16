@@ -31,6 +31,11 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
     public object NullPlaceholder => 0f;
 
     /// <inheritdoc/>
+    // Only the top 16 bits are written, so floats that differ below them encode identically.
+    public object WireEqualityComparer(Type writeType)
+        => writeType == typeof(float) ? WireEquality.Projected<float, ushort>(ToBFloat16Bits) : null;
+
+    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         return ArrayColumn<float>.ReadAsync(reader, columnName, columnType, rowCount, checked(rowCount * sizeof(ushort)), Fill, cancellationToken);
@@ -51,11 +56,12 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        var typed = (IColumn<float>)column;
+        var values = (IColumn<float>)column;
         for (int i = 0; i < length; i++)
         {
-            // Narrow to the top 16 bits of the float32 representation; the low mantissa bits are dropped.
-            writer.WriteUInt16((ushort)(BitConverter.SingleToUInt32Bits(typed[start + i]) >> 16));
+            writer.WriteUInt16(ToBFloat16Bits(values[start + i]));
         }
     }
+
+    private static ushort ToBFloat16Bits(float value) => (ushort)(BitConverter.SingleToUInt32Bits(value) >> 16);
 }

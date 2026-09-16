@@ -57,6 +57,24 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
     }
 
+    /// <inheritdoc/>
+    // Two DateTime values with equal ticks but different Kind are Equals-equal and encode to different instants,
+    // so both surfaces compare on the second they reduce to.
+    public object WireEqualityComparer(Type writeType)
+    {
+        if (writeType == typeof(uint))
+        {
+            return WireEquality.Default<uint>();
+        }
+
+        if (writeType == typeof(DateTimeOffset))
+        {
+            return WireEquality.Projected<DateTimeOffset, uint>(ToWireValue);
+        }
+
+        return writeType == typeof(DateTime) ? WireEquality.Projected<DateTime, uint>(ToWireValue) : null;
+    }
+
     /// <summary>Builds a <c>DateTime</c> codec, resolving its timezone from the type string or the session.</summary>
     /// <param name="node">The parsed <c>DateTime</c> type node (its optional argument is the timezone).</param>
     /// <param name="serverTimezone">The session timezone, used when the type string carries none.</param>
@@ -105,36 +123,33 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
-        // Interpret unspecified DateTime values as wall clocks in the resolved timezone.
         switch (column)
         {
             case IColumn<uint> seconds:
-                // Raw epoch seconds are the wire representation, so they are written verbatim.
                 for (int i = 0; i < length; i++)
                 {
                     writer.WriteUInt32(seconds[start + i]);
                 }
 
                 break;
-
             case IColumn<DateTimeOffset> offsets:
                 for (int i = 0; i < length; i++)
                 {
-                    writer.WriteUInt32(ToUnixSeconds(offsets[start + i].UtcDateTime));
+                    writer.WriteUInt32(ToWireValue(offsets[start + i]));
                 }
 
                 break;
-
             case IColumn<DateTime> dateTimes:
                 for (int i = 0; i < length; i++)
                 {
-                    writer.WriteUInt32(ToUnixSeconds(ToUtc(dateTimes[start + i], timeZone)));
+                    writer.WriteUInt32(ToWireValue(dateTimes[start + i]));
                 }
 
                 break;
-
             default:
-                throw new ArgumentException($"A DateTime column must hold DateTimeOffset or DateTime values, not {column.GetType()}.", nameof(column));
+                throw new ArgumentException(
+                    $"A DateTime column must hold uint, DateTimeOffset, or DateTime values, not {column.GetType()}.",
+                    nameof(column));
         }
     }
 
@@ -196,4 +211,8 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
 
         return (uint)seconds;
     }
+
+    private uint ToWireValue(DateTime value) => ToUnixSeconds(ToUtc(value, timeZone));
+
+    private static uint ToWireValue(DateTimeOffset value) => ToUnixSeconds(value.UtcDateTime);
 }
