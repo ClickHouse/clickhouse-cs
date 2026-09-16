@@ -226,7 +226,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
         long version = await reader.ReadInt64Async(cancellationToken).ConfigureAwait(false);
         if (version != LowCardinalityWire.StatePrefixVersion)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"LowCardinality serialization version {version} is not supported (expected {LowCardinalityWire.StatePrefixVersion}).");
         }
     }
@@ -246,19 +246,19 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
         int code = (int)(metadata & LowCardinalityWire.IndexTypeMask);
         if (code is < LowCardinalityWire.KeyUInt8 or > LowCardinalityWire.KeyUInt64)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"LowCardinality column '{columnName}' declares an unknown key-width code {code}.");
         }
 
         if ((metadata & LowCardinalityWire.NeedGlobalDictionaryBit) != 0)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"LowCardinality column '{columnName}' requests a global dictionary, which the Native format does not use.");
         }
 
         if ((metadata & LowCardinalityWire.HasAdditionalKeysBit) == 0)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"LowCardinality column '{columnName}' carries no additional keys; a non-empty Native block must.");
         }
 
@@ -268,7 +268,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
         ulong dictSizeRaw = await reader.ReadUInt64Async(cancellationToken).ConfigureAwait(false);
         if (dictSizeRaw > int.MaxValue)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"LowCardinality column '{columnName}' declares {dictSizeRaw} dictionary entries, exceeding the maximum this client can address.");
         }
 
@@ -281,7 +281,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
             ulong keysCount = await reader.ReadUInt64Async(cancellationToken).ConfigureAwait(false);
             if (keysCount != (ulong)rowCount)
             {
-                throw new ClickHouseProtocolException(
+                throw new ClickHouseTcpProtocolException(
                     $"LowCardinality column '{columnName}' declares {keysCount} keys but the block expects {rowCount}.");
             }
 
@@ -313,7 +313,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
         long keyBytes = (long)rowCount * width;
         if (keyBytes > Array.MaxLength)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"LowCardinality column '{columnName}' declares {rowCount} keys, whose stream exceeds the maximum this client can buffer.");
         }
 
@@ -372,7 +372,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     {
         if (key >= (ulong)dictSize)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"LowCardinality column '{columnName}' has a key {key} outside its {dictSize}-entry dictionary; the stream is corrupt.");
         }
 

@@ -43,11 +43,11 @@ public class ClickHouseTcpConnectionIntegrationTests
     [Test]
     public void ConnectAsync_WithWrongPassword_ThrowsServerException()
     {
-        var thrown = Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
             await TcpServerFixture.ConnectAsync(None, password: "definitely-not-the-password"));
 
         // The server rejects the credentials during the handshake and the failure surfaces as a typed error.
-        Assert.That(thrown.Code, Is.GreaterThan(0));
+        Assert.That(thrown.RawCode, Is.GreaterThan(0));
     }
 
     [Test]
@@ -60,15 +60,21 @@ public class ClickHouseTcpConnectionIntegrationTests
     }
 
     [Test]
-    public void ConnectAsync_ToUnreachablePort_ThrowsSocketException()
+    public void ConnectAsync_ToUnreachablePort_ThrowsTransportExceptionNamingTheEndpointAndKeepingTheSocketError()
     {
         // Port 1 is reserved and never accepts native-protocol connections.
-        Assert.ThrowsAsync<SocketException>(async () =>
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpTransportException>(async () =>
             await ClickHouseTcpConnection.ConnectAsync(
                 TcpServerFixture.Host,
                 1,
                 new ClientHandshakeParameters { Username = "default" },
                 tls: null,
                 None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain($"{TcpServerFixture.Host}:1"));
+            Assert.That(thrown.InnerException, Is.InstanceOf<SocketException>());
+        });
     }
 }

@@ -114,7 +114,7 @@ internal sealed class NestedColumnCodec : IColumnCodec
         long offsetBytes = (long)rowCount * sizeof(ulong);
         if (offsetBytes > Array.MaxLength)
         {
-            throw new ClickHouseProtocolException(
+            throw new ClickHouseTcpProtocolException(
                 $"Nested column '{columnName}' declares {rowCount} rows, whose offsets stream exceeds the maximum this client can buffer.");
         }
 
@@ -185,13 +185,13 @@ internal sealed class NestedColumnCodec : IColumnCodec
             ulong end = wire[i];
             if (end < previous)
             {
-                throw new ClickHouseProtocolException(
+                throw new ClickHouseTcpProtocolException(
                     $"Nested column '{columnName}' has a non-monotonic offset at row {i} ({end} < {previous}); the stream is corrupt.");
             }
 
             if (end > int.MaxValue)
             {
-                throw new ClickHouseProtocolException(
+                throw new ClickHouseTcpProtocolException(
                     $"Nested column '{columnName}' declares {end} total elements, exceeding the maximum this client can address.");
             }
 

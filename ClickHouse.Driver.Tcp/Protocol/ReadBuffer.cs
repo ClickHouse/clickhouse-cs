@@ -26,6 +26,7 @@ internal sealed class ReadBuffer : IDisposable
     public const int MaxContiguous = 32;
 
     private readonly Stream stream;
+    private readonly bool readsFromTransport;
     private byte[] buffer;
     private int capacity;
     private int head;      // index of the first valid byte
@@ -37,9 +38,13 @@ internal sealed class ReadBuffer : IDisposable
     /// </summary>
     /// <param name="stream">The source stream (a network stream in production, any stream in tests).</param>
     /// <param name="capacity">Requested capacity in bytes; must be at least <see cref="MaxContiguous"/>.</param>
+    /// <param name="readsFromTransport">
+    /// Whether <paramref name="stream"/> is the connection itself, so that a failed read is the transport failing.
+    /// False for an adapter stream, whose own layer decides what its failures mean.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="capacity"/> is below <see cref="MaxContiguous"/>.</exception>
-    public ReadBuffer(Stream stream, int capacity = 16384)
+    public ReadBuffer(Stream stream, int capacity = 16384, bool readsFromTransport = true)
     {
         this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
         if (capacity < MaxContiguous)
@@ -47,6 +52,7 @@ internal sealed class ReadBuffer : IDisposable
             throw new ArgumentOutOfRangeException(nameof(capacity), $"Capacity must be at least {MaxContiguous} bytes.");
         }
 
+        this.readsFromTransport = readsFromTransport;
         buffer = ArrayPool<byte>.Shared.Rent(capacity);
         this.capacity = buffer.Length; // Rent may return a larger array; use all of it.
     }
@@ -61,7 +67,7 @@ internal sealed class ReadBuffer : IDisposable
     /// <param name="needed">The number of contiguous bytes that must be available; must not exceed <see cref="Capacity"/>.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="needed"/> exceeds the buffer capacity.</exception>
-    /// <exception cref="EndOfStreamException">The stream ended before enough bytes arrived.</exception>
+    /// <exception cref="ClickHouseTcpTransportException">The stream ended before enough bytes arrived, or the read failed.</exception>
     public async ValueTask EnsureAsync(int needed, CancellationToken cancellationToken)
     {
         if (needed > capacity)
@@ -131,7 +137,7 @@ internal sealed class ReadBuffer : IDisposable
     /// </summary>
     /// <param name="destination">The region to fill completely with consumed bytes.</param>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
-    /// <exception cref="EndOfStreamException">The stream ended before the destination was filled.</exception>
+    /// <exception cref="ClickHouseTcpTransportException">The stream ended before the destination was filled, or the read failed.</exception>
     public async ValueTask ReadIntoAsync(Memory<byte> destination, CancellationToken cancellationToken)
     {
         if (buffered > 0 && !destination.IsEmpty)
@@ -144,10 +150,19 @@ internal sealed class ReadBuffer : IDisposable
 
         while (!destination.IsEmpty)
         {
-            int read = await stream.ReadAsync(destination, cancellationToken).ConfigureAwait(false);
+            int read;
+            try
+            {
+                read = await stream.ReadAsync(destination, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception e) when (readsFromTransport && TransportFailure.IsTransportFailure(e))
+            {
+                throw TransportFailure.Read(e);
+            }
+
             if (read == 0)
             {
-                throw new EndOfStreamException("Unexpected end of stream while reading from ClickHouse.");
+                throw TransportFailure.EndOfStream();
             }
 
             destination = destination.Slice(read);
@@ -185,14 +200,23 @@ internal sealed class ReadBuffer : IDisposable
     /// guarantees there is free tail space (head + buffered &lt; capacity) whenever this is called.
     /// </summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
-    /// <exception cref="EndOfStreamException">The stream ended before any byte arrived.</exception>
+    /// <exception cref="ClickHouseTcpTransportException">The stream ended before any byte arrived, or the read failed.</exception>
     private async ValueTask FillOnceAsync(CancellationToken cancellationToken)
     {
         int writeStart = head + buffered;
-        int read = await stream.ReadAsync(buffer.AsMemory(writeStart, capacity - writeStart), cancellationToken).ConfigureAwait(false);
+        int read;
+        try
+        {
+            read = await stream.ReadAsync(buffer.AsMemory(writeStart, capacity - writeStart), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception e) when (readsFromTransport && TransportFailure.IsTransportFailure(e))
+        {
+            throw TransportFailure.Read(e);
+        }
+
         if (read == 0)
         {
-            throw new EndOfStreamException("Unexpected end of stream while reading from ClickHouse.");
+            throw TransportFailure.EndOfStream();
         }
 
         buffered += read;
