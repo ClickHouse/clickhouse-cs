@@ -19,6 +19,9 @@ public class ClickHouseTcpClientIntegrationTests
 
     private static string UniqueTableName() => $"tcp_client_test_{Guid.NewGuid():N}";
 
+    private static async Task<ulong> CountAsync(ClickHouseTcpClient client, string table)
+        => (ulong)await client.ExecuteScalarAsync($"SELECT count() FROM {table}", cancellationToken: None);
+
     private sealed class IdRow
     {
         public ulong Id { get; set; }
@@ -258,6 +261,85 @@ public class ClickHouseTcpClientIntegrationTests
 
             var count = await client.QueryAsync($"SELECT count() FROM {table}").ToListAsync();
             Assert.That((ulong)count[0][0], Is.EqualTo(0UL));
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Test]
+    public async Task InsertAsync_SameDeduplicationToken_AppliesTheRowsOnlyOnce()
+    {
+        // Why the option exists: a ClickHouseTcpTransportException leaves an insert's outcome unknown, so a retry
+        // needs the server to recognise the second attempt. Asserted against a real server because the whole
+        // behaviour is the server's, and it needs the deduplication window switched on for a non-replicated table.
+        await using var client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        try
+        {
+            await client.ExecuteAsync(
+                $"CREATE TABLE {table} (id Int32) ENGINE = MergeTree ORDER BY id SETTINGS non_replicated_deduplication_window = 100");
+
+            async Task InsertAsync(string token) => await client.InsertAsync(
+                $"INSERT INTO {table} (id) VALUES",
+                new IColumn[] { PrimitiveColumn<int>.FromValues("id", "Int32", new[] { 1, 2, 3 }) },
+                new ClickHouseTcpInsertOptions { DeduplicationToken = token });
+
+            await InsertAsync("batch-1");
+            ulong afterFirst = await CountAsync(client, table);
+
+            await InsertAsync("batch-1");
+            ulong afterRetry = await CountAsync(client, table);
+
+            await InsertAsync("batch-2");
+            ulong afterNewToken = await CountAsync(client, table);
+
+            // No token: nothing recognises the repeat, which is the behaviour the token exists to change.
+            await client.InsertAsync(
+                $"INSERT INTO {table} (id) VALUES",
+                new IColumn[] { PrimitiveColumn<int>.FromValues("id", "Int32", new[] { 1, 2, 3 }) });
+            ulong afterUntokenized = await CountAsync(client, table);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(afterFirst, Is.EqualTo(3UL));
+                Assert.That(afterRetry, Is.EqualTo(3UL), "a repeat under the same token is dropped, so a retry is safe");
+                Assert.That(afterNewToken, Is.EqualTo(6UL), "a new token is a new batch");
+                Assert.That(afterUntokenized, Is.EqualTo(9UL), "without a token the same rows land twice");
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Test]
+    public async Task InsertAsync_DeduplicationTokenAndTheSameSettingByName_PrefersTheProperty()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        string table = UniqueTableName();
+        try
+        {
+            await client.ExecuteAsync(
+                $"CREATE TABLE {table} (id Int32) ENGINE = MergeTree ORDER BY id SETTINGS non_replicated_deduplication_window = 100");
+
+            // The property and the raw setting disagree. The property wins, so the second insert — whose property
+            // repeats the first's token — is dropped even though its raw setting differs.
+            async Task InsertAsync(string property, string setting) => await client.InsertAsync(
+                $"INSERT INTO {table} (id) VALUES",
+                new IColumn[] { PrimitiveColumn<int>.FromValues("id", "Int32", new[] { 1, 2, 3 }) },
+                new ClickHouseTcpInsertOptions
+                {
+                    DeduplicationToken = property,
+                    Settings = new Dictionary<string, string> { ["insert_deduplication_token"] = setting },
+                });
+
+            await InsertAsync("wins", "loses-a");
+            await InsertAsync("wins", "loses-b");
+
+            Assert.That(await CountAsync(client, table), Is.EqualTo(3UL));
         }
         finally
         {

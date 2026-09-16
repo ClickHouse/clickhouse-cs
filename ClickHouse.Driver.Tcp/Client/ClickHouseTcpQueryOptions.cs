@@ -15,7 +15,10 @@ namespace ClickHouse.Driver.Tcp;
 /// </remarks>
 public record ClickHouseTcpQueryOptions
 {
-    /// <summary>The query id, or null to let the server assign one.</summary>
+    /// <summary>
+    /// Identifies the operation in server, client, and trace logs. Null or empty generates a GUID; supplied ids
+    /// must be unique among concurrent operations.
+    /// </summary>
     public string QueryId { get; init; }
 
     /// <summary>

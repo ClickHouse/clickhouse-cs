@@ -15,11 +15,13 @@ internal static partial class ConnectionLog
         Message = "Connecting to {Host}:{Port} as {Username} (TLS {Tls})")]
     public static partial void Opening(ILogger logger, string host, int port, string username, bool tls);
 
+    // Both revisions, because they differ whenever the client and the server are not the same age, and only the
+    // negotiated one governs which features the connection has.
     [LoggerMessage(
         EventId = 2001,
         Level = LogLevel.Debug,
-        Message = "Connected to {ServerName} {VersionMajor}.{VersionMinor}.{VersionPatch} in {ElapsedMs:0.###} ms: protocol revision {Revision}, server timezone {Timezone}")]
-    public static partial void Opened(ILogger logger, string serverName, int versionMajor, int versionMinor, int versionPatch, double elapsedMs, int revision, string timezone);
+        Message = "Connected to {ServerName} {VersionMajor}.{VersionMinor}.{VersionPatch} in {ElapsedMs:0.###} ms: protocol revision {NegotiatedRevision} in force (server advertised {ServerRevision}), server timezone {Timezone}")]
+    public static partial void Opened(ILogger logger, string serverName, int versionMajor, int versionMinor, int versionPatch, double elapsedMs, int negotiatedRevision, int serverRevision, string timezone);
 
     [LoggerMessage(
         EventId = 2002,

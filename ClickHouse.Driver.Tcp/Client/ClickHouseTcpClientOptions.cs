@@ -58,8 +58,12 @@ public sealed record ClickHouseTcpClientOptions
     /// </summary>
     public int? Port { get; init; }
 
-    /// <summary>The port a connection actually dials: <see cref="Port"/> when set, otherwise derived from <see cref="UseTls"/>.</summary>
-    internal int ResolvedPort => Port ?? (UseTls ? DefaultTlsPort : DefaultPort);
+    /// <summary>
+    /// The port a connection actually dials: <see cref="Port"/> when set, otherwise derived from
+    /// <see cref="UseTls"/>. Read this rather than <see cref="Port"/> to report or check the endpoint, which is
+    /// null on a client that never named one.
+    /// </summary>
+    public int ResolvedPort => Port ?? (UseTls ? DefaultTlsPort : DefaultPort);
 
     /// <summary>The user to authenticate as. Defaults to <c>default</c>.</summary>
     public string Username { get; init; } = DefaultUsername;
@@ -281,21 +285,9 @@ public sealed record ClickHouseTcpClientOptions
     public ClickHouseTcpPoolReusePolicy PoolReusePolicy { get; init; } = DefaultPoolReusePolicy;
 
     /// <summary>
-    /// Codec for the native protocol's compression frames, or <see langword="null"/> to exchange blocks
-    /// uncompressed. Use <see cref="Lz4Compressor"/> (cheapest, lowest server-side load) or
-    /// <see cref="ZstdCompressor"/> (smaller, more CPU); a custom <see cref="IClickHouseCompressor"/> works if
-    /// it implements the native block path.
-    /// <para>
-    /// Compression is requested per query, so this is the default for every query the client runs. It governs
-    /// both directions: the server compresses the blocks it sends and expects the client's own blocks framed
-    /// the same way. Null means the request carries no compression at all, which is not the same as a frame
-    /// whose method byte is NONE.
-    /// </para>
-    /// <para>
-    /// A codec chooses the method byte and the body encoding, but never the decoding: the server picks its own
-    /// codec, so a client that asks for LZ4 can still be sent ZSTD and must decode whatever arrives. To steer
-    /// what the server sends, set its <c>network_compression_method</c> setting, here or per query.
-    /// </para>
+    /// The codec for blocks sent by this client, or null to disable compression in both directions. When enabled,
+    /// the server chooses the response codec through <c>network_compression_method</c>; set it in
+    /// <see cref="CustomSettings"/> or per query.
     /// </summary>
     public IClickHouseCompressor Compressor { get; init; } = ResolveCompressor(DefaultCompression);
 

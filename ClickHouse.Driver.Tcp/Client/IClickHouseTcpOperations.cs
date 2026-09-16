@@ -100,9 +100,22 @@ public interface IClickHouseTcpOperations : IAsyncDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Inserts columnar data. The columns are matched to the target's schema <b>by name</b> (order is free, and a
-    /// named subset inserts only those columns, the server filling the rest from their defaults); values are
-    /// serialized as the target's resolved type. Zero rows is a no-op.
+    /// Returns the first cell, or null for no rows or a NULL cell. The full result is drained; use
+    /// <see cref="StreamAsync"/> to stop reading a large result early.
+    /// </summary>
+    /// <param name="sql">The SQL text.</param>
+    /// <param name="options">Per-query options (query id, settings, parameters), or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The first column of the first row, or null when the result has no rows.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sql"/> is null.</exception>
+    ValueTask<object> ExecuteScalarAsync(
+        string sql,
+        ClickHouseTcpQueryOptions options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Inserts columns matched by name to the statement's column list and encoded using the target schema.
+    /// Unlisted target columns use server defaults; zero rows is a no-op.
     /// </summary>
     /// <param name="sql">The <c>INSERT INTO … VALUES</c> statement, with no inline <c>VALUES (...)</c> literal.</param>
     /// <param name="columns">The row data, matched to the target columns by name.</param>
@@ -180,4 +193,9 @@ public interface IClickHouseTcpOperations : IAsyncDisposable
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
     /// <returns>A task that completes when the server answers.</returns>
     ValueTask PingAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Returns server information from a connection handshake, opening a connection if needed.</summary>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The server's identity and the negotiated protocol revision.</returns>
+    ValueTask<ClickHouseTcpServerInfo> GetServerInfoAsync(CancellationToken cancellationToken = default);
 }

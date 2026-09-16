@@ -23,11 +23,12 @@ public sealed class ClickHouseTcpServerException : ClickHouseTcpException
     /// <summary>Initializes a new instance of the <see cref="ClickHouseTcpServerException"/> class.</summary>
     /// <param name="code">The server-side error code.</param>
     /// <param name="name">The server exception class name (e.g. <c>"DB::Exception"</c>).</param>
-    /// <param name="message">The human-readable error message.</param>
+    /// <param name="message">The error message. A leading <c><paramref name="name"/>: </c> is stripped, since
+    /// <see cref="Name"/> reports it; pass the text exactly as the server sent it.</param>
     /// <param name="serverStackTrace">The server-side stack trace.</param>
     /// <param name="innerException">The nested server exception, or null for the innermost frame.</param>
     public ClickHouseTcpServerException(int code, string name, string message, string serverStackTrace, Exception innerException = null)
-        : base(message, innerException)
+        : base(WithoutNamePrefix(name, message), innerException)
     {
         RawCode = code;
         Code = Enum.IsDefined((ClickHouseErrorCode)code) ? (ClickHouseErrorCode)code : ClickHouseErrorCode.Unknown;
@@ -47,11 +48,34 @@ public sealed class ClickHouseTcpServerException : ClickHouseTcpException
     /// </summary>
     public ClickHouseErrorCode Code { get; }
 
-    /// <summary>The server exception class name (e.g. <c>"DB::Exception"</c>).</summary>
+    /// <summary>
+    /// The server exception class name (e.g. <c>"DB::Exception"</c>). The server prefixes its message text with
+    /// this same name; <see cref="Exception.Message"/> reports the text without it, so the two do not repeat each
+    /// other.
+    /// </summary>
     public string Name { get; }
 
     /// <summary>The server-side stack trace.</summary>
     public string ServerStackTrace { get; }
+
+    /// <summary>
+    /// Strips a leading <c>"{name}: "</c> from the server's message text. The server writes its exception class
+    /// name into the message as well as into the name field, so keeping both would repeat it in every
+    /// <c>ToString()</c>, which already prints the type of this exception.
+    /// </summary>
+    /// <param name="name">The server exception class name.</param>
+    /// <param name="message">The message text as the server sent it.</param>
+    /// <returns>The message without the redundant prefix.</returns>
+    private static string WithoutNamePrefix(string name, string message)
+    {
+        if (string.IsNullOrEmpty(name) || message is null)
+        {
+            return message;
+        }
+
+        string prefix = name + ": ";
+        return message.StartsWith(prefix, StringComparison.Ordinal) ? message[prefix.Length..] : message;
+    }
 
     /// <summary>
     /// Decodes an Exception packet body (the bytes after the packet type code): <c>Int32 code</c>,

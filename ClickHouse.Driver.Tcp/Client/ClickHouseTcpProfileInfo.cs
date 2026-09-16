@@ -13,7 +13,7 @@ public readonly record struct ClickHouseTcpProfileInfo
     /// <summary>Initializes a new instance of the <see cref="ClickHouseTcpProfileInfo"/> struct.</summary>
     /// <param name="rows">Rows in the result.</param>
     /// <param name="blocks">Blocks in the result.</param>
-    /// <param name="bytes">Bytes in the result.</param>
+    /// <param name="bytes">The server's in-memory size of the result; see <see cref="Bytes"/>.</param>
     /// <param name="appliedLimit">Whether a LIMIT was applied.</param>
     /// <param name="rowsBeforeLimit">Rows before the LIMIT.</param>
     /// <param name="calculatedRowsBeforeLimit">Whether <paramref name="rowsBeforeLimit"/> is meaningful.</param>
@@ -33,7 +33,7 @@ public readonly record struct ClickHouseTcpProfileInfo
     /// <summary>Blocks in the result.</summary>
     public ulong Blocks { get; }
 
-    /// <summary>Bytes in the result.</summary>
+    /// <summary>The server's in-memory size for result blocks, not their compressed or wire size.</summary>
     public ulong Bytes { get; }
 
     /// <summary>Whether a LIMIT was applied.</summary>

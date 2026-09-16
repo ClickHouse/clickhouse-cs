@@ -1,24 +1,22 @@
 using System;
+using ClickHouse.Driver.Tcp.Types;
 
-namespace ClickHouse.Driver.Tcp.Types;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// A decoded column: a named, typed sequence of values read from one block. The generic <see cref="IColumn{T}"/>
-/// exposes the values; this non-generic view lets a block hold columns of mixed element types and read a value
-/// without knowing its static type.
-///
-/// <para>
-/// A column's storage may be a pooled buffer, so it is disposable and its values are borrowed for the block's
-/// lifetime. The owning <see cref="Format.Block"/> disposes its columns; a consumer must not read a column
-/// after the block is released (see <see cref="Format.Block"/> for the borrowing contract).
-/// </para>
+/// A named, typed column whose storage is borrowed for the owning <see cref="Block"/>'s lifetime. Use
+/// <see cref="IColumn{T}"/> for typed access; the block owns disposal.
 /// </summary>
 public interface IColumn : IDisposable
 {
     /// <summary>The column name from the block header.</summary>
     string Name { get; }
 
-    /// <summary>The ClickHouse type string from the block header (e.g. <c>UInt64</c>, <c>String</c>).</summary>
+    /// <summary>
+    /// The ClickHouse type string from the block header (e.g. <c>UInt64</c>, <c>String</c>). Null for a column
+    /// built by <see cref="ClickHouseTcpColumn"/>, which has no header: an insert takes the type from the
+    /// target's schema, so the caller never states one.
+    /// </summary>
     string TypeName { get; }
 
     /// <summary>The number of values in the column.</summary>
@@ -31,35 +29,6 @@ public interface IColumn : IDisposable
 
     /// <summary>The <c>T</c> in this column's <see cref="IColumn{T}"/> interface.</summary>
     Type ElementType => ColumnElementTypes.Of(GetType());
-}
-
-/// <summary>Resolves and caches the <c>T</c> in <see cref="IColumn{T}"/>.</summary>
-internal static class ColumnElementTypes
-{
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Type> Cache = new();
-
-    /// <summary>Returns the element type <paramref name="columnType"/> surfaces.</summary>
-    /// <exception cref="InvalidOperationException">The type implements zero or multiple <see cref="IColumn{T}"/> interfaces.</exception>
-    public static Type Of(Type columnType) => Cache.GetOrAdd(columnType, static type =>
-    {
-        Type found = null;
-        foreach (Type candidate in type.GetInterfaces())
-        {
-            if (!candidate.IsGenericType || candidate.GetGenericTypeDefinition() != typeof(IColumn<>))
-            {
-                continue;
-            }
-
-            if (found is not null)
-            {
-                throw new InvalidOperationException($"Column type '{type}' implements IColumn<> more than once, so it has no single element type.");
-            }
-
-            found = candidate.GenericTypeArguments[0];
-        }
-
-        return found ?? throw new InvalidOperationException($"Column type '{type}' does not implement IColumn<>.");
-    });
 }
 
 /// <summary>
