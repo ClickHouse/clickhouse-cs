@@ -150,6 +150,11 @@ internal sealed class ColumnCodecRegistry
         // NestedColumn, so it is not bound by the tuple's element-count cap.
         AddFactory("Nested", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => NestedColumnCodec.Create(node, context, registry));
 
+        // Variant(T1, ..., Tn) is a discriminated union: a per-row discriminator picks one alternative (or NULL),
+        // and the alternatives' values are stored one dense run per type. Each alternative codec is resolved
+        // recursively; the declared order is the discriminator order (the server sends it canonicalized).
+        AddFactory("Variant", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => VariantColumnCodec.Create(node, context, registry));
+
         return new ColumnCodecRegistry(byName);
     }
 }

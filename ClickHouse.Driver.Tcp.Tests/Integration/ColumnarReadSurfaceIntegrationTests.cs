@@ -626,6 +626,92 @@ public class ColumnarReadSurfaceIntegrationTests
         }
     }
 
+    [Test]
+    public async Task QueryAsync_VariantColumn_ExposesDiscriminatorsAndPerTypeChildColumnsThroughIVariantColumn()
+    {
+        // Variant is the composite with no useful materialized element type: its IColumn<T> surface is
+        // IColumn<object>, so every row read through it is boxed. The columnar view is the only typed way in —
+        // dispatch on the discriminator, then read the selected type's child column, which is typed. Each child holds
+        // only its own rows, contiguously, so the per-row position within a child is not the row index; LocalIndices
+        // carries that mapping, precomputed by one walk of the discriminators.
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["allow_experimental_variant_type"] = "1",
+            ["allow_suspicious_variant_types"] = "1",
+        };
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        bool matched = false;
+        int typeCount = 0;
+        int rowCount = 0;
+        byte[] discriminators = null;
+        int discriminatorLength = 0;
+        int[] localIndices = null;
+        string[] stringChild = null;
+        ulong[] intChild = null;
+        var typedReads = new List<object>();
+        var materialized = new List<object>();
+
+        // Rows: 100, 'a', NULL, 400, 'b' — interleaved so neither child's rows are contiguous by row index.
+        await foreach (Block block in connection.QueryAsync(
+            """
+            SELECT CAST(multiIf(number = 1, CAST('a', 'Variant(String, UInt64)'),
+                                number = 2, CAST(NULL, 'Variant(String, UInt64)'),
+                                number = 4, CAST('b', 'Variant(String, UInt64)'),
+                                CAST(toUInt64((number + 1) * 100), 'Variant(String, UInt64)')), 'Variant(String, UInt64)')
+            FROM system.numbers LIMIT 5
+            """,
+            settings: settings,
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IVariantColumn;
+
+            var variant = (IVariantColumn)column;
+            typeCount = variant.TypeCount;
+            rowCount = variant.RowCount;
+            discriminators = variant.Discriminators.ToArray();
+            discriminatorLength = variant.Discriminators.Length;
+            localIndices = variant.LocalIndices.ToArray();
+            stringChild = ((IColumn<string>)variant.GetTypeColumn(0)).Values.ToArray();
+            intChild = ((IColumn<ulong>)variant.GetTypeColumn(1)).Values.ToArray();
+
+            // The typed dispatch the interface exists for: no boxing except what we do here to compare.
+            for (int row = 0; row < variant.RowCount; row++)
+            {
+                byte d = variant.Discriminators[row];
+                if (d == IVariantColumn.NullDiscriminator)
+                {
+                    typedReads.Add(null);
+                }
+                else if (d == 0)
+                {
+                    typedReads.Add(((IColumn<string>)variant.GetTypeColumn(0))[variant.LocalIndices[row]]);
+                }
+                else
+                {
+                    typedReads.Add(((IColumn<ulong>)variant.GetTypeColumn(1))[variant.LocalIndices[row]]);
+                }
+
+                materialized.Add(column.GetValue(row));
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(typeCount, Is.EqualTo(2));
+            Assert.That(rowCount, Is.EqualTo(5));
+            Assert.That(discriminatorLength, Is.EqualTo(rowCount), "sliced to the row count, not the pooled buffer length");
+            Assert.That(discriminators, Is.EqualTo(new byte[] { 1, 0, IVariantColumn.NullDiscriminator, 1, 0 }), "0 = String, 1 = UInt64, 255 = NULL");
+            Assert.That(localIndices, Is.EqualTo(new[] { 0, 0, -1, 1, 1 }), "per-type running position; a NULL row addresses no child, so -1");
+            Assert.That(stringChild, Is.EqualTo(new[] { "a", "b" }), "each child holds only its own rows, contiguously");
+            Assert.That(intChild, Is.EqualTo(new ulong[] { 100, 400 }));
+            Assert.That(typedReads, Is.EqualTo(materialized), "the typed columnar dispatch agrees with the boxed surface");
+            Assert.That(materialized, Is.EqualTo(new object[] { 100UL, "a", null, 400UL, "b" }));
+        });
+    }
+
     private static async Task ExecuteAsync(ClickHouseTcpConnection connection, string sql)
     {
         await foreach (Block block in connection.QueryAsync(sql, cancellationToken: None))
