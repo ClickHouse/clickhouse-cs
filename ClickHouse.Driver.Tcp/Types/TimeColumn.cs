@@ -66,7 +66,7 @@ internal sealed class TimeColumn : IColumn<int>
     /// <summary>Returns a row as a <see cref="TimeSpan"/> (exact — <c>Time</c> is a whole-second duration).</summary>
     /// <param name="row">The zero-based row index.</param>
     /// <returns>The duration.</returns>
-    public TimeSpan GetTimeSpan(int row) => TimeSpan.FromSeconds(Values[row]);
+    public TimeSpan GetTimeSpan(int row) => ColumnValueProjections.TimeToTimeSpan(Values[row]);
 
     /// <summary>
     /// Projects every row to a <see cref="TimeSpan"/>, as a freshly allocated array the caller owns (it outlives
@@ -79,7 +79,7 @@ internal sealed class TimeColumn : IColumn<int>
         var result = new TimeSpan[seconds.Length];
         for (int i = 0; i < seconds.Length; i++)
         {
-            result[i] = TimeSpan.FromSeconds(seconds[i]);
+            result[i] = ColumnValueProjections.TimeToTimeSpan(seconds[i]);
         }
 
         return result;
