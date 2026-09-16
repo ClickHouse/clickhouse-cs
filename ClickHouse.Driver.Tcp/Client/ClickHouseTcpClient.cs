@@ -31,6 +31,12 @@ namespace ClickHouse.Driver.Tcp;
 /// </para>
 ///
 /// <para>
+/// Pooled operations may reuse a connection or use different ones; connection state is neither isolated nor
+/// guaranteed to persist between calls. Use <see cref="OpenSessionAsync"/> for temporary tables and <c>SET</c>
+/// settings that must persist across operations.
+/// </para>
+///
+/// <para>
 /// This type is experimental: its surface may change in a future release. Suppress diagnostic
 /// <c>CHTCP0001</c> to acknowledge that.
 /// </para>
@@ -62,12 +68,6 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
 
     private readonly IConnectionSource source;
 
-    // Per-client, as HTTP's registry is: the client is meant to be a singleton, so the reflection and the compiles
-    // are amortized anyway. It does hold its Type keys and compiled delegates strongly, so it pins a collectible
-    // AssemblyLoadContext for as long as the client is reachable; scoping it to the client is what makes disposing
-    // the client release them, rather than holding them for the process. See PocoTypeRegistry.
-    private readonly PocoTypeRegistry pocoTypes = new();
-
     /// <summary>Creates a client from options.</summary>
     /// <param name="options">The client configuration (endpoint, credentials, timeouts, client-level settings).</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
@@ -90,10 +90,20 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     }
 
     /// <summary>Test/pool seam: builds a client over an arbitrary connection source.</summary>
-    internal ClickHouseTcpClient(IConnectionSource source, ClickHouseTcpClientOptions options = null)
+    /// <param name="source">The connection source.</param>
+    /// <param name="options">The client configuration, or null for the defaults.</param>
+    /// <param name="optionsAreOwned">
+    /// True to reuse options whose custom settings are already privately owned. Sessions use this to share
+    /// the parent client's options instance.
+    /// </param>
+    internal ClickHouseTcpClient(
+        IConnectionSource source,
+        ClickHouseTcpClientOptions options = null,
+        bool optionsAreOwned = false)
     {
         this.source = source;
-        Options = (options ?? new ClickHouseTcpClientOptions()).WithOwnedCustomSettings();
+        ClickHouseTcpClientOptions resolved = options ?? new ClickHouseTcpClientOptions();
+        Options = optionsAreOwned ? resolved : resolved.WithOwnedCustomSettings();
     }
 
     /// <summary>
@@ -101,6 +111,11 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// operation. Init-only, so it reflects construction and never changes.
     /// </summary>
     public ClickHouseTcpClientOptions Options { get; }
+
+    /// <summary>
+    /// Compiled POCO read and write plans, shared with this client's sessions.
+    /// </summary>
+    internal PocoTypeRegistry PocoTypes { get; init; } = new();
 
     /// <summary>
     /// Runs a query and streams its result as a sequence of <see cref="Block"/>s — the low-level columnar tier,
@@ -224,7 +239,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
             // check also covers the header changing mid-enumeration, which the cache then serves.
             if (plan is null || !plan.MatchesHeader(block))
             {
-                plan = pocoTypes.ReadPlanFor<T>(block, forcedTier: null);
+                plan = PocoTypes.ReadPlanFor<T>(block, forcedTier: null);
             }
 
             T[] rows = ArrayPool<T>.Shared.Rent(Math.Min(MaterializationWindowRows, block.RowCount));
@@ -342,7 +357,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
         await lease.Connection.InsertAsync(
             sql,
             buffer.Count,
-            schema => pocoTypes.WritePlanFor<T>(schema).CreateSource(buffer, blockRows),
+            schema => PocoTypes.WritePlanFor<T>(schema).CreateSource(buffer, blockRows),
             settings,
             parameters,
             options?.QueryId,
@@ -394,6 +409,29 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient
     /// </remarks>
     internal static int? ResolveMaxRowsPerBlock(ClickHouseTcpInsertOptions options)
         => (options ?? DefaultInsertOptions).MaxRowsPerBlock;
+
+    /// <inheritdoc/>
+    public async ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default)
+    {
+        IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        var pinned = new PinnedConnectionSource(lease);
+        try
+        {
+            // Reuse client operations and compiled plans on the pinned connection.
+            var operations = new ClickHouseTcpClient(pinned, Options, optionsAreOwned: true)
+            {
+                PocoTypes = PocoTypes,
+            };
+
+            return new ClickHouseTcpSession(pinned, operations);
+        }
+        catch
+        {
+            // Release the pool slot if session construction fails.
+            await pinned.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
 
     /// <summary>Checks connectivity by sending a Ping and awaiting the Pong.</summary>
     /// <param name="cancellationToken">A token to observe for cancellation.</param>
