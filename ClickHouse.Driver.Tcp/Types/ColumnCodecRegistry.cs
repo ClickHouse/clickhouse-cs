@@ -28,7 +28,17 @@ internal sealed class ColumnCodecRegistry
 
     private readonly Dictionary<string, CodecFactory> byName;
 
-    private ColumnCodecRegistry(Dictionary<string, CodecFactory> byName) => this.byName = byName;
+    private ColumnCodecRegistry(Dictionary<string, CodecFactory> byName)
+    {
+        this.byName = byName;
+        Projections = new ColumnReadProjections(this);
+    }
+
+    /// <summary>
+    /// The compiled per-row readers behind <see cref="Block.ReadAs{T}(string)"/>, cached here so a projection is
+    /// compiled once for a type rather than once per block. See <see cref="ColumnReadProjections"/>.
+    /// </summary>
+    public ColumnReadProjections Projections { get; }
 
     /// <summary>Resolves the codec for a ClickHouse type string.</summary>
     /// <param name="typeString">The type string from a column header (e.g. <c>UInt64</c>, <c>DateTime('UTC')</c>).</param>

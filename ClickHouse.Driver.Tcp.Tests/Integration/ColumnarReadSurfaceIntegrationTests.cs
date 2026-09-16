@@ -646,6 +646,9 @@ public class ColumnarReadSurfaceIntegrationTests
         bool matched = false;
         int typeCount = 0;
         int rowCount = 0;
+        string[] typeNames = null;
+        IReadOnlyList<string> typeNamesList = null;
+        string[] childTypeNames = null;
         byte[] discriminators = null;
         int discriminatorLength = 0;
         int[] localIndices = null;
@@ -672,6 +675,9 @@ public class ColumnarReadSurfaceIntegrationTests
             var variant = (IVariantColumn)column;
             typeCount = variant.TypeCount;
             rowCount = variant.RowCount;
+            typeNames = variant.TypeNames.ToArray();
+            typeNamesList = variant.TypeNames;
+            childTypeNames = Enumerable.Range(0, variant.TypeCount).Select(i => variant.GetTypeColumn(i).TypeName).ToArray();
             discriminators = variant.Discriminators.ToArray();
             discriminatorLength = variant.Discriminators.Length;
             localIndices = variant.LocalIndices.ToArray();
@@ -706,6 +712,12 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(rowCount, Is.EqualTo(5));
             Assert.That(discriminatorLength, Is.EqualTo(rowCount), "sliced to the row count, not the pooled buffer length");
             Assert.That(discriminators, Is.EqualTo(new byte[] { 1, 0, IVariantColumn.NullDiscriminator, 1, 0 }), "0 = String, 1 = UInt64, 255 = NULL");
+            Assert.That(typeNames, Is.EqualTo(new[] { "String", "UInt64" }), "which is what TypeNames reports, in discriminator order");
+            Assert.That(typeNames, Is.EqualTo(childTypeNames), "and it agrees with each child's own type string");
+            // Handed out wrapped: neither a cast back to the array nor the IList surface can rewrite an entry into
+            // disagreeing with the child column it names.
+            Assert.That(typeNamesList as string[], Is.Null);
+            Assert.Throws<NotSupportedException>(() => ((IList<string>)typeNamesList)[0] = "Rewritten");
             Assert.That(localIndices, Is.EqualTo(new[] { 0, 0, -1, 1, 1 }), "per-type running position; a NULL row addresses no child, so -1");
             Assert.That(stringChild, Is.EqualTo(new[] { "a", "b" }), "each child holds only its own rows, contiguously");
             Assert.That(intChild, Is.EqualTo(new ulong[] { 100, 400 }));
@@ -913,6 +925,277 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(spans, Has.Length.EqualTo(2));
             Assert.That(first, Is.EqualTo(new TimeSpan(14, 30, 5)));
             Assert.That(spans[1] - spans[0], Is.EqualTo(TimeSpan.FromSeconds(1)));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_EnumColumn_ExposesItsDeclaredMembersThroughIEnumColumn()
+    {
+        // An enum's values ride the wire as their ordinal, so the IColumn<T> surface is the raw sbyte/short and the
+        // labels live in the declaration. IEnumColumn carries that declaration, so neither a row's label nor the
+        // ordinal a label maps to needs the type string re-parsed. Filtering through the ordinal touches the label
+        // once instead of per row.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool matched = false;
+        KeyValuePair<string, long>[] members = null;
+        var labels = new string[3];
+        sbyte[] ordinals = null;
+        long doneOrdinal = -1;
+        bool foundDone = false;
+        var rowsThatAreDone = new List<int>();
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT CAST(number + 1 AS Enum8('queued' = 1, 'running' = 2, 'done' = 3)) FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IEnumColumn;
+
+            var labelled = (IEnumColumn)column;
+            members = labelled.Members.ToArray();
+            ordinals = ((IColumn<sbyte>)column).Values.ToArray();
+            for (int row = 0; row < labelled.RowCount; row++)
+            {
+                labels[row] = labelled.GetLabel(row);
+            }
+
+            foundDone = labelled.TryGetOrdinal("done", out doneOrdinal);
+            for (int row = 0; row < ordinals.Length; row++)
+            {
+                if (ordinals[row] == doneOrdinal)
+                {
+                    rowsThatAreDone.Add(row);
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(
+                members,
+                Is.EqualTo(new[]
+                {
+                    new KeyValuePair<string, long>("queued", 1),
+                    new KeyValuePair<string, long>("running", 2),
+                    new KeyValuePair<string, long>("done", 3),
+                }),
+                "in declaration order");
+            Assert.That(ordinals, Is.EqualTo(new sbyte[] { 1, 2, 3 }), "the values are the raw ordinals");
+            Assert.That(labels, Is.EqualTo(new[] { "queued", "running", "done" }));
+            Assert.That(foundDone, Is.True);
+            Assert.That(doneOrdinal, Is.EqualTo(3));
+            Assert.That(rowsThatAreDone, Is.EqualTo(new[] { 2 }));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_NullableEnumColumn_ReachesTheMembersThroughItsInnerColumn()
+    {
+        // The wrapper is its own column, so the enum view is on the dense inner one — the same shape as the
+        // temporal case, and reachable without knowing whether the ordinals are sbyte or short.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool innerIsEnum = false;
+        var readings = new string[3];
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT if(number = 1, NULL, CAST(number + 1 AS Enum8('queued' = 1, 'running' = 2, 'done' = 3))) " +
+            "FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            var nullable = (INullableColumn)block[0];
+            if (nullable.Inner is IEnumColumn labelled)
+            {
+                innerIsEnum = true;
+                for (int row = 0; row < nullable.RowCount; row++)
+                {
+                    readings[row] = nullable.NullMap[row] != 0 ? null : labelled.GetLabel(row);
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(innerIsEnum, Is.True);
+            Assert.That(readings, Is.EqualTo(new[] { "queued", null, "done" }));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_MixedComposites_TraversedThroughTheNonGenericViewsWithNoTypeArgument()
+    {
+        // Code that handles "whatever the server sent" cannot name a closed generic view: it would need one arm per
+        // CLR element type. Each generic view has a non-generic base carrying the untyped children and that view's
+        // own layout spans, so one arm per *shape* is enough, and the child is then matched on its own terms.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool nullableMatched = false;
+        bool arrayMatched = false;
+        bool mapMatched = false;
+        bool lowCardinalityMatched = false;
+        bool sameInnerInstance = false;
+        byte[] nullMap = null;
+        var offsets = Array.Empty<int>();
+        int innerElementCount = 0;
+        object firstElement = null;
+        var mapOffsets = Array.Empty<int>();
+        object firstKey = null;
+        object secondValue = null;
+        int reservedSlots = 0;
+        var keys = Array.Empty<int>();
+        object keyedValue = null;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT if(number = 1, NULL, toDateTime64('2024-06-15 14:00:00.125', 3, 'UTC') + number) AS ts, " +
+            "range(number + 1) AS ids, " +
+            "map('k', toUInt32(number)) AS attrs, " +
+            "CAST(concat('c', toString(number % 2)), 'LowCardinality(String)') AS bucket " +
+            "FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            if (block["ts"] is INullableColumn nullable)
+            {
+                nullableMatched = true;
+                nullMap = nullable.NullMap.ToArray();
+                sameInnerInstance = ReferenceEquals(nullable.Inner, ((INullableColumn<long>)nullable).Inner);
+            }
+
+            if (block["ids"] is IArrayColumn array)
+            {
+                arrayMatched = true;
+                offsets = array.Offsets.ToArray();
+                innerElementCount = array.Inner.RowCount;
+                firstElement = array.Inner.GetValue(0);
+            }
+
+            if (block["attrs"] is IMapColumn map)
+            {
+                mapMatched = true;
+                mapOffsets = map.Offsets.ToArray();
+                firstKey = map.KeyColumn.GetValue(0);
+                secondValue = map.ValueColumn.GetValue(1);
+            }
+
+            if (block["bucket"] is ILowCardinalityColumn lowCardinality)
+            {
+                lowCardinalityMatched = true;
+                reservedSlots = lowCardinality.ReservedSlotCount;
+                keys = lowCardinality.Keys.ToArray();
+                keyedValue = lowCardinality.Dictionary.GetValue(keys[2]);
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(nullableMatched, Is.True);
+            Assert.That(nullMap, Is.EqualTo(new byte[] { 0, 1, 0 }));
+            Assert.That(sameInnerInstance, Is.True, "the untyped Inner forwards to the typed one, it does not wrap it");
+
+            Assert.That(arrayMatched, Is.True);
+            Assert.That(offsets, Is.EqualTo(new[] { 0, 1, 3, 6 }), "range(n + 1) gives rows of 1, 2 and 3 elements");
+            Assert.That(innerElementCount, Is.EqualTo(6), "the inner column is flat: one entry per element of every row");
+            Assert.That(firstElement, Is.EqualTo(0UL));
+
+            Assert.That(mapMatched, Is.True);
+            Assert.That(mapOffsets, Is.EqualTo(new[] { 0, 1, 2, 3 }), "one entry per row");
+            Assert.That(firstKey, Is.EqualTo("k"));
+            Assert.That(secondValue, Is.EqualTo(1U));
+
+            Assert.That(lowCardinalityMatched, Is.True);
+            Assert.That(reservedSlots, Is.EqualTo(1), "a non-nullable inner reserves slot 0 for its default");
+            Assert.That(keys, Has.Length.EqualTo(3));
+            Assert.That(keyedValue, Is.EqualTo("c0"), "row 2 repeats row 0's value, so it repeats its key");
+            Assert.That(keys[2], Is.EqualTo(keys[0]));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_NullableTemporalColumn_ReachesTheCalendarReadingThroughItsInnerColumn()
+    {
+        // The wrapper deliberately does not implement IDateTimeColumn: those accessors return a value for every
+        // row, and a null row has none. The dense inner column does implement it, so the calendar reading is one
+        // level down — and reaching it through the non-generic view needs no knowledge of the storage width
+        // (uint for DateTime, long for DateTime64, int for Time), which is what IDateTimeColumn exists to hide.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool wrapperIsTemporal = false;
+        bool innerIsTemporal = false;
+        int scale = -1;
+        string timeZone = null;
+        var readings = new DateTimeOffset?[3];
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT if(number = 1, NULL, toDateTime64('2024-06-15 14:00:00.125', 3, 'UTC') + number) AS ts " +
+            "FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            IColumn column = block["ts"];
+            wrapperIsTemporal = column is IDateTimeColumn;
+
+            var nullable = (INullableColumn)column;
+            if (nullable.Inner is IDateTimeColumn timestamps)
+            {
+                innerIsTemporal = true;
+                scale = timestamps.Scale;
+                timeZone = timestamps.TimeZone.Id;
+                for (int row = 0; row < nullable.RowCount; row++)
+                {
+                    readings[row] = nullable.NullMap[row] != 0 ? null : timestamps.GetDateTimeOffset(row);
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wrapperIsTemporal, Is.False, "a null row has no calendar reading, so the wrapper offers none");
+            Assert.That(innerIsTemporal, Is.True);
+            Assert.That(scale, Is.EqualTo(3));
+            Assert.That(timeZone, Is.EqualTo("UTC"));
+            Assert.That(readings[1], Is.Null);
+            Assert.That(
+                readings[0]?.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture),
+                Is.EqualTo("2024-06-15 14:00:00.125"));
+            Assert.That(readings[2] - readings[0], Is.EqualTo(TimeSpan.FromSeconds(2)));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_ViewMatchedWithTheWrongTypeArgument_NeverMatchesWhileTheNonGenericViewDoes()
+    {
+        // The trap the non-generic bases exist to avoid. A generic view is parameterized by the *inner* element
+        // type, so the nullable spelling (or any other wrong argument) compiles with no warning, is never true, and
+        // sends the caller down whatever its else branch does — correct answers at the boxed price, silently.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool wrongNullableArgument = true;
+        bool rightNullableArgument = false;
+        bool untypedNullable = false;
+        bool wrongArrayArgument = true;
+        bool untypedArray = false;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT CAST(number, 'Nullable(Int64)') AS n, range(number) AS ids FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            IColumn nullable = block["n"];
+            wrongNullableArgument = nullable is INullableColumn<long?>;
+            rightNullableArgument = nullable is INullableColumn<long>;
+            untypedNullable = nullable is INullableColumn;
+
+            IColumn array = block["ids"];
+            wrongArrayArgument = array is IArrayColumn<string>;
+            untypedArray = array is IArrayColumn;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wrongNullableArgument, Is.False, "the type argument is the inner type, not the nullable one");
+            Assert.That(rightNullableArgument, Is.True);
+            Assert.That(untypedNullable, Is.True, "the non-generic view cannot be got wrong");
+            Assert.That(wrongArrayArgument, Is.False);
+            Assert.That(untypedArray, Is.True);
         });
     }
 }

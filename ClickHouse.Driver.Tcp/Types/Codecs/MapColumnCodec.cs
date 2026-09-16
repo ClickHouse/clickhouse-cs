@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -30,6 +31,9 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class MapColumnCodec : IColumnCodec
 {
+    private static readonly MethodInfo ProjectMapMethod =
+        typeof(MapColumnCodec).GetMethod(nameof(ProjectMap), BindingFlags.NonPublic | BindingFlags.Static);
+
     private readonly IColumnCodec keyCodec;
     private readonly IColumnCodec valueCodec;
     private readonly IMapShape shape;
@@ -224,6 +228,80 @@ internal sealed class MapColumnCodec : IColumnCodec
 
         projected = CompositeElementProjections.ProjectArray(value, pair, rebuilt);
         return true;
+    }
+
+    /// <summary>
+    /// Forwards a column-level reading to the key and value codecs over the two flat entry columns, then repairs
+    /// them per row. Offered only where one of the two has such a reading; when both convert their values one at a
+    /// time, <see cref="TryProjectRead"/> builds the row array more cheaply.
+    /// </summary>
+    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
+    {
+        projection = null;
+
+        if (targetType == ElementType || !TryPairArguments(targetType, out Type _, out Type[] targetArguments))
+        {
+            return false;
+        }
+
+        bool keyNeedsColumn = keyCodec.TryProjectColumnRead(targetArguments[0], out ColumnReadProjection keyProjection);
+        bool valueNeedsColumn = valueCodec.TryProjectColumnRead(targetArguments[1], out ColumnReadProjection valueProjection);
+        if (!keyNeedsColumn && !valueNeedsColumn)
+        {
+            return false;
+        }
+
+        // The other side may still read as its own type or convert elementwise; resolve it the general way.
+        keyProjection ??= ColumnProjection.For(keyCodec, targetArguments[0]);
+        valueProjection ??= ColumnProjection.For(valueCodec, targetArguments[1]);
+        if (keyProjection is null || valueProjection is null)
+        {
+            return false;
+        }
+
+        projection = ColumnProjection.Close(ProjectMapMethod, (keyProjection, valueProjection), targetArguments);
+        return true;
+    }
+
+    /// <summary>
+    /// Builds the view over one decoded column: the flat key and value columns projected once, then paired per row
+    /// through the offsets this column already holds.
+    /// </summary>
+    /// <typeparam name="TKey">The projected key type.</typeparam>
+    /// <typeparam name="TValue">The projected value type.</typeparam>
+    /// <param name="source">The decoded <c>Map(K, V)</c> column.</param>
+    /// <param name="projections">The key and value codecs' projections of the two flat entry columns.</param>
+    /// <returns>The view.</returns>
+    private static IColumn ProjectMap<TKey, TValue>(IColumn source, (ColumnReadProjection Key, ColumnReadProjection Value) projections)
+    {
+        IMapColumn map = ColumnProjection.Surface<IMapColumn>(source);
+        var keys = (IColumn<TKey>)projections.Key(map.KeyColumn);
+        var values = (IColumn<TValue>)projections.Value(map.ValueColumn);
+        return new ProjectedReadColumn<KeyValuePair<TKey, TValue>[]>(
+            source,
+            (column, row) => Row(((IMapColumn)column).Offsets, keys, values, row));
+    }
+
+    /// <summary>Pairs one row's slice of the projected key and value columns into a new array.</summary>
+    // Read through the indexers, not Values: an entry belongs to exactly one row, so there is nothing for the rows
+    // to share, and materializing the whole key or value column to read one slice of it would convert every other
+    // row's entries as well.
+    private static KeyValuePair<TKey, TValue>[] Row<TKey, TValue>(ReadOnlySpan<int> offsets, IColumn<TKey> keys, IColumn<TValue> values, int row)
+    {
+        int start = offsets[row];
+        int length = offsets[row + 1] - start;
+        if (length == 0)
+        {
+            return Array.Empty<KeyValuePair<TKey, TValue>>();
+        }
+
+        var pairs = new KeyValuePair<TKey, TValue>[length];
+        for (int i = 0; i < length; i++)
+        {
+            pairs[i] = new KeyValuePair<TKey, TValue>(keys[start + i], values[start + i]);
+        }
+
+        return pairs;
     }
 
     /// <inheritdoc/>

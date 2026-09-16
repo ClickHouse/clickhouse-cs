@@ -25,7 +25,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </para>
 /// </summary>
 /// <typeparam name="TElement">The inner codec's CLR element type; each row surfaces as <typeparamref name="TElement"/>[].</typeparam>
-internal sealed class ArrayValueColumn<TElement> : IColumn<TElement[]>, IArrayColumn<TElement>
+internal sealed class ArrayValueColumn<TElement> : IColumn<TElement[]>, IArrayColumn<TElement>, IDenseArrayColumn
 {
     private readonly IColumn<TElement> inner;
     private readonly int rowCount;
