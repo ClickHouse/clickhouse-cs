@@ -175,10 +175,15 @@ public sealed record ClickHouseTcpClientOptions
     public TimeSpan DialTimeout { get; init; } = DefaultDialTimeout;
 
     /// <summary>
-    /// The idle deadline for reading a response — reset each time a packet arrives — so a long streaming query
-    /// is not killed for taking a long time overall. Defaults to 300s. <b>Stored but not yet enforced</b>; the
-    /// idle-deadline read loop lands in a later change.
+    /// Maximum time to wait for a transport read during an operation. On expiry, the operation throws
+    /// <see cref="TimeoutException"/> and discards the connection. Defaults to 300 seconds;
+    /// <see cref="TimeSpan.Zero"/> disables this timeout.
     /// </summary>
+    /// <remarks>
+    /// The timer starts before each transport read and stops when that read completes. Total query duration
+    /// and time spent processing a returned block are unrestricted by this timeout.
+    /// Connection establishment, including the handshake, uses <see cref="DialTimeout"/>.
+    /// </remarks>
     public TimeSpan ReadTimeout { get; init; } = DefaultReadTimeout;
 
     /// <summary>
@@ -447,7 +452,16 @@ public sealed record ClickHouseTcpClientOptions
 
         RequireUsableTimeout(DialTimeout, nameof(DialTimeout));
 
-        RequireUsableTimeout(ReadTimeout, nameof(ReadTimeout));
+        // Zero disables the read timeout.
+        if (ReadTimeout < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ReadTimeout), ReadTimeout, "ReadTimeout must not be negative; use TimeSpan.Zero to disable the deadline.");
+        }
+
+        if (ReadTimeout.TotalMilliseconds > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ReadTimeout), ReadTimeout, $"ReadTimeout must not exceed {TimeSpan.FromMilliseconds(int.MaxValue)} (about 24.8 days).");
+        }
 
         if (MaxSendBufferBytes <= 0)
         {
