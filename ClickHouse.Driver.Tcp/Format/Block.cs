@@ -95,6 +95,78 @@ public sealed class Block : IDisposable
     /// <returns>The column at that position.</returns>
     public IColumn this[int index] => Columns[index];
 
+    /// <summary>The column called <paramref name="name"/>, matched ordinally.</summary>
+    /// <remarks>
+    /// The lookup is a scan of <see cref="Columns"/>, so bind a column once before a row loop rather than
+    /// addressing it per row. ClickHouse column names are case-sensitive, and so is this.
+    /// </remarks>
+    /// <param name="name">The column name.</param>
+    /// <returns>The column with that name.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
+    /// <exception cref="ArgumentException">The block has no column with that name.</exception>
+    public IColumn this[string name]
+    {
+        get
+        {
+            ArgumentNullException.ThrowIfNull(name);
+            return TryGetColumn(name, out IColumn column) ? column : throw NoSuchColumn(name);
+        }
+    }
+
+    /// <summary>Finds the column called <paramref name="name"/>, matched ordinally.</summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="column">The column with that name, or null when there is none.</param>
+    /// <returns>Whether the block has a column with that name.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
+    public bool TryGetColumn(string name, out IColumn column)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        // Scanned rather than looked up in a dictionary: building one would allocate per block, and a block is
+        // decoded, read and released. Callers bind their columns once, outside the row loop.
+        IReadOnlyList<IColumn> columns = Columns;
+        for (int i = 0; i < columns.Count; i++)
+        {
+            if (string.Equals(columns[i].Name, name, StringComparison.Ordinal))
+            {
+                column = columns[i];
+                return true;
+            }
+        }
+
+        column = null;
+        return false;
+    }
+
+    /// <summary>The column called <paramref name="name"/>, as the typed view its values read through.</summary>
+    /// <remarks>Same scan and the same advice as <see cref="this[string]"/>: bind once, outside the row loop.</remarks>
+    /// <typeparam name="T">The CLR element type the column's values read as.</typeparam>
+    /// <param name="name">The column name.</param>
+    /// <returns>The typed column.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
+    /// <exception cref="ArgumentException">The block has no column with that name.</exception>
+    /// <exception cref="InvalidCastException">The column's values cannot be read as <typeparamref name="T"/>.</exception>
+    public IColumn<T> Column<T>(string name) => Typed<T>(this[name]);
+
+    /// <summary>The column at <paramref name="index"/>, as the typed view its values read through.</summary>
+    /// <typeparam name="T">The CLR element type the column's values read as.</typeparam>
+    /// <param name="index">The zero-based column index.</param>
+    /// <returns>The typed column.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a column of this block.</exception>
+    /// <exception cref="InvalidCastException">The column's values cannot be read as <typeparamref name="T"/>.</exception>
+    public IColumn<T> Column<T>(int index)
+    {
+        if (index < 0 || index >= Columns.Count)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(index),
+                index,
+                $"{Describe()} has {Columns.Count} columns.");
+        }
+
+        return Typed<T>(Columns[index]);
+    }
+
     /// <summary>Releases the columns' storage (returning any pooled buffers). Idempotent.</summary>
     public void Dispose()
     {
@@ -103,4 +175,14 @@ public sealed class Block : IDisposable
             column.Dispose();
         }
     }
+
+    private static IColumn<T> Typed<T>(IColumn column)
+        => column as IColumn<T>
+            ?? throw new InvalidCastException(
+                $"Column '{column.Name}' has type '{column.TypeName}', whose values cannot be read as {typeof(T).Name}.");
+
+    private ArgumentException NoSuchColumn(string name)
+        => new($"{Describe()} has no column named '{name}'. Its columns are: {string.Join(", ", ColumnNames)}.", nameof(name));
+
+    private string Describe() => string.IsNullOrEmpty(Name) ? "The block" : $"Block '{Name}'";
 }

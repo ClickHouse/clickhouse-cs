@@ -37,6 +37,47 @@ public class ConnectionPoolTests
         };
 
     [Test]
+    public async Task Sweep_PoolBuiltUnderAnAmbientActivity_DialsTheFloorWithoutInheritingIt()
+    {
+        // A real timer, not the controlled clock: this is about the execution context a timer captures when it is
+        // built, and ControlledTimeProvider hands back an inert timer that never fires. A pool is often built
+        // inside a traced request, and the sweep it starts outlives that request by the life of the client, so a
+        // background dial that inherited the request's span would hang every later connect off a finished trace.
+        var factory = new FakeConnectionFactory();
+        var dialed = new TaskCompletionSource<Activity>(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.BeforeCreate = _ =>
+        {
+            dialed.TrySetResult(Activity.Current);
+            return Task.CompletedTask;
+        };
+
+        ClickHouseTcpClientOptions options = Options(maxPoolSize: 2, minPoolSize: 1) with
+        {
+            SweepInterval = TimeSpan.FromMilliseconds(20),
+        };
+
+        var source = new ActivitySource("ConnectionPoolTests.Ambient");
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = candidate => candidate.Name == source.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        ConnectionPool pool;
+        using (source.StartActivity("ambient"))
+        {
+            pool = new ConnectionPool(options, factory, TimeProvider.System);
+        }
+
+        await using (pool)
+        {
+            Activity ambient = await dialed.Task.WaitAsync(TimeSpan.FromSeconds(30), None);
+            Assert.That(ambient, Is.Null, "the background dial runs with no ambient span to parent its connect to");
+        }
+    }
+
+    [Test]
     public async Task RentAsync_FirstRent_OpensOneConnection()
     {
         var factory = new FakeConnectionFactory();
