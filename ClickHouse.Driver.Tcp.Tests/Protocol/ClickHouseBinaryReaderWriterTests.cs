@@ -374,6 +374,54 @@ public class ClickHouseBinaryReaderWriterTests
         Assert.Throws<ObjectDisposedException>(() => writer.WriteByte(0x01));
     }
 
+    // Disposal has to be exactly-once, not merely idempotent: the connection's teardown is now reachable both
+    // from the operation unwinding and from the pool aborting it, and returning one pooled array twice would
+    // hand the same memory to two unrelated callers. The interlocked guard is what makes that safe — these pin
+    // the observable half of it (repeat disposal stays well-behaved); the accounting itself is not observable,
+    // since ArrayPool does not detect a duplicate return.
+    [Test]
+    public void Writer_DisposedRepeatedly_StaysDisposedAndDoesNotThrow()
+    {
+        var writer = new ClickHouseBinaryWriter(new MemoryStream());
+
+        writer.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.DoesNotThrow(writer.Dispose);
+            Assert.DoesNotThrow(writer.Dispose);
+            Assert.ThrowsAsync<ObjectDisposedException>(async () => await writer.FlushAsync(None));
+        });
+    }
+
+    [Test]
+    public void Reader_DisposedRepeatedly_DoesNotThrow()
+    {
+        var reader = new ClickHouseBinaryReader(new MemoryStream(new byte[] { 0x01 }));
+
+        reader.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.DoesNotThrow(reader.Dispose);
+            Assert.DoesNotThrow(reader.Dispose);
+        });
+    }
+
+    [Test]
+    public void Writer_DisposedConcurrently_ReleasesItsBufferWithoutFaulting()
+    {
+        // The race the guard exists for, run for real: many threads disposing one writer at once.
+        var writer = new ClickHouseBinaryWriter(new MemoryStream());
+        var disposals = new Task[16];
+        for (int i = 0; i < disposals.Length; i++)
+        {
+            disposals[i] = Task.Run(writer.Dispose);
+        }
+
+        Assert.DoesNotThrowAsync(async () => await Task.WhenAll(disposals));
+    }
+
     [Test]
     public async Task WriteClientPacketType_EncodesCodeAsVarUInt()
     {

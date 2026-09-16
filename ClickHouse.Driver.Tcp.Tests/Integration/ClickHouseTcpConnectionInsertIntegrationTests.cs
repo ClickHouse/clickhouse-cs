@@ -379,7 +379,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     }
 
     [Test]
-    public async Task InsertAsync_ServerRejectsStatement_ThrowsThenConnectionIsReusable()
+    public async Task InsertAsync_ServerRejectsStatement_ThrowsAndTerminatesConnection()
     {
         await using var connection = await TcpServerFixture.ConnectAsync(None);
 
@@ -389,15 +389,13 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
             await connection.InsertAsync("INSERT INTO table_that_does_not_exist_xyz (value) VALUES", new[] { column }, cancellationToken: None));
         Assert.That(thrown.Code, Is.GreaterThan(0));
 
-        // The server Exception is a complete response, so the same connection can run another statement.
-        Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
-        byte probe = 0;
-        await foreach (Block block in connection.QueryAsync("SELECT 1", cancellationToken: None))
+        Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
+        Assert.ThrowsAsync<ObjectDisposedException>(async () =>
         {
-            probe = ((IColumn<byte>)block[0]).Values[0];
-        }
-
-        Assert.That(probe, Is.EqualTo((byte)1));
+            await foreach (Block _ in connection.QueryAsync("SELECT 1", cancellationToken: None))
+            {
+            }
+        });
     }
 
     // The values-per-row shape (varying lengths, interspersed empties) that makes the offsets stream non-trivial,

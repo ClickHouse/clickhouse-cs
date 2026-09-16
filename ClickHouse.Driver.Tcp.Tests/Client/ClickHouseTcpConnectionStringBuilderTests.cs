@@ -156,6 +156,112 @@ public class ClickHouseTcpConnectionStringBuilderTests
     }
 
     [Test]
+    public void ToOptions_PoolKeys_ParsesEachValue()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder(
+            "Host=h;MinPoolSize=2;MaxPoolSize=8;PoolTimeout=15;MaxConnectionLifetime=600;IdleTimeout=120;SweepInterval=5;PoolReusePolicy=Fifo");
+
+        var options = builder.ToOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.MinPoolSize, Is.EqualTo(2));
+            Assert.That(options.MaxPoolSize, Is.EqualTo(8));
+            Assert.That(options.PoolTimeout, Is.EqualTo(TimeSpan.FromSeconds(15)));
+            Assert.That(options.MaxConnectionLifetime, Is.EqualTo(TimeSpan.FromMinutes(10)));
+            Assert.That(options.IdleTimeout, Is.EqualTo(TimeSpan.FromMinutes(2)));
+            Assert.That(options.SweepInterval, Is.EqualTo(TimeSpan.FromSeconds(5)));
+            Assert.That(options.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Fifo));
+        });
+    }
+
+    [Test]
+    public void ToOptions_MissingPoolKeys_AppliesDefaults()
+    {
+        var options = new ClickHouseTcpConnectionStringBuilder("Host=h").ToOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.MinPoolSize, Is.Zero);
+            Assert.That(options.MaxPoolSize, Is.EqualTo(20));
+            Assert.That(options.PoolTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
+            Assert.That(options.MaxConnectionLifetime, Is.EqualTo(TimeSpan.FromMinutes(30)));
+            Assert.That(options.IdleTimeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
+            Assert.That(options.SweepInterval, Is.Null, "an absent key means the period is derived");
+            Assert.That(options.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Lifo));
+        });
+    }
+
+    [Test]
+    public void ToOptions_PoolReusePolicyInAnyCase_IsAccepted()
+    {
+        var options = new ClickHouseTcpConnectionStringBuilder("Host=h;PoolReusePolicy=fifo").ToOptions();
+
+        Assert.That(options.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Fifo));
+    }
+
+    [Test]
+    public void ToOptions_UnknownPoolReusePolicy_ThrowsNamingTheAcceptedValues()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder("Host=h;PoolReusePolicy=Random");
+
+        var thrown = Assert.Throws<ArgumentException>(() => builder.ToOptions());
+
+        Assert.That(thrown.Message, Does.Contain("Lifo").And.Contains("Fifo"));
+    }
+
+    [Test]
+    public void PoolTypedSetters_ReadBackOnSameInstance_ReturnValuesNotDefaults()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder
+        {
+            MinPoolSize = 3,
+            MaxPoolSize = 9,
+            PoolTimeout = TimeSpan.FromSeconds(11),
+            MaxConnectionLifetime = TimeSpan.FromMinutes(20),
+            IdleTimeout = TimeSpan.FromMinutes(3),
+            SweepInterval = TimeSpan.FromSeconds(4),
+            PoolReusePolicy = ClickHouseTcpPoolReusePolicy.Fifo,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.MinPoolSize, Is.EqualTo(3));
+            Assert.That(builder.MaxPoolSize, Is.EqualTo(9));
+            Assert.That(builder.PoolTimeout, Is.EqualTo(TimeSpan.FromSeconds(11)));
+            Assert.That(builder.MaxConnectionLifetime, Is.EqualTo(TimeSpan.FromMinutes(20)));
+            Assert.That(builder.IdleTimeout, Is.EqualTo(TimeSpan.FromMinutes(3)));
+            Assert.That(builder.SweepInterval, Is.EqualTo(TimeSpan.FromSeconds(4)));
+            Assert.That(builder.PoolReusePolicy, Is.EqualTo(ClickHouseTcpPoolReusePolicy.Fifo));
+        });
+    }
+
+    [Test]
+    public void SweepInterval_SetToNull_RemovesTheKeyRatherThanStoringAValue()
+    {
+        // Null is how a caller goes back to deriving the period, so it must leave no key behind: a stored zero
+        // would fail validation, and any stored number would keep overriding the derivation.
+        var builder = new ClickHouseTcpConnectionStringBuilder { SweepInterval = TimeSpan.FromSeconds(4) };
+
+        builder.SweepInterval = null;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.SweepInterval, Is.Null);
+            Assert.That(builder.ConnectionString, Does.Not.Contain("SweepInterval").IgnoreCase);
+            Assert.That(builder.ToOptions().SweepInterval, Is.Null);
+        });
+    }
+
+    [Test]
+    public void SweepInterval_Unparseable_ReadsAsAbsentSoThePeriodIsDerived()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder("Host=h;SweepInterval=soon");
+
+        Assert.That(builder.SweepInterval, Is.Null);
+    }
+
+    [Test]
     public void Setters_RoundTripThroughConnectionString()
     {
         var builder = new ClickHouseTcpConnectionStringBuilder
