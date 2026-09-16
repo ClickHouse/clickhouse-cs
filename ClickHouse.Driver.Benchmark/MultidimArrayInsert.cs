@@ -17,6 +17,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// <c>Leaf</c> also covers the wire-transparent wrappers of that primitive leaf (issue #553): they
 /// serialize identically to a bare one, so they have to reach the blit path too.
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class MultidimArrayInsert
@@ -80,7 +81,7 @@ public class MultidimArrayInsert
         client?.Dispose();
     }
 
-    [Benchmark(Baseline = true)]
+    [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
     public async Task<long> JaggedBoxing() =>
         await client.InsertBinaryAsync(targetTable, new[] { "arr" }, jaggedRows);
 

@@ -39,6 +39,7 @@ internal sealed class DateTimeKindConverter : IReadValueConverter
     }
 }
 
+[BenchmarkCategory(BenchmarkCategories.HttpRegression)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class ReadValueBenchmark
@@ -84,7 +85,7 @@ public class ReadValueBenchmark
     // Int32 - GetValue (boxed)
     // ==========================================
 
-    [Benchmark(Baseline = true)]
+    [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
     public async Task Int32_GetValue_NoConverter()
     {
         using var reader = await noConverterConn.ExecuteReaderAsync($"SELECT toInt32(number) FROM system.numbers LIMIT {Count}");
