@@ -377,8 +377,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="queryId">The query id, or null to let the server assign one.</param>
     /// <param name="maxRowsPerBlock">A cap on the rows per wire block — the only bound on block geometry.
     /// Defaults to <see cref="DefaultMaxRowsPerBlock"/>; pass null to write the whole insert as a single block.
-    /// Peak buffered bytes are bounded separately by the between-column flush backstop
-    /// (<see cref="BlockWriter.DefaultFlushThresholdBytes"/>).</param>
+    /// Peak buffered bytes are bounded separately by <paramref name="maxSendBufferBytes"/>.</param>
+    /// <param name="maxSendBufferBytes">The buffered-byte cap that triggers a between-column flush while a block is
+    /// written — the write memory backstop bounding peak client memory during a large insert (a single column
+    /// larger than the cap still buffers in full). Independent of the row-based block split. Defaults to
+    /// <see cref="BlockWriter.DefaultFlushThresholdBytes"/>.</param>
     /// <param name="handlers">Optional callbacks for the metadata the server interleaves into the insert
     /// acknowledgement (notably <see cref="MetadataHandlers.OnProgress"/> for rows written and
     /// <see cref="MetadataHandlers.OnProfileEvents"/>), or null to discard it.</param>
@@ -387,7 +390,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <exception cref="ArgumentNullException"><paramref name="sql"/> or <paramref name="columns"/> is null.</exception>
     /// <exception cref="ArgumentException">The columns hold differing row counts or duplicate names, their names
     /// do not match the target schema, or a column's CLR type is not writable as its target type.</exception>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxRowsPerBlock"/> is zero or negative.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxRowsPerBlock"/> is zero or negative, or <paramref name="maxSendBufferBytes"/> is not positive.</exception>
     /// <exception cref="InvalidOperationException">The connection is busy with another operation.</exception>
     /// <exception cref="ObjectDisposedException">The connection has been terminated.</exception>
     /// <exception cref="ClickHouseServerException">The server reported an error while executing the insert.</exception>
@@ -400,10 +403,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         IReadOnlyDictionary<string, string> parameters = null,
         string queryId = null,
         int? maxRowsPerBlock = DefaultMaxRowsPerBlock,
+        int maxSendBufferBytes = BlockWriter.DefaultFlushThresholdBytes,
         MetadataHandlers handlers = null,
         CancellationToken cancellationToken = default)
     {
-        ValidateInsertArguments(sql, columns, maxRowsPerBlock, out int rowCount);
+        ValidateInsertArguments(sql, columns, maxRowsPerBlock, maxSendBufferBytes, out int rowCount);
 
         // Bail on cancellation before claiming the connection, so a pre-cancelled call leaves it idle.
         cancellationToken.ThrowIfCancellationRequested();
@@ -455,7 +459,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                         : BuildInsertPlan(columns, schema, validateWritable: rowCount > 0, out mismatchError);
                 }
 
-                await StreamInsertRowsAsync(plan, rowCount, maxRowsPerBlock, negotiated, cancellationToken).ConfigureAwait(false);
+                await StreamInsertRowsAsync(plan, rowCount, maxRowsPerBlock, maxSendBufferBytes, negotiated, cancellationToken).ConfigureAwait(false);
 
                 // Rethrow any server error once the state is back to Ready.
                 pending = await DrainToEndOfStreamAsync(negotiated, readContext, handlers, cancellationToken).ConfigureAwait(false);
@@ -496,6 +500,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         string sql,
         IReadOnlyList<IColumn> columns,
         int? maxRowsPerBlock,
+        int maxSendBufferBytes,
         out int rowCount)
     {
         ArgumentNullException.ThrowIfNull(sql);
@@ -503,6 +508,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         if (maxRowsPerBlock is <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(maxRowsPerBlock), maxRowsPerBlock, "The rows-per-block cap must be positive.");
+        }
+
+        if (maxSendBufferBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxSendBufferBytes), maxSendBufferBytes, "The send-buffer cap must be positive.");
         }
 
         rowCount = 0;
@@ -544,23 +554,25 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// once everything is flushed.
     /// </summary>
     /// <param name="plan">The per-column write plan in schema order, or null to write only the terminator.</param>
+    /// <param name="flushThresholdBytes">The buffered-byte cap that triggers a between-column flush while a block is written.</param>
     private async ValueTask StreamInsertRowsAsync(
         InsertColumn[] plan,
         int rowCount,
         int? maxRowsPerBlock,
+        int flushThresholdBytes,
         NegotiatedProtocol negotiated,
         CancellationToken cancellationToken)
     {
         if (rowCount > 0 && plan is not null)
         {
             // Split into wire blocks by row count alone (each column is written straight from its ergonomic form,
-            // so there is no intermediate dense buffer to build first). The between-column flush backstop bounds
-            // peak client memory while a block streams.
+            // so there is no intermediate dense buffer to build first). The flush threshold — the write memory
+            // backstop the caller's send-buffer cap tunes — is what bounds peak client memory while a block streams.
             foreach ((int start, int length) in PlanInsertBlocks(rowCount, maxRowsPerBlock))
             {
                 writer.WriteClientPacketType(ClientPacketType.Data);
                 await BlockWriter.WriteDataBlockAsync(
-                    writer, negotiated, plan, start, length, BlockWriter.DefaultFlushThresholdBytes, cancellationToken).ConfigureAwait(false);
+                    writer, negotiated, plan, start, length, flushThresholdBytes, cancellationToken).ConfigureAwait(false);
                 await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
         }
