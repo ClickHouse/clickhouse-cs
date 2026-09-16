@@ -15,8 +15,13 @@ public class ClickHouseTcpClientOptionsTests
         Assert.Multiple(() =>
         {
             Assert.That(options.Host, Is.EqualTo("localhost"));
-            Assert.That(options.Port, Is.EqualTo(9000));
+            Assert.That(options.Port, Is.Null, "the port is derived from UseTls unless set");
             Assert.That(options.Username, Is.EqualTo("default"));
+            Assert.That(options.UseTls, Is.False);
+            Assert.That(options.TlsServerName, Is.Null);
+            Assert.That(options.TlsAllowInvalidCertificates, Is.False);
+            Assert.That(options.TlsCaCertificatePath, Is.Null);
+            Assert.That(options.ConfigureTls, Is.Null);
             Assert.That(options.Password, Is.EqualTo(string.Empty));
             Assert.That(options.Database, Is.EqualTo("default"));
             Assert.That(options.DialTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
@@ -79,6 +84,146 @@ public class ClickHouseTcpClientOptionsTests
         var options = new ClickHouseTcpClientOptions { Port = port };
 
         Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Test]
+    public void ResolvedPort_UseTlsAndNoExplicitPort_IsTheSecureNativePort()
+    {
+        var options = new ClickHouseTcpClientOptions { UseTls = true };
+
+        Assert.That(options.ResolvedPort, Is.EqualTo(9440));
+    }
+
+    [Test]
+    public void ResolvedPort_NoTlsAndNoExplicitPort_IsThePlaintextNativePort()
+    {
+        var options = new ClickHouseTcpClientOptions();
+
+        Assert.That(options.ResolvedPort, Is.EqualTo(9000));
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ResolvedPort_ExplicitPort_IsHonouredWhateverTlsSays(bool useTls)
+    {
+        // Deriving the port must never override a caller who named one: TLS on a non-standard port is legitimate.
+        var options = new ClickHouseTcpClientOptions { UseTls = useTls, Port = 9123 };
+
+        Assert.That(options.ResolvedPort, Is.EqualTo(9123));
+    }
+
+    [Test]
+    public void Validate_NullPort_DoesNotThrow()
+    {
+        // Null is a request to derive the port, not a value, so the range check must skip it.
+        Assert.DoesNotThrow(() => new ClickHouseTcpClientOptions { Port = null }.Validate());
+    }
+
+    [Test]
+    public void Validate_TlsWithAPinnedAuthority_DoesNotThrow()
+    {
+        var options = new ClickHouseTcpClientOptions
+        {
+            UseTls = true,
+            TlsServerName = "cert.example",
+            TlsCaCertificatePath = "/etc/ca.pem",
+            ConfigureTls = _ => { },
+        };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [TestCase("")]
+    [TestCase("   ")]
+    public void Validate_EmptyTlsCaCertificatePath_ThrowsArgumentException(string path)
+    {
+        var options = new ClickHouseTcpClientOptions
+        {
+            UseTls = true,
+            TlsCaCertificatePath = path,
+        };
+
+        var thrown = Assert.Throws<ArgumentException>(() => options.Validate());
+
+        Assert.That(thrown.ParamName, Is.EqualTo(nameof(ClickHouseTcpClientOptions.TlsCaCertificatePath)));
+    }
+
+    [Test]
+    public void Validate_NullTlsCaCertificatePath_UsesHostTrustAndDoesNotThrow()
+    {
+        var options = new ClickHouseTcpClientOptions
+        {
+            UseTls = true,
+            TlsCaCertificatePath = null,
+        };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_TlsWithValidationTurnedOff_DoesNotThrow()
+    {
+        var options = new ClickHouseTcpClientOptions
+        {
+            UseTls = true,
+            TlsServerName = "cert.example",
+            TlsAllowInvalidCertificates = true,
+            ConfigureTls = _ => { },
+        };
+
+        Assert.DoesNotThrow(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_ValidationTurnedOffAndAnAuthorityPinned_ThrowsArgumentException()
+    {
+        // Contradictory: with validation off no certificate is checked, so the authority would be read from disk
+        // and never consulted. Whichever the caller meant, they did not mean both.
+        var options = new ClickHouseTcpClientOptions
+        {
+            UseTls = true,
+            TlsAllowInvalidCertificates = true,
+            TlsCaCertificatePath = "/etc/ca.pem",
+        };
+
+        Assert.Throws<ArgumentException>(() => options.Validate());
+    }
+
+    [Test]
+    public void Validate_EmptyTlsServerNameWithoutUseTls_DoesNotThrow()
+    {
+        // An empty name is what the connection factory ignores, so Validate must not treat it as configured —
+        // otherwise the two disagree about what "set" means.
+        Assert.DoesNotThrow(() => new ClickHouseTcpClientOptions { TlsServerName = string.Empty }.Validate());
+    }
+
+    // Named per case: ToString prints none of the four properties, so without SetName all four report under one
+    // display name and a failure would not say which property regressed.
+    private static readonly TestCaseData[] TlsPropertiesWithoutUseTls =
+    [
+        new TestCaseData(new ClickHouseTcpClientOptions { TlsServerName = "cert.example" })
+            .SetName($"{{m}}({nameof(ClickHouseTcpClientOptions.TlsServerName)})"),
+        new TestCaseData(new ClickHouseTcpClientOptions { TlsAllowInvalidCertificates = true })
+            .SetName($"{{m}}({nameof(ClickHouseTcpClientOptions.TlsAllowInvalidCertificates)})"),
+        new TestCaseData(new ClickHouseTcpClientOptions { TlsCaCertificatePath = "/etc/ca.pem" })
+            .SetName($"{{m}}({nameof(ClickHouseTcpClientOptions.TlsCaCertificatePath)})"),
+        new TestCaseData(new ClickHouseTcpClientOptions { ConfigureTls = _ => { } })
+            .SetName($"{{m}}({nameof(ClickHouseTcpClientOptions.ConfigureTls)})"),
+    ];
+
+    [TestCaseSource(nameof(TlsPropertiesWithoutUseTls))]
+    public void Validate_TlsPropertySetButUseTlsFalse_ThrowsArgumentException(ClickHouseTcpClientOptions options)
+    {
+        // Ignoring the property would leave the caller with a plaintext connection they configured as encrypted.
+        var thrown = Assert.Throws<ArgumentException>(() => options.Validate());
+
+        Assert.That(thrown.Message, Does.Contain(nameof(ClickHouseTcpClientOptions.UseTls)));
+    }
+
+    [Test]
+    public void Validate_UseTlsWithNothingElseSet_DoesNotThrow()
+    {
+        Assert.DoesNotThrow(() => new ClickHouseTcpClientOptions { UseTls = true }.Validate());
     }
 
     [Test]
@@ -308,6 +453,11 @@ public class ClickHouseTcpClientOptionsTests
             Password = "copy-password",
             Database = "copy-db",
             QuotaKey = "copy-quota",
+            UseTls = true,
+            TlsServerName = "copy-sni",
+            TlsAllowInvalidCertificates = true,
+            TlsCaCertificatePath = "copy-ca.pem",
+            ConfigureTls = _ => { },
             CustomSettings = new Dictionary<string, string> { ["max_threads"] = "4" },
             MaxSendBufferBytes = 4096,
             DialTimeout = TimeSpan.FromSeconds(3),
@@ -441,6 +591,20 @@ public class ClickHouseTcpClientOptionsTests
                 text,
                 Does.Contain("example.invalid").And.Contain("9440").And.Contain("alice").And.Contain("analytics"),
                 "the endpoint, user and database stay, so the text is still useful for diagnostics");
+        });
+    }
+
+    [Test]
+    public void ToString_PortLeftToBeDerived_ShowsThePortAConnectionWouldDial()
+    {
+        // Printing "Port = " with nothing after it helps nobody diagnose a connection; the resolved port is the
+        // one that was actually dialled.
+        var text = new ClickHouseTcpClientOptions { Host = "example.invalid", UseTls = true }.ToString();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain("9440"));
+            Assert.That(text, Does.Contain($"{nameof(ClickHouseTcpClientOptions.UseTls)} = True"));
         });
     }
 

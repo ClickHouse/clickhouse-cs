@@ -83,6 +83,7 @@ public sealed class TcpServerFixture
                 Username = username ?? Username,
                 Password = password ?? Password,
             },
+            tls: null,
             cancellationToken);
 
     /// <summary>Builds client options pointed at the test server, optionally overriding the credentials.</summary>
