@@ -45,12 +45,16 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public override string CommandText { get; set; }
 
     /// <summary>
-    /// Gets or sets the command timeout in seconds. The value is sent to the server as the
+    /// Gets or sets the command timeout in seconds. A positive value is sent to the server as the
     /// <c>max_execution_time</c> setting, so the server cancels the query once it is exceeded.
-    /// Zero, the default, means no limit, as does a negative value. A <c>max_execution_time</c>
-    /// entry in this command's <see cref="CustomSettings"/> is equally specific and takes
-    /// precedence over this property; a connection-level one does not. The overall wait for a
-    /// response is bounded separately by <see cref="ClickHouseClientSettings.Timeout"/>.
+    /// Zero, the default, and negative values add no command-level limit; they do not remove a
+    /// <c>max_execution_time</c> inherited from the connection or the server profile. A
+    /// <c>max_execution_time</c> entry in this command's <see cref="CustomSettings"/> is equally
+    /// specific and takes precedence over this property; a connection-level one does not.
+    /// This property is a server-side limit only: it does not cancel the client-side wait. The
+    /// HTTP request is bounded by <see cref="ClickHouseClientSettings.Timeout"/>, and results are
+    /// streamed, so use the <see cref="System.Threading.CancellationToken"/> overloads of the
+    /// asynchronous execute methods to abort a long read from the client side.
     /// </summary>
     public override int CommandTimeout { get; set; }
 

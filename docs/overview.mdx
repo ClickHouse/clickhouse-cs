@@ -1366,10 +1366,11 @@ Command methods:
 - `ExecuteScalarAsync()` - Returns first column of first row
 - `ExecuteReaderAsync()` - Returns a `ClickHouseDataReader` for iterating results
 
-`CommandTimeout` bounds execution server-side: the value in seconds is sent as the
+`CommandTimeout` bounds execution server-side: a positive value in seconds is sent as the
 `max_execution_time` setting, so ClickHouse stops the query once it is exceeded — with the default
 `timeout_overflow_mode`, as a `ClickHouseServerException` with error code 159 (`TIMEOUT_EXCEEDED`).
-Zero, the default, means no limit, as does a negative value.
+Zero, the default, and negative values add no command-level limit. They do not remove a limit: a
+`max_execution_time` inherited from the connection or from the server profile still applies.
 
 ```csharp
 await using var command = connection.CreateCommand("SELECT count() FROM huge_table");
@@ -1377,9 +1378,12 @@ command.CommandTimeout = 30; // seconds
 ```
 
 A `max_execution_time` entry in the command's own `CustomSettings` is equally specific and takes
-precedence; a connection-level `max_execution_time` is less specific and does not. The overall wait
-for a response is bounded separately by the connection string's `Timeout` (2 minutes by default),
-which applies to the HTTP request as a whole.
+precedence; a connection-level `max_execution_time` is less specific and does not.
+
+`CommandTimeout` is a server-side limit only — it does not cancel the client-side wait. The
+connection string's `Timeout` (2 minutes by default) bounds the HTTP request, and results are
+streamed, so use a `CancellationToken` on the asynchronous execute methods to abort a long read
+from the client side.
 
 ---
 

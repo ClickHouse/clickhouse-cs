@@ -59,6 +59,20 @@ public class CommandTimeoutTests : AbstractConnectionTestFixture
         Assert.That(await command.ExecuteScalarAsync(), Is.EqualTo(serverDefault));
     }
 
+    [TestCase(0)]
+    [TestCase(-1)]
+    public async Task ExecuteScalarAsync_WithoutPositiveCommandTimeout_KeepsConnectionCustomSetting(int commandTimeout)
+    {
+        var builder = TestUtilities.GetConnectionStringBuilder();
+        builder["set_max_execution_time"] = 45;
+        using var connectionWithSetting = new ClickHouseConnection(builder.ConnectionString);
+
+        using var command = connectionWithSetting.CreateCommand("SELECT getSetting('max_execution_time')");
+        command.CommandTimeout = commandTimeout;
+
+        Assert.That(await command.ExecuteScalarAsync(), Is.EqualTo(45UL));
+    }
+
     [Test]
     public async Task ExecuteScalarAsync_WithCommandTimeoutAndCommandCustomSetting_PrefersCustomSetting()
     {
