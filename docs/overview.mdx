@@ -19,11 +19,29 @@ Both clients ship in the `ClickHouse.Driver` NuGet package.
 The HTTP client provides the high-level, thread-safe `ClickHouseClient` API and the ADO.NET API
 used by ORMs. It targets .NET 6.0 and newer and is recommended for most applications.
 
+Use the HTTP client when you need:
+
+- ADO.NET or an ORM;
+- CSV, JSONEachRow, Parquet, or raw stream input and output;
+- bearer authentication or custom HTTP headers;
+- custom parameter type resolution, parameter formatting, or read conversion;
+- a per-query database or role.
+
 [Read the HTTP client documentation](/integrations/language-clients/csharp/http).
 
 ## Native TCP {#native-tcp}
 
-The native TCP client provides the experimental `ClickHouseTcpClient` API, including columnar block
-reads, native compression, pooled connections, and pinned sessions. It targets .NET 8.0 and newer.
+The native TCP client is experimental, and its public API may change in a future release. It provides
+the `ClickHouseTcpClient` API for columnar block reads, native compression, pooled connections, and
+pinned sessions. It targets .NET 8.0 and newer.
+
+Use the native TCP client when you need:
+
+- better performance, especially when processing data in columns;
+- columnar data blocks;
+- persistent connections;
+- pinned sessions through `OpenSessionAsync`;
+- progress, profile, log, totals, and extremes callbacks;
+- W3C trace context propagation to ClickHouse.
 
 [Read the native TCP client documentation](/integrations/language-clients/csharp/tcp).
