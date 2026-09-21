@@ -9,11 +9,7 @@ using ClickHouse.Driver.Tcp.Format;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// Covers <see cref="Block.ReadAs{T}(string)"/> against a real server. <c>Column&lt;T&gt;</c> is a cast, so the
-/// block tier reads a column as the type it decoded to; <c>ReadAs</c> is the other route, converting through the
-/// reading its ClickHouse type offers — the same set the POCO tier maps from. What matters here is that the
-/// conversion agrees with the server's own meaning of the value (a timezone, a scale, an enum's labels), which a
-/// hand-written constant could match by luck, and that a type offering no such reading fails saying so.
+/// Verifies <see cref="Block.ReadAs{T}(string)"/> conversions against values returned by a real server.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -152,10 +148,7 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// A timezone-less <c>DateTime</c> resolves its offset from the session timezone, so the same type string means
-    /// two different instants under two settings. The compiled conversion is cached per type string, and this is
-    /// what pins the session timezone as part of that key: were it not, the second query would read the first
-    /// query's timezone.
+    /// Verifies that cached projections keep the session timezone in their cache key.
     /// </summary>
     [Test]
     public async Task ReadAs_TimezoneLessDateTime_ResolvesTheSessionTimezoneOfEachQuery()
@@ -204,10 +197,7 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// Wrapping a type in <c>LowCardinality</c> must not change what its values read as: a row is a key into a
-    /// dictionary of the inner type's values, so the reading has to match what the same reading gives with no
-    /// dictionary in front of it. Only <c>DateTime</c> and <c>Time</c> have an inner reading to project here, and
-    /// the server calls a low-cardinality <c>DateTime</c> suspicious, hence the setting.
+    /// Verifies that <c>LowCardinality</c> preserves the inner type's projected values.
     /// </summary>
     [Test]
     public async Task ReadAs_LowCardinalityColumn_GivesTheSameValuesAsTheReadingWithoutADictionary()
@@ -252,9 +242,7 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// The nullable shape, where the dictionary reserves slot 0 as the NULL marker rather than a value: those rows
-    /// must read as null and the rest as the lifted inner reading. A mishandled slot 0 would surface as a wrong
-    /// value rather than an error, so the nulls are asserted by position.
+    /// Verifies that nullable dictionary slot 0 projects as NULL.
     /// </summary>
     [Test]
     public async Task ReadAs_NullableLowCardinalityColumn_LiftsTheInnerReadingAndKeepsTheNullRowsNull()
@@ -283,9 +271,7 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// A <c>FixedString(N)</c> reads as text, and the text is all <c>N</c> bytes: the server pads a shorter stored
-    /// value with zeros, and those are part of the value the column holds, so they are part of its reading. A byte
-    /// UTF-8 cannot spell becomes U+FFFD, which is why the bytes remain the column's own reading.
+    /// Verifies that a <c>FixedString(N)</c> text projection includes padding and replaces invalid UTF-8.
     /// </summary>
     [Test]
     public async Task ReadAs_FixedStringColumn_DecodesEveryByteIncludingThePadding()
@@ -349,9 +335,7 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// A <c>String</c>'s bytes are read off the column, and an <c>Array</c> forwards that to its element column, so
-    /// each row is the projected elements resliced. The bytes matter here rather than the shape: a byte UTF-8
-    /// cannot spell survives, which a reading rebuilt from the decoded text could not manage.
+    /// Verifies that an array forwards the raw-byte projection to its string elements.
     /// </summary>
     [Test]
     public async Task ReadAs_ArrayOfString_ReadsEveryRowsElementsAsBytes()
@@ -430,9 +414,7 @@ public class BlockReadAsIntegrationTests
     }
 
     /// <summary>
-    /// A <c>LowCardinality</c> row is a dictionary slot, so the reading is taken once per distinct value and the
-    /// rows holding that key share it. Asserted by identity, which is the observable form of "converted once" — and
-    /// the same sharing the column's own reading already has for a reference type.
+    /// Verifies that rows sharing a dictionary entry also share its projected reference value.
     /// </summary>
     [Test]
     public async Task ReadAs_LowCardinalityString_SharesOneByteArrayPerDictionaryEntry()

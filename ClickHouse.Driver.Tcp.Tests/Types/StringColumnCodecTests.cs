@@ -122,10 +122,7 @@ public class StringColumnCodecTests
     }
 
     /// <summary>
-    /// Bytes are a write shape String takes directly, but not one it can compare the way it encodes, which is
-    /// what <c>LowCardinality</c> deduplicates on. Offering no comparer for them is what makes that combination
-    /// refuse before the write rather than fault once the body is under way — the codec accepts the type, the
-    /// wrapper does not.
+    /// Verifies that raw bytes are writable as String but unsupported as a LowCardinality dictionary key.
     /// </summary>
     [Test]
     public void WireEqualityComparer_Bytes_IsRefusedEvenThoughTheyCanBeWritten()
@@ -193,9 +190,7 @@ public class StringColumnCodecTests
     }
 
     /// <summary>
-    /// Re-emitting a column this client decoded must write the bytes it read, not the UTF-8 of the text they
-    /// decoded to. Otherwise a read followed by an insert — which every dense re-insert does — replaces any byte
-    /// UTF-8 cannot spell with U+FFFD, and the row that comes back is not the row that went in.
+    /// Verifies that dense re-emission preserves invalid UTF-8 bytes.
     /// </summary>
     [Test]
     public async Task WriteColumn_DecodedColumnWithNonUtf8Bytes_ReEmitsTheSameBytes()
@@ -214,9 +209,7 @@ public class StringColumnCodecTests
     }
 
     /// <summary>
-    /// The byte reading is taken off the column's storage, so it survives what the text reading cannot. Asserted
-    /// against a decoded column rather than a round-trip because the point is which of the column's two forms the
-    /// projection read: the text of this row is U+FFFD, and a projection from it would hand that back.
+    /// Verifies that byte projection reads decoded storage rather than re-encoding text.
     /// </summary>
     [Test]
     public async Task ReadAs_NonUtf8Column_ReadsTheBytesRatherThanTheDamagedText()
@@ -256,9 +249,7 @@ public class StringColumnCodecTests
     }
 
     /// <summary>
-    /// The reading needs the column's own byte storage, which only a decoded <c>String</c> column has. A column a
-    /// caller built and labelled <c>String</c> has text and nothing else, so it is told so by name rather than
-    /// failing with a bare cast error. Not reachable through a query, whose columns this codec decodes.
+    /// Verifies the error when a caller-built String column has no raw-byte surface.
     /// </summary>
     [Test]
     public void ReadAs_StringColumnWithoutByteStorage_SaysWhichColumnHasNoBytes()

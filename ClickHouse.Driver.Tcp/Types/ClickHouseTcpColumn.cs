@@ -46,20 +46,9 @@ public static class ClickHouseTcpColumn
     }
 
     /// <summary>
-    /// Builds an <c>Array(T)</c> column in the layout the wire uses: every row's elements concatenated end-to-end
-    /// in one column, plus the per-row offsets into it. This is the shape a read produces (see
-    /// <see cref="IArrayColumn"/>), and the shape the insert writes with no rebuilding — the alternative,
-    /// <c>Create</c> with a <typeparamref name="TElement"/><c>[]</c> per row, costs an array per row and a copy of
-    /// every element.
-    ///
-    /// <para>
-    /// Row <c>i</c> holds the elements of <paramref name="inner"/> from <c>offsets[i]</c> (inclusive) to
-    /// <c>offsets[i + 1]</c> (exclusive), so <paramref name="offsets"/> starts at <c>0</c>, never decreases, ends
-    /// at <paramref name="inner"/>'s row count, and has one more entry than the column has rows. An empty row is
-    /// two equal offsets. Both the inner column and the offsets array are taken over as is, not copied: do not
-    /// modify them until the insert has completed, and note that disposing the column disposes
-    /// <paramref name="inner"/>.
-    /// </para>
+    /// Builds an <c>Array(T)</c> from a flat inner column and row offsets without rebuilding the values. Offsets
+    /// must start at 0, be nondecreasing, and end at the inner column's row count. The result takes ownership of
+    /// <paramref name="inner"/> and retains <paramref name="offsets"/> without copying it.
     /// </summary>
     /// <typeparam name="TElement">The CLR type of one element (not of one row).</typeparam>
     /// <param name="name">The target column's name.</param>

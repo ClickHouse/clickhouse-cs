@@ -207,9 +207,7 @@ internal sealed class NullableColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// Forwards a column-level reading to the inner codec over the dense inner column, with the null-map deciding
-    /// whether a row is read at all — the lifting rule <see cref="TryProjectRead"/> applies to a value, applied to
-    /// the whole column instead. It is how a <c>Nullable(String)</c> reads as a <c>byte[]</c>.
+    /// Projects the dense inner column once and applies the null map to the result.
     /// </summary>
     public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
@@ -222,8 +220,7 @@ internal sealed class NullableColumnCodec : IColumnCodec
             return false;
         }
 
-        // Asked of the inner rather than resolved through ColumnProjection: an inner reading its values express one
-        // at a time is cheaper lifted per value, which TryProjectRead already does.
+        // Leave elementwise inner conversions to TryProjectRead.
         if (!inner.TryProjectColumnRead(targetType, out ColumnReadProjection innerProjection))
         {
             return false;
@@ -234,8 +231,7 @@ internal sealed class NullableColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// Builds the view over one decoded column: the inner column projected once, read through this surface's
-    /// null-map.
+    /// Builds a row view over the projected inner column and this column's null map.
     /// </summary>
     /// <typeparam name="T">The projected reference type, which holds the absent rows itself.</typeparam>
     /// <param name="source">The decoded <c>Nullable(T)</c> column.</param>

@@ -8,10 +8,7 @@ using ClickHouse.Driver.Tcp.Format;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// A ClickHouse <c>String</c> is a byte string: it holds any byte sequence, and the server neither validates nor
-/// transcodes it. These tests use bytes UTF-8 cannot spell, because that is where the text surface and the byte
-/// surface stop agreeing — the text reading of such a row is U+FFFD, and anything that goes back to the server
-/// through that reading stores the replacement character instead of the data.
+/// Verifies lossless read and write behavior for <c>String</c> values that are not valid UTF-8.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -119,9 +116,7 @@ public class StringBytesIntegrationTests
     }
 
     /// <summary>
-    /// The bytes are a reading of the column's type, so the block tier reaches them without pattern-matching:
-    /// <c>ReadAs&lt;byte[]&gt;</c> copies one owned array per row. The same column's text reading is asserted
-    /// beside it, because that damaged text is the whole reason the byte reading exists.
+    /// Verifies that <c>ReadAs&lt;byte[]&gt;</c> returns the wire bytes rather than re-encoded text.
     /// </summary>
     [Test]
     public async Task ReadAs_NonUtf8StringColumn_GivesTheWireBytesRatherThanTheTextReading()
@@ -171,9 +166,7 @@ public class StringBytesIntegrationTests
     }
 
     /// <summary>
-    /// A <c>Nullable(String)</c> reads as a <c>byte[]</c> too: the wrapper forwards the reading to its inner column
-    /// and its null-map decides which rows are read at all, so a NULL row arrives as null rather than as the
-    /// placeholder the wire carries there.
+    /// Verifies that nullable string projections preserve both raw bytes and NULL rows.
     /// </summary>
     [Test]
     public async Task ReadAs_NullableStringColumn_GivesTheBytesAndLeavesTheNullRowsNull()
@@ -213,9 +206,7 @@ public class StringBytesIntegrationTests
     }
 
     /// <summary>
-    /// The POCO tier maps from the same set of readings, so a property typed <c>byte[]</c> is filled from a
-    /// <c>String</c> column with the bytes the wire carried, whether or not the type is wrapped in
-    /// <c>Nullable</c>.
+    /// Verifies raw-byte POCO properties for <c>String</c> and <c>Nullable(String)</c>.
     /// </summary>
     [Test]
     public async Task QueryAsync_ByteArrayProperties_AreFilledWithTheWireBytes()
@@ -259,9 +250,7 @@ public class StringBytesIntegrationTests
     }
 
     /// <summary>
-    /// The byte reading composes, so the POCO tier reaches it under a wrapper too: a property typed
-    /// <c>byte[][]</c> is filled from an <c>Array(String)</c> column, and one typed <c>byte[]</c> from a
-    /// <c>LowCardinality(String)</c> column, where the conversion happens once per dictionary entry.
+    /// Verifies raw-byte POCO properties under array and low-cardinality wrappers.
     /// </summary>
     [Test]
     public async Task QueryAsync_ByteArrayPropertiesUnderAWrapper_AreFilledWithTheWireBytes()
@@ -309,9 +298,7 @@ public class StringBytesIntegrationTests
     }
 
     /// <summary>
-    /// A POCO read materializes a block in windows, and the projected view is bound per column rather than per
-    /// window. Two rows in different windows holding the same dictionary entry therefore get the same array, which
-    /// they could not if the dictionary were converted again for every window.
+    /// Verifies that POCO materialization reuses one projected dictionary across row windows.
     /// </summary>
     [Test]
     public async Task QueryAsync_ByteArrayPropertyOverALowCardinalityColumn_ConvertsEachDictionaryEntryOnce()

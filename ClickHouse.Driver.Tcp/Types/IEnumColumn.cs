@@ -3,33 +3,15 @@ using System.Collections.Generic;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// The read surface of a decoded <c>Enum8</c> or <c>Enum16</c> column: the values ride the wire as their
-/// underlying signed ordinal, and the labels come from the type's declaration. The column's
-/// <see cref="IColumn{T}"/> surface is that raw ordinal (<c>IColumn&lt;sbyte&gt;</c> for <c>Enum8</c>,
-/// <c>IColumn&lt;short&gt;</c> for <c>Enum16</c>), so this interface is where the labels are, and it is the only
-/// route to them that does not re-parse <see cref="IColumn.TypeName"/>.
-///
-/// <para>
-/// The ordinals are widened to <see cref="long"/> here so the interface is not generic over the storage width:
-/// which of the two it is says nothing a caller needs. Reading a whole column of labels is
-/// <c>block.ReadAs&lt;string&gt;(name)</c>; this interface is for the map itself — labelling one row, filtering
-/// rows on the ordinal a label maps to (which touches the label once rather than per row), or printing the
-/// declaration.
-/// </para>
-///
-/// <para>
-/// Obtain it by pattern-matching a column, e.g. <c>if (column is IEnumColumn labelled)</c>. A
-/// <c>Nullable(Enum8)</c> column matches through <see cref="INullableColumn.Inner"/>, and an <c>Array(Enum8)</c>
-/// through <see cref="IArrayColumn.Inner"/>.
-/// </para>
+/// Provides labels for a decoded <c>Enum8</c> or <c>Enum16</c> column. The ordinary column surface exposes the
+/// signed ordinals; this interface widens both storage widths to <see cref="long"/>. Use
+/// <c>Block.ReadAs&lt;string&gt;</c> to read every row as a label.
 /// </summary>
 public interface IEnumColumn : IColumn
 {
     /// <summary>
-    /// The declared members, each label paired with its ordinal, in the order the column's type string lists them.
-    /// That is not necessarily the order a <c>CREATE TABLE</c> or a <c>CAST</c> wrote: the server canonicalizes an
-    /// enum's members, so <c>Enum8('b' = 2, 'a' = 1)</c> arrives as <c>Enum8('a' = 1, 'b' = 2)</c> and reports
-    /// <c>a</c> before <c>b</c>. Owned by the client and safe to retain past the block, unlike the column's values.
+    /// The declared label and ordinal pairs in the server's canonical order. The list is owned and may outlive
+    /// the block.
     /// </summary>
     IReadOnlyList<KeyValuePair<string, long>> Members { get; }
 

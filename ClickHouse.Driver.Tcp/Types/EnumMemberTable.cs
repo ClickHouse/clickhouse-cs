@@ -6,9 +6,7 @@ using System.Linq;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// One enum type's declared members, both ways round, with the ordinals widened to <see cref="long"/> so neither
-/// the public <see cref="IEnumColumn"/> view nor the label projection has to be generic over the storage width.
-/// Built once per codec and shared by every column that codec decodes.
+/// Stores an enum's label-to-ordinal mappings with ordinals widened to <see cref="long"/>.
 /// </summary>
 internal sealed class EnumMemberTable
 {
@@ -63,8 +61,7 @@ internal sealed class EnumMemberTable
             $"The type '{TypeName}' declares no member with the ordinal {ordinal.ToString(CultureInfo.InvariantCulture)}.");
 
     /// <summary>
-    /// Creates the exception for a label the type does not declare. The message names the offending label, which
-    /// identifies the value better than its row would: a wrong label is usually wrong at every row.
+    /// Creates the exception for a label the type does not declare.
     /// </summary>
     /// <param name="label">The label that was not found, or null.</param>
     /// <param name="paramName">The parameter name to report.</param>

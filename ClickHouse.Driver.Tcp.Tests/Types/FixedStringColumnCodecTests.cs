@@ -185,9 +185,7 @@ public class FixedStringColumnCodecTests
     [Test]
     public void RowText_ColumnHoldingNoBytes_SaysWhichColumnCannotBeDecoded()
     {
-        // A column a caller built and labelled FixedString(N) need not hold bytes at all. The reading is compiled
-        // from the type string, so the mismatch surfaces here rather than as a bare cast failure naming neither
-        // the column nor the reading.
+        // Caller-built columns can carry the type name without exposing FixedString byte storage.
         using var notBytes = new ArrayColumn<int>("c", "FixedString(4)", new[] { 1 });
 
         var thrown = Assert.Throws<InvalidOperationException>(() => FixedStringColumnCodec.RowText(notBytes, 0));

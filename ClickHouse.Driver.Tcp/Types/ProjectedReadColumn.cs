@@ -3,12 +3,8 @@ using System;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// A read-side view that converts each row of another column on access — what
-/// <see cref="Block.ReadAs{T}(string)"/> returns when the requested type is not the column's own, and the shape
-/// every projection takes: a codec whose reading is elementwise compiles its per-value conversion into the read
-/// delegate, while a composite or a <c>LowCardinality</c> projects its child column once and then addresses it
-/// here per row. The source column is borrowed and stays the block's to dispose; this view owns nothing but the
-/// array <see cref="Values"/> materializes.
+/// Converts another column on access. The source remains owned by its block; this view owns only the array that
+/// <see cref="Values"/> materializes.
 /// </summary>
 /// <typeparam name="T">The projected element type.</typeparam>
 internal sealed class ProjectedReadColumn<T> : IColumn<T>
@@ -36,9 +32,7 @@ internal sealed class ProjectedReadColumn<T> : IColumn<T>
     public int RowCount => source.RowCount;
 
     /// <summary>
-    /// The projected values, converted once and cached. The array is this view's own, not a pooled buffer, so it
-    /// is not returned on <see cref="Dispose"/> — but it is only as valid as the source column it was read from,
-    /// so build it while the owning block is alive.
+    /// The projected values, converted once and cached. Read them before the source block is disposed.
     /// </summary>
     public ReadOnlySpan<T> Values
     {
@@ -66,8 +60,7 @@ internal sealed class ProjectedReadColumn<T> : IColumn<T>
     public object GetValue(int row) => this[row];
 
     /// <summary>
-    /// Releases nothing: the source column belongs to the block that produced it, and emptying it here would take
-    /// the block's data away from every other reader of it.
+    /// Releases nothing because the source column belongs to its block.
     /// </summary>
     public void Dispose()
     {

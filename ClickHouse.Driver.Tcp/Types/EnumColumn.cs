@@ -5,10 +5,7 @@ using System.Runtime.CompilerServices;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// An <c>Enum8</c>/<c>Enum16</c> column: the decoded ordinals, plus the type's declared members so the labels are
-/// reachable without re-parsing the type string. The values surface as the raw ordinal, exactly as the underlying
-/// fixed-width column decoded them — the wrapper adds <see cref="IEnumColumn"/> and forwards everything else,
-/// including the contiguous span the fixed-width writer blits from.
+/// Wraps decoded enum ordinals with their declared labels while preserving the underlying typed values and span.
 /// </summary>
 /// <typeparam name="T">The underlying signed integer (<see cref="sbyte"/> for <c>Enum8</c>, <see cref="short"/> for <c>Enum16</c>).</typeparam>
 internal sealed class EnumColumn<T> : IColumn<T>, ISpanColumn<T>, IStoredValuesColumn, IEnumColumn

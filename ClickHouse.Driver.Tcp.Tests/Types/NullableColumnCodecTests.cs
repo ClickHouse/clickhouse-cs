@@ -326,10 +326,7 @@ public class NullableColumnCodecTests
         => Assert.That(Resolve("Nullable(UInt8)").TypeName, Is.EqualTo("Nullable(UInt8)"));
 
     /// <summary>
-    /// Forwarding a reading to the inner column needs this column's null-map to say which rows to read, and only a
-    /// decoded <c>Nullable</c> column has one. A column a caller built and labelled <c>Nullable(String)</c> is told
-    /// so by name rather than failing with a bare cast error, and told when the view is built rather than at
-    /// whichever row is read first. Not reachable through a query, whose columns the codec decodes.
+    /// Verifies the error when a caller-built nullable column has no null-map surface.
     /// </summary>
     [Test]
     public void ReadAs_NullableColumnWithoutANullMap_SaysWhichColumnHasNone()

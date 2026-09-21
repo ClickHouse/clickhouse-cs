@@ -417,8 +417,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// An inner reading taken over the inner column rather than over its values is forwarded like any other, so a
-    /// <c>LowCardinality(String)</c> reads as a <c>byte[]</c> — one conversion per dictionary entry.
+    /// Verifies that LowCardinality forwards the inner column's raw-byte projection.
     /// </summary>
     [Test]
     public void ReadableElementTypes_LowCardinalityOfString_OffersTheBytesToo()
@@ -789,9 +788,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// The projected view stands in for the column it reads, so it reports that column's name and type — and
-    /// disposing it must leave the column alone: the block owns that storage and every other reader of the block
-    /// shares it.
+    /// Verifies that a projected view preserves source identity and does not dispose the source.
     /// </summary>
     [Test]
     public void ReadAs_ProjectedView_CarriesTheSourcesIdentityAndDisposesNothing()
@@ -823,9 +820,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// A byte reading has to come off the column, and every wrapper forwards it to the child holding those bytes,
-    /// so it composes wherever a <c>String</c> can appear. The refusals are the ones that should stay refusals: the
-    /// text, which the decoded value expresses itself, and a shape the inner does not have.
+    /// Verifies that wrappers compose the string column's raw-byte projection.
     /// </summary>
     [Test]
     public void TryProjectColumnRead_EveryCompositeOverAString_OffersTheByteReading()
@@ -870,8 +865,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// A composite needs every child to offer its part of the target, not only the one that pulled it onto the
-    /// column-level form, so one child with no such reading refuses the whole thing.
+    /// Verifies that one unsupported child rejects the composite projection.
     /// </summary>
     [Test]
     public void TryProjectColumnRead_OneChildWithNoSuchReading_RefusesTheWholeComposite()
@@ -886,9 +880,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// A projection reaches a composite's children through its columnar surface, and a column a caller built and
-    /// labelled with that type need not have one. Named by surface rather than left to a bare cast failure, and
-    /// said when the view is built rather than at whichever row is read first.
+    /// Verifies the error when a caller-built composite lacks its decoded columnar surface.
     /// </summary>
     [Test]
     public void ReadAs_CompositeColumnWithoutItsColumnarSurface_SaysWhichSurfaceItLacks()
@@ -903,9 +895,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// A composite leaves a reading its children express one value at a time to <see cref="IColumnCodec.TryProjectRead"/>,
-    /// which builds the row without projecting a child column first. Only the children that need the column-level
-    /// form pull the whole composite onto it.
+    /// Verifies that composites use column projection only when a child requires column state.
     /// </summary>
     [Test]
     public void TryProjectColumnRead_CompositeOfElementwiseChildrenOnly_LeavesItToTheValueProjection()
@@ -924,8 +914,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// <c>LowCardinality</c> is the exception: converting per dictionary entry rather than per row is the point of
-    /// the type, so it takes the column-level form even for an inner reading that is elementwise.
+    /// Verifies that LowCardinality projects dictionary entries even for elementwise conversions.
     /// </summary>
     [Test]
     public void TryProjectColumnRead_LowCardinalityOfElementwiseInner_StillTakesTheColumnForm()
@@ -944,9 +933,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// A <c>JSON</c> value is a document the server parses, so it is text and only text — even though it rides the
-    /// wire through the <c>String</c> codec's body and decodes into the same column class, whose bytes are
-    /// therefore right there.
+    /// Verifies that JSON remains text-only despite using String serialization.
     /// </summary>
     [Test]
     public void TryProjectColumnRead_Json_OffersNoByteReadingEvenThoughItsBodyIsAString()
@@ -963,9 +950,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// The memo keeps one entry, keyed on the source column by reference: a consumer reading one column through
-    /// several calls reuses the view, and another column replaces it. Held to one entry because the consumer is a
-    /// compiled scatter, shared and long-lived, so a growing cache there would retain past blocks.
+    /// Verifies the projected-view cache's single-entry, source-identity behavior.
     /// </summary>
     [Test]
     public void ProjectedViewCache_SameColumnThenAnother_ReusesTheViewThenRebuildsIt()
@@ -999,9 +984,7 @@ public class ColumnReadProjectionTests
         => codec.TryProjectColumnRead(targetType, out _);
 
     /// <summary>
-    /// Asserts a codec really offers an advertised reading, and — where that reading is elementwise — that its
-    /// expression has exactly the advertised type. A column-level reading is typed by the view it produces, which
-    /// <see cref="ReadAs{T}"/> casts, so the integration cases pin that end.
+    /// Asserts that a codec offers the advertised target and types elementwise projections correctly.
     /// </summary>
     private static void AssertOffers(IColumnCodec codec, Type target, string type)
     {

@@ -118,9 +118,7 @@ internal sealed class VariantColumn : IColumn<object>, IVariantColumn
     public int TypeCount => typeColumns.Length;
 
     /// <inheritdoc/>
-    // Read off the children rather than carried separately: each was stamped with its own codec's type name when it
-    // was decoded, so this cannot disagree with GetTypeColumn(i).TypeName. Built on first use, like Values, and
-    // wrapped so a caller cannot cast the list back to its array and rewrite an entry.
+    // Derive names from the child columns and expose an immutable list.
     public IReadOnlyList<string> TypeNames
         => typeNames ??= Array.AsReadOnly(Array.ConvertAll(typeColumns, column => column.TypeName));
 

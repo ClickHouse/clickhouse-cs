@@ -59,10 +59,7 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     public object NullPlaceholder => nullPlaceholder ??= new byte[size];
 
     /// <summary>
-    /// A <c>FixedString(N)</c> is a byte string, so the bytes are the lossless reading and the UTF-8 text of them
-    /// is the other. The text is every one of the <c>N</c> bytes decoded, the zero padding a shorter stored value
-    /// was widened with included: trimming it would be a guess, since a value may legitimately end in a zero. Same
-    /// as the HTTP path's <c>FixedStringType</c>, and as <see cref="FixedStringColumn.GetString"/>.
+    /// Offers the lossless bytes and their UTF-8 text. Text includes all <c>N</c> bytes, including zero padding.
     /// </summary>
     public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(byte[]), typeof(string) };
 
@@ -73,9 +70,7 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
         => writeType == typeof(byte[]) ? LowCardinalityKeys.Bytes() : null;
 
     /// <summary>
-    /// The text reading decodes off the column's own blob, so no <c>byte[]</c> is materialized per row to decode
-    /// from. <see cref="TryProjectRead"/> offers the same reading from a value, for a caller holding one element
-    /// rather than the column.
+    /// Decodes text directly from the column blob without allocating an intermediate byte array per row.
     /// </summary>
     public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
@@ -106,8 +101,7 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     /// <returns>That row's text, including any zero padding, and U+FFFD for any byte UTF-8 cannot express.</returns>
     /// <exception cref="InvalidOperationException"><paramref name="column"/> holds no bytes to decode.</exception>
     /// <exception cref="IndexOutOfRangeException"><paramref name="row"/> is negative or not less than the row count.</exception>
-    // A column this client decoded holds its rows in one blob, so the row is decoded from a slice of it with no
-    // intermediate array. A column built by a caller is read through the indexer instead, which materializes one.
+    // Decoded columns use their shared blob; caller-built columns use their byte-array indexer.
     public static string RowText(IColumn column, int row) => column switch
     {
         FixedStringColumn dense => Encoding.UTF8.GetString(dense.GetBytes(row)),

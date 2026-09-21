@@ -321,8 +321,7 @@ public sealed class InsertRoundTripCase
         yield return Arrays<long>("DateTime64(3)", new[] { 0L, 1_700_000_000_123L });
         yield return Arrays<long>("DateTime64(9)", new[] { 1_700_000_000_123_456_789L }, Array.Empty<long>());
 
-        // The dense shape built by a caller rather than received from a read: flat elements plus per-row offsets,
-        // which is what the codec writes with no rebuilding. Same rows as the jagged Array(UInt32) case above.
+        // Caller-built dense shape: flat elements plus row offsets, with no rebuild on write.
         yield return DenseArrays("UInt32", new uint[] { 10, 20, 30, 40, 50 }, new[] { 0, 3, 3, 5 });
 
         yield return Arrays("UUID", new[] { Guid.Empty }, new[] { new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff") });
@@ -817,12 +816,8 @@ public sealed class InsertRoundTripCase
             },
             NestedSettings);
 
-        // LowCardinality(T): the inner values are replaced by a block-local dictionary plus per-row keys. Values
-        // repeat (and include the inner default) so the dedup and the reserved slot-0 default are both exercised.
-        // Like Array/Tuple/Map/Nested, LowCardinality is an exception to the "wrap every type in Nullable" rule —
-        // the server rejects Nullable(LowCardinality(T)); nullability composes the other way as
-        // LowCardinality(Nullable(T)), covered by its own cases further below. A numeric inner is
-        // "suspicious" and needs allow_suspicious_low_cardinality_types; String/FixedString are allowed by default.
+        // Repeated values cover dictionary deduplication and reserved defaults. The server requires nullability
+        // inside LowCardinality and gates numeric inners behind allow_suspicious_low_cardinality_types.
         yield return Same(
             "LowCardinality(String)",
             "LowCardinality(String)",

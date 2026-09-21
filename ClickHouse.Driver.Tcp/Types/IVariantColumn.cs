@@ -16,16 +16,8 @@ public interface IVariantColumn : IColumn
     int TypeCount { get; }
 
     /// <summary>
-    /// The alternative type names, in discriminator order — the ClickHouse type string of each child column, so a
-    /// caller knows what a discriminator selects without inspecting the values. Entry <c>i</c> is the same string
-    /// as <c>GetTypeColumn(i).TypeName</c>.
-    ///
-    /// <para>
-    /// This is the only route to the mapping. The server canonicalizes the alternatives into name-sorted order and
-    /// that sorted order is the discriminator order, so the order the type was declared in says nothing; and the
-    /// type string on the column header need not list the alternatives at all — a <c>Geometry</c> column's header
-    /// is the single word <c>Geometry</c>.
-    /// </para>
+    /// The child columns' ClickHouse type names in discriminator order. This order may differ from the declared
+    /// order, and aliases such as <c>Geometry</c> may not list their alternatives in the column type name.
     /// </summary>
     IReadOnlyList<string> TypeNames { get; }
 

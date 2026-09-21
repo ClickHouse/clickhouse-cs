@@ -41,15 +41,12 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     public object NullPlaceholder => string.Empty;
 
     /// <summary>
-    /// A <c>String</c> is a byte string, so a column of <c>byte[]</c> rows writes as well as a column of text, and
-    /// stores those bytes verbatim. That is the only way to store bytes UTF-8 cannot spell, and the counterpart of
-    /// reading them back through <see cref="IStringColumn"/>.
+    /// Accepts text or raw byte rows. Raw bytes are stored verbatim.
     /// </summary>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
 
     /// <summary>
-    /// A <c>byte[]</c> per row is a reading as well as the text, and the only lossless one. Diagnostics only;
-    /// <see cref="TryProjectColumnRead"/> is the authority.
+    /// Offers text and lossless raw bytes. <see cref="TryProjectColumnRead"/> is authoritative.
     /// </summary>
     public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
 
@@ -67,8 +64,7 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     }
 
     /// <summary>
-    /// The bytes are read off the column, not projected from its text: the text reading spells a byte UTF-8 cannot
-    /// express as U+FFFD, so re-encoding it would hand back the replacement character rather than the data.
+    /// Reads raw bytes from the column because re-encoding decoded text would lose invalid UTF-8 sequences.
     /// </summary>
     public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
@@ -82,9 +78,7 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     /// <returns>That row's bytes.</returns>
     /// <exception cref="InvalidOperationException"><paramref name="column"/> does not expose its bytes.</exception>
     /// <exception cref="IndexOutOfRangeException"><paramref name="row"/> is negative or not less than the row count.</exception>
-    // The type test is per row rather than once, which an isinst beside a byte[] allocation does not measurably
-    // cost. Every column this codec decodes exposes the bytes; a column built by a caller and labelled String
-    // need not, and would otherwise fail with a bare cast error naming neither the column nor the reading.
+    // Caller-built columns may carry the String type name without exposing decoded byte storage.
     public static byte[] RowBytes(IColumn column, int row) => column is IStringColumn text
         ? text.GetBytes(row).ToArray()
         : throw new InvalidOperationException(
@@ -92,13 +86,8 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
             $"so its values cannot be read as a byte[]. Only a String column decoded from a server response does.");
 
     /// <inheritdoc/>
-    // Equal strings encode to equal bytes. The converse can fail (two strings differing only in unpaired
-    // surrogates both encode to the replacement character), which costs a redundant dictionary entry and nothing
-    // else.
-    //
-    // Raw bytes get no key even though the writer takes them: comparing them as strings is not lossless, and
-    // a byte-oriented relation would make every LowCardinality(String) dictionary encode its text first. That
-    // refuses LowCardinality(String) from a byte column when the write is planned.
+    // String keys may keep redundant entries when different invalid UTF-16 inputs encode alike, but never merge
+    // different bytes. Raw bytes have no key, so LowCardinality(String) rejects them during planning.
     public object LowCardinalityKeyWriter(Type writeType)
         => writeType == typeof(string) ? LowCardinalityKeys.Identity<string>() : null;
 

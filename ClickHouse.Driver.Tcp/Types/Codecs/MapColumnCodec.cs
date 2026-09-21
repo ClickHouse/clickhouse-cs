@@ -231,9 +231,8 @@ internal sealed class MapColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// Forwards a column-level reading to the key and value codecs over the two flat entry columns, then repairs
-    /// them per row. Offered only where one of the two has such a reading; when both convert their values one at a
-    /// time, <see cref="TryProjectRead"/> builds the row array more cheaply.
+    /// Projects the flat key and value columns once, then pairs their slices by row. Used only when a child
+    /// conversion needs column state.
     /// </summary>
     public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
@@ -264,8 +263,7 @@ internal sealed class MapColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// Builds the view over one decoded column: the flat key and value columns projected once, then paired per row
-    /// through the offsets this column already holds.
+    /// Builds a row view over the projected key and value columns.
     /// </summary>
     /// <typeparam name="TKey">The projected key type.</typeparam>
     /// <typeparam name="TValue">The projected value type.</typeparam>

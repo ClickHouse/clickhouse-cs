@@ -65,8 +65,7 @@ public class EnumColumnCodecTests
     }
 
     /// <summary>
-    /// The placeholder a <c>Nullable(Enum8)</c> writes at a null row has to be a declared member — the server
-    /// rejects an undeclared ordinal even where it is never read — so the label form must be a declared label.
+    /// Verifies that nullable enum placeholders use a declared member.
     /// </summary>
     [Test]
     public void NullPlaceholderAs_String_IsADeclaredLabel()
@@ -135,8 +134,7 @@ public class EnumColumnCodecTests
     }
 
     /// <summary>
-    /// <c>Members</c> is public API over a list the codec built while parsing, so it is handed out wrapped: a
-    /// consumer that cast it back could otherwise leave it disagreeing with the lookups beside it.
+    /// Verifies that the public member list cannot mutate the lookup tables.
     /// </summary>
     [Test]
     public void Members_IsNotWritableThroughACastBackToItsBackingCollection()
@@ -155,8 +153,7 @@ public class EnumColumnCodecTests
     }
 
     /// <summary>
-    /// An Enum16 declaring more members than a message can list still names the offending label, and says how many
-    /// it left out rather than printing thousands.
+    /// Verifies that errors truncate large member lists and report the omitted count.
     /// </summary>
     [Test]
     public void NoSuchLabel_TypeWithManyMembers_ListsTenAndCountsTheRest()

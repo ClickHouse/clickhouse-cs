@@ -14,18 +14,9 @@ namespace ClickHouse.Driver.Tcp.Types;
 internal delegate IColumn ColumnReadProjection(IColumn source);
 
 /// <summary>
-/// Resolves the reading a codec offers as a projection from column to column, which is the primitive every read
-/// tier asks for: <see cref="Block.ReadAs{T}(string)"/>, the POCO scatter, and
-/// <see cref="ClickHouseTcpTypes.CanRead"/>.
-///
-/// <para>
-/// Column-level rather than value-level because several readings are not a function of one value. A
-/// <c>String</c>'s bytes are in the column and gone from its decoded text. A <c>LowCardinality</c> row is a
-/// dictionary slot, so the conversion belongs to the dictionary and its result is shared by every row holding
-/// that key. A composite's is its child column's, projected once and then addressed per row. A codec that
-/// converts one value at a time says so with <see cref="IColumnCodec.TryProjectRead"/> instead and gets
-/// <see cref="Elementwise"/> built for it.
-/// </para>
+/// Resolves the column projection used by <see cref="Block.ReadAs{T}(string)"/>, POCO reads, and
+/// <see cref="ClickHouseTcpTypes.CanRead"/>. It prefers a codec's column-level projection and otherwise builds an
+/// elementwise view.
 /// </summary>
 internal static class ColumnProjection
 {
@@ -55,9 +46,7 @@ internal static class ColumnProjection
     }
 
     /// <summary>
-    /// Whether a codec offers any reading as <paramref name="targetType"/>. The same three questions
-    /// <see cref="For"/> asks, in the same order, but stopping at the answer — so a leaf's elementwise reading is
-    /// recognized without compiling it.
+    /// Whether a codec offers a reading as <paramref name="targetType"/>, without compiling an elementwise view.
     /// </summary>
     /// <param name="codec">The column's codec.</param>
     /// <param name="targetType">The CLR type to read the values as.</param>
@@ -68,8 +57,7 @@ internal static class ColumnProjection
             || codec.TryProjectRead(Expression.Parameter(codec.ElementType, "value"), targetType, out _);
 
     /// <summary>
-    /// Closes a codec's generic projection builder over the projected type(s) and binds the state it needs, so the
-    /// codec pays one reflective instantiation per resolution and none per block.
+    /// Closes a generic projection builder and binds its state once per resolution.
     /// </summary>
     /// <typeparam name="TState">The builder's second parameter: whatever the codec captured while resolving.</typeparam>
     /// <param name="builder">A static <c>IColumn Build&lt;...&gt;(IColumn source, TState state)</c> method.</param>
@@ -92,9 +80,7 @@ internal static class ColumnProjection
     /// <param name="column">The decoded column.</param>
     /// <returns>The column, as that surface.</returns>
     /// <exception cref="InvalidOperationException"><paramref name="column"/> does not expose that surface.</exception>
-    // The reading is resolved from a type string, so a column a caller built and labelled with that type need not
-    // have the shape the type implies. Named here rather than left to a bare cast failure, which would identify
-    // neither the column nor the reading.
+    // Caller-built columns can carry a type name without exposing that type's decoded shape.
     public static TSurface Surface<TSurface>(IColumn column)
         where TSurface : class, IColumn
         => column as TSurface
@@ -134,14 +120,8 @@ internal static class ColumnProjection
 }
 
 /// <summary>
-/// A one-entry memo of a projected view, keyed on the source column by reference, for a consumer that reads one
-/// column through several calls. The POCO scatter is one: it runs once per materialization window, and a view
-/// built per window would convert a dictionary — or a child column — again for every window of the block.
-///
-/// <para>
-/// The entry outlives the block whose column it holds, until another column replaces it. That retains one view's
-/// worth of converted values, which is the same order as the caches the column itself builds while it is alive.
-/// </para>
+/// Caches one projected view by source-column identity so repeated POCO materialization windows reuse it. The
+/// last source and view remain referenced after block disposal until another source replaces them.
 /// </summary>
 internal sealed class ProjectedViewCache
 {
@@ -156,11 +136,8 @@ internal sealed class ProjectedViewCache
     /// <summary>The projected view of <paramref name="column"/>, reusing the last one when it is the same column.</summary>
     /// <param name="column">The decoded column to project.</param>
     /// <returns>The view.</returns>
-    // The entry is read and published as one reference to an immutable object, so a reader either does not see a
-    // concurrent write at all or sees a fully built entry, never a half-written one. A lost race projects twice and
-    // drops one view; both are views over the column their own caller passed, so neither can be handed the wrong
-    // one. Plans are cached and shared, so two enumerations of different blocks can take turns evicting each
-    // other's entry — that costs the reuse, not correctness.
+    // The immutable entry is published atomically. A race may project twice or evict another block's view, but
+    // cannot return a view for the wrong source.
     public IColumn For(IColumn column)
     {
         Entry current = Volatile.Read(ref entry);

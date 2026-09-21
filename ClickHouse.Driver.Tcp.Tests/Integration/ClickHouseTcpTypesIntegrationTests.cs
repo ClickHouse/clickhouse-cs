@@ -8,10 +8,7 @@ using ClickHouse.Driver.Tcp.Format;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// Pins <see cref="ClickHouseTcpTypes"/> against the operations it predicts. The point of an interrogative API is
-/// that its answer is the operation's answer, so each case asks the question and then does the thing: builds a
-/// column of the candidate CLR type and inserts it, or reads a column of the candidate type back. A prediction
-/// that disagrees with the outcome is worse than no prediction at all, because a caller would trust it.
+/// Verifies <see cref="ClickHouseTcpTypes"/> answers by performing the corresponding reads and writes.
 /// </summary>
 [TestFixture]
 [Category("Integration")]

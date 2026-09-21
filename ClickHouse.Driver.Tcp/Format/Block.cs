@@ -140,10 +140,8 @@ public sealed class Block : IDisposable
     }
 
     /// <summary>
-    /// The column called <paramref name="name"/>, as the typed view its values read through. This is a cast:
-    /// <typeparamref name="T"/> is the type the column decoded to, so a <c>DateTime64</c> column is an
-    /// <c>IColumn&lt;long&gt;</c> and an <c>Enum8</c> an <c>IColumn&lt;sbyte&gt;</c>. To read a column as another
-    /// type its ClickHouse type offers, use <see cref="ReadAs{T}(string)"/>.
+    /// Returns the named column as <see cref="IColumn{T}"/>. This casts to the decoded element type; use
+    /// <see cref="ReadAs{T}(string)"/> to convert to another supported type.
     /// </summary>
     /// <remarks>Same scan and the same advice as <see cref="this[string]"/>: bind once, outside the row loop.</remarks>
     /// <typeparam name="T">The CLR element type the column's values read as.</typeparam>
@@ -155,8 +153,7 @@ public sealed class Block : IDisposable
     public IColumn<T> Column<T>(string name) => Typed<T>(this[name]);
 
     /// <summary>
-    /// The column at <paramref name="index"/>, as the typed view its values read through. A cast, as
-    /// <see cref="Column{T}(string)"/> is.
+    /// Returns the column at <paramref name="index"/> with the same cast semantics as <see cref="Column{T}(string)"/>.
     /// </summary>
     /// <typeparam name="T">The CLR element type the column's values read as.</typeparam>
     /// <param name="index">The zero-based column index.</param>
@@ -166,30 +163,11 @@ public sealed class Block : IDisposable
     public IColumn<T> Column<T>(int index) => Typed<T>(At(index));
 
     /// <summary>
-    /// The column called <paramref name="name"/> read as <typeparamref name="T"/>, converting each value if the
-    /// column did not decode to that type: a <c>DateTime64(3)</c> column as a <see cref="DateTime"/>, an
-    /// <c>Enum8</c> as its label, an <c>Array(DateTime)</c> as a <see cref="DateTime"/><c>[]</c> per row, a
-    /// <c>String</c> as its raw <c>byte[]</c>, a <c>FixedString(N)</c> as the text of its <c>N</c> bytes. Which
-    /// readings a type offers is the type's own business, and the same set the POCO tier maps from — a
-    /// <c>UInt32</c> column reads as a <c>uint</c> and nothing else, and asking for anything else fails naming
-    /// what it does read as.
-    ///
-    /// <para>
-    /// When <typeparamref name="T"/> is the column's own element type this <em>is</em> the column, so the fast
-    /// path costs nothing and <see cref="IColumn{T}.Values"/> is still the borrowed span. Otherwise the result is
-    /// a converting view: the indexer projects one value per call, and <see cref="IColumn{T}.Values"/>
-    /// materializes the whole column into an array of its own, once. Bind it once outside the row loop, as with
-    /// every accessor here, and read it while the block is alive — the values underneath belong to the block.
-    /// </para>
-    ///
-    /// <para>
-    /// A reading a single value cannot express is taken over the column instead, and a composite forwards that to
-    /// the child column holding it, so it composes: a <c>String</c>'s bytes reach a <c>byte[]</c>, an
-    /// <c>Array(String)</c> a <c>byte[][]</c> per row, a <c>LowCardinality(String)</c> one array per dictionary
-    /// entry. A converted reference value taken from a dictionary is shared by every row holding that key, as it
-    /// is when the column is read as its own type, so treat it as read-only. The zero-copy alternative is to reach
-    /// the same storage yourself through <see cref="IStringColumn"/> and the columnar views.
-    /// </para>
+    /// Reads the named column as <typeparamref name="T"/> using a conversion supported by its ClickHouse type.
+    /// Returns the original column when no conversion is needed. Otherwise, the indexer converts on access and
+    /// <see cref="IColumn{T}.Values"/> materializes the converted values once. The result borrows the source
+    /// column and is valid only while this block is alive. Treat projected reference values as read-only because
+    /// dictionary-backed rows may share them.
     /// </summary>
     /// <typeparam name="T">The CLR type to read the values as.</typeparam>
     /// <param name="name">The column name.</param>
@@ -200,7 +178,7 @@ public sealed class Block : IDisposable
     public IColumn<T> ReadAs<T>(string name) => Codecs.Projections.ReadAs<T>(this[name], Context);
 
     /// <summary>
-    /// The column at <paramref name="index"/> read as <typeparamref name="T"/>. Same rules and same costs as
+    /// Reads the column at <paramref name="index"/> with the same conversion and lifetime rules as
     /// <see cref="ReadAs{T}(string)"/>.
     /// </summary>
     /// <typeparam name="T">The CLR type to read the values as.</typeparam>

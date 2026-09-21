@@ -3,11 +3,7 @@ using System;
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
 /// <summary>
-/// Covers the public entry points of <see cref="ClickHouseTcpTypes"/>: the argument contract and how a type string
-/// this client cannot handle is reported. Which answers the codecs give is
-/// <see cref="ColumnWriteAcceptanceTests"/> and <see cref="ColumnReadProjectionTests"/>; that those answers match
-/// what a real insert and a real read do is
-/// <c>ClickHouseTcpTypesIntegrationTests</c>.
+/// Covers the public argument and error contracts of <see cref="ClickHouseTcpTypes"/>.
 /// </summary>
 [TestFixture]
 public class ClickHouseTcpTypesTests

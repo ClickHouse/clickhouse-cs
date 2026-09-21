@@ -238,9 +238,8 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     }
 
     /// <summary>
-    /// Forwards a column-level reading to the element codec over the flat element column, then reslices it per row.
-    /// Offered only where the element codec has one of its own: an element whose values convert one at a time is
-    /// cheaper projected into the row array <see cref="TryProjectRead"/> already builds.
+    /// Projects the flat element column once, then slices it by row. Used only when the element conversion needs
+    /// column state.
     /// </summary>
     public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
@@ -261,8 +260,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     }
 
     /// <summary>
-    /// Builds the view over one decoded column: the flat element column projected once, then addressed per row
-    /// through the offsets this column already holds.
+    /// Builds a row view over the projected flat element column.
     /// </summary>
     /// <typeparam name="T">The projected element type; the view's element type is <c>T[]</c>.</typeparam>
     /// <param name="source">The decoded <c>Array(T)</c> column.</param>
@@ -307,16 +305,8 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         => TryDense(column, out _) || ResolveWriteShape(column) is not null;
 
     /// <summary>
-    /// Recognizes a column already in the wire's layout whose elements the inner codec takes as they stand, so the
-    /// offsets and the element column are re-emitted with nothing rebuilt.
-    ///
-    /// <para>
-    /// The element type is not required to be this codec's own <typeparamref name="TElement"/>: a caller building
-    /// the dense shape names the CLR type it holds, which for a convenience type differs from the canonical one an
-    /// <c>Array(DateTime)</c> decodes to. Matching only the canonical type would send those columns down the jagged
-    /// path, where the flattening view indexes the outer column per element and each access materializes the whole
-    /// row again — quadratic in the row's length for a shape that needed no work at all.
-    /// </para>
+    /// Recognizes a validated dense column whose inner element type this codec can write. Convenience element
+    /// types are accepted as well as the canonical decoded type, avoiding a jagged rebuild.
     /// </summary>
     private bool TryDense(IColumn column, out IDenseArrayColumn dense)
     {

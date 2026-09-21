@@ -10,18 +10,8 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
-/// A codec for <c>Enum8</c> / <c>Enum16</c>, whose values ride the wire as their underlying signed ordinal
-/// (<see cref="sbyte"/> for <c>Enum8</c>, <see cref="short"/> for <c>Enum16</c>). The read/write of those
-/// ordinals is exactly the fixed-width integer path; this codec adds parsing and retention of the
-/// <c>'label' = ordinal</c> map from the type string, so a malformed enum definition fails clearly and the map is
-/// available on both sides.
-///
-/// <para>
-/// The decoded column surfaces the raw ordinal (an <see cref="IColumn{T}"/> of the underlying integer) and
-/// implements <see cref="IEnumColumn"/>, which carries the members. A label is also a reading
-/// (<see cref="TryProjectRead"/> offers <see cref="string"/>) and a write shape: a column of labels converts to
-/// its ordinals on the way out, so what a caller reads as labels can be written back as labels.
-/// </para>
+/// Reads and writes <c>Enum8</c> or <c>Enum16</c> ordinals and their declared labels. Decoded columns expose raw
+/// ordinals through <see cref="IColumn{T}"/> and labels through <see cref="IEnumColumn"/> or string projection.
 /// </summary>
 /// <typeparam name="T">The underlying signed integer type (<see cref="sbyte"/> or <see cref="short"/>).</typeparam>
 internal sealed class EnumColumnCodec<T> : IColumnCodec
@@ -63,9 +53,7 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     public object NullPlaceholder => nullPlaceholder;
 
     /// <inheritdoc/>
-    // The ordinal is written as-is, so ordinal equality is byte equality. A label column is written as the
-    // ordinal its label resolves to, so labels compare on that same ordinal: two spellings of one member share a
-    // dictionary entry, and an undeclared label faults here exactly as it would in the write.
+    // Labels project to their encoded ordinal so LowCardinality keys agree with the wire.
     public object LowCardinalityKeyWriter(Type writeType)
     {
         if (writeType == typeof(T))

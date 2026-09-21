@@ -223,11 +223,7 @@ public class ArrayColumnCodecTests
         => Assert.Throws<NotSupportedException>(() => Resolve("Array(NoSuchType)"));
 
     /// <summary>
-    /// A dense column carrying a convenience element type — <c>DateTime</c> where <c>Array(DateTime)</c> decodes to
-    /// <c>uint</c> — is a shape the server cannot produce, so only a unit test reaches it. It has to take the dense
-    /// path: on the jagged path the flattening view indexes the outer column once per element, and each access
-    /// materializes the whole row again, which is quadratic in the row's length. Counting reads of the element
-    /// column's span separates the two: dense reads it as one run, jagged rebuilds per element.
+    /// Verifies that dense columns with a writable convenience element type bypass the jagged rebuild path.
     /// </summary>
     [Test]
     public async Task WriteColumn_DenseColumnOfAConvenienceElementType_WritesItWithoutRebuildingEachRow()

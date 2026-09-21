@@ -90,9 +90,7 @@ public class GeometryIntegrationTests
     [Test]
     public async Task QueryAsync_GeometryColumn_NamesItsAlternativesThroughTypeNames()
     {
-        // Geometry is the case that leaves a caller with nothing to parse: the column header is the single word
-        // "Geometry", so the alternatives appear nowhere in the type string, and the discriminator order is the
-        // server's name-sorted one rather than any order a caller declared. TypeNames is the whole answer.
+        // Geometry's header omits its alternatives; TypeNames supplies them in server discriminator order.
         await using var connection = await TcpServerFixture.ConnectAsync(None);
 
         string headerType = null;

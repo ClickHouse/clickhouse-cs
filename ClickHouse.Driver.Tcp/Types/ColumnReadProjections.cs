@@ -6,31 +6,16 @@ using ClickHouse.Driver.Tcp.Poco;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// Resolves and caches the projections behind <see cref="Block.ReadAs{T}(string)"/>. The reading itself is
-/// <see cref="ColumnProjection.For"/>'s answer; this only remembers it, so a type is resolved once rather than
-/// once per block.
-///
-/// <para>
-/// One entry per column type, resolution context and target type. The key is the type string rather than the codec
-/// instance because a parameterized type (<c>Enum8(...)</c>, <c>DateTime64(3)</c>, anything composing them) builds
-/// a fresh codec per block, so a cache keyed on the instance would resolve again for every block. The context is
-/// part of the key for the same reason it is part of a codec's identity: a timezone-less <c>DateTime</c> resolves
-/// its offset from the session timezone, which is baked into the projection.
-/// </para>
+/// Caches <see cref="Block.ReadAs{T}(string)"/> projections by type name, resolution context, and target type.
+/// The context preserves session-dependent conversions such as timezone-less <c>DateTime</c>.
 /// </summary>
 internal sealed class ColumnReadProjections
 {
     // Distinguishes "no reading offered" from "not resolved yet", so a refused target is not re-resolved per call.
     private static readonly object NoReading = new();
 
-    // A ceiling on the cache, which lives as long as the registry. The key includes the session timezone, so an
-    // application setting one per request over many types could otherwise accumulate compiled delegates without
-    // bound. Past the ceiling a projection is resolved per call: slower, and still correct.
-    //
-    // Approximate, not exact: the count is read and the entry added as two steps, so first-time resolutions
-    // racing each other at the ceiling can each see room and all insert, overshooting by however many raced. A
-    // lock would make it exact at the cost of contention on a path that runs once per type; the point here is to
-    // bound growth, and an overshoot of a few entries does not affect that.
+    // Limit long-lived compiled projections when callers use many session timezones. The lock-free count check
+    // may overshoot slightly under concurrency; uncached projections remain correct.
     private const int MaxCachedReaders = 1024;
 
     private readonly ColumnCodecRegistry registry;

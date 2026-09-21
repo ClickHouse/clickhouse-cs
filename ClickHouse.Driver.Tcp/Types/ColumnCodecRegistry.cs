@@ -35,8 +35,7 @@ internal sealed class ColumnCodecRegistry
     }
 
     /// <summary>
-    /// The compiled per-row readers behind <see cref="Block.ReadAs{T}(string)"/>, cached here so a projection is
-    /// compiled once for a type rather than once per block. See <see cref="ColumnReadProjections"/>.
+    /// Cached projections used by <see cref="Block.ReadAs{T}(string)"/>.
     /// </summary>
     public ColumnReadProjections Projections { get; }
 

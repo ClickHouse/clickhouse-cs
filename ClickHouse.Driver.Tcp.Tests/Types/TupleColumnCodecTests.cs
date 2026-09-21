@@ -404,9 +404,7 @@ public class TupleColumnCodecTests
     }
 
     /// <summary>
-    /// A projected reading pairs each child column with the child codec of the same position, so a column carrying
-    /// fewer children than its type string declares is refused by name. Not reachable through a query, whose
-    /// columns this codec builds from that same type string.
+    /// Verifies the error when a caller-built tuple has fewer children than its type declares.
     /// </summary>
     [Test]
     public void ReadAs_TupleColumnWithFewerChildrenThanItsType_ThrowsNamingBothCounts()

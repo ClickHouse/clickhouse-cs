@@ -20,9 +20,7 @@ namespace ClickHouse.Driver.Tcp.Poco;
 internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int start, int rowCount, long rowOffset);
 
 /// <summary>
-/// Compiles a per-column loop that fills one property a row at a time — from <see cref="PocoValueProjection"/>
-/// inlined over each decoded value, or from a view the codec projects over the whole column where a single value
-/// cannot express the reading.
+/// Compiles a loop that fills one POCO property from either an elementwise conversion or a projected column.
 /// </summary>
 internal static class PocoColumnScatterFactory
 {
@@ -72,14 +70,8 @@ internal static class PocoColumnScatterFactory
         var locals = new List<ParameterExpression>(3) { row };
         var body = new List<Expression>(4);
 
-        // A reading that is not a function of one value (a String column's bytes into a byte[] property, a
-        // LowCardinality one converted per dictionary entry) is taken through the codec's column-level projection:
-        // the view is bound once in the prologue and the loop reads it a row at a time, so this branch needs
-        // neither the value local nor a tier to source it through. Asked only for a property type that is not the
-        // element type itself, which the value expresses by definition — the same shortcut Block.ReadAs takes.
-        //
-        // Through the memo rather than the projection itself: a scatter runs once per materialization window, and
-        // building the view per window would convert this column's dictionary again for every window of the block.
+        // Cache column-level projections across materialization windows so dictionaries and child columns are
+        // converted once per source column.
         Expression assign;
         if (member.MemberType != elementType
             && codec.TryProjectColumnRead(member.MemberType, out ColumnReadProjection projection))

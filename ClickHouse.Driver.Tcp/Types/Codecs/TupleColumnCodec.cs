@@ -259,9 +259,8 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// Forwards a column-level reading to the child codecs over the per-element child columns, then rebuilds the
-    /// tuple per row. Offered only where a child has such a reading; when every child converts its values one at a
-    /// time, <see cref="TryProjectRead"/> builds the tuple more cheaply.
+    /// Projects child columns once, then rebuilds each tuple row. Used only when a child conversion needs column
+    /// state.
     /// </summary>
     public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
@@ -302,8 +301,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// Compiles <c>(columns, row) =&gt; new ValueTuple&lt;...&gt;(columns[0][row], ...)</c> over the projected child
-    /// columns, once per resolution. An expression rather than a loop because each field has its own static type.
+    /// Compiles a typed tuple constructor over the projected child columns.
     /// </summary>
     /// <param name="targetType">The <c>ValueTuple</c> type to build.</param>
     /// <param name="targetArguments">Its type arguments, one per child.</param>
@@ -333,7 +331,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// Builds the view over one decoded column: each child column projected once, then read as one tuple per row.
+    /// Builds a row view over the projected child columns.
     /// </summary>
     /// <typeparam name="T">The <c>ValueTuple</c> type the view surfaces.</typeparam>
     /// <param name="source">The decoded <c>Tuple(...)</c> column.</param>

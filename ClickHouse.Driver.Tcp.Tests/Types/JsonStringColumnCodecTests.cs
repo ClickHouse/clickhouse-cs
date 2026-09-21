@@ -113,10 +113,7 @@ public class JsonStringColumnCodecTests
     }
 
     /// <summary>
-    /// JSON reads and writes through the <c>String</c> codec, which also takes a <c>byte[]</c> per row. A JSON
-    /// value is a document the server parses, so bytes are not a shape this type means anything by, and refusing
-    /// them keeps the column predicate and the element-type list saying the same thing — otherwise a byte column
-    /// would insert into <c>JSON</c> while <c>Array(JSON)</c> and every interrogative reported it unwritable.
+    /// Verifies that JSON does not inherit String's raw-byte write shape.
     /// </summary>
     [Test]
     public void CanWrite_ByteColumn_IsRefusedUnlikeAPlainStringColumn()

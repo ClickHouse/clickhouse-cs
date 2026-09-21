@@ -931,10 +931,7 @@ public class ColumnarReadSurfaceIntegrationTests
     [Test]
     public async Task StreamAsync_EnumColumn_ExposesItsDeclaredMembersThroughIEnumColumn()
     {
-        // An enum's values ride the wire as their ordinal, so the IColumn<T> surface is the raw sbyte/short and the
-        // labels live in the declaration. IEnumColumn carries that declaration, so neither a row's label nor the
-        // ordinal a label maps to needs the type string re-parsed. Filtering through the ordinal touches the label
-        // once instead of per row.
+        // Verifies raw ordinal access and declaration-based label lookup without parsing the type string.
         await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
@@ -1026,9 +1023,7 @@ public class ColumnarReadSurfaceIntegrationTests
     [Test]
     public async Task StreamAsync_MixedComposites_TraversedThroughTheNonGenericViewsWithNoTypeArgument()
     {
-        // Code that handles "whatever the server sent" cannot name a closed generic view: it would need one arm per
-        // CLR element type. Each generic view has a non-generic base carrying the untyped children and that view's
-        // own layout spans, so one arm per *shape* is enough, and the child is then matched on its own terms.
+        // Non-generic views expose composite shapes without requiring their CLR element types.
         await using var client = TcpServerFixture.CreateClient();
 
         bool nullableMatched = false;
@@ -1114,10 +1109,7 @@ public class ColumnarReadSurfaceIntegrationTests
     [Test]
     public async Task StreamAsync_NullableTemporalColumn_ReachesTheCalendarReadingThroughItsInnerColumn()
     {
-        // The wrapper deliberately does not implement IDateTimeColumn: those accessors return a value for every
-        // row, and a null row has none. The dense inner column does implement it, so the calendar reading is one
-        // level down — and reaching it through the non-generic view needs no knowledge of the storage width
-        // (uint for DateTime, long for DateTime64, int for Time), which is what IDateTimeColumn exists to hide.
+        // Nullable exposes temporal access through its dense inner column because null rows have no temporal value.
         await using var client = TcpServerFixture.CreateClient();
 
         bool wrapperIsTemporal = false;
@@ -1164,9 +1156,7 @@ public class ColumnarReadSurfaceIntegrationTests
     [Test]
     public async Task StreamAsync_ViewMatchedWithTheWrongTypeArgument_NeverMatchesWhileTheNonGenericViewDoes()
     {
-        // The trap the non-generic bases exist to avoid. A generic view is parameterized by the *inner* element
-        // type, so the nullable spelling (or any other wrong argument) compiles with no warning, is never true, and
-        // sends the caller down whatever its else branch does — correct answers at the boxed price, silently.
+        // A generic view with the wrong inner type does not match; the non-generic shape view still does.
         await using var client = TcpServerFixture.CreateClient();
 
         bool wrongNullableArgument = true;

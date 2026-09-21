@@ -426,10 +426,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// Projects the dictionary once and then indexes it by key, so a reading costs one conversion per distinct
-    /// value rather than one per row — the whole reason the type exists. Offered for every reading the inner
-    /// offers, elementwise ones included, which is why this codec does not leave those to
-    /// <see cref="TryProjectRead"/>.
+    /// Projects each dictionary entry once, then reads rows by key.
     /// </summary>
     public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
     {
@@ -473,9 +470,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// Builds the view over one decoded column, surfacing the dictionary's own projected type. An absent row is
-    /// <see langword="null"/>, which only a reference <typeparamref name="T"/> can hold — the nullable surfaces
-    /// over a value type go through <see cref="ProjectLifted{T}"/> instead.
+    /// Builds a row view over a projected dictionary. Nullable value types use <see cref="ProjectLifted{T}"/>.
     /// </summary>
     /// <typeparam name="T">The projected dictionary type, which is also this view's element type.</typeparam>
     /// <param name="source">The decoded <c>LowCardinality(...)</c> column.</param>
@@ -522,9 +517,8 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public bool CanWriteElementType(Type elementType) => InnerAccepts(elementType, out _);
 
-    // The inner type has to offer a wire key, not merely be writable: this codec deduplicates, so accepting a
-    // write type with no key would fault once the body was under way. String takes raw bytes, but offers no key
-    // for them because converting arbitrary bytes to its comparable string is not lossless.
+    // LowCardinality needs wire-equivalent keys to build its dictionary. Reject writable types without a key
+    // during planning rather than failing after the write starts.
     private bool InnerAccepts(Type elementType, out Type innerType)
         => TryInnerWriteType(elementType, out innerType)
             && inner.CanWriteElementType(innerType)
