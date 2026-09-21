@@ -173,8 +173,7 @@ internal sealed class Time64ColumnCodec : IColumnCodec
         }
     }
 
-    // A time of day is always inside the column's range, so this needs no bound of its own; only the scale
-    // shift, which truncates toward zero exactly as the TimeSpan path does.
+    // TimeOnly always fits the column range; scale conversion truncates toward zero.
     private long ToCount(TimeOnly value)
         => FixedPointScaling.ShiftDecimalPlaces(value.Ticks, scale - DotNetTickScale);
 

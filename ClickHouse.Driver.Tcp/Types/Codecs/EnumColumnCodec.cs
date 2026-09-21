@@ -197,9 +197,7 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
             : throw members.NoSuchLabel(label, nameof(label));
 }
 
-/// <summary>
-/// Factory for the bare <c>Enum</c> name, and the member parsing the three factories share.
-/// </summary>
+/// <summary>Creates bare enums and parses enum members.</summary>
 internal static class EnumColumnCodec
 {
     /// <summary>Builds the codec for a bare <c>Enum</c>, whose width comes from the declared ordinals.</summary>
@@ -208,8 +206,7 @@ internal static class EnumColumnCodec
     /// <exception cref="FormatException">A member is malformed, or no member is declared.</exception>
     public static IColumnCodec Create(TypeNode node)
     {
-        // Verified on 26.6: the server takes Enum8 while every ordinal is in the Int8 range and Enum16
-        // otherwise, and reports the column under the width it chose.
+        // Match the server: use Enum8 when every ordinal fits, otherwise Enum16.
         bool fitsInt8 = true;
         foreach (TypeNode argument in node.Arguments)
         {
@@ -227,9 +224,7 @@ internal static class EnumColumnCodec
     /// <summary>Parses a single <c>'label' = ordinal</c> member token into its label and ordinal.</summary>
     internal static (string Label, long Ordinal) ParseMember(string token, TypeNode node)
     {
-        // A member is a single-quoted label, then '=', then a signed integer, e.g. 'a' = -1. The label carries the
-        // server's own escaping (a label with a newline arrives as 'a\nb'), and may contain '=' or a comma inside
-        // the quotes, so scan and decode the quoted run rather than splitting naively on '='.
+        // Scan the quoted label because it may contain escaped separators.
         int open = token.IndexOf('\'');
         if (open < 0)
         {

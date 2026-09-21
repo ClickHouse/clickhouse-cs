@@ -7,17 +7,8 @@ using System.Threading.Tasks;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// An INSERT whose data phase does not finish, either because the caller cancelled it or because the server
-/// rejected an early block while later ones were still going out. An insert writes every block before reading
-/// anything, so both cases leave blocks the socket has already taken, and the question a caller needs answered
-/// is whether any of those rows land.
-///
-/// <para>
-/// The row phase is also the one stretch where the client cannot send a Cancel packet — appended to a truncated
-/// Data packet it would be read as more block bytes — so an interrupted insert is expressed by dropping the
-/// connection. That makes "the pool slot comes back" a separate claim from "the connection survives", and both
-/// are asserted here on a pool one connection wide.
-/// </para>
+/// Verifies interrupted insert data phases. Cancellation drops the connection because a Cancel packet cannot
+/// safely follow a partial Data packet; the pool must still return its permit and commit no partial insert.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -40,9 +31,7 @@ public class InsertInterruptionIntegrationTests
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = MergeTree ORDER BY id", cancellationToken: None);
 
-            // OnBlockWritten runs after the block's flush, so cancelling from it puts the cancellation squarely
-            // inside the data phase with one block already on the socket. Waiting on a timer instead would land
-            // anywhere, including before the phase starts.
+            // Cancel after the first flushed block to target the data phase deterministically.
             using var cancellation = new CancellationTokenSource();
             var blocksWritten = new List<int>();
             var options = new ClickHouseTcpInsertOptions
@@ -82,9 +71,7 @@ public class InsertInterruptionIntegrationTests
     }
 
     /// <summary>
-    /// The server rejects the second block while the client is still writing the rest. Nothing reads the error
-    /// until every block has gone out, so this pins that the write phase finishes and reports the server's error
-    /// rather than stalling against a peer that stopped reading.
+    /// Verifies that an early server rejection is reported while later blocks are still being sent.
     /// </summary>
     [TestCase(5, TestName = "{m}(five blocks)")]
     [TestCase(200, TestName = "{m}(two hundred blocks)")]

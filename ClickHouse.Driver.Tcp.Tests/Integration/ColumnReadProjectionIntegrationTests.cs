@@ -101,9 +101,7 @@ public class ColumnReadProjectionIntegrationTests
     }
 
     /// <summary>
-    /// The server accepts and applies fixed offsets .NET cannot represent — on 26.6 both of these are past
-    /// <see cref="TimeZoneInfo"/>'s ±14 hours — and it is the server that decides what a header carries. The
-    /// seconds are the wire value and need no zone, so the read has to arrive; only a calendar value reports it.
+    /// Verifies raw reads for fixed offsets outside <see cref="TimeZoneInfo"/>'s supported range.
     /// </summary>
     [TestCase("Fixed/UTC+19:00:00", "+19:00:00")]
     [TestCase("Fixed/UTC-18:00:00", "-18:00:00")]

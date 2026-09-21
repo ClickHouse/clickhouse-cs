@@ -199,10 +199,7 @@ public class VariantColumnCodecTests
         Assert.That(bytes, Is.Not.Empty);
     }
 
-    // The dense path pairs the column's alternative i with the codec's alternative i and reuses the column's own
-    // discriminators, so it is only correct when the two lists are the same list. The gate compared the counts
-    // alone, which let a column of one two-alternative Variant be written as another: every discriminator then
-    // named the wrong type, and the failure came from inside the body, after the discriminators had gone out.
+    // Dense discriminators are reusable only when both Variant types have the same ordered alternatives.
     [Test]
     public async Task WriteColumn_DenseColumnOfAnotherVariant_WritesThisCodecsDiscriminatorsAndNotTheColumnsOwn()
     {
@@ -210,8 +207,7 @@ public class VariantColumnCodecTests
         using var numbers = new ArrayColumn<ulong>("v", "UInt64", new ulong[] { 42 });
         using var text = new ArrayColumn<string>("v", "String", new[] { "hi" });
 
-        // As a column read from a Variant(UInt64, String) arrives: its alternative 0 is UInt64, where this codec's
-        // alternative 0 is String. Row 0 selected UInt64, row 1 String.
+        // Source and target assign opposite indices to UInt64 and String.
         using var dense = new VariantColumn(
             "v", "Variant(UInt64, String)", new byte[] { 0, 1 }, new IColumn[] { numbers, text },
             rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
@@ -231,10 +227,7 @@ public class VariantColumnCodecTests
         }));
     }
 
-    // The other side of that gate: a column whose alternatives *are* this codec's must still take the dense path.
-    // Where the two paths differ is a value whose CLR type several alternatives share — the dense column already
-    // records which alternative each row selected, while scattering the same values by runtime type cannot choose.
-    // A check that rejected a column it should accept would silently downgrade every such insert to a refusal.
+    // Matching dense columns retain their discriminator when CLR types cannot distinguish alternatives.
     [Test]
     public void WriteColumn_DenseColumnOfThisVariant_WritesWhereScatteringTheSameValuesCouldNotChoose()
     {

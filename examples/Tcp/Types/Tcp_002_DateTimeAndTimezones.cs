@@ -50,8 +50,7 @@ public static class TcpDateTimeAndTimezones
                         "precise_at",
                         new[] { instant.AddMilliseconds(123) }),
 
-                    // Time and Time64 hold a signed duration of up to 999 hours, so TimeSpan is the reading that
-                    // covers the whole range.
+                    // TimeSpan covers the full signed duration range.
                     ClickHouseTcpColumn.Create("elapsed", new[] { TimeSpan.FromHours(27) }),
                     ClickHouseTcpColumn.Create(
                         "precise_elapsed",
@@ -72,9 +71,7 @@ public static class TcpDateTimeAndTimezones
                 PrintTime((ITimeColumn)block["elapsed"]);
                 PrintTime((ITimeColumn)block["precise_elapsed"]);
 
-                // Reading back as a TimeOnly is a narrowing: a value outside 00:00:00-23:59:59.9999999 is not a
-                // time of day, and such a row is refused rather than reduced modulo a day. Read it as a TimeSpan
-                // when the column can hold a duration.
+                // TimeOnly reads reject negative values and durations of at least one day; use TimeSpan for those.
                 Console.WriteLine($"opens_at as TimeOnly: {block.ReadAs<TimeOnly>("opens_at")[0]:HH:mm}");
 
                 // ReadAs converts a whole column to a reading its type offers, applying the same zone and scale.

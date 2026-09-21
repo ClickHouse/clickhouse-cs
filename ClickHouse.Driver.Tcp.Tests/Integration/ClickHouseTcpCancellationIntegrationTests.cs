@@ -100,10 +100,7 @@ public class ClickHouseTcpCancellationIntegrationTests
     }
 
     /// <summary>
-    /// The same one-second deadline against a query that sends nothing at all, which is what it takes to make it
-    /// fire. A <c>Progress</c> packet counts as the server speaking, and the server sends one every
-    /// <c>interactive_delay</c> microseconds (100 ms by default), so <c>sleep(3)</c> on its own finishes under a
-    /// one-second deadline — see the case below. Raising <c>interactive_delay</c> past the sleep buys the silence.
+    /// Verifies that the read timeout fires when no packet arrives before the timeout expires.
     /// </summary>
     [Test]
     public async Task StreamAsync_ServerSilentForLongerThanReadTimeout_FailsWithTimeoutAndGivesThePoolSlotBack()
@@ -120,13 +117,11 @@ public class ClickHouseTcpCancellationIntegrationTests
             Settings = new Dictionary<string, string>(StringComparer.Ordinal) { ["interactive_delay"] = "10000000" },
         };
 
-        // A TimeoutException inside a connection failure comes from nowhere else, so the types alone prove the timeout
-        // fired. Asserted instead of the elapsed time, which would make this a race on a loaded machine.
+        // The exception types prove the timeout fired without a timing-sensitive elapsed-time assertion.
         var timeout = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(
             async () => await client.ExecuteScalarAsync("SELECT sleep(3)", queryOptions, None));
 
-        // The timeout unwinds a socket read that was genuinely blocked, and the cancel attempt on the way out
-        // must not block behind the same silence. A slot that never came back would fail here instead.
+        // The next query verifies that timeout cleanup returned the only pool slot.
         object next = await client.ExecuteScalarAsync("SELECT toUInt64(7)", cancellationToken: None);
 
         Assert.Multiple(() =>
@@ -138,9 +133,7 @@ public class ClickHouseTcpCancellationIntegrationTests
     }
 
     /// <summary>
-    /// The complement, and the reason the case above has to silence the server: three seconds of work that
-    /// produces no row until the end still survives a one-second deadline, because the periodic
-    /// <c>Progress</c> packets keep resetting it.
+    /// Verifies that progress packets reset the read timeout.
     /// </summary>
     [Test]
     public async Task StreamAsync_QuerySilentApartFromProgressPackets_SurvivesAShorterReadTimeout()

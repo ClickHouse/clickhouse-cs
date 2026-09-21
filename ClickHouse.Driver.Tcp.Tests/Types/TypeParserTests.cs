@@ -68,9 +68,7 @@ public class TypeParserTests
     [TestCase(" ")]
     public void Parse_BacktickedIdentifierWithBreakCharacter_IsOneArgument(string inside)
     {
-        // A backticked identifier is opaque, like a quoted label. The server emits these itself — a JSON typed
-        // path, a Tuple or Nested field name — and normalizes a double-quoted name into a backticked one, so a
-        // header carrying one must parse or the whole read fails before a row decodes.
+        // Structural characters inside backticks belong to the identifier.
         TypeNode node = TypeParser.Parse($"JSON(`a{inside}b` Int64)");
 
         Assert.Multiple(() =>
@@ -87,9 +85,7 @@ public class TypeParserTests
     [TestCase(@"Tuple(`a\nb` Int8)")]
     public void Parse_BacktickedIdentifier_RoundTripsThroughToString(string type)
     {
-        // ToString rebuilds from the tokens, so a name split across tokens would come back respelled — and the
-        // type name is what an insert header echoes. The last two are the server's own printed spelling for a
-        // backtick and a newline inside a name (verified on 26.6).
+        // Preserve the server's quoted spelling when rebuilding the type name.
         Assert.That(TypeParser.Parse(type).ToString(), Is.EqualTo(type));
     }
 
@@ -104,8 +100,7 @@ public class TypeParserTests
     [Test]
     public void Parse_EmptyQuotedLabel_ClosesTheSpan()
     {
-        // Enum8('' = 1) is a legal type. The two quotes are an empty label, not one escaped quote, so the span
-        // must close at the second one rather than swallow the rest of the type.
+        // Two quotes form an empty label, not an escaped quote.
         TypeNode node = TypeParser.Parse("Enum8('' = 1)");
         Assert.That(node.Arguments.Single().Name, Is.EqualTo("'' = 1"));
     }
@@ -116,8 +111,7 @@ public class TypeParserTests
     [TestCase("Array(Int32) ", "Array(Int32)")]
     public void Parse_WhitespaceBetweenStructuralCharacters_ParsesLikeTheCompactSpelling(string type, string expected)
     {
-        // A run of only whitespace is no token at all. Whitespace after a closing paren is how a person
-        // pretty-prints a nested type, and it reaches the parser through a parameter type hint.
+        // Ignore whitespace between structural tokens.
         Assert.That(TypeParser.Parse(type).ToString(), Is.EqualTo(expected));
     }
 

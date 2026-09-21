@@ -148,7 +148,7 @@ internal sealed class TimeColumnCodec : IColumnCodec
         }
     }
 
-    // A time of day is always inside the column's range, so this needs no bound of its own.
+    // TimeOnly always fits the column range.
     private static int ToSeconds(TimeOnly value) => (int)(value.Ticks / TimeSpan.TicksPerSecond);
 
     private static int ToSeconds(TimeSpan value)

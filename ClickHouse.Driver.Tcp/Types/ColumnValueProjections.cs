@@ -48,11 +48,7 @@ internal static class ColumnValueProjections
     /// <param name="timeZone">The column's timezone.</param>
     /// <returns>The instant, presented in <paramref name="timeZone"/>.</returns>
     /// <exception cref="FormatException">The column's timezone is one this platform cannot represent.</exception>
-    /// <remarks>
-    /// Takes the resolved zone, not the zone: a codec embeds this call in an expression tree before any row
-    /// exists, and asking for the zone there would refuse the reading rather than the value. The dereference
-    /// costs a null check against a timezone conversion.
-    /// </remarks>
+    /// <remarks>Timezone resolution is deferred until a row is projected.</remarks>
     public static DateTimeOffset DateTimeToOffset(uint seconds, ResolvedTimeZone timeZone)
         => TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(seconds), timeZone.Value);
 
@@ -75,7 +71,7 @@ internal static class ColumnValueProjections
     /// <exception cref="OverflowException">The count is decodable but outside <see cref="DateTimeOffset"/>'s range.</exception>
     public static DateTimeOffset DateTime64ToOffset(long count, int scale, ResolvedTimeZone timeZone)
     {
-        // Resolved once, outside the try, since the conversion below needs it either way.
+        // Resolve once before translating range failures.
         TimeZoneInfo zone = timeZone.Value;
 
         // A count can be decodable yet outside DateTimeOffset's range. Point at the raw values rather than let a bare
@@ -131,9 +127,7 @@ internal static class ColumnValueProjections
     /// <exception cref="InvalidOperationException">The value is not a time of day.</exception>
     public static TimeOnly Time64ToTimeOnly(long count, int scale)
     {
-        // Checked on the raw count rather than on the TimeSpan: at scale 8 or 9 the shift to 100 ns ticks
-        // truncates toward zero, so a negative count finer than one tick reaches zero and passes a check made
-        // after it. -1 at scale 9 would read as midnight.
+        // Check before conversion because sub-tick negative counts truncate to zero.
         if (count < 0 || count >= SecondsPerDay * FixedPointScaling.Pow10(scale))
         {
             decimal seconds = (decimal)count / FixedPointScaling.Pow10(scale);
@@ -162,9 +156,7 @@ internal static class ColumnValueProjections
         }
     }
 
-    // The narrowing a TimeOnly read is: a Time column holds a signed duration of up to 999 hours, and only the
-    // part of that range which is a time of day has a TimeOnly. Refused rather than wrapped, a duration reduced
-    // modulo a day being a different value.
+    // TimeOnly represents only non-negative durations shorter than one day; do not wrap other values.
     private static TimeOnly AsTimeOfDay(TimeSpan value, string typeName)
     {
         if (value < TimeSpan.Zero || value >= OneDay)

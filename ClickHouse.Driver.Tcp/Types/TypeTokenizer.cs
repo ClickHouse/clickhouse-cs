@@ -6,10 +6,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// <summary>
 /// Splits a ClickHouse type string into tokens for <see cref="TypeParser"/>: the structural characters
 /// <c>(</c>, <c>)</c>, <c>,</c> each as their own token, and the (trimmed) runs between them as identifier
-/// tokens. Quoted spans are opaque — single-quoted enum labels and backtick-quoted identifiers alike, so
-/// <c>Enum8('a,b' = 1)</c> and <c>Tuple(`a,b` Int64)</c> each tokenize as one argument, not two. A run that is
-/// only whitespace yields no token, so a pretty-printed <c>Array( Array(Int32) )</c> tokenizes like its compact
-/// spelling.
+/// tokens. Quoted spans are opaque, and whitespace-only runs produce no token.
 /// </summary>
 internal static class TypeTokenizer
 {

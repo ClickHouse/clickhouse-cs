@@ -327,8 +327,7 @@ public class ClickHouseTcpConnectionStringBuilderTests
         });
     }
 
-    // A readonly user reaches this switch through a connection string more often than through options, since that
-    // is what a host application takes from configuration.
+    // The switch must round-trip through configuration-facing connection strings.
     [Test]
     public void ToOptions_SendJsonAndDynamicSerializationSettings_CarriesTheKeyAndDefaultsToOn()
     {

@@ -62,10 +62,7 @@ internal static class ParameterTypeInference
             case IDictionary dictionary:
                 return InferMap(dictionary, parameterName);
 
-            // The shape this client reads a Map column back as, which Accepts already knows. It is also an
-            // IEnumerable, so it has to be decided before the Array arm below, whose element inference has no
-            // reading for a KeyValuePair. Without this arm a row read from a Map column could not be sent back
-            // as a Dynamic or an untyped parameter.
+            // Detect the Map read shape before the general IEnumerable case.
             case not string and IEnumerable pairs when MapPairs.IsPairSequence(value):
                 return InferPairSequence(pairs, parameterName);
 
@@ -86,9 +83,7 @@ internal static class ParameterTypeInference
     /// <returns>True when the alternative accepts the value.</returns>
     public static bool Accepts(TypeNode node, object value)
     {
-        // The names below are canonical, so an alias or a case variant is mapped to one first, as the formatter
-        // does before its own dispatch. Without this Variant(BIGINT, String) accepted no Int64 at all, while the
-        // server resolves that declaration to Variant(Int64, String).
+        // Match aliases and case variants against canonical type names.
         string name = ColumnCodecRegistry.Default.TryCanonicalName(node.Name, out string registered)
             ? registered
             : node.Name;

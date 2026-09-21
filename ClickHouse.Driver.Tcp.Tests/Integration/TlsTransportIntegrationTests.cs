@@ -9,23 +9,14 @@ using ClickHouse.Driver.Tcp.Tests.Utilities;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// The native protocol inside a TLS tunnel, against the suite's own server. <c>TcpConnectionFactoryTests</c>
-/// covers the handshake and every certificate-validation outcome, but against a listener that answers with a
-/// canned Hello and nothing else, so no test in the default suite has ever run a query, a block or an insert
-/// through an <c>SslStream</c>. The <c>Cloud/</c> fixture does, and is skipped unless a service is configured.
-///
-/// <para>
-/// <see cref="TlsTerminatingProxy"/> supplies the tunnel, so what is under test is the client's side of it: a
-/// real handshake, then results large enough to span many TLS records, an insert, and a pooled connection used
-/// again. The server's own TLS implementation is not covered here, and is not the driver's to cover.
-/// </para>
+/// Exercises queries, blocks, inserts, and pooled reuse through a real <see cref="SslStream"/>.
+/// <see cref="TlsTerminatingProxy"/> terminates TLS before forwarding to the test server.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
 public class TlsTransportIntegrationTests
 {
-    // The name the proxy's certificate carries, not the loopback address the client dials, so TlsServerName is
-    // what the certificate is matched against.
+    // Match the hostname in the proxy certificate, not the loopback address.
     private const string CertificateName = "clickhouse.tls.test.invalid";
 
     private static readonly CancellationToken None = CancellationToken.None;
@@ -54,8 +45,7 @@ public class TlsTransportIntegrationTests
     }
 
     /// <summary>
-    /// The handshake, and that the server answering inside the tunnel is the real one: the version it reports
-    /// has to be the version the same server reports over plaintext. A fake server could pass everything else.
+    /// Verifies the handshake and that the tunnel reaches the configured server.
     /// </summary>
     [Test]
     public async Task PingAsync_OverTls_HandshakesWithTheServerTheSuiteAlreadyUses()
@@ -77,8 +67,7 @@ public class TlsTransportIntegrationTests
     }
 
     /// <summary>
-    /// A result far larger than the 16 KB a TLS record holds, so the read path refills across record boundaries
-    /// rather than finding each block whole. Compression is on by default, so the blocks are compressed as well.
+    /// Verifies compressed reads spanning multiple TLS records.
     /// </summary>
     [Test]
     public async Task QueryAsync_OverTls_ReturnsEveryRowAcrossManyTlsRecords()
@@ -101,9 +90,7 @@ public class TlsTransportIntegrationTests
     }
 
     /// <summary>
-    /// The write path through the tunnel, on a pool of one and into a temporary table. A native connection is the
-    /// session that holds that table, so the read-back succeeds only if the same <c>SslStream</c> connection came
-    /// back out of the pool for each of the three operations.
+    /// Verifies writes and pooled TLS connection reuse with a connection-scoped temporary table.
     /// </summary>
     [Test]
     public async Task InsertRowsAsync_OverTls_RoundTripsOnTheOnePooledTlsConnection()
@@ -123,7 +110,7 @@ public class TlsTransportIntegrationTests
             rows.Add(((ulong)row[0], (string)row[1]));
         }
 
-        // No DROP: the table goes when the session does, which is what the read-back above relies on.
+        // The temporary table is removed with the session.
         Assert.Multiple(() =>
         {
             Assert.That(rows, Has.Count.EqualTo(1000));

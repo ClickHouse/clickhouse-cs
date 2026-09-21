@@ -9,17 +9,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// Inserts into a table whose columns are not all insertable — <c>DEFAULT</c>, <c>MATERIALIZED</c> and
-/// <c>ALIAS</c> — which is the shape of most real schemas and the one the test tables elsewhere in this suite
-/// never have.
-///
-/// <para>
-/// Two things only a real server settles here. The insert schema block does not name every column, and which
-/// ones it omits decides whether a caller who built columns from the table definition can insert at all. And an
-/// insert under <c>input_format_defaults_for_omitted_fields = 1</c> makes the server send a
-/// <c>TableColumns</c> packet, whose body the client decodes only to stay aligned — a decoder reading the wrong
-/// number of bytes would leave the rest of the response mis-framed.
-/// </para>
+/// Covers inserts into tables with <c>DEFAULT</c>, <c>MATERIALIZED</c>, and <c>ALIAS</c> columns.
+/// Also verifies framing around the optional <c>TableColumns</c> packet.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -27,8 +18,7 @@ public class ComputedColumnInsertIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
 
-    // What makes the server send the TableColumns packet before the insert schema block. Verified on 26.6: with
-    // this on the packet arrives (one per insert), with it off it does not.
+    // Makes the server send TableColumns before the insert schema block.
     private static readonly Dictionary<string, string> DefaultsForOmittedFields = new(StringComparer.Ordinal)
     {
         ["input_format_defaults_for_omitted_fields"] = "1",
@@ -44,8 +34,7 @@ public class ComputedColumnInsertIntegrationTests
         }
     }
 
-    // id, plain: insertable. withDefault: insertable, computed when omitted. materialized, aliased: never
-    // insertable, and absent from the insert schema block.
+    // The schema block includes id, plain, and withDefault; it omits materialized and aliased.
     private static async Task<string> CreateTableAsync(ClickHouseTcpConnection connection)
     {
         string table = UniqueTableName();
@@ -87,10 +76,7 @@ public class ComputedColumnInsertIntegrationTests
     }
 
     /// <summary>
-    /// The <c>TableColumns</c> packet is discarded rather than surfaced, so this cannot assert that it arrived —
-    /// only that the response stays aligned around it, which is what a wrong byte count would break. Two inserts
-    /// on one connection, because the packet comes once per insert and a decoder that under-reads leaves the
-    /// leftovers for the next operation.
+    /// Verifies framing across consecutive <c>TableColumns</c> packets on one connection.
     /// </summary>
     [Test]
     public async Task InsertAsync_UnderDefaultsForOmittedFields_StaysAlignedAroundTheTableColumnsPacket()
@@ -106,7 +92,7 @@ public class ComputedColumnInsertIntegrationTests
             await connection.InsertAsync(
                 $"INSERT INTO {table} (id, plain) VALUES", IdAndPlain(), settings: DefaultsForOmittedFields, cancellationToken: None);
 
-            // On the same connection, so it reads whatever the two inserts left on the wire.
+            // Read on the same connection to detect leftover packet bytes.
             List<string> rows = await ReadEveryColumnAsync(connection, table);
 
             Assert.Multiple(() =>
@@ -125,9 +111,7 @@ public class ComputedColumnInsertIntegrationTests
     }
 
     /// <summary>
-    /// An insert with no column list. The schema block names the three insertable columns and omits the
-    /// <c>MATERIALIZED</c> and <c>ALIAS</c> ones, so what a caller must supply is not the table's column list —
-    /// which is what makes building columns from the table definition go wrong.
+    /// Verifies that the schema block contains only insertable columns.
     /// </summary>
     [Test]
     public async Task InsertAsync_NoColumnList_SchemaBlockNamesTheInsertableColumnsOnly()
@@ -176,8 +160,7 @@ public class ComputedColumnInsertIntegrationTests
     }
 
     /// <summary>
-    /// Supplying a <c>MATERIALIZED</c> column, the mistake a caller makes after reading the table definition.
-    /// The client refuses it against the schema block before writing anything, and names the column.
+    /// Verifies that the client rejects a supplied <c>MATERIALIZED</c> column before writing rows.
     /// </summary>
     [Test]
     public async Task InsertAsync_SupplyingAMaterializedColumn_RefusesAndNamesTheColumn()
@@ -196,8 +179,7 @@ public class ComputedColumnInsertIntegrationTests
             var refusal = Assert.ThrowsAsync<ArgumentException>(
                 async () => await connection.InsertAsync($"INSERT INTO {table} (id, plain) VALUES", columns, cancellationToken: None));
 
-            // The mismatch writes no row block and closes the row stream cleanly, so the caller's mistake costs
-            // neither rows nor the connection. Counted on the same connection, which is the proof it survived.
+            // Query on the same connection to verify that rejection wrote no rows and kept it usable.
             long committed = 0;
             await foreach (Block block in connection.QueryAsync($"SELECT count() FROM {table}", cancellationToken: None))
             {
@@ -219,9 +201,7 @@ public class ComputedColumnInsertIntegrationTests
     }
 
     /// <summary>
-    /// Naming the <c>MATERIALIZED</c> column in the statement instead. Now it is the server's refusal, not the
-    /// client's, and it arrives before the schema block — so the two mistakes fail on different sides and a
-    /// caller sees a different exception type for each.
+    /// Verifies that the server rejects a statement naming a <c>MATERIALIZED</c> column.
     /// </summary>
     [Test]
     public async Task InsertAsync_StatementNamesAMaterializedColumn_IsRefusedByTheServer()
@@ -250,8 +230,7 @@ public class ComputedColumnInsertIntegrationTests
         }
     }
 
-    // A row-stream source over columns already built: the insert calls Gather per block, and these columns hold
-    // every row already, so there is nothing to gather.
+    // Adapts already-built columns to the row-stream source interface.
     private sealed class FixedColumnSource(IReadOnlyList<IColumn> columns) : IInsertColumnSource
     {
         public IReadOnlyList<IColumn> Columns { get; } = columns;

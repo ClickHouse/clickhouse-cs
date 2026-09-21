@@ -44,9 +44,7 @@ public class ClickHouseTcpClientSettingsTests
         Assert.That(merged[setting], Is.EqualTo("0"));
     }
 
-    // Sending either setting is a modification, which a readonly profile refuses outright, so a caller has to be
-    // able to send neither. Sending "0" is not the same thing: the server takes it as a no-op change from a
-    // full-rights user, and still refuses it from a readonly one.
+    // Readonly profiles require both injected settings to be absent, not set to zero.
     [Test]
     public void MergeSettings_SendSerializationSettingsOff_SendsNeither()
     {
@@ -60,8 +58,7 @@ public class ClickHouseTcpClientSettingsTests
         });
     }
 
-    // The switch governs the injection only. A caller who names one of the settings themselves has asked for it,
-    // and a readonly user asking for it is their own error to see.
+    // Disabling injection must preserve settings supplied explicitly by the caller.
     [TestCase(FlattenedSetting)]
     [TestCase(JsonAsStringSetting)]
     public void MergeSettings_SendSerializationSettingsOffAndCallerNamesOne_KeepsTheCallersOwn(string setting)

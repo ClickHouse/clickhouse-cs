@@ -77,9 +77,7 @@ public class DateTime64ColumnCodecTests
     [Test]
     public void WriteColumn_DateTimeOffsetPastTheScalesRange_ThrowsNamingTheValueAndTheColumn()
     {
-        // A fine scale reaches a nearer instant than .NET does: at scale 9 the Int64 nanosecond count stops at
-        // 2262-04-11, well inside DateTimeOffset's range, so a 2300 instant has to be refused. The message has to
-        // carry the value and the type, which is what an OverflowException out of the multiply does not.
+        // DateTime64(9) reaches its Int64 limit in 2262, before DateTimeOffset's limit.
         const string type = "DateTime64(9)";
         DateTime64ColumnCodec codec = Codec(type, "UTC");
         var column = new ArrayColumn<DateTimeOffset>("c", type, new[] { new DateTimeOffset(2300, 1, 1, 0, 0, 0, TimeSpan.Zero) });
@@ -236,9 +234,7 @@ public class DateTime64ColumnCodecTests
     [Test]
     public async Task ReadColumn_FixedUtcOffsetTimeZoneInfoCannotHold_ReadsTheCountsAndReportsOnlyTheZone()
     {
-        // The counts are the wire value and need no zone, so a zone TimeZoneInfo cannot hold (26.6 applies
-        // Fixed/UTC+05:30:15, which is not a whole number of minutes) must not fail the read. DateTime64 carries
-        // its own zone field and projection, so it is not covered by the DateTime codec's case.
+        // Raw counts do not require the unrepresentable sub-minute timezone.
         const string type = "DateTime64(3, 'Fixed/UTC+05:30:15')";
         byte[] bytes = await WriteAsync(w => w.WriteInt64(1_700_000_000_123));
         using var reader = ReaderOver(bytes);
@@ -253,8 +249,7 @@ public class DateTime64ColumnCodecTests
         });
     }
 
-    // The write side of the same rule. A Utc DateTime names an instant, so the zone the column declares is not
-    // needed and must not be resolved: this codec's own scaling is what has to run.
+    // A UTC value already identifies an instant and does not require the column timezone.
     [Test]
     public async Task WriteColumn_UtcDateTimeIntoAZoneTimeZoneInfoCannotHold_WritesTheInstant()
     {

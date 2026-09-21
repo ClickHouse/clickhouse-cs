@@ -743,9 +743,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
             }
         }
 
-        // Both server defaults are 0, so sending either is a setting modification, which a readonly profile
-        // refuses outright (Code 164). A caller who cannot modify settings turns this off and gives up only
-        // JSON and Dynamic reads.
+        // Readonly profiles may disable these modifications; JSON and Dynamic may then use unsupported formats.
         if (sendSerializationSettings)
         {
             if (!merged.ContainsKey(FlattenedSerializationSetting))

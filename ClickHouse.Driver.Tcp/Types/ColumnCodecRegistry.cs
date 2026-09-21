@@ -28,7 +28,7 @@ internal sealed class ColumnCodecRegistry
 
     private readonly Dictionary<string, CodecFactory> byName;
 
-    /// <summary>Every registered name keyed without regard to case, so any case a caller writes resolves.</summary>
+    /// <summary>Maps case-insensitive names to their registered spelling.</summary>
     private readonly Dictionary<string, string> canonicalByAnyCase;
 
     private ColumnCodecRegistry(Dictionary<string, CodecFactory> byName)
@@ -54,9 +54,7 @@ internal sealed class ColumnCodecRegistry
     public bool KnowsTypeName(string name) => TryCanonicalName(name, out _);
 
     /// <summary>
-    /// The spelling this client registers a type under, for a name a caller wrote: an alias, or any case of a
-    /// registered name. Case is not checked against the server's own per-family rules — a name the server
-    /// happens to reject is the server's to reject, and it says so far better than a guess here would.
+    /// Resolves an alias or case variant to its registered spelling.
     /// </summary>
     /// <param name="name">The base type name as the caller wrote it.</param>
     /// <param name="canonical">The registered spelling, or null when no codec matches the name.</param>
@@ -93,9 +91,7 @@ internal sealed class ColumnCodecRegistry
         }
         catch (NotSupportedException refusal) when (!refusal.Message.Contains($"'{node}'", StringComparison.Ordinal))
         {
-            // A refusal from a child names only the child, and 'Boolean' on its own sends a caller searching
-            // their code for a name they never wrote. Keep that message and add the type they did write. The
-            // exception type stays NotSupportedException, which is what the contract promises and callers catch.
+            // Add the caller's outer type when a nested codec reports only its unsupported child.
             throw new NotSupportedException($"{refusal.Message} It is inside the column type '{node}'.", refusal);
         }
     }
@@ -115,17 +111,13 @@ internal sealed class ColumnCodecRegistry
             return factory(node, in context, this);
         }
 
-        // A header always names the canonical type, so this second lookup is for the names a caller writes: a
-        // {p:VARCHAR} hint, ClickHouseType, CanRead/CanWrite. Resolving under the registered name also stamps the
-        // codec with it, so DEC(4, 2) reports itself as Decimal(4, 2). Child nodes come back through here, which
-        // is what makes an alias resolve inside a composite.
+        // Headers are canonical; this path handles aliases and casing supplied by callers, including child types.
         if (TryCanonicalName(node.Name, out string canonical))
         {
             return byName[canonical](new TypeNode(canonical, node.Arguments, node.HasArgumentList), in context, this);
         }
 
-        // No "yet": some of what lands here is not a type any supported server has — Object('json') was removed
-        // from ClickHouse, and MultiPoint never existed — so promising it later would be wrong.
+        // Do not imply that every unknown type will become supported.
         throw new NotSupportedException($"ClickHouse type '{node}' is not supported by this client.");
     }
 
@@ -190,8 +182,7 @@ internal sealed class ColumnCodecRegistry
         AddFactory("Enum8", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum8ColumnCodec.Create(node));
         AddFactory("Enum16", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum16ColumnCodec.Create(node));
 
-        // A header always names a width, so the bare name only ever arrives from a caller: a {p:Enum(...)} hint
-        // or a CanRead/CanWrite question. The shipped HTTP driver resolves it, so a moved query keeps working.
+        // Bare Enum is accepted only from caller-supplied type declarations; headers include the width.
         AddFactory("Enum", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => EnumColumnCodec.Create(node));
 
         // Decimal(P, S) and the fixed-width aliases share the width-by-precision codec factory.

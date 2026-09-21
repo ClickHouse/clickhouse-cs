@@ -9,8 +9,7 @@ using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
-// A yielded Block is borrowed — valid only for its iteration — so every read compares or copies inside the
-// await foreach, never retaining the block.
+// A yielded Block is borrowed and must be consumed within its iteration.
 [TestFixture]
 [Category("Integration")]
 public class ClickHouseTcpConnectionInsertIntegrationTests
@@ -49,12 +48,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         }
     }
 
-    // The dense counterpart of the convenient-form round-trip above: seed a table with the caller-friendly column,
-    // then re-insert what a read produces — the dense wire-shaped column (ArrayValueColumn, TupleColumn, MapColumn,
-    // NestedColumn, VariantColumn, the dictionary-backed LowCardinality column, …) — into a second table and read
-    // that back. This proves every supported type also inserts correctly in its dense form, not just the ergonomic
-    // one, exercising the codecs' zero-copy dense write path end-to-end. The read-back block is re-inserted inside
-    // its own iteration (through a second connection), never retained past it.
+    // Reinsert server-read columns to exercise each codec's dense write path end to end.
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
     public async Task InsertAsync_DenseReadbackReinserted_RoundTripsThroughSelect(InsertRoundTripCase testCase)
     {
@@ -69,8 +63,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
 
             await source.InsertAsync($"INSERT INTO {seedTable} (value) VALUES", new[] { testCase.BuildInsertColumn("value") }, settings: testCase.Settings, cancellationToken: None);
 
-            // Re-insert each dense read-back block into the second table while it is still valid (a second
-            // connection, since the source query is streaming on the first).
+            // Reinsert each borrowed block before advancing the source query.
             await foreach (Block block in source.QueryAsync($"SELECT value FROM {seedTable}", settings: testCase.Settings, cancellationToken: None))
             {
                 await sink.InsertAsync($"INSERT INTO {denseTable} (value) VALUES", new[] { block[0] }, settings: testCase.Settings, cancellationToken: None);
@@ -236,8 +229,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
             var thrown = Assert.ThrowsAsync<ArgumentException>(async () =>
                 await connection.InsertAsync($"INSERT INTO {table} (value) VALUES", new[] { mismatched }, cancellationToken: None));
 
-            // The message names the target, the CLR element type it was given, and what it accepts — not the
-            // driver's internal column class, which tells the caller nothing they wrote.
+            // Report the target and accepted CLR types, not the internal column class.
             Assert.Multiple(() =>
             {
                 Assert.That(thrown.Message, Does.Contain("'value' (Int32)"));
@@ -246,8 +238,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
                 Assert.That(thrown.Message, Does.Not.Contain(nameof(PrimitiveColumn<long>)), "the internal column class is not named.");
             });
 
-            // Only the terminator went out (no data block), so the server saw an insert of no rows and the
-            // connection is left ready and usable — and nothing was actually inserted.
+            // No data block was written, so the connection remains usable and the table stays empty.
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
             Assert.That(await CountAsync(connection, table), Is.EqualTo(0UL));
         }
@@ -407,8 +398,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         });
     }
 
-    // The values-per-row shape (varying lengths, interspersed empties) that makes the offsets stream non-trivial,
-    // shared by the two block-splitting tests below.
+    // Shared non-trivial array shape for the block-splitting tests.
     private static readonly uint[][] JaggedArrayRows =
     {
         new uint[] { 1 },
@@ -429,9 +419,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Array(UInt32)) ENGINE = Memory");
 
-            // maxRowsPerBlock: 2 forces the seven rows into four wire blocks. Each block re-bases its offsets at
-            // zero, so this drives the ergonomic jagged write path across block boundaries. The id column pins the
-            // read-back order (Memory does not guarantee it otherwise).
+            // Split into four blocks to verify per-block offset rebasing.
             IColumn[] columns =
             {
                 PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(JaggedArrayRows.Length)),
@@ -458,10 +446,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Array(UInt32)) ENGINE = Memory");
 
-            // The dense wire-shaped column (one flat inner column + a cumulative offsets array) is the zero-copy
-            // write source a read produces. Splitting it with maxRowsPerBlock: 2 exercises the dense write path's
-            // slice-relative offset arithmetic — subtracting each block's first element index — which only runs
-            // when a block begins at a non-zero element offset (blocks 2+ here).
+            // Later dense blocks start at non-zero element offsets and must rebase their slices.
             var inner = PrimitiveColumn<uint>.FromValues("value", "UInt32", new uint[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 });
             var dense = new ArrayValueColumn<uint>("value", "Array(UInt32)", inner, new[] { 0, 1, 1, 3, 6, 6, 7, 11 }, rowCount: JaggedArrayRows.Length, pooledOffsets: false);
             IColumn[] columns =
@@ -495,11 +480,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Variant(String, UInt64)) ENGINE = Memory", settings);
 
-            // Discriminator 0 = String, 1 = UInt64, 255 = NULL. Interleaving the two alternatives (and a NULL) so
-            // that the maxRowsPerBlock: 2 split lands mid-run for both types — every block after the first then
-            // starts at a non-zero per-type offset, exercising the dense write path's before-slice offset
-            // derivation (the O(length) LocalIndices pass, not the old [0, start) rescan). Each type column holds
-            // its rows' values in row order: String rows 1,4,6; UInt64 rows 0,3,5.
+            // Interleave alternatives so later blocks start at non-zero offsets in both child columns.
             object[] expected = { 100UL, "a", null, 200UL, "b", 300UL, "c" };
             var discriminators = new byte[] { 1, 0, 255, 1, 0, 1, 0 };
             IColumn[] typeColumns =
@@ -531,15 +512,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     }
 
     /// <summary>
-    /// A dense <c>Variant</c> column read from one column and inserted into another whose alternatives differ.
-    /// Such a column cannot use the dense shortcut, which pairs alternative <c>i</c> with alternative <c>i</c>, so
-    /// it is scattered by each value's own type instead — and only a server can say where the values then landed.
-    /// This is the case where the counts match, which is the one no arity check separates.
-    /// <para>
-    /// The alternative the value belongs to has to change index between the two types, or the shortcut reaches
-    /// the same answer and the test cannot fail: here the source's Int64 is alternative 0 and the target's is
-    /// alternative 1, so reusing the source discriminators would name Bool for every row.
-    /// </para>
+    /// Verifies that dense <c>Variant</c> values are remapped when equal-length alternative lists differ.
     /// </summary>
     [Test]
     public async Task InsertAsync_DenseVariantOfAnotherVariantsAlternatives_LandsInTheAlternativeTheValueNames()
@@ -551,24 +524,20 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = Memory");
             await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = Memory");
-            // toInt64: a bare 7 is UInt8, and a Variant takes only its own alternatives. Both rows are Int64 so
-            // that both fit the target, while the source column still declares the String alternative that makes
-            // the two alternative lists differ.
+            // Force both values into the source Int64 alternative.
             await ExecuteAsync(
                 connection,
                 $"INSERT INTO {source} VALUES (CAST(toInt64(-3) AS Variant(Int64, String))), (CAST(toInt64(7) AS Variant(Int64, String)))");
 
-            // Inside the loop: the block owns the column's pooled buffers, so it has to still be alive. The read
-            // needs its own connection — one connection carries one in-flight operation.
+            // Reinsert while the borrowed block still owns its pooled buffers.
             await using ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None);
-            // No ORDER BY on the Variant itself: the server refuses one without allow_suspicious_types_in_order_by,
-            // and the read-back below sorts on a String expression instead.
+            // Sort on a String expression because ordering Variant requires a separate setting.
             await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", cancellationToken: None))
             {
                 await connection.InsertAsync($"INSERT INTO {target} (value) VALUES", new[] { block[0] }, cancellationToken: None);
             }
 
-            // variantType names the alternative the row actually selected, which is the whole question here.
+            // variantType exposes the selected target alternative.
             var readBack = new List<string>();
             await foreach (Block block in connection.QueryAsync(
                 $"SELECT concat(toString(value), ' as ', toString(variantType(value))) FROM {target} ORDER BY toString(value)",
@@ -588,8 +557,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         }
         finally
         {
-            // Its own connection: a write that fails terminates the one it failed on, and a DROP that then
-            // throws ObjectDisposedException would mask the failure under test.
+            // Use a separate cleanup connection because failed writes terminate theirs.
             await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
             await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {source}");
             await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {target}");
@@ -597,9 +565,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     }
 
     /// <summary>
-    /// The same shortcut, where the value fits no alternative of the target at all. The refusal has to come
-    /// before any of the column reaches the wire: the discriminators are written first, so a failure discovered
-    /// in the body leaves a half-written column and costs the connection.
+    /// Verifies that an incompatible dense <c>Variant</c> is rejected before writing its discriminators.
     /// </summary>
     [Test]
     public async Task InsertAsync_DenseVariantWhoseValueNoTargetAlternativeAccepts_RefusesBeforeWritingAnything()
@@ -621,9 +587,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
                     async () => await connection.InsertAsync($"INSERT INTO {target} (value) VALUES", new[] { block[0] }, cancellationToken: None));
             }
 
-            // A fresh connection to count with: the INSERT statement was already in flight when the column was
-            // refused, so the client cannot resume that connection and terminates it. That is the existing
-            // contract for an abandoned insert, not something this test is asserting about.
+            // The abandoned insert terminates its connection, so count on a fresh one.
             long rows = 0;
             await using ClickHouseTcpConnection counter = await TcpServerFixture.ConnectAsync(None);
             await foreach (Block block in counter.QueryAsync($"SELECT count() FROM {target}", cancellationToken: None))
@@ -641,8 +605,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         }
         finally
         {
-            // Its own connection: a write that fails terminates the one it failed on, and a DROP that then
-            // throws ObjectDisposedException would mask the failure under test.
+            // Use a separate cleanup connection because failed writes terminate theirs.
             await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
             await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {source}");
             await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {target}");
@@ -658,12 +621,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Dynamic) ENGINE = Memory", DynamicSplitSettings);
 
-            // The Dynamic counterpart of the Variant case above, and the one that matters most: a Dynamic slice
-            // plan derives each type's child-column run start from the local index of that type's first in-slice
-            // row, and at start 0 every one of those is 0. Interleaving the two runtime types (and a NULL) so the
-            // maxRowsPerBlock: 2 split lands mid-run for both means every block after the first starts at a
-            // non-zero per-type offset. Discriminator 0 = String, 1 = UInt64, 2 (the type count) = NULL — unlike
-            // Variant, whose NULL is the fixed 255. String rows 1,4,6; UInt64 rows 0,3,5.
+            // Interleave Dynamic types so later blocks start at non-zero offsets in both child columns.
             object[] expected = { 100UL, "a", null, 200UL, "b", 300UL, "c" };
             var discriminators = new[] { 1, 0, 2, 1, 0, 1, 0 };
             IColumn[] typeColumns =
@@ -720,8 +678,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         return ids;
     }
 
-    // Reads the Array(UInt32) column back in id order, copying each row out of the borrowed block (the materialized
-    // arrays are fresh copies, so they outlive it).
+    // Copy Array(UInt32) rows out of each borrowed block in id order.
     private static async Task<uint[][]> ReadArraysOrderedByIdAsync(ClickHouseTcpConnection connection, string table, int expectedRows)
     {
         var rows = new List<uint[]>(expectedRows);

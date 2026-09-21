@@ -162,22 +162,14 @@ public sealed record ClickHouseTcpClientOptions
     public IReadOnlyDictionary<string, string> CustomSettings { get; init; }
 
     /// <summary>
-    /// Whether every operation asks the server for the <c>JSON</c> and <c>Dynamic</c> wire form this client
-    /// reads, by sending <c>output_format_native_use_flattened_dynamic_and_json_serialization</c> and
-    /// <c>output_format_native_write_json_as_string</c>. Defaults to true.
+    /// Whether to request the <c>JSON</c> and <c>Dynamic</c> wire formats supported by this client.
+    /// Defaults to true.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Both server defaults are <c>0</c>, so sending them is a setting *modification* — and a user under a
-    /// readonly profile cannot modify a setting: every operation fails with
-    /// <c>Code: 164 … Cannot modify … in readonly mode</c>. Set this to false for such a user, or put either
-    /// setting in <see cref="CustomSettings"/> yourself, which also suppresses the injection for that one.
-    /// </para>
-    /// <para>
-    /// The cost of false is that a <c>JSON</c> or <c>Dynamic</c> column may arrive in a serialization this
-    /// client does not read, and that read then fails. Every other type is unaffected, so a session that
-    /// selects neither loses nothing.
-    /// </para>
+    /// The client sends <c>output_format_native_use_flattened_dynamic_and_json_serialization</c> and
+    /// <c>output_format_native_write_json_as_string</c>. Disable this for readonly users that cannot modify
+    /// settings. Without these settings, reading <c>JSON</c> or <c>Dynamic</c> may fail if the server uses an
+    /// unsupported serialization. Values in <see cref="CustomSettings"/> override the injected settings.
     /// </remarks>
     public bool SendJsonAndDynamicSerializationSettings { get; init; } = true;
 

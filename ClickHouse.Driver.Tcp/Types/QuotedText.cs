@@ -3,24 +3,20 @@ using System.Text;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// Scans the quoted spans a ClickHouse type string carries: single-quoted enum labels and backtick-quoted
-/// identifiers (a tuple or nested field name, a JSON typed path). Both spellings use one escaping, checked
-/// against a 26.6 server: <c>\a \b \e \f \n \r \t \v \0</c> and <c>\xHH</c> decode to that character, a
-/// backslash before a quote, a backslash, a double quote or a slash yields that character, and any other
-/// backslash pair keeps both characters. A doubled quote (<c>''</c> or <c>``</c>) is one literal quote, which
-/// the server accepts on input although it always prints the backslash form.
+/// Scans and decodes quoted identifiers and enum labels in ClickHouse type strings.
+/// Supports ClickHouse character, hexadecimal, backslash, and doubled-quote escapes.
 /// </summary>
 internal static class QuotedText
 {
-    /// <summary>Finds the end of the quoted span opening at <paramref name="openIndex"/>, without decoding it.</summary>
+    /// <summary>Finds the closing quote without decoding the span.</summary>
     /// <param name="input">The text to scan.</param>
-    /// <param name="openIndex">The index of the opening quote character, which also selects the closing one.</param>
+    /// <param name="openIndex">The opening quote index.</param>
     /// <returns>The index of the closing quote, or -1 when the span is never closed.</returns>
     public static int EndOfSpan(string input, int openIndex) => Scan(input, openIndex, decoded: null);
 
-    /// <summary>Reads the quoted span opening at <paramref name="openIndex"/> and decodes its escapes.</summary>
+    /// <summary>Reads a quoted span and decodes its escapes.</summary>
     /// <param name="input">The text to scan.</param>
-    /// <param name="openIndex">The index of the opening quote character, which also selects the closing one.</param>
+    /// <param name="openIndex">The opening quote index.</param>
     /// <param name="text">The decoded text without its quotes, or null when the span is never closed.</param>
     /// <param name="end">The index just past the closing quote, or the input length when the span is never closed.</param>
     /// <returns>True when the span is closed.</returns>
@@ -40,10 +36,10 @@ internal static class QuotedText
         return true;
     }
 
-    /// <summary>Scans one span, decoding into <paramref name="decoded"/> when a builder is supplied.</summary>
+    /// <summary>Scans one quoted span.</summary>
     /// <param name="input">The text to scan.</param>
     /// <param name="openIndex">The index of the opening quote character.</param>
-    /// <param name="decoded">Receives the decoded text, or null to only find the end.</param>
+    /// <param name="decoded">Receives decoded text, or null to scan only.</param>
     /// <returns>The index of the closing quote, or -1 when the span is never closed.</returns>
     private static int Scan(string input, int openIndex, StringBuilder decoded)
     {
@@ -75,10 +71,10 @@ internal static class QuotedText
         return -1;
     }
 
-    /// <summary>Decodes the escape sequence opening at <paramref name="backslash"/>.</summary>
+    /// <summary>Decodes one escape sequence.</summary>
     /// <param name="input">The text to scan.</param>
     /// <param name="backslash">The index of the backslash.</param>
-    /// <param name="decoded">Receives the decoded character(s), or null to only measure the sequence.</param>
+    /// <param name="decoded">Receives decoded characters, or null to scan only.</param>
     /// <returns>The index of the sequence's last character.</returns>
     private static int AppendEscape(string input, int backslash, StringBuilder decoded)
     {
@@ -105,7 +101,7 @@ internal static class QuotedText
             case '0': decoded?.Append('\0'); break;
             case '\\' or '\'' or '"' or '`' or '/': decoded?.Append(c); break;
 
-            // An escape the server does not define keeps both characters, as the server's own lexer does.
+            // Preserve unknown escapes, matching the server lexer.
             default: decoded?.Append('\\').Append(c); break;
         }
 

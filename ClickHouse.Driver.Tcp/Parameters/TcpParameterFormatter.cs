@@ -93,8 +93,7 @@ internal static class TcpParameterFormatter
     /// <returns>The formatted value.</returns>
     internal static string Format(TypeNode type, object value, bool quote)
     {
-        // The arms below are the canonical names, so an alias or a case variant is mapped to one first. Every
-        // recursion into a child type comes back through here, which is what makes {p:Array(BIGINT)} format.
+        // Canonicalize aliases and casing at every nesting level.
         string name = ColumnCodecRegistry.Default.TryCanonicalName(type.Name, out string registered) ? registered : type.Name;
 
         if (Array.IndexOf(IntegerTypeNames, name) >= 0
@@ -207,14 +206,11 @@ internal static class TcpParameterFormatter
                     $"ClickHouse type '{type}' holds serialized aggregate states, so no parameter value spells it; " +
                     "the server rejects one too. Pass the arguments the state is built from instead.");
 
-            // The alias is transparent: the value is written as T, which is also what the codec resolves the
-            // column to. The function only tells the server how to merge rows.
+            // SimpleAggregateFunction uses its inner type's format.
             case "SimpleAggregateFunction" when type.Arguments.Count == 2:
                 return Format(type.Arguments[1], value, quote);
 
-            // Neither of these names a layout for the value on its own, so the value's own type does. A Geometry
-            // is ambiguous by construction — an array of points is both a Ring and a LineString — but the text is
-            // the same either way, and the server's parse is what picks the shape.
+            // Dynamic and Geometry derive their layout from the value.
             case "Dynamic" or "Geometry":
                 return Format(TypeParser.Parse(ParameterTypeInference.Infer(value, name)), value, quote);
 
@@ -230,9 +226,7 @@ internal static class TcpParameterFormatter
     /// <returns>The exception to throw.</returns>
     private static ArgumentException NotFormattable(TypeNode type, string name, object value)
     {
-        // Two unrelated failures arrive here and used to read the same: a type name this client does not know,
-        // and a known type an arm declined this value's shape for. Blaming the value for the first sends a
-        // caller looking at the value they wrote, which is fine, for a type name that never existed.
+        // Distinguish an unknown type name from a value incompatible with a known type.
         if (!ColumnCodecRegistry.Default.KnowsTypeName(name))
         {
             return new ArgumentException(
@@ -445,8 +439,7 @@ internal static class TcpParameterFormatter
     /// <returns>The wall-clock time in that timezone.</returns>
     private static DateTime InTargetTimezone(DateTimeOffset value, string declaredTimezone)
     {
-        // Formatting a wall clock is exactly the calendar use the zone is needed for, so an unrepresentable one
-        // is reported here.
+        // Formatting a wall clock requires a representable timezone.
         TimeZoneInfo timeZone = DateTimeZones.Resolve(declaredTimezone, serverTimezone: null).Value;
         return TimeZoneInfo.ConvertTime(value, timeZone).DateTime;
     }

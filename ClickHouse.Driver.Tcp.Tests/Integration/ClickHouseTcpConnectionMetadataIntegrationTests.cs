@@ -13,10 +13,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // leaving the connection unusable. What the packets carry, and the schema of the Log and ProfileEvents blocks,
 // belongs to ClickHouseTcpCallbackIntegrationTests.
 //
-// Not covered here: TableColumns, which a plain query does not produce — an insert under
-// input_format_defaults_for_omitted_fields = 1 does, and ComputedColumnInsertIntegrationTests covers it there —
-// and PartUUIDs, which needs part-level query deduplication on a replicated table and so remains covered by the
-// scripted-byte unit tests alone.
+// TableColumns is covered by computed-column inserts. PartUUIDs remains covered by scripted bytes because it
+// requires replicated-table part deduplication.
 [TestFixture]
 [Category("Integration")]
 public class ClickHouseTcpConnectionMetadataIntegrationTests

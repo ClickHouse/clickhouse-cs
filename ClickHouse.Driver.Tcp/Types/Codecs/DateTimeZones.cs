@@ -5,9 +5,7 @@ using System.Text.RegularExpressions;
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
-/// A column's timezone, or the reason this platform cannot represent the one the header named. A
-/// <c>DateTime</c> column carries a plain count that needs no zone, so an unrepresentable name is reported to a
-/// caller asking for a calendar value and not to the block read, which would lose every column and every row.
+/// A resolved timezone, or a deferred error for a timezone the platform cannot represent.
 /// </summary>
 internal sealed class ResolvedTimeZone
 {
@@ -28,7 +26,7 @@ internal sealed class ResolvedTimeZone
         this.cause = cause;
     }
 
-    /// <summary>Whether a zone resolved, i.e. whether <see cref="Value"/> returns rather than throws.</summary>
+    /// <summary>Whether <see cref="Value"/> is available.</summary>
     public bool IsResolved => zone is not null;
 
     /// <summary>The zone the column's counts are presented in.</summary>
@@ -43,30 +41,22 @@ internal sealed class ResolvedTimeZone
 }
 
 /// <summary>
-/// Resolves explicit and session timezones for the DateTime codecs. They control calendar projections and the
-/// interpretation of unspecified <see cref="DateTime"/> values; wire values remain UTC instants.
+/// Resolves timezones for calendar projections and unspecified <see cref="DateTime"/> values.
 /// </summary>
 internal static class DateTimeZones
 {
-    // ClickHouse emits synthetic fixed-offset timezone names like "Fixed/UTC+05:30:00" for a column declared
-    // with a numeric UTC offset. These are not IANA ids, so FindSystemTimeZoneById cannot resolve them; they
-    // are parsed here into a custom fixed-offset zone instead. The three components are summed as written,
-    // which is what the server does: 26.6 applies Fixed/UTC+05:00:60 as +05:01:00 and Fixed/UTC+05:70:00 as
-    // +06:10:00, keeping the name it was given.
+    // Parse ClickHouse's synthetic Fixed/UTC+HH:MM:SS names, including normalized components.
     private static readonly Regex FixedUtcOffsetRegex = new(
         @"^Fixed/UTC([+-])(\d{2}):(\d{2}):(\d{2})$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// Resolves the timezone a codec should present values in: the type string's explicit timezone when given,
-    /// otherwise the server/session timezone, otherwise UTC.
+    /// Resolves the explicit timezone, then the session timezone, then UTC.
     /// </summary>
     /// <param name="explicitTimezone">The timezone from the type string (e.g. <c>Europe/London</c>), or null/empty.</param>
     /// <param name="serverTimezone">The session's timezone, or null/empty when unknown.</param>
     /// <returns>
-    /// The zone, or the reason it cannot be represented. Nothing here throws: a caller that needs the zone gets
-    /// the failure from <see cref="ResolvedTimeZone.Value"/>, so a name this platform cannot express does not
-    /// take a whole block's read with it.
+    /// The zone or a deferred resolution error.
     /// </returns>
     public static ResolvedTimeZone Resolve(string explicitTimezone, string serverTimezone)
     {
@@ -107,9 +97,7 @@ internal static class DateTimeZones
         int seconds = int.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
         int totalSeconds = sign * ((hours * 3600) + (minutes * 60) + seconds);
 
-        // A custom TimeZoneInfo base offset must be within ±14 hours and a whole number of minutes. The server
-        // goes further — 26.6 accepts and applies Fixed/UTC+19:00:00 and Fixed/UTC+05:30:15 — so an offset it
-        // uses and .NET cannot express is reported to whoever asks for a calendar value.
+        // TimeZoneInfo accepts only whole-minute offsets within ±14 hours; defer other server-valid offsets.
         if (Math.Abs(totalSeconds) > 14 * 3600 || totalSeconds % 60 != 0)
         {
             return ResolvedTimeZone.Unrepresentable(

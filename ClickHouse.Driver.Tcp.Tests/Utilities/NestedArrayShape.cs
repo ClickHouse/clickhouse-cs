@@ -47,8 +47,7 @@ public sealed class NestedArrayShape
     /// <summary>The shapes, for use as an NUnit <c>TestCaseSource</c>.</summary>
     public static IEnumerable<NestedArrayShape> Shapes()
     {
-        // The UInt8 ladder, depth 2 to 7: a fixed-width leaf, so the innermost write is the bulk blit reached through
-        // the whole ConcatColumn stack. Depth 7 stacks six of those views, and the type-parsing corpus goes to 10.
+        // Exercise the bulk leaf write through nested ConcatColumn views at depths 2 through 7.
         yield return Shape<byte[]>(2, "Array(UInt8)", Depth2Rows);
         yield return Shape<byte[][]>(3, "Array(Array(UInt8))", Depth3Rows);
         yield return Shape<byte[][][]>(4, "Array(Array(Array(UInt8)))", Depth4Rows);

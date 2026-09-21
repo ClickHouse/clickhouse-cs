@@ -124,8 +124,8 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
     }
 
     /// <summary>
-    /// Whether every operation asks for the <c>JSON</c>/<c>Dynamic</c> wire form this client reads. Defaults to
-    /// true; set false for a user under a readonly profile. See
+    /// Whether to request the supported <c>JSON</c>/<c>Dynamic</c> wire formats. Defaults to true; disable for
+    /// readonly users that cannot modify settings. See
     /// <see cref="ClickHouseTcpClientOptions.SendJsonAndDynamicSerializationSettings"/>.
     /// </summary>
     /// <exception cref="ArgumentException">The stored value is not a boolean.</exception>

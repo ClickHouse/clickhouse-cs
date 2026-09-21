@@ -145,9 +145,7 @@ public class ClickHouseTcpTypesIntegrationTests
     }
 
     /// <summary>
-    /// <see cref="TypeAliases"/> is a copy of <c>system.data_type_families</c>, so this is the test that notices
-    /// when the server's copy changes: an alias added, an alias whose target moved, or a spelling mistyped in the
-    /// copy. Both directions are checked, and every disagreement is reported at once rather than one per run.
+    /// Compares <see cref="TypeAliases"/> with the server's <c>system.data_type_families</c> table.
     /// </summary>
     [Test]
     public async Task TypeAliases_TheTable_AgreesWithTheServersOwn()
@@ -172,15 +170,13 @@ public class ClickHouseTcpTypesIntegrationTests
         var missing = new List<string>();
         foreach (KeyValuePair<string, string> family in serverFamilies)
         {
-            // Only the aliases whose target this client has a codec for: the server also aliases types the
-            // client does not support, and those are TT-14/TT-48 decisions rather than table entries.
+            // Ignore aliases whose canonical type this client does not support.
             if (family.Value.Length == 0 || !ColumnCodecRegistry.Default.KnowsTypeName(family.Value))
             {
                 continue;
             }
 
-            // 25.8 has the GEOMETRY alias but not the Geometry type, so it points the alias at String. The
-            // client's table names the type, which is right for every server that has one.
+            // Servers without Geometry expose GEOMETRY as a String alias.
             if (!TcpServerFeatures.Has(TcpFeature.Geometry)
                 && family.Key.Equals("GEOMETRY", StringComparison.OrdinalIgnoreCase))
             {

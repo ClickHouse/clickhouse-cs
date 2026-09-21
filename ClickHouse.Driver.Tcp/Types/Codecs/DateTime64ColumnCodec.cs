@@ -120,8 +120,7 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
             return true;
         }
 
-        // The resolved zone is embedded, not the zone, for the reason the DateTime codec gives: this method also
-        // answers CanRead and the POCO tier's mapping discovery, where no row and so no calendar value exists.
+        // Defer timezone resolution until a calendar row is projected.
         if (targetType == typeof(DateTimeOffset))
         {
             projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToOffset), value, scale, timeZone);
@@ -183,9 +182,7 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         int places = scale - DotNetTickScale;
         if (places >= 0)
         {
-            // The count is an Int64 of sub-second units, so a fine scale reaches a nearer instant than .NET does:
-            // scale 9 stops at 2262-04-11. Range-checked rather than left to the multiply, whose OverflowException
-            // would name neither the value nor the column.
+            // Fine scales reach their Int64 limit before DateTimeOffset; report the value and column explicitly.
             long scaleUp = FixedPointScaling.Pow10(places);
             if (dotNetTicksSinceEpoch > long.MaxValue / scaleUp || dotNetTicksSinceEpoch < long.MinValue / scaleUp)
             {

@@ -7,10 +7,7 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// A user under a readonly profile, which is the one caller the high-level client used to refuse outright. Only a
-/// real server can show this: the refusal is the server's (<c>Code: 164 … Cannot modify … in readonly mode</c>),
-/// raised because the client sends two <c>output_format_native_*</c> settings whose server defaults are <c>0</c>,
-/// which makes every operation a setting modification.
+/// Verifies queries under a readonly profile with optional serialization-setting injection.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -56,9 +53,7 @@ public class ReadonlyUserIntegrationTests
     }
 
     /// <summary>
-    /// The same user with the injection left on, which is what the switch exists to avoid. Pinned so that the
-    /// reason the switch exists stays visible, and so a server that one day allows the modification is noticed
-    /// here rather than by a caller.
+    /// Verifies that the server rejects injected serialization settings for a readonly user.
     /// </summary>
     [Test]
     public async Task QueryAsync_ReadonlyUserWithTheSerializationSettingsOn_IsRefusedByTheServer()
@@ -81,14 +76,7 @@ public class ReadonlyUserIntegrationTests
     }
 
     /// <summary>
-    /// Turning the injection off costs exactly one thing, and this is it: a JSON column may arrive in a
-    /// serialization this client does not read. The test asserts the cost is paid by JSON alone — ordinary
-    /// columns in the same session are unaffected — so anyone weighing the switch can see its price.
-    /// <para>
-    /// The columns arrive as themselves rather than as one <c>toString</c> expression, and are read through the
-    /// typed accessors. A server-computed string would come back through the String decoder alone, so the test
-    /// would pass with the DateTime, Array and LowCardinality codecs broken and could not support its name.
-    /// </para>
+    /// Verifies that disabling JSON and Dynamic serialization settings does not affect other typed columns.
     /// </summary>
     [Test]
     public async Task QueryAsync_SerializationSettingsOff_LeavesEveryTypeButJsonAndDynamicWorking()

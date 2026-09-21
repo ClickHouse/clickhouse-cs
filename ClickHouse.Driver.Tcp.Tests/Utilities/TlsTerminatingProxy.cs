@@ -11,15 +11,11 @@ using System.Threading.Tasks;
 namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 
 /// <summary>
-/// A loopback TLS endpoint in front of a plaintext ClickHouse server: it terminates the tunnel and copies the
-/// bytes on to the real server, in both directions, one connection at a time as the client opens them.
+/// A loopback TLS endpoint that forwards each connection to a plaintext ClickHouse server.
 /// </summary>
 /// <remarks>
-/// This is how the default integration suite can do a native handshake over TLS. Enabling TLS on the server
-/// itself needs a certificate and a configuration file inside the container, which the suite cannot do when
-/// <c>CLICKHOUSE_TCP_HOST</c> points it at a server somebody else set up. The client side is what the driver
-/// owns, and it is complete here: the real <c>SslStream</c> handshake, then every protocol packet, block and
-/// insert inside the tunnel, answered by a real server.
+/// Lets the integration suite exercise the client's <see cref="SslStream"/> path without reconfiguring the
+/// target server.
 /// </remarks>
 internal sealed class TlsTerminatingProxy : IAsyncDisposable
 {
@@ -66,7 +62,7 @@ internal sealed class TlsTerminatingProxy : IAsyncDisposable
             {
                 TcpClient accepted = await listener.AcceptTcpClientAsync(shutdown.Token).ConfigureAwait(false);
 
-                // Not awaited: the pool opens several connections, and each lives as long as its client keeps it.
+                // Serve pool connections concurrently for their full client-owned lifetime.
                 _ = ServeAsync(accepted);
             }
         }
@@ -92,7 +88,7 @@ internal sealed class TlsTerminatingProxy : IAsyncDisposable
                 upstream.NoDelay = true;
                 NetworkStream plaintext = upstream.GetStream();
 
-                // Whichever side stops first ends the connection, and disposal below unblocks the other copy.
+                // Closing either direction ends the connection and unblocks the other copy.
                 Task toServer = tunnel.CopyToAsync(plaintext, shutdown.Token);
                 Task toClient = plaintext.CopyToAsync(tunnel, shutdown.Token);
                 await Task.WhenAny(toServer, toClient).ConfigureAwait(false);
@@ -103,7 +99,7 @@ internal sealed class TlsTerminatingProxy : IAsyncDisposable
         }
     }
 
-    // A client that drops its connection, and this proxy's own disposal, are the normal ways a pump ends.
+    // Client disconnects and proxy disposal are normal pump termination.
     private static bool IsExpectedTeardown(Exception e)
         => e is OperationCanceledException or IOException or SocketException or ObjectDisposedException
             or AuthenticationException or InvalidOperationException;

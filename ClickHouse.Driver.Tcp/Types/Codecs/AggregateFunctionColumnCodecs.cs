@@ -69,9 +69,7 @@ internal static class AggregateFunctionColumnCodecs
     /// <returns>The argument naming the function.</returns>
     private static TypeNode FunctionOf(TypeNode node)
     {
-        // Some states carry a leading serialization version, which is not a function name: 26.6 reports
-        // sumMapState(...) as AggregateFunction(1, sumMap, Array(UInt64), Array(UInt64)), and the same for
-        // minMap, maxMap and sumMapFiltered([1, 2]). Naming that argument suggests '1Merge(column)'.
+        // Skip the optional leading serialization version when naming the function.
         if (node.Arguments.Count > 1
             && node.Arguments[0].Arguments.Count == 0
             && uint.TryParse(node.Arguments[0].Name, NumberStyles.None, CultureInfo.InvariantCulture, out _))

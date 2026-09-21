@@ -7,17 +7,7 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// A wall clock written into a column whose timezone is not UTC, checked against the server's own rendering of
-/// what was stored.
-///
-/// <para>
-/// Every other timezone-carrying integration column is <c>'UTC'</c>, and the corpus compares the read-back with
-/// an expected value produced by the same conversion the write used — so an inverted direction, or a tzdata
-/// disagreement between this machine and the server, cancels out and the assertion holds anyway. Here the oracle
-/// is the server: <c>toString(c)</c> renders the stored instant in the column's zone, and
-/// <c>toString(c, 'UTC')</c> shows which offset the client applied. Neither value passes through the code under
-/// test.
-/// </para>
+/// Verifies non-UTC wall-clock conversion against the server's own local and UTC rendering.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -72,9 +62,8 @@ public class TimezoneColumnIntegrationTests
     }
 
     /// <summary>
-    /// A column may declare an offset <see cref="TimeZoneInfo"/> cannot hold — 26.6 takes
-    /// <c>Fixed/UTC+19:00:00</c>, past .NET's ±14 hours — and a value that already names an instant does not need
-    /// that zone. So the write has to land, and only the calendar readings may report the zone.
+    /// Verifies that UTC values can be written when the column timezone cannot be represented by
+    /// <see cref="TimeZoneInfo"/>.
     /// </summary>
     [TestCase("DateTime('Fixed/UTC+19:00:00')", "2024-01-15 10:30:00")]
     [TestCase("DateTime64(3, 'Fixed/UTC+19:00:00')", "2024-01-15 10:30:00.000")]

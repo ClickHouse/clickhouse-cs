@@ -76,8 +76,7 @@ public sealed class InsertRoundTripCase
         yield return Primitive("Int64", new[] { long.MinValue, -1, 0, long.MaxValue });
         yield return Primitive("UInt128", new[] { UInt128.Zero, UInt128.One, UInt128.MaxValue });
         yield return Primitive("Int128", new[] { Int128.MinValue, -Int128.One, Int128.Zero, Int128.MaxValue });
-        // 2^200 pins the limb order; the values after it pin the top limb and the sign bit, which everything
-        // below 2^255 leaves clear.
+        // Include values that set the highest limb and sign bit.
         yield return Primitive("UInt256", new[]
         {
             UInt256.Zero,
@@ -104,13 +103,10 @@ public sealed class InsertRoundTripCase
         yield return EnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, "a", "b");
         yield return EnumLabels("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 }, "x", "y");
 
-        // A label carrying an escape. The header spells it 'a\nb' — on 26.6 the label's stored bytes are 61 0A 62 —
-        // so the label a caller writes has to be the decoded one, and only a server proves the two agree.
+        // Escaped labels must match their decoded server values.
         yield return EnumLabels(@"Enum8('a\nb' = 1, 't\tab' = 2)", new sbyte[] { 1, 2 }, "a\nb", "t\tab");
 
-        // Labels holding the grammar's own separators: a comma, an escaped quote, and an equals sign. The member
-        // splitter must not cut on the comma or end the token at the quote, and ToString() has to re-emit the raw
-        // spelling into the insert header while ToOrdinal looks the decoded label up.
+        // Separators inside quoted labels must not split the enum declaration.
         yield return EnumLabels(@"Enum8('a,b' = 1, 'c\'d' = 2, 'e = f' = 3)", new sbyte[] { 1, 2, 3 }, "a,b", "c'd", "e = f");
 
         // And through the wrappers, where the shape has to survive composition: the nullable substitute needs a
@@ -118,9 +114,7 @@ public sealed class InsertRoundTripCase
         yield return NullableEnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte?[] { -1, null, 127 }, "a", null, "b");
         yield return ArrayEnumLabels("Enum8('a' = -1, 'b' = 127)", new[] { new sbyte[] { -1, 127 }, Array.Empty<sbyte>() }, new[] { "a", "b" }, Array.Empty<string>());
 
-        // Floats and Bool are direct blittable maps, so the primitive factory covers them. NaN and the infinities
-        // are the patterns a conversion through a decimal text form would lose; signed zero rides along, and
-        // FloatSpecialValueIntegrationTests is where its sign is actually observable.
+        // Floats and Bool are direct blittable maps. The signed-zero assertion is covered separately.
         yield return Primitive("Float32", new[] { 0f, -0f, 1.5f, -1.5f, float.MinValue, float.MaxValue, float.NaN, float.PositiveInfinity, float.NegativeInfinity });
         yield return Primitive("Float64", new[] { 0d, -0d, 1.5, -1.5e100, double.MinValue, double.MaxValue, double.NaN, double.PositiveInfinity, double.NegativeInfinity });
         yield return Primitive("Bool", new[] { false, true, true, false });
@@ -143,8 +137,7 @@ public sealed class InsertRoundTripCase
 
         // DateTime reads back as the raw UInt32 epoch seconds. Insert as DateTime (UTC) and expect the epoch
         // seconds of the same instants, regardless of the timezone the server presents.
-        // 2100 is past the signed-32-bit second count that a narrowing cast would wrap, and the last value is the
-        // largest a DateTime column holds: 2106-02-07 06:28:15 UTC, uint.MaxValue seconds.
+        // Cover values beyond Int32 seconds and the UInt32 upper bound.
         yield return DateTimes(
             "DateTime",
             new DateTime(1988, 8, 28, 11, 22, 33, DateTimeKind.Utc),
@@ -171,8 +164,7 @@ public sealed class InsertRoundTripCase
         // any scale. Scale 9 (nanoseconds) is finer than a .NET tick, proving precision no DateTimeOffset can hold.
         yield return DateTime64s("DateTime64(3)", 0L, 1_700_000_000_123L, -6_000_000_000_000L);
 
-        // Both Int64 ends, which at scale 9 are the instants the type stops at (2262-04-11 23:47:16.854775807 and
-        // its negative mirror). The count is the wire value, so these pin the limbs of the widest column value.
+        // Scale 9 can represent the full Int64 wire range.
         yield return DateTime64s("DateTime64(9)", 0L, 1_700_000_000_123_456_789L, -1_000_000_001L, long.MaxValue, long.MinValue);
 
         // DateTime64 also accepts a DateTimeOffset on write, converting the instant to the column's scale; the
@@ -191,10 +183,8 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<long>(name, "DateTime64(3)", Array.ConvertAll(dateTime64Offsets, o => o.ToUnixTimeMilliseconds())),
             settings: null);
 
-        // The last instant a scale-9 column can take from a DateTimeOffset: .NET ticks are 100 ns, so the finest
-        // value expressible is 2262-04-11 23:47:16.8547758, and scaling it up lands 7 nanoseconds short of
-        // Int64.MaxValue. The expected count is written out rather than computed, so the multiply under test is not
-        // also the oracle. One tick more overflows, which DateTime64ColumnCodecTests covers.
+        // The latest scale-9 instant representable by DateTimeOffset. Keep the expected count independent of the
+        // conversion under test.
         var dateTime64NanosecondOffsets = new[] { new DateTimeOffset(2262, 4, 11, 23, 47, 16, TimeSpan.Zero).AddTicks(8_547_758) };
         yield return new InsertRoundTripCase(
             "DateTime64(9) <- DateTimeOffset [latest instant]",
@@ -208,8 +198,7 @@ public sealed class InsertRoundTripCase
         yield return IpAddresses("IPv4", "0.0.0.0", "127.0.0.1", "192.168.1.1", "255.255.255.255");
         yield return IpAddresses("IPv6", "::", "::1", "2001:db8::1", "fe80::1", "2001:db8:85a3:8d3:1319:8a2e:370:7348");
 
-        // An IPv4 address written to an IPv6 column comes back in its IPv4-mapped form, so the insert value and
-        // the expected value differ. Nothing else in the corpus reads that mapping back off a server.
+        // IPv4 values in IPv6 columns read back as IPv4-mapped addresses.
         var mappedIpv4 = new[] { IPAddress.Parse("192.168.1.1"), IPAddress.Parse("0.0.0.0") };
         yield return new InsertRoundTripCase(
             "IPv6 <- IPv4",
@@ -224,9 +213,7 @@ public sealed class InsertRoundTripCase
         yield return WideDecimals("Decimal(38, 10)", "0", "12345.6789", "-98765.4321");
         yield return WideDecimals("Decimal(76, 20)", "0", "1.00000000000000000001", "-1.00000000000000000001");
 
-        // Scale 0 takes neither of FixedPointScaling.ShiftDecimalPlaces's branches, and scale == precision leaves
-        // no integer part at all. The last case holds the largest magnitude a Decimal(76, 0) can, which pins the
-        // top limb of the 256-bit mantissa.
+        // Cover zero scale, scale equal to precision, and the 256-bit mantissa limits.
         yield return WideDecimals("Decimal(38, 0)", "0", "-1", "99999999999999999999999999999999999999");
         yield return WideDecimals("Decimal(38, 38)", "0.00000000000000000000000000000000000001", "-0.99999999999999999999999999999999999999");
         yield return WideDecimals("Decimal(76, 0)", "0", "9999999999999999999999999999999999999999999999999999999999999999999999999999", "-9999999999999999999999999999999999999999999999999999999999999999999999999999");
@@ -246,9 +233,7 @@ public sealed class InsertRoundTripCase
         yield return TimeSeconds("Time", TimeSettings, 0, (12 * 3600) + (34 * 60) + 56, -((1 * 3600) + (2 * 60) + 3));
         yield return Time64Counts("Time64(3)", TimeSettings, 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456, -((((1 * 3600) + (2 * 60) + 3) * 1000L) + 456));
 
-        // A TimeOnly is the time-of-day spelling of the same column, the counterpart of DateOnly for Date. The
-        // read-back is the raw count either way, so the two columns differ. TimeOnly.MaxValue is 23:59:59.9999999,
-        // which truncates toward zero at scale 3 exactly as a TimeSpan does.
+        // TimeOnly values read back as raw Time and Time64 counts.
         var timesOfDay = new[] { new TimeOnly(0, 0, 0), new TimeOnly(12, 34, 56), new TimeOnly(23, 59, 59) };
         yield return new InsertRoundTripCase(
             "Time <- TimeOnly",
@@ -303,16 +288,12 @@ public sealed class InsertRoundTripCase
         yield return NullableValues<Int128>("Int128", Int128.MinValue, null, Int128.MaxValue);
         yield return NullableValues<UInt256>("UInt256", UInt256.Zero, null, UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)));
         yield return NullableValues<Int256>("Int256", Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)), null, Int256.Zero);
-        // A special next to a null, because the null map and the value run are written separately: the placeholder
-        // a null row contributes must not be mistaken for the NaN beside it, or the other way round.
+        // Keep special values adjacent to null-map placeholders.
         yield return NullableValues<float>("Float32", 0f, null, -1.5f, float.MaxValue, float.NaN, null, float.PositiveInfinity, -0f);
         yield return NullableValues<double>("Float64", 1.5, null, -1.5e100, null, double.NaN, double.NegativeInfinity, -0d);
         yield return NullableValues<bool>("Bool", true, null, false);
 
-        // Nullable over a composite, which the server allows for Tuple behind a setting. The write path has to
-        // project the inner column before the state-prefix phase: the tuple builds its write state there and
-        // needs a column of (byte, string), not of (byte, string)?. A null row beside a row of inner defaults
-        // keeps the two distinguishable.
+        // Nullable tuples require projecting the inner column before building tuple write state.
         if (TcpServerFeatures.Has(TcpFeature.NullableTuple))
         {
             yield return Same(
@@ -379,8 +360,7 @@ public sealed class InsertRoundTripCase
         yield return NullableValues<int>("Time", TimeSettings, 0, null, (12 * 3600) + (34 * 60) + 56);
         yield return NullableValues<long>("Time64(3)", TimeSettings, 0L, null, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456);
 
-        // The TimeOnly spelling through the null wrapper, where the placeholder a null row contributes has to be
-        // one the inner codec offers for that write type.
+        // Exercise TimeOnly placeholders through Nullable.
         var nullableTimesOfDay = new TimeOnly?[] { new TimeOnly(1, 2, 3), null, new TimeOnly(0, 0, 0) };
         yield return new InsertRoundTripCase(
             "Nullable(Time) <- TimeOnly?",
@@ -631,9 +611,7 @@ public sealed class InsertRoundTripCase
             "Tuple(a Int32, b String)",
             name => new TupleColumn<int, string>(name, "Tuple(a Int32, b String)", new (int, string)[] { (1, "a"), (-5, string.Empty), (int.MaxValue, "héllo✓") }));
 
-        // A field name the server has to quote. The comma inside the backticks would split the argument list, and
-        // the type name the client rebuilds is what the insert header carries, so only a real server proves both
-        // spellings agree. The server also normalizes a double-quoted name into a backticked one.
+        // A quoted comma must not split the tuple fields.
         yield return Same(
             "Tuple(`a,b` Int64, c String) [quoted field name]",
             "Tuple(`a,b` Int64, c String)",
@@ -802,8 +780,7 @@ public sealed class InsertRoundTripCase
                 ownsFields: false),
             NestedSettings);
 
-        // A field name the server has to quote: it arrives backticked in the header, and the insert header has to
-        // carry the same spelling back or the server rejects the block.
+        // Preserve quoted field names in the insert header.
         yield return Same(
             "Nested(`a b` UInt8) [quoted field name]",
             "Nested(`a b` UInt8)",
@@ -1001,8 +978,7 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<uint>(name, "LowCardinality(DateTime)", new uint[] { 1_700_000_000, 1_700_000_000, 599_916_153, 0, 1_700_000_000, 599_916_153 }),
             LowCardinalitySettings);
 
-        // The dictionary is a bare column of the inner type, so its element width is the inner's and not the key
-        // stream's. The cases above are all four bytes wide; these are one, eight and sixteen.
+        // Cover one-, eight-, and sixteen-byte dictionary elements.
         yield return Same(
             "LowCardinality(UInt8)",
             "LowCardinality(UInt8)",
@@ -1030,8 +1006,7 @@ public sealed class InsertRoundTripCase
         // low-cardinality codec; empty rows and repeated values ride along.
         yield return Arrays("LowCardinality(String)", new[] { "a", "b" }, Array.Empty<string>(), new[] { "a", "a", "c" });
 
-        // Two levels of offsets over a dictionary-bearing leaf, where the flattening view is built over a view.
-        // The deep-nesting ladder uses prefix-free leaves only.
+        // Exercise two offset levels over a dictionary-bearing leaf.
         yield return Same(
             "Array(Array(LowCardinality(String)))",
             "Array(Array(LowCardinality(String)))",
@@ -1339,9 +1314,7 @@ public sealed class InsertRoundTripCase
             Array.Empty<object>(),
             new object[] { "b", 2UL, null });
 
-        // Array(Dynamic) with every row empty: the inner Dynamic has no rows while the block has, so the array
-        // still writes and reads the Dynamic prefix, and the zero-row body path runs with the prefix consumed
-        // rather than skipped. The only all-empty case otherwise is Array(UInt32), a leaf that carries no prefix.
+        // Empty Dynamic arrays still carry a type-list prefix.
         yield return Same(
             "Array(Dynamic) [every row empty]",
             "Array(Dynamic)",
@@ -1359,8 +1332,7 @@ public sealed class InsertRoundTripCase
             }),
             DynamicSettings);
 
-        // The key column has its own state, built separately from the value's: MapShape.WriteStatePrefix writes
-        // the key's prefix first. Every other map case has a prefix-free key, so nothing reached that order.
+        // A LowCardinality key has its own state prefix.
         yield return Maps<string, byte>(
             "LowCardinality(String)",
             "UInt8",
@@ -1368,7 +1340,7 @@ public sealed class InsertRoundTripCase
             Array.Empty<KeyValuePair<string, byte>>(),
             Pairs<string, byte>(("a", 3)));
 
-        // A composite key, where the key column is itself two child columns.
+        // Cover a composite map key.
         yield return Maps<(int, int), int>(
             "Tuple(Int32, Int32)",
             "Int32",
@@ -1450,8 +1422,7 @@ public sealed class InsertRoundTripCase
             }),
             JsonSettings);
 
-        // A typed path the server has to quote. The paren inside the backticks would end the argument list early,
-        // and the read fails on the header before a row decodes, so this case only ever fails at the header.
+        // A parenthesis inside a quoted JSON path must not end the type declaration.
         yield return new InsertRoundTripCase(
             "JSON(`a(b` Int64) [quoted typed path]",
             "JSON(`a(b` Int64)",
@@ -1496,8 +1467,7 @@ public sealed class InsertRoundTripCase
         // rather than treat JSON as a flat leaf. Empty rows and an all-empty column ride along.
         yield return Arrays("JSON", JsonSettings, new[] { "{\"a\":1}", "{}" }, Array.Empty<string>(), new[] { "{\"b\":\"hi\"}" });
 
-        // Array(JSON) with every row empty: the same shape as the all-empty Array(Dynamic) case, for the codec
-        // whose prefix is a version word rather than a type list.
+        // Empty JSON arrays still carry the serialization-version prefix.
         yield return Same(
             "Array(JSON) [every row empty]",
             "Array(JSON)",
@@ -1626,9 +1596,7 @@ public sealed class InsertRoundTripCase
         // whole column type.
         yield return Arrays("Point", new[] { (0d, 0d), (1d, 2d) }, Array.Empty<(double, double)>());
 
-        // Nullable over an alias for a tuple: the null map sits outside, and the inner tuple is still resolved
-        // from the alias name. The bare Nullable(Tuple(...)) case is in the nullable section above; this one adds
-        // the alias.
+        // Cover Nullable through the Point tuple alias.
         if (TcpServerFeatures.Has(TcpFeature.NullableTuple))
         {
             yield return Same(
@@ -1687,9 +1655,7 @@ public sealed class InsertRoundTripCase
                     Ramp(17, i => i % 2 == 0 ? float.MaxValue : float.MinValue),
                 }));
 
-            // An embedding-shaped width: 768 is the dimension of a common sentence embedding, and the widest the
-            // suite reaches otherwise is 17. Every row spans 96 bytes per plane, so QBitLayout's stride arithmetic
-            // and the dense plane copy are exercised at a size where an off-by-one row stride cannot look right.
+            // Exercise QBit stride arithmetic at a realistic embedding width.
             yield return Same(
                 "QBit(Float32, 768)",
                 "QBit(Float32, 768)",
@@ -1801,8 +1767,7 @@ public sealed class InsertRoundTripCase
                 Array.Empty<ulong>(),
             }));
 
-        // A prefix-carrying inner: the alias has to echo the type name into the insert header exactly as declared
-        // and still write JSON's version word, which the four cases above (prefix-free inners) cannot show.
+        // Cover a SimpleAggregateFunction whose inner type has a state prefix.
         yield return Same(
             "SimpleAggregateFunction(anyLast, JSON)",
             "SimpleAggregateFunction(anyLast, JSON)",
@@ -2017,8 +1982,7 @@ public sealed class InsertRoundTripCase
     }
 
     // BFloat16 widens to float; values are chosen to be exactly representable so the narrow-on-write is lossless.
-    // NaN and the infinities qualify: truncating the low 16 bits keeps an all-ones exponent, and the quiet bit is
-    // the mantissa's top bit, which stays.
+    // NaN and infinities also survive the narrowing conversion.
     private static InsertRoundTripCase BFloat16s(string clickHouseType, IReadOnlyDictionary<string, string> settings, params float[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<float>(name, clickHouseType, values), settings);
 

@@ -7,15 +7,7 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// Signed zero, asserted against the bits the server stored.
-///
-/// <para>
-/// The corpus carries <c>-0.0</c> in the float cases, but its comparison cannot see the sign: in .NET
-/// <c>(-0.0).Equals(0.0)</c> is true, so a write that dropped the sign bit would round-trip as equal. The text
-/// form cannot be the oracle either — 25.8 renders a negative zero as <c>0</c> and 26.6 as <c>-0</c> — so the
-/// stored bits are, which is also the exact claim. <c>NaN</c> and the infinities need no test of their own,
-/// being ordinary corpus values that compare unequal to everything else.
-/// </para>
+/// Verifies signed zero by comparing the bits stored by the server.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -42,9 +34,7 @@ public class FloatSpecialValueIntegrationTests
             : null;
         var options = settings is null ? null : new ClickHouseTcpQueryOptions { Settings = settings };
 
-        // Memory, not MergeTree: 25.8's part writer normalizes a negative zero away, a plain SQL insert included,
-        // so a MergeTree table would test the storage engine's rounding rather than what the client wrote. 26.6
-        // keeps it either way.
+        // Memory avoids MergeTree's signed-zero normalization on ClickHouse 25.8.
         string table = $"tcp_float_special_test_{Guid.NewGuid():N}";
         await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64, v {columnType}) ENGINE = Memory", options, None);
         try

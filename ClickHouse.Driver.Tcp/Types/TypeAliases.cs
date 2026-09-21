@@ -4,29 +4,15 @@ using System.Collections.Generic;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// The alternative spellings ClickHouse accepts for a type name, and the canonical name each one means. The
-/// table is every row of <c>system.data_type_families</c> on 26.6 with a non-empty <c>alias_to</c>.
-///
-/// <para>
-/// A column header never carries one of these — the server always reports the canonical name — so this exists
-/// for the names a caller writes: a <c>{p:Type}</c> hint, <see cref="ClickHouseTcpParameter.ClickHouseType"/>,
-/// and <c>ClickHouseTcpTypes.CanRead</c>/<c>CanWrite</c>. The shipped HTTP driver accepts all of them, so a
-/// caller moving a query from it should not have to respell their types.
-/// </para>
-///
-/// <para>
-/// Every name here matches without regard to case, and so does every name the codec registry knows. The server
-/// marks only some families <c>case_insensitive</c>, but which ones is the server's business: a spelling it
-/// rejects it rejects with a better message than a copy of that rule here would give, and the rule moves between
-/// versions and settings. A name this client cannot resolve at all is a different matter, and is still refused.
-/// </para>
+/// Maps caller-supplied ClickHouse type aliases to canonical names.
+/// The table mirrors aliases from <c>system.data_type_families</c>; lookup is case-insensitive.
 /// </summary>
 internal static class TypeAliases
 {
     /// <summary>Every alias, keyed without regard to case.</summary>
     private static readonly Dictionary<string, string> Aliases = new(StringComparer.OrdinalIgnoreCase)
     {
-        // A family of its own on the server, which resolves to DateTime rather than aliasing it.
+        // The server exposes this family separately but resolves it to DateTime.
         ["DateTime32"] = "DateTime",
 
         ["GEOMETRY"] = "Geometry",
@@ -120,7 +106,7 @@ internal static class TypeAliases
     /// <returns>The canonical name when there is one, otherwise the name given.</returns>
     public static string Canonical(string name) => TryCanonical(name, out string canonical) ? canonical : name;
 
-    /// <summary>Every alternative spelling and the canonical name it means, for the tests that check the table.</summary>
+    /// <summary>Enumerates aliases and their canonical names.</summary>
     /// <returns>One pair per spelling.</returns>
     public static IEnumerable<KeyValuePair<string, string>> All() => Aliases;
 }

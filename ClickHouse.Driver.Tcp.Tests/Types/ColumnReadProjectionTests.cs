@@ -220,9 +220,7 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// Where an unrepresentable zone is reported, and where it is not. Building the projection must succeed:
-    /// <c>CanRead</c> and the POCO tier's mapping discovery both come through here with no row in hand, so a
-    /// throw at build time refuses the reading rather than the value. The row is what needs the zone.
+    /// Verifies that an unrepresentable timezone fails when a row is projected, not when projection is built.
     /// </summary>
     [TestCase("DateTime('Fixed/UTC+19:00:00')", "+19:00:00")]
     [TestCase("DateTime('Fixed/UTC+05:30:15')", "+05:30:15")]
@@ -409,9 +407,7 @@ public class ColumnReadProjectionTests
         Assert.That(project(count), Is.EqualTo(TimeOnly.Parse(expected)));
     }
 
-    // The one narrowing in the read surface: a Time column holds a signed duration of up to 999 hours, and the
-    // part of that range outside a day has no TimeOnly. Refused, not reduced modulo a day, which would be a
-    // different value presented as the stored one.
+    // TimeOnly cannot represent negative values or durations of at least one day; do not wrap them.
     [TestCase(-1, TestName = "A negative duration")]
     [TestCase(24 * 3600, TestName = "Exactly 24 hours")]
     [TestCase(100 * 3600, TestName = "A duration of 100 hours")]
@@ -428,9 +424,7 @@ public class ColumnReadProjectionTests
         });
     }
 
-    // The Time64 refusal is on the raw count, not on the TimeSpan it shifts to: at scale 8 and 9 the shift to
-    // 100 ns ticks truncates toward zero, so every count from -1 to -99 at scale 9 reaches TimeSpan.Zero and a
-    // check made after it reads a negative value as midnight.
+    // Check raw counts because sub-tick negative values truncate to TimeSpan.Zero.
     [TestCase(9, -1L, TestName = "A nanosecond before midnight, scale 9")]
     [TestCase(9, -99L, TestName = "The last count scale 9 truncates to zero")]
     [TestCase(9, -100L, TestName = "One tick before midnight, scale 9")]
@@ -453,7 +447,7 @@ public class ColumnReadProjectionTests
         });
     }
 
-    // The bounds on the accepting side of the same check, so it cannot pass by refusing everything.
+    // Pin both accepted bounds of a day.
     [TestCase(9, 0L, "00:00:00")]
     [TestCase(9, 86_399_999_999_999L, "23:59:59.9999999")]
     [TestCase(3, 86_399_999L, "23:59:59.999")]

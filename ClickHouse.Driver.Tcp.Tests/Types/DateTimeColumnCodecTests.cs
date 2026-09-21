@@ -286,9 +286,7 @@ public class DateTimeColumnCodecTests
     [TestCase("DateTime('Fixed/UTC+19:00:00')", "+19:00:00")]
     public async Task ReadColumn_TimezoneThisPlatformCannotResolve_ReadsTheSecondsAndReportsOnlyTheZone(string type, string named)
     {
-        // Neither a zone with no tzdata here nor an offset TimeZoneInfo cannot hold (26.6 accepts and applies
-        // Fixed/UTC+19:00:00, past its ±14 hours) may fail the read: the seconds are the wire value and need no
-        // zone. Only a calendar value does, so only a calendar value reports it.
+        // Raw seconds do not require a representable timezone; calendar projections do.
         byte[] bytes = await WriteAsync(w => w.WriteUInt32(1_700_000_000));
         using var reader = ReaderOver(bytes);
 
@@ -346,8 +344,7 @@ public class DateTimeColumnCodecTests
         Assert.That(thrown.Message, Does.Contain("Fixed/UTC+19:00:00"));
     }
 
-    // The other side of the same rule: a Utc DateTime already names an instant, so the zone the column declares
-    // is irrelevant to it and asking for one must not be what fails the write.
+    // A UTC value already identifies an instant and does not require the column timezone.
     [Test]
     public async Task WriteColumn_UtcDateTimeIntoAZoneTimeZoneInfoCannotHold_WritesTheInstant()
     {
@@ -361,8 +358,7 @@ public class DateTimeColumnCodecTests
         Assert.That(BitConverter.ToUInt32(bytes, 0), Is.EqualTo(1_705_314_600U));
     }
 
-    // A Local value names an instant too. Compared against the same conversion, since a literal would pin the
-    // machine's own zone; what this asserts is that the column's zone is not consulted, not the arithmetic.
+    // Compare Local using the host conversion while verifying that the column timezone is ignored.
     [Test]
     public async Task WriteColumn_LocalDateTimeIntoAZoneTimeZoneInfoCannotHold_WritesTheInstant()
     {
@@ -378,7 +374,7 @@ public class DateTimeColumnCodecTests
             Is.EqualTo((uint)new DateTimeOffset(value.ToUniversalTime(), TimeSpan.Zero).ToUnixTimeSeconds()));
     }
 
-    // The null placeholder is DateTime.UnixEpoch, whose Kind is Utc, so a null row must not need the zone either.
+    // The UTC null placeholder must not resolve the column timezone.
     [Test]
     public async Task WriteColumn_NullableNullIntoAZoneTimeZoneInfoCannotHold_WritesThePlaceholder()
     {

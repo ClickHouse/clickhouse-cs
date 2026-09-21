@@ -67,9 +67,7 @@ public class ClickHouseTcpExceptionIntegrationTests
     }
 
     // A column type the client cannot resolve arrives as a type name in the block header, so the refusal is a
-    // disagreement with the server and belongs under the same base as the rest. AggregateFunction is one of the
-    // two types a real server produces that the client deliberately declines — the other is a wide Tuple, below
-    // — so between them this path is reachable without hand-building a block.
+    // Use a real unsupported server type to exercise codec-resolution failure.
     [Test]
     public async Task QueryAsync_ColumnTypeTheClientCannotRead_ReportsAProtocolFailureKeepingTheHint()
     {
@@ -87,9 +85,7 @@ public class ClickHouseTcpExceptionIntegrationTests
         });
     }
 
-    // The typed TupleColumn shapes stop at seven elements, and a server will happily send more — a wide table
-    // selected as a tuple, or any tuple() of eight. Read on a pool of one, so the follow-up query is also the
-    // proof that declining a column type costs neither the connection nor its permit.
+    // A wide Tuple exceeds the typed column shapes; the follow-up query verifies permit recovery.
     [Test]
     public async Task QueryAsync_TupleWiderThanTheClientReads_ReportsAProtocolFailureAndKeepsThePoolUsable()
     {

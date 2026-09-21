@@ -30,10 +30,7 @@ public class ColumnarReadSurfaceIntegrationTests
     private static readonly CancellationToken None = CancellationToken.None;
 
     /// <summary>
-    /// A bare <c>NULL</c> literal is typed <c>Nullable(Nothing)</c>, whose layout — a null map plus one
-    /// placeholder byte per row — is otherwise read only from bytes a test wrote itself. The column selected
-    /// after it is what proves the placeholder run was the right length: reading too few or too many bytes leaves
-    /// the rest of the block mis-framed. <c>Nothing</c> is not writable, so this can only be a read.
+    /// Verifies framing after a server-produced <c>Nullable(Nothing)</c> column.
     /// </summary>
     [Test]
     public async Task StreamAsync_NullLiteral_ReadsAsNullableNothingAndLeavesTheBlockAligned()

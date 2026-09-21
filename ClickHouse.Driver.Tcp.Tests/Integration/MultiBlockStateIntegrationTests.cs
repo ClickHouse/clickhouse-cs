@@ -10,18 +10,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// Reads of columns that carry per-block serialization state, split across more than one block. A column whose
-/// body cannot be decoded without state read ahead of it — a <c>LowCardinality</c> dictionary, a <c>Dynamic</c>
-/// runtime type list, a version word — puts that state in a per-block prefix, and
-/// <c>BlockReader</c> reads one prefix per block whose row count is greater than zero. If that placement were
-/// wrong, the first block would still decode and the second would desync: the reader would take body bytes for
-/// a prefix, or a stale dictionary for the current one. So a single-block read proves nothing here, and every
-/// case below asserts across at least two blocks.
-///
-/// <para>
-/// Only a real server settles it. Reading back what this client wrote agrees with the client's own model of
-/// where the prefix goes, whether or not the server shares it.
-/// </para>
+/// Verifies per-block state prefixes against a real server. Each case spans multiple blocks so stale or
+/// misaligned dictionaries, runtime type lists, and version words are observable.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -31,9 +21,7 @@ public class MultiBlockStateIntegrationTests
 
     private static readonly CancellationToken None = CancellationToken.None;
 
-    // max_block_size = 2 over 9 rows splits the result into blocks of 2,2,2,2,1, and max_threads = 1 keeps
-    // system.numbers on one stream so the split points and the block order are both deterministic. The two
-    // experimental flags let the Dynamic and Variant cases run and are inert for the others.
+    // Split nine ordered rows into deterministic blocks of 2,2,2,2,1.
     private static readonly Dictionary<string, string> SplitSettings = new(StringComparer.Ordinal)
     {
         ["max_block_size"] = "2",
@@ -44,21 +32,19 @@ public class MultiBlockStateIntegrationTests
 
     private static IEnumerable<TestCaseData> StatefulColumns()
     {
-        // Cycling '% 3' through 2-row blocks means consecutive blocks hold different distinct sets, so a
-        // dictionary held over from the previous block decodes to a wrong value instead of failing outright.
+        // Consecutive blocks reuse keys for different dictionary values.
         yield return new TestCaseData(
                 "toLowCardinality(concat('v', toString(number % 3)))",
                 NineRows(i => "v" + (i % 3)))
             .SetName("{m}(LowCardinality(String))");
 
-        // Nullable moves every dictionary key up by one reserved slot, so it decodes the prefix differently.
+        // Nullable adds a reserved dictionary slot.
         yield return new TestCaseData(
                 "toLowCardinality(if(number % 3 = 0, NULL, concat('v', toString(number)))::Nullable(String))",
                 NineRows(i => i % 3 == 0 ? null : "v" + i))
             .SetName("{m}(LowCardinality(Nullable(String)))");
 
-        // Nested one level down, where the prefix belongs to the inner column and not to the one named in the
-        // block header.
+        // The prefix belongs to the nested inner column.
         yield return new TestCaseData(
                 "[toLowCardinality(concat('v', toString(number)))]",
                 NineRows(i => new[] { "v" + i }))
@@ -69,22 +55,19 @@ public class MultiBlockStateIntegrationTests
                 NineRows(i => new[] { new KeyValuePair<string, byte>("k" + i, (byte)i) }))
             .SetName("{m}(Map(LowCardinality(String), UInt8))");
 
-        // Two dictionary-bearing children in one column: the prefixes are consecutive, so reading one too few or
-        // too many bytes for the first mis-frames the second.
+        // Consecutive child prefixes expose framing errors.
         yield return new TestCaseData(
                 "tuple(toLowCardinality(concat('a', toString(number))), toLowCardinality(concat('b', toString(number))))",
                 NineRows(i => ("a" + i, "b" + i)))
             .SetName("{m}(Tuple of two LowCardinality(String))");
 
-        // A Dynamic whose runtime type changes twice down the result, so the type list a block declares differs
-        // from the one before it. StreamAsync_DynamicSplitAcrossBlocks... asserts those lists directly.
+        // Change Dynamic runtime types between blocks.
         yield return new TestCaseData(
                 "CAST(if(number < 3, CAST(toInt64(number), 'Dynamic'), if(number < 6, CAST(concat('s', toString(number)), 'Dynamic'), CAST(toFloat64(number), 'Dynamic'))), 'Dynamic')",
                 NineRows(i => i < 3 ? (long)i : i < 6 ? "s" + i : (double)i))
             .SetName("{m}(Dynamic whose runtime type list differs per block)");
 
-        // NULL in a Dynamic is the discriminator one past the last runtime type, so it moves with the per-block
-        // list rather than sitting at a fixed sentinel.
+        // Dynamic's null discriminator depends on the per-block type list.
         yield return new TestCaseData(
                 "CAST(if(number % 3 = 1, CAST(NULL, 'Dynamic'), CAST(toInt64(number), 'Dynamic')), 'Dynamic')",
                 NineRows(i => i % 3 == 1 ? null : (long)i))
@@ -121,18 +104,14 @@ public class MultiBlockStateIntegrationTests
 
         Assert.Multiple(() =>
         {
-            // The precondition, asserted rather than assumed: a server that returned one block would make the
-            // row comparison below pass while proving nothing about the second prefix.
+            // Ensure the query exercised more than one state prefix.
             Assert.That(blocks, Is.GreaterThan(1), "max_block_size = 2 must split the result");
             Assert.That(readBack, Is.EqualTo(expected));
         });
     }
 
     /// <summary>
-    /// The dictionary belongs to the block, not to the column: the same key means a different value in a
-    /// different block. Cycling three values through 2-row blocks makes the keys identical block to block
-    /// (<c>[1, 2]</c>) while the values behind them move, so a dictionary read once and reused would decode
-    /// every block to block one's values and no length would look wrong.
+    /// Verifies that identical keys resolve against each block's dictionary.
     /// </summary>
     [Test]
     public async Task StreamAsync_LowCardinalitySplitAcrossBlocks_ResolvesEachBlockAgainstItsOwnDictionary()
@@ -150,8 +129,7 @@ public class MultiBlockStateIntegrationTests
         {
             var lowCardinality = (ILowCardinalityColumn<string>)block[0];
 
-            // Copied out of the borrowed block, and past the reserved leading slot so only the distinct data
-            // values are compared.
+            // Copy values out of the borrowed block, excluding reserved slots.
             var distinct = new string[lowCardinality.Dictionary.RowCount - lowCardinality.ReservedSlotCount];
             for (int slot = 0; slot < distinct.Length; slot++)
             {
@@ -178,9 +156,7 @@ public class MultiBlockStateIntegrationTests
     }
 
     /// <summary>
-    /// A <c>Dynamic</c> column's runtime type list is discovered per block, so a block declares only the types
-    /// its own rows use: the list grows, shrinks, and here changes to a type no earlier block named. Every row
-    /// still decodes, which is what pins the list to the block.
+    /// Verifies that each block uses its own <c>Dynamic</c> runtime type list.
     /// </summary>
     [Test]
     public async Task StreamAsync_DynamicSplitAcrossBlocks_DeclaresEachBlocksOwnRuntimeTypeList()

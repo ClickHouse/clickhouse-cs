@@ -10,8 +10,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <summary>
 /// Encodes ClickHouse <c>DateTime</c> as Unix seconds. The explicit or session timezone controls
 /// <see cref="DateTimeOffset"/> projections and how unspecified <see cref="DateTime"/> values are interpreted.
-/// The raw seconds need no timezone, so a zone this platform cannot represent surfaces only where a calendar
-/// value is asked for.
+/// Timezone errors are deferred until a calendar value is requested.
 /// </summary>
 internal sealed class DateTimeColumnCodec : IColumnCodec
 {
@@ -103,9 +102,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
             return true;
         }
 
-        // The resolved zone is embedded, not the zone: a calendar target is where the zone is needed, and that is
-        // the projected row rather than this method, which also answers CanRead and the POCO tier's mapping
-        // discovery. Asking for it here would refuse the reading instead of the value.
+        // Defer timezone resolution until a calendar row is projected.
         if (targetType == typeof(DateTimeOffset))
         {
             projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToOffset), value, timeZone);
@@ -161,9 +158,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     // Reduces a DateTime to the UTC instant to encode. Utc and Local already denote an instant; a Local value
     // resolves against the host machine's timezone, under the BCL's daylight-saving rules and not the ones below.
     // An Unspecified value has no offset, so its wall-clock is read in the column's timezone.
-    //
-    // Takes the resolved zone rather than the zone, so the two Kinds that name an instant never ask for it: a
-    // column may declare an offset .NET cannot represent, which must not stop a value that does not need it.
+    // Resolve the column timezone only for an Unspecified wall clock.
     internal static DateTime ToUtc(DateTime value, ResolvedTimeZone resolved)
     {
         if (value.Kind != DateTimeKind.Unspecified)

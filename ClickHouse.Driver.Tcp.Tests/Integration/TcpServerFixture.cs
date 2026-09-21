@@ -51,9 +51,7 @@ public sealed class TcpServerFixture
             .WithUsername(Username)
             .WithPassword(Password)
 
-            // The image gives the user it creates no access management, so CREATE USER and GRANT are refused.
-            // A fixture that cannot make a second user can only ever test what a superuser sees, and
-            // ReadonlyUserIntegrationTests needs a user that is not this one.
+            // Readonly-user tests require access-management privileges for fixture setup.
             .WithEnvironment("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1")
             .Build();
 

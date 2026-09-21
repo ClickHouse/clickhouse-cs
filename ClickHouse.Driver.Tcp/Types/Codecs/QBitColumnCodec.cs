@@ -70,9 +70,7 @@ internal abstract class QBitColumnCodec : IColumnCodec
                 $"QBit type '{node}' has an invalid vector length '{token}'; expected a positive integer.");
         }
 
-        // The four element types this codec encodes, each stored the same way — bits(T) planes over the element's
-        // raw bit pattern, most significant first. A fifth would need its own plane width here, so this is what
-        // the client implements rather than a copy of what the server permits.
+        // These are the element types whose bit-plane widths this codec implements.
         return element switch
         {
             "Int8" => new QBitSByteColumnCodec(typeName, dimension),
