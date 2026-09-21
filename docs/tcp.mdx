@@ -73,7 +73,95 @@ Console.WriteLine(version);
 
 ## Migrating from the HTTP client {#migrating-from-http}
 
-TODO
+The TCP API is separate from `IClickHouseClient`; it is not a transport option for
+`ClickHouseClient` or `ClickHouseConnection`. Most SQL can be reused, but construct a
+`ClickHouseTcpClient` and migrate each operation to its TCP equivalent.
+
+### Method equivalents {#migrating-methods}
+
+| HTTP client | TCP client | Important difference |
+|---|---|---|
+| `new ClickHouseClient(...)` | `new ClickHouseTcpClient(...)` | Use `ClickHouseTcpClientOptions` or a TCP connection string and the native port, normally 9000 without TLS. Reuse either client across operations. |
+| `ExecuteNonQueryAsync(...)` | `ExecuteAsync(...)` | The TCP method completes when ClickHouse acknowledges the statement and does not return an affected-row count. |
+| `ExecuteScalarAsync(...)` | `ExecuteScalarAsync(...)` | Both return the first value, or `null` for an empty result. The TCP method drains the complete response before returning so the connection can be reused. |
+| `ExecuteReaderAsync(...)` | `QueryAsync(...)`, `QueryAsync<T>(...)`, or `StreamAsync(...)` | TCP has no `DbDataReader`. Choose allocated `object[]` rows, mapped POCOs, or borrowed columnar blocks. |
+| `QueryAsync<T>(...)` | `QueryAsync<T>(...)` | TCP builds and caches the POCO mapping automatically; no registration call is required. Use `ClickHouseTcpColumn` and `ClickHouseTcpNotMapped` instead of the HTTP mapping attributes. |
+| `InsertBinaryAsync(table, columns, rows)` | `InsertRowsAsync(sql, rows)` | Pass a materialized `IReadOnlyList<object[]>`; the SQL must end at `VALUES`. The TCP method does not return an inserted-row count. |
+| `InsertBinaryAsync<T>(table, rows)` | `InsertRowsAsync<T>(sql, rows)` | TCP needs no POCO registration, but every column named by the statement must map to a compatible public property. |
+| — | `InsertAsync(sql, columns)` | Use typed `IColumn` values to avoid the row-to-column projection and value-type boxing of row inserts. |
+| `PingAsync(...)` | `PingAsync(...)` | HTTP returns `false` for a failed ping; TCP completes successfully on `Pong` and otherwise throws. |
+| `ExecuteRawResultAsync(...)`, `InsertRawStreamAsync(...)`, `PostStreamAsync(...)` | No equivalent | Keep the HTTP client for raw streams and formats such as CSV, JSONEachRow, and Parquet. |
+| `CreateConnection()` or ADO.NET types | No equivalent | Keep the HTTP client for ADO.NET and ORMs. |
+
+For example, an HTTP reader loop:
+
+```csharp
+using var reader = await http.ExecuteReaderAsync(
+    "SELECT id, name FROM events ORDER BY id");
+
+while (reader.Read())
+{
+    Console.WriteLine($"{reader.GetFieldValue<ulong>(0)}: {reader.GetString(1)}");
+}
+```
+
+becomes an asynchronous TCP row stream:
+
+```csharp
+await foreach (object[] row in tcp.QueryAsync(
+    "SELECT id, name FROM events ORDER BY id"))
+{
+    Console.WriteLine($"{row[0]}: {row[1]}");
+}
+```
+
+### Options and parameters {#migrating-options-parameters}
+
+HTTP `QueryOptions` and `ClickHouseParameterCollection` are not interchangeable with their TCP
+counterparts. Move the values into `ClickHouseTcpQueryOptions`, where settings are strings and
+parameters are part of the options object:
+
+```csharp
+var options = new ClickHouseTcpQueryOptions
+{
+    QueryId = "events-by-score",
+    Settings = new Dictionary<string, string>
+    {
+        ["max_execution_time"] = "30",
+    },
+    Parameters = new ClickHouseTcpParameterCollection
+    {
+        { "minimum", 18.0 },
+    },
+};
+
+await foreach (object[] row in client.QueryAsync(
+    "SELECT id, score FROM events WHERE score >= {minimum:Float64}",
+    options))
+{
+    Console.WriteLine($"{row[0]}: {row[1]}");
+}
+```
+
+The TCP client supports ClickHouse-native `{name:Type}` placeholders but does not rewrite
+ADO.NET-style `@name` placeholders. It also has no per-query database, role, bearer token, custom
+header, parameter resolver or formatter, or read converter. See [limitations](#limitations) for the
+features that remain HTTP-only.
+
+### Connection and result lifetime {#migrating-lifetime}
+
+Both high-level clients are thread-safe and should be reused. The TCP client owns persistent native
+connections rather than HTTP connections, implements `IAsyncDisposable`, and should normally be
+disposed asynchronously when the application shuts down.
+
+`QueryAsync` rows are caller-owned. `StreamAsync` blocks and their columns are borrowed and valid
+only for the current iteration; copy any values that must outlive it. Always finish or dispose an
+enumeration so its connection returns to the pool. Use `OpenSessionAsync` when several operations
+must run on the same connection and retain session state.
+
+See the complete
+[HTTP-to-TCP migration example](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Tcp/Core/Tcp_004_MigratingFromHttp.cs)
+for both clients used against the same table.
 
 ## Configuration {#configuration}
 
@@ -1538,7 +1626,7 @@ The TCP client is experimental and does not provide every feature of the HTTP cl
 The TCP API is not an ADO.NET provider and cannot be used with ORMs. It also does not support
 CSV, JSONEachRow, Parquet, or raw stream input and output; bearer authentication or custom HTTP
 headers; custom parameter type resolution, formatting, or read conversion; or a per-query database
-or role. Use the [HTTP client](/integrations/language-clients/csharp/http) when an application needs
+or role. Use the [HTTP client](./http) when an application needs
 one of those features.
 
 ### SQL parameters {#limitations-sql-parameters}
