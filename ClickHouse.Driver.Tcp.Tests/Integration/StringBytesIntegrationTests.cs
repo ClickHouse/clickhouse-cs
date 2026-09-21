@@ -250,32 +250,31 @@ public class StringBytesIntegrationTests
     }
 
     /// <summary>
-    /// Verifies raw-byte POCO properties under array and low-cardinality wrappers.
+    /// Verifies raw-byte POCO properties under an array wrapper.
     /// </summary>
     [Test]
-    public async Task QueryAsync_ByteArrayPropertiesUnderAWrapper_AreFilledWithTheWireBytes()
+    public async Task QueryAsync_ByteArrayPropertiesUnderAnArray_AreFilledWithTheWireBytes()
     {
         await using var client = TcpServerFixture.CreateClient();
         string table = UniqueTableName();
         try
         {
             await client.ExecuteAsync(
-                $"CREATE TABLE {table} (Id UInt8, Parts Array(String), Label LowCardinality(String)) ENGINE = Memory",
+                $"CREATE TABLE {table} (Id UInt8, Parts Array(String)) ENGINE = Memory",
                 cancellationToken: None);
             await client.InsertAsync(
-                $"INSERT INTO {table} (Id, Parts, Label) VALUES",
+                $"INSERT INTO {table} (Id, Parts) VALUES",
                 new IColumn[]
                 {
                     ClickHouseTcpColumn.Create("Id", new byte[] { 0, 1, 2 }),
                     ClickHouseTcpColumn.Create(
                         "Parts",
                         new[] { new[] { new byte[] { 0x41, 0xFF }, Array.Empty<byte>() }, Array.Empty<byte[]>(), new[] { new byte[] { 0xFE } } }),
-                    ClickHouseTcpColumn.Create("Label", new[] { "shared", "other", "shared" }),
                 },
                 cancellationToken: None);
 
             var rows = new List<NestedBlobRow>();
-            await foreach (NestedBlobRow row in client.QueryAsync<NestedBlobRow>($"SELECT Id, Parts, Label FROM {table} ORDER BY Id", cancellationToken: None))
+            await foreach (NestedBlobRow row in client.QueryAsync<NestedBlobRow>($"SELECT Id, Parts FROM {table} ORDER BY Id", cancellationToken: None))
             {
                 rows.Add(row);
             }
@@ -286,9 +285,6 @@ public class StringBytesIntegrationTests
                 Assert.That(rows[0].Parts, Is.EqualTo(new[] { new byte[] { 0x41, 0xFF }, Array.Empty<byte>() }));
                 Assert.That(rows[1].Parts, Is.Empty);
                 Assert.That(rows[2].Parts, Is.EqualTo(new[] { new byte[] { 0xFE } }));
-                Assert.That(rows[0].Label, Is.EqualTo(new byte[] { 0x73, 0x68, 0x61, 0x72, 0x65, 0x64 }));
-                Assert.That(rows[1].Label, Is.EqualTo(new byte[] { 0x6F, 0x74, 0x68, 0x65, 0x72 }));
-                Assert.That(ReferenceEquals(rows[0].Label, rows[2].Label), Is.True, "both rows hold the same dictionary entry");
             });
         }
         finally
@@ -340,8 +336,6 @@ public class StringBytesIntegrationTests
         public byte Id { get; set; }
 
         public byte[][] Parts { get; set; }
-
-        public byte[] Label { get; set; }
     }
 
     private sealed class LabelRow

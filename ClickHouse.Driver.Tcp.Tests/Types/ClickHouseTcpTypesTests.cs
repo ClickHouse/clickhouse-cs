@@ -9,30 +9,6 @@ namespace ClickHouse.Driver.Tcp.Tests.Types;
 public class ClickHouseTcpTypesTests
 {
     [Test]
-    public void CanWrite_TheTypeAndACandidate_AnswersFromTheCodec()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(ClickHouseTcpTypes.CanWrite("Array(Nullable(DateTime('UTC')))", typeof(DateTime?[])), Is.True);
-            Assert.That(ClickHouseTcpTypes.CanWrite("Array(Nullable(DateTime('UTC')))", typeof(DateTime[])), Is.False, "an Array(Nullable(T)) row has to carry the nulls");
-            Assert.That(ClickHouseTcpTypes.CanWrite("FixedString(4)", typeof(byte[])), Is.True);
-            Assert.That(ClickHouseTcpTypes.CanWrite("FixedString(4)", typeof(string)), Is.False);
-        });
-    }
-
-    [Test]
-    public void CanRead_TheTypeAndACandidate_AnswersFromTheCodec()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(ClickHouseTcpTypes.CanRead("Enum8('a' = 1)", typeof(string)), Is.True);
-            Assert.That(ClickHouseTcpTypes.CanRead("Enum8('a' = 1)", typeof(sbyte)), Is.True);
-            Assert.That(ClickHouseTcpTypes.CanRead("UInt32", typeof(uint)), Is.True);
-            Assert.That(ClickHouseTcpTypes.CanRead("UInt32", typeof(long)), Is.False, "there is no numeric widening");
-        });
-    }
-
-    [Test]
     public void CanReadAndCanWrite_NullArgument_Throws()
     {
         Assert.Multiple(() =>

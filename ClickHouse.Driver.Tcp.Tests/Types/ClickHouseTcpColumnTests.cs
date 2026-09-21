@@ -86,49 +86,40 @@ public class ClickHouseTcpColumnTests
     }
 
     [Test]
-    public void Create_NullArguments_Throw()
+    public void CreateOrCreateArray_NullArguments_Throw()
     {
+        using IColumn<uint> inner = ClickHouseTcpColumn.Create("tags", new uint[] { 1 });
+
         Assert.Multiple(() =>
         {
             Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.Create(null, new[] { 1 }));
             Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.Create<int>("id", (int[])null));
             Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.Create<int>("id", (IEnumerable<int>)null));
+            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray<uint>("tags", null, new[] { 0 }));
+            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, null));
+            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray(null, inner, new[] { 0, 1 }));
         });
     }
 
-    [Test]
-    public void CreateArray_FlatElementsAndOffsets_PresentsTheRowsThoseOffsetsDescribe()
+    [TestCaseSource(nameof(ArrayShapes))]
+    public void CreateArray_FlatElementsAndOffsets_PresentsTheRowsThoseOffsetsDescribe(
+        uint[] elements,
+        int[] offsets,
+        uint[][] expectedRows)
     {
         IArrayColumn<uint> column = ClickHouseTcpColumn.CreateArray(
             "tags",
-            ClickHouseTcpColumn.Create("tags", new uint[] { 10, 20, 30 }),
-            new[] { 0, 2, 2, 3 });
+            ClickHouseTcpColumn.Create("tags", elements),
+            offsets);
 
         Assert.Multiple(() =>
         {
-            Assert.That(column.RowCount, Is.EqualTo(3), "one row per offset pair");
+            Assert.That(column.RowCount, Is.EqualTo(expectedRows.Length), "one row per offset pair");
             Assert.That(column.TypeName, Is.Null, "the insert takes the type from the target's schema");
             Assert.That(column.ElementType, Is.EqualTo(typeof(uint[])));
-            Assert.That(column.Offsets.ToArray(), Is.EqualTo(new[] { 0, 2, 2, 3 }));
-            Assert.That(column.InnerValues.ToArray(), Is.EqualTo(new uint[] { 10, 20, 30 }));
-            Assert.That(column.GetValue(0), Is.EqualTo(new uint[] { 10, 20 }));
-            Assert.That(column.GetValue(1), Is.EqualTo(Array.Empty<uint>()), "two equal offsets are an empty row");
-            Assert.That(column.GetValue(2), Is.EqualTo(new uint[] { 30 }));
-        });
-    }
-
-    [Test]
-    public void CreateArray_OneLeadingOffsetAndNoElements_IsAZeroRowColumn()
-    {
-        IArrayColumn<uint> column = ClickHouseTcpColumn.CreateArray(
-            "tags",
-            ClickHouseTcpColumn.Create("tags", Array.Empty<uint>()),
-            new[] { 0 });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(column.RowCount, Is.EqualTo(0));
-            Assert.That(column.Offsets.ToArray(), Is.EqualTo(new[] { 0 }));
+            Assert.That(column.Offsets.ToArray(), Is.EqualTo(offsets));
+            Assert.That(column.InnerValues.ToArray(), Is.EqualTo(elements));
+            Assert.That(column.Values.ToArray(), Is.EqualTo(expectedRows));
         });
     }
 
@@ -136,28 +127,42 @@ public class ClickHouseTcpColumnTests
     /// The offsets decide which elements each row claims, so a wrong one either reads past the elements or sends
     /// the server rows the caller did not build. Each message says which rule was broken.
     /// </summary>
-    [Test]
-    public void CreateArray_OffsetsThatDoNotDescribeTheElements_AreRefusedWithTheRuleTheyBreak()
+    [TestCaseSource(nameof(InvalidArrayOffsets))]
+    public void CreateArray_OffsetsThatDoNotDescribeTheElements_AreRefusedWithTheRuleTheyBreak(
+        int[] offsets,
+        string[] messageFragments)
     {
         IColumn<uint> inner = ClickHouseTcpColumn.Create("tags", new uint[] { 10, 20, 30 });
+        var thrown = Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, offsets));
 
         Assert.Multiple(() =>
         {
-            Assert.That(
-                Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, Array.Empty<int>())).Message,
-                Does.Contain("are empty"));
-            Assert.That(
-                Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, new[] { 1, 3 })).Message,
-                Does.Contain("start at 1"));
-            Assert.That(
-                Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, new[] { 0, 2, 1, 3 })).Message,
-                Does.Contain("go backwards at row 1"));
-            Assert.That(
-                Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, new[] { 0, 2 })).Message,
-                Does.Contain("end at 2").And.Contain("holds 3 elements"));
-            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray<uint>("tags", null, new[] { 0 }));
-            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, null));
-            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray(null, inner, new[] { 0, 3 }));
+            foreach (string fragment in messageFragments)
+            {
+                Assert.That(thrown.Message, Does.Contain(fragment));
+            }
         });
     }
+
+    private static IEnumerable<TestCaseData> ArrayShapes()
+    {
+        yield return new TestCaseData(
+                new uint[] { 10, 20, 30 },
+                new[] { 0, 2, 2, 3 },
+                new[] { new uint[] { 10, 20 }, Array.Empty<uint>(), new uint[] { 30 } })
+            .SetName("CreateArray_FlatElementsAndOffsets_PresentsThreeRows");
+        yield return new TestCaseData(Array.Empty<uint>(), new[] { 0 }, Array.Empty<uint[]>())
+            .SetName("CreateArray_OneLeadingOffsetAndNoElements_IsAZeroRowColumn");
+    }
+
+    private static IEnumerable<TestCaseData> InvalidArrayOffsets()
+    {
+        yield return InvalidArrayOffsetsCase(Array.Empty<int>(), "are empty");
+        yield return InvalidArrayOffsetsCase(new[] { 1, 3 }, "start at 1");
+        yield return InvalidArrayOffsetsCase(new[] { 0, 2, 1, 3 }, "go backwards at row 1");
+        yield return InvalidArrayOffsetsCase(new[] { 0, 2 }, "end at 2", "holds 3 elements");
+    }
+
+    private static TestCaseData InvalidArrayOffsetsCase(int[] offsets, params string[] messageFragments)
+        => new TestCaseData(offsets, messageFragments);
 }

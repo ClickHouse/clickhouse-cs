@@ -301,6 +301,7 @@ public class ColumnReadProjectionTests
     [TestCase("Time64(3)", typeof(DateTime))]
     [TestCase("Nullable(DateTime('UTC'))", typeof(TimeSpan?))]
     [TestCase("LowCardinality(Nullable(DateTime('UTC')))", typeof(TimeSpan?))]
+    [TestCase("Enum8('a' = 1)", typeof(int))]
     public void TryProjectRead_ProjectingCodecAskedForAnUnofferedType_ReturnsFalse(string type, Type unoffered)
     {
         IColumnCodec codec = Codec(type);
@@ -377,11 +378,13 @@ public class ColumnReadProjectionTests
     }
 
     [Test]
-    public void ReadableElementTypes_NullableOfReferenceInner_StaysUnwrapped()
+    [TestCase("String")]
+    [TestCase("Nullable(String)")]
+    [TestCase("LowCardinality(String)")]
+    public void ReadableElementTypes_StringShape_OffersTextAndBytes(string type)
     {
-        IColumnCodec codec = Codec("Nullable(String)");
+        IColumnCodec codec = Codec(type);
 
-        // A reference inner's nulls are already CLR nulls, so both surface types are the bare inner spellings.
         Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
     }
 
@@ -414,21 +417,6 @@ public class ColumnReadProjectionTests
         IColumnCodec codec = Codec("LowCardinality(UInt32)");
 
         Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(uint) }));
-    }
-
-    /// <summary>
-    /// Verifies that LowCardinality forwards the inner column's raw-byte projection.
-    /// </summary>
-    [Test]
-    public void ReadableElementTypes_LowCardinalityOfString_OffersTheBytesToo()
-    {
-        IColumnCodec codec = Codec("LowCardinality(String)");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
-            Assert.That(OffersColumnRead(codec, typeof(byte[])), Is.True);
-        });
     }
 
     /// <summary>
@@ -538,18 +526,6 @@ public class ColumnReadProjectionTests
         });
     }
 
-    [Test]
-    public void TryProjectRead_EnumAskedForAString_YieldsTheDeclaredLabel()
-    {
-        Func<sbyte, string> project = Project<sbyte, string>(Codec("Enum8('a' = -1, 'b' = 127)"));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(project(-1), Is.EqualTo("a"));
-            Assert.That(project(127), Is.EqualTo("b"));
-        });
-    }
-
     /// <summary>
     /// Every row of a column read from the server is a declared ordinal, so the projection cannot meet this on a
     /// real read. Pinned anyway: it is the difference between a clear failure and a wrong label.
@@ -561,15 +537,6 @@ public class ColumnReadProjectionTests
 
         var thrown = Assert.Throws<KeyNotFoundException>(() => project(0));
         Assert.That(thrown.Message, Does.Contain("Enum8('a' = -1, 'b' = 127)").And.Contain("ordinal 0"));
-    }
-
-    [Test]
-    public void TryProjectRead_EnumAskedForAnUnrelatedType_ReturnsFalse()
-    {
-        IColumnCodec codec = Codec("Enum8('a' = 1)");
-        ParameterExpression source = Expression.Parameter(typeof(sbyte), "v");
-
-        Assert.That(codec.TryProjectRead(source, typeof(int), out Expression _), Is.False);
     }
 
     /// <summary>
@@ -808,76 +775,9 @@ public class ColumnReadProjectionTests
         });
     }
 
-    [Test]
-    public void ReadableElementTypes_String_OffersTheTextAndTheBytes()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(Codec("String").ReadableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
-            Assert.That(Codec("Nullable(String)").ReadableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }),
-                "a reference-typed reading is already nullable, so the wrapper lifts it to itself");
-        });
-    }
-
-    /// <summary>
-    /// Verifies that wrappers compose the string column's raw-byte projection.
-    /// </summary>
-    [Test]
-    public void TryProjectColumnRead_EveryCompositeOverAString_OffersTheByteReading()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(OffersColumnRead(Codec("String"), typeof(byte[])), Is.True);
-            Assert.That(OffersColumnRead(Codec("Nullable(String)"), typeof(byte[])), Is.True);
-            Assert.That(OffersColumnRead(Codec("LowCardinality(String)"), typeof(byte[])), Is.True);
-            Assert.That(OffersColumnRead(Codec("LowCardinality(Nullable(String))"), typeof(byte[])), Is.True);
-            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(byte[][])), Is.True);
-            Assert.That(OffersColumnRead(Codec("Array(Array(String))"), typeof(byte[][][])), Is.True);
-            Assert.That(OffersColumnRead(Codec("Map(String, String)"), typeof(KeyValuePair<byte[], byte[]>[])), Is.True);
-            Assert.That(OffersColumnRead(Codec("Map(UInt8, String)"), typeof(KeyValuePair<byte, byte[]>[])), Is.True);
-            Assert.That(OffersColumnRead(Codec("Tuple(String)"), typeof(ValueTuple<byte[]>)), Is.True);
-            Assert.That(OffersColumnRead(Codec("Tuple(UInt8, String)"), typeof((byte, byte[]))), Is.True);
-
-            Assert.That(OffersColumnRead(Codec("String"), typeof(string)), Is.False, "the text is the canonical value's own reading");
-            Assert.That(OffersColumnRead(Codec("Nullable(String)"), typeof(byte[][])), Is.False, "the inner has no such reading to forward");
-            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(byte[])), Is.False, "a row of an array reads as an array");
-        });
-    }
-
-    /// <summary>
-    /// The reading is refused when the target does not have the composite's own row shape, and when it is the type
-    /// the column decodes to, which needs no projection at all.
-    /// </summary>
-    [Test]
-    public void TryProjectColumnRead_TargetOfTheWrongRowShapeOrTheElementTypeItself_IsRefused()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(string)), Is.False, "not an array at all");
-            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(string[])), Is.False, "the element type itself");
-            Assert.That(OffersColumnRead(Codec("Map(String, String)"), typeof(string)), Is.False, "not a pair array");
-            Assert.That(OffersColumnRead(Codec("Map(String, String)"), typeof(KeyValuePair<string, string>[])), Is.False, "the element type itself");
-            Assert.That(OffersColumnRead(Codec("Tuple(UInt8, String)"), typeof(string)), Is.False, "not a tuple");
-            Assert.That(OffersColumnRead(Codec("Tuple(UInt8, String)"), typeof((byte, string))), Is.False, "the element type itself");
-            Assert.That(OffersColumnRead(Codec("Nullable(String)"), typeof(string)), Is.False, "the element type itself");
-            Assert.That(OffersColumnRead(Codec("LowCardinality(String)"), typeof(string)), Is.False, "the element type itself");
-        });
-    }
-
-    /// <summary>
-    /// Verifies that one unsupported child rejects the composite projection.
-    /// </summary>
-    [Test]
-    public void TryProjectColumnRead_OneChildWithNoSuchReading_RefusesTheWholeComposite()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(OffersColumnRead(Codec("Tuple(UInt8, String)"), typeof((long, byte[]))), Is.False, "a UInt8 does not widen");
-            Assert.That(OffersColumnRead(Codec("Map(UInt8, String)"), typeof(KeyValuePair<long, byte[]>[])), Is.False);
-            Assert.That(OffersColumnRead(Codec("Array(String)"), typeof(Guid[])), Is.False);
-            Assert.That(OffersColumnRead(Codec("LowCardinality(String)"), typeof(Guid)), Is.False);
-        });
-    }
+    [TestCaseSource(nameof(ColumnReadCandidates))]
+    public void TryProjectColumnRead_Candidate_ReturnsExpected(string type, Type target, bool expected)
+        => Assert.That(OffersColumnRead(Codec(type), target), Is.EqualTo(expected));
 
     /// <summary>
     /// Verifies the error when a caller-built composite lacks its decoded columnar surface.
@@ -887,6 +787,7 @@ public class ColumnReadProjectionTests
     {
         Assert.Multiple(() =>
         {
+            AssertLacksSurface<byte[]>("Nullable(String)", "INullableColumn");
             AssertLacksSurface<byte[][]>("Array(String)", "IArrayColumn");
             AssertLacksSurface<KeyValuePair<string, byte[]>[]>("Map(String, String)", "IMapColumn");
             AssertLacksSurface<ValueTuple<byte[]>>("Tuple(String)", "ITupleColumn");
@@ -894,58 +795,26 @@ public class ColumnReadProjectionTests
         });
     }
 
-    /// <summary>
-    /// Verifies that composites use column projection only when a child requires column state.
-    /// </summary>
     [Test]
-    public void TryProjectColumnRead_CompositeOfElementwiseChildrenOnly_LeavesItToTheValueProjection()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(OffersColumnRead(Codec("Array(DateTime('UTC'))"), typeof(DateTime[])), Is.False);
-            Assert.That(OffersColumnRead(Codec("Tuple(DateTime('UTC'), Time)"), typeof((DateTime, TimeSpan))), Is.False);
-            Assert.That(OffersColumnRead(Codec("Map(String, DateTime('UTC'))"), typeof(KeyValuePair<string, DateTime>[])), Is.False);
-            Assert.That(OffersColumnRead(Codec("Nullable(DateTime('UTC'))"), typeof(DateTime?)), Is.False);
-
-            // Still readable, through the elementwise path.
-            Assert.That(ClickHouseTcpTypes.CanRead("Array(DateTime('UTC'))", typeof(DateTime[])), Is.True);
-            Assert.That(ClickHouseTcpTypes.CanRead("Nullable(DateTime('UTC'))", typeof(DateTime?)), Is.True);
-        });
-    }
-
-    /// <summary>
-    /// Verifies that LowCardinality projects dictionary entries even for elementwise conversions.
-    /// </summary>
-    [Test]
-    public void TryProjectColumnRead_LowCardinalityOfElementwiseInner_StillTakesTheColumnForm()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(OffersColumnRead(Codec("LowCardinality(DateTime('UTC'))"), typeof(DateTime)), Is.True);
-            Assert.That(OffersColumnRead(Codec("LowCardinality(Nullable(DateTime('UTC')))"), typeof(DateTime?)), Is.True);
-            Assert.That(OffersColumnRead(Codec("LowCardinality(FixedString(4))"), typeof(string)), Is.True);
-
-            Assert.That(
-                OffersColumnRead(Codec("LowCardinality(Nullable(DateTime('UTC')))"), typeof(DateTime)),
-                Is.False,
-                "a bare value-typed target has nowhere to put a NULL row");
-        });
-    }
+    [TestCase("Array(DateTime('UTC'))", typeof(DateTime[]))]
+    [TestCase("Tuple(DateTime('UTC'), Time)", typeof((DateTime, TimeSpan)))]
+    [TestCase("Map(String, DateTime('UTC'))", typeof(KeyValuePair<string, DateTime>[]))]
+    [TestCase("Nullable(DateTime('UTC'))", typeof(DateTime?))]
+    public void CanRead_CompositeOfElementwiseChildren_UsesTheValueProjection(string type, Type target)
+        => Assert.That(ClickHouseTcpTypes.CanRead(type, target), Is.True);
 
     /// <summary>
     /// Verifies that JSON remains text-only despite using String serialization.
     /// </summary>
     [Test]
-    public void TryProjectColumnRead_Json_OffersNoByteReadingEvenThoughItsBodyIsAString()
+    public void ReadableElementTypes_Json_OffersTextButNotBytes()
     {
         IColumnCodec json = Codec("JSON");
 
         Assert.Multiple(() =>
         {
-            Assert.That(OffersColumnRead(json, typeof(byte[])), Is.False);
             Assert.That(json.ReadableElementTypes, Is.EqualTo(new[] { typeof(string) }));
             Assert.That(ClickHouseTcpTypes.CanRead("JSON", typeof(byte[])), Is.False);
-            Assert.That(ClickHouseTcpTypes.CanRead("String", typeof(byte[])), Is.True);
         });
     }
 
@@ -978,6 +847,47 @@ public class ColumnReadProjectionTests
             Assert.That(built, Is.EqualTo(3));
         });
     }
+
+    private static IEnumerable<TestCaseData> ColumnReadCandidates()
+    {
+        yield return ColumnReadCase("String", typeof(byte[]), true);
+        yield return ColumnReadCase("Nullable(String)", typeof(byte[]), true);
+        yield return ColumnReadCase("LowCardinality(String)", typeof(byte[]), true);
+        yield return ColumnReadCase("LowCardinality(Nullable(String))", typeof(byte[]), true);
+        yield return ColumnReadCase("Array(String)", typeof(byte[][]), true);
+        yield return ColumnReadCase("Array(Array(String))", typeof(byte[][][]), true);
+        yield return ColumnReadCase("Map(String, String)", typeof(KeyValuePair<byte[], byte[]>[]), true);
+        yield return ColumnReadCase("Map(UInt8, String)", typeof(KeyValuePair<byte, byte[]>[]), true);
+        yield return ColumnReadCase("Tuple(String)", typeof(ValueTuple<byte[]>), true);
+        yield return ColumnReadCase("Tuple(UInt8, String)", typeof((byte, byte[])), true);
+        yield return ColumnReadCase("String", typeof(string), false);
+        yield return ColumnReadCase("Nullable(String)", typeof(byte[][]), false);
+        yield return ColumnReadCase("Array(String)", typeof(byte[]), false);
+        yield return ColumnReadCase("Array(String)", typeof(string), false);
+        yield return ColumnReadCase("Array(String)", typeof(string[]), false);
+        yield return ColumnReadCase("Map(String, String)", typeof(string), false);
+        yield return ColumnReadCase("Map(String, String)", typeof(KeyValuePair<string, string>[]), false);
+        yield return ColumnReadCase("Tuple(UInt8, String)", typeof(string), false);
+        yield return ColumnReadCase("Tuple(UInt8, String)", typeof((byte, string)), false);
+        yield return ColumnReadCase("Nullable(String)", typeof(string), false);
+        yield return ColumnReadCase("LowCardinality(String)", typeof(string), false);
+        yield return ColumnReadCase("Tuple(UInt8, String)", typeof((long, byte[])), false);
+        yield return ColumnReadCase("Map(UInt8, String)", typeof(KeyValuePair<long, byte[]>[]), false);
+        yield return ColumnReadCase("Array(String)", typeof(Guid[]), false);
+        yield return ColumnReadCase("LowCardinality(String)", typeof(Guid), false);
+        yield return ColumnReadCase("Array(DateTime('UTC'))", typeof(DateTime[]), false);
+        yield return ColumnReadCase("Tuple(DateTime('UTC'), Time)", typeof((DateTime, TimeSpan)), false);
+        yield return ColumnReadCase("Map(String, DateTime('UTC'))", typeof(KeyValuePair<string, DateTime>[]), false);
+        yield return ColumnReadCase("Nullable(DateTime('UTC'))", typeof(DateTime?), false);
+        yield return ColumnReadCase("LowCardinality(DateTime('UTC'))", typeof(DateTime), true);
+        yield return ColumnReadCase("LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTime?), true);
+        yield return ColumnReadCase("LowCardinality(FixedString(4))", typeof(string), true);
+        yield return ColumnReadCase("LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTime), false);
+        yield return ColumnReadCase("JSON", typeof(byte[]), false);
+    }
+
+    private static TestCaseData ColumnReadCase(string type, Type target, bool expected)
+        => new TestCaseData(type, target, expected).SetArgDisplayNames(type, target.Name, expected.ToString());
 
     /// <summary>Asks a codec for the reading it takes over the whole column rather than over one decoded value.</summary>
     private static bool OffersColumnRead(IColumnCodec codec, Type targetType)

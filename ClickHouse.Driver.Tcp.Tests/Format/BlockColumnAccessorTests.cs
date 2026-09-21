@@ -128,15 +128,29 @@ public class BlockColumnAccessorTests
 
     [TestCase(-1)]
     [TestCase(2)]
-    public void ColumnByIndex_OutOfRange_Throws(int index)
+    public void ColumnOrReadAs_ByIndexOutOfRange_ThrowsNamingTheColumnCount(int index)
     {
         using Block block = TwoColumnBlock();
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => block.Column<ulong>(index));
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Assert.Throws<ArgumentOutOfRangeException>(() => block.Column<ulong>(index)).Message,
+                Does.Contain("has 2 columns"));
+            Assert.That(
+                Assert.Throws<ArgumentOutOfRangeException>(() => block.ReadAs<ulong>(index)).Message,
+                Does.Contain("has 2 columns"));
+        });
     }
 
     private static Block TwoColumnBlock()
-        => new(string.Empty, default, 2, [Ids(), Labels()], null, default);
+        => new(
+            string.Empty,
+            default,
+            2,
+            [Ids(), Labels()],
+            ColumnCodecRegistry.Default,
+            new ResolveContext { ServerTimezone = "UTC" });
 
     private static IColumn Ids() => PrimitiveColumn<ulong>.FromValues("id", "UInt64", [7UL, 8UL]);
 

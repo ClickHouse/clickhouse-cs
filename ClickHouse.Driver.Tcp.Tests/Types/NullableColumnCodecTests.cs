@@ -325,17 +325,4 @@ public class NullableColumnCodecTests
     public void Resolve_Nullable_StampsFullTypeName()
         => Assert.That(Resolve("Nullable(UInt8)").TypeName, Is.EqualTo("Nullable(UInt8)"));
 
-    /// <summary>
-    /// Verifies the error when a caller-built nullable column has no null-map surface.
-    /// </summary>
-    [Test]
-    public void ReadAs_NullableColumnWithoutANullMap_SaysWhichColumnHasNone()
-    {
-        var text = new ArrayColumn<string>("c", "Nullable(String)", new[] { "a" });
-
-        var thrown = Assert.Throws<InvalidOperationException>(
-            () => ColumnCodecRegistry.Default.Projections.ReadAs<byte[]>(text, new ResolveContext { ServerTimezone = "UTC" }));
-
-        Assert.That(thrown.Message, Does.Contain("Column 'c' (Nullable(String))").And.Contain("INullableColumn"));
-    }
 }

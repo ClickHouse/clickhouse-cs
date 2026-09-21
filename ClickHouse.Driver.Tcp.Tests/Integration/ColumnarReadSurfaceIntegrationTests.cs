@@ -43,6 +43,8 @@ public class ColumnarReadSurfaceIntegrationTests
 
         bool matchedInner = false;
         bool matchedNullable = false;
+        bool matchedUntyped = false;
+        bool sameInnerInstance = false;
         byte[] nullMap = null;
         int nullMapLength = 0;
         int rowCount = 0;
@@ -57,8 +59,10 @@ public class ColumnarReadSurfaceIntegrationTests
             IColumn column = block[0];
             matchedInner = column is INullableColumn<int>;
             matchedNullable = column is INullableColumn<int?>;
+            matchedUntyped = column is INullableColumn;
 
             var nullable = (INullableColumn<int>)column;
+            sameInnerInstance = ReferenceEquals(((INullableColumn)column).Inner, nullable.Inner);
             nullMap = nullable.NullMap.ToArray();
             nullMapLength = nullable.NullMap.Length;
             rowCount = nullable.RowCount;
@@ -81,6 +85,8 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             Assert.That(matchedInner, Is.True, "the view is parameterized by the inner type");
             Assert.That(matchedNullable, Is.False, "and not by the nullable type");
+            Assert.That(matchedUntyped, Is.True);
+            Assert.That(sameInnerInstance, Is.True, "the untyped Inner is the typed Inner");
             Assert.That(rowCount, Is.EqualTo(4));
             Assert.That(nullMap, Is.EqualTo(new byte[] { 0, 1, 0, 0 }), "one entry per row, non-zero marking null");
             Assert.That(nullMapLength, Is.EqualTo(rowCount), "the map is sliced to the row count, not the pooled buffer length");
@@ -141,6 +147,9 @@ public class ColumnarReadSurfaceIntegrationTests
         await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
+        bool matchedUntyped = false;
+        bool matchedWrongElement = false;
+        bool sameUntypedInner = false;
         int rowCount = 0;
         int[] offsets = null;
         int[] innerValues = null;
@@ -155,8 +164,11 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             IColumn column = block[0];
             matched = column is IArrayColumn<int>;
+            matchedUntyped = column is IArrayColumn;
+            matchedWrongElement = column is IArrayColumn<string>;
 
             var array = (IArrayColumn<int>)column;
+            sameUntypedInner = ReferenceEquals(((IArrayColumn)column).Inner, array.Inner);
             rowCount = array.RowCount;
             offsets = array.Offsets.ToArray();
             innerValues = array.InnerValues.ToArray();
@@ -172,6 +184,9 @@ public class ColumnarReadSurfaceIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(matched, Is.True);
+            Assert.That(matchedUntyped, Is.True);
+            Assert.That(matchedWrongElement, Is.False);
+            Assert.That(sameUntypedInner, Is.True, "the untyped Inner is the typed Inner");
             Assert.That(rowCount, Is.EqualTo(4));
             Assert.That(offsets, Is.EqualTo(new[] { 0, 0, 1, 3, 6 }), "one more entry than rows; [0] is 0");
             Assert.That(offsets.Length, Is.EqualTo(rowCount + 1), "sliced to the row count, not the pooled buffer length");
@@ -318,6 +333,9 @@ public class ColumnarReadSurfaceIntegrationTests
         await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
+        bool matchedUntyped = false;
+        bool sameUntypedKeyColumn = false;
+        bool sameUntypedValueColumn = false;
         int rowCount = 0;
         int[] offsets = null;
         string[] flatKeys = null;
@@ -338,8 +356,11 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             IColumn column = block[0];
             matched = column is IMapColumn<string, int>;
+            matchedUntyped = column is IMapColumn;
 
             var map = (IMapColumn<string, int>)column;
+            sameUntypedKeyColumn = ReferenceEquals(((IMapColumn)column).KeyColumn, map.KeyColumn);
+            sameUntypedValueColumn = ReferenceEquals(((IMapColumn)column).ValueColumn, map.ValueColumn);
             rowCount = map.RowCount;
             offsets = map.Offsets.ToArray();
             flatKeys = map.KeyColumn.Values.ToArray();
@@ -358,6 +379,9 @@ public class ColumnarReadSurfaceIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(matched, Is.True);
+            Assert.That(matchedUntyped, Is.True);
+            Assert.That(sameUntypedKeyColumn, Is.True, "the untyped KeyColumn is the typed KeyColumn");
+            Assert.That(sameUntypedValueColumn, Is.True, "the untyped ValueColumn is the typed ValueColumn");
             Assert.That(rowCount, Is.EqualTo(3));
             Assert.That(offsets, Is.EqualTo(new[] { 0, 0, 1, 3 }), "one more entry than rows");
             Assert.That(offsets.Length, Is.EqualTo(rowCount + 1), "sliced to the row count, not the pooled buffer length");
@@ -478,6 +502,8 @@ public class ColumnarReadSurfaceIntegrationTests
         await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
+        bool matchedUntyped = false;
+        bool sameUntypedDictionary = false;
         int rowCount = 0;
         int keyCount = 0;
         int dictionarySize = 0;
@@ -492,8 +518,10 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             IColumn column = block[0];
             matched = column is ILowCardinalityColumn<string>;
+            matchedUntyped = column is ILowCardinalityColumn;
 
             var lc = (ILowCardinalityColumn<string>)column;
+            sameUntypedDictionary = ReferenceEquals(((ILowCardinalityColumn)column).Dictionary, lc.Dictionary);
             rowCount = lc.RowCount;
             keyCount = lc.Keys.Length;
             dictionarySize = lc.Dictionary.RowCount;
@@ -510,6 +538,8 @@ public class ColumnarReadSurfaceIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(matched, Is.True);
+            Assert.That(matchedUntyped, Is.True);
+            Assert.That(sameUntypedDictionary, Is.True, "the untyped Dictionary is the typed Dictionary");
             Assert.That(rowCount, Is.EqualTo(12));
             Assert.That(keyCount, Is.EqualTo(rowCount), "one key per row, sliced to the row count rather than the pooled buffer length");
             Assert.That(dictionarySize, Is.EqualTo(4), "three distinct values plus the reserved default slot at [0]");
@@ -1021,92 +1051,6 @@ public class ColumnarReadSurfaceIntegrationTests
     }
 
     [Test]
-    public async Task StreamAsync_MixedComposites_TraversedThroughTheNonGenericViewsWithNoTypeArgument()
-    {
-        // Non-generic views expose composite shapes without requiring their CLR element types.
-        await using var client = TcpServerFixture.CreateClient();
-
-        bool nullableMatched = false;
-        bool arrayMatched = false;
-        bool mapMatched = false;
-        bool lowCardinalityMatched = false;
-        bool sameInnerInstance = false;
-        byte[] nullMap = null;
-        var offsets = Array.Empty<int>();
-        int innerElementCount = 0;
-        object firstElement = null;
-        var mapOffsets = Array.Empty<int>();
-        object firstKey = null;
-        object secondValue = null;
-        int reservedSlots = 0;
-        var keys = Array.Empty<int>();
-        object keyedValue = null;
-
-        await foreach (Block block in client.StreamAsync(
-            "SELECT if(number = 1, NULL, toDateTime64('2024-06-15 14:00:00.125', 3, 'UTC') + number) AS ts, " +
-            "range(number + 1) AS ids, " +
-            "map('k', toUInt32(number)) AS attrs, " +
-            "CAST(concat('c', toString(number % 2)), 'LowCardinality(String)') AS bucket " +
-            "FROM system.numbers LIMIT 3",
-            cancellationToken: None))
-        {
-            if (block["ts"] is INullableColumn nullable)
-            {
-                nullableMatched = true;
-                nullMap = nullable.NullMap.ToArray();
-                sameInnerInstance = ReferenceEquals(nullable.Inner, ((INullableColumn<long>)nullable).Inner);
-            }
-
-            if (block["ids"] is IArrayColumn array)
-            {
-                arrayMatched = true;
-                offsets = array.Offsets.ToArray();
-                innerElementCount = array.Inner.RowCount;
-                firstElement = array.Inner.GetValue(0);
-            }
-
-            if (block["attrs"] is IMapColumn map)
-            {
-                mapMatched = true;
-                mapOffsets = map.Offsets.ToArray();
-                firstKey = map.KeyColumn.GetValue(0);
-                secondValue = map.ValueColumn.GetValue(1);
-            }
-
-            if (block["bucket"] is ILowCardinalityColumn lowCardinality)
-            {
-                lowCardinalityMatched = true;
-                reservedSlots = lowCardinality.ReservedSlotCount;
-                keys = lowCardinality.Keys.ToArray();
-                keyedValue = lowCardinality.Dictionary.GetValue(keys[2]);
-            }
-        }
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(nullableMatched, Is.True);
-            Assert.That(nullMap, Is.EqualTo(new byte[] { 0, 1, 0 }));
-            Assert.That(sameInnerInstance, Is.True, "the untyped Inner forwards to the typed one, it does not wrap it");
-
-            Assert.That(arrayMatched, Is.True);
-            Assert.That(offsets, Is.EqualTo(new[] { 0, 1, 3, 6 }), "range(n + 1) gives rows of 1, 2 and 3 elements");
-            Assert.That(innerElementCount, Is.EqualTo(6), "the inner column is flat: one entry per element of every row");
-            Assert.That(firstElement, Is.EqualTo(0UL));
-
-            Assert.That(mapMatched, Is.True);
-            Assert.That(mapOffsets, Is.EqualTo(new[] { 0, 1, 2, 3 }), "one entry per row");
-            Assert.That(firstKey, Is.EqualTo("k"));
-            Assert.That(secondValue, Is.EqualTo(1U));
-
-            Assert.That(lowCardinalityMatched, Is.True);
-            Assert.That(reservedSlots, Is.EqualTo(1), "a non-nullable inner reserves slot 0 for its default");
-            Assert.That(keys, Has.Length.EqualTo(3));
-            Assert.That(keyedValue, Is.EqualTo("c0"), "row 2 repeats row 0's value, so it repeats its key");
-            Assert.That(keys[2], Is.EqualTo(keys[0]));
-        });
-    }
-
-    [Test]
     public async Task StreamAsync_NullableTemporalColumn_ReachesTheCalendarReadingThroughItsInnerColumn()
     {
         // Nullable exposes temporal access through its dense inner column because null rows have no temporal value.
@@ -1153,39 +1097,4 @@ public class ColumnarReadSurfaceIntegrationTests
         });
     }
 
-    [Test]
-    public async Task StreamAsync_ViewMatchedWithTheWrongTypeArgument_NeverMatchesWhileTheNonGenericViewDoes()
-    {
-        // A generic view with the wrong inner type does not match; the non-generic shape view still does.
-        await using var client = TcpServerFixture.CreateClient();
-
-        bool wrongNullableArgument = true;
-        bool rightNullableArgument = false;
-        bool untypedNullable = false;
-        bool wrongArrayArgument = true;
-        bool untypedArray = false;
-
-        await foreach (Block block in client.StreamAsync(
-            "SELECT CAST(number, 'Nullable(Int64)') AS n, range(number) AS ids FROM system.numbers LIMIT 2",
-            cancellationToken: None))
-        {
-            IColumn nullable = block["n"];
-            wrongNullableArgument = nullable is INullableColumn<long?>;
-            rightNullableArgument = nullable is INullableColumn<long>;
-            untypedNullable = nullable is INullableColumn;
-
-            IColumn array = block["ids"];
-            wrongArrayArgument = array is IArrayColumn<string>;
-            untypedArray = array is IArrayColumn;
-        }
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(wrongNullableArgument, Is.False, "the type argument is the inner type, not the nullable one");
-            Assert.That(rightNullableArgument, Is.True);
-            Assert.That(untypedNullable, Is.True, "the non-generic view cannot be got wrong");
-            Assert.That(wrongArrayArgument, Is.False);
-            Assert.That(untypedArray, Is.True);
-        });
-    }
 }

@@ -489,15 +489,4 @@ public class BlockReadAsIntegrationTests
         Settings = new Dictionary<string, string>(StringComparer.Ordinal) { ["allow_suspicious_low_cardinality_types"] = "1" },
     };
 
-    [Test]
-    public async Task ReadAs_IndexOutsideTheBlock_ThrowsNamingTheColumnCount()
-    {
-        await using var client = TcpServerFixture.CreateClient();
-
-        await foreach (Block block in client.StreamAsync("SELECT 1 AS a, 2 AS b", cancellationToken: None))
-        {
-            var thrown = Assert.Throws<ArgumentOutOfRangeException>(() => block.ReadAs<int>(2));
-            Assert.That(thrown.Message, Does.Contain("has 2 columns"));
-        }
-    }
 }
