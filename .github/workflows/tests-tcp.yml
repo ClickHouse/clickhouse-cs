@@ -39,7 +39,7 @@ permissions:
 jobs:
   regress-clickhouse-tcp:
     name: ClickHouse regression (TCP)
-    uses: ./.github/workflows/reusable-tcp.yml
+    uses: $/.github/workflows/reusable-tcp.yml
     with:
       clickhouse-version: ${{ matrix.version }}
       ref: ${{ inputs.ref }}
@@ -57,7 +57,7 @@ jobs:
   regress-dotnet-tcp:
     name: .NET regression (TCP)
     # Framework axis: each TFM runs against clickhouse-version 'latest' (the reusable default).
-    uses: ./.github/workflows/reusable-tcp.yml
+    uses: $/.github/workflows/reusable-tcp.yml
     with:
       framework: ${{ matrix.framework }}
       ref: ${{ inputs.ref }}
@@ -72,7 +72,7 @@ jobs:
     # Cloud service. Landing on an integration branch, asking for it by hand, or the tests:run-cloud label on a
     # pull request (tests-cloud-tcp-label.yml) is enough.
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    uses: ./.github/workflows/tests-cloud-tcp.yml
+    uses: $/.github/workflows/tests-cloud-tcp.yml
     secrets:
       CLICKHOUSE_CLOUD_HOST: ${{ secrets.CLICKHOUSE_CLOUD_HOST }}
       CLICKHOUSE_CLOUD_USER: ${{ secrets.CLICKHOUSE_CLOUD_USER }}

@@ -38,7 +38,7 @@ jobs:
   cloud-tcp:
     name: Cloud (TCP)
     needs: authorize
-    uses: ./.github/workflows/tests-cloud-tcp.yml
+    uses: $/.github/workflows/tests-cloud-tcp.yml
     permissions:
       contents: read
     secrets:
