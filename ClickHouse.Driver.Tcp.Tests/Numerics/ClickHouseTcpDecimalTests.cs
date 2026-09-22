@@ -8,6 +8,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Numerics;
 [TestFixture]
 public class ClickHouseTcpDecimalTests
 {
+    private const int Values = 5000;
+
     [TestCase("0", 0, "0")]
     [TestCase("123", 0, "123")]
     [TestCase("12345", 2, "123.45")]
@@ -178,4 +180,28 @@ public class ClickHouseTcpDecimalTests
     [Test]
     public void Constructor_NegativeScale_Throws()
         => Assert.Throws<ArgumentOutOfRangeException>(() => new ClickHouseTcpDecimal(BigInteger.One, -1));
+
+    [Test]
+    public void Constructor_Int128Mantissas_AllocatesNothingPerValue()
+    {
+        _ = new ClickHouseTcpDecimal(Int128.MaxValue, 0);
+
+        var sign = 0;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Values; i++)
+        {
+            var mantissa = (i & 1) == 0 ? Int128.MinValue : Int128.MaxValue;
+            sign += new ClickHouseTcpDecimal(mantissa, 0).Sign;
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sign, Is.Zero);
+            Assert.That(new ClickHouseTcpDecimal(Int128.MinValue, 0).Mantissa.ToBigInteger(), Is.EqualTo((BigInteger)Int128.MinValue));
+            Assert.That(new ClickHouseTcpDecimal(Int128.MaxValue, 0).Mantissa.ToBigInteger(), Is.EqualTo((BigInteger)Int128.MaxValue));
+            Assert.That(allocated, Is.LessThan(Values), $"constructing from Int128 must not allocate per value; allocated {allocated / (double)Values:F1} B/value");
+        });
+    }
 }
