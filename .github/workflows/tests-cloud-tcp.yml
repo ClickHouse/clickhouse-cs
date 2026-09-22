@@ -29,6 +29,11 @@ jobs:
     name: Cloud Tests (TCP) - AWS
     runs-on: ubuntu-22.04
     timeout-minutes: 30 # the whole integration suite, every round trip over the public internet
+    # One run at a time: every run shares one Cloud service, and concurrent runs made its Keeper lose the
+    # connection during DDL. GitHub keeps one waiting run per group, so a newer run replaces an older waiting one.
+    concurrency:
+      group: cloud-tcp
+      cancel-in-progress: false
     # Without the label, a fork PR must never reach the Cloud credentials. The pull_request trigger withholds
     # secrets from forks anyway; this makes the intent explicit and skips the job instead of failing it in a
     # confusing way. workflow_dispatch is listed on its own: on a dispatch there is no pull_request context.
