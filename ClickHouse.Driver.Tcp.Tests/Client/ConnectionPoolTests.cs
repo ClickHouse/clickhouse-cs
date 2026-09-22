@@ -1206,6 +1206,32 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task ConnectionPool_WithAPositiveMinPoolSize_ArmsTheFirstSweepImmediately()
+    {
+        var clock = new ControlledTimeProvider();
+        await using var pool = new ConnectionPool(Options(minPoolSize: 2), new FakeConnectionFactory(), clock);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(clock.TimerDueTime, Is.EqualTo(TimeSpan.Zero));
+            Assert.That(clock.TimerPeriod, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        });
+    }
+
+    [Test]
+    public async Task ConnectionPool_WithNoMinPoolSize_DelaysTheFirstSweepByThePeriod()
+    {
+        var clock = new ControlledTimeProvider();
+        await using var pool = new ConnectionPool(Options(), new FakeConnectionFactory(), clock);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(clock.TimerDueTime, Is.EqualTo(TimeSpan.FromSeconds(30)));
+            Assert.That(clock.TimerPeriod, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        });
+    }
+
+    [Test]
     public async Task Sweep_OnAPoolBuiltWithAnExplicitInterval_StillRetiresExpiredConnections()
     {
         // The override changes when the sweep runs, not what it does. The clock here is controlled and its timers

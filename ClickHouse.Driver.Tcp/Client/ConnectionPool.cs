@@ -92,7 +92,7 @@ internal sealed class ConnectionPool : IConnectionSource
     // 1 while a sweep is running. Only one at a time, because sweeps share the `reaped` buffer.
     private int sweeping;
 
-    /// <summary>Creates a pool over the client's options, opening no connection until the first rent.</summary>
+    /// <summary>Creates a pool over the client's options, warming it in the background when a floor is set.</summary>
     /// <param name="options">The validated client options.</param>
     internal ConnectionPool(ClickHouseTcpClientOptions options)
         : this(options, new TcpConnectionFactory(options), TimeProvider.System)
@@ -111,9 +111,13 @@ internal sealed class ConnectionPool : IConnectionSource
         permits = new SemaphoreSlim(options.MaxPoolSize, options.MaxPoolSize);
 
         TimeSpan period = SweepInterval(options);
+        TimeSpan dueTime = options.MinPoolSize > 0 ? TimeSpan.Zero : period;
+
+        // Created last, after every field the sweep touches is initialized, so an immediate callback sees a fully
+        // built pool even if it runs before this constructor returns.
         sweeper = period == TimeSpan.Zero
             ? null
-            : time.CreateTimer(static state => ((ConnectionPool)state).SweepQuietly(), this, period, period);
+            : time.CreateTimer(static state => ((ConnectionPool)state).SweepQuietly(), this, dueTime, period);
     }
 
     /// <summary>

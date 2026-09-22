@@ -93,10 +93,11 @@ public sealed record ClickHouseTcpClientOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The floor is maintained by the same sweep that closes expired connections, so a pool below it is topped up
-    /// within one sweep period rather than at construction, and a burst arriving before the first sweep still opens
-    /// its own connections. Topping up never takes a slot from a waiting caller: it uses only capacity that is free
-    /// at that moment, so a pool already at <see cref="MaxPoolSize"/> skips it.
+    /// The floor is maintained by the same sweep that closes expired connections. When the floor is positive, the
+    /// first sweep runs immediately and starts filling the pool in the background; later gaps are filled within one
+    /// sweep period. A burst that reaches the pool first still opens its own connections. Topping up never takes a
+    /// slot from a waiting caller: it uses only capacity that is free at that moment, so a pool already at
+    /// <see cref="MaxPoolSize"/> skips it.
     /// </para>
     /// <para>
     /// Because the rotation is what holds the floor, a pool carrying no traffic at all still reconnects: this many

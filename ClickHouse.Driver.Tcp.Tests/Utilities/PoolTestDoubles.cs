@@ -10,8 +10,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 
 /// <summary>
 /// A clock the test drives by hand, so age and idleness can be aged by minutes without waiting for them. Its
-/// timers do nothing: the pool's sweep is invoked directly, keeping every test deterministic rather than
-/// racing a background timer.
+/// timers record their schedule but do nothing: the pool's sweep is invoked directly, keeping every test
+/// deterministic rather than racing a background timer.
 /// </summary>
 internal sealed class ControlledTimeProvider : TimeProvider
 {
@@ -48,8 +48,18 @@ internal sealed class ControlledTimeProvider : TimeProvider
     /// <summary>Moves the clock forward.</summary>
     public void Advance(TimeSpan by) => Interlocked.Add(ref timestamp, by.Ticks);
 
+    /// <summary>The due time passed when the timer was created, or null when no timer was created.</summary>
+    public TimeSpan? TimerDueTime { get; private set; }
+
+    /// <summary>The period passed when the timer was created, or null when no timer was created.</summary>
+    public TimeSpan? TimerPeriod { get; private set; }
+
     public override ITimer CreateTimer(TimerCallback callback, object state, TimeSpan dueTime, TimeSpan period)
-        => new InertTimer();
+    {
+        TimerDueTime = dueTime;
+        TimerPeriod = period;
+        return new InertTimer();
+    }
 
     private sealed class InertTimer : ITimer
     {
