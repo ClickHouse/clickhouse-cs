@@ -61,13 +61,9 @@ public class TimezoneColumnIntegrationTests
         }
     }
 
-    /// <summary>
-    /// Verifies that UTC values can be written when the column timezone cannot be represented by
-    /// <see cref="TimeZoneInfo"/>.
-    /// </summary>
-    [TestCase("DateTime('Fixed/UTC+19:00:00')", "2024-01-15 10:30:00")]
-    [TestCase("DateTime64(3, 'Fixed/UTC+19:00:00')", "2024-01-15 10:30:00.000")]
-    public async Task InsertAsync_UtcDateTimeIntoAZoneTimeZoneInfoCannotHold_StoresTheInstant(
+    [TestCase("DateTime('Fixed/UTC+14:00:00')", "2024-01-15 10:30:00")]
+    [TestCase("DateTime64(3, 'Fixed/UTC-14:00:00')", "2024-01-15 10:30:00.000")]
+    public async Task InsertAsync_UtcDateTimeIntoMaximumFixedOffsetColumn_StoresTheInstant(
         string columnType,
         string inUtc)
     {

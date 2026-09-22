@@ -100,18 +100,14 @@ public class ColumnReadProjectionIntegrationTests
         });
     }
 
-    /// <summary>
-    /// Verifies raw reads for fixed offsets outside <see cref="TimeZoneInfo"/>'s supported range.
-    /// </summary>
-    [TestCase("Fixed/UTC+19:00:00", "+19:00:00")]
-    [TestCase("Fixed/UTC-18:00:00", "-18:00:00")]
-    public async Task StreamAsync_DateTimeOffsetTimeZoneInfoCannotHold_ReadsTheSecondsAndReportsOnlyTheZone(string zone, string offset)
+    [TestCase("Fixed/UTC+14:00:00", 14)]
+    [TestCase("Fixed/UTC-14:00:00", -14)]
+    public async Task StreamAsync_DateTimeAtMaximumFixedOffset_ProjectsTheServerInstant(string zone, int offsetHours)
     {
         await using var client = TcpServerFixture.CreateClient();
 
         uint canonical = 0;
-        FormatException fromTimeZone = null;
-        FormatException fromProjection = null;
+        DateTimeOffset projected = default;
 
         await foreach (Block block in client.StreamAsync(
             $"SELECT toDateTime(1700000000, '{zone}')",
@@ -119,15 +115,14 @@ public class ColumnReadProjectionIntegrationTests
         {
             IColumn column = block[0];
             canonical = ((IColumn<uint>)column).Values[0];
-            fromTimeZone = Assert.Throws<FormatException>(() => _ = ((IDateTimeColumn)column).TimeZone);
-            fromProjection = Assert.Throws<FormatException>(() => ProjectRow<DateTime>(column, 0));
+            projected = ProjectRow<DateTimeOffset>(column, 0);
         }
 
         Assert.Multiple(() =>
         {
             Assert.That(canonical, Is.EqualTo(1_700_000_000u));
-            Assert.That(fromTimeZone?.Message, Does.Contain(zone).And.Contain(offset));
-            Assert.That(fromProjection?.Message, Does.Contain(offset));
+            Assert.That(projected.UtcDateTime, Is.EqualTo(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc)));
+            Assert.That(projected.Offset, Is.EqualTo(TimeSpan.FromHours(offsetHours)));
         });
     }
 

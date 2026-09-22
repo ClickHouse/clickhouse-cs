@@ -59,7 +59,7 @@ public class DateTimeZonesTests
             DateTimeZones.Resolve(id, serverTimezone: null).Value.BaseUtcOffset,
             Is.EqualTo(new TimeSpan(hours, minutes, 0)));
 
-    // The server accepts offsets beyond TimeZoneInfo's ±14-hour and whole-minute limits.
+    // Older servers and raw protocol metadata can contain offsets TimeZoneInfo cannot represent.
     [TestCase("Fixed/UTC+19:00:00", "+19:00:00")]
     [TestCase("Fixed/UTC-18:00:00", "-18:00:00")]
     [TestCase("Fixed/UTC+05:30:15", "+05:30:15")]
