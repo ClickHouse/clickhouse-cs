@@ -102,7 +102,7 @@ public class ClickHouseTcpLoggingIntegrationTests
         string id = logged.Groups[1].Value;
         object recorded = await QueryLog.ScalarAsync(
             client,
-            $"SELECT count() FROM system.query_log WHERE query_id = '{id}' AND type = 'QueryFinish'");
+            $"SELECT count() FROM {QueryLog.Table} WHERE query_id = '{id}' AND type = 'QueryFinish'");
 
         Assert.Multiple(() =>
         {

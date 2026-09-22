@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
@@ -43,6 +44,25 @@ public sealed class TcpServerFixture
     private const string ContainerUsername = "default";
     private const string ContainerPassword = "clickhouse";
 
+    // Embedded Keeper, so that ON CLUSTER queries run on the container. The image already defines a cluster
+    // named "default" with this server as its only replica.
+    private const string KeeperConfig = """
+        <clickhouse>
+          <keeper_server>
+            <tcp_port>9181</tcp_port>
+            <server_id>1</server_id>
+            <log_storage_path>/var/lib/clickhouse/coordination/log</log_storage_path>
+            <snapshot_storage_path>/var/lib/clickhouse/coordination/snapshots</snapshot_storage_path>
+            <raft_configuration>
+              <server><id>1</id><hostname>localhost</hostname><port>9234</port></server>
+            </raft_configuration>
+          </keeper_server>
+          <zookeeper>
+            <node><host>localhost</host><port>9181</port></node>
+          </zookeeper>
+        </clickhouse>
+        """;
+
     private static ClickHouseContainer container;
     private static TcpConnectionFactory factory;
     private static ClickHouseTcpClientOptions serverOptions;
@@ -58,6 +78,13 @@ public sealed class TcpServerFixture
 
     /// <summary>The password the integration tests authenticate with.</summary>
     public static string Password => serverOptions.Password;
+
+    /// <summary>
+    /// Whether <c>ON CLUSTER</c> and <c>clusterAllReplicas</c> work against the cluster named <c>default</c>.
+    /// True for Cloud and for the fixture's own container. False for a server named by
+    /// <c>CLICKHOUSE_TCP_HOST</c>, which usually has no Keeper.
+    /// </summary>
+    internal static bool HasDefaultCluster => IsCloud || container is not null;
 
     /// <summary>Whether the server under test is a ClickHouse Cloud service.</summary>
     internal static bool IsCloud { get; } =
@@ -250,6 +277,7 @@ public sealed class TcpServerFixture
 
             // Readonly-user tests require access-management privileges for fixture setup.
             .WithEnvironment("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1")
+            .WithResourceMapping(Encoding.UTF8.GetBytes(KeeperConfig), "/etc/clickhouse-server/config.d/keeper.xml")
             .Build();
 
         await container.StartAsync();
