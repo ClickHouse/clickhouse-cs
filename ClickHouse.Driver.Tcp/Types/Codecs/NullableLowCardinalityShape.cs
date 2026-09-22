@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
@@ -29,7 +28,7 @@ internal abstract class NullableLowCardinalityShape<T> : ILowCardinalityShape, I
 
     /// <inheritdoc/>
     public bool CanInnerWrite(IColumnCodec inner)
-        => inner.CanWriteElementType(typeof(T)) && inner.WireEqualityComparer(typeof(T)) is IEqualityComparer<T>;
+        => inner.CanWriteElementType(typeof(T)) && inner.LowCardinalityKeyWriter(typeof(T)) is ILowCardinalityKeyWriter<T>;
 
     /// <inheritdoc/>
     public void WriteBody(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn column, int start, int length)
@@ -74,10 +73,10 @@ internal abstract class NullableLowCardinalityShape<T> : ILowCardinalityShape, I
     // the inner codec produces.
     private void WriteErgonomic(IColumnCodec inner, ClickHouseBinaryWriter writer, IColumn source, int start, int length)
     {
-        var comparer = (IEqualityComparer<T>)inner.WireEqualityComparer(typeof(T));
+        var keyWriter = (ILowCardinalityKeyWriter<T>)inner.LowCardinalityKeyWriter(typeof(T));
         var placeholder = (T)inner.NullPlaceholderAs(typeof(T));
         IColumn<T> present = WithoutNulls(source, placeholder);
-        LowCardinalityValueWriter.Write(inner, comparer, writer, present, placeholder, source, this, start, length);
+        keyWriter.Write(inner, writer, present, placeholder, source, this, start, length);
     }
 }
 

@@ -32,8 +32,8 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // Only the top 16 bits are written, so floats that differ below them encode identically.
-    public object WireEqualityComparer(Type writeType)
-        => writeType == typeof(float) ? WireEquality.Projected<float, ushort>(ToBFloat16Bits) : null;
+    public object LowCardinalityKeyWriter(Type writeType)
+        => writeType == typeof(float) ? LowCardinalityKeys.Projected<float, ushort>(ToBFloat16Bits) : null;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)

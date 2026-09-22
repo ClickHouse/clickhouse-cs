@@ -12,23 +12,34 @@ internal interface ILowCardinalityNullMap
     bool IsNull(IColumn source, int row);
 }
 
-/// <summary>
-/// Builds a block-local LowCardinality dictionary: the distinct values in first-appearance order, plus a key per
-/// row indexing them.
-///
-/// <para>
-/// Which rows count as the same value is the inner codec's answer, through
-/// <see cref="IColumnCodec.WireEqualityComparer"/>. It has to be, because the relation the wire needs is "encodes
-/// to the same bytes" and CLR equality is a different relation for several types. Deduplicating on the wrong one
-/// merges rows the server must see as distinct, and the values reach it changed.
-/// </para>
-/// </summary>
+/// <summary>Builds and writes a LowCardinality dictionary from one surfaced element type.</summary>
+internal interface ILowCardinalityKeyWriter<TSource>
+{
+    void Write(
+        IColumnCodec inner,
+        ClickHouseBinaryWriter writer,
+        IColumn<TSource> values,
+        TSource placeholder,
+        IColumn source,
+        ILowCardinalityNullMap nullMap,
+        int start,
+        int length);
+}
+
+/// <summary>Projects a surfaced value to the key used for LowCardinality dictionary lookup.</summary>
+internal interface ILowCardinalityKeySelector<TSource, TKey>
+{
+    TKey Select(TSource value);
+}
+
+/// <summary>Builds a block-local LowCardinality dictionary from typed encoding keys.</summary>
 internal static class LowCardinalityValueWriter
 {
     /// <summary>Writes the dictionary and keys for rows [<paramref name="start"/>, start + length).</summary>
-    /// <typeparam name="T">The surfaced element type being written.</typeparam>
+    /// <typeparam name="TSource">The surfaced element type being written.</typeparam>
+    /// <typeparam name="TKey">The key type that represents its encoding.</typeparam>
     /// <param name="inner">The codec that encodes the dictionary.</param>
-    /// <param name="comparer">The inner codec's wire-equality comparer for <typeparamref name="T"/>.</param>
+    /// <param name="selector">Projects one source value to its dictionary key.</param>
     /// <param name="writer">The writer to encode the body into.</param>
     /// <param name="values">The values, with a placeholder already substituted at null rows.</param>
     /// <param name="placeholder">The value the reserved slots take.</param>
@@ -36,21 +47,22 @@ internal static class LowCardinalityValueWriter
     /// <param name="nullMap">Reports null rows, or null when the column cannot hold one.</param>
     /// <param name="start">The zero-based first row to write.</param>
     /// <param name="length">The number of rows to write.</param>
-    public static void Write<T>(
+    public static void Write<TSource, TKey, TSelector>(
         IColumnCodec inner,
-        IEqualityComparer<T> comparer,
+        TSelector selector,
         ClickHouseBinaryWriter writer,
-        IColumn<T> values,
-        T placeholder,
+        IColumn<TSource> values,
+        TSource placeholder,
         IColumn source,
         ILowCardinalityNullMap nullMap,
         int start,
         int length)
+        where TSelector : struct, ILowCardinalityKeySelector<TSource, TKey>
     {
         int reserved = nullMap is null ? 1 : 2;
-        var index = new Dictionary<T, int>(comparer) { [placeholder] = reserved - 1 };
+        var index = new Dictionary<TKey, int> { [selector.Select(placeholder)] = reserved - 1 };
 
-        T[] dictionary = ArrayPool<T>.Shared.Rent(length + reserved);
+        TSource[] dictionary = ArrayPool<TSource>.Shared.Rent(length + reserved);
         int[] keys = ArrayPool<int>.Shared.Rent(length);
         try
         {
@@ -64,7 +76,8 @@ internal static class LowCardinalityValueWriter
             {
                 for (int i = 0; i < length; i++)
                 {
-                    keys[i] = Intern(index, dictionary, values[start + i], ref dictionarySize);
+                    TSource value = values[start + i];
+                    keys[i] = Intern(index, dictionary, selector.Select(value), value, ref dictionarySize);
                 }
             }
             else
@@ -72,14 +85,22 @@ internal static class LowCardinalityValueWriter
                 for (int i = 0; i < length; i++)
                 {
                     int row = start + i;
-                    keys[i] = nullMap.IsNull(source, row) ? 0 : Intern(index, dictionary, values[row], ref dictionarySize);
+                    if (nullMap.IsNull(source, row))
+                    {
+                        keys[i] = 0;
+                    }
+                    else
+                    {
+                        TSource value = values[row];
+                        keys[i] = Intern(index, dictionary, selector.Select(value), value, ref dictionarySize);
+                    }
                 }
             }
 
             int code = LowCardinalityWire.SelectKeyWidthCode(dictionarySize);
             writer.WriteUInt64(LowCardinalityWire.NativeFlags | (ulong)code);
             writer.WriteUInt64((ulong)dictionarySize);
-            inner.WriteColumn(writer, ArrayColumn<T>.OverBuffer(source.Name, inner.TypeName, dictionary, dictionarySize), 0, dictionarySize);
+            inner.WriteColumn(writer, ArrayColumn<TSource>.OverBuffer(source.Name, inner.TypeName, dictionary, dictionarySize), 0, dictionarySize);
             writer.WriteUInt64((ulong)length);
 
             for (int i = 0; i < length; i++)
@@ -89,20 +110,25 @@ internal static class LowCardinalityValueWriter
         }
         finally
         {
-            ArrayPool<T>.Shared.Return(dictionary, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+            ArrayPool<TSource>.Shared.Return(dictionary, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<TSource>());
             ArrayPool<int>.Shared.Return(keys);
         }
     }
 
-    private static int Intern<T>(Dictionary<T, int> index, T[] dictionary, T value, ref int dictionarySize)
+    private static int Intern<TSource, TKey>(
+        Dictionary<TKey, int> index,
+        TSource[] dictionary,
+        TKey key,
+        TSource value,
+        ref int dictionarySize)
     {
-        if (index.TryGetValue(value, out int existing))
+        if (index.TryGetValue(key, out int existing))
         {
             return existing;
         }
 
         dictionary[dictionarySize] = value;
-        index[value] = dictionarySize;
+        index[key] = dictionarySize;
         return dictionarySize++;
     }
 }

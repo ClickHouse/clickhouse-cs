@@ -30,8 +30,8 @@ internal sealed class DateColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // A DateOnly compares by its day number, which is what is encoded.
-    public object WireEqualityComparer(Type writeType)
-        => writeType == typeof(DateOnly) ? WireEquality.Default<DateOnly>() : null;
+    public object LowCardinalityKeyWriter(Type writeType)
+        => writeType == typeof(DateOnly) ? LowCardinalityKeys.Identity<DateOnly>() : null;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -97,8 +97,8 @@ internal sealed class Date32ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // A DateOnly compares by its day number, which is what is encoded.
-    public object WireEqualityComparer(Type writeType)
-        => writeType == typeof(DateOnly) ? WireEquality.Default<DateOnly>() : null;
+    public object LowCardinalityKeyWriter(Type writeType)
+        => writeType == typeof(DateOnly) ? LowCardinalityKeys.Identity<DateOnly>() : null;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)

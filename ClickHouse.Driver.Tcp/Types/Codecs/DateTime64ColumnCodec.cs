@@ -68,19 +68,19 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     // Both instant surfaces compare on the count at this column's scale: two values inside one tick of the scale
     // encode identically, and equal ticks under different Kind do not.
-    public object WireEqualityComparer(Type writeType)
+    public object LowCardinalityKeyWriter(Type writeType)
     {
         if (writeType == typeof(long))
         {
-            return WireEquality.Default<long>();
+            return LowCardinalityKeys.Identity<long>();
         }
 
         if (writeType == typeof(DateTimeOffset))
         {
-            return WireEquality.Projected<DateTimeOffset, long>(CountFromDateTimeOffset);
+            return LowCardinalityKeys.Projected<DateTimeOffset, long>(CountFromDateTimeOffset);
         }
 
-        return writeType == typeof(DateTime) ? WireEquality.Projected<DateTime, long>(CountFromDateTime) : null;
+        return writeType == typeof(DateTime) ? LowCardinalityKeys.Projected<DateTime, long>(CountFromDateTime) : null;
     }
 
     /// <summary>Builds a <c>DateTime64</c> codec from its scale and optional timezone arguments.</summary>

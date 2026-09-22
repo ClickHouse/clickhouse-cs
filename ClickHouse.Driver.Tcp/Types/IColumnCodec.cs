@@ -97,26 +97,22 @@ internal interface IColumnCodec
     }
 
     /// <summary>
-    /// An <see cref="IEqualityComparer{T}"/> of <paramref name="writeType"/> that holds two values equal exactly
-    /// when this codec encodes them to the same bytes, or <see langword="null"/> when the codec offers none.
+    /// A typed strategy that projects <paramref name="writeType"/> values to LowCardinality dictionary keys, or
+    /// <see langword="null"/> when the codec offers none.
     ///
     /// <para>
-    /// Only LowCardinality reads this, to decide which rows share a dictionary entry. CLR equality is the right
-    /// answer surprisingly often but not always: <c>float</c> makes <c>+0</c> equal <c>-0</c> though their bit
-    /// patterns differ, <c>DateTime.Equals</c> ignores <c>Kind</c> though it changes the instant encoded, and
-    /// <c>byte[]</c> compares by reference. Where the two disagree, derive the comparer from the same conversion
-    /// the write path uses, with <see cref="Codecs.WireEquality.Projected{TSource,TKey}"/>.
+    /// Equal keys must encode identically; unequal keys may encode identically at the cost of a redundant dictionary
+    /// entry. Where CLR equality disagrees with encoding, derive the key from the same conversion the write path uses.
     /// </para>
     ///
     /// <para>
-    /// Returning <see langword="null"/> means the type cannot be a LowCardinality inner, which is what the server
-    /// says of every non-scalar type anyway. It is the safe answer: a codec that stays silent is rejected when a
-    /// write is planned, not silently deduplicated on the wrong relation.
+    /// Returning <see langword="null"/> means the type cannot be a LowCardinality inner. A codec that stays silent
+    /// is rejected when a write is planned rather than deduplicated on the wrong relation.
     /// </para>
     /// </summary>
     /// <param name="writeType">One of this codec's writable CLR element types.</param>
-    /// <returns>The comparer, boxed because this interface is not generic, or null.</returns>
-    object WireEqualityComparer(Type writeType) => null;
+    /// <returns>An <see cref="Codecs.ILowCardinalityKeyWriter{TSource}"/>, boxed because this interface is not generic, or null.</returns>
+    object LowCardinalityKeyWriter(Type writeType) => null;
 
     /// <summary>Prepares state shared by the prefix and body. The caller disposes it after the body.</summary>
     /// <param name="column">The column about to be written; must match this codec's element type.</param>

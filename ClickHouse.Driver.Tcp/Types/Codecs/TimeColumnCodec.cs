@@ -58,14 +58,14 @@ internal sealed class TimeColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // A TimeSpan is encoded as whole seconds, so two values inside one second encode identically.
-    public object WireEqualityComparer(Type writeType)
+    public object LowCardinalityKeyWriter(Type writeType)
     {
         if (writeType == typeof(int))
         {
-            return WireEquality.Default<int>();
+            return LowCardinalityKeys.Identity<int>();
         }
 
-        return writeType == typeof(TimeSpan) ? WireEquality.Projected<TimeSpan, int>(ToSeconds) : null;
+        return writeType == typeof(TimeSpan) ? LowCardinalityKeys.Projected<TimeSpan, int>(ToSeconds) : null;
     }
 
     /// <inheritdoc/>

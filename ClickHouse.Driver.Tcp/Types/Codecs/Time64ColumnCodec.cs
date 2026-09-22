@@ -64,14 +64,14 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     // A TimeSpan is encoded as a count at this column's scale, so two values inside one tick of it encode
     // identically.
-    public object WireEqualityComparer(Type writeType)
+    public object LowCardinalityKeyWriter(Type writeType)
     {
         if (writeType == typeof(long))
         {
-            return WireEquality.Default<long>();
+            return LowCardinalityKeys.Identity<long>();
         }
 
-        return writeType == typeof(TimeSpan) ? WireEquality.Projected<TimeSpan, long>(ToCount) : null;
+        return writeType == typeof(TimeSpan) ? LowCardinalityKeys.Projected<TimeSpan, long>(ToCount) : null;
     }
 
     /// <summary>Builds a <c>Time64</c> codec from its scale argument.</summary>

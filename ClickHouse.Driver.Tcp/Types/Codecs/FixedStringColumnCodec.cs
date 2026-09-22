@@ -49,8 +49,8 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     /// <inheritdoc/>
     // The array is written verbatim, so two rows share an entry when their bytes match. Default equality on
     // byte[] is reference equality, which would give nearly every row its own dictionary entry.
-    public object WireEqualityComparer(Type writeType)
-        => writeType == typeof(byte[]) ? WireEquality.Bytes() : null;
+    public object LowCardinalityKeyWriter(Type writeType)
+        => writeType == typeof(byte[]) ? LowCardinalityKeys.Bytes() : null;
 
     /// <summary>Builds a <c>FixedString(N)</c> codec from its type node's single integer length argument.</summary>
     /// <param name="node">The parsed <c>FixedString</c> type node.</param>

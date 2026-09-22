@@ -35,8 +35,8 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // IPAddress.Equals also compares the ScopeId, which is not encoded, so the wire integer is the relation.
-    public object WireEqualityComparer(Type writeType)
-        => writeType == typeof(IPAddress) ? WireEquality.Projected<IPAddress, uint>(ToWireValue) : null;
+    public object LowCardinalityKeyWriter(Type writeType)
+        => writeType == typeof(IPAddress) ? LowCardinalityKeys.Projected<IPAddress, uint>(ToWireValue) : null;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -125,8 +125,8 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     // IPAddress.Equals also compares the ScopeId, which is not encoded, and holds an IPv4 address distinct from
     // its own mapped form, which encodes the same. The 16 encoded bytes are the relation.
-    public object WireEqualityComparer(Type writeType)
-        => writeType == typeof(IPAddress) ? WireEquality.Projected<IPAddress, (ulong, ulong)>(ToWireKey) : null;
+    public object LowCardinalityKeyWriter(Type writeType)
+        => writeType == typeof(IPAddress) ? LowCardinalityKeys.Projected<IPAddress, (ulong, ulong)>(ToWireKey) : null;
 
     private static (ulong, ulong) ToWireKey(IPAddress value)
     {

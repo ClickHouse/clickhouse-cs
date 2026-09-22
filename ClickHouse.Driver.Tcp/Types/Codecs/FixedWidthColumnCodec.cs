@@ -43,7 +43,7 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
     // The bytes are the value reinterpreted, so equal integers are equal bytes. The floats are the exception:
     // +0 equals -0 and every NaN equals every other, none of which holds of their bit patterns, so they compare
     // on the bit pattern instead.
-    public object WireEqualityComparer(Type writeType)
+    public object LowCardinalityKeyWriter(Type writeType)
     {
         if (writeType != typeof(T))
         {
@@ -52,15 +52,15 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
 
         if (typeof(T) == typeof(float))
         {
-            return WireEquality.Projected<float, int>(BitConverter.SingleToInt32Bits);
+            return LowCardinalityKeys.Projected<float, int>(BitConverter.SingleToInt32Bits);
         }
 
         if (typeof(T) == typeof(double))
         {
-            return WireEquality.Projected<double, long>(BitConverter.DoubleToInt64Bits);
+            return LowCardinalityKeys.Projected<double, long>(BitConverter.DoubleToInt64Bits);
         }
 
-        return WireEquality.Default<T>();
+        return LowCardinalityKeys.Identity<T>();
     }
 
     /// <inheritdoc/>

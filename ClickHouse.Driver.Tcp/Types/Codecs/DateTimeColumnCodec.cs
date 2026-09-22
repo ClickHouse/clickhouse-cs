@@ -60,19 +60,19 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     /// <inheritdoc/>
     // Two DateTime values with equal ticks but different Kind are Equals-equal and encode to different instants,
     // so both surfaces compare on the second they reduce to.
-    public object WireEqualityComparer(Type writeType)
+    public object LowCardinalityKeyWriter(Type writeType)
     {
         if (writeType == typeof(uint))
         {
-            return WireEquality.Default<uint>();
+            return LowCardinalityKeys.Identity<uint>();
         }
 
         if (writeType == typeof(DateTimeOffset))
         {
-            return WireEquality.Projected<DateTimeOffset, uint>(ToWireValue);
+            return LowCardinalityKeys.Projected<DateTimeOffset, uint>(ToWireValue);
         }
 
-        return writeType == typeof(DateTime) ? WireEquality.Projected<DateTime, uint>(ToWireValue) : null;
+        return writeType == typeof(DateTime) ? LowCardinalityKeys.Projected<DateTime, uint>(ToWireValue) : null;
     }
 
     /// <summary>Builds a <c>DateTime</c> codec, resolving its timezone from the type string or the session.</summary>
