@@ -8,7 +8,7 @@ public static class TcpConnectionString
     public static async Task Run()
     {
         // Use a builder when configuration starts as a connection string but needs code-level changes.
-        var builder = ExampleConfig.TcpBuilder();
+        var builder = new ClickHouseTcpConnectionStringBuilder(ExampleConfig.TcpConnectionString);
         builder.Compression = "zstd";
         builder.MaxPoolSize = 4;
         builder.IdleTimeout = TimeSpan.FromMinutes(1);

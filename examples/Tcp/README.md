@@ -27,7 +27,7 @@ The native client provides:
 
 - columnar block reads through `StreamAsync`;
 - pinned sessions through `OpenSessionAsync`;
-- progress, profile, log, totals, and extremes callbacks;
+- insert-block and query progress, profile info, server log and profile-event blocks, totals, and extremes callbacks;
 - native block compression and `QBit` plane access;
 - W3C trace context propagation to ClickHouse.
 

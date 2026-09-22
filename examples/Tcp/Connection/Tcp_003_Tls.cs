@@ -28,12 +28,21 @@ public static class TcpTls
         string? connectionString = Environment.GetEnvironmentVariable(TlsConnectionStringVariable);
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            Console.WriteLine($"Set {TlsConnectionStringVariable} to test a TLS endpoint.");
+            Console.WriteLine(
+                $"Set {TlsConnectionStringVariable} to a full native connection string with Host and UseTls=true. " +
+                "Port may be omitted to use 9440.");
             return;
         }
 
-        await using var client = new ClickHouseTcpClient(connectionString);
+        ClickHouseTcpClientOptions tls = new ClickHouseTcpConnectionStringBuilder(connectionString).ToOptions();
+        if (!tls.UseTls)
+        {
+            throw new InvalidOperationException(
+                $"{TlsConnectionStringVariable} must set UseTls=true; it currently names a plaintext connection.");
+        }
+
+        await using var client = new ClickHouseTcpClient(tls);
         ClickHouseTcpServerInfo server = await client.GetServerInfoAsync();
-        Console.WriteLine($"Connected securely to {server}.");
+        Console.WriteLine($"Connected securely to {server} through {tls.Host}:{tls.ResolvedPort}.");
     }
 }

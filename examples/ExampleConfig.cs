@@ -47,9 +47,9 @@ public static class ExampleConfig
     {
         get
         {
-            var builder = TcpBuilder();
+            ClickHouseTcpClientOptions options = TcpBuilder().ToOptions();
 
-            return (builder.Host, builder.Port ?? 9000);
+            return (options.Host, options.ResolvedPort);
         }
     }
 

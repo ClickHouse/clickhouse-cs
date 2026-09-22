@@ -350,11 +350,12 @@ class Program
             (nameof(TcpReadTiers), TcpReadTiers.Run),
             (nameof(TcpBlocksAndColumns), TcpBlocksAndColumns.Run),
             (nameof(TcpParameters), TcpParameters.Run),
-            (nameof(TcpPoco), TcpPoco.Run));
+            (nameof(TcpPocoRead), TcpPocoRead.Run));
 
         await RunCategory("NATIVE PROTOCOL: WRITING DATA", isInteractive,
             (nameof(TcpColumnarInsert), TcpColumnarInsert.Run),
-            (nameof(TcpCompositeWrites), TcpCompositeWrites.Run));
+            (nameof(TcpCompositeWrites), TcpCompositeWrites.Run),
+            (nameof(TcpPocoWrite), TcpPocoWrite.Run));
 
         await RunCategory("NATIVE PROTOCOL: DATA TYPES", isInteractive,
             (nameof(TcpScalarTypes), TcpScalarTypes.Run),
@@ -371,7 +372,6 @@ class Program
 
         await RunCategory("NATIVE PROTOCOL: ADVANCED", isInteractive,
             (nameof(TcpSettingsAndQueryId), TcpSettingsAndQueryId.Run),
-            (nameof(TcpProgressAndStatistics), TcpProgressAndStatistics.Run),
             (nameof(TcpCancellation), TcpCancellation.Run),
             (nameof(TcpErrorsAndRetries), TcpErrorsAndRetries.Run),
             (nameof(TcpCompression), TcpCompression.Run),
@@ -380,7 +380,7 @@ class Program
         await RunCategory("NATIVE PROTOCOL: OBSERVABILITY", isInteractive,
             (nameof(TcpLogging), TcpLogging.Run),
             (nameof(TcpOpenTelemetry), TcpOpenTelemetry.Run),
-            (nameof(TcpMetadataBlocks), TcpMetadataBlocks.Run),
+            (nameof(TcpCallbacksAndMetadata), TcpCallbacksAndMetadata.Run),
             (nameof(TcpHealthChecks), TcpHealthChecks.Run),
             (nameof(TcpTestcontainers), TcpTestcontainers.Run));
 

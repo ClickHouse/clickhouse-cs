@@ -2,10 +2,10 @@ using ClickHouse.Driver.Tcp;
 
 namespace ClickHouse.Driver.Examples;
 
-/// <summary>Inserts and reads strongly typed objects with custom column mappings.</summary>
-public static class TcpPoco
+/// <summary>Inserts strongly typed objects by mapping their properties to target columns.</summary>
+public static class TcpPocoWrite
 {
-    private const string TableName = "example_tcp_poco";
+    private const string TableName = "example_tcp_poco_write";
 
     public static async Task Run()
     {
@@ -21,7 +21,7 @@ public static class TcpPoco
                     full_name String,
                     signal_count UInt32,
                     recorded_at DateTime('UTC'),
-                    internal_notes String
+                    internal_notes String DEFAULT ''
                 )
                 ENGINE = MergeTree
                 ORDER BY id
@@ -35,6 +35,7 @@ public static class TcpPoco
                     DisplayName = "Ada Lovelace",
                     SignalCount = 12,
                     RecordedAt = new DateTime(2026, 6, 1, 6, 0, 0, DateTimeKind.Utc),
+                    InternalNotes = "not sent",
                 },
                 new Observation
                 {
@@ -42,21 +43,22 @@ public static class TcpPoco
                     DisplayName = "Grace Hopper",
                     SignalCount = 7,
                     RecordedAt = new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc),
+                    InternalNotes = "not sent",
                 },
             };
 
+            // Target columns match case- and underscore-insensitively. The attribute supplies the one
+            // non-conventional name, and the ignored property is left out of the INSERT column list.
             await client.InsertRowsAsync(
                 $"INSERT INTO {TableName} (id, full_name, signal_count, recorded_at) VALUES",
                 rows);
 
-            // POCO mapping is usually slower than block iteration: it allocates and fills one object per row.
-            // StreamAsync exposes borrowed column buffers and avoids those per-row object allocations.
-            await foreach (Observation row in client.QueryAsync<Observation>(
-                $"SELECT id, full_name, signal_count, recorded_at, internal_notes " +
+            await foreach (object[] row in client.QueryAsync(
+                $"SELECT id, full_name, signal_count, formatDateTime(recorded_at, '%FT%TZ'), internal_notes " +
                 $"FROM {TableName} ORDER BY id"))
             {
                 Console.WriteLine(
-                    $"{row.Id}: {row.DisplayName}, {row.SignalCount} signals at {row.RecordedAt:O}");
+                    $"{row[0]}: {row[1]}, {row[2]} signals at {row[3]}; notes='{row[4]}'");
             }
         }
         finally

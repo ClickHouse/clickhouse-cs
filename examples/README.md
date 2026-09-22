@@ -111,12 +111,13 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_001_ReadTiers.cs](Tcp/Read/Tcp_001_ReadTiers.cs) - Read rows as arrays, POCOs, or columnar blocks
 - [Tcp_002_BlocksAndColumns.cs](Tcp/Read/Tcp_002_BlocksAndColumns.cs) - Access typed block columns and copy borrowed data
 - [Tcp_003_Parameters.cs](Tcp/Read/Tcp_003_Parameters.cs) - Bind typed values and identifiers
-- [Tcp_004_Poco.cs](Tcp/Read/Tcp_004_Poco.cs) - Map query results and inserts to a POCO
+- [Tcp_004_PocoRead.cs](Tcp/Read/Tcp_004_PocoRead.cs) - Map query results to strongly typed objects
 
 ### Native Protocol: Writing Data
 
 - [Tcp_001_ColumnarInsert.cs](Tcp/Write/Tcp_001_ColumnarInsert.cs) - Insert typed columns and let ClickHouse fill defaults
 - [Tcp_002_CompositeWrites.cs](Tcp/Write/Tcp_002_CompositeWrites.cs) - Insert composite values, build the flat array shape, and reuse a column from a block
+- [Tcp_003_PocoWrite.cs](Tcp/Write/Tcp_003_PocoWrite.cs) - Map strongly typed objects to target columns
 
 ### Native Protocol: Data Types
 
@@ -136,17 +137,16 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 ### Native Protocol: Advanced
 
 - [Tcp_001_SettingsAndQueryId.cs](Tcp/Advanced/Tcp_001_SettingsAndQueryId.cs) - Apply settings and assign a query ID
-- [Tcp_002_ProgressAndStatistics.cs](Tcp/Advanced/Tcp_002_ProgressAndStatistics.cs) - Receive progress and profile callbacks
-- [Tcp_003_Cancellation.cs](Tcp/Advanced/Tcp_003_Cancellation.cs) - Cancel row, block, and command operations
-- [Tcp_004_ErrorsAndRetries.cs](Tcp/Advanced/Tcp_004_ErrorsAndRetries.cs) - Handle errors and retry a failed read safely
-- [Tcp_005_Compression.cs](Tcp/Advanced/Tcp_005_Compression.cs) - Select a native compression codec
-- [Tcp_006_ServerInfo.cs](Tcp/Advanced/Tcp_006_ServerInfo.cs) - Read handshake metadata and gate optional features
+- [Tcp_002_Cancellation.cs](Tcp/Advanced/Tcp_002_Cancellation.cs) - Cancel row, block, and command operations
+- [Tcp_003_ErrorsAndRetries.cs](Tcp/Advanced/Tcp_003_ErrorsAndRetries.cs) - Handle errors and retry a failed read safely
+- [Tcp_004_Compression.cs](Tcp/Advanced/Tcp_004_Compression.cs) - Select a native compression codec
+- [Tcp_005_ServerInfo.cs](Tcp/Advanced/Tcp_005_ServerInfo.cs) - Read handshake metadata and gate optional features
 
 ### Native Protocol: Observability
 
 - [Tcp_001_Logging.cs](Tcp/Observability/Tcp_001_Logging.cs) - Configure diagnostic log categories and levels
 - [Tcp_002_OpenTelemetry.cs](Tcp/Observability/Tcp_002_OpenTelemetry.cs) - Export native client activities with OpenTelemetry
-- [Tcp_003_MetadataBlocks.cs](Tcp/Observability/Tcp_003_MetadataBlocks.cs) - Receive server logs, totals, and extremes
+- [Tcp_003_CallbacksAndMetadata.cs](Tcp/Observability/Tcp_003_CallbacksAndMetadata.cs) - Use insert-block and query progress, profile info, server log and profile-event blocks, totals, and extremes callbacks
 - [Tcp_004_HealthChecks.cs](Tcp/Observability/Tcp_004_HealthChecks.cs) - Use native protocol pings in an ASP.NET Core health check
 - [Tcp_005_Testcontainers.cs](Tcp/Observability/Tcp_005_Testcontainers.cs) - Run a native client test against a temporary container
 

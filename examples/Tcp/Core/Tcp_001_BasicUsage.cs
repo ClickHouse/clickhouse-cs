@@ -10,7 +10,7 @@ public static class TcpBasicUsage
     public static async Task Run()
     {
         // Reuse one client in your application. It is thread-safe and owns a connection pool.
-        await using var client = ExampleConfig.CreateTcpClient();
+        await using var client = new ClickHouseTcpClient(ExampleConfig.TcpConnectionString);
 
         ClickHouseTcpServerInfo server = await client.GetServerInfoAsync();
         Console.WriteLine($"Connected to {server} through {ExampleConfig.TcpEndpoint}");
