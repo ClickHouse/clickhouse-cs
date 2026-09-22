@@ -68,10 +68,14 @@ jobs:
 
   cloud-tcp:
     name: Cloud (TCP)
-    # Not on pull_request: every stacked tcp/** epic PR would otherwise queue another run against the shared
-    # Cloud service. Landing on an integration branch, asking for it by hand, or the tests:run-cloud label on a
-    # pull request (tests-cloud-tcp-label.yml) is enough.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # On a pull request only when its branch is in this repository, which needs write access to push. Dependabot
+    # pull requests do not get the Actions secrets. A fork gets a run from the tests:run-cloud label
+    # (tests-cloud-tcp-label.yml).
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: $/.github/workflows/tests-cloud-tcp.yml
     secrets:
       CLICKHOUSE_CLOUD_HOST: ${{ secrets.CLICKHOUSE_CLOUD_HOST }}
