@@ -50,4 +50,9 @@ internal static class ConnectionFailure
         new(
             "The ClickHouse server closed the connection before the response was complete.",
             new EndOfStreamException("Unexpected end of stream while reading from ClickHouse."));
+
+    /// <summary>Reports a connect or read that exceeded its timeout. The inner exception is a <see cref="TimeoutException"/>.</summary>
+    /// <param name="message">What timed out, naming the option that set the timeout.</param>
+    internal static ClickHouseTcpConnectionException Timeout(string message) =>
+        new(message, new TimeoutException(message));
 }

@@ -67,7 +67,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     private readonly ClickHouseBinaryWriter writer;
 
     // Timeout per transport read, or null when disabled.
-    private readonly IdleReadDeadline readDeadline;
+    private readonly IdleReadTimeout idleReadTimeout;
 
     // Null means every query on this connection is uncompressed. Compression is per-query on the wire, but the
     // codec is a client-level option today, so it is fixed for a connection's life; a per-query override would
@@ -100,11 +100,11 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         this.stream = stream;
         this.socket = socket;
         this.compressor = compressor;
-        readDeadline = readTimeout == TimeSpan.Zero ? null : new IdleReadDeadline(readTimeout);
+        idleReadTimeout = readTimeout == TimeSpan.Zero ? null : new IdleReadTimeout(readTimeout);
 
-        // Attach the deadline to the transport buffer. The frame decoder reads through this buffer,
+        // Attach the read timeout to the transport buffer. The frame decoder reads through this buffer,
         // so compressed reads use the same timeout.
-        reader = new ClickHouseBinaryReader(new ReadBuffer(stream, deadline: readDeadline), ownsBuffer: true);
+        reader = new ClickHouseBinaryReader(new ReadBuffer(stream, readTimeout: idleReadTimeout), ownsBuffer: true);
         writer = new ClickHouseBinaryWriter(stream);
         state = TcpConnectionState.Handshaking;
     }
@@ -209,7 +209,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <para>
     /// A connect <i>timeout</i> is the caller's responsibility: the OS-level TCP connect can hang far longer
     /// than desired against a host that silently drops packets. Pass a token from a linked
-    /// <see cref="System.Threading.CancellationTokenSource"/> with a deadline (the pool/options layer supplies this).
+    /// <see cref="System.Threading.CancellationTokenSource"/> with a timeout (the pool/options layer supplies this).
     /// </para>
     /// </summary>
     /// <param name="host">The server host name or address.</param>
@@ -274,7 +274,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
 
         // HandshakeAsync terminates the connection (closing this socket) on any failure, so a throw here needs
-        // no extra cleanup. The handshake itself runs under the caller's connect deadline rather than
+        // no extra cleanup. The handshake itself runs under the caller's connect timeout rather than
         // readTimeout, so the two never stack on the one exchange.
         var connection = new ClickHouseTcpConnection(transport, socket, compressor, readTimeout);
         await connection.HandshakeAsync(handshake, cancellationToken).ConfigureAwait(false);
@@ -291,8 +291,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <exception cref="ObjectDisposedException">The connection has been terminated.</exception>
     /// <exception cref="ClickHouseTcpServerException">The server replied with an Exception.</exception>
     /// <exception cref="ClickHouseTcpProtocolException">The server replied with something other than Pong or Exception.</exception>
-    /// <exception cref="ClickHouseTcpConnectionException">The connection failed while the ping was in flight.</exception>
-    /// <exception cref="TimeoutException">A transport read exceeded the connection's ReadTimeout.</exception>
+    /// <exception cref="ClickHouseTcpConnectionException">The connection failed while the ping was in flight, or a read exceeded the connection's ReadTimeout (the inner exception is then a <see cref="TimeoutException"/>).</exception>
     public async ValueTask PingAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -381,7 +380,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// </code>
     /// </example>
     /// <para>
-    /// Dispose the enumerator to release the connection, the current block's buffers, and the read deadline's
+    /// Dispose the enumerator to release the connection, the current block's buffers, and the read timeout's
     /// cancellation registration. Stopping enumeration without disposal skips this cleanup.
     /// </para>
     /// </remarks>
@@ -397,8 +396,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <exception cref="ObjectDisposedException">The connection has been terminated.</exception>
     /// <exception cref="ClickHouseTcpServerException">The server reported an error while executing the query.</exception>
     /// <exception cref="ClickHouseTcpProtocolException">The server sent an unexpected packet.</exception>
-    /// <exception cref="ClickHouseTcpConnectionException">The connection failed while the response was being read.</exception>
-    /// <exception cref="TimeoutException">A transport read exceeded the connection's ReadTimeout.</exception>
+    /// <exception cref="ClickHouseTcpConnectionException">The connection failed while the response was being read, or a read exceeded the connection's ReadTimeout (the inner exception is then a <see cref="TimeoutException"/>).</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     internal async IAsyncEnumerable<Block> QueryAsync(
         string sql,
@@ -500,7 +498,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
         finally
         {
-            // Release the deadline registration before any subsequent cleanup can throw.
+            // Release the timeout registration before any subsequent cleanup can throw.
             EndRead();
 
             // Release the last yielded block (still current) on end-of-stream, early disposal, or error.
@@ -579,9 +577,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <exception cref="InvalidOperationException">The connection is busy with another operation.</exception>
     /// <exception cref="ObjectDisposedException">The connection has been terminated.</exception>
     /// <exception cref="ClickHouseTcpServerException">The server reported an error while executing the insert.</exception>
-    /// <exception cref="ClickHouseTcpConnectionException">The connection failed while the blocks were being sent or the response read.</exception>
+    /// <exception cref="ClickHouseTcpConnectionException">The connection failed while the blocks were being sent or the response read, or a read exceeded the connection's ReadTimeout (the inner exception is then a <see cref="TimeoutException"/>).</exception>
     /// <exception cref="ClickHouseTcpProtocolException">The server sent an unexpected packet, or no schema block.</exception>
-    /// <exception cref="TimeoutException">A transport read exceeded the connection's ReadTimeout.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     internal ValueTask InsertAsync(
         string sql,
@@ -744,7 +741,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
         finally
         {
-            // Release the deadline registration before any subsequent cleanup can throw.
+            // Release the timeout registration before any subsequent cleanup can throw.
             EndRead();
 
             // Only the factory's source is ours to release; a caller's own columns outlive the insert.
@@ -1458,17 +1455,17 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         }
     }
 
-    /// <summary>Initializes the operation's read deadline. Pair with <see cref="EndRead"/> in a finally block.</summary>
+    /// <summary>Initializes the operation's read timeout. Pair with <see cref="EndRead"/> in a finally block.</summary>
     /// <remarks>
-    /// Reads and writes receive the caller's token. The transport buffer applies the deadline token only
+    /// Reads and writes receive the caller's token. The transport buffer applies the timeout token only
     /// to the individual stream read, so a completed read's timeout cannot cancel later reads or writes.
     /// </remarks>
     /// <param name="cancellationToken">The caller's token for this operation.</param>
     private void BeginRead(CancellationToken cancellationToken)
-        => readDeadline?.Begin(cancellationToken);
+        => idleReadTimeout?.Begin(cancellationToken);
 
-    /// <summary>Closes the idle read deadline opened by <see cref="BeginRead"/>.</summary>
-    private void EndRead() => readDeadline?.End();
+    /// <summary>Closes the idle read timeout opened by <see cref="BeginRead"/>.</summary>
+    private void EndRead() => idleReadTimeout?.End();
 
     /// <summary>
     /// Attempts to send Cancel before closing the connection. Delivery failures are suppressed to preserve
@@ -1495,8 +1492,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
             // Use an independent timeout because the operation token may already be cancelled.
             // The pool lease remains held until this flush completes or times out.
-            using var deadline = new CancellationTokenSource(CancelSendTimeout);
-            await writer.FlushAsync(deadline.Token).ConfigureAwait(false);
+            using var timeout = new CancellationTokenSource(CancelSendTimeout);
+            await writer.FlushAsync(timeout.Token).ConfigureAwait(false);
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {

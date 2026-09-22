@@ -8,17 +8,17 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp.Tests.Protocol;
 
 [TestFixture]
-public class ReadBufferDeadlineTests
+public class ReadBufferReadTimeoutTests
 {
     [TestCase(false)]
     [TestCase(true)]
-    public async Task ReadIntoAsync_TimeoutAfterSuccessfulRead_NextReadUsesFreshDeadline(bool cancelCaller)
+    public async Task ReadIntoAsync_TimeoutAfterSuccessfulRead_NextReadUsesFreshTimeout(bool cancelCaller)
     {
         using var caller = new CancellationTokenSource();
-        var deadline = new IdleReadDeadline(TimeSpan.FromMilliseconds(200));
-        deadline.Begin(caller.Token);
+        var readTimeout = new IdleReadTimeout(TimeSpan.FromMilliseconds(200));
+        readTimeout.Begin(caller.Token);
         using var stream = new DelayedContinuationStream(cancelCaller ? caller.Cancel : null);
-        using var buffer = new ReadBuffer(stream, deadline: deadline);
+        using var buffer = new ReadBuffer(stream, readTimeout: readTimeout);
         try
         {
             var first = new byte[1];
@@ -44,14 +44,15 @@ public class ReadBufferDeadlineTests
                 Assert.That(second[0], Is.EqualTo(43));
 
                 // The replacement must still enforce ReadTimeout when the next transport read stalls.
-                var timeout = Assert.ThrowsAsync<TimeoutException>(async () =>
+                var timeout = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(async () =>
                     await buffer.ReadIntoAsync(new byte[1], caller.Token).AsTask().WaitAsync(TimeSpan.FromSeconds(10)));
                 Assert.That(timeout.Message, Does.Contain("ReadTimeout"));
+                Assert.That(timeout.InnerException, Is.TypeOf<TimeoutException>());
             }
         }
         finally
         {
-            deadline.End();
+            readTimeout.End();
         }
     }
 
@@ -95,7 +96,7 @@ public class ReadBufferDeadlineTests
             Task<int> pending = WaitForCancellationAsync(cancellationToken);
             if (reads == 2)
             {
-                // Cancel only after the pending read has registered on its deadline token.
+                // Cancel only after the pending read has registered on its timeout token.
                 cancelSecondRead();
                 Assert.That(cancellationToken.IsCancellationRequested, Is.True, "Caller cancellation must reach the replacement read token synchronously.");
             }

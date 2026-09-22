@@ -81,7 +81,7 @@ public class ClickHouseTcpCancellationIntegrationTests
     }
 
     [Test]
-    public async Task StreamAsync_QueryLongerThanReadTimeout_SurvivesBecauseTheDeadlineMeasuresSilence()
+    public async Task StreamAsync_QueryLongerThanReadTimeout_SurvivesBecauseTheTimeoutMeasuresSilence()
     {
         // The query takes roughly two seconds, producing ten-row blocks every 200 ms with a one-second read timeout.
         // Select the sleepEachRow result so the planner must evaluate it.

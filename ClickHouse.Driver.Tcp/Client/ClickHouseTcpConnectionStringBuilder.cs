@@ -164,7 +164,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         }
     }
 
-    /// <summary>The connect-plus-handshake deadline, in seconds. Defaults to 30.</summary>
+    /// <summary>The connect-plus-handshake timeout, in seconds. Defaults to 30.</summary>
     public TimeSpan DialTimeout
     {
         get => GetTimeSpanSecondsOrDefault("DialTimeout", ClickHouseTcpClientOptions.DefaultDialTimeout);

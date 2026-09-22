@@ -1360,10 +1360,10 @@ public class ConnectionPoolTests
     }
 
     [Test]
-    public async Task DisposeAsync_ADialStillRunningPastTheDrainDeadline_DisposesTheFactoryWhenTheDialFinishes()
+    public async Task DisposeAsync_ADialStillRunningPastTheDrainTimeout_DisposesTheFactoryWhenTheDialFinishes()
     {
         // The dial is the one caller disposal cannot reach: it holds a permit but is not in `leased`, so the abort
-        // after the drain deadline does not see it. Disposing the factory anyway would free the TLS certificate
+        // after the drain timeout does not see it. Disposing the factory anyway would free the TLS certificate
         // authorities under a live handshake. It still has to be disposed once that handshake leaves the factory.
         FakeConnectionFactory factory = GatedDialFactory(out SemaphoreSlim dialing, out TaskCompletionSource finishDial);
         var pool = new ConnectionPool(

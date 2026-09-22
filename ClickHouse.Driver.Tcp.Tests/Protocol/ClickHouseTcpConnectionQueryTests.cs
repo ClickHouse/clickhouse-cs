@@ -212,11 +212,12 @@ public class ClickHouseTcpConnectionQueryTests
         using var connection = new ClickHouseTcpConnection(transport, socket: null, readTimeout: TimeSpan.FromMilliseconds(200));
         await connection.HandshakeAsync(Handshake, None);
 
-        var thrown = Assert.CatchAsync<TimeoutException>(async () => await DrainAsync(connection));
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(async () => await DrainAsync(connection));
 
         Assert.Multiple(() =>
         {
             Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            Assert.That(thrown.InnerException, Is.TypeOf<TimeoutException>());
             AssertCancelSent(transport);
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
         });
@@ -226,7 +227,7 @@ public class ClickHouseTcpConnectionQueryTests
     public async Task QueryAsync_CompressedAndTheServerStopsInsideABlock_ThrowsTimeoutNamingReadTimeout()
     {
         // A stalled compressed frame must time out through the underlying transport buffer.
-        // The decoder must propagate TimeoutException without reporting a malformed frame.
+        // The decoder must propagate the timeout failure without reporting a malformed frame.
         byte[] script = Concat(
             await ServerHelloBytesAsync(54476),
             await BytesAsync(w =>
@@ -238,17 +239,18 @@ public class ClickHouseTcpConnectionQueryTests
         using var connection = new ClickHouseTcpConnection(transport, socket: null, Lz4Compressor.Default, readTimeout: TimeSpan.FromMilliseconds(200));
         await connection.HandshakeAsync(Handshake, None);
 
-        var thrown = Assert.CatchAsync<TimeoutException>(async () => await DrainAsync(connection));
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(async () => await DrainAsync(connection));
 
         Assert.Multiple(() =>
         {
             Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            Assert.That(thrown.InnerException, Is.TypeOf<TimeoutException>());
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
         });
     }
 
     [Test]
-    public async Task QueryAsync_CallerCancelsWhileTheDeadlineIsArmed_ReportsCancellationNotTimeout()
+    public async Task QueryAsync_CallerCancelsWhileTheTimeoutIsArmed_ReportsCancellationNotTimeout()
     {
         // Use a long read timeout so the caller token triggers cancellation first.
         var transport = new ScriptedDuplexStream(await ServerHelloBytesAsync(54476), blockWhenExhausted: true);
@@ -263,7 +265,7 @@ public class ClickHouseTcpConnectionQueryTests
     }
 
     [Test]
-    public async Task HandshakeAsync_SlowerThanReadTimeout_CompletesBecauseTheDeadlineCoversResponsesOnly()
+    public async Task HandshakeAsync_SlowerThanReadTimeout_CompletesBecauseTheTimeoutCoversResponsesOnly()
     {
         // The handshake uses DialTimeout; ReadTimeout must remain inactive during connection establishment.
         var transport = new ScriptedDuplexStream(await ServerHelloBytesAsync(54476), maxChunk: 2, readDelay: TimeSpan.FromMilliseconds(20));
@@ -275,9 +277,9 @@ public class ClickHouseTcpConnectionQueryTests
     }
 
     [Test]
-    public async Task QueryAsync_SecondQueryOnTheSameConnection_RearmsTheDeadlineForItsOwnReads()
+    public async Task QueryAsync_SecondQueryOnTheSameConnection_RearmsTheTimeoutForItsOwnReads()
     {
-        // Verify that successive queries create separate deadline token sources on the same connection.
+        // Verify that successive queries create separate timeout token sources on the same connection.
         byte[] script = Concat(
             await ServerHelloBytesAsync(54476),
             await DataPacketAsync(new ulong[] { 1 }),
@@ -300,7 +302,7 @@ public class ClickHouseTcpConnectionQueryTests
     }
 
     [Test]
-    public async Task QueryAsync_ResponseSlowerOverallThanReadTimeout_CompletesBecauseTheDeadlineMeasuresSilence()
+    public async Task QueryAsync_ResponseSlowerOverallThanReadTimeout_CompletesBecauseTheTimeoutMeasuresSilence()
     {
         // Two-byte reads delayed by 20 ms make the query exceed 250 ms in total while each read stays below
         // the timeout. Only reads after the handshake use ReadTimeout.

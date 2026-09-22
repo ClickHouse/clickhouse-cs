@@ -3,16 +3,17 @@ using System;
 namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
-/// The connection to the server failed: the socket could not be opened, TLS could not be negotiated, or
-/// an established connection broke while the client was reading or writing.
+/// The connection to the server failed: the socket could not be opened, TLS could not be negotiated, an
+/// established connection broke while the client was reading or writing, or the server did not answer in time.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The cause the runtime raised is kept as <see cref="Exception.InnerException"/> — usually a
+/// The cause is kept as <see cref="Exception.InnerException"/> — usually a
 /// <see cref="System.Net.Sockets.SocketException"/>, an <see cref="System.IO.IOException"/>, an
-/// <see cref="System.IO.EndOfStreamException"/> when the server closed the connection mid-message, or a
-/// <see cref="System.Security.Authentication.AuthenticationException"/> for a TLS failure. Match on that
-/// when the distinction matters.
+/// <see cref="System.IO.EndOfStreamException"/> when the server closed the connection mid-message, a
+/// <see cref="System.Security.Authentication.AuthenticationException"/> for a TLS failure, or a
+/// <see cref="TimeoutException"/> when <see cref="ClickHouseTcpClientOptions.DialTimeout"/> or
+/// <see cref="ClickHouseTcpClientOptions.ReadTimeout"/> expired. Match on that when the distinction matters.
 /// </para>
 /// <para>
 /// The connection is terminated and never reused.

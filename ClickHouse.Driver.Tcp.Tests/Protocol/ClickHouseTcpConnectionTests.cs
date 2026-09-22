@@ -182,11 +182,12 @@ public class ClickHouseTcpConnectionTests
             new ScriptedDuplexStream(script, blockWhenExhausted: true), socket: null, readTimeout: TimeSpan.FromMilliseconds(200));
         await connection.HandshakeAsync(Handshake, None);
 
-        var thrown = Assert.CatchAsync<TimeoutException>(async () => await connection.PingAsync(None));
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(async () => await connection.PingAsync(None));
 
         Assert.Multiple(() =>
         {
             Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            Assert.That(thrown.InnerException, Is.TypeOf<TimeoutException>());
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
         });
     }

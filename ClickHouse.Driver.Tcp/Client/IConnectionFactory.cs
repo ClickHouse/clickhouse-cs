@@ -87,12 +87,13 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
 
             return connection;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && linked.IsCancellationRequested)
+        catch (Exception e) when (e is OperationCanceledException or ClickHouseTcpConnectionException
+            && !cancellationToken.IsCancellationRequested && linked.IsCancellationRequested)
         {
-            // The linked token, not the caller's, fired: the dial deadline elapsed. Surface it as a timeout so a
-            // hung connect is distinguishable from a caller cancellation. The deadline covers the TLS handshake
-            // too, which is one more round trip a wedged server can stall on.
-            var timeout = new TimeoutException(
+            // The linked token, not the caller's, fired: DialTimeout elapsed. Report a timeout so a hung connect is
+            // distinguishable from a caller cancellation. A connection exception counts too, because SslStream can
+            // report cancellation as an IOException. The timeout covers the TLS handshake as well.
+            var timeout = ConnectionFailure.Timeout(
                 $"Connecting to {options.Host}:{options.ResolvedPort} timed out after {options.DialTimeout.TotalSeconds:0.###}s (DialTimeout).");
             ReportFailure(activity, startedAt, timeout);
             throw timeout;

@@ -38,7 +38,7 @@ internal interface IConnectionLease : IAsyncDisposable
 {
     /// <summary>
     /// The rented connection, valid until the lease is disposed, or until the source itself is disposed, which aborts
-    /// an operation still running once its own deadline passes.
+    /// an operation still running once its own timeout expires.
     /// </summary>
     ClickHouseTcpConnection Connection { get; }
 }

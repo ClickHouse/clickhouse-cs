@@ -220,12 +220,13 @@ public class ClickHouseTcpConnectionInsertTests
         using var connection = new ClickHouseTcpConnection(transport, socket: null, readTimeout: TimeSpan.FromMilliseconds(200));
         await connection.HandshakeAsync(Handshake, None);
 
-        var thrown = Assert.CatchAsync<TimeoutException>(
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(
             async () => await connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1)), cancellationToken: None));
 
         Assert.Multiple(() =>
         {
             Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            Assert.That(thrown.InnerException, Is.TypeOf<TimeoutException>());
             Assert.That(transport.Written[^1], Is.EqualTo((byte)ClientPacketType.Cancel));
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
         });
@@ -242,12 +243,13 @@ public class ClickHouseTcpConnectionInsertTests
         using var connection = new ClickHouseTcpConnection(transport, socket: null, readTimeout: TimeSpan.FromMilliseconds(200));
         await connection.HandshakeAsync(Handshake, None);
 
-        var thrown = Assert.CatchAsync<TimeoutException>(
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(
             async () => await connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1)), cancellationToken: None));
 
         Assert.Multiple(() =>
         {
             Assert.That(thrown.Message, Does.Contain("ReadTimeout"));
+            Assert.That(thrown.InnerException, Is.TypeOf<TimeoutException>());
             Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Terminated));
         });
     }

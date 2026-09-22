@@ -9,20 +9,20 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 /// processes a returned block. Each operation must pair <see cref="Begin"/> with <see cref="End"/>.
 /// This class is not thread-safe.
 /// </remarks>
-internal sealed class IdleReadDeadline
+internal sealed class IdleReadTimeout
 {
     private readonly TimeSpan timeout;
     private CancellationTokenSource source;
     private CancellationToken callerToken;
 
-    /// <summary>Initializes a deadline of <paramref name="timeout"/>.</summary>
+    /// <summary>Initializes an idle read timeout of <paramref name="timeout"/>.</summary>
     /// <param name="timeout">
     /// Positive read timeout, validated by <see cref="ClickHouseTcpClientOptions.Validate"/> against the timer's
-    /// supported range. Connections with a zero timeout do not create a deadline.
+    /// supported range. Connections with a zero timeout do not create one.
     /// </param>
-    internal IdleReadDeadline(TimeSpan timeout) => this.timeout = timeout;
+    internal IdleReadTimeout(TimeSpan timeout) => this.timeout = timeout;
 
-    /// <summary>Whether the deadline token is cancelled without caller cancellation.</summary>
+    /// <summary>Whether the timeout token is cancelled without caller cancellation.</summary>
     internal bool Elapsed => source is { IsCancellationRequested: true } && !callerToken.IsCancellationRequested;
 
     /// <summary>Initializes cancellation for an operation. Pair with <see cref="End"/> in a finally block.</summary>
@@ -43,7 +43,7 @@ internal sealed class IdleReadDeadline
 
     /// <summary>Arms the timer and returns the token for this transport read.</summary>
     /// <param name="cancellationToken">The caller's token, used while no operation is active (during the handshake).</param>
-    /// <returns>The read's deadline token, or the caller's token when no operation is active.</returns>
+    /// <returns>The read's timeout token, or the caller's token when no operation is active.</returns>
     internal CancellationToken Arm(CancellationToken cancellationToken)
     {
         if (source is null)
@@ -70,7 +70,7 @@ internal sealed class IdleReadDeadline
     }
 
     /// <summary>Creates the exception for a transport read timeout.</summary>
-    /// <returns>A timeout naming the option that set the deadline.</returns>
-    internal TimeoutException ToException()
-        => new($"The server sent nothing for {timeout.TotalSeconds:0.###}s while a response was being read (ReadTimeout).");
+    /// <returns>A connection failure naming the option that set the timeout, with a <see cref="TimeoutException"/> as its cause.</returns>
+    internal ClickHouseTcpConnectionException ToException()
+        => ConnectionFailure.Timeout($"The server sent nothing for {timeout.TotalSeconds:0.###}s while a response was being read (ReadTimeout).");
 }
