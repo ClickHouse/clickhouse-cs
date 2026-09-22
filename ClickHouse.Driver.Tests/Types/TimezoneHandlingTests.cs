@@ -1215,13 +1215,6 @@ public class ReadDateTimeFixedUtcOffsetTests : AbstractConnectionTestFixture
             wallClock, DateTimeKind.Unspecified, new TimeSpan(-14, 0, 0))
             .SetName("ReadDateTime_MinFixedUtcOffset");
 
-        // A minute field above 59 carries into the hour, so the server resolves this name to
-        // +06:00 and the driver has to agree with it. Accepted by 26.3 and by 26.9.
-        yield return new TestCaseData(
-            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+05:60:00')",
-            wallClock, DateTimeKind.Unspecified, new TimeSpan(6, 0, 0))
-            .SetName("ReadDateTime_FixedUtcOffsetWithMinuteCarry");
-
         // DateTime64 uses the same offset handling and preserves sub-second precision.
         yield return new TestCaseData(
             "SELECT toDateTime64('2024-01-15 10:30:00.123', 3, 'Fixed/UTC+05:30:00')",
@@ -1256,6 +1249,23 @@ public class ReadDateTimeFixedUtcOffsetTests : AbstractConnectionTestFixture
             Assert.That(dateTimeOffset.Offset, Is.EqualTo(expectedOffset), "GetDateTimeOffset offset");
             Assert.That(dateTimeOffset.DateTime, Is.EqualTo(expectedWallClock), "GetDateTimeOffset wall-clock");
         });
+    }
+
+    /// <summary>
+    /// A minute field above 59 carries into the hour: 26.3 and 26.9 resolve Fixed/UTC+05:60:00 to
+    /// +06:00, and the driver has to agree. 26.10 rejects the name, so no column there can carry it.
+    /// </summary>
+    [Test]
+    public async Task ReadDateTime_FixedUtcOffsetWithMinuteCarry_ResolvesToTheNextHour()
+    {
+        if (TestUtilities.ServerVersion is null || TestUtilities.ServerVersion >= new Version(26, 10))
+        {
+            Assert.Ignore("ClickHouse 26.10 and later reject a Fixed/UTC minute field above 59.");
+        }
+
+        await ReadDateTime_WithFixedUtcOffset_PreservesWallClockKindAndOffset(
+            "SELECT toDateTime('2024-01-15 10:30:00', 'Fixed/UTC+05:60:00')",
+            new DateTime(2024, 1, 15, 10, 30, 0), DateTimeKind.Unspecified, new TimeSpan(6, 0, 0));
     }
 
     /// <summary>
@@ -1330,8 +1340,8 @@ public class ResolveTimezoneParseTests
             .SetName("ParseDateTime_FixedUtcMinInRangeHours");
 
         // A field above its natural limit carries into the next one, which is how the server
-        // reads it: 26.3 and 26.9 both resolve Fixed/UTC+05:60:00 to +06:00, and 26.3 resolves
-        // Fixed/UTC+05:00:60 to +05:01:00 (26.9 rejects the name for being finer than 15 min).
+        // reads it: 26.3 and 26.9 both resolve Fixed/UTC+05:60:00 to +06:00 (26.10 rejects it), and
+        // 26.3 resolves Fixed/UTC+05:00:60 to +05:01:00 (26.9 rejects it for being finer than 15 min).
         yield return new TestCaseData("DateTime('Fixed/UTC+05:60:00')", 6 * 3600)
             .SetName("ParseDateTime_FixedUtcMinutesCarryIntoHour");
         yield return new TestCaseData("DateTime('Fixed/UTC+05:00:60')", (5 * 3600) + 60)
