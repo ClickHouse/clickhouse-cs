@@ -3,6 +3,8 @@ name: Cloud Tests (TCP)
 # Runs the ClickHouse.Driver.Tcp integration suite against a real ClickHouse Cloud service over the secure
 # native port. Separate from tests-cloud.yml so the TCP workflow can call it without also running the HTTP
 # cloud job.
+#
+# tests-cloud-tcp-label.yml also calls it, for the tests:run-cloud label on a pull request.
 on:
   workflow_call:
     inputs:
@@ -27,11 +29,14 @@ jobs:
     name: Cloud Tests (TCP) - AWS
     runs-on: ubuntu-22.04
     timeout-minutes: 30 # the whole integration suite, every round trip over the public internet
-    # A fork PR must never reach the Cloud credentials. The pull_request trigger withholds secrets from forks
-    # anyway; this makes the intent explicit and skips the job instead of failing it in a confusing way.
-    # workflow_dispatch is listed on its own: on a dispatch there is no pull_request context, so the third test
-    # is false and the job would be skipped despite only a collaborator being able to start one.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    # Without the label, a fork PR must never reach the Cloud credentials. The pull_request trigger withholds
+    # secrets from forks anyway; this makes the intent explicit and skips the job instead of failing it in a
+    # confusing way. workflow_dispatch is listed on its own: on a dispatch there is no pull_request context.
+    if: >-
+      (github.event_name == 'pull_request_target' && github.event.label.name == 'tests:run-cloud')
+      || (github.event_name != 'pull_request_target'
+          && (github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+              || github.event.pull_request.head.repo.full_name == github.repository))
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -41,8 +46,11 @@ jobs:
           # where the test process could read it.
           persist-credentials: false
 
+      # Not on a label: a pull_request_target run shares the base branch's cache, and pull request code could
+      # write to it.
       - uses: actions/cache@v6
         name: Cache NuGet
+        if: github.event_name != 'pull_request_target'
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
