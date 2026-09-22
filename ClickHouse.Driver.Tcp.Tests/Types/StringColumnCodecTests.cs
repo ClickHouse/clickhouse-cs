@@ -125,7 +125,7 @@ public class StringColumnCodecTests
     /// Verifies that raw bytes are writable as String but unsupported as a LowCardinality dictionary key.
     /// </summary>
     [Test]
-    public void WireEqualityComparer_Bytes_IsUnavailableAndLowCardinalityRefusesThem()
+    public void LowCardinalityKeyWriter_Bytes_IsUnavailableAndLowCardinalityRefusesThem()
     {
         IColumnCodec codec = StringColumnCodec.Instance;
         IColumnCodec lowCardinality = ColumnCodecRegistry.Default.Resolve("LowCardinality(String)", ResolveContext.ForWrite);
@@ -133,8 +133,8 @@ public class StringColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.WireEqualityComparer(typeof(byte[])), Is.Null);
-            Assert.That(codec.WireEqualityComparer(typeof(string)), Is.Not.Null);
+            Assert.That(codec.LowCardinalityKeyWriter(typeof(byte[])), Is.Null);
+            Assert.That(codec.LowCardinalityKeyWriter(typeof(string)), Is.Not.Null);
 
             Assert.That(lowCardinality.CanWriteElementType(typeof(byte[])), Is.False);
             Assert.That(lowCardinality.CanWrite(new ArrayColumn<byte[]>("c", null, new[] { new byte[] { 0xFF } })), Is.False);
