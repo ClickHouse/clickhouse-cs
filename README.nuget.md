@@ -7,24 +7,6 @@ Official C# client for [ClickHouse](https://clickhouse.com/). This package conta
 * **HTTP client**: `ClickHouseClient` and an ADO.NET provider for ORMs. It sends data in the RowBinary format over HTTP(S). Use it for most applications.
 * **Native TCP client** (experimental): `ClickHouseTcpClient`. It uses the ClickHouse native protocol and sends data in columnar blocks.
 
-## Choosing a client
-
-| | HTTP | Native TCP |
-|---|---|---|
-| Status | Stable | Experimental. The API can change in a future release. |
-| Main API | `ClickHouseClient`, ADO.NET (`ClickHouseConnection`) | `ClickHouseTcpClient` |
-| .NET versions | 6.0 and newer | 8.0 and newer |
-| Default ports | 8123 (HTTP), 8443 (HTTPS) | 9000, 9440 (TLS) |
-| Performance | Good | Better, especially when you process data in columns |
-| ADO.NET and ORMs (Dapper, EF Core, linq2db) | Yes | No |
-| CSV, JSONEachRow, Parquet, and raw streams | Yes | No |
-| `JSON` performance | Better: binary transfer | Text transfer only |
-| Bearer authentication and custom HTTP headers | Yes | No |
-| Columnar block reads | No | Yes |
-| Progress, profile, and server log callbacks | No | Yes |
-
-The [overview](https://clickhouse.com/docs/integrations/language-clients/csharp/overview) gives more information about when to use each client.
-
 ## Documentation
 
 Full documentation is on the ClickHouse website:
@@ -36,6 +18,25 @@ Full documentation is on the ClickHouse website:
 ## Usage examples
 
 We have a wide range of [examples](https://github.com/ClickHouse/clickhouse-cs/tree/main/examples), aiming to cover typical scenarios of client usage. They are grouped by client: [HTTP](https://github.com/ClickHouse/clickhouse-cs/tree/main/examples/Http) and [native TCP](https://github.com/ClickHouse/clickhouse-cs/tree/main/examples/Tcp).
+
+## Choosing a client
+
+| | HTTP | Native TCP |
+|---|---|---|
+| Status | Stable | Experimental. The API can change in a future release. |
+| Main API | `ClickHouseClient`, ADO.NET (`ClickHouseConnection`) | `ClickHouseTcpClient` |
+| .NET versions | 6.0 and newer | 8.0 and newer |
+| Default ports | 8123 (HTTP), 8443 (HTTPS) | 9000, 9440 (TLS) |
+| Performance | Fast | Even faster: about 2x for typical reads and 1.5x for writes |
+| ADO.NET and ORMs (Dapper, EF Core, linq2db) | Yes | No |
+| CSV, JSONEachRow, Parquet, and raw streams | Yes | No |
+| `JSON` performance | Better: binary transfer | Text transfer only |
+| Bearer authentication and custom HTTP headers | Yes | No |
+| Columnar block reads | No | Yes |
+| Progress, profile, and server log callbacks | No | Yes |
+| W3C trace context propagation to ClickHouse | No | Yes |
+
+The [overview](https://clickhouse.com/docs/integrations/language-clients/csharp/overview) gives more information about when to use each client.
 
 ## ClickHouse Versions
 
