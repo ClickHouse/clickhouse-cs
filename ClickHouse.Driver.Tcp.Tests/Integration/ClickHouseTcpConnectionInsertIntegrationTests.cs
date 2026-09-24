@@ -538,7 +538,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
             // Reinsert while the borrowed block still owns its pooled buffers.
             await using ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None);
             // Sort on a String expression because ordering Variant requires a separate setting.
-            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", cancellationToken: None))
+            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", settings: ReadOtherConnectionsInserts, cancellationToken: None))
             {
                 await connection.InsertAsync($"INSERT INTO {target} (value) VALUES", new[] { block[0] }, cancellationToken: None);
             }
@@ -589,7 +589,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
 
             ArgumentException refusal = null;
             await using ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None);
-            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", cancellationToken: None))
+            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", settings: ReadOtherConnectionsInserts, cancellationToken: None))
             {
                 refusal = Assert.ThrowsAsync<ArgumentException>(
                     async () => await connection.InsertAsync($"INSERT INTO {target} (value) VALUES", new[] { block[0] }, cancellationToken: None));
@@ -673,6 +673,13 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     {
         ["allow_experimental_dynamic_type"] = "1",
         ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
+    };
+
+    // A second connection can reach a Cloud replica that has not yet loaded the parts another replica just
+    // inserted. This setting makes the read wait for them. A single server ignores it.
+    private static readonly Dictionary<string, string> ReadOtherConnectionsInserts = new(StringComparer.Ordinal)
+    {
+        ["select_sequential_consistency"] = "1",
     };
 
     private static uint[] RowIds(int count)

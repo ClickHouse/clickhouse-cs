@@ -28,7 +28,9 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// connection, and so on one replica, because the pool hands back the connection it just took in. Two shapes
 /// leave that guarantee and read an empty table on Cloud: a second connection opened to read what the first
 /// wrote, and a connection that retires mid-test — a server error, an enumerator dropped mid-response — before
-/// the table it wrote is read back. Use <c>MergeTree ORDER BY tuple()</c> for either.
+/// the table it wrote is read back. Use <c>MergeTree ORDER BY tuple()</c> for either, and read with
+/// <c>select_sequential_consistency = 1</c>: a replica loads the parts that another replica inserted
+/// asynchronously, so without the setting the read can miss them.
 /// </para>
 /// </summary>
 [SetUpFixture]
