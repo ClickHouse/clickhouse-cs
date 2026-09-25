@@ -1,12 +1,14 @@
 using System;
+using System.Diagnostics;
 
 namespace ClickHouse.Driver.Tcp.Protocol;
 
 /// <summary>
 /// Writes the ClientInfo block embedded in a Query packet (the TCP-interface branch). Identifies the query's
 /// origin and the client. Fields gate on the negotiated version; at the current ceiling every gate is active.
-/// The client sends a plain initial query with no distributed context, no OpenTelemetry span, and no
-/// parallel-replica coordination, so those fields are their zero/absent forms.
+/// The client sends a plain initial query with no distributed context and no parallel-replica coordination, so
+/// those fields are their zero/absent forms. The trace-context field carries the ambient
+/// <see cref="Activity"/> when there is one.
 /// </summary>
 internal static class ClientInfo
 {
@@ -57,7 +59,7 @@ internal static class ClientInfo
 
         if (negotiated.Supports(ProtocolFeature.OpenTelemetry))
         {
-            writer.WriteByte(0);                    // has_trace = 0 (no OpenTelemetry span)
+            WriteTraceContext(writer, Activity.Current);
         }
 
         if (negotiated.Supports(ProtocolFeature.ParallelReplicasClientInfo))
@@ -66,6 +68,42 @@ internal static class ClientInfo
             writer.WriteVarUInt(0);                 // count_participating_replicas
             writer.WriteVarUInt(0);                 // number_of_current_replica
         }
+    }
+
+    /// <summary>
+    /// Writes the W3C trace context of <paramref name="activity"/>, so the spans the server records for this
+    /// query (<c>system.opentelemetry_span_log</c>) hang off the caller's trace rather than starting their own.
+    /// Writes the absent form when there is no span, or when its id is not W3C — a hierarchical id has no
+    /// trace id to send.
+    /// </summary>
+    /// <param name="writer">The writer to encode into.</param>
+    /// <param name="activity">The span to propagate, or null for none.</param>
+    internal static void WriteTraceContext(ClickHouseBinaryWriter writer, Activity activity)
+    {
+        if (activity is null || activity.IdFormat != ActivityIdFormat.W3C)
+        {
+            writer.WriteByte(0);                    // has_trace = 0
+            return;
+        }
+
+        writer.WriteByte(1);                        // has_trace = 1
+
+        // trace_id is a UUID on the wire: two 8-byte halves, each written little-endian. A W3C trace id is 16
+        // big-endian bytes, so each half is reversed. span_id is a plain little-endian UInt64, so it reverses
+        // whole.
+        Span<byte> id = stackalloc byte[16];
+        activity.TraceId.CopyTo(id);
+        id[..8].Reverse();
+        id[8..].Reverse();
+        writer.WriteBytes(id);
+
+        Span<byte> span = stackalloc byte[8];
+        activity.SpanId.CopyTo(span);
+        span.Reverse();
+        writer.WriteBytes(span);
+
+        writer.WriteString(activity.TraceStateString ?? string.Empty);
+        writer.WriteByte((byte)activity.ActivityTraceFlags);
     }
 
     private static string TryGet(Func<string> get)
