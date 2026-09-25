@@ -1,0 +1,5 @@
+[*.cs]
+dotnet_diagnostic.RS0016.severity = error # RS0016: Public APIs must be declared
+dotnet_diagnostic.RS0017.severity = error # RS0017: Remove deleted types and members from the declared API
+dotnet_diagnostic.RS0024.severity = error # RS0024: The contents of the public API files are invalid
+dotnet_diagnostic.RS0048.severity = error # RS0048: A missing API file turns the checks above off silently

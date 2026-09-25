@@ -1,0 +1,1 @@
+* Added `RowIndex` to `ClickHouseBulkCopySerializationException` so binary-insert failures report the zero-based index of the offending row within the batch, making it easy to locate bad data in large inserts. (#606)
