@@ -12,6 +12,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// Both benchmarks insert the same data into an ENGINE Null table
 /// so the measurement is purely client-side serialization + network overhead.
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.HttpRegression)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class PocoInsertBenchmark
@@ -49,7 +50,7 @@ public class PocoInsertBenchmark
         client?.Dispose();
     }
 
-    [Benchmark(Baseline = true)]
+    [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
     public async Task<long> ObjectArray()
     {
         var columns = new[] { "Id", "Name", "Value" };

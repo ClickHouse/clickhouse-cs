@@ -6,6 +6,17 @@ on:
     paths-ignore:
     - '**/*.md'
   workflow_dispatch:
+    inputs:
+      categories:
+        description: 'BenchmarkDotNet categories, comma-separated. Empty runs everything.'
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      categories:
+        description: 'BenchmarkDotNet categories, comma-separated. Empty runs everything.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +30,7 @@ jobs:
         image: clickhouse/clickhouse-server:latest
         ports:
           - 8123:8123
+          - 9000:9000
         env:
           CLICKHOUSE_DB: test
           CLICKHOUSE_USER: test
@@ -28,7 +40,7 @@ jobs:
     steps:
     - uses: actions/checkout@v7
       name: Checkout
-    
+
     - uses: actions/cache@v6
       name: Cache NuGet
       with:
@@ -44,9 +56,28 @@ jobs:
           10.x
 
     - name: Run
-      run: dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj --framework net10.0 --configuration Release -- --join --filter "*" --artifacts .
       env:
         CLICKHOUSE_CONNECTION: Host=localhost;Port=8123;Username=test;Password=test1234
+        CLICKHOUSE_TCP_CONNECTION_STRING: Host=localhost;Port=9000;Username=test;Password=test1234
+        INPUT_CATEGORIES: ${{ inputs.categories }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        # A push to main runs the regression sets. The whole suite runs nightly, where an hours-long
+        # job costs nothing; a dispatch or a nightly call with no categories also runs everything.
+        CATEGORIES="$INPUT_CATEGORIES"
+        if [ -z "$CATEGORIES" ] && [ "$EVENT_NAME" = "push" ]; then
+          CATEGORIES="http-regression,tcp-regression,cross"
+        fi
+        CATEGORY_ARG=""
+        if [ -n "$CATEGORIES" ]; then
+          CATEGORY_ARG="--anyCategories $(echo "$CATEGORIES" | tr ',' ' ')"
+        fi
+        echo "Categories: ${CATEGORIES:-all}"
+        dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
+          --framework net10.0 \
+          --configuration Release \
+          --no-launch-profile \
+          -- --join --filter "*" $CATEGORY_ARG --artifacts .
 
     - name: Post results to summary
       run: cat results/*-report-github.md >> $GITHUB_STEP_SUMMARY
