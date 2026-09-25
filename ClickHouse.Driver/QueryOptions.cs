@@ -60,6 +60,8 @@ public class QueryOptions
     /// Gets or sets the bearer token for JWT authentication.
     /// When set, Bearer authentication is used instead of Basic authentication
     /// (Username and Password are ignored for the Authorization header).
+    /// This override takes precedence over the client-level
+    /// <see cref="ClickHouseClientSettings.CredentialsProvider"/> and <see cref="ClickHouseClientSettings.BearerToken"/>.
     /// The token should be provided as-is (already encoded if required by your auth provider).
     /// Default: null
     /// </summary>
