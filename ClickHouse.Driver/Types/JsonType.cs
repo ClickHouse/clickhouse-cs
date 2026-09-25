@@ -473,9 +473,77 @@ internal class JsonType : ParameterizedType
         {
             ArrayType at => ReadJsonArray(reader, at),
             MapType mt => ReadJsonMap(reader, mt),
+            // Nested derives from TupleType and reads as a repeated tuple, so it has to be matched
+            // before the tuple arm.
+            NestedType nt => ReadJsonNested(reader, nt),
+            TupleType tt => ReadJsonTuple(reader, tt),
+            // SimpleAggregateFunction reads exactly as the type it wraps, so the value inside is
+            // what decides the rendering.
+            SimpleAggregateFunctionType sa => ReadJsonNode(reader, sa.UnderlyingType),
+            // Nullable decides only whether a value is present: its marker comes first, and a
+            // present value is rendered by the type it wraps.
+            NullableType nt => reader.ReadByte() > 0 ? null : ReadJsonNode(reader, nt.UnderlyingType),
+            // A Dynamic or Variant value carries the type of the value itself, so the type to
+            // render by is only known per value: read it off the value and dispatch again.
+            // Dispatching on the static type instead reads the value whole, which loses the
+            // structure of a composite one.
+            DynamicType => ReadJsonNode(reader, null),
+            VariantType vt => ReadJsonVariant(reader, vt),
             FixedStringType => ReadJsonFixedString(reader, type),
             _ => ReadJsonValue(reader, type),
         };
+    }
+
+    /// <summary>
+    /// Reads a Nested value, which is a repeated tuple: a length, then that many tuples.
+    /// </summary>
+    private JsonArray ReadJsonNested(ExtendedBinaryReader reader, NestedType nestedType)
+    {
+        var count = reader.Read7BitEncodedInt();
+        var array = new JsonArray();
+        for (var i = 0; i < count; i++)
+        {
+            array.Add(ReadJsonTuple(reader, nestedType));
+        }
+
+        return array;
+    }
+
+    private JsonNode ReadJsonVariant(ExtendedBinaryReader reader, VariantType variantType)
+    {
+        var discriminator = reader.ReadByte();
+        return discriminator == VariantType.NullDiscriminator
+            ? null
+            : ReadJsonNode(reader, variantType.UnderlyingTypes[discriminator]);
+    }
+
+    /// <summary>
+    /// Renders a tuple the way the server renders it in a JSON document: a named tuple as an
+    /// object, an unnamed one as an array.
+    /// </summary>
+    private JsonNode ReadJsonTuple(ExtendedBinaryReader reader, TupleType tupleType)
+    {
+        var elementTypes = tupleType.UnderlyingTypes;
+        var names = tupleType.ElementNames;
+
+        if (names is null || names.Length != elementTypes.Length)
+        {
+            var array = new JsonArray();
+            foreach (var elementType in elementTypes)
+            {
+                array.Add(ReadJsonNode(reader, elementType));
+            }
+
+            return array;
+        }
+
+        var obj = new JsonObject();
+        for (var i = 0; i < elementTypes.Length; i++)
+        {
+            obj[names[i]] = ReadJsonNode(reader, elementTypes[i]);
+        }
+
+        return obj;
     }
 
     private JsonArray ReadJsonArray(ExtendedBinaryReader reader, ArrayType arrayType)
@@ -519,8 +587,9 @@ internal class JsonType : ParameterizedType
     /// <summary>
     /// Whether values of this type are text rather than raw bytes. Decided from the ClickHouse type,
     /// not the CLR type: <c>Array(UInt8)</c> also reads as a <see cref="byte"/> array, so decoding on
-    /// <c>byte[]</c> alone would corrupt it. <c>Variant</c>/<c>Dynamic</c> are false because their
-    /// subtype is only known per value.
+    /// <c>byte[]</c> alone would corrupt it. <c>Variant</c>/<c>Dynamic</c> never reach this — they are
+    /// re-dispatched on the type of the value they hold — and are false for any other caller,
+    /// because that type is only known per value.
     /// </summary>
     private static bool IsTextBacked(ClickHouseType type) => type switch
     {
@@ -569,8 +638,10 @@ internal class JsonType : ParameterizedType
             Guid guid => JsonValue.Create(guid.ToString()),
             IPAddress ip => JsonValue.Create(ip.ToString()),
             ClickHouseDecimal chDec => JsonValue.Create(chDec.ToString(CultureInfo.InvariantCulture)),
-            // Default: try JsonSerializer for complex types
-            _ => JsonValue.Create(JsonSerializer.SerializeToElement(value))
+            // Default: serialize complex types. SerializeToNode, not JsonValue.Create, because
+            // Create throws on an element which is an object or an array, and a value read as a
+            // collection (a QBit, which reads as an array) is exactly that.
+            _ => JsonSerializer.SerializeToNode(value)
         };
     }
 

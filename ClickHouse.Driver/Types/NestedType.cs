@@ -17,6 +17,7 @@ internal class NestedType : TupleType
         return new NestedType
         {
             UnderlyingTypes = node.ChildNodes.Select(ClearFieldName).Select(parseClickHouseTypeFunc).ToArray(),
+            ElementNames = ExtractElementNames(node),
         };
     }
 
