@@ -212,6 +212,33 @@ public class ClickHouseTcpConnectionQueryIntegrationTests
     }
 
     [Test]
+    public async Task QueryAsync_EmptyResultOfDictionaryBearingType_ReadsTheZeroRowHeaderAndStaysReady()
+    {
+        // The empty-result case above uses a type with no serialization state. LowCardinality has some — a version
+        // marker that precedes the column body — which raises the question of whether the zero-row header block
+        // that opens every result set carries it. It does not: ClickHouse gates the whole of writeData, prefix
+        // included, on `if (rows)`. This is the server-agreement half of the invariant that BlockWriterTests pins
+        // between our own writer and reader, and it is the shape that would desync the stream if we read a prefix
+        // the server never sent — a failure that surfaces as a protocol error here rather than as wrong data.
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+
+        int blockCount = 0;
+        await foreach (Block block in connection.QueryAsync(
+            "SELECT CAST('x', 'LowCardinality(String)') AS v, CAST(NULL, 'LowCardinality(Nullable(String))') AS n WHERE 0",
+            cancellationToken: None))
+        {
+            _ = block;
+            blockCount++;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blockCount, Is.EqualTo(0), "the header block carries no rows, so nothing is yielded");
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready), "reaching Ready proves the stream stayed in sync through end-of-stream");
+        });
+    }
+
+    [Test]
     public async Task QueryAsync_SessionTimezoneSetting_ResolvesTimezoneLessColumnAgainstSessionTimezone()
     {
         await using var connection = await TcpServerFixture.ConnectAsync(None);
