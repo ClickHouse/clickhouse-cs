@@ -37,6 +37,9 @@ internal sealed class NullableColumnCodec : IColumnCodec
     private readonly (Type Spelling, INullableShape Shape)[] writeShapes;
     private readonly bool innerCanWrite;
 
+    // Built lazily to avoid write-shape allocations when the codec is used only for reads. Races are harmless.
+    private Type[] writableElementTypes;
+
     private NullableColumnCodec(string typeName, IColumnCodec inner)
     {
         TypeName = typeName;
@@ -46,9 +49,7 @@ internal sealed class NullableColumnCodec : IColumnCodec
         // canonical ElementType made nullable.
         canonicalShape = NullableShapes.For(inner.ElementType);
 
-        // One shape per CLR write type the inner codec accepts, so a Nullable column can be supplied in any form
-        // the bare inner accepts (e.g. Nullable(DateTime) as DateTimeOffset? or DateTime?). The canonical
-        // ElementType leads the list, so it wins when a column would match more than one write type.
+        // Preserve the inner codec's write-type order; its canonical type remains preferred.
         IReadOnlyList<Type> writeTypes = inner.WritableElementTypes;
         writeShapes = new (Type, INullableShape)[writeTypes.Count];
         for (int i = 0; i < writeTypes.Count; i++)
@@ -56,8 +57,7 @@ internal sealed class NullableColumnCodec : IColumnCodec
             writeShapes[i] = (writeTypes[i], NullableShapes.For(writeTypes[i]));
         }
 
-        // Whether the inner codec can write at all (e.g. Nothing cannot). Computed once so CanWrite can reject a
-        // Nullable(non-writable) column up front rather than letting the write fail mid-stream.
+        // Reject a non-writable inner codec before streaming starts.
         innerCanWrite = canonicalShape.CanInnerWrite(inner);
     }
 
@@ -88,10 +88,33 @@ internal sealed class NullableColumnCodec : IColumnCodec
     }
 
     /// <summary>
-    /// The placeholder for an absent <c>Nullable(T)</c> value is <see langword="null"/> itself — a null-marked
-    /// row. Relevant only if a future composite nests a <c>Nullable</c> and asks for its placeholder.
+    /// The inner codec's writable CLR types, each made nullable.
+    /// </summary>
+    public IReadOnlyList<Type> WritableElementTypes => EnsureWritableElementTypes();
+
+    /// <summary>
+    /// The placeholder for an absent value.
     /// </summary>
     public object NullPlaceholder => null;
+
+    /// <summary>
+    /// Returns <see langword="null"/> for any writable CLR type.
+    /// </summary>
+    /// <param name="writeType">The CLR write type to express the placeholder in.</param>
+    /// <returns><see langword="null"/>.</returns>
+    /// <exception cref="NotSupportedException"><paramref name="writeType"/> is not a writable element type.</exception>
+    public object NullPlaceholderAs(Type writeType)
+    {
+        foreach (Type writable in EnsureWritableElementTypes())
+        {
+            if (writable == writeType)
+            {
+                return null;
+            }
+        }
+
+        throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
+    }
 
     /// <summary>Builds a <c>Nullable(T)</c> codec, resolving the inner type <c>T</c> through the registry.</summary>
     /// <param name="node">The parsed <c>Nullable</c> type node; its single argument is the inner type.</param>
@@ -192,6 +215,26 @@ internal sealed class NullableColumnCodec : IColumnCodec
         }
 
         return ColumnValueProjections.TryLiftOverAbsent(value, inner, innerTarget, targetType, out projected);
+    }
+
+    /// <summary>Builds the nullable write-type list on first use.</summary>
+    /// <returns>The write types, each the inner's spelling made nullable.</returns>
+    private Type[] EnsureWritableElementTypes()
+    {
+        Type[] surface = writableElementTypes;
+        if (surface is not null)
+        {
+            return surface;
+        }
+
+        surface = new Type[writeShapes.Length];
+        for (int i = 0; i < writeShapes.Length; i++)
+        {
+            surface[i] = writeShapes[i].Shape.NullableElementType;
+        }
+
+        writableElementTypes = surface;
+        return surface;
     }
 
     /// <inheritdoc/>

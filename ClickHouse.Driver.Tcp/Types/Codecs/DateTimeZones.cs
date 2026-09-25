@@ -5,10 +5,8 @@ using System.Text.RegularExpressions;
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
-/// Timezone resolution shared by the <c>DateTime</c> / <c>DateTime64</c> codecs. A ClickHouse timezone-bearing
-/// type stores a UTC instant on the wire; the timezone (from the type string, or the session's when the type
-/// omits one) only determines the offset a value is <i>presented</i> with. This resolves that timezone once,
-/// at codec construction, and converts UTC instants into offsets at read time.
+/// Resolves explicit and session timezones for the DateTime codecs. They control calendar projections and the
+/// interpretation of unspecified <see cref="DateTime"/> values; wire values remain UTC instants.
 /// </summary>
 internal static class DateTimeZones
 {
@@ -25,7 +23,7 @@ internal static class DateTimeZones
     /// otherwise the server/session timezone, otherwise UTC.
     /// </summary>
     /// <param name="explicitTimezone">The timezone from the type string (e.g. <c>Europe/London</c>), or null/empty.</param>
-    /// <param name="serverTimezone">The session's timezone, or null/empty when unknown (e.g. the write path).</param>
+    /// <param name="serverTimezone">The session's timezone, or null/empty when unknown.</param>
     /// <returns>The resolved timezone info.</returns>
     /// <exception cref="FormatException">The named timezone is not known to the platform.</exception>
     public static TimeZoneInfo Resolve(string explicitTimezone, string serverTimezone)

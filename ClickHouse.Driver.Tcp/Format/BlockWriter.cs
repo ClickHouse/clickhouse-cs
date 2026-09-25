@@ -14,10 +14,11 @@ namespace ClickHouse.Driver.Tcp.Format;
 internal static class BlockWriter
 {
     /// <summary>
-    /// The default per-block encoded-size target (50 MiB): the insert path sizes blocks to stay within it, and
-    /// the encoder flushes between columns once the buffer passes it as a backstop.
+    /// The default buffered-byte threshold (1 MiB) for the flush between two columns of a block. Peak buffered
+    /// bytes are this plus the column that crossed it, since the check follows a whole column; the writer never
+    /// flushes on its own, it grows.
     /// </summary>
-    public const int DefaultFlushThresholdBytes = 50 * 1024 * 1024;
+    public const int DefaultFlushThresholdBytes = 1024 * 1024;
 
     /// <summary>
     /// Writes the empty end-of-input block: an empty name, the standard block info, and zero column/row counts.
@@ -63,7 +64,8 @@ internal static class BlockWriter
             }
         }
 
-        // Writing uses each value's own instant, so the codec needs no server timezone.
+        // A self-described block has no server sample/context to borrow. Explicit type timezones still apply;
+        // timezone-less DateTime types fall back to UTC for an Unspecified wall clock.
         ResolveContext context = ResolveContext.ForWrite;
         var planned = new InsertColumn[columns.Count];
         for (int i = 0; i < columns.Count; i++)
