@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ClickHouse.Driver.Formats;
 
@@ -10,6 +12,9 @@ namespace ClickHouse.Driver.Formats;
 /// </summary>
 internal sealed class ExceptionTagAwareStream : Stream
 {
+    /// <summary>Response header carrying the per-query exception token.</summary>
+    internal const string HeaderName = "X-ClickHouse-Exception-Tag";
+
     private const string ExceptionPrefix = "__exception__";
     private const int BufferCapacity = 4096; // 4KB ring buffer
 
@@ -17,6 +22,7 @@ internal sealed class ExceptionTagAwareStream : Stream
     private readonly bool leaveOpen;
     private readonly byte[] exceptionPrefixBytes; // "__exception__"
     private readonly byte[] tagBytes;             // exception tag/token
+    private readonly bool throwAtEndOfStream;
 
     // Ring buffer for recent bytes
     private readonly byte[] recentBytes = new byte[BufferCapacity];
@@ -26,7 +32,15 @@ internal sealed class ExceptionTagAwareStream : Stream
     /// <param name="innerStream">The stream reads are pulled from and recorded off.</param>
     /// <param name="exceptionTag">The per-query token the server brackets a mid-stream exception with.</param>
     /// <param name="leaveOpen">When <c>true</c> the inner stream is not disposed with this wrapper.</param>
-    public ExceptionTagAwareStream(Stream innerStream, string exceptionTag, bool leaveOpen = false)
+    /// <param name="throwAtEndOfStream">
+    /// When <see langword="true"/>, the wrapper proactively throws a <see cref="ClickHouseServerException"/>
+    /// as soon as the inner stream ends (or fails with an <see cref="IOException"/>) and an in-band exception
+    /// block is present in the observed tail. This is required by consumers that read the stream directly
+    /// (e.g. the raw / custom-FORMAT streaming path), which have no decoder to translate the end-of-stream
+    /// into a server error. When <see langword="false"/> (the default) the wrapper is a passive observer and
+    /// the caller surfaces the error itself by calling <see cref="TryExtractMidStreamException"/> after a read failure.
+    /// </param>
+    public ExceptionTagAwareStream(Stream innerStream, string exceptionTag, bool leaveOpen = false, bool throwAtEndOfStream = false)
     {
         this.innerStream = innerStream ?? throw new ArgumentNullException(nameof(innerStream));
         this.leaveOpen = leaveOpen;
@@ -36,6 +50,7 @@ internal sealed class ExceptionTagAwareStream : Stream
 
         exceptionPrefixBytes = Encoding.UTF8.GetBytes(ExceptionPrefix);
         tagBytes = Encoding.UTF8.GetBytes(exceptionTag);
+        this.throwAtEndOfStream = throwAtEndOfStream;
     }
 
     public override bool CanRead => innerStream.CanRead;
@@ -54,11 +69,25 @@ internal sealed class ExceptionTagAwareStream : Stream
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        int bytesRead = innerStream.Read(buffer, offset, count);
+        int bytesRead;
+        try
+        {
+            bytesRead = innerStream.Read(buffer, offset, count);
+        }
+        catch (IOException) when (throwAtEndOfStream)
+        {
+            ThrowIfMidStreamException();
+            throw;
+        }
 
         if (bytesRead > 0)
+        {
             RecordBytes(buffer, offset, bytesRead);
+            return bytesRead;
+        }
 
+        if (throwAtEndOfStream)
+            ThrowIfMidStreamException();
         return bytesRead;
     }
 
@@ -69,25 +98,108 @@ internal sealed class ExceptionTagAwareStream : Stream
     /// </summary>
     public override int Read(Span<byte> buffer)
     {
-        int bytesRead = innerStream.Read(buffer);
+        int bytesRead;
+        try
+        {
+            bytesRead = innerStream.Read(buffer);
+        }
+        catch (IOException) when (throwAtEndOfStream)
+        {
+            ThrowIfMidStreamException();
+            throw;
+        }
 
         if (bytesRead > 0)
+        {
             RecordBytes(buffer.Slice(0, bytesRead));
+            return bytesRead;
+        }
 
+        if (throwAtEndOfStream)
+            ThrowIfMidStreamException();
+        return bytesRead;
+    }
+
+    public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        int bytesRead;
+        try
+        {
+            bytesRead = await innerStream.ReadAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException) when (throwAtEndOfStream)
+        {
+            ThrowIfMidStreamException();
+            throw;
+        }
+
+        if (bytesRead > 0)
+        {
+            RecordBytes(buffer, offset, bytesRead);
+            return bytesRead;
+        }
+
+        if (throwAtEndOfStream)
+            ThrowIfMidStreamException();
+        return bytesRead;
+    }
+
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        int bytesRead;
+        try
+        {
+            bytesRead = await innerStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException) when (throwAtEndOfStream)
+        {
+            ThrowIfMidStreamException();
+            throw;
+        }
+
+        if (bytesRead > 0)
+        {
+            RecordBytes(buffer.Span.Slice(0, bytesRead));
+            return bytesRead;
+        }
+
+        if (throwAtEndOfStream)
+            ThrowIfMidStreamException();
         return bytesRead;
     }
 
     public override int ReadByte()
     {
-        int b = innerStream.ReadByte();
+        int b;
+        try
+        {
+            b = innerStream.ReadByte();
+        }
+        catch (IOException) when (throwAtEndOfStream)
+        {
+            ThrowIfMidStreamException();
+            throw;
+        }
+
         if (b >= 0)
         {
             recentBytes[writePosition] = (byte)b;
             writePosition = (writePosition + 1) % BufferCapacity;
             if (bytesRecorded < BufferCapacity)
                 bytesRecorded++;
+            return b;
         }
+
+        if (throwAtEndOfStream)
+            ThrowIfMidStreamException();
         return b;
+    }
+
+    private void ThrowIfMidStreamException()
+    {
+        var serverException = TryExtractMidStreamException();
+        if (serverException != null)
+            throw serverException;
     }
 
     private void RecordBytes(byte[] buffer, int offset, int count)
