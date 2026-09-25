@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
 
-namespace ClickHouse.Driver.Tcp.Numerics;
+namespace ClickHouse.Driver.Tcp;
 
 /// <summary>
 /// An unsigned 256-bit integer, the CLR representation of ClickHouse <c>UInt256</c>.
@@ -127,15 +127,39 @@ public readonly struct UInt256 : IEquatable<UInt256>, IComparable<UInt256>
     /// <inheritdoc/>
     public override string ToString() => ToBigInteger().ToString(CultureInfo.InvariantCulture);
 
+    /// <summary>Compares two values for equality.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when they are the same number.</returns>
     public static bool operator ==(UInt256 left, UInt256 right) => left.Equals(right);
 
+    /// <summary>Compares two values for inequality.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when they are different numbers.</returns>
     public static bool operator !=(UInt256 left, UInt256 right) => !left.Equals(right);
 
+    /// <summary>Orders two values as unsigned numbers.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is the smaller number.</returns>
     public static bool operator <(UInt256 left, UInt256 right) => left.CompareTo(right) < 0;
 
+    /// <summary>Orders two values as unsigned numbers.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is the larger number.</returns>
     public static bool operator >(UInt256 left, UInt256 right) => left.CompareTo(right) > 0;
 
+    /// <summary>Orders two values as unsigned numbers.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is not the larger number.</returns>
     public static bool operator <=(UInt256 left, UInt256 right) => left.CompareTo(right) <= 0;
 
+    /// <summary>Orders two values as unsigned numbers.</summary>
+    /// <param name="left">The left value.</param>
+    /// <param name="right">The right value.</param>
+    /// <returns>True when <paramref name="left"/> is not the smaller number.</returns>
     public static bool operator >=(UInt256 left, UInt256 right) => left.CompareTo(right) >= 0;
 }

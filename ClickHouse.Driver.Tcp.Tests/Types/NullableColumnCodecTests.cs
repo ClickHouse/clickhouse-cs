@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Tcp.Numerics;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
