@@ -98,6 +98,7 @@ internal static class TypeConverter
 
     public static IEnumerable<string> RegisteredTypes => SimpleTypes.Keys
         .Concat(ParameterizedTypes.Values.Select(t => t.Name))
+        .Distinct()
         .OrderBy(x => x)
         .ToArray();
 
@@ -127,6 +128,9 @@ internal static class TypeConverter
 
         // Special types
         RegisterPlainType<DynamicType>();
+
+        // Dynamic also carries an optional max_types argument, which Parse accepts and ignores
+        RegisterParameterizedType<DynamicType>();
         RegisterPlainType<UuidType>();
         RegisterPlainType<IPv4Type>();
         RegisterPlainType<IPv6Type>();
@@ -242,6 +246,13 @@ internal static class TypeConverter
         var node = Parser.Parse(type);
         return ParseClickHouseType(node, settings);
     }
+
+    /// <summary>
+    /// Whether the text is one of the type-name aliases, some of which hold a space
+    /// ("BIGINT UNSIGNED"). Callers which split an element declaration on its space have to rule
+    /// an alias out first.
+    /// </summary>
+    internal static bool IsTypeAlias(string value) => Aliases.ContainsKey(value.Trim().ToUpperInvariant());
 
     internal static string ExtractTypeName(SyntaxTreeNode node)
     {

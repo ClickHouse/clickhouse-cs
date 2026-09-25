@@ -477,4 +477,41 @@ public class DynamicTests : AbstractConnectionTestFixture
         ClassicAssert.IsTrue(reader.Read());
         Assert.That(reader.GetValue(0), Is.EqualTo(DBNull.Value));
     }
+
+    [Test]
+    [TestCase("Dynamic")]
+    [TestCase("Dynamic(max_types=0)")]
+    [TestCase("Dynamic(max_types=3)")]
+    [TestCase("Dynamic(max_types = 3)")]
+    public void ParseClickHouseType_DynamicWithMaxTypes_KeepsTheDeclaredName(string typeName)
+    {
+        var type = TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default);
+
+        Assert.That(type, Is.TypeOf<DynamicType>());
+        Assert.That(type.ToString(), Is.EqualTo(typeName));
+    }
+
+    [Test]
+    [TestCase("Dynamic(max_paths=3)")]
+    [TestCase("Dynamic(max_types=x)")]
+    [TestCase("Dynamic(3)")]
+    public void ParseClickHouseType_DynamicWithUnsupportedArgument_Throws(string typeName)
+    {
+        Assert.That(
+            () => TypeConverter.ParseClickHouseType(typeName, TypeSettings.Default),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCase("Dynamic")]
+    [TestCase("Dynamic(max_types = 0)")]
+    [TestCase("Dynamic(max_types = 3)")]
+    public async Task ShouldReadDynamicColumnDeclaredWithMaxTypes(string typeName)
+    {
+        using var reader = await connection.ExecuteReaderAsync($"SELECT ('x', ('macro', 20::UInt64))::{typeName} AS v");
+
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetValue(0), Is.EqualTo(Tuple.Create("x", Tuple.Create("macro", 20UL))));
+    }
 }
