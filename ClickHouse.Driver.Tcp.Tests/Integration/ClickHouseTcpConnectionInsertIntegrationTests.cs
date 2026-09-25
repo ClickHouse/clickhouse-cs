@@ -474,6 +474,55 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         }
     }
 
+    [Test]
+    public async Task InsertAsync_DenseVariantColumnSplitAcrossBlocks_RoundTripsEveryRow()
+    {
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["allow_experimental_variant_type"] = "1",
+            ["allow_suspicious_variant_types"] = "1",
+        };
+        await using var connection = await TcpServerFixture.ConnectAsync(None);
+        string table = UniqueTableName();
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Variant(String, UInt64)) ENGINE = Memory", settings);
+
+            // Discriminator 0 = String, 1 = UInt64, 255 = NULL. Interleaving the two alternatives (and a NULL) so
+            // that the maxRowsPerBlock: 2 split lands mid-run for both types — every block after the first then
+            // starts at a non-zero per-type offset, exercising the dense write path's before-slice offset
+            // derivation (the O(length) LocalIndices pass, not the old [0, start) rescan). Each type column holds
+            // its rows' values in row order: String rows 1,4,6; UInt64 rows 0,3,5.
+            object[] expected = { 100UL, "a", null, 200UL, "b", 300UL, "c" };
+            var discriminators = new byte[] { 1, 0, 255, 1, 0, 1, 0 };
+            IColumn[] typeColumns =
+            {
+                new ArrayColumn<string>("value", "String", new[] { "a", "b", "c" }),
+                PrimitiveColumn<ulong>.FromValues("value", "UInt64", new ulong[] { 100, 200, 300 }),
+            };
+            var dense = new VariantColumn("value", "Variant(String, UInt64)", discriminators, typeColumns, expected.Length, pooledDiscriminators: false, ownsColumns: false);
+
+            IColumn[] columns = { PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(expected.Length)), dense };
+            await connection.InsertAsync($"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, settings: settings, cancellationToken: None);
+
+            var readBack = new List<object>(expected.Length);
+            await foreach (Block block in connection.QueryAsync($"SELECT value FROM {table} ORDER BY id", settings: settings, cancellationToken: None))
+            {
+                for (int row = 0; row < block[0].RowCount; row++)
+                {
+                    readBack.Add(block[0].GetValue(row));
+                }
+            }
+
+            Assert.That(readBack, Is.EqualTo(expected));
+            Assert.That(connection.State, Is.EqualTo(TcpConnectionState.Ready));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
     private static uint[] RowIds(int count)
     {
         var ids = new uint[count];
