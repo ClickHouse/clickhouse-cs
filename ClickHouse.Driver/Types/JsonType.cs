@@ -480,6 +480,9 @@ internal class JsonType : ParameterizedType
             // SimpleAggregateFunction reads exactly as the type it wraps, so the value inside is
             // what decides the rendering.
             SimpleAggregateFunctionType sa => ReadJsonNode(reader, sa.UnderlyingType),
+            // Nullable decides only whether a value is present: its marker comes first, and a
+            // present value is rendered by the type it wraps.
+            NullableType nt => reader.ReadByte() > 0 ? null : ReadJsonNode(reader, nt.UnderlyingType),
             // A Dynamic or Variant value carries the type of the value itself, so the type to
             // render by is only known per value: read it off the value and dispatch again.
             // Dispatching on the static type instead reads the value whole, which loses the
@@ -636,8 +639,8 @@ internal class JsonType : ParameterizedType
             IPAddress ip => JsonValue.Create(ip.ToString()),
             ClickHouseDecimal chDec => JsonValue.Create(chDec.ToString(CultureInfo.InvariantCulture)),
             // Default: serialize complex types. SerializeToNode, not JsonValue.Create, because
-            // Create throws on an element which is an object or an array, and a composite value
-            // reaching here (a geo type, a tuple of more than seven elements) is exactly that.
+            // Create throws on an element which is an object or an array, and a value read as a
+            // collection (a QBit, which reads as an array) is exactly that.
             _ => JsonSerializer.SerializeToNode(value)
         };
     }
