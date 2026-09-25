@@ -44,6 +44,17 @@ public class PocoWriteIntegrationTests
             IColumn insert = testCase.BuildInsertColumn("value");
             string sql = $"INSERT INTO {table} (value) VALUES";
 
+            // Four of Geometry's six alternatives are two structurally identical pairs, so a gathered row of either
+            // shape surfaces a CLR type that names no single alternative and no value-level test can separate them.
+            if (testCase.ClickHouseType == "Geometry")
+            {
+                ArgumentException ambiguous = Assert.ThrowsAsync<ArgumentException>(
+                    async () => await InsertColumnAsRowsAsync(client, sql, insertOptions, insert, ElementTypeOf(insert)));
+
+                Assert.That(ambiguous.Message, Does.Contain("does not say which of them is meant"));
+                return;
+            }
+
             // Nested and composites containing it require a specialized column shape that row gathering cannot build.
             if (testCase.ClickHouseType.Contains("Nested(", StringComparison.Ordinal))
             {
