@@ -6,13 +6,80 @@ using ClickHouse.Driver.Tcp.Parameters;
 
 namespace ClickHouse.Driver.Tcp.Tests.Parameters;
 
-// The arms a per-type round-trip does not reach: types the server never sends back as themselves, the error
-// paths, and the CLR shapes that map onto one type in more than one way.
+// Covers formatter paths that per-type round trips cannot reach.
 [TestFixture]
 public class TcpParameterFormatterEdgeCaseTests
 {
     private static string Format(object value, string typeName)
         => TcpParameterFormatter.FormatSqlText(value, typeName, "p");
+
+    // Unknown type names must not be reported as value-conversion failures.
+    [TestCase("MultiPoint", TestName = "A geo name no version has")]
+    [TestCase("Object", TestName = "A name a past version had")]
+    public void FormatSqlText_TypeNameThisClientDoesNotKnow_SaysSoRatherThanBlamingTheValue(string typeName)
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Format("abc", typeName));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("is not a ClickHouse type name this client knows"));
+            Assert.That(exception.Message, Does.Contain(typeName), "shows the type as it was written");
+            Assert.That(exception.Message, Does.Contain("toTypeName"), "says how to find the name to write");
+            Assert.That(exception.Message, Does.Not.Contain("Cannot convert value"), "the value is not the problem");
+            Assert.That(exception.Message, Does.Contain("Parameter 'p'"), "names the parameter");
+        });
+    }
+
+    // Let the server decide whether it accepts the caller's casing.
+    [Test]
+    public void FormatSqlText_TypeNameInAnyCase_FormatsRatherThanRefusing()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format("abc", "string"), Is.EqualTo("abc"));
+            Assert.That(Format(new[] { "abc" }, "array(string)"), Is.EqualTo("['abc']"));
+            Assert.That(Format(1L, "bigint"), Is.EqualTo("1"));
+        });
+    }
+
+    [Test]
+    public void FormatSqlText_KnownTypeAValueDoesNotFit_BlamesTheValue()
+    {
+        // Array is known, so this failure must identify the incompatible value.
+        var exception = Assert.Throws<ArgumentException>(() => Format(5, "Array(String)"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("Cannot convert value of type 'System.Int32' (5)"));
+            Assert.That(exception.Message, Does.Contain("Array(String)"));
+        });
+    }
+
+    [Test]
+    public void FormatSqlText_AggregateFunction_SaysNoValueSpellsAState()
+    {
+        // The server rejects a parameter of this type as well (Code 33 on 26.6), so there is nothing to write.
+        var exception = Assert.Throws<ArgumentException>(() => Format("abc", "AggregateFunction(sum, UInt64)"));
+
+        Assert.That(exception.Message, Does.Contain("serialized aggregate states").And.Contain("the server rejects one too"));
+    }
+
+    // These types derive their layout from an inner type or the value itself.
+    [TestCase("SimpleAggregateFunction(sum, UInt64)", 5, ExpectedResult = "5", TestName = "SimpleAggregateFunction writes as its inner type")]
+    [TestCase("Dynamic", 5, ExpectedResult = "5", TestName = "Dynamic writes an integer")]
+    [TestCase("Dynamic", "x", ExpectedResult = "x", TestName = "Dynamic writes a string")]
+    [TestCase("Geometry", null, ExpectedResult = "(10,20)", TestName = "Geometry writes a point")]
+    public string FormatSqlText_TypeThatTakesItsLayoutFromTheValue_WritesTheValuesOwnText(string typeName, object value)
+        => Format(value ?? (10.0, 20.0), typeName);
+
+    [Test]
+    public void FormatSqlText_GeometryHoldingAnArrayOfPoints_WritesTheShapeTextTheServerParses()
+    {
+        // Ring and LineString produce the same text for this value.
+        Assert.That(
+            Format(new[] { (0.0, 0.0), (1.0, 1.0), (0.0, 1.0) }, "Geometry"),
+            Is.EqualTo("[(0,0),(1,1),(0,1)]"));
+    }
 
     [Test]
     public void FormatSqlText_NothingType_ProducesTheNullMarker()
@@ -61,6 +128,66 @@ public class TcpParameterFormatterEdgeCaseTests
             Assert.That(Format(-new TimeSpan(0, 1, 2, 3, 123), "Time64(3)"), Is.EqualTo("-1:02:03.123"));
         });
     }
+
+    // A TimeOnly reaches a different arm than a TimeSpan, but both print as one clock reading.
+    [TestCase("Time", ExpectedResult = "1:02:03", TestName = "Time from a TimeOnly")]
+    [TestCase("Time64(3)", ExpectedResult = "1:02:03.123", TestName = "Time64 from a TimeOnly")]
+    public string FormatSqlText_TimeFromATimeOnly_UsesTheClockReading(string typeName)
+        => Format(new TimeOnly(1, 2, 3, 123), typeName);
+
+    // Match the HTTP driver's midpoint-to-even rounding at the declared scale.
+    [TestCase("Time64(1)", 150, ExpectedResult = "1:02:03.2", TestName = "A midpoint rounds to even, upward")]
+    [TestCase("Time64(1)", 250, ExpectedResult = "1:02:03.2", TestName = "A midpoint rounds to even, downward")]
+    [TestCase("Time64(1)", 149, ExpectedResult = "1:02:03.1", TestName = "Below the midpoint")]
+    [TestCase("Time64(2)", 999, ExpectedResult = "1:02:04.00", TestName = "Rounding carries into the second")]
+    [TestCase("Time", 600, ExpectedResult = "1:02:04", TestName = "Rounding carries into the second at scale 0")]
+    public string FormatSqlText_TimeOnlyFinerThanTheScale_IsRoundedToIt(string typeName, int milliseconds)
+        => Format(new TimeOnly(1, 2, 3, milliseconds), typeName);
+
+    [Test]
+    public void FormatSqlText_TimeOnlyAtTheEndOfTheDay_KeepsEveryTick()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format(TimeOnly.MaxValue, "Time64(7)"), Is.EqualTo("23:59:59.9999999"));
+            Assert.That(Format(TimeOnly.MaxValue, "Time64(9)"), Is.EqualTo("23:59:59.999999900"));
+            Assert.That(Format(TimeOnly.MinValue, "Time64(3)"), Is.EqualTo("0:00:00.000"));
+
+            // The final half-second rounds to the legal Time value 24:00:00.
+            Assert.That(Format(TimeOnly.MaxValue, "Time"), Is.EqualTo("24:00:00"), "rounded, not clamped to the day");
+            Assert.That(Format(TimeOnly.MaxValue, "Time64(3)"), Is.EqualTo("23:59:60.000"));
+        });
+    }
+
+    // Variant matching must canonicalize aliases and casing before selecting an alternative.
+    [TestCase("Variant(BIGINT, String)", ExpectedResult = "7", TestName = "An alias alternative")]
+    [TestCase("Variant(bigint, String)", ExpectedResult = "7", TestName = "An alias alternative in another case")]
+    [TestCase("Variant(int64, String)", ExpectedResult = "7", TestName = "A canonical alternative in another case")]
+    [TestCase("Variant(String, BIGINT)", ExpectedResult = "7", TestName = "An alias alternative, second")]
+    public string FormatSqlText_VariantAlternativeSpelledAsAnAlias_TakesTheValue(string typeName)
+        => Format(7L, typeName);
+
+    [Test]
+    public void FormatSqlText_VariantAlternativeWithAnAliasInsideAComposite_TakesTheValue()
+        => Assert.That(Format(new[] { 7L, 8L }, "Variant(Array(BIGINT), String)"), Is.EqualTo("[7,8]"));
+
+    // Resolving the alias must not make every alternative match: an Int64 still fits neither of these.
+    [Test]
+    public void FormatSqlText_VariantWhoseAliasedAlternativesRefuseTheValue_IsStillRefused()
+        => Assert.Throws<ArgumentException>(() => Format(7L, "Variant(INET4, String)"));
+
+    // Map rows read back as ordered KeyValuePair sequences, not dictionaries.
+    [Test]
+    public void FormatSqlText_DynamicFromTheMapReadShape_FormatsAMapLiteral()
+    {
+        var pairs = new[] { new KeyValuePair<string, int>("a", 1), new KeyValuePair<string, int>("b", 2) };
+
+        Assert.That(Format(pairs, "Dynamic"), Is.EqualTo("{'a' : 1,'b' : 2}"));
+    }
+
+    [Test]
+    public void FormatSqlText_DynamicFromAnEmptyPairSequence_FormatsAnEmptyMap()
+        => Assert.That(Format(Array.Empty<KeyValuePair<string, int>>(), "Dynamic"), Is.EqualTo("{}"));
 
     [Test]
     public void FormatSqlText_NestedSingleRow_FormatsAsOneTuple()
@@ -203,8 +330,7 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
-    // The suggestion has to stay valid for the type it is about: DateTime64('UTC') is not a type, and a
-    // suggestion naming another scale would change the precision the caller declared.
+    // Suggested declarations must preserve a DateTime64 scale while adding a timezone.
     [TestCase("DateTime64(3)", "DateTime64(3, 'UTC')", TestName = "Scale three")]
     [TestCase("DateTime64(9)", "DateTime64(9, 'UTC')", TestName = "Scale nine")]
     [TestCase("DateTime64(0)", "DateTime64(0, 'UTC')", TestName = "Scale zero")]
@@ -236,8 +362,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_VariantHoldingAByteArray_ChecksTheArrayElementType()
     {
-        // Matching an Array alternative by name alone let Array(String) take the bytes and print them as
-        // quoted decimals, which the server stores without complaint because it is a valid Array(String).
+        // Byte arrays must not match Array(String) by outer type name alone.
         Assert.That(Format(new byte[] { 65, 66 }, "Variant(Array(String), Array(UInt8))"), Is.EqualTo("[65,66]"));
     }
 
@@ -252,8 +377,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_VariantHoldingAPointDeclaredLast_StillPicksTheGeoAlternative()
     {
-        // A geo name stands for a Tuple/Array shape, and no CLR type infers to "Point", so matching has to
-        // compare shapes. Declaration order must not decide it either.
+        // Geometry alternatives match their underlying CLR shape.
         Assert.That(Format((1.5, 2.5), "Variant(String, Point)"), Is.EqualTo("(1.5,2.5)"));
     }
 
@@ -271,8 +395,7 @@ public class TcpParameterFormatterEdgeCaseTests
         Assert.That(exception.Message, Does.Contain("no alternative"));
     }
 
-    // Accepts saw no byte payload in a ReadOnlyMemory, so a text alternative refused it. With a JSON
-    // alternative present the fallback took it instead and serialized it as base64.
+    // ReadOnlyMemory<byte> must select the text alternative instead of JSON.
     [TestCase("Variant(String, Int64)", ExpectedResult = "AB", TestName = "Variant holding a ReadOnlyMemory")]
     [TestCase("Variant(Int64, FixedString(2))", ExpectedResult = "AB", TestName = "Variant with only a FixedString alternative")]
     [TestCase("Variant(String, JSON)", ExpectedResult = "AB", TestName = "Variant preferring String to the JSON fallback")]
@@ -316,7 +439,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_Time64AtAMidpoint_RoundsToEven()
     {
-        // Explicit pre-rounding is required because decimal formatting rounds midpoints away from zero.
+        // Pre-round because decimal formatting otherwise rounds midpoints away from zero.
         Assert.Multiple(() =>
         {
             Assert.That(Format(TimeSpan.FromSeconds(0.5), "Time64(0)"), Is.EqualTo("0:00:00"));
@@ -357,6 +480,30 @@ public class TcpParameterFormatterEdgeCaseTests
     }
 
     [Test]
+    public void FormatSqlText_VariantWithATimeAlternative_PicksIt()
+    {
+        // TimeSpan and TimeOnly must both match Time alternatives.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format(new TimeSpan(1, 1, 1), "Variant(Time, String)"), Is.EqualTo("1:01:01"));
+            Assert.That(Format(new TimeOnly(1, 1, 1), "Variant(Time, String)"), Is.EqualTo("1:01:01"));
+        });
+    }
+
+    [Test]
+    public void FormatSqlText_VariantOfTwoTimeAlternatives_PicksTheFirstThatAccepts()
+    {
+        // When several alternatives accept a value, declaration order wins.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Format(new TimeSpan(0, 1, 1, 1, 500), "Variant(Time, Time64(3))"), Is.EqualTo("1:01:02"));
+            Assert.That(
+                Format(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), "Variant(Date, DateTime64(3))"),
+                Is.EqualTo("2024-01-02"));
+        });
+    }
+
+    [Test]
     public void FormatSqlText_VariantWhereNoArrayElementTypeFits_Throws()
     {
         var exception = Assert.Throws<ArgumentException>(
@@ -375,7 +522,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_VariantHoldingKeyValuePairs_PicksTheMapAlternative()
     {
-        // A pair sequence is also an IEnumerable, so without its own arm the Array alternative would claim it.
+        // A pair sequence must match Map before the general Array case.
         KeyValuePair<string, int>[] pairs = [new("a", 1)];
 
         Assert.That(Format(pairs, "Variant(Array(String), Map(String, Int32))"), Is.EqualTo("{'a' : 1}"));
@@ -412,15 +559,13 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_VariantHoldingASequenceWhereNoAlternativeIsAnArray_Throws()
     {
-        // The sequence never reaches the recursive Array arm, so the fallback name comparison is what has to
-        // reject it.
+        // Reject a sequence whose inferred element type differs from the alternative.
         var exception = Assert.Throws<ArgumentException>(() => Format(new[] { 1, 2 }, "Variant(Int64, String)"));
 
         Assert.That(exception.Message, Does.Contain("no alternative"));
     }
 
-    // A string is a sequence of chars, so a container arm that takes any IEnumerable sends one element per
-    // character and the server stores it without complaint. Every container arm has to refuse it instead.
+    // Container alternatives must not treat strings as character sequences.
     [TestCase("Array(String)", TestName = "Bound as an Array")]
     [TestCase("QBit(Float32, 3)", TestName = "Bound as a QBit")]
     [TestCase("Nested(a String)", TestName = "Bound as Nested")]
@@ -492,9 +637,7 @@ public class TcpParameterFormatterEdgeCaseTests
         });
     }
 
-    // A BFloat16 holds the top 16 bits of a 32-bit float, so only a float reaches the server intact. The
-    // server refuses none of these: it narrows a wider value with no error, and turns a value outside the
-    // float range into an infinity, which is why the client is the layer that has to reject them.
+    // Only Single can be narrowed to BFloat16 without an implicit conversion or overflow.
     private static IEnumerable<TestCaseData> BFloat16RejectionCases()
     {
         yield return new TestCaseData(1.5d, "BFloat16").SetName("A double");
@@ -522,8 +665,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [Test]
     public void FormatSqlText_VariantHoldingADouble_KeepsItOutOfTheBFloat16Alternative()
     {
-        // Alternative matching has to refuse what the formatter refuses, or the Variant picks an arm that
-        // then throws for a value another arm would have taken.
+        // Variant matching must apply the same BFloat16 restrictions as formatting.
         Assert.Multiple(() =>
         {
             Assert.That(Format(1.5d, "Variant(BFloat16, Float64)"), Is.EqualTo("1.5"));
@@ -537,8 +679,7 @@ public class TcpParameterFormatterEdgeCaseTests
     [TestCase("Array(Int32)", "shallower", TestName = "Declared shallower than the CLR rank")]
     public void FormatSqlText_MultidimensionalArrayOfTheWrongDepth_SaysWhichWayToChangeIt(string typeName, string suggestion)
     {
-        // Without this check the rank-3 case would emit three bracket levels for a two-level type and only the
-        // server would notice.
+        // Reject array ranks that do not match the declared nesting depth.
         var exception = Assert.Throws<ArgumentException>(() => Format(new int[,] { { 1, 2 }, { 3, 4 } }, typeName));
 
         Assert.That(exception.Message, Does.Contain(suggestion));
@@ -581,6 +722,7 @@ public class ParameterTypeInferenceTests
         yield return new TestCaseData(Guid.Empty).Returns("UUID").SetName("Guid");
         yield return new TestCaseData(new DateOnly(2024, 1, 2)).Returns("Date").SetName("DateOnly");
         yield return new TestCaseData(TimeSpan.Zero).Returns("Time64(9)").SetName("TimeSpan");
+        yield return new TestCaseData(new TimeOnly(1, 2, 3)).Returns("Time64(9)").SetName("TimeOnly");
         yield return new TestCaseData(new DateTime(2024, 1, 2)).Returns("DateTime64(7, 'UTC')").SetName("DateTime");
         yield return new TestCaseData(IPAddress.Parse("1.2.3.4")).Returns("IPv4").SetName("IPv4 address");
         yield return new TestCaseData(IPAddress.Parse("::1")).Returns("IPv6").SetName("IPv6 address");

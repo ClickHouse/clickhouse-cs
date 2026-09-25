@@ -28,9 +28,18 @@ internal sealed class ColumnCodecRegistry
 
     private readonly Dictionary<string, CodecFactory> byName;
 
+    /// <summary>Maps case-insensitive names to their registered spelling.</summary>
+    private readonly Dictionary<string, string> canonicalByAnyCase;
+
     private ColumnCodecRegistry(Dictionary<string, CodecFactory> byName)
     {
         this.byName = byName;
+        canonicalByAnyCase = new Dictionary<string, string>(byName.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (string name in byName.Keys)
+        {
+            canonicalByAnyCase[name] = name;
+        }
+
         Projections = new ColumnReadProjections(this);
     }
 
@@ -39,17 +48,52 @@ internal sealed class ColumnCodecRegistry
     /// </summary>
     public ColumnReadProjections Projections { get; }
 
+    /// <summary>Whether a codec is registered for a base type name, i.e. whether this client knows the type.</summary>
+    /// <param name="name">The base type name, in any case and under any of its aliases.</param>
+    /// <returns>True when the name is one this client resolves.</returns>
+    public bool KnowsTypeName(string name) => TryCanonicalName(name, out _);
+
+    /// <summary>
+    /// Resolves an alias or case variant to its registered spelling.
+    /// </summary>
+    /// <param name="name">The base type name as the caller wrote it.</param>
+    /// <param name="canonical">The registered spelling, or null when no codec matches the name.</param>
+    /// <returns>True when a codec is registered under some spelling of the name.</returns>
+    public bool TryCanonicalName(string name, out string canonical)
+    {
+        if (name is not null && byName.ContainsKey(name))
+        {
+            canonical = name;
+            return true;
+        }
+
+        if (TypeAliases.TryCanonical(name, out canonical) && byName.ContainsKey(canonical))
+        {
+            return true;
+        }
+
+        return canonicalByAnyCase.TryGetValue(name ?? string.Empty, out canonical);
+    }
+
     /// <summary>Resolves the codec for a ClickHouse type string.</summary>
     /// <param name="typeString">The type string from a column header (e.g. <c>UInt64</c>, <c>DateTime('UTC')</c>).</param>
     /// <param name="context">The resolution context (server timezone, etc.); use the sample block's context when
     /// resolving an INSERT target, or <see cref="ResolveContext.ForWrite"/> when no server context exists.</param>
     /// <returns>The codec for that type.</returns>
     /// <exception cref="FormatException"><paramref name="typeString"/> is malformed.</exception>
-    /// <exception cref="NotSupportedException">The type is well-formed but not yet supported by this client.</exception>
+    /// <exception cref="NotSupportedException">The type is well-formed but this client has no codec for it.</exception>
     public IColumnCodec Resolve(string typeString, in ResolveContext context)
     {
         TypeNode node = TypeParser.Parse(typeString);
-        return ResolveNode(node, in context);
+        try
+        {
+            return ResolveNode(node, in context);
+        }
+        catch (NotSupportedException refusal) when (!refusal.Message.Contains($"'{node}'", StringComparison.Ordinal))
+        {
+            // Add the caller's outer type when a nested codec reports only its unsupported child.
+            throw new NotSupportedException($"{refusal.Message} It is inside the column type '{node}'.", refusal);
+        }
     }
 
     /// <summary>
@@ -59,7 +103,7 @@ internal sealed class ColumnCodecRegistry
     /// <param name="node">The parsed type node.</param>
     /// <param name="context">The resolution context (server timezone, etc.).</param>
     /// <returns>The codec for that type.</returns>
-    /// <exception cref="NotSupportedException">The type is well-formed but not yet supported by this client.</exception>
+    /// <exception cref="NotSupportedException">The type is well-formed but this client has no codec for it.</exception>
     public IColumnCodec ResolveNode(TypeNode node, in ResolveContext context)
     {
         if (byName.TryGetValue(node.Name, out CodecFactory factory))
@@ -67,7 +111,14 @@ internal sealed class ColumnCodecRegistry
             return factory(node, in context, this);
         }
 
-        throw new NotSupportedException($"ClickHouse type '{node}' is not supported by this client yet.");
+        // Headers are canonical; this path handles aliases and casing supplied by callers, including child types.
+        if (TryCanonicalName(node.Name, out string canonical))
+        {
+            return byName[canonical](new TypeNode(canonical, node.Arguments, node.HasArgumentList), in context, this);
+        }
+
+        // Do not imply that every unknown type will become supported.
+        throw new NotSupportedException($"ClickHouse type '{node}' is not supported by this client.");
     }
 
     private static ColumnCodecRegistry CreateDefault()
@@ -130,6 +181,9 @@ internal sealed class ColumnCodecRegistry
         // Enum aliases: raw underlying Int8/Int16 ordinal; the label map is parsed and retained by the codec.
         AddFactory("Enum8", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum8ColumnCodec.Create(node));
         AddFactory("Enum16", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum16ColumnCodec.Create(node));
+
+        // Bare Enum is accepted only from caller-supplied type declarations; headers include the width.
+        AddFactory("Enum", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => EnumColumnCodec.Create(node));
 
         // Decimal(P, S) and the fixed-width aliases share the width-by-precision codec factory.
         foreach (string name in new[] { "Decimal", "Decimal32", "Decimal64", "Decimal128", "Decimal256" })

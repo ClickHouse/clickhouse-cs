@@ -67,9 +67,7 @@ public class ClickHouseTcpExceptionIntegrationTests
     }
 
     // A column type the client cannot resolve arrives as a type name in the block header, so the refusal is a
-    // disagreement with the server and belongs under the same base as the rest. AggregateFunction is the one
-    // type a real server produces that the client deliberately declines, so it is the only way to reach this
-    // path without hand-building a block.
+    // Use a real unsupported server type to exercise codec-resolution failure.
     [Test]
     public async Task QueryAsync_ColumnTypeTheClientCannotRead_ReportsAProtocolFailureKeepingTheHint()
     {
@@ -84,6 +82,27 @@ public class ClickHouseTcpExceptionIntegrationTests
             Assert.That(thrown.Message, Does.Contain("'s'"), "the failing column is named.");
             Assert.That(thrown.Message, Does.Contain("sumMerge(column)"), "the actionable hint survives the wrapping.");
             Assert.That(thrown.InnerException, Is.InstanceOf<NotSupportedException>());
+        });
+    }
+
+    // A wide Tuple exceeds the typed column shapes; the follow-up query verifies permit recovery.
+    [Test]
+    public async Task QueryAsync_TupleWiderThanTheClientReads_ReportsAProtocolFailureAndKeepsThePoolUsable()
+    {
+        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { MaxPoolSize = 1 });
+
+        var thrown = Assert.ThrowsAsync<ClickHouseTcpProtocolException>(
+            async () => await client.QueryAsync("SELECT tuple(1, 2, 3, 4, 5, 6, 7, 8) AS t").ToListAsync());
+
+        object next = await client.ExecuteScalarAsync("SELECT toUInt64(7)", cancellationToken: None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.InstanceOf<ClickHouseTcpException>());
+            Assert.That(thrown.Message, Does.Contain("'t'"), "the failing column is named.");
+            Assert.That(thrown.Message, Does.Contain("at most 7"), "and the limit, so a caller knows what it has to change.");
+            Assert.That(thrown.InnerException, Is.InstanceOf<NotSupportedException>());
+            Assert.That(next, Is.EqualTo(7UL), "the only pool slot came back.");
         });
     }
 

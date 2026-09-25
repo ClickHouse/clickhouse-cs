@@ -62,6 +62,72 @@ public class TypeParserTests
         });
     }
 
+    [TestCase(",")]
+    [TestCase("(")]
+    [TestCase(")")]
+    [TestCase(" ")]
+    public void Parse_BacktickedIdentifierWithBreakCharacter_IsOneArgument(string inside)
+    {
+        // Structural characters inside backticks belong to the identifier.
+        TypeNode node = TypeParser.Parse($"JSON(`a{inside}b` Int64)");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.Name, Is.EqualTo("JSON"));
+            Assert.That(node.Arguments.Select(a => a.Name), Is.EqualTo(new[] { $"`a{inside}b` Int64" }));
+        });
+    }
+
+    [TestCase("JSON(`a,b` Int64)")]
+    [TestCase("Tuple(`a b` Int64, c String)")]
+    [TestCase("Nested(`a(b` UInt8)")]
+    [TestCase(@"Tuple(`a\`b` Int8)")]
+    [TestCase(@"Tuple(`a\nb` Int8)")]
+    public void Parse_BacktickedIdentifier_RoundTripsThroughToString(string type)
+    {
+        // Preserve the server's quoted spelling when rebuilding the type name.
+        Assert.That(TypeParser.Parse(type).ToString(), Is.EqualTo(type));
+    }
+
+    [Test]
+    public void Parse_DoubledBacktick_ClosesAtTheFinalBacktick()
+    {
+        // The server accepts the doubled form on input, though it prints the backslash form.
+        TypeNode node = TypeParser.Parse("Tuple(`a``b` Int8)");
+        Assert.That(node.Arguments.Single().Name, Is.EqualTo("`a``b` Int8"));
+    }
+
+    [Test]
+    public void Parse_EmptyQuotedLabel_ClosesTheSpan()
+    {
+        // Two quotes form an empty label, not an escaped quote.
+        TypeNode node = TypeParser.Parse("Enum8('' = 1)");
+        Assert.That(node.Arguments.Single().Name, Is.EqualTo("'' = 1"));
+    }
+
+    [TestCase("Array( Array(Int32) )", "Array(Array(Int32))")]
+    [TestCase("Tuple(a UInt8, b Tuple(c UInt8) )", "Tuple(a UInt8, b Tuple(c UInt8))")]
+    [TestCase("Map( String , UInt64 )", "Map(String, UInt64)")]
+    [TestCase("Array(Int32) ", "Array(Int32)")]
+    public void Parse_WhitespaceBetweenStructuralCharacters_ParsesLikeTheCompactSpelling(string type, string expected)
+    {
+        // Ignore whitespace between structural tokens.
+        Assert.That(TypeParser.Parse(type).ToString(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Parse_SpacedEmptyArgumentList_IsTheZeroElementNode()
+    {
+        TypeNode node = TypeParser.Parse("Tuple( )");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.Arguments, Is.Empty);
+            Assert.That(node.HasArgumentList, Is.True);
+            Assert.That(node.ToString(), Is.EqualTo("Tuple()"));
+        });
+    }
+
     [Test]
     public void Parse_NestedType_DoesNotSplitInsideNestedParens()
     {
@@ -154,6 +220,8 @@ public class TypeParserTests
     [TestCase("Array(String)junk")]
     [TestCase("Enum8('a")]
     [TestCase("DateTime('UTC")]
+    [TestCase("Tuple(`a b Int64)")]
+    [TestCase("Tuple( , )")]
     public void Parse_Malformed_ThrowsFormat(string type)
         => Assert.Throws<FormatException>(() => TypeParser.Parse(type));
 }

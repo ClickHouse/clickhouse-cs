@@ -32,8 +32,7 @@ public class ColumnCodecRegistryTests
         Assert.That(codec.TypeName, Is.EqualTo("DateTime('UTC')"));
     }
 
-    // A parseable type the registry has no factory for. Deliberately not a real ClickHouse type: every real one this
-    // stood for has since been implemented, and the fallback itself is what the test is about.
+    // Use a parseable synthetic type to reach the unsupported-type fallback.
     [Test]
     public void Resolve_UnsupportedButWellFormedType_ThrowsNotSupported()
         => Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve("NotAType(UInt8)", default));
@@ -42,9 +41,7 @@ public class ColumnCodecRegistryTests
     public void Resolve_MalformedType_ThrowsFormat()
         => Assert.Throws<FormatException>(() => ColumnCodecRegistry.Default.Resolve(string.Empty, default));
 
-    // The geo aliases name structures the client already encodes. The round-trip corpus proves the values; what
-    // only a resolution test reaches is that the alias survives as the codec's own name — a codec reporting
-    // "Tuple(Float64, Float64)" would still round-trip, and would still misname the type in every diagnostic.
+    // Geo codecs must retain their alias names for diagnostics.
     [TestCase("Point", typeof((double, double)))]
     [TestCase("Ring", typeof((double, double)[]))]
     [TestCase("LineString", typeof((double, double)[]))]
@@ -61,10 +58,7 @@ public class ColumnCodecRegistryTests
         });
     }
 
-    // Geometry expands to a Variant the header never spells out. The client applies its own alternative order to
-    // the write and to the read, so no round trip can see a transposition of Ring with LineString or Polygon with
-    // MultiLineString: the same wrong order on both sides returns the value intact, and each pair is
-    // byte-identical so the server never objects. GeometryIntegrationTests pins the order by asking the server.
+    // Resolution pins Geometry's alternative order; a client-only round trip cannot detect transposition.
     [Test]
     public void Resolve_Geometry_KeepsTheAliasNameAndSurfacesTheVariantType()
     {
@@ -77,12 +71,8 @@ public class ColumnCodecRegistryTests
     }
 
 
-    // SimpleAggregateFunction encodes as its inner type, so it must resolve to the inner codec *itself* rather than
-    // to a renaming wrapper — which the corpus cannot tell apart, since a wrapper would round-trip identically.
-    // The aliased inner additionally pins that the inner goes back through the registry: a resolver that only
-    // handled plain type names would fail there and nowhere else. The composite inners pin that the whole parsed
-    // node reaches the registry with its own arguments, not just its name — including when the function itself is
-    // parameterized, which parses as a node with arguments of its own and must not be read as a second inner type.
+    // SimpleAggregateFunction must resolve directly to its fully parsed inner codec, including aliases,
+    // composites, and parameterized functions.
     [TestCase("SimpleAggregateFunction(sum, UInt64)", "UInt64")]
     [TestCase("SimpleAggregateFunction(anyLast, Point)", "Point")]
     [TestCase("SimpleAggregateFunction(groupArrayArray, Array(UInt64))", "Array(UInt64)")]
@@ -99,12 +89,12 @@ public class ColumnCodecRegistryTests
     public void Resolve_SimpleAggregateFunctionWithoutExactlyOneInnerType_ThrowsFormat(string type)
         => Assert.Throws<FormatException>(() => ColumnCodecRegistry.Default.Resolve(type, default));
 
-    // AggregateFunction holds the function's own intermediate state, which no generic codec decodes. The hint has to
-    // be a query that actually runs: the combinator attaches to the bare name, and a parameterized function keeps its
-    // parameters in their own list ahead of the column. "quantiles(0.5, 0.9)Merge" is not a function, and a bare
-    // "quantilesMerge(column)" is rejected by the server for wanting its parameters — verified on 26.6.
+    // AggregateFunction is unsupported, but diagnostics must suggest valid Merge syntax. A leading integer is a
+    // serialization version; parameterized functions keep their parameters on the Merge combinator.
     [TestCase("AggregateFunction(sum, UInt64)", "sumMerge(column)")]
     [TestCase("AggregateFunction(quantiles(0.5, 0.9), UInt64)", "quantilesMerge(0.5, 0.9)(column)")]
+    [TestCase("AggregateFunction(1, sumMap, Array(UInt64), Array(UInt64))", "sumMapMerge(column)")]
+    [TestCase("AggregateFunction(1, sumMapFiltered([1, 2]), Array(UInt64), Array(UInt64))", "sumMapFilteredMerge([1, 2])(column)")]
     public void Resolve_AggregateFunction_ThrowsSuggestingAMergeQueryThatRuns(string type, string expectedHint)
     {
         var exception = Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve(type, default));
@@ -112,6 +102,131 @@ public class ColumnCodecRegistryTests
     }
 
     [Test]
+    public void Resolve_AggregateFunctionWithASerializationVersion_NamesTheFunctionAndNotTheVersion()
+    {
+        var exception = Assert.Throws<NotSupportedException>(
+            () => ColumnCodecRegistry.Default.Resolve("AggregateFunction(1, sumMap, Array(UInt64), Array(UInt64))", default));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("'sumMap' aggregate function"));
+            Assert.That(exception.Message, Does.Not.Contain("'1' aggregate function"));
+        });
+    }
+
+    [Test]
+    public void Resolve_UnsupportedChildType_NamesTheOuterTypeAsWell()
+    {
+        // Add the outer type because the unsupported child alone does not identify the caller's declaration.
+        var exception = Assert.Throws<NotSupportedException>(
+            () => ColumnCodecRegistry.Default.Resolve("Map(String, Array(MultiPoint))", default));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("'MultiPoint'"));
+            Assert.That(exception.Message, Does.Contain("'Map(String, Array(MultiPoint))'"));
+            Assert.That(exception.Message, Does.Not.Contain("yet"));
+            Assert.That(exception.InnerException, Is.TypeOf<NotSupportedException>(), "the child's own refusal is kept");
+        });
+    }
+
+    [Test]
+    public void Resolve_UnsupportedTopLevelType_NamesItOnce()
+    {
+        // The type the caller wrote is the type that failed, so there is no outer type to add.
+        var exception = Assert.Throws<NotSupportedException>(() => ColumnCodecRegistry.Default.Resolve("MultiPoint", default));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain("'MultiPoint'").And.Not.Contain("inside"));
+            Assert.That(exception.InnerException, Is.Null);
+        });
+    }
+
+    // Alias resolution stamps the codec with the canonical name.
+    [TestCase("VARCHAR", "String")]
+    [TestCase("nchar varying(456)", "String")]
+    [TestCase("BIGINT", "Int64")]
+    [TestCase("TINYINT UNSIGNED", "UInt8")]
+    [TestCase("DOUBLE PRECISION", "Float64")]
+    [TestCase("BINARY(10)", "FixedString(10)")]
+    [TestCase("DEC(4, 2)", "Decimal(4, 2)")]
+    [TestCase("TIMESTAMP", "DateTime")]
+    [TestCase("INET4", "IPv4")]
+    [TestCase("Boolean", "Bool")]
+    [TestCase("GEOMETRY", "Geometry")]
+    [TestCase("DateTime32", "DateTime")]
+    [TestCase("datetime64(3)", "DateTime64(3)")]
+    [TestCase("json", "JSON")]
+    [TestCase("DATE", "Date")]
+    [TestCase("time64(9)", "Time64(9)")]
+    public void Resolve_AliasOrCaseVariant_ResolvesToTheCanonicalType(string written, string canonical)
+        => Assert.That(ColumnCodecRegistry.Default.Resolve(written, ResolveContext.ForWrite).TypeName, Is.EqualTo(canonical));
+
+    [Test]
+    public void Resolve_AliasInsideAComposite_ResolvesThroughTheChildNodes()
+    {
+        // Child nodes resolve through the same alias registry.
+        IColumnCodec written = ColumnCodecRegistry.Default.Resolve(
+            "Array(Map(String, Tuple(Int32, BIGINT)))",
+            ResolveContext.ForWrite);
+        IColumnCodec canonical = ColumnCodecRegistry.Default.Resolve(
+            "Array(Map(String, Tuple(Int32, Int64)))",
+            ResolveContext.ForWrite);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written.ElementType, Is.EqualTo(canonical.ElementType));
+
+            // Canonicalize only the aliased node, not the entire type tree.
+            Assert.That(written.TypeName, Is.EqualTo("Array(Map(String, Tuple(Int32, BIGINT)))"));
+        });
+    }
+
+    // Resolve registered names case-insensitively and stamp only that node with the registered spelling.
+    [TestCase("string", "String")]
+    [TestCase("int64", "Int64")]
+    [TestCase("array(uint8)", "Array(uint8)")]
+    [TestCase("nullable(string)", "Nullable(string)")]
+    [TestCase("geometry", "Geometry")]
+    [TestCase("VARIANT(Int64, String)", "Variant(Int64, String)")]
+    public void Resolve_AnyCaseOfAKnownName_Resolves(string written, string expectedTypeName)
+        => Assert.That(
+            ColumnCodecRegistry.Default.Resolve(written, ResolveContext.ForWrite).TypeName,
+            Is.EqualTo(expectedTypeName));
+
+    [Test]
     public void Resolve_AggregateFunctionNamingNoFunction_ThrowsFormat()
         => Assert.Throws<FormatException>(() => ColumnCodecRegistry.Default.Resolve("AggregateFunction()", default));
+
+    // A bare Enum uses Enum8 when all ordinals fit, otherwise Enum16.
+    [TestCase("Enum('A' = 1, 'B' = 2)", "Enum8('A' = 1, 'B' = 2)")]
+    [TestCase("Enum('A' = -128, 'B' = 127)", "Enum8('A' = -128, 'B' = 127)")]
+    [TestCase("Enum('A' = 1, 'B' = 200)", "Enum16('A' = 1, 'B' = 200)")]
+    [TestCase("Enum('A' = -129)", "Enum16('A' = -129)")]
+    [TestCase("enum('a' = 1)", "Enum8('a' = 1)")]
+    public void Resolve_BareEnum_PicksTheWidthTheServerWould(string written, string expectedTypeName)
+        => Assert.That(ColumnCodecRegistry.Default.Resolve(written, ResolveContext.ForWrite).TypeName, Is.EqualTo(expectedTypeName));
+
+    [Test]
+    public void Resolve_BareEnumDeclaringNoMembers_ThrowsFormat()
+        => Assert.Throws<FormatException>(() => ColumnCodecRegistry.Default.Resolve("Enum()", ResolveContext.ForWrite));
+
+    /// <summary>
+    /// Verifies the exception type for valid server forms the client intentionally does not support.
+    /// </summary>
+    [TestCase("Enum8('a', 'b')", typeof(FormatException), TestName = "Enum members with implicit ordinals")]
+    [TestCase("DateTime64", typeof(FormatException), TestName = "DateTime64 with no scale, which the server defaults to 3")]
+    [TestCase("Decimal", typeof(FormatException), TestName = "Decimal with no precision, which the server defaults to (10, 0)")]
+    [TestCase("Decimal(4)", typeof(FormatException), TestName = "Decimal with no scale, which the server defaults to 0")]
+    [TestCase("Tuple(UInt8,)", typeof(FormatException), TestName = "A trailing comma")]
+    [TestCase("Array(/* c */ String)", typeof(NotSupportedException), TestName = "A comment inside a type")]
+    [TestCase("`Int64`", typeof(NotSupportedException), TestName = "A backticked type name")]
+    [TestCase("\"String\"", typeof(NotSupportedException), TestName = "A double-quoted type name")]
+    [TestCase("INT(10) UNSIGNED", typeof(FormatException), TestName = "A trailing word after the arguments")]
+    public void Resolve_FormTheServerAcceptsAndThisClientDoesNot_RefusesWithTheTypeThatSaysWhy(string written, Type refusal)
+        => Assert.That(
+            Assert.Throws(refusal, () => ColumnCodecRegistry.Default.Resolve(written, ResolveContext.ForWrite)).Message,
+            Does.Contain(written),
+            "a refusal that does not quote what was written leaves the caller nothing to search for");
 }

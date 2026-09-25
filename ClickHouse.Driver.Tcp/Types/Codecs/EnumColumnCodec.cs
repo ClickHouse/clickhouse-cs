@@ -96,7 +96,7 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
 
         foreach (TypeNode argument in node.Arguments)
         {
-            (string label, long ordinal) = ParseMember(argument.Name, node);
+            (string label, long ordinal) = EnumColumnCodec.ParseMember(argument.Name, node);
             T value = parseOrdinal(ordinal, node.Name);
             if (!labelToOrdinal.TryAdd(label, value))
             {
@@ -195,47 +195,48 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
         => label is not null && LabelToOrdinal.TryGetValue(label, out T ordinal)
             ? ordinal
             : throw members.NoSuchLabel(label, nameof(label));
+}
+
+/// <summary>Creates bare enums and parses enum members.</summary>
+internal static class EnumColumnCodec
+{
+    /// <summary>Builds the codec for a bare <c>Enum</c>, whose width comes from the declared ordinals.</summary>
+    /// <param name="node">The parsed <c>Enum</c> type node.</param>
+    /// <returns>An <c>Enum8</c> or <c>Enum16</c> codec, named for the width chosen.</returns>
+    /// <exception cref="FormatException">A member is malformed, or no member is declared.</exception>
+    public static IColumnCodec Create(TypeNode node)
+    {
+        // Match the server: use Enum8 when every ordinal fits, otherwise Enum16.
+        bool fitsInt8 = true;
+        foreach (TypeNode argument in node.Arguments)
+        {
+            (_, long ordinal) = ParseMember(argument.Name, node);
+            if (ordinal is < sbyte.MinValue or > sbyte.MaxValue)
+            {
+                fitsInt8 = false;
+            }
+        }
+
+        var sized = new TypeNode(fitsInt8 ? "Enum8" : "Enum16", node.Arguments, node.HasArgumentList);
+        return fitsInt8 ? Enum8ColumnCodec.Create(sized) : Enum16ColumnCodec.Create(sized);
+    }
 
     /// <summary>Parses a single <c>'label' = ordinal</c> member token into its label and ordinal.</summary>
-    private static (string Label, long Ordinal) ParseMember(string token, TypeNode node)
+    internal static (string Label, long Ordinal) ParseMember(string token, TypeNode node)
     {
-        // A member is a single-quoted label, then '=', then a signed integer, e.g. 'a' = -1. The label may
-        // contain escaped quotes (\') and backslashes (\\), and may itself contain '=' inside the quotes, so
-        // scan the quoted run rather than splitting naively on '='.
+        // Scan the quoted label because it may contain escaped separators.
         int open = token.IndexOf('\'');
         if (open < 0)
         {
             throw new FormatException($"Malformed enum member '{token}' in type '{node}': expected a quoted label.");
         }
 
-        var label = new System.Text.StringBuilder();
-        int i = open + 1;
-        bool closed = false;
-        for (; i < token.Length; i++)
-        {
-            char c = token[i];
-            if (c == '\\' && i + 1 < token.Length)
-            {
-                label.Append(token[++i]);
-                continue;
-            }
-
-            if (c == '\'')
-            {
-                closed = true;
-                i++;
-                break;
-            }
-
-            label.Append(c);
-        }
-
-        if (!closed)
+        if (!QuotedText.TryRead(token, open, out string label, out int afterLabel))
         {
             throw new FormatException($"Malformed enum member '{token}' in type '{node}': unterminated label.");
         }
 
-        string rest = token.Substring(i).Trim();
+        string rest = token.Substring(afterLabel).Trim();
         if (rest.Length == 0 || rest[0] != '=')
         {
             throw new FormatException($"Malformed enum member '{token}' in type '{node}': expected '= ordinal' after the label.");
@@ -247,7 +248,7 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
             throw new FormatException($"Malformed enum member '{token}' in type '{node}': '{ordinalText}' is not a valid ordinal.");
         }
 
-        return (label.ToString(), ordinal);
+        return (label, ordinal);
     }
 }
 

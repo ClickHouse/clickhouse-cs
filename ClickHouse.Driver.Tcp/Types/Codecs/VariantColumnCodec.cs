@@ -187,13 +187,12 @@ internal sealed class VariantColumnCodec : IColumnCodec
                     $"Variant alternative '{argument}' must not be Nullable; a Variant carries NULL through its discriminator, not a nullable alternative.");
             }
 
-            // The server rejects Dynamic inside Variant (Dynamic is a superset of Variant). Reject it client-side
-            // too: a Variant does not thread the per-operation write state a data-dependent alternative needs, so a
-            // Dynamic alternative would desynchronize its type-list prefix from its body.
+            // Dynamic needs per-operation state that Variant does not propagate to alternatives.
             if (string.Equals(argument.Name, "Dynamic", StringComparison.Ordinal))
             {
                 throw new FormatException(
-                    $"Variant alternative '{argument}' must not be Dynamic; the server does not allow a Dynamic type inside a Variant.");
+                    $"Variant alternative '{argument}' must not be Dynamic; this client cannot write a Dynamic alternative, "
+                    + "whose type list would desynchronize from its body.");
             }
 
             childCodecs[i] = registry.ResolveNode(argument, in context);
@@ -253,9 +252,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // A dense variant column is only writable when its alternatives match this codec's; a bare IColumn<object> is
-    // scattered by runtime CLR type. A variant column of a different arity is rejected here rather than silently
-    // re-scattered (which could reorder its discriminators).
+    // BeginWrite selects dense reuse or scattering by runtime type.
     //
     // The dense test is the concrete VariantColumn, not the public IVariantColumn: the dense writer trusts
     // invariants only that class's constructor establishes (every discriminator is either a valid alternative index
@@ -272,8 +269,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
     public bool CanWriteElementType(Type elementType) => allChildrenWritable && elementType == ElementType;
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column)
-        => allChildrenWritable && (column is VariantColumn dense ? dense.TypeCount == children.Length : column is IColumn<object>);
+    public bool CanWrite(IColumn column) => allChildrenWritable && column is IColumn<object>;
 
     /// <inheritdoc/>
     // Project the slice into one column per alternative once, and open each alternative's own write state over it,
@@ -281,9 +277,30 @@ internal sealed class VariantColumnCodec : IColumnCodec
     // Every alternative gets a column and a state even when no row selects it: the alternative set is fixed by the
     // type rather than by the data, so each one's prefix belongs on the wire regardless of which rows arrived.
     public IColumnWriteState BeginWrite(IColumn column, int start, int length)
-        => column is VariantColumn dense && dense.TypeCount == children.Length
+        => column is VariantColumn dense && HasTheSameAlternatives(dense)
             ? BuildDenseState(dense, start, length)
             : BuildScatteredState(column, start, length);
+
+    // Dense reuse is safe only when discriminator indices name the same alternatives in the same order.
+    // Otherwise scatter by runtime type and validate before writing.
+    private bool HasTheSameAlternatives(VariantColumn dense)
+    {
+        if (dense.TypeCount != children.Length)
+        {
+            return false;
+        }
+
+        IReadOnlyList<string> names = dense.TypeNames;
+        for (int i = 0; i < children.Length; i++)
+        {
+            if (!string.Equals(names[i], children[i].TypeName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)

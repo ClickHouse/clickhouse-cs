@@ -76,8 +76,24 @@ public sealed class InsertRoundTripCase
         yield return Primitive("Int64", new[] { long.MinValue, -1, 0, long.MaxValue });
         yield return Primitive("UInt128", new[] { UInt128.Zero, UInt128.One, UInt128.MaxValue });
         yield return Primitive("Int128", new[] { Int128.MinValue, -Int128.One, Int128.Zero, Int128.MaxValue });
-        yield return Primitive("UInt256", new[] { UInt256.Zero, UInt256.FromBigInteger(1), UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)) });
-        yield return Primitive("Int256", new[] { Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)), Int256.FromBigInteger(-1), Int256.Zero, Int256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)) });
+        // Include values that set the highest limb and sign bit.
+        yield return Primitive("UInt256", new[]
+        {
+            UInt256.Zero,
+            UInt256.FromBigInteger(1),
+            UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)),
+            UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 255)),
+            UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 256) - 1),
+        });
+        yield return Primitive("Int256", new[]
+        {
+            Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)),
+            Int256.FromBigInteger(-1),
+            Int256.Zero,
+            Int256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)),
+            Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 255)),
+            Int256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 255) - 1),
+        });
 
         // Enum columns are inserted and read as their raw underlying ordinals; the ordinals must be declared members.
         yield return Primitive("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 });
@@ -87,14 +103,20 @@ public sealed class InsertRoundTripCase
         yield return EnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, "a", "b");
         yield return EnumLabels("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 }, "x", "y");
 
+        // Escaped labels must match their decoded server values.
+        yield return EnumLabels(@"Enum8('a\nb' = 1, 't\tab' = 2)", new sbyte[] { 1, 2 }, "a\nb", "t\tab");
+
+        // Separators inside quoted labels must not split the enum declaration.
+        yield return EnumLabels(@"Enum8('a,b' = 1, 'c\'d' = 2, 'e = f' = 3)", new sbyte[] { 1, 2, 3 }, "a,b", "c'd", "e = f");
+
         // And through the wrappers, where the shape has to survive composition: the nullable substitute needs a
         // placeholder label for its null rows, and the array path flattens the labels before the enum sees them.
         yield return NullableEnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte?[] { -1, null, 127 }, "a", null, "b");
         yield return ArrayEnumLabels("Enum8('a' = -1, 'b' = 127)", new[] { new sbyte[] { -1, 127 }, Array.Empty<sbyte>() }, new[] { "a", "b" }, Array.Empty<string>());
 
-        // Floats and Bool are direct blittable maps, so the primitive factory covers them.
-        yield return Primitive("Float32", new[] { 0f, 1.5f, -1.5f, float.MinValue, float.MaxValue });
-        yield return Primitive("Float64", new[] { 0d, 1.5, -1.5e100, double.MinValue, double.MaxValue });
+        // Floats and Bool are direct blittable maps. The signed-zero assertion is covered separately.
+        yield return Primitive("Float32", new[] { 0f, -0f, 1.5f, -1.5f, float.MinValue, float.MaxValue, float.NaN, float.PositiveInfinity, float.NegativeInfinity });
+        yield return Primitive("Float64", new[] { 0d, -0d, 1.5, -1.5e100, double.MinValue, double.MaxValue, double.NaN, double.PositiveInfinity, double.NegativeInfinity });
         yield return Primitive("Bool", new[] { false, true, true, false });
 
         yield return Strings("String", string.Empty, "hello", "héllo✓", "a\0b", new string('x', 500));
@@ -115,17 +137,21 @@ public sealed class InsertRoundTripCase
 
         // DateTime reads back as the raw UInt32 epoch seconds. Insert as DateTime (UTC) and expect the epoch
         // seconds of the same instants, regardless of the timezone the server presents.
+        // Cover values beyond Int32 seconds and the UInt32 upper bound.
         yield return DateTimes(
             "DateTime",
             new DateTime(1988, 8, 28, 11, 22, 33, DateTimeKind.Utc),
             new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc),
-            DateTime.UnixEpoch);
+            DateTime.UnixEpoch,
+            new DateTime(2100, 6, 15, 12, 0, 0, DateTimeKind.Utc),
+            DateTime.UnixEpoch.AddSeconds(uint.MaxValue));
 
         // A DateTimeOffset with a non-UTC offset survives as the same instant (i.e. the same epoch seconds).
         var dateTimeOffsets = new[]
         {
             new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)),
             new DateTimeOffset(1988, 8, 28, 11, 22, 33, TimeSpan.FromHours(-8)),
+            new DateTimeOffset(2100, 6, 15, 12, 0, 0, TimeSpan.FromHours(5)),
         };
         yield return new InsertRoundTripCase(
             "DateTime <- DateTimeOffset",
@@ -137,7 +163,9 @@ public sealed class InsertRoundTripCase
         // DateTime64 surfaces as the raw Int64 count at the column's scale, so it retains the exact wire value at
         // any scale. Scale 9 (nanoseconds) is finer than a .NET tick, proving precision no DateTimeOffset can hold.
         yield return DateTime64s("DateTime64(3)", 0L, 1_700_000_000_123L, -6_000_000_000_000L);
-        yield return DateTime64s("DateTime64(9)", 0L, 1_700_000_000_123_456_789L, -1_000_000_001L);
+
+        // Scale 9 can represent the full Int64 wire range.
+        yield return DateTime64s("DateTime64(9)", 0L, 1_700_000_000_123_456_789L, -1_000_000_001L, long.MaxValue, long.MinValue);
 
         // DateTime64 also accepts a DateTimeOffset on write, converting the instant to the column's scale; the
         // read-back is still the raw count, so at scale 3 the expected column carries epoch milliseconds. The
@@ -146,6 +174,7 @@ public sealed class InsertRoundTripCase
         {
             DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123),
             new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)),
+            new DateTimeOffset(2299, 12, 31, 23, 59, 59, TimeSpan.Zero),
         };
         yield return new InsertRoundTripCase(
             "DateTime64(3) <- DateTimeOffset",
@@ -154,16 +183,40 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<long>(name, "DateTime64(3)", Array.ConvertAll(dateTime64Offsets, o => o.ToUnixTimeMilliseconds())),
             settings: null);
 
+        // The latest scale-9 instant representable by DateTimeOffset. Keep the expected count independent of the
+        // conversion under test.
+        var dateTime64NanosecondOffsets = new[] { new DateTimeOffset(2262, 4, 11, 23, 47, 16, TimeSpan.Zero).AddTicks(8_547_758) };
+        yield return new InsertRoundTripCase(
+            "DateTime64(9) <- DateTimeOffset [latest instant]",
+            "DateTime64(9)",
+            name => new ArrayColumn<DateTimeOffset>(name, "DateTime64(9)", dateTime64NanosecondOffsets),
+            name => new ArrayColumn<long>(name, "DateTime64(9)", new[] { 9_223_372_036_854_775_800L }),
+            settings: null);
+
         yield return Uuids("UUID", Guid.Empty, new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff"));
 
         yield return IpAddresses("IPv4", "0.0.0.0", "127.0.0.1", "192.168.1.1", "255.255.255.255");
-        yield return IpAddresses("IPv6", "::", "::1", "2001:db8::1", "fe80::1");
+        yield return IpAddresses("IPv6", "::", "::1", "2001:db8::1", "fe80::1", "2001:db8:85a3:8d3:1319:8a2e:370:7348");
+
+        // IPv4 values in IPv6 columns read back as IPv4-mapped addresses.
+        var mappedIpv4 = new[] { IPAddress.Parse("192.168.1.1"), IPAddress.Parse("0.0.0.0") };
+        yield return new InsertRoundTripCase(
+            "IPv6 <- IPv4",
+            "IPv6",
+            name => new ArrayColumn<IPAddress>(name, "IPv6", mappedIpv4),
+            name => new ArrayColumn<IPAddress>(name, "IPv6", new[] { IPAddress.Parse("::ffff:192.168.1.1"), IPAddress.Parse("::ffff:0.0.0.0") }),
+            settings: null);
 
         // Decimal32/64 surface as System.Decimal; Decimal128/256 as ClickHouseTcpDecimal.
         yield return Decimals("Decimal(9, 2)", 0m, 1.23m, -1.23m, 9999999.99m);
         yield return Decimals("Decimal(18, 4)", 0m, 12345.6789m, -12345.6789m, 99999999999999.9999m);
         yield return WideDecimals("Decimal(38, 10)", "0", "12345.6789", "-98765.4321");
         yield return WideDecimals("Decimal(76, 20)", "0", "1.00000000000000000001", "-1.00000000000000000001");
+
+        // Cover zero scale, scale equal to precision, and the 256-bit mantissa limits.
+        yield return WideDecimals("Decimal(38, 0)", "0", "-1", "99999999999999999999999999999999999999");
+        yield return WideDecimals("Decimal(38, 38)", "0.00000000000000000000000000000000000001", "-0.99999999999999999999999999999999999999");
+        yield return WideDecimals("Decimal(76, 0)", "0", "9999999999999999999999999999999999999999999999999999999999999999999999999999", "-9999999999999999999999999999999999999999999999999999999999999999999999999999");
 
         // The DecimalN(S) alias spellings resolve to the same codecs as Decimal(P, S); one case proves the server
         // round-trips the alias type name as declared.
@@ -174,11 +227,28 @@ public sealed class InsertRoundTripCase
         yield return Primitive("IntervalDay", new[] { 0L, 7L, -30L });
 
         // Newer/experimental server types: enable their flag on the round-trip
-        yield return BFloat16s("BFloat16", BFloat16Settings, 0f, 1f, -2f, 0.5f, 100f);
+        yield return BFloat16s("BFloat16", BFloat16Settings, 0f, -0f, 1f, -2f, 0.5f, 100f, float.NaN, float.PositiveInfinity, float.NegativeInfinity);
         // Time surfaces as the raw Int32 seconds; Time64 as the raw Int64 count at the column's scale. The
         // inserted values are the exact wire values, returned verbatim.
         yield return TimeSeconds("Time", TimeSettings, 0, (12 * 3600) + (34 * 60) + 56, -((1 * 3600) + (2 * 60) + 3));
         yield return Time64Counts("Time64(3)", TimeSettings, 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456, -((((1 * 3600) + (2 * 60) + 3) * 1000L) + 456));
+
+        // TimeOnly values read back as raw Time and Time64 counts.
+        var timesOfDay = new[] { new TimeOnly(0, 0, 0), new TimeOnly(12, 34, 56), new TimeOnly(23, 59, 59) };
+        yield return new InsertRoundTripCase(
+            "Time <- TimeOnly",
+            "Time",
+            name => new ArrayColumn<TimeOnly>(name, "Time", timesOfDay),
+            name => new ArrayColumn<int>(name, "Time", new[] { 0, (12 * 3600) + (34 * 60) + 56, (23 * 3600) + (59 * 60) + 59 }),
+            TimeSettings);
+
+        var timesOfDay64 = new[] { new TimeOnly(0, 0, 0), new TimeOnly(1, 2, 3, 456), TimeOnly.MaxValue };
+        yield return new InsertRoundTripCase(
+            "Time64(3) <- TimeOnly",
+            "Time64(3)",
+            name => new ArrayColumn<TimeOnly>(name, "Time64(3)", timesOfDay64),
+            name => new ArrayColumn<long>(name, "Time64(3)", new[] { 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456, 86_399_999L }),
+            TimeSettings);
         yield return Time64Counts("Time64(9)", TimeSettings, 0L, 3_723_123_456_789L, -3_723_123_456_789L);
 
         // Time/Time64 also accept a TimeSpan on write, truncating toward zero at the column's scale. The read-back
@@ -218,9 +288,25 @@ public sealed class InsertRoundTripCase
         yield return NullableValues<Int128>("Int128", Int128.MinValue, null, Int128.MaxValue);
         yield return NullableValues<UInt256>("UInt256", UInt256.Zero, null, UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)));
         yield return NullableValues<Int256>("Int256", Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)), null, Int256.Zero);
-        yield return NullableValues<float>("Float32", 0f, null, -1.5f, float.MaxValue);
-        yield return NullableValues<double>("Float64", 1.5, null, -1.5e100, null);
+        // Keep special values adjacent to null-map placeholders.
+        yield return NullableValues<float>("Float32", 0f, null, -1.5f, float.MaxValue, float.NaN, null, float.PositiveInfinity, -0f);
+        yield return NullableValues<double>("Float64", 1.5, null, -1.5e100, null, double.NaN, double.NegativeInfinity, -0d);
         yield return NullableValues<bool>("Bool", true, null, false);
+
+        // Nullable tuples require projecting the inner column before building tuple write state.
+        if (TcpServerFeatures.Has(TcpFeature.NullableTuple))
+        {
+            yield return Same(
+                "Nullable(Tuple(UInt8, String))",
+                "Nullable(Tuple(UInt8, String))",
+                name => new ArrayColumn<(byte, string)?>(name, "Nullable(Tuple(UInt8, String))", new (byte, string)?[]
+                {
+                    ((byte)7, "x"),
+                    null,
+                    ((byte)0, string.Empty),
+                }),
+                NullableTupleSettings);
+        }
         yield return NullableValues<sbyte>("Enum8('a' = -1, 'b' = 127)", -1, null, 127);
         yield return NullableValues<short>("Enum16('x' = -32768, 'y' = 32767)", -32768, null, 32767);
         yield return NullableValues<DateOnly>("Date", new DateOnly(1970, 1, 1), null, new DateOnly(2149, 6, 6));
@@ -236,9 +322,10 @@ public sealed class InsertRoundTripCase
         yield return NullableDateTimes(
             new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero),
             null,
-            new DateTimeOffset(1988, 8, 28, 11, 22, 33, TimeSpan.Zero));
+            new DateTimeOffset(1988, 8, 28, 11, 22, 33, TimeSpan.Zero),
+            DateTimeOffset.UnixEpoch.AddSeconds(uint.MaxValue));
         yield return NullableDateTime64s(3, 0L, null, 1_700_000_000_123L, null);
-        yield return NullableDateTime64s(9, 1_700_000_000_123_456_789L, null, -1_000_000_001L);
+        yield return NullableDateTime64s(9, 1_700_000_000_123_456_789L, null, -1_000_000_001L, long.MaxValue);
 
         // Nullable re-offers every CLR write spelling the bare inner accepts, each with its own-typed null
         // placeholder — so Nullable(DateTime) takes DateTimeOffset? or DateTime?, and Nullable(DateTime64) takes
@@ -269,9 +356,25 @@ public sealed class InsertRoundTripCase
             settings: null);
 
         // Experimental server types: enable their flag on the round-trip (same as their non-nullable cases).
-        yield return NullableValues<float>("BFloat16", BFloat16Settings, 0f, null, 1f, -2f);
+        yield return NullableValues<float>("BFloat16", BFloat16Settings, 0f, null, 1f, -2f, float.NaN, null, float.PositiveInfinity);
         yield return NullableValues<int>("Time", TimeSettings, 0, null, (12 * 3600) + (34 * 60) + 56);
         yield return NullableValues<long>("Time64(3)", TimeSettings, 0L, null, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456);
+
+        // Exercise TimeOnly placeholders through Nullable.
+        var nullableTimesOfDay = new TimeOnly?[] { new TimeOnly(1, 2, 3), null, new TimeOnly(0, 0, 0) };
+        yield return new InsertRoundTripCase(
+            "Nullable(Time) <- TimeOnly?",
+            "Nullable(Time)",
+            name => new ArrayColumn<TimeOnly?>(name, "Nullable(Time)", nullableTimesOfDay),
+            name => new ArrayColumn<int?>(name, "Nullable(Time)", new int?[] { (1 * 3600) + (2 * 60) + 3, null, 0 }),
+            TimeSettings);
+
+        yield return new InsertRoundTripCase(
+            "Nullable(Time64(3)) <- TimeOnly?",
+            "Nullable(Time64(3))",
+            name => new ArrayColumn<TimeOnly?>(name, "Nullable(Time64(3))", nullableTimesOfDay),
+            name => new ArrayColumn<long?>(name, "Nullable(Time64(3))", new long?[] { (((1 * 3600) + (2 * 60) + 3) * 1000L), null, 0L }),
+            TimeSettings);
 
         yield return NullableStrings("hello", null, "world", string.Empty);
         yield return NullableStrings(null, null); // every row null
@@ -307,8 +410,8 @@ public sealed class InsertRoundTripCase
         yield return Arrays("Int256", new[] { Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)), Int256.Zero });
         yield return Arrays("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, Array.Empty<sbyte>());
         yield return Arrays("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 });
-        yield return Arrays("Float32", new[] { 0f, 1.5f, -1.5f, float.MaxValue }, Array.Empty<float>());
-        yield return Arrays("Float64", new[] { 0d, -1.5e100, double.MaxValue });
+        yield return Arrays("Float32", new[] { 0f, 1.5f, -1.5f, float.MaxValue }, Array.Empty<float>(), new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, -0f });
+        yield return Arrays("Float64", new[] { 0d, -1.5e100, double.MaxValue }, new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity, -0d });
         yield return Arrays("Bool", new[] { true, false, true }, Array.Empty<bool>());
         yield return Arrays("String", new[] { "a", "bb" }, Array.Empty<string>(), new[] { string.Empty, "héllo✓" });
         yield return Arrays<byte[]>("FixedString(4)", new[] { new byte[] { 1, 2, 3, 4 }, new byte[] { 0xFF, 0, 0xFF, 0 } }, Array.Empty<byte[]>());
@@ -317,9 +420,9 @@ public sealed class InsertRoundTripCase
 
         // Array(DateTime) reads back raw uint epoch seconds; Array(DateTime64) raw long counts at the column scale.
         // The shared corpus uses canonical CLR types; lifted types have focused coverage.
-        yield return Arrays<uint>("DateTime", new uint[] { 1_700_000_000, 0 }, Array.Empty<uint>());
+        yield return Arrays<uint>("DateTime", new uint[] { 1_700_000_000, 0, uint.MaxValue }, Array.Empty<uint>());
         yield return Arrays<long>("DateTime64(3)", new[] { 0L, 1_700_000_000_123L });
-        yield return Arrays<long>("DateTime64(9)", new[] { 1_700_000_000_123_456_789L }, Array.Empty<long>());
+        yield return Arrays<long>("DateTime64(9)", new[] { 1_700_000_000_123_456_789L, long.MaxValue, long.MinValue }, Array.Empty<long>());
 
         // Caller-built dense shape: flat elements plus row offsets, with no rebuild on write.
         yield return DenseArrays("UInt32", new uint[] { 10, 20, 30, 40, 50 }, new[] { 0, 3, 3, 5 });
@@ -337,7 +440,7 @@ public sealed class InsertRoundTripCase
         yield return Arrays("IntervalDay", new[] { 7L, -30L });
 
         // Experimental server types: enable their flag on the round-trip (same as their bare cases).
-        yield return Arrays("BFloat16", BFloat16Settings, new[] { 0f, 1f, -2f, 0.5f }, Array.Empty<float>());
+        yield return Arrays("BFloat16", BFloat16Settings, new[] { 0f, 1f, -2f, 0.5f }, Array.Empty<float>(), new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, -0f });
         yield return Arrays("Time", TimeSettings, new[] { 0, (12 * 3600) + (34 * 60) + 56 }, Array.Empty<int>());
         yield return Arrays("Time64(3)", TimeSettings, new[] { 0L, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456 });
 
@@ -508,6 +611,12 @@ public sealed class InsertRoundTripCase
             "Tuple(a Int32, b String)",
             name => new TupleColumn<int, string>(name, "Tuple(a Int32, b String)", new (int, string)[] { (1, "a"), (-5, string.Empty), (int.MaxValue, "héllo✓") }));
 
+        // A quoted comma must not split the tuple fields.
+        yield return Same(
+            "Tuple(`a,b` Int64, c String) [quoted field name]",
+            "Tuple(`a,b` Int64, c String)",
+            name => new TupleColumn<long, string>(name, "Tuple(`a,b` Int64, c String)", new (long, string)[] { (1L, "x"), (long.MinValue, string.Empty) }));
+
         // A named tuple whose elements are themselves parametric — the name/type split must survive nesting.
         yield return Same(
             "Tuple(a Array(Int32), b Nullable(String)) [named parametric]",
@@ -665,6 +774,21 @@ public sealed class InsertRoundTripCase
                     new ArrayColumn<byte>(name, "UInt8", new byte[] { 1, 2, 3 }),
                     new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
                 },
+                new[] { 0, 2, 2, 3 },
+                rowCount: 3,
+                pooledOffsets: false,
+                ownsFields: false),
+            NestedSettings);
+
+        // Preserve quoted field names in the insert header.
+        yield return Same(
+            "Nested(`a b` UInt8) [quoted field name]",
+            "Nested(`a b` UInt8)",
+            name => new NestedColumn(
+                name,
+                "Nested(`a b` UInt8)",
+                new[] { "a b" },
+                new IColumn[] { new ArrayColumn<byte>(name, "UInt8", new byte[] { 1, 2, 3 }) },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
                 pooledOffsets: false,
@@ -854,9 +978,53 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<uint>(name, "LowCardinality(DateTime)", new uint[] { 1_700_000_000, 1_700_000_000, 599_916_153, 0, 1_700_000_000, 599_916_153 }),
             LowCardinalitySettings);
 
+        // Cover one-, eight-, and sixteen-byte dictionary elements.
+        yield return Same(
+            "LowCardinality(UInt8)",
+            "LowCardinality(UInt8)",
+            name => PrimitiveColumn<byte>.FromValues(name, "LowCardinality(UInt8)", new byte[] { 3, 3, 0, 255, 3 }),
+            LowCardinalitySettings);
+
+        yield return Same(
+            "LowCardinality(Int64)",
+            "LowCardinality(Int64)",
+            name => PrimitiveColumn<long>.FromValues(name, "LowCardinality(Int64)", new[] { long.MinValue, 0L, long.MaxValue, 0L }),
+            LowCardinalitySettings);
+
+        yield return Same(
+            "LowCardinality(UUID)",
+            "LowCardinality(UUID)",
+            name => new ArrayColumn<Guid>(name, "LowCardinality(UUID)", new[]
+            {
+                Guid.Empty,
+                new Guid("00112233-4455-6677-8899-aabbccddeeff"),
+                Guid.Empty,
+            }),
+            LowCardinalitySettings);
+
         // Array(LowCardinality(String)) flattens its jagged rows into one values stream handed to the
         // low-cardinality codec; empty rows and repeated values ride along.
         yield return Arrays("LowCardinality(String)", new[] { "a", "b" }, Array.Empty<string>(), new[] { "a", "a", "c" });
+
+        // Exercise two offset levels over a dictionary-bearing leaf.
+        yield return Same(
+            "Array(Array(LowCardinality(String)))",
+            "Array(Array(LowCardinality(String)))",
+            name => new ArrayColumn<string[][]>(name, "Array(Array(LowCardinality(String)))", new[]
+            {
+                new[] { new[] { "a", "b" }, Array.Empty<string>(), new[] { "a" } },
+                Array.Empty<string[]>(),
+                new[] { new[] { "c", "a", "c" } },
+            }));
+
+        yield return Same(
+            "Array(Array(LowCardinality(Nullable(String))))",
+            "Array(Array(LowCardinality(Nullable(String))))",
+            name => new ArrayColumn<string[][]>(name, "Array(Array(LowCardinality(Nullable(String))))", new[]
+            {
+                new[] { new[] { "a", null }, Array.Empty<string>() },
+                new[] { new string[] { null, null }, new[] { "a", "b" } },
+            }));
 
         // A dictionary past 255 entries forces the client to widen the key stream from UInt8 to UInt16
         // (SelectKeyWidthCode switches on dictSize < byte.MaxValue). Unit tests assert the client picks that
@@ -1146,6 +1314,13 @@ public sealed class InsertRoundTripCase
             Array.Empty<object>(),
             new object[] { "b", 2UL, null });
 
+        // Empty Dynamic arrays still carry a type-list prefix.
+        yield return Same(
+            "Array(Dynamic) [every row empty]",
+            "Array(Dynamic)",
+            name => new ArrayColumn<object[]>(name, "Array(Dynamic)", new[] { Array.Empty<object>(), Array.Empty<object>() }),
+            DynamicSettings);
+
         // Tuple(Dynamic, String): a Dynamic element inside a tuple. Each element position is its own child column,
         // so the Dynamic child's type list (state prefix) is written from its own projected values.
         yield return Same(
@@ -1156,6 +1331,21 @@ public sealed class InsertRoundTripCase
                 (42UL, "a"), ("x", "b"), (null, "c"),
             }),
             DynamicSettings);
+
+        // A LowCardinality key has its own state prefix.
+        yield return Maps<string, byte>(
+            "LowCardinality(String)",
+            "UInt8",
+            Pairs<string, byte>(("a", 1), ("b", 2)),
+            Array.Empty<KeyValuePair<string, byte>>(),
+            Pairs<string, byte>(("a", 3)));
+
+        // Cover a composite map key.
+        yield return Maps<(int, int), int>(
+            "Tuple(Int32, Int32)",
+            "Int32",
+            Pairs<(int, int), int>(((1, 2), 3), ((-1, 0), 4)),
+            Array.Empty<KeyValuePair<(int, int), int>>());
 
         // Map(String, Dynamic): a Dynamic value column inside a map, flattened like Array(Tuple(String, Dynamic)).
         yield return Maps<string, object>("String", "Dynamic", DynamicSettings,
@@ -1232,6 +1422,14 @@ public sealed class InsertRoundTripCase
             }),
             JsonSettings);
 
+        // A parenthesis inside a quoted JSON path must not end the type declaration.
+        yield return new InsertRoundTripCase(
+            "JSON(`a(b` Int64) [quoted typed path]",
+            "JSON(`a(b` Int64)",
+            name => new ArrayColumn<string>(name, "JSON(`a(b` Int64)", new[] { "{\"a(b\":5}", "{}" }),
+            name => new ArrayColumn<string>(name, "JSON(`a(b` Int64)", new[] { "{\"a(b\":5}", "{\"a(b\":0}" }),
+            JsonSettings);
+
         // The server parses a JSON value rather than storing the text, so what comes back is its own rendering:
         // keys ordinally sorted (so "A" precedes "a"), whitespace dropped, numbers re-rendered canonically
         // (1.0 -> 1, 1e3 -> 1000, -0 -> 0), a dotted key read as nesting, and a JSON null or an empty object
@@ -1268,6 +1466,13 @@ public sealed class InsertRoundTripCase
         // Array(JSON): JSON carries a state prefix, so the array has to emit the version once ahead of its offsets
         // rather than treat JSON as a flat leaf. Empty rows and an all-empty column ride along.
         yield return Arrays("JSON", JsonSettings, new[] { "{\"a\":1}", "{}" }, Array.Empty<string>(), new[] { "{\"b\":\"hi\"}" });
+
+        // Empty JSON arrays still carry the serialization-version prefix.
+        yield return Same(
+            "Array(JSON) [every row empty]",
+            "Array(JSON)",
+            name => new ArrayColumn<string[]>(name, "Array(JSON)", new[] { Array.Empty<string>(), Array.Empty<string>() }),
+            JsonSettings);
 
         // Tuple(JSON, String): each element is its own child column, so the JSON version is written from the
         // element the tuple projects.
@@ -1328,8 +1533,8 @@ public sealed class InsertRoundTripCase
         // The geo aliases name structures already covered above — Point is Tuple(Float64, Float64) and the rest
         // are arrays over it — so what these cases prove is not the layout but that the alias resolves to it: the
         // server puts "Point"/"Ring"/… in the column header, and the client has to accept that name in both
-        // directions. Like Array and Tuple, they take no Nullable case: Nullable(Point) needs
-        // enable_nullable_tuple_type and the server rejects a Nullable array outright.
+        // directions. Nullable(Point) is covered below, behind enable_nullable_tuple_type; the array-shaped
+        // aliases take no Nullable case, the server rejecting a Nullable array outright.
         // Supplied as a flat column of tuples rather than a dense TupleColumn: that column's convenience
         // constructor derives its children's types by re-parsing its own type name, which an alias is not. The
         // dense shape is still covered — the read comes back as one, and the dense-readback case re-inserts it.
@@ -1391,11 +1596,20 @@ public sealed class InsertRoundTripCase
         // whole column type.
         yield return Arrays("Point", new[] { (0d, 0d), (1d, 2d) }, Array.Empty<(double, double)>());
 
-        // No Nullable(Point) case, though the server accepts the type behind enable_nullable_tuple_type and this
-        // client reads it correctly. Writing it hits a pre-existing defect that has nothing to do with geo:
-        // NullableColumnCodec forwards the *outer* column to the inner's state-prefix phase, and TupleColumnCodec
-        // builds its write state there, so it is handed a column of (double, double)? where it needs
-        // (double, double). Any Nullable(Tuple(...)) fails the same way. Tracked as an I6 residual.
+        // Cover Nullable through the Point tuple alias.
+        if (TcpServerFeatures.Has(TcpFeature.NullableTuple))
+        {
+            yield return Same(
+                "Nullable(Point)",
+                "Nullable(Point)",
+                name => new ArrayColumn<(double, double)?>(name, "Nullable(Point)", new (double, double)?[]
+                {
+                    (1.5d, -2.5d),
+                    null,
+                    (0d, 0d),
+                }),
+                NullableTupleSettings);
+        }
 
         // Geometry is a Variant over the six aliases, and the column header carries only "Geometry", so the client
         // expands it and picks the discriminator order itself. A row against each of the six discriminators, plus a
@@ -1439,6 +1653,16 @@ public sealed class InsertRoundTripCase
                 {
                     Ramp(17, i => (i * 0.5f) - 4f),
                     Ramp(17, i => i % 2 == 0 ? float.MaxValue : float.MinValue),
+                }));
+
+            // Exercise QBit stride arithmetic at a realistic embedding width.
+            yield return Same(
+                "QBit(Float32, 768)",
+                "QBit(Float32, 768)",
+                name => new ArrayColumn<float[]>(name, "QBit(Float32, 768)", new[]
+                {
+                    Ramp(768, i => (i * 0.25f) - 96f),
+                    Ramp(768, i => i % 3 == 0 ? float.MaxValue : (i % 3 == 1 ? -0f : float.NaN)),
                 }));
 
             yield return Same(
@@ -1542,6 +1766,17 @@ public sealed class InsertRoundTripCase
                 new ulong[] { 1, 2, 3 },
                 Array.Empty<ulong>(),
             }));
+
+        // Cover a SimpleAggregateFunction whose inner type has a state prefix.
+        yield return Same(
+            "SimpleAggregateFunction(anyLast, JSON)",
+            "SimpleAggregateFunction(anyLast, JSON)",
+            name => new ArrayColumn<string>(name, "SimpleAggregateFunction(anyLast, JSON)", new[]
+            {
+                "{\"a\":1}",
+                "{}",
+            }),
+            JsonSettings);
 
         // A parameterized function keeps its parameters in the type name, on the wire as well as in the DDL. It
         // parses as one node carrying its own arguments, so the type still has exactly two arguments and the
@@ -1747,6 +1982,7 @@ public sealed class InsertRoundTripCase
     }
 
     // BFloat16 widens to float; values are chosen to be exactly representable so the narrow-on-write is lossless.
+    // NaN and infinities also survive the narrowing conversion.
     private static InsertRoundTripCase BFloat16s(string clickHouseType, IReadOnlyDictionary<string, string> settings, params float[] values)
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<float>(name, clickHouseType, values), settings);
 
@@ -1846,6 +2082,12 @@ public sealed class InsertRoundTripCase
 
         return values;
     }
+
+    /// <summary>Enables Nullable over a Tuple, which the server refuses by default.</summary>
+    private static readonly IReadOnlyDictionary<string, string> NullableTupleSettings = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["enable_nullable_tuple_type"] = "1",
+    };
 
     /// <summary>Enables the experimental BFloat16 type for the round-trip.</summary>
     private static readonly IReadOnlyDictionary<string, string> BFloat16Settings = new Dictionary<string, string>(StringComparer.Ordinal)

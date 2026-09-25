@@ -100,6 +100,32 @@ public class ColumnReadProjectionIntegrationTests
         });
     }
 
+    [TestCase("Fixed/UTC+14:00:00", 14)]
+    [TestCase("Fixed/UTC-14:00:00", -14)]
+    public async Task StreamAsync_DateTimeAtMaximumFixedOffset_ProjectsTheServerInstant(string zone, int offsetHours)
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        uint canonical = 0;
+        DateTimeOffset projected = default;
+
+        await foreach (Block block in client.StreamAsync(
+            $"SELECT toDateTime(1700000000, '{zone}')",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            canonical = ((IColumn<uint>)column).Values[0];
+            projected = ProjectRow<DateTimeOffset>(column, 0);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(canonical, Is.EqualTo(1_700_000_000u));
+            Assert.That(projected.UtcDateTime, Is.EqualTo(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc)));
+            Assert.That(projected.Offset, Is.EqualTo(TimeSpan.FromHours(offsetHours)));
+        });
+    }
+
     /// <summary>
     /// A daylight-saving date, where the offset differs from the zone's standard offset. A projection that used a
     /// fixed base offset instead of resolving it per instant would pass the winter case above and fail here.

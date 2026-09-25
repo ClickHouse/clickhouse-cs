@@ -5,17 +5,30 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
+using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
-// What only a real server shows: that concurrent operations over one client really do run at once on separate
-// connections, and that their results come back uncorrupted rather than crossed. The pool's own decisions —
-// reuse, retirement, queueing, drain — are covered without a server in ConnectionPoolTests.
+// Covers pool behavior that requires real connections and server responses.
 [TestFixture]
 [Category("Integration")]
 public class ConnectionPoolIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
+
+    /// <summary>An operation that fails after acquiring a pool permit.</summary>
+    public enum FailingOperation
+    {
+        /// <summary>A query rejected by the server.</summary>
+        QueryTheServerRefuses,
+
+        /// <summary>An insert with a column absent from the schema block.</summary>
+        InsertOfAnUnknownColumn,
+
+        /// <summary>An insert whose columns have different row counts.</summary>
+        InsertOfRaggedColumns,
+    }
 
     private static string UniqueTableName() => $"tcp_pool_test_{Guid.NewGuid():N}";
 
@@ -38,8 +51,7 @@ public class ConnectionPoolIntegrationTests
     [Test]
     public async Task QueryAsync_FourQueriesAtOnce_RunConcurrentlyRatherThanOneAfterAnother()
     {
-        // Four one-second sleeps. Serialized they take at least four seconds; on four connections they take about
-        // one, so the bound is wide enough to be stable and still far below the serialized cost.
+        // Four serialized one-second queries would exceed the 3.5-second bound.
         await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 4);
 
         var elapsed = Stopwatch.StartNew();
@@ -78,8 +90,7 @@ public class ConnectionPoolIntegrationTests
     [Test]
     public async Task QueryAsync_ManyConcurrentQueries_EachSeesOnlyItsOwnResult()
     {
-        // The failure this guards against is two operations sharing a connection and reading each other's blocks,
-        // which shows up as a row count or a value belonging to another query.
+        // Distinct row counts detect responses crossing between concurrent operations.
         await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 4);
 
         int[] rowCounts = await Task.WhenAll(Enumerable.Range(1, 16).Select(async i =>
@@ -129,8 +140,7 @@ public class ConnectionPoolIntegrationTests
     [Test]
     public async Task QueryAsync_ConnectionHeldByAnUnfinishedStream_LaterCallerTimesOut()
     {
-        // The pool's exhaustion path, and the case its message calls out: an enumerator that is never advanced to
-        // the end keeps its connection, so with a pool of one nothing else can run.
+        // An unfinished stream retains its connection and exhausts a pool of one.
         await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1, poolTimeout: TimeSpan.FromSeconds(1));
 
         IAsyncEnumerator<Block> held = client
@@ -149,25 +159,15 @@ public class ConnectionPoolIntegrationTests
             await held.DisposeAsync();
         }
 
-        // Disposing the enumerator gives the connection back, so the client is usable again.
+        // Disposing the stream returns the connection.
         Assert.DoesNotThrowAsync(async () => await client.ExecuteAsync("SELECT 1", cancellationToken: None));
     }
 
     [Test]
     public async Task QueryAsync_AfterThePoolSatIdlePastTheIdleTimeout_RunsOnAFreshConnection()
     {
-        // Retirement end to end, over a real socket and a real clock: ConnectionPoolTests drives a hand-held
-        // TimeProvider whose timers do nothing, so nothing there proves an over-idle connection is retired
-        // without a test calling Sweep itself. This does not say which mechanism did it — the sweep timer and the
-        // checkout would both refuse that connection, and either is a correct answer — only that the caller is
-        // given a working connection and not the stale one.
-        //
-        // A temporary table is the marker, because the server scopes one to the connection that created it: while
-        // the pool reuses that connection the table is visible, and it is gone the moment the pool replaces it.
-        // Five seconds, not one: the read-back below has to happen inside the window to prove the marker was ever
-        // there, and the net8/net9/net10 suites run at once against one server, so a tight window would fail on a
-        // scheduling stall rather than on the pool. Reuse itself is proven without any timing dependency by
-        // Return_AfterEachKindOfOperation_KeepsTheSameConnection, which leaves the timeout at its 5-minute default.
+        // A temporary table identifies the connection. It disappears when the idle connection is replaced.
+        // Five seconds leaves enough time to verify the marker before the concurrent test suites can delay it.
         await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1, idleTimeout: TimeSpan.FromSeconds(5));
         string marker = UniqueTableName();
 
@@ -185,13 +185,56 @@ public class ConnectionPoolIntegrationTests
             "a connection left idle past the timeout must not be handed out again");
     }
 
+    /// <summary>
+    /// Verifies that checkout replaces a connection closed by the server while idle.
+    /// The null case verifies that waiting alone does not replace the connection.
+    /// </summary>
+    /// <param name="serverIdleTimeout">Seconds for the server's <c>idle_connection_timeout</c>, or null to leave it.</param>
+    /// <param name="markerAfterTheWait">Whether the connection-scoped marker should remain.</param>
+    [TestCase("1", 0UL)]
+    [TestCase(null, 1UL)]
+    public async Task QueryAsync_AfterTheServerHungUpOnAnIdleConnection_RunsOnAFreshConnectionRatherThanFailing(
+        string serverIdleTimeout,
+        ulong markerAfterTheWait)
+    {
+        await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1);
+        ClickHouseTcpQueryOptions options = serverIdleTimeout is null
+            ? null
+            : new ClickHouseTcpQueryOptions
+            {
+                Settings = new Dictionary<string, string> { ["idle_connection_timeout"] = serverIdleTimeout },
+            };
+
+        string marker = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TEMPORARY TABLE {marker} (id UInt64)", options, None);
+        Assert.That(
+            await TemporaryTableExistsAsync(client, marker, options),
+            Is.EqualTo(1UL),
+            "the marker must exist to begin with, or the assertion below proves nothing");
+
+        // Poll because the server closes idle connections asynchronously. Each interval exceeds its timeout.
+        ulong markerAfterwards = 0;
+        int attempts = serverIdleTimeout is null ? 1 : 12;
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            for (int attempt = 0; attempt < attempts; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                markerAfterwards = await TemporaryTableExistsAsync(client, marker, options);
+                if (markerAfterwards == markerAfterTheWait)
+                {
+                    return;
+                }
+            }
+        });
+
+        Assert.That(markerAfterwards, Is.EqualTo(markerAfterTheWait));
+    }
+
     [Test]
     public async Task Return_AfterEachKindOfOperation_KeepsTheSameConnection()
     {
-        // The return path now asks IsReusable, not just for Ready, so it polls the socket and inspects the read
-        // buffer of a connection that has just finished work. If any operation leaves bytes behind, that turns
-        // into a fresh connection per operation — a silent throughput loss no other test would show. The same
-        // temporary table proves the connection survived: with a pool of one, it is gone if the pool replaced it.
+        // The temporary table proves each operation returned the same reusable connection.
         await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1);
         string marker = UniqueTableName();
 
@@ -224,12 +267,60 @@ public class ConnectionPoolIntegrationTests
         });
     }
 
+    /// <summary>
+    /// Verifies that retired connections close their server-side sockets.
+    /// Each query uses a distinct connection; the observer remains in both counts. The tolerance allows for
+    /// connections opened by concurrent framework suites.
+    /// </summary>
+    [Test]
+    public async Task Retirement_AfterChurningManyConnections_LeavesNoneOpenOnTheServer()
+    {
+        const int churns = 40;
+        const int tolerance = churns / 4;
+
+        await using ClickHouseTcpClient observer = CreateClient(maxPoolSize: 1);
+        long baseline = await ServerConnectionsAsync(observer);
+        Assert.That(baseline, Is.GreaterThan(0), "the observer's own connection must be in the count, or this is not the count");
+
+        string tag = $"tcp_churn_{Guid.NewGuid():N}";
+        await using (var churning = new ClickHouseTcpClient(TcpServerFixture.Options() with
+        {
+            MaxPoolSize = 1,
+            MaxConnectionLifetime = TimeSpan.FromTicks(1),
+        }))
+        {
+            for (int churn = 0; churn < churns; churn++)
+            {
+                await churning.ExecuteAsync(
+                    "SELECT 1",
+                    new ClickHouseTcpQueryOptions { QueryId = $"{tag}_{churn}" },
+                    None);
+            }
+        }
+
+        // HAVING prevents QueryLog.ScalarAsync from accepting a partial result.
+        object ports = await QueryLog.ScalarAsync(
+            observer,
+            $"SELECT toUInt64(uniqExact(port)) FROM system.query_log WHERE query_id LIKE '{tag}%' AND type = 'QueryStart' HAVING count() = {churns}");
+        long open = await WaitForServerConnectionsAsync(observer, baseline + tolerance);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Convert.ToInt64(ports),
+                Is.EqualTo(churns),
+                "the server must have seen each query on a client port of its own");
+            Assert.That(
+                open - baseline,
+                Is.LessThanOrEqualTo(tolerance),
+                $"connections the pool retired must not stay open on the server (baseline {baseline})");
+        });
+    }
+
     [Test]
     public async Task ExecuteAsync_UnparseableSetting_ReplacesClosedConnectionBeforeNextOperation()
     {
-        // A settings-list parse failure is raised before the server accepts the query. The server sends the
-        // Exception packet and then closes the socket, but its FIN races the pool's immediate return and checkout.
-        // Repeat the exact error/follow-up pair so the test cannot pass merely because one FIN arrived promptly.
+        // Repeat because the server's FIN races the pool's return and next checkout.
         const int iterations = 40;
         var invalid = new ClickHouseTcpQueryOptions
         {
@@ -249,12 +340,118 @@ public class ConnectionPoolIntegrationTests
         }
     }
 
-    private static async Task<ulong> TemporaryTableExistsAsync(ClickHouseTcpClient client, string name)
+    /// <summary>
+    /// Verifies that server, schema, and pre-connection failures return a pool permit.
+    /// </summary>
+    /// <param name="failing">The operation to repeat.</param>
+    /// <param name="expected">The expected exception type.</param>
+    [TestCase(FailingOperation.QueryTheServerRefuses, typeof(ClickHouseTcpServerException))]
+    [TestCase(FailingOperation.InsertOfAnUnknownColumn, typeof(ArgumentException))]
+    [TestCase(FailingOperation.InsertOfRaggedColumns, typeof(ArgumentException))]
+    public async Task Failure_RepeatedAtAPoolOfOne_ReturnsThePermitEveryTime(FailingOperation failing, Type expected)
+    {
+        const int attempts = 3;
+
+        // A leaked permit makes the next attempt fail after this timeout.
+        await using ClickHouseTcpClient client = CreateClient(maxPoolSize: 1, poolTimeout: TimeSpan.FromSeconds(5));
+        string table = UniqueTableName();
+        await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = MergeTree ORDER BY id", cancellationToken: None);
+        try
+        {
+            for (int attempt = 1; attempt <= attempts; attempt++)
+            {
+                Exception thrown = Assert.CatchAsync(async () => await FailAsync(client, failing, table));
+                Assert.That(thrown, Is.InstanceOf(expected), $"attempt {attempt}");
+            }
+
+            ulong rows = 0;
+            await foreach (ValueRow row in client.QueryAsync<ValueRow>(
+                $"SELECT toUInt64(count()) AS id FROM {table}", cancellationToken: None))
+            {
+                rows = row.Id;
+            }
+
+            Assert.That(rows, Is.Zero, "a refused insert must leave no row behind");
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    private static async Task FailAsync(ClickHouseTcpClient client, FailingOperation failing, string table)
+    {
+        switch (failing)
+        {
+            case FailingOperation.QueryTheServerRefuses:
+                await client.ExecuteAsync($"SELECT count() FROM {table}_absent", cancellationToken: None);
+                break;
+
+            case FailingOperation.InsertOfAnUnknownColumn:
+                IColumn[] unknown =
+                [
+                    PrimitiveColumn<ulong>.FromValues("id", "UInt64", [1, 2]),
+                    PrimitiveColumn<ulong>.FromValues("absent", "UInt64", [1, 2]),
+                ];
+                await client.InsertAsync($"INSERT INTO {table} (id) VALUES", unknown, cancellationToken: None);
+                break;
+
+            case FailingOperation.InsertOfRaggedColumns:
+                IColumn[] ragged =
+                [
+                    PrimitiveColumn<ulong>.FromValues("id", "UInt64", [1, 2]),
+                    PrimitiveColumn<ulong>.FromValues("second", "UInt64", [1, 2, 3]),
+                ];
+                await client.InsertAsync($"INSERT INTO {table} (id) VALUES", ragged, cancellationToken: None);
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(failing), failing, "unhandled failure");
+        }
+    }
+
+    // Returns the server's open native-connection count, including this client.
+    private static async Task<long> ServerConnectionsAsync(ClickHouseTcpClient client)
+    {
+        long open = 0;
+        await foreach (ValueRow row in client.QueryAsync<ValueRow>(
+            "SELECT toUInt64(value) AS id FROM system.metrics WHERE metric = 'TCPConnection'",
+            cancellationToken: None))
+        {
+            open = (long)row.Id;
+        }
+
+        return open;
+    }
+
+    // Server-side connection closure is asynchronous, so wait for the count to settle.
+    private static async Task<long> WaitForServerConnectionsAsync(ClickHouseTcpClient client, long limit)
+    {
+        long open = 0;
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            open = await ServerConnectionsAsync(client);
+            if (open <= limit)
+            {
+                return open;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+        }
+
+        return open;
+    }
+
+    private static async Task<ulong> TemporaryTableExistsAsync(
+        ClickHouseTcpClient client,
+        string name,
+        ClickHouseTcpQueryOptions options = null)
     {
         ulong exists = 0;
         await foreach (ValueRow row in client.QueryAsync<ValueRow>(
             $"SELECT toUInt64(count()) AS id FROM system.tables WHERE is_temporary AND name = '{name}'",
-            cancellationToken: None))
+            options,
+            None))
         {
             exists = row.Id;
         }

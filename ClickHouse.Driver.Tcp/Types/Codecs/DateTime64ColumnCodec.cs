@@ -20,9 +20,9 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     private static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
 
     private readonly int scale;
-    private readonly TimeZoneInfo timeZone;
+    private readonly ResolvedTimeZone timeZone;
 
-    private DateTime64ColumnCodec(string typeName, int scale, TimeZoneInfo timeZone)
+    private DateTime64ColumnCodec(string typeName, int scale, ResolvedTimeZone timeZone)
     {
         TypeName = typeName;
         this.scale = scale;
@@ -101,7 +101,7 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         }
 
         string explicitTz = node.Arguments.Count > 1 ? DateTimeZones.UnquoteTimezone(node.Arguments[1]) : null;
-        TimeZoneInfo tz = DateTimeZones.Resolve(explicitTz, serverTimezone);
+        ResolvedTimeZone tz = DateTimeZones.Resolve(explicitTz, serverTimezone);
         return new DateTime64ColumnCodec(node.ToString(), scale, tz);
     }
 
@@ -120,6 +120,7 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
             return true;
         }
 
+        // Defer timezone resolution until a calendar row is projected.
         if (targetType == typeof(DateTimeOffset))
         {
             projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTime64ToOffset), value, scale, timeZone);
@@ -181,7 +182,17 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         int places = scale - DotNetTickScale;
         if (places >= 0)
         {
-            return FixedPointScaling.ShiftDecimalPlaces(dotNetTicksSinceEpoch, places);
+            // Fine scales reach their Int64 limit before DateTimeOffset; report the value and column explicitly.
+            long scaleUp = FixedPointScaling.Pow10(places);
+            if (dotNetTicksSinceEpoch > long.MaxValue / scaleUp || dotNetTicksSinceEpoch < long.MinValue / scaleUp)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value),
+                    value,
+                    $"{value:o} cannot be written to {TypeName} (scale {scale}): the count of sub-second units since 1970-01-01 does not fit in an Int64.");
+            }
+
+            return dotNetTicksSinceEpoch * scaleUp;
         }
 
         long factor = FixedPointScaling.Pow10(-places);

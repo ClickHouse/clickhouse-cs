@@ -11,6 +11,11 @@ public interface IDateTimeColumn : IColumn
     /// <summary>
     /// The type's timezone, or the query's session timezone followed by the handshake timezone when unspecified.
     /// </summary>
+    /// <remarks>
+    /// Raw column values remain available when the timezone cannot be represented; this property and calendar
+    /// projections throw instead.
+    /// </remarks>
+    /// <exception cref="FormatException">The column's timezone cannot be represented on this platform.</exception>
     TimeZoneInfo TimeZone { get; }
 
     /// <summary>

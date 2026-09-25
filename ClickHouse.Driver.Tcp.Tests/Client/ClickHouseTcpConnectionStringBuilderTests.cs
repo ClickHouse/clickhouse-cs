@@ -327,6 +327,23 @@ public class ClickHouseTcpConnectionStringBuilderTests
         });
     }
 
+    // The switch must round-trip through configuration-facing connection strings.
+    [Test]
+    public void ToOptions_SendJsonAndDynamicSerializationSettings_CarriesTheKeyAndDefaultsToOn()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                ClickHouseTcpClientOptions.FromConnectionString("Host=h;SendJsonAndDynamicSerializationSettings=false")
+                    .SendJsonAndDynamicSerializationSettings,
+                Is.False);
+            Assert.That(
+                ClickHouseTcpClientOptions.FromConnectionString("Host=h").SendJsonAndDynamicSerializationSettings,
+                Is.True,
+                "no key means the injection stays on");
+        });
+    }
+
     [Test]
     public void ToOptions_UseTlsWithNoPortKey_ResolvesToTheSecureNativePort()
     {

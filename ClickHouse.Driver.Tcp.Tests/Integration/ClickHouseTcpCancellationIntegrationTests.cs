@@ -99,6 +99,51 @@ public class ClickHouseTcpCancellationIntegrationTests
         Assert.That(rows, Is.EqualTo(100));
     }
 
+    /// <summary>
+    /// Verifies that the read timeout fires when no packet arrives before the timeout expires.
+    /// </summary>
+    [Test]
+    public async Task StreamAsync_ServerSilentForLongerThanReadTimeout_FailsWithTimeoutAndGivesThePoolSlotBack()
+    {
+        ClickHouseTcpClientOptions options = TcpServerFixture.Options() with
+        {
+            ReadTimeout = TimeSpan.FromSeconds(1),
+            MaxPoolSize = 1,
+        };
+        await using var client = new ClickHouseTcpClient(options);
+
+        var queryOptions = new ClickHouseTcpQueryOptions
+        {
+            Settings = new Dictionary<string, string>(StringComparer.Ordinal) { ["interactive_delay"] = "10000000" },
+        };
+
+        // The exception types prove the timeout fired without a timing-sensitive elapsed-time assertion.
+        var timeout = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(
+            async () => await client.ExecuteScalarAsync("SELECT sleep(3)", queryOptions, None));
+
+        // The next query verifies that timeout cleanup returned the only pool slot.
+        object next = await client.ExecuteScalarAsync("SELECT toUInt64(7)", cancellationToken: None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(timeout.Message, Does.Contain("ReadTimeout"), "the message has to name the option to change");
+            Assert.That(timeout.InnerException, Is.TypeOf<TimeoutException>());
+            Assert.That(next, Is.EqualTo(7UL));
+        });
+    }
+
+    /// <summary>
+    /// Verifies that progress packets reset the read timeout.
+    /// </summary>
+    [Test]
+    public async Task StreamAsync_QuerySilentApartFromProgressPackets_SurvivesAShorterReadTimeout()
+    {
+        ClickHouseTcpClientOptions options = TcpServerFixture.Options() with { ReadTimeout = TimeSpan.FromSeconds(1) };
+        await using var client = new ClickHouseTcpClient(options);
+
+        Assert.That(await client.ExecuteScalarAsync("SELECT sleep(3)", cancellationToken: None), Is.EqualTo((byte)0));
+    }
+
     // An unbounded query remains active when the client stops reading. Small, delayed blocks
     // allow the server to read Cancel between writes.
     private static IAsyncEnumerable<Block> Unbounded(ClickHouseTcpClient client, string queryId, CancellationToken cancellationToken)

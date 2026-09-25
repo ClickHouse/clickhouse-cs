@@ -29,6 +29,36 @@ public class ColumnarReadSurfaceIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
 
+    /// <summary>
+    /// Verifies framing after a server-produced <c>Nullable(Nothing)</c> column.
+    /// </summary>
+    [Test]
+    public async Task StreamAsync_NullLiteral_ReadsAsNullableNothingAndLeavesTheBlockAligned()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        var nulls = new List<object>();
+        var following = new List<ulong>();
+        string typeName = null;
+        await foreach (Block block in client.StreamAsync(
+            "SELECT NULL AS n, toUInt64(number) + 1 AS following FROM numbers(3)", cancellationToken: None))
+        {
+            typeName = block[0].TypeName;
+            for (int row = 0; row < block.RowCount; row++)
+            {
+                nulls.Add(block[0].GetValue(row));
+                following.Add((ulong)block[1].GetValue(row));
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(typeName, Is.EqualTo("Nullable(Nothing)"));
+            Assert.That(nulls, Is.EqualTo(new object[] { null, null, null }));
+            Assert.That(following, Is.EqualTo(new ulong[] { 1, 2, 3 }), "the next column decodes, so the placeholder run was one byte per row");
+        });
+    }
+
     [Test]
     public async Task StreamAsync_NullableColumn_ExposesInnerAndNullMapThroughINullableColumn()
     {

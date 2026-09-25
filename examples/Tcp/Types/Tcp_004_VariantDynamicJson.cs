@@ -18,6 +18,10 @@ public static class TcpVariantDynamicJson
         builder["set_allow_experimental_dynamic_type"] = 1;
         builder["set_allow_experimental_json_type"] = 1;
 
+        // Readonly users can disable JSON/Dynamic serialization settings, but those columns may then use an
+        // unsupported wire format. Other column types are unaffected.
+        builder.SendJsonAndDynamicSerializationSettings = true;
+
         await using var client = new ClickHouseTcpClient(builder.ToOptions());
         string[] tables = { VariantTable, DynamicTable, JsonTable };
 

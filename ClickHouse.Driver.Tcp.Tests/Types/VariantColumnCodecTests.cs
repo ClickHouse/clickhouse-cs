@@ -199,6 +199,63 @@ public class VariantColumnCodecTests
         Assert.That(bytes, Is.Not.Empty);
     }
 
+    // Dense discriminators are reusable only when both Variant types have the same ordered alternatives.
+    [Test]
+    public async Task WriteColumn_DenseColumnOfAnotherVariant_WritesThisCodecsDiscriminatorsAndNotTheColumnsOwn()
+    {
+        IColumnCodec codec = Resolve(StringUInt64);
+        using var numbers = new ArrayColumn<ulong>("v", "UInt64", new ulong[] { 42 });
+        using var text = new ArrayColumn<string>("v", "String", new[] { "hi" });
+
+        // Source and target assign opposite indices to UInt64 and String.
+        using var dense = new VariantColumn(
+            "v", "Variant(UInt64, String)", new byte[] { 0, 1 }, new IColumn[] { numbers, text },
+            rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
+
+        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
+        {
+            codec.WriteStatePrefix(w, dense);
+            codec.WriteColumn(w, dense);
+        });
+
+        Assert.That(bytes, Is.EqualTo(new byte[]
+        {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // state prefix: discriminators mode = 0 (BASIC)
+            0x01, 0x00,                                     // row 0 is the UInt64 (1 here), row 1 the String (0)
+            0x02, 0x68, 0x69,                               // String run: len = 2, "hi"
+            0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run: 42
+        }));
+    }
+
+    // Matching dense columns retain their discriminator when CLR types cannot distinguish alternatives.
+    [Test]
+    public void WriteColumn_DenseColumnOfThisVariant_WritesWhereScatteringTheSameValuesCouldNotChoose()
+    {
+        const string type = "Variant(JSON, String, UInt64)";
+        IColumnCodec codec = Resolve(type);
+        using var json = new ArrayColumn<string>("v", "JSON", Array.Empty<string>());
+        using var text = new ArrayColumn<string>("v", "String", new[] { "hi" });
+        using var numbers = new ArrayColumn<ulong>("v", "UInt64", Array.Empty<ulong>());
+        using var dense = new VariantColumn(
+            "v", type, new byte[] { 1 }, new IColumn[] { json, text, numbers },
+            rowCount: 1, pooledDiscriminators: false, ownsColumns: false);
+
+        var boxed = new ArrayColumn<object>("v", type, new object[] { "hi" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.DoesNotThrowAsync(async () => await CodecTestHarness.WriteAsync(w =>
+            {
+                codec.WriteStatePrefix(w, dense);
+                codec.WriteColumn(w, dense);
+            }));
+
+            Assert.ThrowsAsync<ArgumentException>(
+                async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, boxed)),
+                "the same value boxed is ambiguous between JSON and String, which is what makes the dense path observable");
+        });
+    }
+
     private static IEnumerable<TestCaseData> AmbiguousAlternativeCases()
     {
         yield return new TestCaseData("Variant(JSON, String, UInt64)", (object)"{}", new[] { "JSON", "String" })

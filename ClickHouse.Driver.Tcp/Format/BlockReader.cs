@@ -98,8 +98,7 @@ internal static class BlockReader
                 // still owe its version marker. It does not, because ClickHouse writes that prefix from inside
                 // NativeWriter's writeData — which it calls only `if (rows)` — and NativeReader skips readData for a
                 // zero-row block symmetrically. BlockWriter gates both phases the same way, so the two halves agree.
-                // BlockWriterTests pins the byte layout and ClickHouseTcpConnectionQueryIntegrationTests pins the
-                // server's half; reading a prefix here that was never written desyncs every column after it.
+                // Non-empty blocks carry one state prefix per column before any column body.
                 if (rowCount != 0)
                 {
                     await codec.ReadStatePrefixAsync(reader, cancellationToken).ConfigureAwait(false);

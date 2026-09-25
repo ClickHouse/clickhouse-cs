@@ -55,13 +55,21 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Decimal256(4)", "12345678901234567890123456789012345.6789")
             .Returns("12345678901234567890123456789012345.6789").SetName("Decimal256 wider than a CLR decimal");
 
+        // Caller-supplied aliases reach the server verbatim, including aliases inside composites.
+        yield return new TestCaseData("VARCHAR", "abc").Returns("abc").SetName("VARCHAR, an alias of String");
+        yield return new TestCaseData("BIGINT", -5L).Returns("-5").SetName("BIGINT, an alias of Int64");
+        yield return new TestCaseData("DOUBLE PRECISION", 1.5d).Returns("1.5").SetName("DOUBLE PRECISION, a two-word alias");
+        yield return new TestCaseData("Boolean", true).Returns("true").SetName("Boolean, an alias of Bool");
+        yield return new TestCaseData("datetime64(3)", new DateTime(2024, 1, 2, 3, 4, 5, 123, DateTimeKind.Unspecified))
+            .Returns("2024-01-02 03:04:05.123").SetName("A case variant of a case-insensitive family");
+        yield return new TestCaseData("Array(TINYINT UNSIGNED)", new byte[] { 1, 2 }).Returns("[1,2]").SetName("An alias inside a composite");
+
         // The server accepts .NET's NaN and Infinity spellings.
         yield return new TestCaseData("Float64", double.NaN).Returns("nan").SetName("Float64 NaN");
         yield return new TestCaseData("Float64", double.PositiveInfinity).Returns("inf").SetName("Float64 +Infinity");
         yield return new TestCaseData("Float64", double.NegativeInfinity).Returns("-inf").SetName("Float64 -Infinity");
 
-        // BFloat16 takes a float and nothing else, so these are the only values it can be given. The
-        // narrowing to 7 mantissa bits is the server's, which is why every value here is one it holds exactly.
+        // Use exactly representable Single values for BFloat16.
         yield return new TestCaseData("BFloat16", 1.5f).Returns("1.5").SetName("BFloat16");
         yield return new TestCaseData("BFloat16", -2.5f).Returns("-2.5").SetName("BFloat16 negative");
         yield return new TestCaseData("BFloat16", 0f).Returns("0").SetName("BFloat16 zero");
@@ -125,8 +133,7 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Array(Int32)", Array.Empty<int>()).Returns("[]").SetName("Empty array");
         yield return new TestCaseData("Array(Array(Int32))", new[] { new[] { 1, 2 }, new[] { 3 } }).Returns("[[1,2],[3]]").SetName("Jagged array");
 
-        // A rank-2 CLR array carries the same shape as a jagged one, and iterates flattened unless the
-        // formatter walks its axes.
+        // Multidimensional arrays require walking each axis rather than flattened enumeration.
         yield return new TestCaseData("Array(Array(Int32))", new int[,] { { 1, 2 }, { 3, 4 } }).Returns("[[1,2],[3,4]]")
             .SetName("Rank-2 array");
         yield return new TestCaseData("Array(Nullable(Int32))", new int?[] { 1, null, 3 }).Returns("[1,NULL,3]").SetName("Array with a null element");
@@ -153,6 +160,11 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Time", new TimeSpan(1, 1, 1)).Returns("01:01:01").SetName("Time");
         yield return new TestCaseData("Time", 3723).Returns("01:02:03").SetName("Time from whole seconds");
         yield return new TestCaseData("Time64(3)", new TimeSpan(0, 1, 1, 1, 500)).Returns("01:01:01.500").SetName("Time64");
+
+        // The time-of-day type, which the shipped HTTP driver takes for both of these.
+        yield return new TestCaseData("Time", new TimeOnly(1, 1, 1)).Returns("01:01:01").SetName("Time from a TimeOnly");
+        yield return new TestCaseData("Time64(3)", new TimeOnly(1, 1, 1, 500)).Returns("01:01:01.500").SetName("Time64 from a TimeOnly");
+        yield return new TestCaseData("Time64(7)", TimeOnly.MaxValue).Returns("23:59:59.9999999").SetName("Time64 from the last tick of the day");
         yield return new TestCaseData("FixedString(3)", Encoding.UTF8.GetBytes("abc")).Returns("abc").SetName("FixedString from bytes");
         yield return new TestCaseData("String", Encoding.UTF8.GetBytes("abc")).Returns("abc").SetName("String from bytes");
         yield return new TestCaseData("IntervalDay", -3L).Returns("-3").SetName("IntervalDay negative");
@@ -175,6 +187,17 @@ public class ClickHouseTcpParameterIntegrationTests
             .Returns("[1,NULL,3]").SetName("Variant holding an array with a null element");
         yield return new TestCaseData("Variant(Array(LowCardinality(Nullable(String))), Int64)", new[] { "a", null })
             .Returns("['a',NULL]").SetName("Variant holding a low-cardinality array with a null element");
+
+        // Variant matching canonicalizes caller-supplied aliases and casing.
+        yield return new TestCaseData("Variant(BIGINT, String)", 7L).Returns("7").SetName("An alias as a Variant alternative");
+        yield return new TestCaseData("Variant(Array(BIGINT), String)", new[] { 7L, 8L })
+            .Returns("[7,8]").SetName("An alias nested inside a Variant alternative");
+
+        // Time values must match Time as well as Time64 alternatives.
+        yield return new TestCaseData("Variant(Time, String)", new TimeSpan(1, 1, 1))
+            .Returns("1:01:01").SetName("Variant picks the Time arm from a TimeSpan");
+        yield return new TestCaseData("Variant(Time, String)", new TimeOnly(1, 1, 1))
+            .Returns("1:01:01").SetName("Variant picks the Time arm from a TimeOnly");
 
         // Covers both JSON spellings and geo types backed by tuple/array shapes.
         yield return new TestCaseData("Json", "{\"a\":1}").Returns("{\"a\":1}").SetName("Json in the lowercase spelling");
@@ -215,6 +238,10 @@ public class ClickHouseTcpParameterIntegrationTests
         // An Enum bound by its numeric value rather than its label. Neither transport had a case for it.
         yield return new TestCaseData("Enum8('a' = 1, 'b' = 2)", 2).Returns("b").SetName("Enum by number");
 
+        // The client must select a width for a bare Enum before formatting.
+        yield return new TestCaseData("Enum('a' = 1, 'b' = 2)", "b").Returns("b").SetName("Enum with no width");
+        yield return new TestCaseData("Enum('a' = 1, 'b' = 200)", "b").Returns("b").SetName("Enum with no width, past the Int8 range");
+
         // A wide decimal past what a CLR decimal can hold, so the BigInteger path is the one under test.
         yield return new TestCaseData("Decimal128(0)", new string('1', 30)).Returns(new string('1', 30)).SetName("Decimal128 of 30 digits");
         yield return new TestCaseData("Decimal256(0)", new string('1', 50)).Returns(new string('1', 50)).SetName("Decimal256 of 50 digits");
@@ -227,6 +254,21 @@ public class ClickHouseTcpParameterIntegrationTests
 
         // A surrogate pair, which a formatter that walks chars rather than runes can split.
         yield return new TestCaseData("String", "a\U0001F600b").Returns("a\U0001F600b").SetName("String with an emoji");
+
+        // These types let the value or inner type determine the serialized layout.
+        yield return new TestCaseData("SimpleAggregateFunction(sum, UInt64)", 42UL)
+            .Returns("42").SetName("SimpleAggregateFunction as its inner type");
+        yield return new TestCaseData("SimpleAggregateFunction(groupArrayArray, Array(UInt64))", new ulong[] { 1, 2, 3 })
+            .Returns("[1,2,3]").SetName("SimpleAggregateFunction over an array inner");
+        yield return new TestCaseData("Dynamic", -7L).Returns("-7").SetName("Dynamic holding an integer");
+        yield return new TestCaseData("Dynamic", "x").Returns("x").SetName("Dynamic holding a string");
+        yield return new TestCaseData("Dynamic", new ulong[] { 1, 2, 3 }).Returns("[1,2,3]").SetName("Dynamic holding an array");
+        if (TcpServerFeatures.Has(TcpFeature.Geometry))
+        {
+            yield return new TestCaseData("Geometry", (10.0, 20.0)).Returns("(10,20)").SetName("Geometry as a point");
+            yield return new TestCaseData("Geometry", new[] { (0.0, 0.0), (1.0, 1.0), (0.0, 1.0) })
+                .Returns("[(0,0),(1,1),(0,1)]").SetName("Geometry as a ring");
+        }
 
         // A ValueTuple past 7 elements nests its tail in TRest, which ITuple flattens back out.
         yield return new TestCaseData("Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, String, String)",
@@ -363,8 +405,7 @@ public class ClickHouseTcpParameterIntegrationTests
         Assert.That(read, Is.EqualTo("2020-01-02 12:00:00"));
     }
 
-    // Every unit rides as its underlying Int64 count, and the client routes it there only if the name is in
-    // its own list of Interval names. A unit missing from that list fails here and nowhere else.
+    // Every interval unit is serialized as its Int64 count.
     [TestCase("IntervalNanosecond")]
     [TestCase("IntervalMicrosecond")]
     [TestCase("IntervalMillisecond")]
@@ -392,8 +433,7 @@ public class ClickHouseTcpParameterIntegrationTests
     [Test]
     public async Task QueryAsync_DoubleForABFloat16_IsRefusedBeforeItReachesTheServer()
     {
-        // The server narrows a double to BFloat16 with no error, and a value outside the float range arrives
-        // as an infinity, so the client refuses it instead.
+        // Reject non-Single BFloat16 values before the server silently narrows them.
         await using var client = TcpServerFixture.CreateClient();
         var options = new ClickHouseTcpQueryOptions
         {
@@ -404,6 +444,30 @@ public class ClickHouseTcpParameterIntegrationTests
             async () => await ScalarAsync(client, "SELECT toString({p:BFloat16})", options));
 
         Assert.That(exception.Message, Does.Contain("Pass a float"));
+    }
+
+    /// <summary>
+    /// Verifies that a Map row represented as ordered key-value pairs can be rebound as <c>Dynamic</c>.
+    /// </summary>
+    [Test]
+    public async Task QueryAsync_MapReadBackSentAsADynamicParameter_IsParsedAsAMap()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        object pairs = await ScalarAsync(client, "SELECT map('a', toInt32(1), 'b', toInt32(2))", null);
+        Assert.That(pairs, Is.InstanceOf<KeyValuePair<string, int>[]>(), "the shape this test is about");
+
+        var options = new ClickHouseTcpQueryOptions
+        {
+            Parameters = new ClickHouseTcpParameterCollection { { "p", pairs } },
+        };
+
+        object read = await ScalarAsync(
+            client,
+            "SELECT concat(toString(dynamicType({p:Dynamic})), ' = ', toString({p:Dynamic}))",
+            options);
+
+        Assert.That(read, Is.EqualTo("String = {'a':1,'b':2}"));
     }
 
     [TestCase("limit")]
@@ -648,9 +712,7 @@ public class ClickHouseTcpParameterIntegrationTests
             async () => await ScalarAsync(client, "SELECT {p:Int32}", options));
     }
 
-    // Each of these is a query the server runs, holding a brace the scanner must not read as a placeholder.
-    // Reaching past the brace for a colon took the hint of the parameter after it, and binding then failed
-    // on a query the server would have answered.
+    // Braces in valid SQL constructs must not be parsed as parameter placeholders.
     [TestCase("SELECT 1 AS \"col{x}\", {p:Int32}", TestName = "brace inside a double-quoted identifier")]
     [TestCase("SELECT 1 AS `col{x}`, {p:Int32}", TestName = "brace inside a backtick-quoted identifier")]
     [TestCase("SELECT $$ {x} $$ != '', {p:Int32}", TestName = "brace inside a heredoc")]

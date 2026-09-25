@@ -50,6 +50,9 @@ public sealed class TcpServerFixture
         container = new ClickHouseBuilder($"clickhouse/clickhouse-server:{tag}")
             .WithUsername(Username)
             .WithPassword(Password)
+
+            // Readonly-user tests require access-management privileges for fixture setup.
+            .WithEnvironment("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1")
             .Build();
 
         await container.StartAsync();

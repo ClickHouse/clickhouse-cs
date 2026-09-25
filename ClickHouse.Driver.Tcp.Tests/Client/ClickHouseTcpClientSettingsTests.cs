@@ -44,6 +44,37 @@ public class ClickHouseTcpClientSettingsTests
         Assert.That(merged[setting], Is.EqualTo("0"));
     }
 
+    // Readonly profiles require both injected settings to be absent, not set to zero.
+    [Test]
+    public void MergeSettings_SendSerializationSettingsOff_SendsNeither()
+    {
+        var merged = ClickHouseTcpClient.MergeSettings(
+            clientSettings: null, perQuerySettings: null, sendSerializationSettings: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.ContainsKey(FlattenedSetting), Is.False);
+            Assert.That(merged.ContainsKey(JsonAsStringSetting), Is.False);
+        });
+    }
+
+    // Disabling injection must preserve settings supplied explicitly by the caller.
+    [TestCase(FlattenedSetting)]
+    [TestCase(JsonAsStringSetting)]
+    public void MergeSettings_SendSerializationSettingsOffAndCallerNamesOne_KeepsTheCallersOwn(string setting)
+    {
+        var perQuery = new Dictionary<string, string> { [setting] = "1" };
+
+        var merged = ClickHouseTcpClient.MergeSettings(
+            clientSettings: null, perQuery, sendSerializationSettings: false);
+
+        Assert.That(merged[setting], Is.EqualTo("1"));
+    }
+
+    [Test]
+    public void SendJsonAndDynamicSerializationSettings_NotSet_DefaultsToOn()
+        => Assert.That(new ClickHouseTcpClientOptions().SendJsonAndDynamicSerializationSettings, Is.True);
+
     [Test]
     public void MergeSettings_PerQueryOverridesClientLevelForSameKey()
     {
