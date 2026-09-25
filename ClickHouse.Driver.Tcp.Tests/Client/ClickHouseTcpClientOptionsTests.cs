@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using ClickHouse.Driver.Compression;
 
 namespace ClickHouse.Driver.Tcp.Tests.Client;
 
@@ -469,6 +470,9 @@ public class ClickHouseTcpClientOptionsTests
             IdleTimeout = TimeSpan.FromSeconds(7),
             SweepInterval = TimeSpan.FromSeconds(8),
             PoolReusePolicy = ClickHouseTcpPoolReusePolicy.Fifo,
+
+            // Zstd rather than Lz4 so this stays non-default whichever codec the default becomes.
+            Compressor = ZstdCompressor.Default,
         };
         var defaults = new ClickHouseTcpClientOptions();
 

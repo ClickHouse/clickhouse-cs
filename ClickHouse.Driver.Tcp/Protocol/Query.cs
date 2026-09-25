@@ -30,6 +30,10 @@ internal static class Query
     /// <param name="sql">The SQL text.</param>
     /// <param name="settings">Per-query settings as textual values, or null for none.</param>
     /// <param name="queryParameters">Query parameter values (already in SQL representation), or null for none.</param>
+    /// <param name="compressed">
+    /// Whether this query's block bodies are compressed, in both directions. Setting it commits the client to
+    /// framing its own Data blocks — including the empty end-of-input marker — for this query.
+    /// </param>
     public static void Write(
         ClickHouseBinaryWriter writer,
         NegotiatedProtocol negotiated,
@@ -37,7 +41,8 @@ internal static class Query
         string queryId,
         string sql,
         IReadOnlyDictionary<string, string> settings,
-        IReadOnlyDictionary<string, string> queryParameters)
+        IReadOnlyDictionary<string, string> queryParameters,
+        bool compressed = false)
     {
         writer.WriteClientPacketType(ClientPacketType.Query);
         writer.WriteString(queryId ?? string.Empty);
@@ -52,7 +57,7 @@ internal static class Query
         }
 
         writer.WriteByte(StageComplete);
-        writer.WriteBool(false);                   // compression disabled
+        writer.WriteBool(compressed);              // compression, for this query only, both directions
 
         writer.WriteString(sql);
 
