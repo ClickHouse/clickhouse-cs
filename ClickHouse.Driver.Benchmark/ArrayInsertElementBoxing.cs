@@ -23,6 +23,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// </list>
 /// Inserts into <c>Null</c>-engine tables to isolate client serialization.
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class ArrayInsertElementBoxing

@@ -34,6 +34,14 @@ rules:
   # docs_sync.yml uses pull_request_target with types: [closed], so it runs
   # after a merge and checks out the base ref or a release tag. It never checks
   # out pull request head code, which is the case the audit warns about.
+  #
+  # tests-cloud-tcp-label.yml uses pull_request_target with types: [labeled], and
+  # does check out pull request head code, with the Cloud credentials. That is
+  # the point: a maintainer runs the Cloud suite for a fork. The job runs only
+  # for the tests:run-cloud label added by a user with write access, checks out
+  # the head commit named by the label event, has a read-only token, and skips
+  # the cache. A separate job removes the label afterwards.
   dangerous-triggers:
     ignore:
       - docs_sync.yml
+      - tests-cloud-tcp-label.yml
