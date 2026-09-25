@@ -7,6 +7,7 @@ on:
       - "examples/**"
       - "ClickHouse.Driver/**"
       - "ClickHouse.Driver.Common/**"
+      - "ClickHouse.Driver.Tcp/**"
       - ".github/workflows/examples.yml"
   pull_request:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - "examples/**"
       - "ClickHouse.Driver/**"
       - "ClickHouse.Driver.Common/**"
+      - "ClickHouse.Driver.Tcp/**"
       - ".github/workflows/examples.yml"
   workflow_dispatch:
     inputs:
@@ -36,6 +38,8 @@ jobs:
         image: clickhouse/clickhouse-server:latest
         ports:
           - 8123:8123
+          # The native protocol listens separately; the Tcp examples need it.
+          - 9000:9000
         env:
           CLICKHOUSE_DB: test
           CLICKHOUSE_SKIP_USER_SETUP: "1"
