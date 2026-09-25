@@ -164,14 +164,14 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         }
     }
 
-    /// <summary>The connect-plus-handshake deadline, in seconds. Defaults to 30.</summary>
+    /// <summary>The connect-plus-handshake timeout, in seconds. Defaults to 30.</summary>
     public TimeSpan DialTimeout
     {
         get => GetTimeSpanSecondsOrDefault("DialTimeout", ClickHouseTcpClientOptions.DefaultDialTimeout);
         set => this["DialTimeout"] = value.TotalSeconds;
     }
 
-    /// <summary>The idle read deadline, in seconds. Defaults to 300.</summary>
+    /// <summary>Maximum time per transport read during an operation, in seconds. Defaults to 300; 0 disables it.</summary>
     public TimeSpan ReadTimeout
     {
         get => GetTimeSpanSecondsOrDefault("ReadTimeout", ClickHouseTcpClientOptions.DefaultReadTimeout);

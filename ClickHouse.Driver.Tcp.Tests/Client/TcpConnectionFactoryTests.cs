@@ -15,7 +15,7 @@ using ClickHouse.Driver.Tcp.Tests.Utilities;
 namespace ClickHouse.Driver.Tcp.Tests.Client;
 
 // DialTimeout has to bound connect *and* handshake, not just connect: a server that accepts the socket and then
-// says nothing is exactly the hang the deadline exists for, and no real ClickHouse can be asked to behave that
+// says nothing is exactly the hang the timeout exists for, and no real ClickHouse can be asked to behave that
 // way. A listener that accepts and never replies reproduces it with no network beyond loopback.
 [TestFixture]
 public class TcpConnectionFactoryTests
@@ -46,11 +46,12 @@ public class TcpConnectionFactoryTests
                 DialTimeout = TimeSpan.FromMilliseconds(250),
             });
 
-            var thrown = Assert.ThrowsAsync<TimeoutException>(async () => await factory.CreateAsync(CancellationToken.None));
+            var thrown = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(async () => await factory.CreateAsync(CancellationToken.None));
 
             Assert.Multiple(() =>
             {
                 Assert.That(thrown.Message, Does.Contain("DialTimeout"));
+                Assert.That(thrown.InnerException, Is.TypeOf<TimeoutException>());
                 Assert.That(thrown.Message, Does.Contain($"127.0.0.1:{port}"));
             });
         }

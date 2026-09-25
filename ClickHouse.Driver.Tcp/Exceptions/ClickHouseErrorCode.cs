@@ -97,7 +97,7 @@ public enum ClickHouseErrorCode
     /// <summary>The query exceeded its row limit.</summary>
     TooManyRows = 158,
 
-    /// <summary>The query exceeded <c>max_execution_time</c> or another server-side deadline.</summary>
+    /// <summary>The query exceeded <c>max_execution_time</c> or another server-side timeout.</summary>
     TimeoutExceeded = 159,
 
     /// <summary>The query was killed for running below <c>min_execution_speed</c>.</summary>

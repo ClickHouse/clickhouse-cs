@@ -18,7 +18,7 @@ namespace ClickHouse.Driver.Tcp.Client;
 /// <para>
 /// A checked-out connection belongs to its lease-holder alone, which is how a connection that is not thread-safe
 /// stays safe under a client that is. Disposal is the one exception: it aborts the transport of anything still out
-/// once the drain deadline passes. A returned connection is kept for reuse unless it is terminated, out of step
+/// once the drain timeout expires. A returned connection is kept for reuse unless it is terminated, out of step
 /// with the server, too old, or has sat unused too long. A retired one is closed and never handed out again.
 /// </para>
 /// </summary>
@@ -306,17 +306,17 @@ internal sealed class ConnectionPool : IConnectionSource
         // finds the pool disposed and closes its connection rather than pooling it. Bounded by PoolTimeout for the
         // same reason a checkout is: an operation that never releases its connection, such as an `await foreach`
         // whose enumerator is never disposed, must not turn disposal into a hang.
-        using var drainDeadline = new CancellationTokenSource(options.PoolTimeout);
+        using var drainTimeout = new CancellationTokenSource(options.PoolTimeout);
         try
         {
             for (int i = 0; i < options.MaxPoolSize; i++)
             {
-                await permits.WaitAsync(drainDeadline.Token).ConfigureAwait(false);
+                await permits.WaitAsync(drainTimeout.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
         {
-            // The drain deadline elapsed: at least one operation did not give its connection back. Abort what is
+            // The drain timeout elapsed: at least one operation did not give its connection back. Abort what is
             // still out, since nothing else can. The pool holds the only other reference to it, and the caller has
             // evidently lost theirs. Aborting closes the transport only, which frees an operation parked on a read
             // that will never arrive, and leaves alone the buffers that operation may still be using.
@@ -659,7 +659,7 @@ internal sealed class ConnectionPool : IConnectionSource
     /// cancellation; only disposal is reported as disposal.
     /// </para>
     /// <para>
-    /// The filter reads its tokens when the exception is thrown, not when it was raised, so a dial deadline and a
+    /// The filter reads its tokens when the exception is thrown, not when it was raised, so a dial timeout and a
     /// disposal that land in the same instant can each be reported as the other. Both answers are true of that
     /// instant, so telling them apart is not worth the cost.
     /// </para>
