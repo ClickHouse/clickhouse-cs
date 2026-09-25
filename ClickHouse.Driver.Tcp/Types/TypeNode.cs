@@ -12,13 +12,23 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// </summary>
 internal sealed class TypeNode
 {
-    /// <summary>Initializes a new instance of the <see cref="TypeNode"/> class.</summary>
+    /// <summary>Initializes a new instance of the <see cref="TypeNode"/> class, with an argument list iff there are arguments.</summary>
     /// <param name="name">The base type name, or the raw token for a non-type argument.</param>
     /// <param name="arguments">The argument nodes; empty for a plain type or a leaf token.</param>
     public TypeNode(string name, IReadOnlyList<TypeNode> arguments)
+        : this(name, arguments, arguments.Count > 0)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="TypeNode"/> class.</summary>
+    /// <param name="name">The base type name, or the raw token for a non-type argument.</param>
+    /// <param name="arguments">The argument nodes; empty for a plain type or a leaf token.</param>
+    /// <param name="hasArgumentList">Whether the type string carried parentheses, even around nothing.</param>
+    public TypeNode(string name, IReadOnlyList<TypeNode> arguments, bool hasArgumentList)
     {
         Name = name;
         Arguments = arguments;
+        HasArgumentList = hasArgumentList;
     }
 
     /// <summary>The base type name (e.g. <c>UInt64</c>, <c>Array</c>), or the raw token of a non-type argument.</summary>
@@ -27,11 +37,18 @@ internal sealed class TypeNode
     /// <summary>The argument nodes, in source order; empty when the type takes none.</summary>
     public IReadOnlyList<TypeNode> Arguments { get; }
 
+    /// <summary>
+    /// Whether the type string carried a parenthesized argument list, even an empty one. Only an empty list makes
+    /// this differ from <c><see cref="Arguments"/>.Count > 0</c>, which separates the legal zero-element
+    /// <c>Tuple()</c> from a bare <c>Tuple</c> that names no elements at all.
+    /// </summary>
+    public bool HasArgumentList { get; }
+
     /// <summary>Reconstructs a canonical type string (arguments comma-separated), useful for diagnostics.</summary>
     /// <returns>The type string.</returns>
     public override string ToString()
     {
-        if (Arguments.Count == 0)
+        if (Arguments.Count == 0 && !HasArgumentList)
         {
             return Name;
         }
