@@ -32,7 +32,7 @@ public readonly struct ClickHouseTcpDecimal : IEquatable<ClickHouseTcpDecimal>, 
     /// <param name="mantissa">The unscaled value.</param>
     /// <param name="scale">The number of fractional digits; must be non-negative.</param>
     public ClickHouseTcpDecimal(Int128 mantissa, int scale)
-        : this(Int256.FromBigInteger(mantissa), scale)
+        : this(SignExtend(mantissa), scale)
     {
     }
 
@@ -52,6 +52,12 @@ public readonly struct ClickHouseTcpDecimal : IEquatable<ClickHouseTcpDecimal>, 
 
     /// <summary>The sign of the value: -1, 0, or 1.</summary>
     public int Sign => mantissa == Int256.Zero ? 0 : mantissa.IsNegative ? -1 : 1;
+
+    private static Int256 SignExtend(Int128 value)
+    {
+        ulong high = value < 0 ? ulong.MaxValue : 0;
+        return new Int256(unchecked((ulong)value), unchecked((ulong)(value >> 64)), high, high);
+    }
 
     /// <summary>Builds a value from a <see cref="decimal"/>, preserving its scale exactly.</summary>
     /// <param name="value">The value to convert.</param>
