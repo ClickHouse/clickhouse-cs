@@ -8,6 +8,38 @@ namespace ClickHouse.Driver.Examples;
 /// </summary>
 public static class ExampleRunner
 {
+    // These sets must be initialized before _examples because discovery reads them.
+    // Preflight both endpoints for examples that use both clients.
+    private static readonly HashSet<string> _crossTransport = new(StringComparer.Ordinal)
+    {
+        "TcpMigratingFromHttp",
+    };
+
+    // Self-contained examples do not need the configured server.
+    private static readonly HashSet<string> _selfContained = new(StringComparer.Ordinal)
+    {
+        "Testcontainers",
+        "TcpTestcontainers",
+    };
+
+    // These examples configure their own endpoint instead of using ExampleConfig.
+    private static readonly HashSet<string> _customEndpoint = new(StringComparer.Ordinal)
+    {
+        "ConnectionStringConfiguration",
+        "CreateTableCloud",
+        "DependencyInjection",
+        "JwtAuthentication",
+        "TcpTls",
+    };
+
+    // Run infrastructure-dependent examples only when a filter selects them explicitly.
+    private static readonly HashSet<string> _optIn = new(StringComparer.Ordinal)
+    {
+        "CreateTableCluster",
+        "CreateTableCloud",
+        "JwtAuthentication",
+    };
+
     private static readonly List<ExampleInfo> _examples = DiscoverExamples();
 
     /// <summary>
@@ -19,6 +51,15 @@ public static class ExampleRunner
         /// Normalized form for matching (lowercase, no underscores).
         /// </summary>
         public string NormalizedName { get; } = Normalize(ClassName);
+
+        /// <summary>The transport indicated by the example's class-name prefix.</summary>
+        public ExampleTransport Transport { get; } = GetTransport(ClassName);
+
+        /// <summary>The endpoints that preflight must check.</summary>
+        public IReadOnlyList<ExampleTransport> RequiredTransports { get; } = GetRequiredTransports(ClassName);
+
+        /// <summary>Whether an unfiltered run includes this example.</summary>
+        public bool RunsByDefault { get; } = !_optIn.Contains(ClassName);
     }
 
     /// <summary>
@@ -27,14 +68,26 @@ public static class ExampleRunner
     public static IReadOnlyList<ExampleInfo> Examples => _examples;
 
     /// <summary>
+    /// Gets the examples that use one transport and that a run naming no example includes.
+    /// </summary>
+    /// <param name="transport">The transport to select.</param>
+    /// <returns>The matching examples, in class-name order.</returns>
+    public static List<ExampleInfo> ForTransport(ExampleTransport transport)
+        => _examples.Where(e => e.Transport == transport && e.RunsByDefault).ToList();
+
+    /// <summary>
     /// Finds examples matching the given filter using fuzzy matching.
     /// Matches against any substring of the normalized class name.
     /// </summary>
-    public static List<ExampleInfo> FindMatches(string filter)
+    /// <param name="filter">The pattern to match.</param>
+    /// <param name="transport">The transport to restrict the match to, or null for either.</param>
+    /// <returns>The matching examples, in class-name order.</returns>
+    public static List<ExampleInfo> FindMatches(string filter, ExampleTransport? transport = null)
     {
         var normalizedFilter = Normalize(filter);
         return _examples
             .Where(e => e.NormalizedName.Contains(normalizedFilter))
+            .Where(e => transport is null || e.Transport == transport)
             .ToList();
     }
 
@@ -50,19 +103,27 @@ public static class ExampleRunner
     /// <summary>
     /// Lists all available examples to the console.
     /// </summary>
-    public static void ListExamples()
+    public static void ListExamples(ExampleTransport? transport = null)
     {
-        Console.WriteLine("Available examples:\n");
+        // Keep opt-in examples discoverable even though an unfiltered run skips them.
+        var listed = _examples.Where(e => transport is null || e.Transport == transport).ToList();
 
-        foreach (var example in _examples.OrderBy(e => e.ClassName))
+        Console.WriteLine(transport is { } named ? $"Available {named} examples:\n" : "Available examples:\n");
+
+        foreach (var example in listed.OrderBy(e => e.ClassName))
         {
-            Console.WriteLine($"  - {example.ClassName}");
+            Console.WriteLine(example.RunsByDefault
+                ? $"  - {example.ClassName}"
+                : $"  - {example.ClassName}   (--filter only: needs a cluster, Cloud, or a token)");
         }
 
         Console.WriteLine();
         Console.WriteLine("Usage:");
         Console.WriteLine("  dotnet run                         Run all examples");
+        Console.WriteLine("  dotnet run -- --http               Run only the HTTP examples");
+        Console.WriteLine("  dotnet run -- --tcp                Run only the native protocol examples");
         Console.WriteLine("  dotnet run -- --list               List available examples");
+        Console.WriteLine("  dotnet run -- --list --tcp         List one transport's examples");
         Console.WriteLine("  dotnet run -- --filter <pattern>   Run examples matching pattern");
         Console.WriteLine("  dotnet run -- <pattern>            Shorthand for --filter");
         Console.WriteLine();
@@ -118,6 +179,26 @@ public static class ExampleRunner
     private static string Normalize(string input)
     {
         return input.Replace("_", "").Replace("-", "").ToLowerInvariant();
+    }
+
+    private static ExampleTransport GetTransport(string className)
+        => className.StartsWith("Tcp", StringComparison.Ordinal)
+            ? ExampleTransport.Tcp
+            : ExampleTransport.Http;
+
+    private static IReadOnlyList<ExampleTransport> GetRequiredTransports(string className)
+    {
+        if (_selfContained.Contains(className) || _customEndpoint.Contains(className))
+        {
+            return [];
+        }
+
+        if (_crossTransport.Contains(className))
+        {
+            return [ExampleTransport.Http, ExampleTransport.Tcp];
+        }
+
+        return [GetTransport(className)];
     }
 
     private static int GetSimilarityScore(string filter, string target)
