@@ -22,10 +22,11 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </para>
 ///
 /// <para>
-/// On the write path the column is always the dense <c>TupleColumn</c> (whose child columns already exist),
-/// serialized straight from those children with no copy. A flat column of <c>ValueTuple</c> values — the buffer
+/// On the write path a dense <c>TupleColumn</c> (whose child columns already exist) is serialized straight from
+/// those children with no copy. A flat column of <c>ValueTuple</c> values — the buffer
 /// an <c>Array(Tuple(...))</c> flattens into, or one a caller builds directly — is un-transposed into the
-/// per-child columns before the write.
+/// per-child columns before the write when every child codec accepts that projection. A shape-only child such as
+/// <c>Nested</c> requires the dense tuple form so its named field columns remain available.
 /// </para>
 /// </summary>
 internal sealed class TupleColumnCodec : IColumnCodec
@@ -63,7 +64,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
     private readonly ConstructorInfo columnConstructor;
     private readonly Type icolumnOfTupleType;
     private readonly Func<string, IColumn, int, IColumn>[] childProjectionBuilders;
-    private readonly bool allChildrenWritable;
+    private readonly bool projectedChildrenWritable;
 
     private TupleColumnCodec(string typeName, IColumnCodec[] children, string[] fieldNames)
     {
@@ -114,15 +115,16 @@ internal sealed class TupleColumnCodec : IColumnCodec
                 .MakeGenericMethod(elementTypes[i])
                 .CreateDelegate(typeof(Func<string, IColumn, int, IColumn>));
 
-            // Probe writability with an empty child column so a Tuple over a non-writable element (e.g. Nothing)
-            // is rejected up front rather than mid-write.
+            // Probe the flat ValueTuple path with the projected child shape it will actually hand the codec. A
+            // dense TupleColumn is checked against its real child columns in CanWrite instead, which lets a
+            // Tuple(Nested(...)) re-insert its wire-shaped NestedColumn child.
             var emptyBuilder = (Func<string, IColumn>)emptyTemplate
                 .MakeGenericMethod(elementTypes[i])
                 .CreateDelegate(typeof(Func<string, IColumn>));
             writable &= children[i].CanWrite(emptyBuilder(children[i].TypeName));
         }
 
-        allChildrenWritable = writable;
+        projectedChildrenWritable = writable;
     }
 
     /// <inheritdoc/>
@@ -218,7 +220,33 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => allChildrenWritable && icolumnOfTupleType.IsInstanceOfType(column);
+    public bool CanWrite(IColumn column)
+    {
+        if (!icolumnOfTupleType.IsInstanceOfType(column))
+        {
+            return false;
+        }
+
+        if (column is not ITupleColumn dense)
+        {
+            return projectedChildrenWritable;
+        }
+
+        if (dense.Children.Count != children.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < children.Length; i++)
+        {
+            if (!children[i].CanWrite(dense.Children[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <inheritdoc/>
     // Project each element position into its own child column once (dense children as-is, a flat tuple column
