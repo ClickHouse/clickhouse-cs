@@ -64,6 +64,12 @@ internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec
     public object NullPlaceholder => default(TValue);
 
     /// <inheritdoc/>
+    // Values that differ only in trailing zeros scale to one mantissa, so the mantissa is the relation rather
+    // than whatever the value type's own equality does with scale.
+    public object LowCardinalityKeyWriter(Type writeType)
+        => writeType == typeof(TValue) ? LowCardinalityKeys.Projected<TValue, TMantissa>(value => encode(value, scale)) : null;
+
+    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         int s = scale;
