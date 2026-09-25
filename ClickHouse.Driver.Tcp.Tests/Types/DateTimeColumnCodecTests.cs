@@ -260,6 +260,29 @@ public class DateTimeColumnCodecTests
     }
 
     [Test]
+    public async Task WriteColumn_LocalKind_EncodesTheInstantAndIgnoresTheColumnTimezone()
+    {
+        // A Kind=Local value names an instant, resolved against the host machine's timezone, so the column's own
+        // timezone takes no part: two columns five hours apart encode it identically, and so does the Kind=Utc
+        // value naming the same instant. A wall-clock reading would differ between the two columns. Both
+        // assertions hold whatever zone the host is in.
+        const string utcType = "DateTime('UTC')";
+        const string offsetType = "DateTime('Fixed/UTC+05:00:00')";
+        var local = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Local);
+        DateTime utc = local.ToUniversalTime();
+
+        byte[] inUtcColumn = await WriteAsync(w => Codec(utcType).WriteColumn(w, new ArrayColumn<DateTime>("c", utcType, new[] { local })));
+        byte[] inOffsetColumn = await WriteAsync(w => Codec(offsetType).WriteColumn(w, new ArrayColumn<DateTime>("c", offsetType, new[] { local })));
+        byte[] fromUtcKind = await WriteAsync(w => Codec(offsetType).WriteColumn(w, new ArrayColumn<DateTime>("c", offsetType, new[] { utc })));
+
+        Assert.Multiple(() =>
+        {
+            CollectionAssert.AreEqual(inUtcColumn, inOffsetColumn, "the column timezone takes no part");
+            CollectionAssert.AreEqual(fromUtcKind, inOffsetColumn, "Local is the instant, not a wall clock in the column timezone");
+        });
+    }
+
+    [Test]
     public void Create_UnknownTimezone_Throws()
         => Assert.Throws<FormatException>(() => Codec("DateTime('Not/AZone')"));
 

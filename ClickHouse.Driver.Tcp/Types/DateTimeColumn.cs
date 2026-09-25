@@ -144,11 +144,5 @@ internal sealed class DateTimeColumn : IColumn<uint>
         return new DateTimeColumn(name, typeName, timeZone, rented, byteCount, pooled: true);
     }
 
-    // The wire value is a UTC instant; the timezone only decides the offset it is presented with. The offset is
-    // resolved from the instant so both daylight-saving transitions and historical base-offset changes are honored.
-    private DateTimeOffset ToDateTimeOffset(uint seconds)
-    {
-        DateTimeOffset utc = DateTimeOffset.FromUnixTimeSeconds(seconds);
-        return TimeZoneInfo.ConvertTime(utc, timeZone);
-    }
+    private DateTimeOffset ToDateTimeOffset(uint seconds) => ColumnValueProjections.DateTimeToOffset(seconds, timeZone);
 }
