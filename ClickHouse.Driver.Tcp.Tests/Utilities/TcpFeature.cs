@@ -42,6 +42,10 @@ public enum TcpFeature
     [SinceVersion("26.6")]
     NullableTuple = 1 << 6,
 
+    /// <summary><c>QBit</c> columns with <c>Int8</c> elements.</summary>
+    [SinceVersion("26.7")]
+    QBitInt8 = 1 << 7,
+
     /// <summary>Every capability. What an unrecognised or unpinned server version resolves to.</summary>
     All = ~None,
 }

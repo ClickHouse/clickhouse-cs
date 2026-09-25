@@ -96,6 +96,9 @@ internal sealed class ColumnCodecRegistry
         // FixedString(N): N contiguous bytes per row, the length parsed from the type argument.
         AddFactory("FixedString", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => FixedStringColumnCodec.Create(node));
 
+        // QBit(T, N): no state prefix; most-significant-first planes containing one big-endian bitmap per row.
+        AddFactory("QBit", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => QBitColumnCodec.Create(node));
+
         // Dates and times.
         AddConstant(DateColumnCodec.Instance);
         AddConstant(Date32ColumnCodec.Instance);
