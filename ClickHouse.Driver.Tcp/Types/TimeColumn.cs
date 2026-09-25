@@ -23,7 +23,7 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// out to retain.
 /// </para>
 /// </summary>
-internal sealed class TimeColumn : IColumn<int>
+internal sealed class TimeColumn : IColumn<int>, IStoredValuesColumn
 {
     private readonly int length;
     private readonly bool pooled;
