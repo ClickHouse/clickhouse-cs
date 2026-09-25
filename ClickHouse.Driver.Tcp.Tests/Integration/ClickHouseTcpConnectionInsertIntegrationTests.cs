@@ -12,6 +12,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // A yielded Block is borrowed and must be consumed within its iteration.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpConnectionInsertIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -19,6 +20,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
     public async Task InsertAsync_ColumnarData_RoundTripsThroughSelect(InsertRoundTripCase testCase)
     {
+        TcpServerFixture.SkipIfCloudLocksASetting(testCase.Settings);
+
         await using var connection = await TcpServerFixture.ConnectAsync(None);
         string table = UniqueTableName();
         try
@@ -52,6 +55,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     [TestCaseSource(typeof(InsertRoundTripCase), nameof(InsertRoundTripCase.Cases))]
     public async Task InsertAsync_DenseReadbackReinserted_RoundTripsThroughSelect(InsertRoundTripCase testCase)
     {
+        TcpServerFixture.SkipIfCloudLocksASetting(testCase.Settings);
+
         await using var source = await TcpServerFixture.ConnectAsync(None);
         await using var sink = await TcpServerFixture.ConnectAsync(None);
         string seedTable = UniqueTableName();
@@ -522,8 +527,9 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         string target = UniqueTableName();
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = Memory");
-            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = Memory");
+            // The reader uses another connection, so use replicated storage for multi-replica Cloud services.
+            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = MergeTree ORDER BY tuple()");
             // Force both values into the source Int64 alternative.
             await ExecuteAsync(
                 connection,
@@ -532,7 +538,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
             // Reinsert while the borrowed block still owns its pooled buffers.
             await using ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None);
             // Sort on a String expression because ordering Variant requires a separate setting.
-            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", cancellationToken: None))
+            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", settings: ReadOtherConnectionsInserts, cancellationToken: None))
             {
                 await connection.InsertAsync($"INSERT INTO {target} (value) VALUES", new[] { block[0] }, cancellationToken: None);
             }
@@ -575,13 +581,15 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         string target = UniqueTableName();
         try
         {
-            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = Memory");
-            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = Memory");
+            // MergeTree, not Memory: the reader and the counter below are their own connections, and Memory data
+            // belongs to the replica that took the insert, so a multi-replica server hands them empty tables.
+            await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = MergeTree ORDER BY tuple()");
             await ExecuteAsync(connection, $"INSERT INTO {source} VALUES (CAST('abc' AS Variant(Int64, String)))");
 
             ArgumentException refusal = null;
             await using ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None);
-            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", cancellationToken: None))
+            await foreach (Block block in reader.QueryAsync($"SELECT value FROM {source}", settings: ReadOtherConnectionsInserts, cancellationToken: None))
             {
                 refusal = Assert.ThrowsAsync<ArgumentException>(
                     async () => await connection.InsertAsync($"INSERT INTO {target} (value) VALUES", new[] { block[0] }, cancellationToken: None));
@@ -665,6 +673,13 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     {
         ["allow_experimental_dynamic_type"] = "1",
         ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
+    };
+
+    // A second connection can reach a Cloud replica that has not yet loaded the parts another replica just
+    // inserted. This setting makes the read wait for them. A single server ignores it.
+    private static readonly Dictionary<string, string> ReadOtherConnectionsInserts = new(StringComparer.Ordinal)
+    {
+        ["select_sequential_consistency"] = "1",
     };
 
     private static uint[] RowIds(int count)

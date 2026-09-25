@@ -13,6 +13,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // Covers pool behavior that requires real connections and server responses.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ConnectionPoolIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -122,9 +123,17 @@ public class ConnectionPoolIntegrationTests
                 Enumerable.Range(batch * 50, 50).Select(i => new ValueRow { Id = (ulong)i }).ToList(),
                 cancellationToken: None).AsTask()));
 
+            // The eight inserts commit on whichever replica their connection reached, so the count has to be
+            // read with sequential consistency to include all of them. On a single server there is nothing to
+            // wait for and the setting does nothing.
+            var readAll = new ClickHouseTcpQueryOptions
+            {
+                Settings = new Dictionary<string, string> { ["select_sequential_consistency"] = "1" },
+            };
+
             ulong count = 0;
             await foreach (ValueRow row in client.QueryAsync<ValueRow>(
-                $"SELECT count() AS id FROM {table}", cancellationToken: None))
+                $"SELECT count() AS id FROM {table}", readAll, None))
             {
                 count = row.Id;
             }
@@ -275,6 +284,12 @@ public class ConnectionPoolIntegrationTests
     [Test]
     public async Task Retirement_AfterChurningManyConnections_LeavesNoneOpenOnTheServer()
     {
+        if (TcpServerFixture.IsCloud)
+        {
+            // The TCPConnection metric counts one replica only, and each connection can go to any replica.
+            Assert.Ignore("On Cloud the open-connection count covers one replica, not all connections of this client.");
+        }
+
         const int churns = 40;
         const int tolerance = churns / 4;
 
@@ -301,7 +316,7 @@ public class ConnectionPoolIntegrationTests
         // HAVING prevents QueryLog.ScalarAsync from accepting a partial result.
         object ports = await QueryLog.ScalarAsync(
             observer,
-            $"SELECT toUInt64(uniqExact(port)) FROM system.query_log WHERE query_id LIKE '{tag}%' AND type = 'QueryStart' HAVING count() = {churns}");
+            $"SELECT toUInt64(uniqExact(port)) FROM {QueryLog.Table} WHERE query_id LIKE '{tag}%' AND type = 'QueryStart' HAVING count() = {churns}");
         long open = await WaitForServerConnectionsAsync(observer, baseline + tolerance);
 
         Assert.Multiple(() =>

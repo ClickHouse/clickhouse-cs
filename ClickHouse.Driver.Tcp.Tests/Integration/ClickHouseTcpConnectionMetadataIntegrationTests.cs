@@ -17,6 +17,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // requires replicated-table part deduplication.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpConnectionMetadataIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;

@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
+using ClickHouse.Driver.Tcp.Tests.Integration;
 
 namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 
@@ -15,6 +16,21 @@ internal static class QueryLog
 {
     /// <summary>Number of flush-and-read attempts before giving up.</summary>
     internal const int MaxAttempts = 40;
+
+    /// <summary>
+    /// The table expression to read the log from. Use it in place of <c>system.query_log</c> in a lookup.
+    /// </summary>
+    /// <remarks>
+    /// Each replica keeps its own log, and the query under test can run on any replica, so where the server has
+    /// a cluster the flush and the lookup cover every replica.
+    /// </remarks>
+    internal static string Table => TcpServerFixture.HasDefaultCluster
+        ? "clusterAllReplicas(default, system.query_log)"
+        : "system.query_log";
+
+    private static string FlushSql => TcpServerFixture.HasDefaultCluster
+        ? "SYSTEM FLUSH LOGS ON CLUSTER default query_log"
+        : "SYSTEM FLUSH LOGS query_log";
 
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
 
@@ -33,7 +49,7 @@ internal static class QueryLog
     {
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
-            await client.ExecuteAsync("SYSTEM FLUSH LOGS query_log", cancellationToken: CancellationToken.None);
+            await client.ExecuteAsync(FlushSql, cancellationToken: CancellationToken.None);
 
             object value = await ReadFirstAsync(client, sql);
             if (value is not null)

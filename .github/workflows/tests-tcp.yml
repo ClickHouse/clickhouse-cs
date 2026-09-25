@@ -15,6 +15,7 @@ on:
       - "Directory.Packages.props"
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
+      - ".github/workflows/tests-cloud-tcp.yml"
   pull_request:
     # Matches the PR's base branch, so a PR stacked onto another tcp/** epic branch triggers too.
     branches: [main, tcp-client, "tcp/**"]
@@ -24,6 +25,7 @@ on:
       - "Directory.Packages.props"
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
+      - ".github/workflows/tests-cloud-tcp.yml"
   workflow_dispatch:
     inputs:
       ref:
@@ -37,7 +39,7 @@ permissions:
 jobs:
   regress-clickhouse-tcp:
     name: ClickHouse regression (TCP)
-    uses: ./.github/workflows/reusable-tcp.yml
+    uses: $/.github/workflows/reusable-tcp.yml
     with:
       clickhouse-version: ${{ matrix.version }}
       ref: ${{ inputs.ref }}
@@ -55,7 +57,7 @@ jobs:
   regress-dotnet-tcp:
     name: .NET regression (TCP)
     # Framework axis: each TFM runs against clickhouse-version 'latest' (the reusable default).
-    uses: ./.github/workflows/reusable-tcp.yml
+    uses: $/.github/workflows/reusable-tcp.yml
     with:
       framework: ${{ matrix.framework }}
       ref: ${{ inputs.ref }}
@@ -63,3 +65,21 @@ jobs:
       fail-fast: false
       matrix:
         framework: ["net10.0", "net9.0", "net8.0"] # TCP library targets net8.0+ only
+
+  cloud-tcp:
+    name: Cloud (TCP)
+    # On a pull request only when its branch is in this repository, which needs write access to push. Dependabot
+    # pull requests do not get the Actions secrets. A fork gets a run from the tests:run-cloud label
+    # (tests-cloud-tcp-label.yml).
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.event.pull_request.user.login != 'dependabot[bot]')
+    uses: $/.github/workflows/tests-cloud-tcp.yml
+    secrets:
+      CLICKHOUSE_CLOUD_HOST: ${{ secrets.CLICKHOUSE_CLOUD_HOST }}
+      CLICKHOUSE_CLOUD_USER: ${{ secrets.CLICKHOUSE_CLOUD_USER }}
+      CLICKHOUSE_CLOUD_PASSWORD: ${{ secrets.CLICKHOUSE_CLOUD_PASSWORD }}
+    with:
+      ref: ${{ inputs.ref }}

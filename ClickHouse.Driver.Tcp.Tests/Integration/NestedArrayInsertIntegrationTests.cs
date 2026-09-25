@@ -27,6 +27,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class NestedArrayInsertIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;

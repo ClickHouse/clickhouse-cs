@@ -14,6 +14,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 // which confirms that the server processed the Cancel packet.
 [TestFixture]
 [Category("Integration")]
+[Category("Cloud")]
 public class ClickHouseTcpCancellationIntegrationTests
 {
     private const int QueryWasCancelledByClient = 735;
@@ -157,7 +158,7 @@ public class ClickHouseTcpCancellationIntegrationTests
     {
         object code = await QueryLog.ScalarAsync(
             client,
-            $"SELECT exception_code FROM system.query_log WHERE query_id = '{queryId}' AND type != 'QueryStart' ORDER BY event_time_microseconds DESC LIMIT 1");
+            $"SELECT exception_code FROM {QueryLog.Table} WHERE query_id = '{queryId}' AND type != 'QueryStart' ORDER BY event_time_microseconds DESC LIMIT 1");
 
         return Convert.ToInt32(code, CultureInfo.InvariantCulture) == QueryWasCancelledByClient;
     }
