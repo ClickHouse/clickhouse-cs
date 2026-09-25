@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Numerics;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
@@ -195,6 +196,45 @@ public class TypeMappingTests
 
     [TestCaseSource(nameof(ValueToClickHouseTypeCases))]
     public string ShouldConvertValueToClickHouseType(object value) => TypeConverter.ToClickHouseType(value).ToString();
+
+    private static IEnumerable<TestCaseData> InferDecimalTypeCases()
+    {
+        // InferDecimalType chooses the narrowest Decimal width whose precision (the max of the
+        // value's significant digits and its scale) represents the value, and carries the value's
+        // own scale so no fractional digits are lost. Cases drive precision by scale and by digit
+        // count and sit on both edges of every width threshold, so an off-by-one in a `<=` bound —
+        // or a dropped BigInteger.Abs — would fail. Args: (mantissa, scale) => "Decimal<width>(<scale>)".
+        yield return new TestCaseData(BigInteger.Zero, 0).Returns("Decimal32(0)");                          // precision 1: the Math.Max(..., 1) floor
+        yield return new TestCaseData(BigInteger.Parse("123456789"), 4).Returns("Decimal32(4)");            // precision 9: Decimal32 upper edge, digit-driven
+        yield return new TestCaseData(BigInteger.One, 10).Returns("Decimal64(10)");                         // precision 10: Decimal64 lower edge, scale-driven (the #466 0.0000000001 case)
+        yield return new TestCaseData(BigInteger.One, 18).Returns("Decimal64(18)");                         // precision 18: Decimal64 upper edge
+        yield return new TestCaseData(BigInteger.Parse("1234567890123456789"), 0).Returns("Decimal128(0)"); // precision 19: Decimal128 lower edge, digit-driven
+        yield return new TestCaseData(BigInteger.One, 38).Returns("Decimal128(38)");                        // precision 38: Decimal128 upper edge
+        yield return new TestCaseData(BigInteger.One, 39).Returns("Decimal256(39)");                        // precision 39: Decimal256 lower edge
+        yield return new TestCaseData(BigInteger.One, 76).Returns("Decimal256(76)");                        // precision 76: Decimal256 upper edge
+        yield return new TestCaseData(BigInteger.Parse("-123456789"), 6).Returns("Decimal32(6)");           // negative: the sign is not a digit (|mantissa| has 9 digits -> Decimal32)
+    }
+
+    [Test]
+    [TestCaseSource(nameof(InferDecimalTypeCases))]
+    public string InferDecimalType_ForValueScale_SelectsNarrowestWidthCarryingValueScale(BigInteger mantissa, int scale)
+        => TypeConverter.InferDecimalType(new ClickHouseDecimal(mantissa, scale)).ToString();
+
+    private static IEnumerable<TestCaseData> InferDecimalTypeOverflowCases()
+    {
+        // A precision above 76 exceeds the capacity of the widest ClickHouse Decimal (Decimal256),
+        // reachable either through the scale alone or through the significant-digit count.
+        yield return new TestCaseData(BigInteger.One, 77).SetName("InferDecimalType_ScaleAbove76_Throws");
+        yield return new TestCaseData(BigInteger.Parse(new string('9', 77)), 0).SetName("InferDecimalType_DigitsAbove76_Throws");
+    }
+
+    [Test]
+    [TestCaseSource(nameof(InferDecimalTypeOverflowCases))]
+    public void InferDecimalType_ForPrecisionAbove76_ThrowsArgumentOutOfRangeException(BigInteger mantissa, int scale)
+    {
+        var value = new ClickHouseDecimal(mantissa, scale);
+        Assert.Throws<ArgumentOutOfRangeException>(() => TypeConverter.InferDecimalType(value));
+    }
 
     private static IEnumerable<TestCaseData> NonZeroBoundMultidimCases()
     {
