@@ -29,11 +29,23 @@ internal static class CodecTestHarness
     /// <summary>A reader over the given bytes.</summary>
     public static ClickHouseBinaryReader ReaderOver(byte[] bytes) => new(new MemoryStream(bytes));
 
-    /// <summary>Writes then reads back <paramref name="column"/> through <paramref name="codec"/>, returning the decoded column.</summary>
+    /// <summary>
+    /// Writes then reads back <paramref name="column"/> through <paramref name="codec"/>, returning the decoded
+    /// column. The column is written straight from its ergonomic form (no densify step), exactly as the insert
+    /// pipeline now does — the codec projects it to the wire through lazy views with no intermediate dense buffer.
+    /// </summary>
     public static async Task<IColumn> RoundTripAsync(IColumnCodec codec, IColumn column, string columnType, int rowCount)
     {
         byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
         using ClickHouseBinaryReader reader = ReaderOver(bytes);
         return await codec.ReadColumnAsync(reader, column.Name, columnType, rowCount, None);
     }
+
+    /// <summary>
+    /// Encodes the requested row range of <paramref name="column"/> straight from its ergonomic form. Use for the
+    /// direct-<see cref="IColumnCodec.WriteColumn(ClickHouseBinaryWriter, IColumn, int, int)"/> slice tests that
+    /// bypass <see cref="RoundTripAsync"/>.
+    /// </summary>
+    public static Task<byte[]> WriteSliceAsync(IColumnCodec codec, IColumn column, int start, int length)
+        => WriteAsync(w => codec.WriteColumn(w, column, start, length));
 }

@@ -312,6 +312,23 @@ public class DateTimeColumnCodecTests
         });
     }
 
+    [Test]
+    public void WritableElementTypes_ListsUIntThenOffsetThenDateTime()
+        => Assert.That(Codec("DateTime").WritableElementTypes, Is.EqualTo(new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) }));
+
+    [Test]
+    public void NullPlaceholderAs_ReturnsEpochInRequestedSpelling_ThrowsForOthers()
+    {
+        DateTimeColumnCodec codec = Codec("DateTime");
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.NullPlaceholderAs(typeof(uint)), Is.EqualTo(0u));
+            Assert.That(codec.NullPlaceholderAs(typeof(DateTimeOffset)), Is.EqualTo(DateTimeOffset.UnixEpoch));
+            Assert.That(codec.NullPlaceholderAs(typeof(DateTime)), Is.EqualTo(DateTime.UnixEpoch));
+            Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(string)));
+        });
+    }
+
     private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)
     {
         using var ms = new MemoryStream();

@@ -151,7 +151,6 @@ public sealed class InsertRoundTripCase
 
         // Newer/experimental server types: enable their flag on the round-trip
         yield return BFloat16s("BFloat16", BFloat16Settings, 0f, 1f, -2f, 0.5f, 100f);
-
         // Time surfaces as the raw Int32 seconds; Time64 as the raw Int64 count at the column's scale. The
         // inserted values are the exact wire values, returned verbatim.
         yield return TimeSeconds("Time", TimeSettings, 0, (12 * 3600) + (34 * 60) + 56, -((1 * 3600) + (2 * 60) + 3));
@@ -176,6 +175,134 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<TimeSpan>(name, "Time64(3)", time64Spans),
             name => new ArrayColumn<long>(name, "Time64(3)", Array.ConvertAll(time64Spans, t => t.Ticks / TimeSpan.TicksPerMillisecond)),
             TimeSettings);
+
+        // Nullable(T): one case per supported inner type. A value inner surfaces as T?, a reference inner as the
+        // nullable reference; each case interleaves nulls with present values, and the all-null cases exercise
+        // the placeholder-only values stream. IMPORTANT: when adding a new type to this list, add a Nullable(that
+        // type) case here too — Nullable exercises a distinct write path (null-map + per-type null placeholder)
+        // that the bare type does not.
+        yield return NullableValues<byte>("UInt8", 0, null, byte.MaxValue);
+        yield return NullableValues<sbyte>("Int8", sbyte.MinValue, null, sbyte.MaxValue);
+        yield return NullableValues<ushort>("UInt16", 0, null, ushort.MaxValue);
+        yield return NullableValues<short>("Int16", short.MinValue, null, short.MaxValue);
+        yield return NullableValues<uint>("UInt32", 0, null, uint.MaxValue);
+        yield return NullableValues<int>("Int32", int.MinValue, null, 0, int.MaxValue);
+        yield return NullableValues<int>("Int32", (int?)null, null); // every row null: the values stream is all placeholder
+        yield return NullableValues<ulong>("UInt64", 0, null, ulong.MaxValue);
+        yield return NullableValues<long>("Int64", long.MinValue, null, long.MaxValue);
+        yield return NullableValues<UInt128>("UInt128", UInt128.Zero, null, UInt128.MaxValue);
+        yield return NullableValues<Int128>("Int128", Int128.MinValue, null, Int128.MaxValue);
+        yield return NullableValues<UInt256>("UInt256", UInt256.Zero, null, UInt256.FromBigInteger(System.Numerics.BigInteger.Pow(2, 200)));
+        yield return NullableValues<Int256>("Int256", Int256.FromBigInteger(-System.Numerics.BigInteger.Pow(2, 200)), null, Int256.Zero);
+        yield return NullableValues<float>("Float32", 0f, null, -1.5f, float.MaxValue);
+        yield return NullableValues<double>("Float64", 1.5, null, -1.5e100, null);
+        yield return NullableValues<bool>("Bool", true, null, false);
+        yield return NullableValues<sbyte>("Enum8('a' = -1, 'b' = 127)", -1, null, 127);
+        yield return NullableValues<short>("Enum16('x' = -32768, 'y' = 32767)", -32768, null, 32767);
+        yield return NullableValues<DateOnly>("Date", new DateOnly(1970, 1, 1), null, new DateOnly(2149, 6, 6));
+        yield return NullableValues<DateOnly>("Date32", new DateOnly(1900, 1, 1), null, new DateOnly(2299, 12, 31));
+        yield return NullableValues<Guid>("UUID", Guid.Empty, null, new Guid("00112233-4455-6677-8899-aabbccddeeff"));
+        yield return NullableValues<decimal>("Decimal(9, 2)", 1.23m, null, -1.23m, 9999999.99m);
+        yield return NullableValues<decimal>("Decimal(18, 4)", 12345.6789m, null, -12345.6789m);
+        yield return NullableWideDecimals("Decimal(38, 10)", "12345.6789", null, "-98765.4321");
+        yield return NullableWideDecimals("Decimal(76, 20)", "1.00000000000000000001", null, "-1.00000000000000000001");
+        yield return NullableValues<long>("IntervalSecond", 0L, null, -5L);
+
+        // DateTime reads back a DateTimeOffset?; equality is by instant, so the presented offset does not matter.
+        yield return NullableDateTimes(
+            new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero),
+            null,
+            new DateTimeOffset(1988, 8, 28, 11, 22, 33, TimeSpan.Zero));
+        yield return NullableDateTime64s(3, 0L, null, 1_700_000_000_123L, null);
+        yield return NullableDateTime64s(9, 1_700_000_000_123_456_789L, null, -1_000_000_001L);
+
+        // Nullable re-offers every CLR write spelling the bare inner accepts, each with its own-typed null
+        // placeholder — so Nullable(DateTime) takes DateTimeOffset? or DateTime?, and Nullable(DateTime64) takes
+        // long?, DateTimeOffset? or DateTime?. The cases above only cover the first spelling of each, which left
+        // the alternates proven by unit tests alone; these send them to a server.
+        var nullableDateTimes = new DateTime?[] { DateTime.UnixEpoch.AddSeconds(1_700_000_000), null, DateTime.UnixEpoch };
+        yield return new InsertRoundTripCase(
+            "Nullable(DateTime) <- DateTime?",
+            "Nullable(DateTime)",
+            name => new ArrayColumn<DateTime?>(name, "Nullable(DateTime)", nullableDateTimes),
+            name => new ArrayColumn<uint?>(name, "Nullable(DateTime)", Array.ConvertAll(nullableDateTimes, v => v is null ? (uint?)null : (uint)new DateTimeOffset(v.Value.ToUniversalTime()).ToUnixTimeSeconds())),
+            settings: null);
+
+        var nullableOffsets = new DateTimeOffset?[] { DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123), null };
+        yield return new InsertRoundTripCase(
+            "Nullable(DateTime64(3)) <- DateTimeOffset?",
+            "Nullable(DateTime64(3))",
+            name => new ArrayColumn<DateTimeOffset?>(name, "Nullable(DateTime64(3))", nullableOffsets),
+            name => new ArrayColumn<long?>(name, "Nullable(DateTime64(3))", Array.ConvertAll(nullableOffsets, o => o?.ToUnixTimeMilliseconds())),
+            settings: null);
+
+        var nullable64DateTimes = new DateTime?[] { DateTime.UnixEpoch.AddMilliseconds(1_700_000_000_123), null };
+        yield return new InsertRoundTripCase(
+            "Nullable(DateTime64(3)) <- DateTime?",
+            "Nullable(DateTime64(3))",
+            name => new ArrayColumn<DateTime?>(name, "Nullable(DateTime64(3))", nullable64DateTimes),
+            name => new ArrayColumn<long?>(name, "Nullable(DateTime64(3))", Array.ConvertAll(nullable64DateTimes, v => v is null ? (long?)null : new DateTimeOffset(v.Value.ToUniversalTime()).ToUnixTimeMilliseconds())),
+            settings: null);
+
+        // Experimental server types: enable their flag on the round-trip (same as their non-nullable cases).
+        yield return NullableValues<float>("BFloat16", BFloat16Settings, 0f, null, 1f, -2f);
+        yield return NullableValues<int>("Time", TimeSettings, 0, null, (12 * 3600) + (34 * 60) + 56);
+        yield return NullableValues<long>("Time64(3)", TimeSettings, 0L, null, (((1 * 3600) + (2 * 60) + 3) * 1000L) + 456);
+
+        yield return NullableStrings("hello", null, "world", string.Empty);
+        yield return NullableStrings(null, null); // every row null
+
+        // IPv4/IPv6 are reference-typed (IPAddress) but fixed-width; a null row must not reach the IP codec (it
+        // dereferences the address), so the nullable write substitutes a placeholder instead.
+        yield return NullableIps("IPv4", "127.0.0.1", null, "255.255.255.255");
+        yield return NullableIps("IPv6", "::1", null, "2001:db8::1");
+        yield return NullableIps("IPv4", null, null); // every row null
+    }
+
+    private static InsertRoundTripCase NullableValues<T>(string innerType, params T?[] values)
+        where T : struct
+        => NullableValues(innerType, settings: null, values);
+
+    private static InsertRoundTripCase NullableValues<T>(string innerType, IReadOnlyDictionary<string, string> settings, params T?[] values)
+        where T : struct
+    {
+        string type = $"Nullable({innerType})";
+        return new InsertRoundTripCase($"{type} [{values.Length} rows]", type, name => new ArrayColumn<T?>(name, type, values), name => new ArrayColumn<T?>(name, type, values), settings);
+    }
+
+    // Nullable(DateTime) inserts a DateTimeOffset? but reads back the raw UInt32 epoch seconds (uint?); the
+    // expected column carries each present instant's epoch seconds, with nulls preserved.
+    private static InsertRoundTripCase NullableDateTimes(params DateTimeOffset?[] values)
+        => new(
+            $"Nullable(DateTime) [{values.Length} rows]",
+            "Nullable(DateTime)",
+            name => new ArrayColumn<DateTimeOffset?>(name, "Nullable(DateTime)", values),
+            name => new ArrayColumn<uint?>(name, "Nullable(DateTime)", Array.ConvertAll(values, v => v is null ? (uint?)null : (uint)v.Value.ToUnixTimeSeconds())),
+            settings: null);
+
+    // Nullable(DateTime64(scale)) surfaces a long? raw count at the column's scale; a null count maps to a null row.
+    private static InsertRoundTripCase NullableDateTime64s(int scale, params long?[] counts)
+    {
+        string type = $"Nullable(DateTime64({scale}))";
+        return Same($"{type} [{counts.Length} rows]", type, name => new ArrayColumn<long?>(name, type, counts));
+    }
+
+    // Nullable of a wide decimal (Decimal128/256) surfaces a ClickHouseDecimal?; a null string maps to a null row.
+    private static InsertRoundTripCase NullableWideDecimals(string innerType, params string[] values)
+    {
+        string type = $"Nullable({innerType})";
+        return Same($"{type} [{values.Length} rows]", type, name => new ArrayColumn<ClickHouseDecimal?>(
+            name, type, values.Select(v => v is null ? (ClickHouseDecimal?)null : ParseWide(v)).ToArray()));
+    }
+
+    private static InsertRoundTripCase NullableStrings(params string[] values)
+        => Same($"Nullable(String) [{values.Length} rows]", "Nullable(String)", name => new ArrayColumn<string>(name, "Nullable(String)", values));
+
+    private static InsertRoundTripCase NullableIps(string innerType, params string[] values)
+    {
+        string type = $"Nullable({innerType})";
+        return Same($"{type} [{values.Length} rows]", type, name => new ArrayColumn<IPAddress>(
+            name, type, values.Select(v => v is null ? null : IPAddress.Parse(v)).ToArray()));
     }
 
     private static InsertRoundTripCase Primitive<T>(string clickHouseType, T[] values)
