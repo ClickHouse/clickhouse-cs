@@ -1,0 +1,64 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary_markdown", "verdict", "findings"],
+  "properties": {
+    "summary_markdown": {
+      "type": "string",
+      "description": "Body of the sticky summary comment, as Markdown, in the structure given in the prompt. Every finding also appears here, so the summary reads on its own."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "request_changes", "block"],
+      "description": "Matches the final verdict in summary_markdown."
+    },
+    "findings": {
+      "type": "array",
+      "description": "One entry per issue, most severe first. Empty when the PR has nothing worth a reviewer's attention.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "severity",
+          "path",
+          "line",
+          "title",
+          "body",
+          "dismissed_but_real"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable identifier for this issue, lowercase kebab-case, for example 'tcp-reader-missing-cancellation-token'. Reuse the key from prior_threads.json when reporting the same issue again; only a genuinely new finding gets a new key. Letters, digits, dot, underscore, slash and hyphen only."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["blocker", "major", "nit"],
+            "description": "Judged by the severity model in .claude/skills/review/SKILL.md."
+          },
+          "path": {
+            "type": "string",
+            "description": "Repository-relative path, exactly as it appears in the diff."
+          },
+          "line": {
+            "type": "integer",
+            "description": "Line number in the new version of the file. Must be a line inside a diff hunk, either added or context; a line outside every hunk cannot take a comment."
+          },
+          "title": {
+            "type": "string",
+            "description": "Short label for the issue, under 70 characters."
+          },
+          "body": {
+            "type": "string",
+            "description": "The inline comment: the invariant, how this code breaks it, the impact, and the smallest fix. A ```suggestion block when a concrete replacement fits the anchored line."
+          },
+          "dismissed_but_real": {
+            "type": "boolean",
+            "description": "True only for a finding the PR author dismissed that you still consider real. It goes in the summary and gets no inline comment."
+          }
+        }
+      }
+    }
+  }
+}
