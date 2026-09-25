@@ -23,11 +23,15 @@ internal interface IColumnCodec
     IReadOnlyList<Type> WritableElementTypes => new[] { ElementType };
 
     /// <summary>
-    /// Common readable CLR types. Composite combinations may be omitted; test them with <see cref="TryProjectRead"/>.
+    /// Common readable CLR types. Composite combinations may be omitted; test them with
+    /// <see cref="ColumnProjection.Offers"/>, which is the authority.
     /// </summary>
     IReadOnlyList<Type> ReadableElementTypes => new[] { ElementType };
 
-    /// <summary>Builds an expression that projects a canonical value to <paramref name="targetType"/>.</summary>
+    /// <summary>
+    /// Builds an elementwise projection from the canonical value to <paramref name="targetType"/>. Use
+    /// <see cref="TryProjectColumnRead"/> when the conversion requires column state.
+    /// </summary>
     /// <param name="value">An expression of type <see cref="ElementType"/>.</param>
     /// <param name="targetType">The requested CLR type.</param>
     /// <param name="projected">An expression of type <paramref name="targetType"/>, or null when none is offered.</param>
@@ -38,6 +42,19 @@ internal interface IColumnCodec
         ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
         projected = targetType == ElementType ? value : null;
         return projected is not null;
+    }
+
+    /// <summary>
+    /// Builds a projected column when conversion requires column state, such as raw string bytes, dictionary
+    /// entries, or composite child columns. Called before <see cref="TryProjectRead"/>. The default offers none.
+    /// </summary>
+    /// <param name="targetType">The requested CLR type.</param>
+    /// <param name="projection">A projection producing an <c>IColumn&lt;targetType&gt;</c>, or null when none is offered.</param>
+    /// <returns>Whether a column-level reading as <paramref name="targetType"/> exists.</returns>
+    bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
+    {
+        projection = null;
+        return false;
     }
 
     /// <summary>A valid canonical value for the hidden inner value of a null.</summary>

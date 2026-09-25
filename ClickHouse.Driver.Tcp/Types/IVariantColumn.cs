@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace ClickHouse.Driver.Tcp;
 
@@ -13,6 +14,12 @@ public interface IVariantColumn : IColumn
 
     /// <summary>The number of alternative types.</summary>
     int TypeCount { get; }
+
+    /// <summary>
+    /// The child columns' ClickHouse type names in discriminator order. This order may differ from the declared
+    /// order, and aliases such as <c>Geometry</c> may not list their alternatives in the column type name.
+    /// </summary>
+    IReadOnlyList<string> TypeNames { get; }
 
     /// <summary>One discriminator per row; <see cref="NullDiscriminator"/> marks a NULL row.</summary>
     ReadOnlySpan<byte> Discriminators { get; }

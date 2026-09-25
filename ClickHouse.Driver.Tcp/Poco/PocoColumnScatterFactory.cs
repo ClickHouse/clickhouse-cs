@@ -20,11 +20,13 @@ namespace ClickHouse.Driver.Tcp.Poco;
 internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int start, int rowCount, long rowOffset);
 
 /// <summary>
-/// Compiles a per-column loop with <see cref="PocoValueProjection"/> inlined into each assignment.
+/// Compiles a loop that fills one POCO property from either an elementwise conversion or a projected column.
 /// </summary>
 internal static class PocoColumnScatterFactory
 {
     private static readonly MethodInfo SpanAt = typeof(PocoSpan).GetMethod(nameof(PocoSpan.At), BindingFlags.Public | BindingFlags.Static);
+
+    private static readonly MethodInfo CacheFor = typeof(ProjectedViewCache).GetMethod(nameof(ProjectedViewCache.For));
 
     /// <summary>
     /// Compiles the scatter for one column into one property.
@@ -48,15 +50,13 @@ internal static class PocoColumnScatterFactory
             throw NotSurfacingItsElementType(column, codec);
         }
 
-        PocoScatterTier tier = SelectTier(forcedTier, column);
-
         ParameterExpression columnParameter = Expression.Parameter(typeof(IColumn), "column");
         ParameterExpression rows = Expression.Parameter(typeof(T[]), "rows");
         ParameterExpression start = Expression.Parameter(typeof(int), "start");
         ParameterExpression rowCount = Expression.Parameter(typeof(int), "rowCount");
         ParameterExpression rowOffset = Expression.Parameter(typeof(long), "rowOffset");
         ParameterExpression row = Expression.Variable(typeof(int), "row");
-        ParameterExpression value = Expression.Variable(elementType, "value");
+        Expression columnRow = Expression.Add(start, row);
 
         var site = new PocoProjectionSite
         {
@@ -67,26 +67,50 @@ internal static class PocoColumnScatterFactory
             Row = Expression.Add(rowOffset, Expression.Convert(row, typeof(long))),
         };
 
-        if (!PocoValueProjection.TryResolve(codec, value, member.MemberType, site, out Expression projected))
-        {
-            throw NotReadableAs(column, codec, member, typeof(T));
-        }
-
         var locals = new List<ParameterExpression>(3) { row };
         var body = new List<Expression>(4);
-        Expression source = SourceOneValue(tier, columnParameter, typedColumn, elementType, Expression.Add(start, row), locals, body);
 
-        // row = 0; while (row < rowCount) { value = <source>; rows[row].P = <projected>; row++; }
+        // Cache column-level projections across materialization windows so dictionaries and child columns are
+        // converted once per source column.
+        Expression assign;
+        if (member.MemberType != elementType
+            && codec.TryProjectColumnRead(member.MemberType, out ColumnReadProjection projection))
+        {
+            Type typedView = typeof(IColumn<>).MakeGenericType(member.MemberType);
+            ParameterExpression view = Expression.Variable(typedView, "view");
+            locals.Add(view);
+            body.Add(Expression.Assign(
+                view,
+                Expression.Convert(
+                    Expression.Call(Expression.Constant(new ProjectedViewCache(projection)), CacheFor, columnParameter),
+                    typedView)));
+
+            assign = Expression.Assign(
+                Expression.Property(Expression.ArrayIndex(rows, row), member.Property),
+                Expression.MakeIndex(view, typedView.GetProperty("Item", member.MemberType, new[] { typeof(int) }), new[] { columnRow }));
+        }
+        else
+        {
+            ParameterExpression value = Expression.Variable(elementType, "value");
+            if (!PocoValueProjection.TryResolve(codec, value, member.MemberType, site, out Expression projected))
+            {
+                throw NotReadableAs(column, codec, member, typeof(T));
+            }
+
+            Expression source = SourceOneValue(SelectTier(forcedTier, column), columnParameter, typedColumn, elementType, columnRow, locals, body);
+            assign = Expression.Block(
+                new[] { value },
+                Expression.Assign(value, source),
+                Expression.Assign(Expression.Property(Expression.ArrayIndex(rows, row), member.Property), projected));
+        }
+
+        // row = 0; while (row < rowCount) { <assign>; row++; }
         LabelTarget done = Expression.Label("done");
         body.Add(Expression.Assign(row, Expression.Constant(0)));
         body.Add(Expression.Loop(
             Expression.IfThenElse(
                 Expression.LessThan(row, rowCount),
-                Expression.Block(
-                    new[] { value },
-                    Expression.Assign(value, source),
-                    Expression.Assign(Expression.Property(Expression.ArrayIndex(rows, row), member.Property), projected),
-                    Expression.PostIncrementAssign(row)),
+                Expression.Block(assign, Expression.PostIncrementAssign(row)),
                 Expression.Break(done)),
             done));
 

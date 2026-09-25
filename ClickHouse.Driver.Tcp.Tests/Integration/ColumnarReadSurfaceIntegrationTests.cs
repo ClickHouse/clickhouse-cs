@@ -43,6 +43,8 @@ public class ColumnarReadSurfaceIntegrationTests
 
         bool matchedInner = false;
         bool matchedNullable = false;
+        bool matchedUntyped = false;
+        bool sameInnerInstance = false;
         byte[] nullMap = null;
         int nullMapLength = 0;
         int rowCount = 0;
@@ -57,8 +59,10 @@ public class ColumnarReadSurfaceIntegrationTests
             IColumn column = block[0];
             matchedInner = column is INullableColumn<int>;
             matchedNullable = column is INullableColumn<int?>;
+            matchedUntyped = column is INullableColumn;
 
             var nullable = (INullableColumn<int>)column;
+            sameInnerInstance = ReferenceEquals(((INullableColumn)column).Inner, nullable.Inner);
             nullMap = nullable.NullMap.ToArray();
             nullMapLength = nullable.NullMap.Length;
             rowCount = nullable.RowCount;
@@ -81,6 +85,8 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             Assert.That(matchedInner, Is.True, "the view is parameterized by the inner type");
             Assert.That(matchedNullable, Is.False, "and not by the nullable type");
+            Assert.That(matchedUntyped, Is.True);
+            Assert.That(sameInnerInstance, Is.True, "the untyped Inner is the typed Inner");
             Assert.That(rowCount, Is.EqualTo(4));
             Assert.That(nullMap, Is.EqualTo(new byte[] { 0, 1, 0, 0 }), "one entry per row, non-zero marking null");
             Assert.That(nullMapLength, Is.EqualTo(rowCount), "the map is sliced to the row count, not the pooled buffer length");
@@ -141,6 +147,9 @@ public class ColumnarReadSurfaceIntegrationTests
         await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
+        bool matchedUntyped = false;
+        bool matchedWrongElement = false;
+        bool sameUntypedInner = false;
         int rowCount = 0;
         int[] offsets = null;
         int[] innerValues = null;
@@ -155,8 +164,11 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             IColumn column = block[0];
             matched = column is IArrayColumn<int>;
+            matchedUntyped = column is IArrayColumn;
+            matchedWrongElement = column is IArrayColumn<string>;
 
             var array = (IArrayColumn<int>)column;
+            sameUntypedInner = ReferenceEquals(((IArrayColumn)column).Inner, array.Inner);
             rowCount = array.RowCount;
             offsets = array.Offsets.ToArray();
             innerValues = array.InnerValues.ToArray();
@@ -172,6 +184,9 @@ public class ColumnarReadSurfaceIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(matched, Is.True);
+            Assert.That(matchedUntyped, Is.True);
+            Assert.That(matchedWrongElement, Is.False);
+            Assert.That(sameUntypedInner, Is.True, "the untyped Inner is the typed Inner");
             Assert.That(rowCount, Is.EqualTo(4));
             Assert.That(offsets, Is.EqualTo(new[] { 0, 0, 1, 3, 6 }), "one more entry than rows; [0] is 0");
             Assert.That(offsets.Length, Is.EqualTo(rowCount + 1), "sliced to the row count, not the pooled buffer length");
@@ -318,6 +333,9 @@ public class ColumnarReadSurfaceIntegrationTests
         await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
+        bool matchedUntyped = false;
+        bool sameUntypedKeyColumn = false;
+        bool sameUntypedValueColumn = false;
         int rowCount = 0;
         int[] offsets = null;
         string[] flatKeys = null;
@@ -338,8 +356,11 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             IColumn column = block[0];
             matched = column is IMapColumn<string, int>;
+            matchedUntyped = column is IMapColumn;
 
             var map = (IMapColumn<string, int>)column;
+            sameUntypedKeyColumn = ReferenceEquals(((IMapColumn)column).KeyColumn, map.KeyColumn);
+            sameUntypedValueColumn = ReferenceEquals(((IMapColumn)column).ValueColumn, map.ValueColumn);
             rowCount = map.RowCount;
             offsets = map.Offsets.ToArray();
             flatKeys = map.KeyColumn.Values.ToArray();
@@ -358,6 +379,9 @@ public class ColumnarReadSurfaceIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(matched, Is.True);
+            Assert.That(matchedUntyped, Is.True);
+            Assert.That(sameUntypedKeyColumn, Is.True, "the untyped KeyColumn is the typed KeyColumn");
+            Assert.That(sameUntypedValueColumn, Is.True, "the untyped ValueColumn is the typed ValueColumn");
             Assert.That(rowCount, Is.EqualTo(3));
             Assert.That(offsets, Is.EqualTo(new[] { 0, 0, 1, 3 }), "one more entry than rows");
             Assert.That(offsets.Length, Is.EqualTo(rowCount + 1), "sliced to the row count, not the pooled buffer length");
@@ -478,6 +502,8 @@ public class ColumnarReadSurfaceIntegrationTests
         await using var client = TcpServerFixture.CreateClient();
 
         bool matched = false;
+        bool matchedUntyped = false;
+        bool sameUntypedDictionary = false;
         int rowCount = 0;
         int keyCount = 0;
         int dictionarySize = 0;
@@ -492,8 +518,10 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             IColumn column = block[0];
             matched = column is ILowCardinalityColumn<string>;
+            matchedUntyped = column is ILowCardinalityColumn;
 
             var lc = (ILowCardinalityColumn<string>)column;
+            sameUntypedDictionary = ReferenceEquals(((ILowCardinalityColumn)column).Dictionary, lc.Dictionary);
             rowCount = lc.RowCount;
             keyCount = lc.Keys.Length;
             dictionarySize = lc.Dictionary.RowCount;
@@ -510,6 +538,8 @@ public class ColumnarReadSurfaceIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(matched, Is.True);
+            Assert.That(matchedUntyped, Is.True);
+            Assert.That(sameUntypedDictionary, Is.True, "the untyped Dictionary is the typed Dictionary");
             Assert.That(rowCount, Is.EqualTo(12));
             Assert.That(keyCount, Is.EqualTo(rowCount), "one key per row, sliced to the row count rather than the pooled buffer length");
             Assert.That(dictionarySize, Is.EqualTo(4), "three distinct values plus the reserved default slot at [0]");
@@ -646,6 +676,9 @@ public class ColumnarReadSurfaceIntegrationTests
         bool matched = false;
         int typeCount = 0;
         int rowCount = 0;
+        string[] typeNames = null;
+        IReadOnlyList<string> typeNamesList = null;
+        string[] childTypeNames = null;
         byte[] discriminators = null;
         int discriminatorLength = 0;
         int[] localIndices = null;
@@ -672,6 +705,9 @@ public class ColumnarReadSurfaceIntegrationTests
             var variant = (IVariantColumn)column;
             typeCount = variant.TypeCount;
             rowCount = variant.RowCount;
+            typeNames = variant.TypeNames.ToArray();
+            typeNamesList = variant.TypeNames;
+            childTypeNames = Enumerable.Range(0, variant.TypeCount).Select(i => variant.GetTypeColumn(i).TypeName).ToArray();
             discriminators = variant.Discriminators.ToArray();
             discriminatorLength = variant.Discriminators.Length;
             localIndices = variant.LocalIndices.ToArray();
@@ -706,6 +742,12 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(rowCount, Is.EqualTo(5));
             Assert.That(discriminatorLength, Is.EqualTo(rowCount), "sliced to the row count, not the pooled buffer length");
             Assert.That(discriminators, Is.EqualTo(new byte[] { 1, 0, IVariantColumn.NullDiscriminator, 1, 0 }), "0 = String, 1 = UInt64, 255 = NULL");
+            Assert.That(typeNames, Is.EqualTo(new[] { "String", "UInt64" }), "which is what TypeNames reports, in discriminator order");
+            Assert.That(typeNames, Is.EqualTo(childTypeNames), "and it agrees with each child's own type string");
+            // Handed out wrapped: neither a cast back to the array nor the IList surface can rewrite an entry into
+            // disagreeing with the child column it names.
+            Assert.That(typeNamesList as string[], Is.Null);
+            Assert.Throws<NotSupportedException>(() => ((IList<string>)typeNamesList)[0] = "Rewritten");
             Assert.That(localIndices, Is.EqualTo(new[] { 0, 0, -1, 1, 1 }), "per-type running position; a NULL row addresses no child, so -1");
             Assert.That(stringChild, Is.EqualTo(new[] { "a", "b" }), "each child holds only its own rows, contiguously");
             Assert.That(intChild, Is.EqualTo(new ulong[] { 100, 400 }));
@@ -915,4 +957,144 @@ public class ColumnarReadSurfaceIntegrationTests
             Assert.That(spans[1] - spans[0], Is.EqualTo(TimeSpan.FromSeconds(1)));
         });
     }
+
+    [Test]
+    public async Task StreamAsync_EnumColumn_ExposesItsDeclaredMembersThroughIEnumColumn()
+    {
+        // Verifies raw ordinal access and declaration-based label lookup without parsing the type string.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool matched = false;
+        KeyValuePair<string, long>[] members = null;
+        var labels = new string[3];
+        sbyte[] ordinals = null;
+        long doneOrdinal = -1;
+        bool foundDone = false;
+        var rowsThatAreDone = new List<int>();
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT CAST(number + 1 AS Enum8('queued' = 1, 'running' = 2, 'done' = 3)) FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            IColumn column = block[0];
+            matched = column is IEnumColumn;
+
+            var labelled = (IEnumColumn)column;
+            members = labelled.Members.ToArray();
+            ordinals = ((IColumn<sbyte>)column).Values.ToArray();
+            for (int row = 0; row < labelled.RowCount; row++)
+            {
+                labels[row] = labelled.GetLabel(row);
+            }
+
+            foundDone = labelled.TryGetOrdinal("done", out doneOrdinal);
+            for (int row = 0; row < ordinals.Length; row++)
+            {
+                if (ordinals[row] == doneOrdinal)
+                {
+                    rowsThatAreDone.Add(row);
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matched, Is.True);
+            Assert.That(
+                members,
+                Is.EqualTo(new[]
+                {
+                    new KeyValuePair<string, long>("queued", 1),
+                    new KeyValuePair<string, long>("running", 2),
+                    new KeyValuePair<string, long>("done", 3),
+                }),
+                "in declaration order");
+            Assert.That(ordinals, Is.EqualTo(new sbyte[] { 1, 2, 3 }), "the values are the raw ordinals");
+            Assert.That(labels, Is.EqualTo(new[] { "queued", "running", "done" }));
+            Assert.That(foundDone, Is.True);
+            Assert.That(doneOrdinal, Is.EqualTo(3));
+            Assert.That(rowsThatAreDone, Is.EqualTo(new[] { 2 }));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_NullableEnumColumn_ReachesTheMembersThroughItsInnerColumn()
+    {
+        // The wrapper is its own column, so the enum view is on the dense inner one — the same shape as the
+        // temporal case, and reachable without knowing whether the ordinals are sbyte or short.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool innerIsEnum = false;
+        var readings = new string[3];
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT if(number = 1, NULL, CAST(number + 1 AS Enum8('queued' = 1, 'running' = 2, 'done' = 3))) " +
+            "FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            var nullable = (INullableColumn)block[0];
+            if (nullable.Inner is IEnumColumn labelled)
+            {
+                innerIsEnum = true;
+                for (int row = 0; row < nullable.RowCount; row++)
+                {
+                    readings[row] = nullable.NullMap[row] != 0 ? null : labelled.GetLabel(row);
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(innerIsEnum, Is.True);
+            Assert.That(readings, Is.EqualTo(new[] { "queued", null, "done" }));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_NullableTemporalColumn_ReachesTheCalendarReadingThroughItsInnerColumn()
+    {
+        // Nullable exposes temporal access through its dense inner column because null rows have no temporal value.
+        await using var client = TcpServerFixture.CreateClient();
+
+        bool wrapperIsTemporal = false;
+        bool innerIsTemporal = false;
+        int scale = -1;
+        string timeZone = null;
+        var readings = new DateTimeOffset?[3];
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT if(number = 1, NULL, toDateTime64('2024-06-15 14:00:00.125', 3, 'UTC') + number) AS ts " +
+            "FROM system.numbers LIMIT 3",
+            cancellationToken: None))
+        {
+            IColumn column = block["ts"];
+            wrapperIsTemporal = column is IDateTimeColumn;
+
+            var nullable = (INullableColumn)column;
+            if (nullable.Inner is IDateTimeColumn timestamps)
+            {
+                innerIsTemporal = true;
+                scale = timestamps.Scale;
+                timeZone = timestamps.TimeZone.Id;
+                for (int row = 0; row < nullable.RowCount; row++)
+                {
+                    readings[row] = nullable.NullMap[row] != 0 ? null : timestamps.GetDateTimeOffset(row);
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wrapperIsTemporal, Is.False, "a null row has no calendar reading, so the wrapper offers none");
+            Assert.That(innerIsTemporal, Is.True);
+            Assert.That(scale, Is.EqualTo(3));
+            Assert.That(timeZone, Is.EqualTo("UTC"));
+            Assert.That(readings[1], Is.Null);
+            Assert.That(
+                readings[0]?.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture),
+                Is.EqualTo("2024-06-15 14:00:00.125"));
+            Assert.That(readings[2] - readings[0], Is.EqualTo(TimeSpan.FromSeconds(2)));
+        });
+    }
+
 }

@@ -77,7 +77,8 @@ internal sealed class JsonStringColumnCodec : IColumnCodec
         => StringColumnCodec.Instance.ReadColumnAsync(reader, columnName, columnType, rowCount, cancellationToken);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => StringColumnCodec.Instance.CanWrite(column);
+    // JSON accepts text only; do not inherit String's raw-byte write shape.
+    public bool CanWrite(IColumn column) => column is IColumn<string>;
 
     /// <inheritdoc/>
     // The prefix is a fixed version marker, independent of the data; the column/slice is unused.

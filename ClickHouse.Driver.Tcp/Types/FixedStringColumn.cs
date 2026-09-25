@@ -5,20 +5,10 @@ using System.Text;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// A <c>FixedString(N)</c> column: every row is exactly <c>N</c> bytes on the wire (no length prefix), so the
-/// rows are kept back-to-back in one pooled blob at a fixed stride and a row's bytes are the slice
-/// <c>[row * N, (row + 1) * N)</c>. Like <c>String</c>, <c>FixedString</c> is byte-oriented (not necessarily
-/// UTF-8, and commonly holds fixed binary such as hashes), so the bytes are retained verbatim and a caller
-/// chooses how to read each row: the raw bytes (<see cref="GetBytes(int)"/>, zero-copy), a string under an
-/// explicit encoding (<see cref="GetString(int, Encoding)"/>), or — the default <see cref="IColumn{T}"/> view —
-/// a per-row <see cref="byte"/> array. A decoded row always has exactly <c>N</c> bytes, any trailing zeros a
-/// shorter stored value was padded with included.
-///
-/// <para>
-/// The blob is rented from <see cref="ArrayPool{T}"/> and returned on <see cref="Dispose"/>; like every column,
-/// the bytes and any span returned by <see cref="GetBytes(int)"/> are borrowed for the block's lifetime. Copy
-/// out (<see cref="GetString(int, Encoding)"/> or <c>GetBytes(row).ToArray()</c>) to retain.
-/// </para>
+/// Stores <c>FixedString(N)</c> rows back-to-back in a pooled byte buffer. Each row is exactly <c>N</c> bytes,
+/// including zero padding. <see cref="GetBytes(int)"/> returns a borrowed zero-copy slice;
+/// <see cref="GetString(int, Encoding)"/> decodes a copy-owned string. UTF-8 projections include all bytes and
+/// do not trim padding. Dispose returns the pooled buffer.
 /// </summary>
 internal sealed class FixedStringColumn : IColumn<byte[]>
 {
@@ -107,9 +97,7 @@ internal sealed class FixedStringColumn : IColumn<byte[]>
     }
 
     /// <summary>
-    /// Returns the bytes of the row range <c>[start, start + length)</c> as one zero-copy slice of the blob
-    /// (borrowed), exactly <c>length * N</c> bytes. The rows sit back-to-back at the same stride the wire uses, so
-    /// a codec can blit a whole range in one copy rather than walking it row by row.
+    /// Returns a borrowed, contiguous byte slice for rows <c>[start, start + length)</c>.
     /// </summary>
     /// <param name="start">The zero-based first row of the range.</param>
     /// <param name="length">The number of rows in the range.</param>

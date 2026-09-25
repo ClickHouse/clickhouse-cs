@@ -97,19 +97,37 @@ public class JsonStringColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_StringColumn_ReturnsTrue()
+    [TestCase("Text", true)]
+    [TestCase("UInt32", false)]
+    [TestCase("Bytes", false)]
+    public void CanWrite_ColumnCandidate_ReturnsExpected(string kind, bool expected)
     {
         IColumnCodec codec = Resolve(Json);
+        using IColumn column = kind switch
+        {
+            "Text" => new ArrayColumn<string>("j", Json, DocumentedValues),
+            "UInt32" => PrimitiveColumn<uint>.FromValues("j", Json, new uint[] { 1 }),
+            "Bytes" => new ArrayColumn<byte[]>("j", Json, new[] { new byte[] { (byte)'{', (byte)'}' } }),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+        };
 
-        Assert.That(codec.CanWrite(new ArrayColumn<string>("j", Json, DocumentedValues)), Is.True);
+        Assert.That(codec.CanWrite(column), Is.EqualTo(expected));
     }
 
+    /// <summary>
+    /// Verifies that JSON does not inherit String's raw-byte write shape.
+    /// </summary>
     [Test]
-    public void CanWrite_NonStringColumn_ReturnsFalse()
+    public void CanWriteElementType_ByteArray_IsRefusedWhileStringIsAccepted()
     {
         IColumnCodec codec = Resolve(Json);
 
-        Assert.That(codec.CanWrite(PrimitiveColumn<uint>.FromValues("j", Json, new uint[] { 1 })), Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWriteElementType(typeof(byte[])), Is.False);
+            Assert.That(ClickHouseTcpTypes.CanWrite("JSON", typeof(byte[])), Is.False);
+            Assert.That(ClickHouseTcpTypes.CanWrite("JSON", typeof(string)), Is.True);
+        });
     }
 
     // Unlike every other codec's placeholder, this one is real input: see the Nullable(JSON) test below.

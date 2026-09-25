@@ -139,34 +139,54 @@ public sealed class Block : IDisposable
         return false;
     }
 
-    /// <summary>The column called <paramref name="name"/>, as the typed view its values read through.</summary>
+    /// <summary>
+    /// Returns the named column as <see cref="IColumn{T}"/>. This casts to the decoded element type; use
+    /// <see cref="ReadAs{T}(string)"/> to convert to another supported type.
+    /// </summary>
     /// <remarks>Same scan and the same advice as <see cref="this[string]"/>: bind once, outside the row loop.</remarks>
     /// <typeparam name="T">The CLR element type the column's values read as.</typeparam>
     /// <param name="name">The column name.</param>
     /// <returns>The typed column.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
     /// <exception cref="ArgumentException">The block has no column with that name.</exception>
-    /// <exception cref="InvalidCastException">The column's values cannot be read as <typeparamref name="T"/>.</exception>
+    /// <exception cref="InvalidCastException">The column's values are not <typeparamref name="T"/>.</exception>
     public IColumn<T> Column<T>(string name) => Typed<T>(this[name]);
 
-    /// <summary>The column at <paramref name="index"/>, as the typed view its values read through.</summary>
+    /// <summary>
+    /// Returns the column at <paramref name="index"/> with the same cast semantics as <see cref="Column{T}(string)"/>.
+    /// </summary>
     /// <typeparam name="T">The CLR element type the column's values read as.</typeparam>
     /// <param name="index">The zero-based column index.</param>
     /// <returns>The typed column.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a column of this block.</exception>
-    /// <exception cref="InvalidCastException">The column's values cannot be read as <typeparamref name="T"/>.</exception>
-    public IColumn<T> Column<T>(int index)
-    {
-        if (index < 0 || index >= Columns.Count)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(index),
-                index,
-                $"{Describe()} has {Columns.Count} columns.");
-        }
+    /// <exception cref="InvalidCastException">The column's values are not <typeparamref name="T"/>.</exception>
+    public IColumn<T> Column<T>(int index) => Typed<T>(At(index));
 
-        return Typed<T>(Columns[index]);
-    }
+    /// <summary>
+    /// Reads the named column as <typeparamref name="T"/> using a conversion supported by its ClickHouse type.
+    /// Returns the original column when no conversion is needed. Otherwise, the indexer converts on access and
+    /// <see cref="IColumn{T}.Values"/> materializes the converted values once. The result borrows the source
+    /// column and is valid only while this block is alive. Treat projected reference values as read-only because
+    /// dictionary-backed rows may share them.
+    /// </summary>
+    /// <typeparam name="T">The CLR type to read the values as.</typeparam>
+    /// <param name="name">The column name.</param>
+    /// <returns>The column read as <typeparamref name="T"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
+    /// <exception cref="ArgumentException">The block has no column with that name.</exception>
+    /// <exception cref="InvalidCastException">The column's ClickHouse type offers no reading as <typeparamref name="T"/>.</exception>
+    public IColumn<T> ReadAs<T>(string name) => Codecs.Projections.ReadAs<T>(this[name], Context);
+
+    /// <summary>
+    /// Reads the column at <paramref name="index"/> with the same conversion and lifetime rules as
+    /// <see cref="ReadAs{T}(string)"/>.
+    /// </summary>
+    /// <typeparam name="T">The CLR type to read the values as.</typeparam>
+    /// <param name="index">The zero-based column index.</param>
+    /// <returns>The column read as <typeparamref name="T"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a column of this block.</exception>
+    /// <exception cref="InvalidCastException">The column's ClickHouse type offers no reading as <typeparamref name="T"/>.</exception>
+    public IColumn<T> ReadAs<T>(int index) => Codecs.Projections.ReadAs<T>(At(index), Context);
 
     /// <summary>Releases the columns' storage (returning any pooled buffers). Idempotent.</summary>
     public void Dispose()
@@ -180,7 +200,13 @@ public sealed class Block : IDisposable
     private static IColumn<T> Typed<T>(IColumn column)
         => column as IColumn<T>
             ?? throw new InvalidCastException(
-                $"Column '{column.Name}' has type '{column.TypeName}', whose values cannot be read as {typeof(T).Name}.");
+                $"Column '{column.Name}' has type '{column.TypeName}', whose values are {column.ElementType}, not {typeof(T)}. " +
+                $"{nameof(ReadAs)} converts a column to another reading, where its ClickHouse type offers one.");
+
+    private IColumn At(int index)
+        => index >= 0 && index < Columns.Count
+            ? Columns[index]
+            : throw new ArgumentOutOfRangeException(nameof(index), index, $"{Describe()} has {Columns.Count} columns.");
 
     private ArgumentException NoSuchColumn(string name)
         => new($"{Describe()} has no column named '{name}'. Its columns are: {string.Join(", ", ColumnNames)}.", nameof(name));

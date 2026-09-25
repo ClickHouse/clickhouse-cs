@@ -86,13 +86,83 @@ public class ClickHouseTcpColumnTests
     }
 
     [Test]
-    public void Create_NullArguments_Throw()
+    public void CreateOrCreateArray_NullArguments_Throw()
     {
+        using IColumn<uint> inner = ClickHouseTcpColumn.Create("tags", new uint[] { 1 });
+
         Assert.Multiple(() =>
         {
             Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.Create(null, new[] { 1 }));
             Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.Create<int>("id", (int[])null));
             Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.Create<int>("id", (IEnumerable<int>)null));
+            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray<uint>("tags", null, new[] { 0 }));
+            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, null));
+            Assert.Throws<ArgumentNullException>(() => ClickHouseTcpColumn.CreateArray(null, inner, new[] { 0, 1 }));
         });
     }
+
+    [TestCaseSource(nameof(ArrayShapes))]
+    public void CreateArray_FlatElementsAndOffsets_PresentsTheRowsThoseOffsetsDescribe(
+        uint[] elements,
+        int[] offsets,
+        uint[][] expectedRows)
+    {
+        IArrayColumn<uint> column = ClickHouseTcpColumn.CreateArray(
+            "tags",
+            ClickHouseTcpColumn.Create("tags", elements),
+            offsets);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column.RowCount, Is.EqualTo(expectedRows.Length), "one row per offset pair");
+            Assert.That(column.TypeName, Is.Null, "the insert takes the type from the target's schema");
+            Assert.That(column.ElementType, Is.EqualTo(typeof(uint[])));
+            Assert.That(column.Offsets.ToArray(), Is.EqualTo(offsets));
+            Assert.That(column.InnerValues.ToArray(), Is.EqualTo(elements));
+            Assert.That(column.Values.ToArray(), Is.EqualTo(expectedRows));
+        });
+    }
+
+    /// <summary>
+    /// The offsets decide which elements each row claims, so a wrong one either reads past the elements or sends
+    /// the server rows the caller did not build. Each message says which rule was broken.
+    /// </summary>
+    [TestCaseSource(nameof(InvalidArrayOffsets))]
+    public void CreateArray_OffsetsThatDoNotDescribeTheElements_AreRefusedWithTheRuleTheyBreak(
+        int[] offsets,
+        string[] messageFragments)
+    {
+        IColumn<uint> inner = ClickHouseTcpColumn.Create("tags", new uint[] { 10, 20, 30 });
+        var thrown = Assert.Throws<ArgumentException>(() => ClickHouseTcpColumn.CreateArray("tags", inner, offsets));
+
+        Assert.Multiple(() =>
+        {
+            foreach (string fragment in messageFragments)
+            {
+                Assert.That(thrown.Message, Does.Contain(fragment));
+            }
+        });
+    }
+
+    private static IEnumerable<TestCaseData> ArrayShapes()
+    {
+        yield return new TestCaseData(
+                new uint[] { 10, 20, 30 },
+                new[] { 0, 2, 2, 3 },
+                new[] { new uint[] { 10, 20 }, Array.Empty<uint>(), new uint[] { 30 } })
+            .SetName("CreateArray_FlatElementsAndOffsets_PresentsThreeRows");
+        yield return new TestCaseData(Array.Empty<uint>(), new[] { 0 }, Array.Empty<uint[]>())
+            .SetName("CreateArray_OneLeadingOffsetAndNoElements_IsAZeroRowColumn");
+    }
+
+    private static IEnumerable<TestCaseData> InvalidArrayOffsets()
+    {
+        yield return InvalidArrayOffsetsCase(Array.Empty<int>(), "are empty");
+        yield return InvalidArrayOffsetsCase(new[] { 1, 3 }, "start at 1");
+        yield return InvalidArrayOffsetsCase(new[] { 0, 2, 1, 3 }, "go backwards at row 1");
+        yield return InvalidArrayOffsetsCase(new[] { 0, 2 }, "end at 2", "holds 3 elements");
+    }
+
+    private static TestCaseData InvalidArrayOffsetsCase(int[] offsets, params string[] messageFragments)
+        => new TestCaseData(offsets, messageFragments);
 }

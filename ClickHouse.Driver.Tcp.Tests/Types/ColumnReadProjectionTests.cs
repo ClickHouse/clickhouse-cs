@@ -155,20 +155,14 @@ public class ColumnReadProjectionTests
 
                 foreach (Type target in readable)
                 {
-                    ParameterExpression source = Expression.Parameter(codec.ElementType, "v");
-                    Expression projected = null;
-                    bool offered = false;
                     try
                     {
-                        offered = codec.TryProjectRead(source, target, out projected);
+                        AssertOffers(codec, target, type);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not AssertionException)
                     {
                         Assert.Fail($"{type} advertises {target} but threw projecting it: {ex.Message}");
                     }
-
-                    Assert.That(offered, Is.True, $"{type} advertises {target} but does not project it");
-                    Assert.That(projected?.Type, Is.EqualTo(target), $"{type} projected {target} as {projected?.Type}");
                 }
             }
         });
@@ -307,6 +301,7 @@ public class ColumnReadProjectionTests
     [TestCase("Time64(3)", typeof(DateTime))]
     [TestCase("Nullable(DateTime('UTC'))", typeof(TimeSpan?))]
     [TestCase("LowCardinality(Nullable(DateTime('UTC')))", typeof(TimeSpan?))]
+    [TestCase("Enum8('a' = 1)", typeof(int))]
     public void TryProjectRead_ProjectingCodecAskedForAnUnofferedType_ReturnsFalse(string type, Type unoffered)
     {
         IColumnCodec codec = Codec(type);
@@ -383,12 +378,14 @@ public class ColumnReadProjectionTests
     }
 
     [Test]
-    public void ReadableElementTypes_NullableOfReferenceInner_StaysUnwrapped()
+    [TestCase("String")]
+    [TestCase("Nullable(String)")]
+    [TestCase("LowCardinality(String)")]
+    public void ReadableElementTypes_StringShape_OffersTextAndBytes(string type)
     {
-        IColumnCodec codec = Codec("Nullable(String)");
+        IColumnCodec codec = Codec(type);
 
-        // A reference inner's nulls are already CLR nulls, so the surface type is the bare inner type.
-        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(string) }));
+        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
     }
 
     [Test]
@@ -417,9 +414,9 @@ public class ColumnReadProjectionTests
     [Test]
     public void ReadableElementTypes_LowCardinalityOfNonProjectingInner_IsJustTheInnerType()
     {
-        IColumnCodec codec = Codec("LowCardinality(String)");
+        IColumnCodec codec = Codec("LowCardinality(UInt32)");
 
-        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(string) }));
+        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(uint) }));
     }
 
     /// <summary>
@@ -468,10 +465,7 @@ public class ColumnReadProjectionTests
                 IColumnCodec codec = Codec(type);
                 foreach (Type target in codec.ReadableElementTypes)
                 {
-                    ParameterExpression source = Expression.Parameter(codec.ElementType, "v");
-                    Assert.That(codec.TryProjectRead(source, target, out Expression projected), Is.True,
-                        $"{type} advertises {target} but does not project it");
-                    Assert.That(projected.Type, Is.EqualTo(target), $"{type} projected {target} as {projected.Type}");
+                    AssertOffers(codec, target, type);
                 }
             }
         });
@@ -517,20 +511,32 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
-    /// Enum columns surface the raw ordinal and accept only the ordinal on write, so mirroring the write list
-    /// leaves them with no alternate reading. Pinned so that adding label projection later is a deliberate,
-    /// visible choice rather than an accident.
+    /// An enum reads as its raw ordinal or as its label, and writes from either, so the two lists match. The
+    /// members come from the type string the column carries, so neither direction needs anything of the server.
     /// </summary>
     [Test]
-    public void ReadableElementTypes_Enum_OffersOnlyTheRawOrdinal()
+    public void ReadableElementTypes_Enum_OffersTheOrdinalAndTheLabel()
     {
         IColumnCodec codec = Codec("Enum8('a' = 1, 'b' = 2)");
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(sbyte) }));
+            Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(sbyte), typeof(string) }));
             Assert.That(codec.ReadableElementTypes, Is.EqualTo(codec.WritableElementTypes));
         });
+    }
+
+    /// <summary>
+    /// Every row of a column read from the server is a declared ordinal, so the projection cannot meet this on a
+    /// real read. Pinned anyway: it is the difference between a clear failure and a wrong label.
+    /// </summary>
+    [Test]
+    public void TryProjectRead_EnumOrdinalWithNoDeclaredMember_ThrowsNamingTheType()
+    {
+        Func<sbyte, string> project = Project<sbyte, string>(Codec("Enum8('a' = -1, 'b' = 127)"));
+
+        var thrown = Assert.Throws<KeyNotFoundException>(() => project(0));
+        Assert.That(thrown.Message, Does.Contain("Enum8('a' = -1, 'b' = 127)").And.Contain("ordinal 0"));
     }
 
     /// <summary>
@@ -704,6 +710,212 @@ public class ColumnReadProjectionTests
             Assert.That(project("abc"), Is.EqualTo(new[] { 'c', 'b', 'a' }));
             Assert.That(project(null), Is.Null);
         });
+    }
+
+    /// <summary>
+    /// The projected view materializes its values into an array of its own on the first <c>Values</c>, so the two
+    /// access paths have to agree, and a row past the end has to fail either way round.
+    /// </summary>
+    [Test]
+    public void ReadAs_ProjectedView_AgreesBetweenTheIndexerAndValuesAndBoundsBothWays()
+    {
+        var ordinals = new ArrayColumn<sbyte>("state", "Enum8('a' = 1, 'b' = 2)", new sbyte[] { 1, 2 });
+
+        IColumn<string> beforeValues = ReadAs<string>(ordinals);
+        IColumn<string> afterValues = ReadAs<string>(ordinals);
+        _ = afterValues.Values;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(beforeValues[1], Is.EqualTo("b"), "read per row, nothing materialized");
+            Assert.That(afterValues[1], Is.EqualTo("b"), "read out of the materialized array");
+            Assert.That(beforeValues.Values.ToArray(), Is.EqualTo(new[] { "a", "b" }));
+            Assert.That(beforeValues.RowCount, Is.EqualTo(2));
+            Assert.Throws<IndexOutOfRangeException>(() => _ = beforeValues[2]);
+            Assert.Throws<IndexOutOfRangeException>(() => _ = afterValues[2]);
+        });
+    }
+
+    /// <summary>
+    /// A column built by a caller for an insert carries no type string, so there is nothing to resolve a reading
+    /// from. Not reachable through a <see cref="Block"/>, whose columns all come off a header.
+    /// </summary>
+    [Test]
+    public void ReadAs_ColumnWithNoTypeString_SaysSoRatherThanFailingToParseIt()
+    {
+        IColumn<int> built = ClickHouseTcpColumn.Create("v", new[] { 1, 2 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReadAs<int>(built), Is.SameAs(built), "the requested type is the column's own, so nothing is resolved");
+
+            var thrown = Assert.Throws<InvalidCastException>(() => ReadAs<long>(built));
+            Assert.That(thrown.Message, Does.Contain("carries no ClickHouse type").And.Contain("System.Int32"));
+        });
+    }
+
+    /// <summary>
+    /// Verifies that a projected view preserves source identity and does not dispose the source.
+    /// </summary>
+    [Test]
+    public void ReadAs_ProjectedView_CarriesTheSourcesIdentityAndDisposesNothing()
+    {
+        var ordinals = new ArrayColumn<sbyte>("state", "Enum8('a' = 1)", new sbyte[] { 1 });
+
+        IColumn<string> projected = ReadAs<string>(ordinals);
+        projected.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(projected.Name, Is.EqualTo("state"));
+            Assert.That(projected.TypeName, Is.EqualTo("Enum8('a' = 1)"));
+            Assert.That(projected.GetValue(0), Is.EqualTo("a"), "the boxed reading is the projected one");
+            Assert.That(ordinals.RowCount, Is.EqualTo(1), "the source column is untouched");
+            Assert.That(ordinals.Values.ToArray(), Is.EqualTo(new sbyte[] { 1 }));
+        });
+    }
+
+    [TestCaseSource(nameof(ColumnReadCandidates))]
+    public void TryProjectColumnRead_Candidate_ReturnsExpected(string type, Type target, bool expected)
+        => Assert.That(OffersColumnRead(Codec(type), target), Is.EqualTo(expected));
+
+    /// <summary>
+    /// Verifies the error when a caller-built composite lacks its decoded columnar surface.
+    /// </summary>
+    [Test]
+    public void ReadAs_CompositeColumnWithoutItsColumnarSurface_SaysWhichSurfaceItLacks()
+    {
+        Assert.Multiple(() =>
+        {
+            AssertLacksSurface<byte[]>("Nullable(String)", "INullableColumn");
+            AssertLacksSurface<byte[][]>("Array(String)", "IArrayColumn");
+            AssertLacksSurface<KeyValuePair<string, byte[]>[]>("Map(String, String)", "IMapColumn");
+            AssertLacksSurface<ValueTuple<byte[]>>("Tuple(String)", "ITupleColumn");
+            AssertLacksSurface<byte[]>("LowCardinality(String)", "ILowCardinalityColumn");
+        });
+    }
+
+    [Test]
+    [TestCase("Array(DateTime('UTC'))", typeof(DateTime[]))]
+    [TestCase("Tuple(DateTime('UTC'), Time)", typeof((DateTime, TimeSpan)))]
+    [TestCase("Map(String, DateTime('UTC'))", typeof(KeyValuePair<string, DateTime>[]))]
+    [TestCase("Nullable(DateTime('UTC'))", typeof(DateTime?))]
+    public void CanRead_CompositeOfElementwiseChildren_UsesTheValueProjection(string type, Type target)
+        => Assert.That(ClickHouseTcpTypes.CanRead(type, target), Is.True);
+
+    /// <summary>
+    /// Verifies that JSON remains text-only despite using String serialization.
+    /// </summary>
+    [Test]
+    public void ReadableElementTypes_Json_OffersTextButNotBytes()
+    {
+        IColumnCodec json = Codec("JSON");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.ReadableElementTypes, Is.EqualTo(new[] { typeof(string) }));
+            Assert.That(ClickHouseTcpTypes.CanRead("JSON", typeof(byte[])), Is.False);
+        });
+    }
+
+    /// <summary>
+    /// Verifies the projected-view cache's single-entry, source-identity behavior.
+    /// </summary>
+    [Test]
+    public void ProjectedViewCache_SameColumnThenAnother_ReusesTheViewThenRebuildsIt()
+    {
+        int built = 0;
+        var cache = new ProjectedViewCache(source =>
+        {
+            built++;
+            return new ProjectedReadColumn<string>(source, static (column, row) => column.Name);
+        });
+
+        using var first = new ArrayColumn<string>("a", "String", new[] { "1" });
+        using var second = new ArrayColumn<string>("b", "String", new[] { "2" });
+
+        IColumn firstView = cache.For(first);
+        IColumn firstAgain = cache.For(first);
+        IColumn secondView = cache.For(second);
+        IColumn firstAfterEviction = cache.For(first);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstAgain, Is.SameAs(firstView), "the same column reads through the same view");
+            Assert.That(secondView, Is.Not.SameAs(firstView));
+            Assert.That(firstAfterEviction, Is.Not.SameAs(firstView), "one entry, so the other column replaced it");
+            Assert.That(built, Is.EqualTo(3));
+        });
+    }
+
+    private static IEnumerable<TestCaseData> ColumnReadCandidates()
+    {
+        yield return ColumnReadCase("String", typeof(byte[]), true);
+        yield return ColumnReadCase("Nullable(String)", typeof(byte[]), true);
+        yield return ColumnReadCase("LowCardinality(String)", typeof(byte[]), true);
+        yield return ColumnReadCase("LowCardinality(Nullable(String))", typeof(byte[]), true);
+        yield return ColumnReadCase("Array(String)", typeof(byte[][]), true);
+        yield return ColumnReadCase("Array(Array(String))", typeof(byte[][][]), true);
+        yield return ColumnReadCase("Map(String, String)", typeof(KeyValuePair<byte[], byte[]>[]), true);
+        yield return ColumnReadCase("Map(UInt8, String)", typeof(KeyValuePair<byte, byte[]>[]), true);
+        yield return ColumnReadCase("Tuple(String)", typeof(ValueTuple<byte[]>), true);
+        yield return ColumnReadCase("Tuple(UInt8, String)", typeof((byte, byte[])), true);
+        yield return ColumnReadCase("String", typeof(string), false);
+        yield return ColumnReadCase("Nullable(String)", typeof(byte[][]), false);
+        yield return ColumnReadCase("Array(String)", typeof(byte[]), false);
+        yield return ColumnReadCase("Array(String)", typeof(string), false);
+        yield return ColumnReadCase("Array(String)", typeof(string[]), false);
+        yield return ColumnReadCase("Map(String, String)", typeof(string), false);
+        yield return ColumnReadCase("Map(String, String)", typeof(KeyValuePair<string, string>[]), false);
+        yield return ColumnReadCase("Tuple(UInt8, String)", typeof(string), false);
+        yield return ColumnReadCase("Tuple(UInt8, String)", typeof((byte, string)), false);
+        yield return ColumnReadCase("Nullable(String)", typeof(string), false);
+        yield return ColumnReadCase("LowCardinality(String)", typeof(string), false);
+        yield return ColumnReadCase("Tuple(UInt8, String)", typeof((long, byte[])), false);
+        yield return ColumnReadCase("Map(UInt8, String)", typeof(KeyValuePair<long, byte[]>[]), false);
+        yield return ColumnReadCase("Array(String)", typeof(Guid[]), false);
+        yield return ColumnReadCase("LowCardinality(String)", typeof(Guid), false);
+        yield return ColumnReadCase("Array(DateTime('UTC'))", typeof(DateTime[]), false);
+        yield return ColumnReadCase("Tuple(DateTime('UTC'), Time)", typeof((DateTime, TimeSpan)), false);
+        yield return ColumnReadCase("Map(String, DateTime('UTC'))", typeof(KeyValuePair<string, DateTime>[]), false);
+        yield return ColumnReadCase("Nullable(DateTime('UTC'))", typeof(DateTime?), false);
+        yield return ColumnReadCase("LowCardinality(DateTime('UTC'))", typeof(DateTime), true);
+        yield return ColumnReadCase("LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTime?), true);
+        yield return ColumnReadCase("LowCardinality(FixedString(4))", typeof(string), true);
+        yield return ColumnReadCase("LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTime), false);
+        yield return ColumnReadCase("JSON", typeof(byte[]), false);
+    }
+
+    private static TestCaseData ColumnReadCase(string type, Type target, bool expected)
+        => new TestCaseData(type, target, expected).SetArgDisplayNames(type, target.Name, expected.ToString());
+
+    /// <summary>Asks a codec for the reading it takes over the whole column rather than over one decoded value.</summary>
+    private static bool OffersColumnRead(IColumnCodec codec, Type targetType)
+        => codec.TryProjectColumnRead(targetType, out _);
+
+    /// <summary>
+    /// Asserts that a codec offers the advertised target and types elementwise projections correctly.
+    /// </summary>
+    private static void AssertOffers(IColumnCodec codec, Type target, string type)
+    {
+        Assert.That(ColumnProjection.Offers(codec, target), Is.True, $"{type} advertises {target} but does not project it");
+
+        if (codec.TryProjectRead(Expression.Parameter(codec.ElementType, "v"), target, out Expression projected))
+        {
+            Assert.That(projected.Type, Is.EqualTo(target), $"{type} projected {target} as {projected.Type}");
+        }
+    }
+
+    private static IColumn<T> ReadAs<T>(IColumn column)
+        => ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, new ResolveContext { ServerTimezone = "UTC" });
+
+    private static void AssertLacksSurface<T>(string type, string surface)
+    {
+        using var mislabelled = new ArrayColumn<string>("c", type, new[] { "a" });
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => ReadAs<T>(mislabelled));
+
+        Assert.That(thrown.Message, Does.Contain($"Column 'c' ({type})").And.Contain(surface));
     }
 
     private sealed class EvaluationCounter

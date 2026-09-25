@@ -1,6 +1,10 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq.Expressions;
+using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -20,6 +24,14 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<byte[]>
 {
+    private static readonly Func<IColumn, int, string> ReadRowText = RowText;
+
+    private static readonly ColumnReadProjection ProjectText =
+        static source => new ProjectedReadColumn<string>(source, ReadRowText);
+
+    private static readonly MethodInfo Utf8Method =
+        typeof(Encoding).GetMethod(nameof(Encoding.GetString), new[] { typeof(byte[]) });
+
     private readonly int size;
 
     // N zero bytes, shared: the write path only ever reads it, and it is the exact width a null position must
@@ -46,11 +58,58 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     /// </summary>
     public object NullPlaceholder => nullPlaceholder ??= new byte[size];
 
+    /// <summary>
+    /// Offers the lossless bytes and their UTF-8 text. Text includes all <c>N</c> bytes, including zero padding.
+    /// </summary>
+    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(byte[]), typeof(string) };
+
     /// <inheritdoc/>
     // The array is written verbatim, so two rows share an entry when their bytes match. Default equality on
     // byte[] is reference equality, which would give nearly every row its own dictionary entry.
     public object LowCardinalityKeyWriter(Type writeType)
         => writeType == typeof(byte[]) ? LowCardinalityKeys.Bytes() : null;
+
+    /// <summary>
+    /// Decodes text directly from the column blob without allocating an intermediate byte array per row.
+    /// </summary>
+    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
+    {
+        projection = targetType == typeof(string) ? ProjectText : null;
+        return projection is not null;
+    }
+
+    /// <inheritdoc/>
+    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
+    {
+        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
+
+        if (targetType == ElementType)
+        {
+            projected = value;
+            return true;
+        }
+
+        projected = targetType == typeof(string)
+            ? Expression.Call(Expression.Constant(Encoding.UTF8), Utf8Method, value)
+            : null;
+        return projected is not null;
+    }
+
+    /// <summary>One row decoded as UTF-8, off the column's blob where it has one.</summary>
+    /// <param name="column">The decoded column, which must hold the row's bytes.</param>
+    /// <param name="row">The zero-based row index.</param>
+    /// <returns>That row's text, including any zero padding, and U+FFFD for any byte UTF-8 cannot express.</returns>
+    /// <exception cref="InvalidOperationException"><paramref name="column"/> holds no bytes to decode.</exception>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="row"/> is negative or not less than the row count.</exception>
+    // Decoded columns use their shared blob; caller-built columns use their byte-array indexer.
+    public static string RowText(IColumn column, int row) => column switch
+    {
+        FixedStringColumn dense => Encoding.UTF8.GetString(dense.GetBytes(row)),
+        IColumn<byte[]> bytes => Encoding.UTF8.GetString(bytes[row]),
+        _ => throw new InvalidOperationException(
+            $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which holds no bytes to decode, " +
+            "so its values cannot be read as a string."),
+    };
 
     /// <summary>Builds a <c>FixedString(N)</c> codec from its type node's single integer length argument.</summary>
     /// <param name="node">The parsed <c>FixedString</c> type node.</param>
