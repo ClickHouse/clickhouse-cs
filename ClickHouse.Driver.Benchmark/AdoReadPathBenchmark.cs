@@ -29,6 +29,7 @@ namespace ClickHouse.Driver.Benchmark;
 ///   punished hardest.</item>
 /// </list>
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class AdoReadPathBenchmark
@@ -64,7 +65,7 @@ FROM system.numbers LIMIT {Count}";
     [GlobalCleanup]
     public void Cleanup() => connection?.Dispose();
 
-    [Benchmark(Baseline = true)]
+    [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
     public async Task UntypedAccessor()
     {
         using var reader = await connection.ExecuteReaderAsync(Sql);

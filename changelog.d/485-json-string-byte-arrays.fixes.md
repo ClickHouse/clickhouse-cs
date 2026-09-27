@@ -1,1 +1,0 @@
-* Fixed string values inside a `JSON` column being returned as base64 when `ReadStringsAsByteArrays = true`, and `Map(String, ...)` keys throwing `InvalidCastException`. String leaves inside a `JSON` column are now always decoded as UTF-8 text regardless of the setting — remove any base64 workaround; the setting is unchanged for ordinary `String`/`FixedString` columns.

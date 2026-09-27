@@ -7,6 +7,8 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <LangVersion>latest</LangVersion>
+    <!-- CHTCP0001: the native-TCP client is experimental; the benchmarks opt in to measuring it. -->
+    <NoWarn>$(NoWarn);CHTCP0001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -32,7 +34,17 @@
     <!-- Compression types (incl. LZ4) live in the bundled (PrivateAssets="all") Common assembly;
          reference it directly for local dev. In comparison mode the types come from Common.dll inside the package. -->
     <ProjectReference Include="..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
+    <!-- The native client is bundled into the ClickHouse.Driver package the same way, so comparison
+         mode picks it up from Tcp.dll inside the package. -->
+    <ProjectReference Include="..\ClickHouse.Driver.Tcp\ClickHouse.Driver.Tcp.csproj" />
   </ItemGroup>
+  <!-- BenchmarkDotNet takes either a baseline method or a baseline job, not both: given both, the
+       method wins and every other row's ratio silently mixes the two effects. Comparison mode needs
+       the job to be the baseline, so BenchmarkModes.MethodBaseline turns the method baselines off
+       there. See BenchmarkModes. -->
+  <PropertyGroup Condition="'$(BenchmarkComparisonMode)' == 'true'">
+    <DefineConstants>$(DefineConstants);BENCHMARK_COMPARISON</DefineConstants>
+  </PropertyGroup>
   <ItemGroup Condition="'$(BenchmarkComparisonMode)' == 'true'">
     <PackageReference Include="ClickHouse.Driver" />
   </ItemGroup>

@@ -404,6 +404,7 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
             await client.InsertBinaryAsync(tableName, rows));
 
         Assert.That(ex.Row, Is.Not.Null);
+        Assert.That(ex.RowIndex, Is.EqualTo(0));
         Assert.That(ex.InnerException, Is.Not.Null);
     }
 

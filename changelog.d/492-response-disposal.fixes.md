@@ -1,1 +1,0 @@
-* Fixed `ClickHouseClient` leaking the query's `HttpResponseMessage` — and with it the pooled HTTP connection — on the paths that fully consume it (`ExecuteNonQueryAsync`, `InsertBinaryAsync`) and on any request that fails. Paths that hand the response to the caller (`ExecuteReaderAsync`/`ExecuteRawResultAsync`/`InsertRawStreamAsync`/`PostStreamAsync`) are unchanged.

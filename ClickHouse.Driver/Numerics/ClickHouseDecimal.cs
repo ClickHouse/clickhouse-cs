@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -23,17 +24,21 @@ public readonly struct ClickHouseDecimal
     public ClickHouseDecimal(decimal value)
         : this()
     {
-        // Slightly wasteful, but seems to be the cheapest way to get scale
-        var parts = decimal.GetBits(value);
+        // Seems to be the cheapest way to get scale. The Span overload fills a stack buffer instead of
+        // returning a fresh int[4].
+        Span<int> parts = stackalloc int[4];
+        decimal.GetBits(value, parts);
         int scale = (parts[3] >> 16) & 0x7F;
         bool negative = (parts[3] & 0x80000000) != 0;
 
-        var data = new byte[(3 * sizeof(int)) + 1];
-        WriteIntToArray(parts[0], data, 0);
-        WriteIntToArray(parts[1], data, sizeof(int));
-        WriteIntToArray(parts[2], data, 2 * sizeof(int));
+        // The 96-bit mantissa is little-endian and always non-negative (the sign lives in parts[3]), so it
+        // is read back unsigned rather than with the extra zero byte a signed read would need.
+        Span<byte> data = stackalloc byte[3 * sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(data, parts[0]);
+        BinaryPrimitives.WriteInt32LittleEndian(data.Slice(sizeof(int)), parts[1]);
+        BinaryPrimitives.WriteInt32LittleEndian(data.Slice(2 * sizeof(int)), parts[2]);
 
-        var mantissa = new BigInteger(data);
+        var mantissa = new BigInteger(data, isUnsigned: true, isBigEndian: false);
         if (negative)
             mantissa = BigInteger.Negate(mantissa);
 
@@ -418,14 +423,6 @@ public readonly struct ClickHouseDecimal
         if (scale < value.Scale)
             return value.Mantissa / BigInteger.Pow(10, value.Scale - scale);
         return value.Mantissa * BigInteger.Pow(10, scale - value.Scale);
-    }
-
-    private static void WriteIntToArray(int value, byte[] array, int index)
-    {
-        array[index + 0] = (byte)value;
-        array[index + 1] = (byte)(value >> 8);
-        array[index + 2] = (byte)(value >> 0x10);
-        array[index + 3] = (byte)(value >> 0x18);
     }
 
     // [DoesNotReturn]

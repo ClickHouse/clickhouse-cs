@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 namespace ClickHouse.Driver.Tests.Logging;
@@ -14,9 +15,30 @@ internal class CapturingLogger : ILogger
             }
         }
 
-        public List<LogEntry> Logs { get; } = new();
-        
-        public LogLevel MinimumLevel { get; set; } = LogLevel.Trace;
+        private readonly List<LogEntry> logs = new();
+
+        /// <summary>
+        /// Snapshot of the entries captured so far. The driver logs from every thread it uses, so
+        /// callers get a private copy taken under the lock rather than the live collection.
+        /// </summary>
+        public List<LogEntry> Logs
+        {
+            get
+            {
+                lock (logs)
+                {
+                    return new List<LogEntry>(logs);
+                }
+            }
+        }
+
+        private volatile LogLevel minimumLevel = LogLevel.Trace;
+
+        public LogLevel MinimumLevel
+        {
+            get => minimumLevel;
+            set => minimumLevel = value;
+        }
 
         public string Category { get; set; }
 
@@ -27,14 +49,19 @@ internal class CapturingLogger : ILogger
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
         {
             if (!IsEnabled(logLevel)) return;
-            
-            Logs.Add(new LogEntry
+
+            var entry = new LogEntry
             {
                 LogLevel = logLevel,
                 EventId = eventId,
                 Message = formatter(state, exception),
                 Exception = exception
-            });
+            };
+
+            lock (logs)
+            {
+                logs.Add(entry);
+            }
         }
     }
 
@@ -48,18 +75,31 @@ internal class CapturingLogger : ILogger
 
     internal sealed class CapturingLoggerFactory : ILoggerFactory
     {
+        private readonly object levelLock = new();
         private LogLevel minimumLevel = LogLevel.Trace;
-        public Dictionary<string, CapturingLogger> Loggers { get; } = new();
+
+        public ConcurrentDictionary<string, CapturingLogger> Loggers { get; } = new();
 
         public LogLevel MinimumLevel
         {
-            get => minimumLevel;
+            get
+            {
+                lock (levelLock)
+                {
+                    return minimumLevel;
+                }
+            }
             set
             {
-                minimumLevel = value;
-                foreach (var logger in Loggers.Values)
+                // Held across the propagation so that a logger created concurrently cannot be
+                // added with the previous level after the loop has already passed it by.
+                lock (levelLock)
                 {
-                    logger.MinimumLevel = minimumLevel;
+                    minimumLevel = value;
+                    foreach (var logger in Loggers.Values)
+                    {
+                        logger.MinimumLevel = value;
+                    }
                 }
             }
         }
@@ -70,12 +110,10 @@ internal class CapturingLogger : ILogger
 
         public ILogger CreateLogger(string categoryName)
         {
-            if (Loggers.TryGetValue(categoryName, out var existingLogger)) 
-                return existingLogger;
-            
-            var logger = new CapturingLogger { Category = categoryName, MinimumLevel = minimumLevel};
-            Loggers[categoryName] = logger;
-            return logger;
+            lock (levelLock)
+            {
+                return Loggers.GetOrAdd(categoryName, name => new CapturingLogger { Category = name, MinimumLevel = minimumLevel });
+            }
         }
 
         public void Dispose()

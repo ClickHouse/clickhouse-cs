@@ -1,0 +1,61 @@
+name: Build & Test (TCP)
+
+on:
+  workflow_call:
+    inputs:
+      framework:
+        default: net10.0
+        required: false
+        type: string
+      clickhouse-version:
+        default: latest
+        required: false
+        type: string
+      ref:
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build & Test (TCP)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15 # cold ClickHouse image pull + NuGet restore across the matrix
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # No step here talks to git again, so the job token does not need to stay in .git/config
+          # where the test process could read it.
+          persist-credentials: false
+
+      - uses: actions/cache@v6
+        name: Cache NuGet
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.x
+            9.x
+            10.x
+
+      # No filter: the Cloud category marks the tests tests-cloud-tcp.yml also runs against a real Cloud
+      # service, not tests that need one. They run here too, against the container.
+      #
+      # The framework is passed through the environment rather than interpolated into the run
+      # script, so a caller-supplied input cannot inject shell.
+      - name: Test
+        run: dotnet test ClickHouse.Driver.Tcp.Tests/ClickHouse.Driver.Tcp.Tests.csproj --framework "$FRAMEWORK" --configuration Release --verbosity normal --logger GitHubActions /clp:ErrorsOnly
+        env:
+          CLICKHOUSE_VERSION: ${{ inputs.clickhouse-version }}
+          FRAMEWORK: ${{ inputs.framework }}

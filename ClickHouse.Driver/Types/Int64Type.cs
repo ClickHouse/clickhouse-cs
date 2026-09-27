@@ -4,7 +4,7 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class Int64Type : IntegerType, ITypedReader<long>
+internal class Int64Type : IntegerType, ITypedReader<long>, ITypedWriter<long>
 {
     public override Type FrameworkType => typeof(long);
 
@@ -14,5 +14,7 @@ internal class Int64Type : IntegerType, ITypedReader<long>
 
     public override string ToString() => "Int64";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToInt64(value, CultureInfo.InvariantCulture));
+    public override void Write(ExtendedBinaryWriter writer, object value) => WriteValue(writer, Convert.ToInt64(value, CultureInfo.InvariantCulture));
+
+    public void WriteValue(ExtendedBinaryWriter writer, long value) => writer.Write(value);
 }

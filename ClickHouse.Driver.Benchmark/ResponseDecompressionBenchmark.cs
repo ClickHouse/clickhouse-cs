@@ -46,6 +46,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// BENCH_WARMUP=1 BENCH_ITERATIONS=10 BENCH_LAUNCHES=1 dotnet run -c Release -- --filter *ResponseDecompression*
 /// </code>
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.Compression)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class ResponseDecompressionBenchmark

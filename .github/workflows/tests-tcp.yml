@@ -1,0 +1,85 @@
+name: TCP Tests
+
+# Runs the ClickHouse.Driver.Tcp test suite, gated on changes to the TCP projects only.
+# The TCP project is standalone (no reference to ClickHouse.Driver), so its build/test closure is just
+# the two TCP projects plus the shared package versions and the CI wiring itself.
+on:
+  push:
+    # Only the long-lived integration branches run on push (validating what landed). The per-epic tcp/**
+    # branches are validated by the pull_request trigger below; keeping them off push avoids a duplicate
+    # run every time a commit is pushed to an epic branch that already has an open PR.
+    branches: [main, tcp-client]
+    paths:
+      - "ClickHouse.Driver.Tcp/**"
+      - "ClickHouse.Driver.Tcp.Tests/**"
+      - "Directory.Packages.props"
+      - ".github/workflows/tests-tcp.yml"
+      - ".github/workflows/reusable-tcp.yml"
+      - ".github/workflows/tests-cloud-tcp.yml"
+  pull_request:
+    # Matches the PR's base branch, so a PR stacked onto another tcp/** epic branch triggers too.
+    branches: [main, tcp-client, "tcp/**"]
+    paths:
+      - "ClickHouse.Driver.Tcp/**"
+      - "ClickHouse.Driver.Tcp.Tests/**"
+      - "Directory.Packages.props"
+      - ".github/workflows/tests-tcp.yml"
+      - ".github/workflows/reusable-tcp.yml"
+      - ".github/workflows/tests-cloud-tcp.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit SHA to run on"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  regress-clickhouse-tcp:
+    name: ClickHouse regression (TCP)
+    uses: $/.github/workflows/reusable-tcp.yml
+    with:
+      clickhouse-version: ${{ matrix.version }}
+      ref: ${{ inputs.ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - "latest"
+          - "26.6"
+          - "26.5"
+          - "26.4"
+          - "26.3"
+          - "25.8"
+
+  regress-dotnet-tcp:
+    name: .NET regression (TCP)
+    # Framework axis: each TFM runs against clickhouse-version 'latest' (the reusable default).
+    uses: $/.github/workflows/reusable-tcp.yml
+    with:
+      framework: ${{ matrix.framework }}
+      ref: ${{ inputs.ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: ["net10.0", "net9.0", "net8.0"] # TCP library targets net8.0+ only
+
+  cloud-tcp:
+    name: Cloud (TCP)
+    # On a pull request only when its branch is in this repository, which needs write access to push. Dependabot
+    # pull requests do not get the Actions secrets. A fork gets a run from the tests:run-cloud label
+    # (tests-cloud-tcp-label.yml).
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.event.pull_request.user.login != 'dependabot[bot]')
+    uses: $/.github/workflows/tests-cloud-tcp.yml
+    secrets:
+      CLICKHOUSE_CLOUD_HOST: ${{ secrets.CLICKHOUSE_CLOUD_HOST }}
+      CLICKHOUSE_CLOUD_USER: ${{ secrets.CLICKHOUSE_CLOUD_USER }}
+      CLICKHOUSE_CLOUD_PASSWORD: ${{ secrets.CLICKHOUSE_CLOUD_PASSWORD }}
+    with:
+      ref: ${{ inputs.ref }}

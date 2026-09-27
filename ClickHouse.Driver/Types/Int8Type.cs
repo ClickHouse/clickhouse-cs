@@ -4,7 +4,7 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class Int8Type : IntegerType, ITypedReader<sbyte>
+internal class Int8Type : IntegerType, ITypedReader<sbyte>, ITypedWriter<sbyte>
 {
     public override Type FrameworkType => typeof(sbyte);
 
@@ -14,5 +14,7 @@ internal class Int8Type : IntegerType, ITypedReader<sbyte>
 
     public sbyte ReadValue(ExtendedBinaryReader reader) => reader.ReadSByte();
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToSByte(value, CultureInfo.InvariantCulture));
+    public override void Write(ExtendedBinaryWriter writer, object value) => WriteValue(writer, Convert.ToSByte(value, CultureInfo.InvariantCulture));
+
+    public void WriteValue(ExtendedBinaryWriter writer, sbyte value) => writer.Write(value);
 }
