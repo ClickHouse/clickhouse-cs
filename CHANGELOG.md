@@ -1,6 +1,18 @@
 Unreleased
 ---
 
+v1.5.0
+---
+
+**New Features:**
+* **Experimental native TCP client.** `ClickHouseTcpClient` connects to ClickHouse over the native protocol (port 9000, or 9440 with TLS). Configure it with a connection string or `ClickHouseTcpClientOptions`. It reads rows, POCOs, or columnar blocks, and inserts rows, POCOs, or typed columns. In our benchmarks against the HTTP client in v1.4.0, reads are up to 2x faster, inserts are up to 1.5x faster, and managed allocations are much lower. It ships in the `ClickHouse.Driver` package for .NET 8 and later. It is a separate API from `ClickHouseClient` and has no ADO.NET layer. The API can change in a future release, so using it causes warning `CHTCP0001`. See the [documentation](https://clickhouse.com/docs/integrations/language-clients/csharp/tcp) and the [examples](https://github.com/ClickHouse/clickhouse-cs/tree/main/examples/Tcp).
+
+**Improvements:**
+* Added `RowIndex` to `ClickHouseBulkCopySerializationException` so binary-insert failures report the zero-based index of the offending row within the batch, making it easy to locate bad data in large inserts. (Thanks to @mbtolou - #606 and @Skyuzii - #608)
+
+**Bug Fixes:**
+* Fixed a wall-clock shift when reading a `DateTime`/`DateTime64` column whose `Fixed/UTC±HH:MM:SS` timezone name has a minute or second field above 59. The server carries such a field into the next one, so `Fixed/UTC+05:60:00` means +06:00; the driver rejected the name and read the value as UTC. (#612)
+
 v1.4.0
 ---
 
@@ -375,7 +387,7 @@ v0.8.0
  * Enabled strong naming for the library.
  * Added a new way to configure ClickHouseConnection: the ClickHouseClientSettings class. You can initialize it from a connection string by calling ClickHouseClientSettings.FromConnectionString(), or simply by setting its properties.
  * Added settings validation to prevent incorrect configurations.
- * Added logging in the library, enable it by passing a LoggerFactory through the settings. Logging level configuration is configured through the factory. For more info, see the documentation: https://clickhouse.com/docs/integrations/csharp#logging-and-diagnostics
+ * Added logging in the library, enable it by passing a LoggerFactory through the settings. Logging level configuration is configured through the factory. For more info, see the documentation: https://clickhouse.com/docs/integrations/language-clients/csharp/http#logging-and-diagnostics
  * Added EnableDebugMode setting to ClickHouseClientSettings for low-level .NET network tracing (.NET 5+). When enabled, traces System.Net events (HTTP, Sockets, DNS, TLS) to help diagnose network issues. Requires ILoggerFactory with Trace-level logging enabled. WARNING: Significant performance impact - not recommended for production use.
  * AddClickHouseDataSource now automatically injects ILoggerFactory from the service provider when not explicitly provided.
  * Improvements to ActivitySource for tracing: stopped adding tags when it was not necessary, and made it configurable through ClickHouseDiagnosticsOptions.

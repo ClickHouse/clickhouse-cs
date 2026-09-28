@@ -1147,7 +1147,7 @@ Compression trades CPU for bytes. Whether that is a win depends almost entirely 
 link is relative to how fast the codec runs. There is no setting that is right for
 everyone.
 
-#### The one number that decides it
+#### The one number that decides it {#the-one-number-that-decides-it}
 
 Compressing is worth it as long as the codec is faster than the network.
 
@@ -1160,7 +1160,7 @@ inside one cloud region commonly exceeds that, while anything crossing the publi
 
 The insert path tolerates compression to higher link speeds, because your client compresses on a core of its own and is typically faster than the server's response compression.
 
-#### Rough guide by deployment
+#### Rough guide by deployment {#rough-guide-by-deployment}
 
 | Where your client runs | Typical bandwidth | Reads | Inserts |
 |---|---|---|---|
@@ -1181,7 +1181,7 @@ compressing well past the speed at which a single-threaded one stops being worth
 
 The read path only parallelizes across multiple queries.
 
-#### Choosing a codec
+#### Choosing a codec {#choosing-a-codec}
 
 | Codec | Ratio | Use it when | Watch out for |
 |---|---|---|---|
@@ -1190,7 +1190,7 @@ The read path only parallelizes across multiple queries.
 | `gzip` | medium | Interoperability — universally understood by proxies and gateways. | Dominated on every axis by both `lz4` and `zstd` in our measurements: larger than `zstd` while costing several times more CPU to encode and 5–9× more to decode. Choose it for compatibility, not performance. |
 | `br` | highest at low levels | Bandwidth is genuinely the binding constraint and you can spend CPU for it. | Cliffs badly at higher levels — at `http_zlib_compression_level=6` we measured it at 3–4× `zstd`'s server CPU. Not advertised by default, because it outranks every fallback token in the default list. |
 
-#### Levels
+#### Levels {#levels}
 
 Response compression is governed by a single server setting, `http_zlib_compression_level`, which applies to *every* HTTP codec, not just zlib. It defaults to 3.
 
@@ -1206,7 +1206,7 @@ using var reader = await client.ExecuteReaderAsync(
     });
 ```
 
-#### Measuring your own crossover
+#### Measuring your own crossover {#measuring-your-own-crossover}
 
 The quickest way to optimize your choice of codec and compression level is to time the same query at a few codecs and compare.
 
@@ -1742,7 +1742,7 @@ A JSON map key type other than exactly `String` — `Map(LowCardinality(String),
 example — throws `NotSupportedException`.
 </Note>
 
-##### Overlapping paths
+##### Overlapping paths {#overlapping-paths}
 
 ClickHouse accepts a column which declares a path both as a value and as the parent of another
 path, for example `JSON(a Int64, a.b Int64)`. Both paths are present in every row, so the server

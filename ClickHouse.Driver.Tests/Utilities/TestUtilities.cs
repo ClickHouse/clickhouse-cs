@@ -224,7 +224,7 @@ public static class TestUtilities
         }
         builder["set_session_timeout"] = 1; // Expire sessions quickly after test
         builder["set_allow_experimental_geo_types"] = 1; // Allow support for geo types
-        builder["set_flatten_nested"] = 0; // Nested should be a single column, see https://clickhouse.com/docs/en/operations/settings/settings#flatten-nested
+        builder["set_flatten_nested"] = 0; // Nested should be a single column, see https://clickhouse.com/docs/reference/settings/session-settings/other#flatten_nested
 
         if (SupportedFeatures.HasFlag(Feature.Map))
         {
