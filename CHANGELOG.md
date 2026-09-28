@@ -387,7 +387,7 @@ v0.8.0
  * Enabled strong naming for the library.
  * Added a new way to configure ClickHouseConnection: the ClickHouseClientSettings class. You can initialize it from a connection string by calling ClickHouseClientSettings.FromConnectionString(), or simply by setting its properties.
  * Added settings validation to prevent incorrect configurations.
- * Added logging in the library, enable it by passing a LoggerFactory through the settings. Logging level configuration is configured through the factory. For more info, see the documentation: https://clickhouse.com/docs/integrations/csharp#logging-and-diagnostics
+ * Added logging in the library, enable it by passing a LoggerFactory through the settings. Logging level configuration is configured through the factory. For more info, see the documentation: https://clickhouse.com/docs/integrations/language-clients/csharp/http#logging-and-diagnostics
  * Added EnableDebugMode setting to ClickHouseClientSettings for low-level .NET network tracing (.NET 5+). When enabled, traces System.Net events (HTTP, Sockets, DNS, TLS) to help diagnose network issues. Requires ILoggerFactory with Trace-level logging enabled. WARNING: Significant performance impact - not recommended for production use.
  * AddClickHouseDataSource now automatically injects ILoggerFactory from the service provider when not explicitly provided.
  * Improvements to ActivitySource for tracing: stopped adding tags when it was not necessary, and made it configurable through ClickHouseDiagnosticsOptions.
