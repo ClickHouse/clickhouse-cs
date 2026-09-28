@@ -19,6 +19,14 @@ jobs:
     permissions:
       statuses: write
 
+  test-head-tcp:
+    name: Test against ClickHouse HEAD (TCP)
+    # The TCP suite has no `head` entry in its own matrix (tests-tcp.yml), so head coverage for the
+    # native-protocol driver lives here, next to the HTTP head run.
+    uses: ./.github/workflows/reusable-tcp.yml
+    with:
+      clickhouse-version: head
+
   benchmark-full:
     name: Full benchmark suite
     uses: $/.github/workflows/benchmark.yml
