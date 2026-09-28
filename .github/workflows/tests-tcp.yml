@@ -48,11 +48,10 @@ jobs:
       matrix:
         version:
           - "latest"
-          - "26.6"
-          - "26.5"
-          - "26.4"
+          - "26.9"
+          - "26.8"
+          - "26.7"
           - "26.3"
-          - "25.8"
 
   regress-dotnet-tcp:
     name: .NET regression (TCP)
