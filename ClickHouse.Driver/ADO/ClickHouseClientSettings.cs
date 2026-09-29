@@ -103,6 +103,9 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         // Copy read value converter
         ReadValueConverter = other.ReadValueConverter;
 
+        // Copy credentials provider
+        CredentialsProvider = other.CredentialsProvider;
+
         // Copy accept encoding
         AcceptEncoding = other.AcceptEncoding;
     }
@@ -153,10 +156,27 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Gets or sets the bearer token for JWT authentication.
     /// When set, Bearer authentication is used instead of Basic authentication
     /// (Username and Password are ignored for the Authorization header).
+    /// A <see cref="CredentialsProvider"/> result, when present, takes precedence over this token.
     /// The token should be provided as-is (already encoded if required by your auth provider).
     /// Default: null
     /// </summary>
     public string BearerToken { get; init; }
+
+    /// <summary>
+    /// Gets or sets a callback that supplies credentials dynamically, allowing credential rotation
+    /// without recreating the client or connection.
+    /// The callback is invoked once per HTTP request (unless a per-query
+    /// <see cref="QueryOptions.BearerToken"/> override is set, which skips it) and must be thread-safe.
+    /// Precedence for the Authorization header: per-query <see cref="QueryOptions.BearerToken"/> override,
+    /// then this callback's result, then <see cref="BearerToken"/>, then <see cref="Username"/>/<see cref="Password"/>.
+    /// Returning null falls back to the static credentials in this settings object.
+    /// The callback is synchronous: providers that acquire tokens asynchronously (e.g. OAuth refresh)
+    /// should refresh in the background and return the cached value here.
+    /// Note: the OpenTelemetry db.user tag continues to report <see cref="Username"/>.
+    /// This setting can only be set programmatically (no connection string key).
+    /// Default: null
+    /// </summary>
+    public Func<ClickHouseCredentials> CredentialsProvider { get; init; }
 
     /// <summary>
     /// Gets or sets whether to use compression for data transfer. This is the master switch: when false
@@ -528,6 +548,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                ParameterTypeResolver == other.ParameterTypeResolver &&
                ParameterFormatter == other.ParameterFormatter &&
                ReadValueConverter == other.ReadValueConverter &&
+               CredentialsProvider == other.CredentialsProvider &&
                AcceptEncoding == other.AcceptEncoding &&
                Roles.SequenceEqual(other.Roles) &&
                CustomHeaders.EntriesEqual(other.CustomHeaders) &&
@@ -573,6 +594,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(ParameterTypeResolver);
         hash.Add(ParameterFormatter);
         hash.Add(ReadValueConverter);
+        hash.Add(CredentialsProvider);
         hash.Add(AcceptEncoding);
         foreach (var kvp in CustomSettings)
         {
