@@ -2,8 +2,9 @@ name: TCP Tests
 
 # Runs the ClickHouse.Driver.Tcp test suite. The TCP projects do not reference ClickHouse.Driver, so an
 # HTTP-only change does not run this suite. They do reference ClickHouse.Driver.Common, so the path filters
-# select it, together with the shared build inputs and the workflows of this suite. tests.yml and
-# examples.yml list the same shared build inputs; keep the three lists the same.
+# select it, together with the shared build inputs, the workflows of this suite, and codecov.yml (the
+# Codecov settings for its coverage report). tests.yml and examples.yml list the same shared build inputs;
+# keep the three lists the same.
 on:
   push:
     # Only the long-lived integration branches run on push (validating what landed). The per-epic tcp/**
@@ -20,6 +21,7 @@ on:
       - "[Nn]u[Gg]et.[Cc]onfig"
       - ".editorconfig"
       - "sgKey.snk"
+      - "codecov.yml"
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
       - ".github/workflows/tests-cloud-tcp.yml"
@@ -37,6 +39,7 @@ on:
       - "[Nn]u[Gg]et.[Cc]onfig"
       - ".editorconfig"
       - "sgKey.snk"
+      - "codecov.yml"
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
       - ".github/workflows/tests-cloud-tcp.yml"
@@ -52,6 +55,15 @@ permissions:
   contents: read
 
 jobs:
+  coverage-tcp:
+    name: Code Coverage (TCP)
+    uses: $/.github/workflows/reusable-tcp.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      coverage: true
+      ref: ${{ inputs.ref }}
+
   regress-clickhouse-tcp:
     name: ClickHouse regression (TCP)
     uses: $/.github/workflows/reusable-tcp.yml
