@@ -1366,6 +1366,22 @@ Command methods:
 - `ExecuteScalarAsync()` - Returns first column of first row
 - `ExecuteReaderAsync()` - Returns a `ClickHouseDataReader` for iterating results
 
+`CommandTimeout` is a server-side limit in seconds. A positive value is sent as the
+`max_execution_time` setting, and the server stops a query that runs longer. With the default
+`timeout_overflow_mode`, the command throws a `ClickHouseServerException` with error code 159
+(`TIMEOUT_EXCEEDED`).
+
+```csharp
+await using var command = connection.CreateCommand("SELECT count() FROM huge_table");
+command.CommandTimeout = 30; // seconds
+```
+
+- Zero (the default) and negative values send nothing. A `max_execution_time` set on the
+  connection or in the server profile still applies.
+- A `max_execution_time` in the command's `CustomSettings` overrides `CommandTimeout`.
+  `CommandTimeout` overrides a `max_execution_time` set on the connection.
+- The client does not enforce `CommandTimeout`.
+
 ---
 
 ### Using ClickHouseDataReader {#ado-net-reader}
