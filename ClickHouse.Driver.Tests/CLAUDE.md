@@ -1,0 +1,1 @@
+@../ClickHouse.Driver/AGENTS.md
