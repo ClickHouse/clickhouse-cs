@@ -9,6 +9,13 @@ coverage:
         threshold: 1%
         target: 75%
 
+# The HTTP suite uploads with the flag http and the TCP suite with the flag tcp. Their path filters let a
+# commit run only one suite. Carryforward then copies the other flag's report from the nearest earlier
+# commit that has one, so the total of each commit covers both drivers.
+flag_management:
+  default_rules:
+    carryforward: true
+
 # Vendored third-party source (e.g. the K4os LZ4/xxHash codec) is a verbatim,
 # re-derivable copy we don't own; its coverage is not meaningful for this repo.
 ignore:

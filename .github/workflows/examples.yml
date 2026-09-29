@@ -1,5 +1,8 @@
 name: Examples
 
+# The shared build inputs are the same as in tests.yml and tests-tcp.yml. Directory.Packages.props also sets
+# the versions of the packages that only the examples use (Polly, the OpenTelemetry console exporter, and
+# some Microsoft.Extensions packages), so a version change runs this workflow.
 on:
   push:
     branches: [main]
@@ -8,7 +11,14 @@ on:
       - "ClickHouse.Driver/**"
       - "ClickHouse.Driver.Common/**"
       - "ClickHouse.Driver.Tcp/**"
+      - "Directory.Packages.props"
+      - "Directory.Build.*"
+      - "global.json"
+      - "[Nn]u[Gg]et.[Cc]onfig"
+      - ".editorconfig"
+      - "sgKey.snk"
       - ".github/workflows/examples.yml"
+      - "!**/*.md"
   pull_request:
     branches: [main]
     paths:
@@ -16,7 +26,14 @@ on:
       - "ClickHouse.Driver/**"
       - "ClickHouse.Driver.Common/**"
       - "ClickHouse.Driver.Tcp/**"
+      - "Directory.Packages.props"
+      - "Directory.Build.*"
+      - "global.json"
+      - "[Nn]u[Gg]et.[Cc]onfig"
+      - ".editorconfig"
+      - "sgKey.snk"
       - ".github/workflows/examples.yml"
+      - "!**/*.md"
   workflow_dispatch:
     inputs:
       ref:
