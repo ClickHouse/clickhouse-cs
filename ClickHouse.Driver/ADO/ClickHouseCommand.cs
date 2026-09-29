@@ -45,16 +45,11 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public override string CommandText { get; set; }
 
     /// <summary>
-    /// Gets or sets the command timeout in seconds. A positive value is sent to the server as the
-    /// <c>max_execution_time</c> setting, so the server cancels the query once it is exceeded.
-    /// Zero, the default, and negative values add no command-level limit; they do not remove a
-    /// <c>max_execution_time</c> inherited from the connection or the server profile. A
-    /// <c>max_execution_time</c> entry in this command's <see cref="CustomSettings"/> is equally
-    /// specific and takes precedence over this property; a connection-level one does not.
-    /// This property is a server-side limit only: it does not cancel the client-side wait. The
-    /// HTTP request is bounded by <see cref="ClickHouseClientSettings.Timeout"/>, and results are
-    /// streamed, so use the <see cref="System.Threading.CancellationToken"/> overloads of the
-    /// asynchronous execute methods to abort a long read from the client side.
+    /// Gets or sets the command timeout in seconds. A positive value is sent as the
+    /// <c>max_execution_time</c> setting, and the server stops a query that runs longer.
+    /// Zero (the default) and negative values send nothing, so a limit set on the connection or
+    /// in the server profile still applies. A <c>max_execution_time</c> in
+    /// <see cref="CustomSettings"/> overrides this property. The client does not enforce this limit.
     /// </summary>
     public override int CommandTimeout { get; set; }
 
@@ -262,10 +257,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         };
     }
 
-    // CommandTimeout carries the ADO.NET timeout contract, which ClickHouse enforces through the
-    // max_execution_time setting. Zero (the ADO.NET "no limit" value, and this property's default)
-    // leaves the setting alone, as does a negative value. An explicit max_execution_time in
-    // CustomSettings states the same thing in the server's own terms, so it wins.
+    // In ADO.NET, a CommandTimeout of 0 means "no limit".
     private TimeSpan? GetMaxExecutionTime(IDictionary<string, object> settings) =>
         CommandTimeout > 0 && settings?.ContainsKey("max_execution_time") != true
             ? TimeSpan.FromSeconds(CommandTimeout)
