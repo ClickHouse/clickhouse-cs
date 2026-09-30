@@ -2,6 +2,7 @@
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Http;
 
@@ -72,7 +73,14 @@ public class ClickHouseRawResult : IDisposable
     /// Reads the response content as a stream.
     /// </summary>
     /// <returns>A task that resolves to the response content stream.</returns>
-    public Task<Stream> ReadAsStreamAsync() => response.Content.ReadAsStreamAsync();
+    public Task<Stream> ReadAsStreamAsync() => ReadAsStreamAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Reads the response content as a stream.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that resolves to the response content stream.</returns>
+    public Task<Stream> ReadAsStreamAsync(CancellationToken cancellationToken) => response.Content.ReadAsStreamAsync(cancellationToken);
 
     /// <summary>
     /// Reads the response content as a stream, transparently decoding it when the response is
@@ -92,12 +100,33 @@ public class ClickHouseRawResult : IDisposable
     /// return the same stream rather than stacking a decoder over a partly-consumed body; not safe for
     /// concurrent use.
     /// </remarks>
-    public async Task<Stream> ReadDecompressedStreamAsync()
+    public Task<Stream> ReadDecompressedStreamAsync() => ReadDecompressedStreamAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Reads the response content as a stream, transparently decoding it when the response is
+    /// transport-compressed — unlike <see cref="ReadAsStreamAsync"/>, which is a verbatim pass-through of
+    /// the raw bytes. The codec is taken from the response's <c>Content-Encoding</c>: absent or
+    /// <c>identity</c> returns the raw stream unchanged, and <c>lz4</c>, <c>zstd</c>, <c>gzip</c>,
+    /// <c>deflate</c> and <c>br</c> are decoded.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that resolves to a plaintext stream over the response content.</returns>
+    /// <exception cref="NotSupportedException">
+    /// The response uses a codec this client cannot decode (e.g. <c>snappy</c>); the message names it.
+    /// </exception>
+    /// <remarks>
+    /// Disposing this <see cref="ClickHouseRawResult"/> is always sufficient — it releases the response and
+    /// any decoder inserted here. Disposing the returned stream is safe too, but note that with nothing to
+    /// decode it <i>is</i> the content stream, so that ends the response body. Repeated sequential calls
+    /// return the same stream rather than stacking a decoder over a partly-consumed body; not safe for
+    /// concurrent use.
+    /// </remarks>
+    public async Task<Stream> ReadDecompressedStreamAsync(CancellationToken cancellationToken)
     {
         if (decompressedStream != null)
             return decompressedStream;
 
-        var rawStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        var rawStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
 
         // Throws for a codec we cannot decode, before anything has been read — so the body is left intact
         // for a caller who wants to decode it themselves, through any read member. Nothing leaks either:
@@ -115,20 +144,42 @@ public class ClickHouseRawResult : IDisposable
     /// Reads the response content as a byte array.
     /// </summary>
     /// <returns>A task that resolves to the response content as bytes.</returns>
-    public Task<byte[]> ReadAsByteArrayAsync() => response.Content.ReadAsByteArrayAsync();
+    public Task<byte[]> ReadAsByteArrayAsync() => ReadAsByteArrayAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Reads the response content as a byte array.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that resolves to the response content as bytes.</returns>
+    public Task<byte[]> ReadAsByteArrayAsync(CancellationToken cancellationToken) => response.Content.ReadAsByteArrayAsync(cancellationToken);
 
     /// <summary>
     /// Reads the response content as a string.
     /// </summary>
     /// <returns>A task that resolves to the response content as a string.</returns>
-    public Task<string> ReadAsStringAsync() => response.Content.ReadAsStringAsync();
+    public Task<string> ReadAsStringAsync() => ReadAsStringAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Reads the response content as a string.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that resolves to the response content as a string.</returns>
+    public Task<string> ReadAsStringAsync(CancellationToken cancellationToken) => response.Content.ReadAsStringAsync(cancellationToken);
 
     /// <summary>
     /// Copies the response content to the specified stream.
     /// </summary>
     /// <param name="stream">The destination stream to copy the content to.</param>
     /// <returns>A task that completes when the copy operation is finished.</returns>
-    public Task CopyToAsync(Stream stream) => response.Content.CopyToAsync(stream);
+    public Task CopyToAsync(Stream stream) => CopyToAsync(stream, CancellationToken.None);
+
+    /// <summary>
+    /// Copies the response content to the specified stream.
+    /// </summary>
+    /// <param name="stream">The destination stream to copy the content to.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that completes when the copy operation is finished.</returns>
+    public Task CopyToAsync(Stream stream, CancellationToken cancellationToken) => response.Content.CopyToAsync(stream, cancellationToken);
 
     public void Dispose()
     {
