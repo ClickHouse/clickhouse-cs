@@ -8,6 +8,8 @@
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
     <!-- CHTCP0001: the native-TCP client is experimental; the tests opt in to exercising it. -->
     <NoWarn>CS8002;CHTCP0001</NoWarn>
+    <!-- codecov.yml ignores the vendored source in ClickHouse.Driver.Common/Vendor, so do not instrument it. -->
+    <ExcludeByFile>**/Vendor/**/*.cs</ExcludeByFile>
   </PropertyGroup>
 
   <ItemGroup>

@@ -82,15 +82,21 @@ internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWri
         return new ClickHouseDecimal(mantissa, Scale);
     }
 
-    private decimal ReadDecimal(ExtendedBinaryReader reader)
+    private decimal ReadDecimal(ExtendedBinaryReader reader) => Size switch
     {
-        var mantissa = Size switch
-        {
-            4 => reader.ReadInt32(),
-            8 => reader.ReadInt64(),
-            _ => (decimal)ReadMantissa(reader),
-        };
-        return mantissa / (decimal)Exponent;
+        4 => reader.ReadInt32() / (decimal)Exponent,
+        8 => reader.ReadInt64() / (decimal)Exponent,
+        _ => ReadWideDecimal(reader),
+    };
+
+    private decimal ReadWideDecimal(ExtendedBinaryReader reader)
+    {
+        var mantissa = ReadMantissa(reader);
+        var scale = Scale;
+        // A scale above 28 or a mantissa wider than 96 bits does not fit System.Decimal as stored,
+        // but the value can still be exact once trailing zeros are dropped.
+        ClickHouseDecimal.TrimToDecimalRange(ref mantissa, ref scale);
+        return (decimal)mantissa / (decimal)(scale == Scale ? Exponent : BigInteger.Pow(10, scale));
     }
 
     private BigInteger ReadMantissa(ExtendedBinaryReader reader)

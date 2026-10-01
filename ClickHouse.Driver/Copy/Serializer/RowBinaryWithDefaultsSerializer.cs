@@ -4,7 +4,7 @@ using ClickHouse.Driver.Types;
 
 namespace ClickHouse.Driver.Copy.Serializer;
 
-// https://clickhouse.com/docs/en/interfaces/formats#rowbinarywithdefaults
+// https://clickhouse.com/docs/reference/formats/RowBinary/RowBinaryWithDefaults
 internal class RowBinaryWithDefaultsSerializer : IRowSerializer
 {
     public void Serialize(object[] row, ClickHouseType[] types, ExtendedBinaryWriter writer)

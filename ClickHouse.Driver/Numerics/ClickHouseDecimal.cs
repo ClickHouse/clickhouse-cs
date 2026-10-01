@@ -21,6 +21,10 @@ public readonly struct ClickHouseDecimal
     /// </summary>
     public static int MaxDivisionPrecision { get; set; } = 50;
 
+    private const int MaxDecimalScale = 28;
+
+    private static readonly BigInteger MaxDecimalMantissa = new(decimal.MaxValue);
+
     public ClickHouseDecimal(decimal value)
         : this()
     {
@@ -158,6 +162,12 @@ public readonly struct ClickHouseDecimal
         if (negative)
         {
             mantissa = BigInteger.Negate(mantissa);
+        }
+
+        TrimToDecimalRange(ref mantissa, ref scale);
+        if (scale > MaxDecimalScale)
+        {
+            ThrowDecimalOverflowException();
         }
 
         var numberBytes = mantissa.ToByteArray();
@@ -415,6 +425,33 @@ public readonly struct ClickHouseDecimal
     }
 
     public int CompareTo(decimal other) => CompareTo((ClickHouseDecimal)other);
+
+    /// <summary>
+    /// Drops trailing zeros while the value does not fit <see cref="decimal"/> (a scale above 28 or a
+    /// mantissa wider than 96 bits), so a value stored with a wider representation than it needs
+    /// converts exactly. The value itself never changes; if it needs more than 28 fractional digits,
+    /// nothing is dropped and the caller's range check rejects it.
+    /// </summary>
+    internal static void TrimToDecimalRange(ref BigInteger mantissa, ref int scale)
+    {
+        if (scale > MaxDecimalScale)
+        {
+            var quotient = BigInteger.DivRem(mantissa, BigInteger.Pow(10, scale - MaxDecimalScale), out var remainder);
+            if (!remainder.IsZero)
+                return;
+            mantissa = quotient;
+            scale = MaxDecimalScale;
+        }
+
+        while (scale > 0 && BigInteger.Abs(mantissa) > MaxDecimalMantissa)
+        {
+            var quotient = BigInteger.DivRem(mantissa, 10, out var remainder);
+            if (!remainder.IsZero)
+                return;
+            mantissa = quotient;
+            scale--;
+        }
+    }
 
     internal static BigInteger ScaleMantissa(ClickHouseDecimal value, int scale)
     {

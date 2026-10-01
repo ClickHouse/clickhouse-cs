@@ -373,6 +373,126 @@ public class DynamicTests : AbstractConnectionTestFixture
         Assert.That(result, Is.EqualTo(new ClickHouseDecimal(123.456789m)));
     }
 
+    // A decimal written to Dynamic is stored as the narrowest Decimal32/64/128/256 whose precision P
+    // holds its integer digits and scale, with the scale widened to P - integerDigits.
+    // Args: (value, expected dynamicType() reported by the server).
+    private static IEnumerable<TestCaseData> DynamicDecimalCases()
+    {
+        // Values that differ only in fractional length share one type.
+        yield return new TestCaseData(1.2m, "Decimal(9, 8)");
+        yield return new TestCaseData(1.20m, "Decimal(9, 8)");
+        yield return new TestCaseData(1.23m, "Decimal(9, 8)");
+        yield return new TestCaseData(1.2345m, "Decimal(9, 8)");
+        yield return new TestCaseData(12.34m, "Decimal(9, 7)");
+        yield return new TestCaseData(-1.2345m, "Decimal(9, 8)");
+        yield return new TestCaseData(0m, "Decimal(9, 8)");
+        yield return new TestCaseData(0.00m, "Decimal(9, 9)");
+        yield return new TestCaseData(-0.5m, "Decimal(9, 9)");
+
+        // Width boundaries, reached through the integer digits or through the scale.
+        yield return new TestCaseData(123456789m, "Decimal(9, 0)");
+        yield return new TestCaseData(1234567890m, "Decimal(18, 8)");
+        yield return new TestCaseData(0.123456789m, "Decimal(9, 9)");
+        yield return new TestCaseData(0.0000000001m, "Decimal(18, 18)");
+        yield return new TestCaseData(-12345678.9m, "Decimal(9, 1)");
+        yield return new TestCaseData(123456789.1m, "Decimal(18, 9)");
+        yield return new TestCaseData(123456789012345678m, "Decimal(18, 0)");
+        yield return new TestCaseData(1234567890123456789m, "Decimal(38, 19)");
+        yield return new TestCaseData(0.0123456789012345m, "Decimal(18, 18)");
+        yield return new TestCaseData(0.000000000000000001m, "Decimal(18, 18)");
+        yield return new TestCaseData(0.0000000000000000001m, "Decimal(38, 38)");
+        yield return new TestCaseData(0.1234567890123456789012345678m, "Decimal(38, 38)");
+        yield return new TestCaseData(decimal.MaxValue, "Decimal(38, 9)");
+        yield return new TestCaseData(decimal.MinValue, "Decimal(38, 9)");
+
+        // Beyond System.Decimal: only reachable through ClickHouseDecimal.
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Parse(new string('9', 38)), 0), "Decimal(38, 0)");
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Parse("1" + new string('0', 38)), 0), "Decimal(76, 37)");
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.One, 38), "Decimal(38, 38)");
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.One, 39), "Decimal(76, 76)");
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.One, 76), "Decimal(76, 76)");
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Parse("-" + new string('9', 76)), 0), "Decimal(76, 0)");
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Parse("123456789012345678901234567890"), 40), "Decimal(76, 76)");
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Zero, 80), "Decimal(76, 76)");
+    }
+
+    // Values that System.Decimal holds exactly, read back with UseCustomDecimals=false.
+    // Args: (value written, expected System.Decimal, expected dynamicType()).
+    private static IEnumerable<TestCaseData> DynamicSystemDecimalCases()
+    {
+        foreach (var c in DynamicDecimalCases().Where(c => c.Arguments[0] is decimal))
+            yield return new TestCaseData(c.Arguments[0], c.Arguments[0], c.Arguments[1]);
+
+        // Stored as Decimal256.
+        yield return new TestCaseData(new ClickHouseDecimal(5 * BigInteger.Pow(10, 39), 40), 0.5m, "Decimal(76, 76)");
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Zero, 80), 0m, "Decimal(76, 76)");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCaseSource(nameof(DynamicDecimalCases))]
+    public async Task Write_DecimalToDynamic_StoresSharedTypeAndPreservesValue(object value, string expectedType)
+    {
+        var targetTable = CreateTableName($"dynamic_decimal_{expectedType}");
+        await connection.ExecuteStatementAsync(
+            $"CREATE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, value }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value, dynamicType(value) FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetString(1), Is.EqualTo(expectedType));
+        var expected = value is ClickHouseDecimal chd ? chd : new ClickHouseDecimal((decimal)value);
+        Assert.That((ClickHouseDecimal)reader.GetValue(0), Is.EqualTo(expected));
+        if (value is decimal dec)
+            Assert.That(reader.GetDecimal(0), Is.EqualTo(dec));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCaseSource(nameof(DynamicSystemDecimalCases))]
+    public async Task Read_DecimalFromDynamicWithoutCustomDecimals_ReturnsSystemDecimalWithoutOverflow(object value, decimal expected, string expectedType)
+    {
+        var targetTable = CreateTableName($"dynamic_decimal_{expectedType}");
+        await connection.ExecuteStatementAsync(
+            $"CREATE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.WriteToServerAsync([new object[] { 1u, value }]);
+
+        using var systemDecimalConnection = TestUtilities.GetTestClickHouseConnection(customDecimals: false);
+        using var reader = await systemDecimalConnection.ExecuteReaderAsync($"SELECT value, dynamicType(value) FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetString(1), Is.EqualTo(expectedType));
+        Assert.That(reader.GetValue(0), Is.TypeOf<decimal>().And.EqualTo(expected));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task Write_DecimalsOfDifferentFractionalLengthToDynamic_StoresOneSharedType()
+    {
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync(
+            $"CREATE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        var values = new[] { 1.2m, 1.23m, 1.2345m, 9.87654321m, -3.5m };
+        using var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
+        await bulkCopy.WriteToServerAsync(values.Select((v, i) => new object[] { (uint)i, v }).ToList());
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT value, dynamicType(value) FROM {targetTable} ORDER BY id");
+        foreach (var expected in values)
+        {
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetString(1), Is.EqualTo("Decimal(9, 8)"));
+            Assert.That((ClickHouseDecimal)reader.GetValue(0), Is.EqualTo(new ClickHouseDecimal(expected)));
+        }
+
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
     [Test]
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_IntArray_ShouldRoundTrip()

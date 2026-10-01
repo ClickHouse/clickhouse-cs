@@ -1,8 +1,10 @@
 name: TCP Tests
 
-# Runs the ClickHouse.Driver.Tcp test suite, gated on changes to the TCP projects only.
-# The TCP project is standalone (no reference to ClickHouse.Driver), so its build/test closure is just
-# the two TCP projects plus the shared package versions and the CI wiring itself.
+# Runs the ClickHouse.Driver.Tcp test suite. The TCP projects do not reference ClickHouse.Driver, so an
+# HTTP-only change does not run this suite. They do reference ClickHouse.Driver.Common, so the path filters
+# select it, together with the shared build inputs, the workflows of this suite, and codecov.yml (the
+# Codecov settings for its coverage report). tests.yml and examples.yml list the same shared build inputs;
+# keep the three lists the same.
 on:
   push:
     # Only the long-lived integration branches run on push (validating what landed). The per-epic tcp/**
@@ -12,20 +14,36 @@ on:
     paths:
       - "ClickHouse.Driver.Tcp/**"
       - "ClickHouse.Driver.Tcp.Tests/**"
+      - "ClickHouse.Driver.Common/**"
       - "Directory.Packages.props"
+      - "Directory.Build.*"
+      - "global.json"
+      - "[Nn]u[Gg]et.[Cc]onfig"
+      - ".editorconfig"
+      - "sgKey.snk"
+      - "codecov.yml"
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
       - ".github/workflows/tests-cloud-tcp.yml"
+      - "!**/*.md"
   pull_request:
     # Matches the PR's base branch, so a PR stacked onto another tcp/** epic branch triggers too.
     branches: [main, tcp-client, "tcp/**"]
     paths:
       - "ClickHouse.Driver.Tcp/**"
       - "ClickHouse.Driver.Tcp.Tests/**"
+      - "ClickHouse.Driver.Common/**"
       - "Directory.Packages.props"
+      - "Directory.Build.*"
+      - "global.json"
+      - "[Nn]u[Gg]et.[Cc]onfig"
+      - ".editorconfig"
+      - "sgKey.snk"
+      - "codecov.yml"
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
       - ".github/workflows/tests-cloud-tcp.yml"
+      - "!**/*.md"
   workflow_dispatch:
     inputs:
       ref:
@@ -37,6 +55,15 @@ permissions:
   contents: read
 
 jobs:
+  coverage-tcp:
+    name: Code Coverage (TCP)
+    uses: $/.github/workflows/reusable-tcp.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      coverage: true
+      ref: ${{ inputs.ref }}
+
   regress-clickhouse-tcp:
     name: ClickHouse regression (TCP)
     uses: $/.github/workflows/reusable-tcp.yml
@@ -48,11 +75,10 @@ jobs:
       matrix:
         version:
           - "latest"
-          - "26.6"
-          - "26.5"
-          - "26.4"
+          - "26.9"
+          - "26.8"
+          - "26.7"
           - "26.3"
-          - "25.8"
 
   regress-dotnet-tcp:
     name: .NET regression (TCP)
@@ -65,6 +91,42 @@ jobs:
       fail-fast: false
       matrix:
         framework: ["net10.0", "net9.0", "net8.0"] # TCP library targets net8.0+ only
+
+  build-http-driver:
+    name: HTTP driver build (TCP)
+    # ClickHouse.Driver references ClickHouse.Driver.Tcp for net8.0 and later and compiles against its public
+    # types, so a TCP change can break the HTTP driver build, possibly on some target frameworks only.
+    # tests.yml does not run for a TCP-only change, so this job builds ClickHouse.Driver for every target
+    # framework.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # No step here talks to git again, so the job token does not need to stay in .git/config.
+          persist-credentials: false
+
+      - uses: actions/cache@v6
+        name: Cache NuGet
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # The .NET 10 SDK builds the older target frameworks too: their reference packs come from NuGet.
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            10.x
+
+      # GeneratePackageOnBuild=false: compile only, without the NuGet package.
+      - name: Build
+        run: dotnet build ClickHouse.Driver/ClickHouse.Driver.csproj --configuration Release -p:GeneratePackageOnBuild=false
 
   cloud-tcp:
     name: Cloud (TCP)
