@@ -97,6 +97,12 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["ReadStringsAsByteArrays"] = value;
     }
 
+    public bool AllowDuplicateJsonKeys
+    {
+        get => GetBooleanOrDefault("AllowDuplicateJsonKeys", ClickHouseDefaults.AllowDuplicateJsonKeys);
+        set => this["AllowDuplicateJsonKeys"] = value;
+    }
+
     /// <summary>
     /// Gets or sets the size, in bytes, of the buffer used when reading HTTP query responses.
     /// Default: 8 KiB
@@ -260,6 +266,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             JsonReadMode = settings.JsonReadMode,
             JsonWriteMode = settings.JsonWriteMode,
             MapReadMode = settings.MapReadMode,
+            AllowDuplicateJsonKeys = settings.AllowDuplicateJsonKeys,
             AcceptEncoding = settings.AcceptEncoding,
         };
 

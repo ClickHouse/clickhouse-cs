@@ -14,6 +14,7 @@ namespace ClickHouse.Driver.Benchmark;
 /// <c>ClickHouseType</c> per row; now stateless types return a shared singleton, so the residual
 /// per-row allocation should be just the boxed value.
 /// </summary>
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 public class DynamicReadBenchmark
@@ -35,7 +36,7 @@ public class DynamicReadBenchmark
     public void Cleanup() => connection?.Dispose();
 
     // Int64 Dynamic: per-row header decodes to a (now shared) Int64Type.
-    [Benchmark(Baseline = true)]
+    [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
     public async Task Int64_Dynamic_GetValue()
     {
         using var reader = await connection.ExecuteReaderAsync(

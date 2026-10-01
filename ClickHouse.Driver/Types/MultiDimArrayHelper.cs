@@ -54,14 +54,17 @@ internal static class MultiDimArrayHelper
         // innermost row can be blitted in a single write instead of boxing every scalar through
         // Array.GetValue(int[]) + a virtual leaf.Write. Gated on:
         //   - little-endian host (CLR primitive layout == wire layout only on LE);
-        //   - a known fixed-width primitive leaf (TryGetBlittableElementSize);
+        //   - a known fixed-width primitive leaf (TryGetBlittableElementSize), looked up on the leaf
+        //     with its wire-transparent wrappers removed (TransparentWrapper.Unwrap) — a LowCardinality(Int32)
+        //     leaf writes the very same bytes as a bare Int32 one, so gating on the concrete wrapper
+        //     class alone would send it down the boxing path for nothing;
         //   - the CLR element type matching the leaf's framework type EXACTLY — the slow path
         //     coerces mismatches (e.g. long[,] into Array(Int32)) via Convert.ToXxx, which blitting
         //     would silently corrupt, so any mismatch falls through to WriteAxis.
         // Non-zero GetLowerBound is handled implicitly: the blit walks flat memory offsets, which are
         // independent of the logical index bounds.
         if (BitConverter.IsLittleEndian
-            && TryGetBlittableElementSize(leafType, out var elementSize)
+            && TryGetBlittableElementSize(TransparentWrapper.Unwrap(leafType), out var elementSize)
             && array.GetType().GetElementType() == leafType.FrameworkType)
         {
             ref var origin = ref MemoryMarshal.GetArrayDataReference(array);
@@ -118,7 +121,8 @@ internal static class MultiDimArrayHelper
     /// <summary>
     /// Returns the wire size in bytes for leaf types whose CLR in-memory representation is byte-identical
     /// to the ClickHouse little-endian wire format. Deliberately gated on the concrete leaf class (not just
-    /// <see cref="ClickHouseType.FrameworkType"/>) so only these exact fixed-width primitives qualify.
+    /// <see cref="ClickHouseType.FrameworkType"/>) so only these exact fixed-width primitives qualify —
+    /// callers strip the wire-transparent wrappers first (see <see cref="TransparentWrapper.Unwrap"/>).
     /// Int128/UInt128 are excluded: they are <see cref="System.Numerics.BigInteger"/>-backed here, not a
     /// contiguous 16-byte struct. String/DateTime/Decimal/UUID/IP differ in wire layout and fall through.
     /// </summary>

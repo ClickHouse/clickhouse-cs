@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Net.Http;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Parameters;
@@ -46,7 +45,11 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public override string CommandText { get; set; }
 
     /// <summary>
-    /// Gets or sets the command timeout in seconds. Not currently used by ClickHouse.
+    /// Gets or sets the command timeout in seconds. A positive value is sent as the
+    /// <c>max_execution_time</c> setting, and the server stops a query that runs longer.
+    /// Zero (the default) and negative values send nothing, so a limit set on the connection or
+    /// in the server profile still applies. A <c>max_execution_time</c> in
+    /// <see cref="CustomSettings"/> overrides this property. The client does not enforce this limit.
     /// </summary>
     public override int CommandTimeout { get; set; }
 
@@ -207,20 +210,24 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             throw new InvalidOperationException("Connection is not set");
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
-        var sqlBuilder = new StringBuilder(CommandText);
-        switch (behavior)
+        var limitClause = behavior switch
         {
-            case CommandBehavior.SingleRow:
-                sqlBuilder.Append(" LIMIT 1");
-                break;
-            case CommandBehavior.SchemaOnly:
-                sqlBuilder.Append(" LIMIT 0");
-                break;
-            default:
-                break;
-        }
+            CommandBehavior.SingleRow => "LIMIT 1",
+            CommandBehavior.SchemaOnly => "LIMIT 0",
+            _ => null,
+        };
 
-        var result = await PostSqlQueryAsync(sqlBuilder.ToString(), lcts.Token).ConfigureAwait(false);
+        // Normalize CommandText the way the pre-#471 code did (via `new StringBuilder(CommandText)`):
+        // a null CommandText is treated as an empty query for every behavior, so an unset command
+        // reaches the server as an empty query (rejected there) rather than throwing a client-side
+        // ArgumentNullException when the null reaches StringContent.
+        var commandText = CommandText ?? string.Empty;
+
+        // Append the LIMIT out-of-band so a trailing comment or statement terminator in CommandText
+        // cannot swallow it or turn the query into a rejected multi-statement (issue #471).
+        var sql = limitClause is null ? commandText : RowLimitAppender.Append(commandText, limitClause);
+
+        var result = await PostSqlQueryAsync(sql, lcts.Token).ConfigureAwait(false);
         return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.ClickHouseClient.TypeSettings, connection.ClickHouseClient.PocoRegistry, connection.ClickHouseClient.Settings.ReadBufferSize, connection.ClickHouseClient.Settings.ReadValueConverter).ConfigureAwait(false);
     }
 
@@ -236,14 +243,23 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
     private QueryOptions BuildQueryOptions()
     {
+        var settings = customSettings?.Count > 0 ? customSettings : null;
+
         return new QueryOptions
         {
             QueryId = QueryId,
             BearerToken = BearerToken,
             Database = connection?.Database,
             Roles = roles?.Count > 0 ? roles : null,
-            CustomSettings = customSettings?.Count > 0 ? customSettings : null,
+            CustomSettings = settings,
             AcceptEncoding = AcceptEncoding,
+            MaxExecutionTime = GetMaxExecutionTime(settings),
         };
     }
+
+    // In ADO.NET, a CommandTimeout of 0 means "no limit".
+    private TimeSpan? GetMaxExecutionTime(IDictionary<string, object> settings) =>
+        CommandTimeout > 0 && settings?.ContainsKey("max_execution_time") != true
+            ? TimeSpan.FromSeconds(CommandTimeout)
+            : null;
 }

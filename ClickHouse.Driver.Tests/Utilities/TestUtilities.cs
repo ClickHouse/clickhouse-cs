@@ -224,7 +224,7 @@ public static class TestUtilities
         }
         builder["set_session_timeout"] = 1; // Expire sessions quickly after test
         builder["set_allow_experimental_geo_types"] = 1; // Allow support for geo types
-        builder["set_flatten_nested"] = 0; // Nested should be a single column, see https://clickhouse.com/docs/en/operations/settings/settings#flatten-nested
+        builder["set_flatten_nested"] = 0; // Nested should be a single column, see https://clickhouse.com/docs/reference/settings/session-settings/other#flatten_nested
 
         if (SupportedFeatures.HasFlag(Feature.Map))
         {
@@ -375,7 +375,12 @@ public static class TestUtilities
 
         var data = reader.GetFieldValues();
 
-        ClassicAssert.IsFalse(reader.Read(), "Unexpected extra row: " + string.Join(",", reader.GetFieldValues()));
+        // Read the extra row's values only once there is one. The argument to IsFalse is evaluated eagerly,
+        // so inlining GetFieldValues() there read the row *after* Read() had returned false — which the
+        // reader now rejects — and allocated a joined string of every column on every successful call just
+        // to discard it.
+        if (reader.Read())
+            Assert.Fail("Unexpected extra row: " + string.Join(",", reader.GetFieldValues()));
 
         return data;
     }

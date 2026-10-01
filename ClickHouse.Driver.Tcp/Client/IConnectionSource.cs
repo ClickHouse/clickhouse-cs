@@ -1,0 +1,44 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Protocol;
+
+namespace ClickHouse.Driver.Tcp.Client;
+
+/// <summary>
+/// Supplies connections to the client, hiding whether a connection is opened fresh, reused, or drawn from a
+/// pool. A caller rents a connection for one operation and disposes the returned lease to give it back; the
+/// source decides, when a lease returns, whether the connection is reusable or must be discarded.
+///
+/// <para>
+/// <see cref="ConnectionPool"/> is the implementation the client builds. The seam remains so the client's own
+/// behaviour can be exercised over a source that needs no server.
+/// </para>
+/// </summary>
+internal interface IConnectionSource : IAsyncDisposable
+{
+    /// <summary>
+    /// Rents a ready connection, waiting if none is currently available. Dispose the returned lease to return
+    /// the connection. On failure to obtain one (a dial timeout, or no connection freeing up in time) the call
+    /// throws and nothing is leased.
+    /// </summary>
+    /// <param name="cancellationToken">A token to observe while waiting for and establishing a connection.</param>
+    /// <returns>A lease over a ready connection.</returns>
+    /// <exception cref="TimeoutException">No connection became available within the source's wait limit.</exception>
+    ValueTask<IConnectionLease> RentAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// A rented connection. Disposing the lease returns the connection to its source, and a second dispose does nothing.
+/// The lease does not own the connection's teardown: the source decides, when the lease is returned, whether to keep
+/// the connection for reuse or discard it. A connection a failed operation left terminated is never reused, nor is one
+/// out of step with the server or past either of its time limits.
+/// </summary>
+internal interface IConnectionLease : IAsyncDisposable
+{
+    /// <summary>
+    /// The rented connection, valid until the lease is disposed, or until the source itself is disposed, which aborts
+    /// an operation still running once its own timeout expires.
+    /// </summary>
+    ClickHouseTcpConnection Connection { get; }
+}

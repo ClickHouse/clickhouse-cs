@@ -41,7 +41,8 @@ internal class TupleType : ParameterizedType
     {
         var count = underlyingTypes.Length;
 
-        if (count > 7)
+        // There is no System.Tuple`0, and no System.Tuple arity above 7
+        if (count == 0 || count > 7)
             return typeof(LargeTuple);
 
         var typeArgs = new Type[count];
@@ -93,7 +94,7 @@ internal class TupleType : ParameterizedType
         if (underlyingTypes.Length != count)
             throw new ArgumentException($"Count of tuple type elements ({underlyingTypes.Length}) does not match number of elements ({count})");
 
-        if (count > 7)
+        if (count == 0 || count > 7)
             return new LargeTuple(values);
 
         var valuesCopy = new object[count];
@@ -120,6 +121,9 @@ internal class TupleType : ParameterizedType
     }
 
     public override string ToString() => $"{Name}({string.Join(",", UnderlyingTypes.Select(t => t.ToString()))})";
+
+    internal override string CacheSignature =>
+        ComposeCacheSignature(children => $"{Name}({string.Join(",", children)})", UnderlyingTypes);
 
     public override object Read(ExtendedBinaryReader reader)
     {

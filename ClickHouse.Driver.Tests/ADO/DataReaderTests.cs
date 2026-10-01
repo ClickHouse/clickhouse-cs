@@ -216,4 +216,75 @@ public class DataReaderTests : AbstractConnectionTestFixture
         Assert.That(rows, Is.EqualTo(Enumerable.Range(0, 100)).AsCollection);
         ClassicAssert.IsFalse(reader.Read());
     }
+
+    [Test]
+    public async Task TryGetEnumOrdinal_Enum8Column_ReturnsWireOrdinalWhileStandardAccessorsAreUnchanged()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
+            "SELECT CAST('Active', 'Enum8(''Active'' = 1, ''Inactive'' = 2)') AS value");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.Multiple(() =>
+        {
+            // The opt-in accessor exposes the underlying ordinal that arrived on the wire.
+            Assert.That(reader.TryGetEnumOrdinal(0, out var ordinal), Is.True);
+            Assert.That(ordinal, Is.EqualTo(1));
+            // The string form is unchanged (an enum column materializes as its label).
+            Assert.That(reader.GetString(0), Is.EqualTo("Active"));
+            Assert.That(reader.GetValue(0), Is.InstanceOf<string>());
+            Assert.That(reader.GetFieldValue<string>(0), Is.EqualTo("Active"));
+            // The standard numeric accessors keep ADO.NET's behavior for a string-backed column.
+            Assert.Throws<InvalidCastException>(() => reader.GetInt32(0));
+            Assert.Throws<InvalidCastException>(() => reader.GetFieldValue<int>(0));
+        });
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [TestCase("Enum8('Active' = 1, 'Inactive' = 2)", "Active", 1)]
+    [TestCase("Enum8('Active' = 1, 'Inactive' = 2)", "Inactive", 2)]
+    [TestCase("Enum8('None' = -1, 'Active' = 1)", "None", -1)]        // negative ordinal
+    [TestCase("Enum16('Low' = 1, 'High' = 1000)", "High", 1000)]      // beyond Enum8/byte range
+    public async Task TryGetEnumOrdinal_KnownLabel_ReturnsRawSignedWireOrdinal(string enumType, string label, int expected)
+    {
+        var quotedType = enumType.Replace("'", "''"); // embed the enum type in the SQL string literal
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
+            $"SELECT CAST('{label}', '{quotedType}') AS value");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.TryGetEnumOrdinal(0, out var ordinal), Is.True);
+        Assert.That(ordinal, Is.EqualTo(expected));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    public async Task TryGetEnumOrdinal_NullableEnum8WithValue_ReturnsOrdinal()
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
+            "SELECT CAST('Active', 'Nullable(Enum8(''Active'' = 1, ''Inactive'' = 2))') AS value");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.TryGetEnumOrdinal(0, out var ordinal), Is.True);
+        Assert.That(ordinal, Is.EqualTo(1));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    public async Task TryGetEnumOrdinal_NonEnumOrNullColumns_ReturnsFalseAndLeavesAccessorsUnchanged()
+    {
+        // Contrast cases: the new accessor only resolves live enum labels; everything else returns
+        // false and the standard accessors behave exactly as they do on a build without it.
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
+            "SELECT 'plain' AS s, toInt32(42) AS i, CAST(NULL, 'Nullable(Enum8(''Active'' = 1))') AS n");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.Multiple(() =>
+        {
+            // Plain String column: not an enum -> false; a numeric cast still throws.
+            Assert.That(reader.TryGetEnumOrdinal(0, out _), Is.False);
+            Assert.Throws<InvalidCastException>(() => reader.GetInt32(0));
+            // Int column: not an enum -> false; GetInt32 works exactly as before.
+            Assert.That(reader.TryGetEnumOrdinal(1, out _), Is.False);
+            Assert.That(reader.GetInt32(1), Is.EqualTo(42));
+            // NULL Nullable(Enum): no ordinal -> false; callers use IsDBNull.
+            Assert.That(reader.TryGetEnumOrdinal(2, out _), Is.False);
+            ClassicAssert.IsTrue(reader.IsDBNull(2));
+        });
+        ClassicAssert.IsFalse(reader.Read());
+    }
 }

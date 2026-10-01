@@ -93,7 +93,7 @@ dotnet test ClickHouse.Driver.IntegrationTests/ClickHouse.Driver.IntegrationTest
 
 ### Running tests with code coverage
 
-The project uses Coverlet for code coverage:
+The project uses Coverlet for code coverage. The HTTP and TCP drivers have separate test projects:
 
 ```bash
 dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj \
@@ -102,26 +102,66 @@ dotnet test ClickHouse.Driver.Tests/ClickHouse.Driver.Tests.csproj \
   /p:CollectCoverage=true \
   /p:CoverletOutputFormat=opencover \
   /p:SkipAutoProps=true
+
+dotnet test ClickHouse.Driver.Tcp.Tests/ClickHouse.Driver.Tcp.Tests.csproj \
+  --framework net9.0 \
+  -c Release \
+  /p:CollectCoverage=true \
+  /p:CoverletOutputFormat=opencover \
+  /p:SkipAutoProps=true
 ```
 
-Coverage reports are generated in the test project directory:
+The TCP tests start a ClickHouse container with Testcontainers unless `CLICKHOUSE_TCP_CONNECTION` sets a
+server connection string.
+
+Coverage reports are generated in each test project directory:
 
 ```
 ClickHouse.Driver.Tests/coverage.net9.0.opencover.xml
+ClickHouse.Driver.Tcp.Tests/coverage.net9.0.opencover.xml
 ```
 
 ### Running benchmarks
 
-Benchmarks use BenchmarkDotNet and require a running ClickHouse instance:
+Benchmarks use BenchmarkDotNet and require a running ClickHouse instance. `CLICKHOUSE_CONNECTION`
+carries the HTTP connection string. `CLICKHOUSE_TCP_CONNECTION_STRING` carries the native one; with
+it unset, the native endpoint is derived from the HTTP string on port 9000.
 
 ```bash
 dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
-  --framework net9.0 \
   --configuration Release \
-  -- --join --filter "*" --artifacts ./results --job Short
+  -- --join --filter "*" --artifacts ./results
 ```
 
 Results will be saved in the `results/` directory.
+
+Every benchmark class carries a category, and the CI runs select on them:
+
+| Category | Covers |
+| --- | --- |
+| `http-regression` | HTTP throughput and allocation |
+| `tcp-regression` | Native protocol throughput and allocation |
+| `cross` | The same workload over both transports |
+| `http-investigation`, `tcp-investigation` | One issue or one past optimization |
+| `compression` | Codecs and framing, shared by both transports |
+
+```bash
+dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
+  --configuration Release \
+  -- --join --filter "*" --anyCategories tcp-regression cross --artifacts ./results
+```
+
+A pull request runs the categories its changed files select, in
+`.github/workflows/benchmark-compare.yml`. The nightly build runs all of them.
+
+The full iteration counts take hours. For a quick local pass, `BENCH_WARMUP`, `BENCH_ITERATIONS` and
+`BENCH_LAUNCHES` override them:
+
+```bash
+BENCH_WARMUP=1 BENCH_ITERATIONS=5 BENCH_LAUNCHES=1 \
+  dotnet run --project ClickHouse.Driver.Benchmark/ClickHouse.Driver.Benchmark.csproj \
+  --configuration Release -- --join --filter "*TcpReadTiers*" --artifacts ./results
+```
 
 ### Testing against different ClickHouse versions
 
@@ -160,7 +200,9 @@ See `changelog.d/README.md` for the categories and naming convention.
 ### Expected CI behavior
 
 - **All tests must pass** on all target frameworks and ClickHouse versions
-- **Code coverage** is reported to Codecov (must not decrease significantly)
+- **Code coverage** is reported to Codecov. The HTTP and TCP suites upload separate reports (flags `http`
+  and `tcp`), and Codecov shows their combined total. The `codecov/patch` check has a 75% target for the
+  lines that a pull request changes.
 - **Benchmarks** run but don't fail the build (used for performance regression detection)
 - **CodeQL** must not find security issues
 - **Public API analyzer** will fail if API surface changes aren't documented
