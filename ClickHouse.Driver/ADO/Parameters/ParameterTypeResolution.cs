@@ -1,4 +1,7 @@
 ﻿using System;
+using System.Globalization;
+using System.Numerics;
+using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types;
 namespace ClickHouse.Driver.ADO.Parameters;
 
@@ -51,10 +54,53 @@ internal static class ParameterTypeResolution
             return $"Decimal128({scale})";
         }
 
+        if (parameter.Value is ClickHouseDecimal chd)
+            return ResolveClickHouseDecimalTypeName(chd, parameter.ParameterName);
+
         // 5. Default: value-based TypeConverter mapping (inspects the value for ambiguous types like IPAddress or instant-bearing DateTimes)
         if (parameter.Value is not null and not DBNull)
             return TypeConverter.ToClickHouseType(parameter.Value).ToString();
 
         return TypeConverter.ToClickHouseType(typeof(DBNull)).ToString();
+    }
+
+    /// <summary>
+    /// Resolves the type for a <see cref="ClickHouseDecimal"/> value: <c>Decimal128(9)</c> if it holds the value
+    /// exactly. Otherwise the scale is that of the value without its trailing fractional zeros (which the server
+    /// parses exactly at a smaller scale), raised to 9 where the width has room, in <c>Decimal128</c> or, above
+    /// 38 digits, <c>Decimal256</c>.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The value needs more than 76 digits, which exceeds the capacity of ClickHouse's widest Decimal256.
+    /// </exception>
+    private static string ResolveClickHouseDecimalTypeName(ClickHouseDecimal value, string parameterName)
+    {
+        const int defaultScale = 9;
+        const int decimal128Precision = 38;
+        const int decimal256Precision = 76;
+
+        var mantissa = BigInteger.Abs(value.Mantissa);
+        var scale = mantissa.IsZero ? 0 : value.Scale;
+        while (scale > 0)
+        {
+            var quotient = BigInteger.DivRem(mantissa, 10, out var remainder);
+            if (!remainder.IsZero)
+                break;
+            mantissa = quotient;
+            scale--;
+        }
+
+        var digits = mantissa.IsZero ? 0 : mantissa.ToString(CultureInfo.InvariantCulture).Length;
+        var integerDigits = Math.Max(digits - scale, 0);
+        if (integerDigits + scale > decimal256Precision)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(value),
+                value,
+                $"Decimal value of parameter '{parameterName}' requires a precision of {integerDigits + scale} digits, which exceeds the maximum of {decimal256Precision} supported by ClickHouse (Decimal256).");
+        }
+
+        scale = Math.Max(scale, Math.Min(defaultScale, decimal256Precision - integerDigits));
+        return integerDigits + scale <= decimal128Precision ? $"Decimal128({scale})" : $"Decimal256({scale})";
     }
 }
