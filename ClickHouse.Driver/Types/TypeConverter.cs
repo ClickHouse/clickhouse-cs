@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using ClickHouse.Driver.Numerics;
@@ -496,6 +498,50 @@ internal static class TypeConverter
 
         // 3. No ambiguity for this type; delegate to type-based inference
         return ToClickHouseType(type);
+    }
+
+    /// <summary>
+    /// Infers the ClickHouse <c>Decimal</c> type for <paramref name="value"/> where the type is chosen
+    /// from the value rather than a column definition, e.g. when writing into a <c>Dynamic</c> column.
+    /// <para>
+    /// The width is the narrowest of Decimal32/64/128/256 whose precision P holds both the value's
+    /// integer digits and its scale. The scale is then set to <c>P - integerDigits</c>, so values that
+    /// differ only in their number of fractional digits share one type (1.2, 1.23 and 1.2345 are all
+    /// <c>Decimal32(8)</c>). The numeric value is kept exactly.
+    /// </para>
+    /// </summary>
+    /// <param name="value">The decimal value to infer a type for.</param>
+    /// <returns>The inferred <see cref="DecimalType"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The value needs more than 76 digits, which exceeds the capacity of ClickHouse's widest Decimal256.
+    /// </exception>
+    internal static ClickHouseType InferDecimalType(ClickHouseDecimal value)
+    {
+        var scale = value.Scale;
+        var digits = BigInteger.Abs(value.Mantissa).ToString(CultureInfo.InvariantCulture).Length;
+        var integerDigits = Math.Max(digits - scale, 0);
+        var precision = integerDigits + scale;
+        if (precision > 76)
+        {
+            if (!value.Mantissa.IsZero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value),
+                    value,
+                    $"Decimal value requires a precision of {precision} digits, which exceeds the maximum of 76 supported by ClickHouse (Decimal256).");
+            }
+
+            // Zero is exact at any scale, so a zero that carries a scale above 76 still fits Decimal256.
+            precision = 76;
+        }
+
+        return precision switch
+        {
+            <= 9 => new Decimal32Type { Scale = 9 - integerDigits },
+            <= 18 => new Decimal64Type { Scale = 18 - integerDigits },
+            <= 38 => new Decimal128Type { Scale = 38 - integerDigits },
+            _ => new Decimal256Type { Scale = 76 - integerDigits },
+        };
     }
 
     private static bool IsKeyValuePairType(Type type) =>

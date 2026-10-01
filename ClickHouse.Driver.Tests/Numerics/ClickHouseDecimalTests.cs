@@ -114,6 +114,16 @@ public class ClickHouseDecimalTests
         Assert.That((decimal)result, Is.EqualTo(value));
     }
 
+    [Test]
+    [TestCase("1", 31)]
+    [TestCase("1234500000000000000000000000000", 60)]
+    [TestCase("123456789012345678901234567890", 0)]
+    public void ExplicitDecimalConversion_ValueNotRepresentable_ThrowsOverflowException(string mantissa, int scale)
+    {
+        var value = new ClickHouseDecimal(BigInteger.Parse(mantissa, CultureInfo.InvariantCulture), scale);
+        Assert.Throws<OverflowException>(() => _ = (decimal)value);
+    }
+
     [Test, Combinatorial]
     public void ShouldAdd(
         [ValueSource(typeof(ClickHouseDecimalTests), nameof(Decimals))] decimal left,
