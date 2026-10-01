@@ -1613,7 +1613,7 @@ await using var reader = await cmd3.ExecuteReaderAsync();
 | Decimal256(S) | `decimal` / `ClickHouseDecimal` |
 
 <Note>
-Decimal type conversion is controlled via the UseCustomDecimals setting.
+Decimal type conversion is controlled via the UseCustomDecimals setting. When a value is read as `decimal` (with `UseCustomDecimals=false`, or through `GetDecimal`), trailing zeros are dropped where necessary to fit `decimal`. If the value still does not fit, an `OverflowException` is thrown.
 </Note>
 
 ---
@@ -2002,6 +2002,10 @@ command.AddParameter("dt", myDateTime);
 | Decimal64 | `decimal`, `ClickHouseDecimal`, any `Convert.ToDecimal()` compatible | Max precision 18 |
 | Decimal128 | `decimal`, `ClickHouseDecimal`, any `Convert.ToDecimal()` compatible | Max precision 38 |
 | Decimal256 | `decimal`, `ClickHouseDecimal`, any `Convert.ToDecimal()` compatible | Max precision 76 |
+
+<Note>
+When you write a scalar `decimal` or `ClickHouseDecimal` to a `Dynamic` column, or to a `JSON` path without a type hint in `JsonWriteMode.Binary`, the driver selects the type from the value. It uses the narrowest of `Decimal32`, `Decimal64`, `Decimal128` and `Decimal256` that holds the integer digits and the scale of the value, with the largest scale that this width permits. The numeric value does not change, but the stored scale can be larger than the scale of the input: `1.2m`, `1.23m` and `1.2345m` are all stored as `Decimal(9, 8)`, and `12.34m` as `Decimal(9, 7)`. A value that needs more than 76 digits cannot be written.
+</Note>
 
 ---
 
