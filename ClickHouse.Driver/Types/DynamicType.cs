@@ -26,7 +26,7 @@ internal class DynamicType : ClickHouseType
     /// <summary>
     /// Writes a value with its type header for dynamic type encoding.
     /// The type is inferred from the value's .NET type and cached, except for decimals, whose
-    /// ClickHouse scale/width depend on the value itself and so are inferred per value.
+    /// ClickHouse width and scale depend on the value itself and so are inferred per value.
     /// </summary>
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
@@ -36,9 +36,8 @@ internal class DynamicType : ClickHouseType
             return;
         }
 
-        // Decimals must be inferred from the value, not just its .NET type: the ClickHouse scale is
-        // derived from the value's own scale, so the per-Type cache (which cannot vary by value)
-        // would truncate any value whose scale exceeds the cached type's fixed scale (issue #466).
+        // Decimals must be inferred from the value, not just its .NET type: a single cached type has
+        // one fixed scale, which truncates every value with more fractional digits than that scale.
         ClickHouseType inferredType;
         if (value is ClickHouseDecimal chd)
             inferredType = TypeConverter.InferDecimalType(chd);
