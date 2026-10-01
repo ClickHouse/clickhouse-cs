@@ -120,7 +120,21 @@ public readonly struct ClickHouseDecimal
         return Truncate(NumberOfDigits(Mantissa) - Scale);
     }
 
-    public static int NumberOfDigits(BigInteger value) => value == 0 ? 0 : (int)Math.Ceiling(BigInteger.Log10(value * value.Sign));
+    public static int NumberOfDigits(BigInteger value)
+    {
+        if (value.IsZero)
+            return 0;
+
+        var abs = BigInteger.Abs(value);
+        // Log10 is a double: near a power of ten, floor(Log10) + 1 can be one too high or too low
+        var digits = (int)Math.Floor(BigInteger.Log10(abs)) + 1;
+        var lowerBound = BigInteger.Pow(10, digits - 1);
+        if (abs < lowerBound)
+            return digits - 1;
+        if (abs >= lowerBound * 10)
+            return digits + 1;
+        return digits;
+    }
 
     public static implicit operator ClickHouseDecimal(int value) => new ClickHouseDecimal(value, 0);
 
