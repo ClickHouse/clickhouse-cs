@@ -136,6 +136,21 @@ public class ClickHouseClientTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public void RedactedConnectionString_WithBearerToken_ShouldMaskToken()
+    {
+        const string token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJjaS10ZXN0In0.c2lnbmF0dXJl";
+        using var client = new ClickHouseClient(new ClickHouseClientSettings { BearerToken = token });
+
+        var redacted = new ClickHouseConnectionStringBuilder(client.RedactedConnectionString);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.RedactedConnectionString, Does.Not.Contain(token));
+            Assert.That(redacted.BearerToken, Is.EqualTo("****"));
+        });
+    }
+
+    [Test]
     public async Task Constructor_WithHttpClient_ShouldUseProvidedHttpClient()
     {
         var trackingHandler = new TrackingHandler(new HttpClientHandler

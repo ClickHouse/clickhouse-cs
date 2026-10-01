@@ -262,6 +262,8 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.AllowDuplicateJsonKeys.get -> boo
 ClickHouse.Driver.ADO.ClickHouseClientSettings.AllowDuplicateJsonKeys.init -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AllowDuplicateJsonKeys.get -> bool
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AllowDuplicateJsonKeys.set -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.BearerToken.get -> string
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.BearerToken.set -> void
 const ClickHouse.Driver.ADO.ClickHouseDefaults.AllowDuplicateJsonKeys = false -> bool
 ClickHouse.Driver.InsertOptions.QueryPlacement.get -> ClickHouse.Driver.InsertQueryPlacement
 ClickHouse.Driver.InsertOptions.QueryPlacement.init -> void
