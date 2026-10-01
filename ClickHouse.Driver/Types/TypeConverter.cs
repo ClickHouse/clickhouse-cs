@@ -21,6 +21,10 @@ internal static class TypeConverter
     private static readonly Dictionary<string, ParameterizedType> ParameterizedTypes = [];
     private static readonly Dictionary<Type, ClickHouseType> ReverseMapping = [];
 
+    // 10^0 to 10^77, and every power of ten a decimal holds, to count the digits of a mantissa (see DigitCount).
+    private static readonly BigInteger[] PowersOfTen = Enumerable.Range(0, 78).Select(n => BigInteger.Pow(10, n)).ToArray();
+    private static readonly decimal[] DecimalPowersOfTen = PowersOfTen.Take(29).Select(p => (decimal)p).ToArray();
+
     private static readonly Dictionary<string, string> Aliases = new()
     {
         { "BIGINT", "Int64" },
@@ -590,10 +594,49 @@ internal static class TypeConverter
         return NarrowestDecimalType(precision, integerDigits);
     }
 
+    /// <summary>
+    /// <see cref="InferCommonDecimalType(IEnumerable{ClickHouseDecimal})"/> for <see cref="decimal"/> values, which
+    /// are read from their bits: the conversion to <see cref="ClickHouseDecimal"/> allocates for each value whose
+    /// mantissa exceeds 31 bits.
+    /// </summary>
+    /// <param name="values">The decimal values to infer a common type for.</param>
+    /// <returns>The inferred <see cref="DecimalType"/>, or <c>null</c> if <paramref name="values"/> is empty.</returns>
+    internal static ClickHouseType InferCommonDecimalType(IEnumerable<decimal> values)
+    {
+        var hasValues = false;
+        var integerDigits = 0;
+        var scale = 0;
+        Span<int> bits = stackalloc int[4];
+        foreach (var value in values)
+        {
+            hasValues = true;
+            decimal.GetBits(value, bits);
+            var valueScale = (bits[3] >> 16) & 0x7F;
+            var digits = DigitCount(DecimalPowersOfTen, new decimal(bits[0], bits[1], bits[2], false, 0));
+            integerDigits = Math.Max(integerDigits, Math.Max(digits - valueScale, 0));
+            scale = Math.Max(scale, valueScale);
+        }
+
+        // A decimal has at most 29 digits and a scale of at most 28, so no set of them needs more than 76 digits.
+        return hasValues ? NarrowestDecimalType(integerDigits + scale, integerDigits) : null;
+    }
+
     private static int IntegerDigits(ClickHouseDecimal value)
     {
-        var digits = BigInteger.Abs(value.Mantissa).ToString(CultureInfo.InvariantCulture).Length;
+        var magnitude = BigInteger.Abs(value.Mantissa);
+        var digits = magnitude > PowersOfTen[PowersOfTen.Length - 1]
+            ? magnitude.ToString(CultureInfo.InvariantCulture).Length
+            : DigitCount(PowersOfTen, magnitude);
         return Math.Max(digits - value.Scale, 0);
+    }
+
+    // The number of decimal digits (1 for zero) of a non-negative integer below ten times the largest power of ten
+    // in the table. This runs for each element of a collection, so it searches the powers of ten instead of
+    // formatting the number to a string.
+    private static int DigitCount<T>(T[] powersOfTen, T magnitude)
+    {
+        var index = Array.BinarySearch(powersOfTen, magnitude);
+        return index >= 0 ? index + 1 : Math.Max(~index, 1);
     }
 
     // The scale without the trailing zeros of the fraction, which a smaller scale also holds exactly.

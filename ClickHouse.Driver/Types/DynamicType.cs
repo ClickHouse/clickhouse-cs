@@ -94,6 +94,10 @@ internal class DynamicType : ClickHouseType
             // With no value to preserve, the decimal keeps the type inferred from its .NET type.
             DecimalType => TypeConverter.InferCommonDecimalType(values.Select(ToClickHouseDecimal)) ?? type,
             NullableType nullable => new NullableType { UnderlyingType = InferDecimalTypes(nullable.UnderlyingType, values) },
+            ArrayType { UnderlyingType: DecimalType decimalType } => new ArrayType
+            {
+                UnderlyingType = InferArrayDecimalType(values) ?? decimalType,
+            },
             ArrayType array => new ArrayType { UnderlyingType = InferDecimalTypes(array.UnderlyingType, values.SelectMany(ArrayElements)) },
             MapType map => new MapType
             {
@@ -137,6 +141,48 @@ internal class DynamicType : ClickHouseType
         for (var level = 1; level < multidimensional.Rank; level++)
             elements = [elements];
         return elements;
+    }
+
+    // The common decimal type of the elements of the Array(Decimal) values in `arrays`. ArrayType writes a
+    // decimal[] or a ClickHouseDecimal[] without boxing its elements, so they are read here without boxing them
+    // either. When all the arrays are decimal[], their elements are also not converted to ClickHouseDecimal.
+    private static ClickHouseType InferArrayDecimalType(IEnumerable<object> arrays) =>
+        arrays.All(static array => array is decimal[])
+            ? TypeConverter.InferCommonDecimalType(DecimalArrayElements(arrays))
+            : TypeConverter.InferCommonDecimalType(ClickHouseDecimalArrayElements(arrays));
+
+    private static IEnumerable<decimal> DecimalArrayElements(IEnumerable<object> arrays)
+    {
+        foreach (decimal[] array in arrays)
+        {
+            foreach (var value in array)
+                yield return value;
+        }
+    }
+
+    private static IEnumerable<ClickHouseDecimal> ClickHouseDecimalArrayElements(IEnumerable<object> arrays)
+    {
+        foreach (var array in arrays)
+        {
+            if (array is ClickHouseDecimal[] clickHouseDecimals)
+            {
+                foreach (var value in clickHouseDecimals)
+                    yield return value;
+            }
+            else if (array is decimal[] decimals)
+            {
+                foreach (var value in decimals)
+                    yield return value;
+            }
+            else
+            {
+                foreach (var value in ArrayElements(array))
+                {
+                    if (value is not null and not DBNull)
+                        yield return ToClickHouseDecimal(value);
+                }
+            }
+        }
     }
 
     // A Tuple type inferred from a .NET type is only written with System.Tuple and ValueTuple values.
