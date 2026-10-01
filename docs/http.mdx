@@ -1616,6 +1616,16 @@ await using var reader = await cmd3.ExecuteReaderAsync();
 Decimal type conversion is controlled via the UseCustomDecimals setting. When a value is read as `decimal` (with `UseCustomDecimals=false`, or through `GetDecimal`), trailing zeros are dropped where necessary to fit `decimal`. If the value still does not fit, an `OverflowException` is thrown.
 </Note>
 
+##### ClickHouseDecimal operations {#type-map-reading-clickhousedecimal}
+
+`ClickHouseDecimal` (namespace `ClickHouse.Driver.Numerics`) keeps the value as a `BigInteger` mantissa and a scale. These members round toward zero:
+
+- `Truncate(precision)` removes digits from the end of the fractional part until at most `precision` significant digits remain, or until no fractional digits remain: `12.345` gives `12.3` for precision `3` and `12` for precision `1`.
+- `Truncate()` and conversion to `BigInteger` (`Convert.ChangeType(value, typeof(BigInteger))`) return the integer part: `0.1` gives `0`, and `-1.9` gives `-1`.
+- Division calculates at least `MaxDivisionPrecision` significant digits of the quotient (a static property, default `50`) and truncates the remaining digits: `1 / 3` gives `0.` followed by 50 digits `3`.
+
+`NumberOfDigits(BigInteger)` returns the number of decimal digits of the absolute value, and `0` for zero.
+
 ---
 
 #### Boolean type {#type-map-reading-boolean}
