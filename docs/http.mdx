@@ -1890,6 +1890,12 @@ When inserting data, the driver converts .NET types to their corresponding Click
 | Int256 | `BigInteger`, `decimal`, `double`, `float`, `int`, `uint`, `long`, `ulong`, any `Convert.ToInt64()` compatible | |
 | UInt256 | `BigInteger`, `decimal`, `double`, `float`, `int`, `uint`, `long`, `ulong`, any `Convert.ToInt64()` compatible | |
 
+<Note>
+When you write a `ClickHouseDecimal` to an `Int8`, `UInt8`, `Int16`, `UInt16`, `Int32`, `UInt32`, `Int64` or `UInt64` column, the driver drops the fractional part (it rounds toward zero). If the integer part is out of the range of the column type, the conversion throws `OverflowException`: `255.9` is stored as `255` in a `UInt8` column, and `256.5` is not written. `InsertBinaryAsync` reports this as a `ClickHouseBulkCopySerializationException` with the `OverflowException` as its `InnerException`.
+
+`Convert.ToSByte` through `Convert.ToUInt64` and `Convert.ChangeType` on a `ClickHouseDecimal` use the same rules. `Convert.ChangeType` to a type that has no conversion from `ClickHouseDecimal`, such as `Guid`, `TimeSpan`, an enum or a nullable type, throws `InvalidCastException`.
+</Note>
+
 ---
 
 #### Floating point types {#type-map-writing-floating-point}
