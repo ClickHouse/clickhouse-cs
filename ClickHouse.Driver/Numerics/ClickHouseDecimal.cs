@@ -386,17 +386,17 @@ public readonly struct ClickHouseDecimal
 
     public bool ToBoolean(IFormatProvider provider) => !Mantissa.IsZero;
 
-    public char ToChar(IFormatProvider provider) => (char)(int)this;
+    public char ToChar(IFormatProvider provider) => checked((char)(int)this);
 
-    public sbyte ToSByte(IFormatProvider provider) => (sbyte)(int)this;
+    public sbyte ToSByte(IFormatProvider provider) => checked((sbyte)(int)this);
 
-    public byte ToByte(IFormatProvider provider) => (byte)(int)this;
+    public byte ToByte(IFormatProvider provider) => checked((byte)(int)this);
 
-    public short ToInt16(IFormatProvider provider) => (short)(int)this;
+    public short ToInt16(IFormatProvider provider) => checked((short)(int)this);
 
-    public ushort ToUInt16(IFormatProvider provider) => (ushort)(uint)this;
+    public ushort ToUInt16(IFormatProvider provider) => checked((ushort)(uint)this);
 
-    public int ToInt32(IFormatProvider provider) => (short)(int)this;
+    public int ToInt32(IFormatProvider provider) => (int)this;
 
     public uint ToUInt32(IFormatProvider provider) => (uint)this;
 
@@ -414,6 +414,8 @@ public readonly struct ClickHouseDecimal
 
     public object ToType(Type conversionType, IFormatProvider provider)
     {
+        ArgumentNullException.ThrowIfNull(conversionType);
+
         if (conversionType == typeof(BigInteger))
         {
             var mantissa = this.Mantissa;
@@ -421,7 +423,33 @@ public readonly struct ClickHouseDecimal
             Truncate(ref mantissa, ref scale, 0);
             return mantissa;
         }
-        return Convert.ChangeType(this, conversionType, provider);
+
+        if (conversionType == typeof(ClickHouseDecimal) || conversionType == typeof(object))
+            return this;
+
+        // Convert.ChangeType calls ToType for every type it does not convert itself, so calling back
+        // into it from here recurses without end. An enum reports the TypeCode of its underlying type,
+        // but Convert has no conversion to it (the same as for decimal).
+        var typeCode = conversionType.IsEnum ? TypeCode.Object : Type.GetTypeCode(conversionType);
+        return typeCode switch
+        {
+            TypeCode.Boolean => ToBoolean(provider),
+            TypeCode.Char => ToChar(provider),
+            TypeCode.SByte => ToSByte(provider),
+            TypeCode.Byte => ToByte(provider),
+            TypeCode.Int16 => ToInt16(provider),
+            TypeCode.UInt16 => ToUInt16(provider),
+            TypeCode.Int32 => ToInt32(provider),
+            TypeCode.UInt32 => ToUInt32(provider),
+            TypeCode.Int64 => ToInt64(provider),
+            TypeCode.UInt64 => ToUInt64(provider),
+            TypeCode.Single => ToSingle(provider),
+            TypeCode.Double => ToDouble(provider),
+            TypeCode.Decimal => ToDecimal(provider),
+            TypeCode.DateTime => ToDateTime(provider),
+            TypeCode.String => ToString(provider),
+            _ => throw new InvalidCastException($"Invalid cast from '{typeof(ClickHouseDecimal).FullName}' to '{conversionType.FullName}'."),
+        };
     }
 
     public int CompareTo(decimal other) => CompareTo((ClickHouseDecimal)other);
