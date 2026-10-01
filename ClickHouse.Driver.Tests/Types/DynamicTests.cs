@@ -551,6 +551,55 @@ public class DynamicTests : AbstractConnectionTestFixture
         Assert.That(result["two"], Is.EqualTo(2));
     }
 
+    // Args: (column type, value that is or contains a value of exactly System.Object).
+    private static IEnumerable<TestCaseData> SystemObjectValueCases()
+    {
+        yield return new TestCaseData("Dynamic", new object());
+        yield return new TestCaseData("Dynamic", new object[] { 1, new object() });
+        yield return new TestCaseData("Dynamic", new List<object> { new object() });
+        yield return new TestCaseData("Dynamic", new Dictionary<string, object> { ["a"] = new object() });
+        yield return new TestCaseData("Array(Dynamic)", new object[] { new object() });
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCaseSource(nameof(SystemObjectValueCases))]
+    public async Task Write_SystemObjectToDynamic_ThrowsUnknownType(string columnType, object value)
+    {
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (id UInt32, value {columnType}) ENGINE = Memory");
+
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(() =>
+            client.InsertBinaryAsync(targetTable, ["id", "value"], [new object[] { 1u, value }]));
+
+        Assert.That(ex.InnerException, Is.TypeOf<ArgumentOutOfRangeException>());
+        Assert.That(ex.InnerException.Message, Is.EqualTo("Unknown type: System.Object (Parameter 'value')"));
+    }
+
+    // Args: (value whose element type is System.Object, expected dynamicType(), expected toString()).
+    private static IEnumerable<TestCaseData> ObjectCollectionOfMappedValuesCases()
+    {
+        yield return new TestCaseData(new object[] { 1, "a" }, "Array(Dynamic)", "[1,'a']");
+        yield return new TestCaseData(new Dictionary<string, object> { ["a"] = 1 }, "Map(String, Dynamic)", "{'a':1}");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCaseSource(nameof(ObjectCollectionOfMappedValuesCases))]
+    public async Task Write_ObjectCollectionOfMappedValuesToDynamic_StoresDynamicCollection(object value, string expectedType, string expectedText)
+    {
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        await client.InsertBinaryAsync(targetTable, ["id", "value"], [new object[] { 1u, value }]);
+
+        using var reader = await client.ExecuteReaderAsync($"SELECT dynamicType(value), toString(value) FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetString(0), Is.EqualTo(expectedType));
+        Assert.That(reader.GetString(1), Is.EqualTo(expectedText));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
     [Test]
     [RequiredFeature(Feature.Dynamic)]
     public async Task Write_MixedTypesInSameColumn_ShouldRoundTrip()
