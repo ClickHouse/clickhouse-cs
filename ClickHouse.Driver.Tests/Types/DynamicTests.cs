@@ -414,6 +414,7 @@ public class DynamicTests : AbstractConnectionTestFixture
         yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Parse("-" + new string('9', 76)), 0), "Decimal(76, 0)");
         yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Parse("123456789012345678901234567890"), 40), "Decimal(76, 76)");
         yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Zero, 80), "Decimal(76, 76)");
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Pow(10, 77), 77), "Decimal(76, 75)");
     }
 
     // Values that System.Decimal holds exactly, read back with UseCustomDecimals=false.
@@ -491,6 +492,160 @@ public class DynamicTests : AbstractConnectionTestFixture
         }
 
         ClassicAssert.IsFalse(reader.Read());
+    }
+
+    // All decimals at one position of a collection written to Dynamic share one type: the narrowest
+    // Decimal32/64/128/256 whose precision P holds the largest integer-digit count and the largest scale
+    // among them, with the scale widened to P - integerDigits.
+    // Args: (value, expected dynamicType() reported by the server, expected value read back).
+    private static IEnumerable<TestCaseData> DynamicDecimalCollectionCases()
+    {
+        static TestCaseData Case(object value, string expectedType, object expected = null) =>
+            new TestCaseData(value, expectedType, expected ?? value);
+
+        // A single element gets the same type as the scalar value.
+        yield return Case(new[] { 1.2m }, "Array(Decimal(9, 8))");
+        yield return Case(new[] { 1.23m }, "Array(Decimal(9, 8))");
+        yield return Case(new[] { 1.2345m }, "Array(Decimal(9, 8))");
+        yield return Case(new[] { 12.34m }, "Array(Decimal(9, 7))");
+
+        // The largest scale and the most integer digits can come from different elements, in any order.
+        yield return Case(new[] { 0.0123456789012345m, 0.0000000001m }, "Array(Decimal(18, 18))");
+        yield return Case(new[] { 1.5m, -0.0123456789012345m }, "Array(Decimal(18, 17))");
+        yield return Case(new[] { -0.0123456789012345m, 1.5m }, "Array(Decimal(18, 17))");
+        yield return Case(new List<decimal> { -12.5m, 0.0000000001m }, "Array(Decimal(18, 16))");
+        yield return Case(new List<decimal> { 0.0000000001m, -12.5m }, "Array(Decimal(18, 16))");
+
+        // Width boundaries that only the combination of elements reaches or crosses.
+        yield return Case(new[] { 12345678m, 0.1m }, "Array(Decimal(9, 1))");
+        yield return Case(new[] { 123456789m, 0.1m }, "Array(Decimal(18, 9))");
+        yield return Case(new[] { 12345678m, 0.0000000001m }, "Array(Decimal(18, 10))");
+        yield return Case(new[] { 0m, 0.0000000001m }, "Array(Decimal(18, 17))");
+        yield return Case(new[] { 12345678901234567890m, 0.000000000000000001m }, "Array(Decimal(38, 18))");
+        yield return Case(new[] { 0.0000000000000000001m, 12345678901234567890m }, "Array(Decimal(76, 56))");
+        yield return Case(new List<decimal> { decimal.MaxValue, 0.0000000001m, decimal.MinValue }, "Array(Decimal(76, 47))");
+
+        // ClickHouseDecimal, including values beyond System.Decimal.
+        yield return Case(new[] { new ClickHouseDecimal(0.0123456789012345m), new ClickHouseDecimal(-0.0000000001m) }, "Array(Decimal(18, 18))");
+        yield return Case(new List<ClickHouseDecimal> { new(1.5m), new(BigInteger.One, 30) }, "Array(Decimal(38, 37))");
+        yield return Case(new[] { new ClickHouseDecimal(BigInteger.Pow(10, 38), 0), new ClickHouseDecimal(BigInteger.MinusOne, 30) }, "Array(Decimal(76, 37))");
+
+        yield return Case(new[] { new ClickHouseDecimal(BigInteger.Pow(10, 27), 0), new ClickHouseDecimal(BigInteger.One, 48) }, "Array(Decimal(76, 48))");
+
+        // Trailing fractional zeros, and all the digits of a zero, are exact at a smaller scale, so they do not
+        // count toward the 76-digit limit.
+        yield return Case(new[] { new ClickHouseDecimal(BigInteger.Zero, 80), new ClickHouseDecimal(1.5m) }, "Array(Decimal(76, 75))");
+        yield return Case(new[] { new ClickHouseDecimal(BigInteger.Pow(10, 28), 0), new ClickHouseDecimal(BigInteger.Pow(10, 48), 48) }, "Array(Decimal(76, 47))");
+
+        // Null elements are skipped. With no non-null element, the type is the Decimal(38, 9) default.
+        yield return Case(new decimal?[] { null, 0.0000000001m, 1.5m }, "Array(Nullable(Decimal(18, 17)))");
+        yield return Case(new List<ClickHouseDecimal?> { new(1.5m), null, new(BigInteger.One, 10) }, "Array(Nullable(Decimal(18, 17)))");
+        yield return Case(new decimal?[] { null, null }, "Array(Nullable(Decimal(38, 9)))");
+        yield return Case(Array.Empty<decimal>(), "Array(Decimal(38, 9))");
+        yield return Case(new[] { null, new[] { 0.0000000001m } }, "Array(Array(Decimal(18, 18)))", new[] { Array.Empty<decimal>(), new[] { 0.0000000001m } });
+        yield return Case(new Dictionary<string, decimal?> { ["a"] = null, ["b"] = 1.5m }, "Map(String, Nullable(Decimal(9, 8)))");
+
+        // Nested arrays, maps and tuples.
+        yield return Case(new[] { new[] { 1.5m }, new[] { 0.0000000001m } }, "Array(Array(Decimal(18, 17)))");
+        yield return Case(new[,] { { 1.5m, 0.0000000001m } }, "Array(Array(Decimal(18, 17)))", new[] { new[] { 1.5m, 0.0000000001m } });
+        yield return Case(new Dictionary<string, decimal> { ["a"] = 1.5m, ["b"] = 0.0000000001m }, "Map(String, Decimal(18, 17))");
+        yield return Case(
+            new Dictionary<decimal, int> { [1.5m] = 1, [0.0000000001m] = 2 },
+            "Map(Decimal(18, 17), Int32)",
+            new[] { KeyValuePair.Create(1.5m, 1), KeyValuePair.Create(0.0000000001m, 2) });
+        yield return Case(
+            new List<KeyValuePair<string, decimal>> { new("a", 1.5m), new("b", 0.0000000001m) },
+            "Map(String, Decimal(18, 17))");
+        yield return Case(Tuple.Create(1.5m, 0.0000000001m, "x"), "Tuple(Decimal(9, 8), Decimal(18, 18), String)");
+        yield return Case((1.5m, 0.0000000001m), "Tuple(Decimal(9, 8), Decimal(18, 18))", Tuple.Create(1.5m, 0.0000000001m));
+        yield return Case(new[] { Tuple.Create(1.5m, 1), Tuple.Create(0.0000000001m, 2) }, "Array(Tuple(Decimal(18, 17), Int32))");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCaseSource(nameof(DynamicDecimalCollectionCases))]
+    public async Task InsertBinaryAsync_DecimalCollectionToDynamic_StoresCommonTypeAndPreservesValues(object value, string expectedType, object expected)
+    {
+        var targetTable = CreateTableName($"dynamic_decimals_{expectedType}");
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        await client.InsertBinaryAsync(targetTable, ["id", "value"], [new object[] { 1u, value }]);
+
+        using var reader = await client.ExecuteReaderAsync($"SELECT value, dynamicType(value) FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetString(1), Is.EqualTo(expectedType));
+        Assert.That(reader.GetValue(0), Is.EqualTo(expected).Using<ClickHouseDecimal, decimal>((actual, written) => actual == written));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task InsertBinaryAsync_DecimalArraysOfOneClrTypeToDynamic_InfersTypeForEachCell()
+    {
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        var cells = new (decimal[] Value, string ExpectedType)[]
+        {
+            (new[] { 1.2m }, "Array(Decimal(9, 8))"),
+            (new[] { 0.0000000001m }, "Array(Decimal(18, 18))"),
+            (new[] { 123456789012345678m, 0.5m }, "Array(Decimal(38, 20))"),
+            (new[] { -1.2345m }, "Array(Decimal(9, 8))"),
+        };
+        await client.InsertBinaryAsync(targetTable, ["id", "value"], cells.Select((c, i) => new object[] { (uint)i, c.Value }).ToList());
+
+        using var reader = await client.ExecuteReaderAsync($"SELECT value, dynamicType(value) FROM {targetTable} ORDER BY id");
+        foreach (var (value, expectedType) in cells)
+        {
+            ClassicAssert.IsTrue(reader.Read());
+            Assert.That(reader.GetString(1), Is.EqualTo(expectedType));
+            Assert.That(reader.GetValue(0), Is.EqualTo(value).Using<ClickHouseDecimal, decimal>((actual, written) => actual == written));
+        }
+
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    // Collections of values that System.Decimal holds exactly, stored with a scale above 28 or a mantissa
+    // above 96 bits. Args: (value written, expected dynamicType()).
+    private static IEnumerable<TestCaseData> DynamicSystemDecimalCollectionCases()
+    {
+        yield return new TestCaseData(new[] { 0.1234567890123456789012345678m, -1.5m }, "Array(Decimal(38, 37))");
+        yield return new TestCaseData(new List<decimal> { decimal.MaxValue, 0.0000000001m }, "Array(Decimal(76, 47))");
+        yield return new TestCaseData(new decimal?[] { null, decimal.MinValue, 0.0000000001m }, "Array(Nullable(Decimal(76, 47)))");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    [TestCaseSource(nameof(DynamicSystemDecimalCollectionCases))]
+    public async Task Read_DecimalCollectionFromDynamicWithoutCustomDecimals_ReturnsSystemDecimals(object value, string expectedType)
+    {
+        var targetTable = CreateTableName($"dynamic_decimals_{expectedType}");
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        await client.InsertBinaryAsync(targetTable, ["id", "value"], [new object[] { 1u, value }]);
+
+        using var systemDecimalClient = TestUtilities.GetTestClickHouseClient(customDecimals: false);
+        using var reader = await systemDecimalClient.ExecuteReaderAsync($"SELECT value, dynamicType(value) FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetString(1), Is.EqualTo(expectedType));
+        Assert.That(reader.GetValue(0), Is.EqualTo(value));
+        ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Dynamic)]
+    public async Task InsertBinaryAsync_DecimalCollectionWithNoCommonDecimal256TypeToDynamic_Throws()
+    {
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (id UInt32, value Dynamic) ENGINE = Memory");
+
+        // Each value fits Decimal256 alone, but a common scale needs 29 integer and 48 fractional digits.
+        var value = new[] { new ClickHouseDecimal(BigInteger.Pow(10, 28), 0), new ClickHouseDecimal(BigInteger.One, 48) };
+
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(
+            () => client.InsertBinaryAsync(targetTable, ["id", "value"], [new object[] { 1u, value }]));
+        Assert.That(ex.InnerException, Is.TypeOf<ArgumentOutOfRangeException>());
+        Assert.That(await client.ExecuteScalarAsync($"SELECT count() FROM {targetTable}"), Is.EqualTo(0UL));
     }
 
     [Test]
