@@ -98,6 +98,72 @@ public class ClickHouseDecimalTests
     public decimal ShouldTruncate(decimal value, int precision) => (decimal)new ClickHouseDecimal(value).Truncate(precision);
 
     [Test]
+    [TestCase("1000", 3, 1, ExpectedResult = "1")]
+    [TestCase("-100", 2, 2, ExpectedResult = "-1.0")]
+    [TestCase("100000000000000012345", 20, 18, ExpectedResult = "1.00000000000000012")]
+    public string Truncate_MantissaAtOrJustAbovePowerOfTen_KeepsGivenNumberOfDigits(string mantissa, int scale, int precision)
+    {
+        var value = new ClickHouseDecimal(BigInteger.Parse(mantissa, CultureInfo.InvariantCulture), scale);
+        return value.Truncate(precision).ToString(CultureInfo.InvariantCulture);
+    }
+
+    [Test]
+    [TestCase("1", 1, ExpectedResult = "0")]
+    [TestCase("100", 3, ExpectedResult = "0")]
+    [TestCase("100", 2, ExpectedResult = "1")]
+    [TestCase("100000000000000012345", 20, ExpectedResult = "1")]
+    public string Floor_MantissaAtOrJustAbovePowerOfTen_ReturnsIntegerPart(string mantissa, int scale)
+    {
+        var value = new ClickHouseDecimal(BigInteger.Parse(mantissa, CultureInfo.InvariantCulture), scale);
+        return value.Floor().ToString(CultureInfo.InvariantCulture);
+    }
+
+    [Test]
+    [RequiredFeature(Feature.WideTypes)]
+    [TestCase("toDecimal64('0.1', 1)")]
+    [TestCase("toDecimal64('-0.1', 1)")]
+    [TestCase("toDecimal64('0.01', 2)")]
+    [TestCase("toDecimal64('0.100', 3)")]
+    [TestCase("toDecimal256('0.0000100000000000000012345', 25)")]
+    public async Task TruncateAndConvertToBigInteger_ValueBelowOneFromClickHouse_MatchesServerTruncation(string expression)
+    {
+        using var connection = TestUtilities.GetTestClickHouseConnection();
+        using var reader = await connection.ExecuteReaderAsync($"SELECT x, trunc(x), toInt256(x) FROM (SELECT {expression} AS x)");
+        Assert.That(reader.Read(), Is.True);
+
+        var value = (ClickHouseDecimal)reader.GetValue(0);
+        var serverTruncated = (ClickHouseDecimal)reader.GetValue(1);
+        var serverInteger = (BigInteger)reader.GetValue(2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value.Truncate(), Is.EqualTo(serverTruncated));
+            Assert.That(Convert.ChangeType(value, typeof(BigInteger), CultureInfo.InvariantCulture), Is.EqualTo(serverInteger));
+        });
+    }
+
+    [Test]
+    public void NumberOfDigits_ValuesAroundPowersOfTen_ReturnsDecimalDigitCount()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ClickHouseDecimal.NumberOfDigits(BigInteger.Zero), Is.EqualTo(0));
+            foreach (var exponent in Enumerable.Range(0, 161).Append(1000))
+            {
+                var power = BigInteger.Pow(10, exponent);
+                foreach (var value in new[] { power - 1, power, power + 1, power + 12345, (2 * power) - 1 })
+                {
+                    if (value.IsZero)
+                        continue;
+                    var expected = value.ToString(CultureInfo.InvariantCulture).Length;
+                    Assert.That(ClickHouseDecimal.NumberOfDigits(value), Is.EqualTo(expected), $"{value}");
+                    Assert.That(ClickHouseDecimal.NumberOfDigits(-value), Is.EqualTo(expected), $"-{value}");
+                }
+            }
+        });
+    }
+
+    [Test]
     public void ShouldValidateBuiltinValues()
     {
         Assert.Multiple(() =>
@@ -189,6 +255,17 @@ public class ClickHouseDecimalTests
         actual = new ClickHouseDecimal(ClickHouseDecimal.ScaleMantissa(actual, GetScale(expected)), scale);
 
         AssertAreEqualWithDelta(expected, (decimal)actual);
+    }
+
+    [Test]
+    [TestCase("1", "3", ExpectedResult = "0.33333333333333333333333333333333333333333333333333")]
+    [TestCase("10", "3", ExpectedResult = "3.3333333333333333333333333333333333333333333333333")]
+    [TestCase("100", "7", ExpectedResult = "14.285714285714285714285714285714285714285714285714")]
+    [TestCase("123456789012345678901234567890123456789012345678901", "10", ExpectedResult = "12345678901234567890123456789012345678901234567890.1")]
+    public string Divide_PowerOfTenDividendOrDivisor_SizesResultFromExactDigitCount(string dividend, string divisor)
+    {
+        var result = ClickHouseDecimal.Parse(dividend, CultureInfo.InvariantCulture) / ClickHouseDecimal.Parse(divisor, CultureInfo.InvariantCulture);
+        return result.ToString(CultureInfo.InvariantCulture);
     }
 
     [Test, Combinatorial]
