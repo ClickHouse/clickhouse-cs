@@ -257,9 +257,34 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override DateTime GetDateTime(int ordinal) => GetTypedValue<DateTime>(ordinal);
 
-    // Box-free by construction once GetDateTime is: CoerceToDateTimeOffset has a DateTime overload.
-    public virtual DateTimeOffset GetDateTimeOffset(int ordinal) => GetEffectiveClickHouseType(ordinal) is AbstractDateTimeType adt ?
-        adt.CoerceToDateTimeOffset(GetDateTime(ordinal)) : throw new InvalidCastException();
+    // Box-free by construction once GetDateTime is: both the captured-instant path and
+    // CoerceToDateTimeOffset's DateTime overload stay off the boxed path.
+    public virtual DateTimeOffset GetDateTimeOffset(int ordinal)
+    {
+        if (GetEffectiveClickHouseType(ordinal) is not AbstractDateTimeType adt)
+            throw new InvalidCastException();
+
+        // Prefer the instant the column's slot kept while decoding. Coercing the wall-clock DateTime back
+        // into the column timezone cannot recover it: during a DST fall-back hour the same wall clock
+        // occurs at two offsets, and the lenient resolution used for a wall clock always picks the earlier
+        // one, returning a different instant for the second occurrence. A read-value converter can replace
+        // the decoded value, so pass what the caller sees when one is in play.
+        var visibleValue = readValueConverter == null ? (DateTime?)null : GetDateTime(ordinal);
+        if (CapturingReader(Slot(ordinal)) is InstantCapturingReader capturing &&
+            capturing.TryGetDateTimeOffset(visibleValue, out var dto))
+            return dto;
+
+        return adt.CoerceToDateTimeOffset(visibleValue ?? GetDateTime(ordinal));
+    }
+
+    // Only a column that decodes an instant has one; Date/Date32 and a NULL cell have none, and both fall
+    // back to coercing the decoded value, exactly as every column did before.
+    private static InstantCapturingReader CapturingReader(ColumnSlot slot) => slot switch
+    {
+        ValueSlot<DateTime> valueSlot => valueSlot.Reader as InstantCapturingReader,
+        NullableSlot<DateTime> nullableSlot when nullableSlot.HasValue => nullableSlot.Reader as InstantCapturingReader,
+        _ => null,
+    };
 
     public override decimal GetDecimal(int ordinal)
     {

@@ -7,7 +7,7 @@ using NodaTime;
 
 namespace ClickHouse.Driver.Types;
 
-internal class DateTime64Type : AbstractDateTimeType
+internal class DateTime64Type : AbstractDateTimeType, IInstantReader
 {
     public int Scale { get; set; }
 
@@ -15,12 +15,10 @@ internal class DateTime64Type : AbstractDateTimeType
 
     public override string ToString() => TimeZone == null ? $"DateTime64({Scale})" : $"DateTime64({Scale}, '{TimeZone.Id}')";
 
-    public DateTime FromClickHouseTicks(long clickHouseTicks)
-    {
-        // Convert ClickHouse variable precision ticks into "standard" .NET 100ns ones
-        var ticks = MathUtils.ShiftDecimalPlaces(clickHouseTicks, 7 - Scale);
-        return ToDateTime(Instant.FromUnixTimeTicks(ticks));
-    }
+    public DateTime FromClickHouseTicks(long clickHouseTicks) => ToDateTime(ToInstant(clickHouseTicks));
+
+    // Converts ClickHouse variable precision ticks into "standard" .NET 100ns ones
+    public Instant ToInstant(long clickHouseTicks) => Instant.FromUnixTimeTicks(MathUtils.ShiftDecimalPlaces(clickHouseTicks, 7 - Scale));
 
     public long ToClickHouseTicks(Instant instant) => MathUtils.ShiftDecimalPlaces(instant.ToUnixTimeTicks(), Scale - 7);
 
@@ -46,10 +44,11 @@ internal class DateTime64Type : AbstractDateTimeType
 
     protected override DateTimeOffset ReadDateTimeOffset(ExtendedBinaryReader reader) => ToDateTimeOffset(ReadInstant(reader));
 
-    // Same conversion as FromClickHouseTicks, exposing the intermediate instant so both the DateTime and the
-    // DateTimeOffset read share one wire read.
-    private Instant ReadInstant(ExtendedBinaryReader reader)
-        => Instant.FromUnixTimeTicks(MathUtils.ShiftDecimalPlaces(reader.ReadInt64(), 7 - Scale));
+    // Same conversion as FromClickHouseTicks, exposing the intermediate instant so every read of this type
+    // shares one wire read.
+    private Instant ReadInstant(ExtendedBinaryReader reader) => ToInstant(reader.ReadInt64());
+
+    Instant IInstantReader.ReadInstant(ExtendedBinaryReader reader) => ReadInstant(reader);
 
     // No range check: any coerced instant is representable, so 'original' is unused.
     protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T original)
