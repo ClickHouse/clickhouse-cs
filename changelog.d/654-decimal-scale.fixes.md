@@ -1,0 +1,1 @@
+* Fixed `Decimal` values read as `decimal` losing the column's scale: `7` in a `Decimal(18, 4)` column was returned as `7` instead of `7.0000`. This affected reads with `UseCustomDecimals=false` and `decimal` properties read through `QueryAsync<T>` with any setting. The `decimal` now keeps the column's scale wherever `decimal` can hold it (issue #654).

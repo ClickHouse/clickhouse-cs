@@ -1613,7 +1613,7 @@ await using var reader = await cmd3.ExecuteReaderAsync();
 | Decimal256(S) | `decimal` / `ClickHouseDecimal` |
 
 <Note>
-Decimal type conversion is controlled via the UseCustomDecimals setting. When a value is read as `decimal` (with `UseCustomDecimals=false`, or through `GetDecimal`), trailing zeros are dropped where necessary to fit `decimal`. If the value still does not fit, an `OverflowException` is thrown.
+Decimal type conversion is controlled via the UseCustomDecimals setting. When a value is read as `decimal` (with `UseCustomDecimals=false`, or through `GetDecimal`), it keeps the scale of the column, so `7` in a `Decimal(18, 4)` column is returned as `7.0000m`. `decimal` holds at most 28 fractional digits and a 96-bit mantissa, so when a value does not fit at the column's scale, trailing zeros are dropped where necessary, and a value that still does not fit throws an `OverflowException`.
 </Note>
 
 ---

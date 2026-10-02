@@ -13,6 +13,10 @@ public class SelectColumn
 {
     private readonly ClickHouseConnection connection;
 
+    // Reads Decimal columns as System.Decimal. The default connection reads them as ClickHouseDecimal,
+    // which is a different decoder.
+    private readonly ClickHouseConnection systemDecimalConnection;
+
     [Params(500000)]
     public int Count { get; set; }
 
@@ -20,11 +24,14 @@ public class SelectColumn
     {
         var connectionString = Environment.GetEnvironmentVariable("CLICKHOUSE_CONNECTION");
         connection = new ClickHouseConnection(connectionString);
+        systemDecimalConnection = new ClickHouseConnection(new ClickHouseClientSettings(connectionString) { UseCustomDecimals = false });
     }
 
-    private async Task RunNumericBenchmark(string expression)
+    private Task RunNumericBenchmark(string expression) => RunNumericBenchmark(connection, expression);
+
+    private async Task RunNumericBenchmark(ClickHouseConnection target, string expression)
     {
-        using var reader = await connection.ExecuteReaderAsync($"SELECT {expression} FROM system.numbers LIMIT {Count}");
+        using var reader = await target.ExecuteReaderAsync($"SELECT {expression} FROM system.numbers LIMIT {Count}");
         while (reader.Read()) ;
     }
 
@@ -54,6 +61,15 @@ public class SelectColumn
 
     [Benchmark]
     public async Task SelectDecimal256() => await RunNumericBenchmark("toDecimal256(number,5)");
+
+    [Benchmark]
+    public async Task SelectDecimal64AsSystemDecimal() => await RunNumericBenchmark(systemDecimalConnection, "toDecimal64(number,5)");
+
+    [Benchmark]
+    public async Task SelectDecimal128AsSystemDecimal() => await RunNumericBenchmark(systemDecimalConnection, "toDecimal128(number,5)");
+
+    [Benchmark]
+    public async Task SelectDecimal256AsSystemDecimal() => await RunNumericBenchmark(systemDecimalConnection, "toDecimal256(number,5)");
 
     [Benchmark]
     public async Task SelectDate() => await RunNumericBenchmark("toDate(18942+number)");
