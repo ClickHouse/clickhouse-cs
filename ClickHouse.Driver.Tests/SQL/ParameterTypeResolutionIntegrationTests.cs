@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Numerics;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 
@@ -136,6 +139,38 @@ public class ParameterTypeResolutionIntegrationTests
         using var reader = await client.ExecuteReaderAsync("SELECT toTypeName(@val) as type_name", parameters);
         Assert.That(reader.Read(), Is.True);
         Assert.That(reader.GetString(0), Is.EqualTo("Int32"));
+    }
+
+    private static IEnumerable<TestCaseData> ClickHouseDecimalValueCases()
+    {
+        yield return new TestCaseData(new ClickHouseDecimal(123456789, 9), "Decimal(38, 9)", "0.123456789");
+        yield return new TestCaseData(new ClickHouseDecimal(19, 10), "Decimal(38, 10)", "0.0000000019");
+        yield return new TestCaseData(new ClickHouseDecimal(-10000000009, 10), "Decimal(38, 10)", "-1.0000000009");
+        yield return new TestCaseData(new ClickHouseDecimal(1, 40), "Decimal(76, 40)", "0.0000000000000000000000000000000000000001");
+        yield return new TestCaseData(
+            new ClickHouseDecimal(BigInteger.Parse("12345678901234567890123456789012345123456789", CultureInfo.InvariantCulture), 9),
+            "Decimal(76, 9)",
+            "12345678901234567890123456789012345.123456789");
+        yield return new TestCaseData(
+            new ClickHouseDecimal(BigInteger.Pow(10, 76) - 1, 6),
+            "Decimal(76, 6)",
+            new string('9', 70) + "." + new string('9', 6));
+        yield return new TestCaseData(new ClickHouseDecimal(1234567891 * BigInteger.Pow(10, 71), 80), "Decimal(38, 9)", "1.234567891");
+    }
+
+    [TestCaseSource(nameof(ClickHouseDecimalValueCases))]
+    public async Task ExecuteReaderAsync_ClickHouseDecimalWithoutType_KeepsFullValue(ClickHouseDecimal value, string expectedType, string expectedValue)
+    {
+        var settings = TestUtilities.GetTestClickHouseClientSettings(useFormDataParameters: useFormDataParameters);
+        using var client = new ClickHouseClient(settings);
+
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("p", value);
+
+        using var reader = await client.ExecuteReaderAsync("SELECT toTypeName(@p), toString(@p)", parameters);
+        Assert.That(reader.Read(), Is.True);
+        Assert.That(reader.GetString(0), Is.EqualTo(expectedType));
+        Assert.That(reader.GetString(1), Is.EqualTo(expectedValue));
     }
 
 

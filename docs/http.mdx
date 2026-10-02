@@ -763,6 +763,8 @@ For `@`-style parameters with no `{name:Type}` hint in the SQL and no `ClickHous
 Explicit hints (`{name:DateTime}`) take precedence over inference and are the recommended way of building queries.
 </Warning>
 
+An inferred `decimal` parameter is sent as `Decimal128(S)`, where `S` is the scale of the value. An inferred `ClickHouseDecimal` parameter is sent as `Decimal128(9)` if that type holds the value exactly. Otherwise the driver uses the scale of the value without its trailing zeros, raised to 9 if the type has room, and `Decimal256` if the value needs more than 38 digits, so the server does not truncate it. A `ClickHouseDecimal` that needs more than 76 digits throws `ArgumentOutOfRangeException`. Decimals inside arrays and other composite parameters are inferred as `Decimal128(9)`; to keep more digits, set `ClickHouseType` or use a `{name:Type}` hint.
+
 To override these defaults, set `ParameterTypeResolver` on `ClickHouseClientSettings`. This is useful when you want all `DateTime` parameters to use `DateTime64(3)` for millisecond precision, or all decimals to use a specific scale, without setting `ClickHouseType` on every individual parameter.
 
 **Using `DictionaryParameterTypeResolver` for simple type mappings:**
