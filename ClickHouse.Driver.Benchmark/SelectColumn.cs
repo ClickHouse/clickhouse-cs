@@ -27,6 +27,13 @@ public class SelectColumn
         systemDecimalConnection = new ClickHouseConnection(new ClickHouseClientSettings(connectionString) { UseCustomDecimals = false });
     }
 
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        connection.Dispose();
+        systemDecimalConnection.Dispose();
+    }
+
     private Task RunNumericBenchmark(string expression) => RunNumericBenchmark(connection, expression);
 
     private async Task RunNumericBenchmark(ClickHouseConnection target, string expression)
