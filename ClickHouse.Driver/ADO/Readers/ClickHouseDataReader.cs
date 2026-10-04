@@ -413,9 +413,20 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// <typeparamref name="T"/> but rows are ragged or an intermediate row is null. For every
     /// other <typeparamref name="T"/> this is a plain cast and follows the standard ADO.NET
     /// behaviour.
+    /// <para>
+    /// For a <typeparamref name="T"/> that contains a <see cref="ValueTuple"/> or a
+    /// <see cref="Tuple{T1,T2,T3,T4,T5,T6,T7,TRest}"/> (itself, as an array element, or nested in a
+    /// tuple), the tuple value is converted to that shape, including tuples of more than seven
+    /// elements through <c>TRest</c>. Elements follow the same strict cast as a whole column.
+    /// <see cref="InvalidCastException"/> signals a mismatch in element count, element type or
+    /// structure.
+    /// </para>
     /// </summary>
     public override T GetFieldValue<T>(int ordinal)
     {
+        if (FieldValueDispatcher<T>.RequiresTupleConversion)
+            return GetTupleFieldValue<T>(ordinal);
+
         if (FieldValueDispatcher<T>.RequiresMultidimConversion)
         {
             var raw = GetValue(ordinal);
@@ -444,6 +455,29 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         }
 
         var value = GetSlotValue<T>(ordinal);
+        if (readValueConverter != null)
+            return readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
+        return value;
+    }
+
+    /// <summary>
+    /// <see cref="GetFieldValue{T}"/> for a <typeparamref name="T"/> that contains a <see cref="ValueTuple"/> or a
+    /// <c>Tuple`8</c>. Converts the raw slot value rather than <see cref="GetValue"/>'s result, so the read value
+    /// converter runs once, on the converted value, as it does on the plain path.
+    /// </summary>
+    private T GetTupleFieldValue<T>(int ordinal)
+    {
+        T value;
+        try
+        {
+            value = TupleFieldConverter.Convert<T>(Slot(ordinal).GetBoxed());
+        }
+        catch (InvalidCastException ex)
+        {
+            throw new InvalidCastException(
+                $"Column [{ordinal}] of type '{columnTypeNames[ordinal]}' cannot be converted to '{typeof(T)}': {ex.Message}", ex);
+        }
+
         if (readValueConverter != null)
             return readValueConverter.ConvertValue<T>(value, FieldNames[ordinal], columnTypeNames[ordinal]);
         return value;
@@ -480,16 +514,18 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     }
 
     /// <summary>
-    /// Per-<typeparamref name="T"/> cached predicate driving <see cref="GetFieldValue{T}"/>'s
+    /// Per-<typeparamref name="T"/> cached predicates driving <see cref="GetFieldValue{T}"/>'s
     /// dispatch. The .NET runtime instantiates this generic exactly once per closed
-    /// <typeparamref name="T"/>, so the <c>typeof</c> + <c>IsArray</c> + <c>GetArrayRank</c>
-    /// work runs once on first use; thereafter the hot path is a single static <see cref="bool"/>
-    /// load and branch.
+    /// <typeparamref name="T"/>, so the reflection over <c>typeof(T)</c> runs once on first use;
+    /// thereafter the hot path is a static <see cref="bool"/> load and branch per predicate.
     /// </summary>
     private static class FieldValueDispatcher<T>
     {
         public static readonly bool RequiresMultidimConversion =
             typeof(T).IsArray && typeof(T).GetArrayRank() >= 2;
+
+        public static readonly bool RequiresTupleConversion =
+            TupleFieldConverter.RequiresConversion(typeof(T));
     }
 
     // Custom extension

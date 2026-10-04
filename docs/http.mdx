@@ -547,6 +547,53 @@ while (reader.Read())
 }
 ```
 
+#### Reading tuples as typed values {#reading-tuples}
+
+`GetValue` returns a `Tuple(...)` column as `System.Tuple<...>` (up to 7 elements) or as an `ITuple`
+(more than 7). `GetFieldValue<T>` can also return it as a C# `ValueTuple` of any length, or as a
+`System.Tuple` of more than 7 elements, whose last type argument holds the remaining elements. The
+same works for an array of tuples and for a tuple nested in another tuple:
+
+```csharp
+var reader = await client.ExecuteReaderAsync(@"
+    SELECT customer_id,
+           groupArray(tuple(order_id, product_id, store_id, quantity, price_cents,
+                            created_at, shipped_at, status, priority))
+    FROM orders
+    GROUP BY customer_id");
+
+while (reader.Read())
+{
+    var orders = reader.GetFieldValue<(ulong OrderId, ulong ProductId, uint StoreId, int Quantity,
+        long PriceCents, DateTime CreatedAt, DateTime ShippedAt, string Status, sbyte Priority)[]>(1);
+}
+```
+
+An empty `Tuple()` reads as the empty `ValueTuple`. The last type argument of a `System.Tuple` with
+more than 7 elements must itself be a `System.Tuple`, as the `System.Tuple` constructor requires; a
+target that mixes the two kinds there, such as `Tuple<int, int, int, int, int, int, int, (int, string)>`,
+throws `InvalidCastException` whatever the data. Read such a column as a `ValueTuple` instead. A
+nullable `ValueTuple` such as `(int, string)?` is not converted: a non-NULL value throws
+`InvalidCastException`.
+
+Each element is cast to its target type the same way `GetFieldValue<T>` casts a whole column, from
+the element's [framework type](#clickhouse-native-type-map-reading): an `Int32` element reads as
+`int`, `int?` or `object`, but not as `long`, because numbers are not widened. A NULL element reads
+as null into a nullable or reference type, including an array or a `System.Tuple`, and throws for any
+other type. A mismatch in element count, element type or structure throws `InvalidCastException`,
+and its message names the element, for example `Item2[].Item9` for the ninth element of a tuple in
+the array that is the second element of the column's tuple.
+
+An empty array is checked against the element type it was read with, so a wrong target throws even
+when there is no data. The check passes when some value of that element type would convert: a
+`Nullable(T)` element can be NULL, so it passes for any target that holds null. Two cases are checked
+less closely, because the element's .NET type does not carry the information:
+
+- an element read as a reference type (`String`, `IPv4`/`IPv6` and others) is checked as if it were
+  never NULL, since, for example, `Nullable(String)` and `String` both read as `string`;
+- for tuples with more than 7 elements, or empty `Tuple()` values, only the fact that the elements are
+  tuples is checked, not their count or types.
+
 #### POCO reads {#poco-read}
 
 Instead of reading columns by index or name, you can stream query results directly into your own classes. Register the type once with the client, then use `QueryAsync<T>`:
@@ -1844,7 +1891,7 @@ Both representations are accepted on the write path in either mode — see [writ
 | Nothing | `DBNull` |
 | Dynamic | See note |
 | Array(T) | `T[]` (nested `Array(Array(T))` reads as jagged `T[][]`; use `reader.GetFieldValue<T[,]>(ordinal)` to materialize rectangular data as a multidimensional CLR array) |
-| Tuple(T1, T2, ...) | `Tuple<T1, T2, ...>` / `LargeTuple` |
+| Tuple(T1, T2, ...) | `Tuple<T1, T2, ...>` / `LargeTuple` (also a `ValueTuple` of any length through `GetFieldValue<T>` — see [reading tuples](#reading-tuples)) |
 | Map(K, V) | `Dictionary<K, V>`, or `List<KeyValuePair<K, V>>` when `MapReadMode=KeyValuePairs` — see [Map type](#type-map-reading-map) |
 | Nullable(T) | `T?` |
 | Enum8 | `string` |
