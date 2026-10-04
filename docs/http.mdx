@@ -979,7 +979,7 @@ You can also set a converter per-query via `QueryOptions.ReadValueConverter`; wh
 
 **Dispatch boundary:**
 
-The converter is invoked once per column with the entire deserialized cell value, it does **not** recurse into composite containers. For an `Array(Int32)` column the value passed in is an `int[]`; for `Tuple(Int32, String)` it is an `ITuple`.
+The converter is invoked once per column with the entire deserialized cell value, it does **not** recurse into composite containers. For an `Array(Int32)` column the value passed in is an `int[]`; for `Tuple(Int32, String)` it is an `ITuple`. One exception: when `GetFieldValue<T>` [converts a tuple](#reading-tuples) to a `ValueTuple` or a `System.Tuple` of more than 7 elements, `ConvertValue<T>` receives the converted `T`, once for the whole column value.
 
 **Which overload runs:**
 
@@ -2183,7 +2183,7 @@ Property name matching with column type hints is case-sensitive. A property `Use
 | Nothing | Any | Writes nothing (no-op) |
 | Dynamic | Scalar .NET types such as `int`, `string`, `Guid` and `DateTime`; arrays, `List<T>`, `Dictionary<K, V>` and tuples of these; `null`, `DBNull` | The ClickHouse type is inferred from the .NET type of each value. For example, `int` is written as `Int32` and `int[]` as `Array(Int32)`. `DateTime` and `DateTimeOffset` are written as `DateTime`, which has second precision. For `decimal` and `ClickHouseDecimal`, see [Decimal types](#type-map-writing-decimal). `null` and `DBNull` write `NULL`. Other .NET types, including enums and other collection types, throw `ArgumentOutOfRangeException`. For query parameters, see [Not supported for writing](#type-map-writing-not-supported). |
 | Array(T) | `IList`, `null` | Null writes empty array. For nested types (`Array(Array(T))` and deeper) both jagged shapes (`T[][]`, `List<List<T>>`) and rectangular multidimensional CLR arrays (`T[,]`, `T[,,]`, …) are accepted; the CLR rank must match the ClickHouse nesting depth. |
-| Tuple(T1, T2, ...) | `ITuple`, `IList` | Element count must match tuple arity. See [ValueTuple caveat](#valuetuple-caveat) for >7 elements. |
+| Tuple(T1, T2, ...) | `ITuple`, `IList` | Element count must match tuple arity. See [tuples with more than 7 elements](#valuetuple-caveat). |
 | Map(K, V) | `IDictionary`, `IEnumerable<KeyValuePair<K, V>>` | A pair sequence (for example the `List<KeyValuePair<K, V>>` produced by `MapReadMode=KeyValuePairs`) is accepted in either read mode, and can repeat a key. Applies to binary inserts and to query parameters |
 | Nullable(T) | `null`, `DBNull`, or types accepted by T | Writes null flag byte before value |
 | Enum8 | `string`, `sbyte`, numeric types | String looked up in enum dictionary |
@@ -3349,30 +3349,24 @@ Beyond migrations, the provider also does not yet support:
 
 ## Limitations {#limitations}
 
-### Tuples with 8+ elements and a nested tuple in the last position {#valuetuple-caveat}
+### Tuples with more than 7 elements {#valuetuple-caveat}
 
-C# `ValueTuple` types with more than 7 elements use a compiler-generated nesting scheme: the 8th generic argument (`TRest`) is itself a `ValueTuple` holding the remaining elements. For example, `(int, int, int, int, int, int, int, string, string)` compiles to `ValueTuple<int, int, int, int, int, int, int, ValueTuple<string, string>>`.
+C# `ValueTuple` and `System.Tuple` hold at most 7 elements directly. A longer tuple uses the 8-argument
+form, whose last type argument (`TRest`) is itself a tuple holding the remaining elements. For example,
+`(int, int, int, int, int, int, int, string, string)` compiles to
+`ValueTuple<int, int, int, int, int, int, int, ValueTuple<string, string>>`. The driver follows the same
+rule both when it writes a tuple and when [`GetFieldValue<T>` reads one](#reading-tuples), so the
+elements are numbered the way C# numbers them.
 
-This creates an ambiguity when the ClickHouse column is an 8-element tuple where the last element is itself a tuple — e.g., `Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Tuple(String, String))`. The driver cannot distinguish between:
+A tuple nested as the 8th element has a type of its own. The tuple syntax and `Tuple.Create` build it
+for you: `(1, 2, 3, 4, 5, 6, 7, ("a", "b"))` is
+`ValueTuple<int, int, int, int, int, int, int, ValueTuple<ValueTuple<string, string>>>`, and
+`Tuple.Create(1, 2, 3, 4, 5, 6, 7, Tuple.Create("a", "b"))` is the `System.Tuple` equivalent. Both
+match `Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Tuple(String, String))`.
 
-- A **9-element flat tuple** (compiler-generated TRest nesting)
-- An **8-element tuple** where the last element is a nested `Tuple(String, String)`
-
-Both produce the same .NET type: `ValueTuple<int, int, int, int, int, int, int, ValueTuple<string, string>>`.
-
-The driver treats the 8th argument as TRest (i.e., flattens it), which means the 8-element-with-nested-tuple case will be serialized incorrectly.
-
-This affects both `System.Tuple` and `ValueTuple` since both use TRest nesting for >7 elements. Tuples with 7 or fewer elements, or tuples where the last element is not itself a tuple, are not affected.
-
-**Workaround:** Wrap the inner tuple in an extra layer so the driver can distinguish it from TRest nesting:
-
-```csharp
-// Instead of this (ambiguous — is it 8 elements or 9 flat?):
-Tuple.Create(1, 2, 3, 4, 5, 6, 7, Tuple.Create("a", "b"))
-
-// Do this (unambiguous — inner tuple is wrapped):
-Tuple.Create(1, 2, 3, 4, 5, 6, 7, Tuple.Create(Tuple.Create("a", "b")))
-```
+Only when you name the 8-argument type yourself does the difference show:
+`new ValueTuple<int, int, int, int, int, int, int, ValueTuple<string, string>>(...)` is a 9-element
+tuple, because its last type argument is `TRest`, not an 8th element.
 
 ---
 
