@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Types;
+using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Tests.ADO;
 
@@ -159,6 +161,29 @@ public class TupleFieldValueTests : AbstractConnectionTestFixture
         var value = await ReadFieldAsync<(int, int, int, int, int, int, int, ValueTuple<string>)>(
             "SELECT tuple(toInt32(1), toInt32(2), toInt32(3), toInt32(4), toInt32(5), toInt32(6), toInt32(7), tuple('x'))");
         Assert.That(value, Is.EqualTo((1, 2, 3, 4, 5, 6, 7, new ValueTuple<string>("x"))));
+    }
+
+    [Test]
+    public async Task GetFieldValue_TupleNestedAsEighthElement_ReadsWhatBinaryInsertAndParameterWrote()
+    {
+        // The write side follows the same TRest rule, so a tuple nested as the 8th element round-trips as itself.
+        var value = (1, 2, 3, 4, 5, 6, 7, ("a", "b"));
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {targetTable} (t Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Tuple(String, String))) ENGINE Memory");
+        await client.InsertBinaryAsync(targetTable, new[] { "t" }, new[] { new object[] { value } });
+
+        var parameters = new ClickHouseParameterCollection();
+        parameters.AddParameter("p", value);
+        using var reader = await client.ExecuteReaderAsync($"SELECT t, @p, toTypeName(@p) FROM {targetTable}", parameters);
+        Assert.That(reader.Read(), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.GetFieldValue<(int, int, int, int, int, int, int, (string, string))>(0), Is.EqualTo(value));
+            Assert.That(reader.GetFieldValue<(int, int, int, int, int, int, int, (string, string))>(1), Is.EqualTo(value));
+            Assert.That(reader.GetString(2),
+                Is.EqualTo("Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Tuple(String, String))"));
+        });
     }
 
     [Test]
