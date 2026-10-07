@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using ClickHouse.Driver.ADO;
-using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Tests.ADO;
 
@@ -46,10 +44,24 @@ public class ReadonlyUserTests
         if (admin == null)
             return;
 
-        foreach (var user in users.Values)
-            await admin.ExecuteNonQueryAsync($"DROP USER IF EXISTS {user}");
-
-        admin.Dispose();
+        try
+        {
+            foreach (var user in users.Values)
+            {
+                try
+                {
+                    await admin.ExecuteNonQueryAsync($"DROP USER IF EXISTS {user}");
+                }
+                catch (Exception e)
+                {
+                    TestContext.Progress.WriteLine($"Cleanup: failed to drop user {user}: {e.Message}");
+                }
+            }
+        }
+        finally
+        {
+            admin.Dispose();
+        }
     }
 
     // The JSON modes are set to None: that is the documented way to keep the driver from sending the

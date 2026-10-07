@@ -335,6 +335,26 @@ public class AcceptEncodingTests
     /// the property. The URI flag still follows the property, since a custom header is opaque to the
     /// driver — asserted so that asymmetry is a decision on record rather than a surprise.
     /// </summary>
+    /// <summary>
+    /// With compression off, an <c>Accept-Encoding</c> injected through CustomHeaders is still sent, and
+    /// the URI carries no <c>enable_http_compression</c>: the server's own value of the setting decides
+    /// whether it is honoured.
+    /// </summary>
+    [Test]
+    public async Task CustomHeaderAcceptEncoding_WithCompressionDisabled_IsSentWithoutTheFlag()
+    {
+        var (client, handler) = CreateClient(useCompression: false, customHeaderAcceptEncoding: "gzip");
+
+        await client.ExecuteNonQueryAsync("SELECT 1");
+
+        var negotiation = NegotiationOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(negotiation.Header, Is.EqualTo(new[] { "gzip" }));
+            Assert.That(negotiation.Flag, Is.EqualTo("<absent>"));
+        });
+    }
+
     [Test]
     public async Task ClientLevelCustomHeaderAcceptEncoding_OutranksTheClientLevelSetting()
     {

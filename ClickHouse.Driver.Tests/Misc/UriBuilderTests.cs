@@ -251,6 +251,27 @@ public class UriBuilderTests
         });
     }
 
+    // A readonly user may only send a setting at its effective value, so "false" must never be sent.
+    // withCustomSettings selects the deduplication path; without them the fast path is used.
+    [TestCase(true, false, ExpectedResult = "true")]
+    [TestCase(true, true, ExpectedResult = "true")]
+    [TestCase(false, false, ExpectedResult = null)]
+    [TestCase(false, true, ExpectedResult = null)]
+    public string ToString_EnableHttpCompression_IsSentOnlyWhenCompressionIsRequested(bool useCompression, bool withCustomSettings)
+    {
+        var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
+        {
+            UseCompression = useCompression,
+            CommandQueryStringParameters = withCustomSettings
+                ? new Dictionary<string, object> { { "max_threads", 4 } }
+                : null,
+        };
+
+        var @params = HttpUtility.ParseQueryString(new Uri(builder.ToString()).Query);
+
+        return @params.Get("enable_http_compression");
+    }
+
     [Test]
     public void ToString_WithCustomSettingsAndMaxExecutionTime_ShouldEmitBothOnDeduplicationPath()
     {

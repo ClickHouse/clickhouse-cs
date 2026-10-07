@@ -147,9 +147,9 @@ internal class ClickHouseUriBuilder
         sb.Append(key).Append('=').Append(HttpUtility.UrlEncode(value));
     }
 
-    // enable_http_compression is sent only to ask for compression, never as "false": a request that
-    // offers no codec gets an uncompressed response anyway, and a readonly user cannot send a setting
-    // value that differs from the one in effect for it.
+    // enable_http_compression is sent only as "true", when compression is on. It is never sent as
+    // "false": with compression off the driver offers no codec, so the response is uncompressed
+    // anyway, and a readonly user cannot send a setting value that differs from the one in effect.
     private void AppendBaseParameters(StringBuilder sb, ref bool first)
     {
         if (UseCompression)
