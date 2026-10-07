@@ -329,13 +329,6 @@ public class AcceptEncodingTests
     }
 
     /// <summary>
-    /// An <c>Accept-Encoding</c> injected through <b>client-level</b> CustomHeaders outranks the
-    /// client-level property, the same way a per-query custom header does in
-    /// <see cref="CustomHeaderAcceptEncoding_OutranksTheClientLevelSetting"/>: both are attached after
-    /// the property. The URI flag still follows the property, since a custom header is opaque to the
-    /// driver — asserted so that asymmetry is a decision on record rather than a surprise.
-    /// </summary>
-    /// <summary>
     /// With compression off, an <c>Accept-Encoding</c> injected through CustomHeaders is still sent, and
     /// the URI carries no <c>enable_http_compression</c>: the server's own value of the setting decides
     /// whether it is honoured.
@@ -355,6 +348,13 @@ public class AcceptEncodingTests
         });
     }
 
+    /// <summary>
+    /// An <c>Accept-Encoding</c> injected through <b>client-level</b> CustomHeaders outranks the
+    /// client-level property, the same way a per-query custom header does in
+    /// <see cref="CustomHeaderAcceptEncoding_OutranksTheClientLevelSetting"/>: both are attached after
+    /// the property. The URI flag still follows the property, since a custom header is opaque to the
+    /// driver — asserted so that asymmetry is a decision on record rather than a surprise.
+    /// </summary>
     [Test]
     public async Task ClientLevelCustomHeaderAcceptEncoding_OutranksTheClientLevelSetting()
     {
