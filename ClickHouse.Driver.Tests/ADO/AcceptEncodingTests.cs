@@ -253,7 +253,7 @@ public class AcceptEncodingTests
 
         await client.ExecuteNonQueryAsync("SELECT 1");
 
-        Assert.That(handler.Requests.Single().RequestUri.Query, Does.Contain("enable_http_compression=false"));
+        Assert.That(handler.Requests.Single().RequestUri.Query, Does.Not.Contain("enable_http_compression"));
     }
 
     /// <summary>
@@ -324,7 +324,7 @@ public class AcceptEncodingTests
         Assert.Multiple(() =>
         {
             Assert.That(negotiation.Header, Is.Empty);
-            Assert.That(negotiation.Flag, Is.EqualTo("false"));
+            Assert.That(negotiation.Flag, Is.EqualTo("<absent>"));
         });
     }
 

@@ -37,7 +37,7 @@ public class UriBuilderTests
             Assert.That(@params.Get("c"), Is.EqualTo("1"));
             Assert.That(@params.Get("d"), Is.EqualTo("c"));
             Assert.That(@params.Get("session_id"), Is.EqualTo("SESSION"));
-            Assert.That(@params.Get("enable_http_compression"), Is.EqualTo("false"));
+            Assert.That(@params.Get("enable_http_compression"), Is.Null);
             Assert.That(@params.Get("query_id"), Is.EqualTo("QUERY"));
             Assert.That(@params.Get("param_sqlParameterName"), Is.EqualTo("sqlParameterValue"));
         });

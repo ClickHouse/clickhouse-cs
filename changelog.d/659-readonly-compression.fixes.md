@@ -1,0 +1,1 @@
+* Fixed every query failing with `READONLY` (code 164) for a `readonly = 1` user when `Compression=false`: the driver no longer sends `enable_http_compression=false` ([#659](https://github.com/ClickHouse/clickhouse-cs/issues/659)).

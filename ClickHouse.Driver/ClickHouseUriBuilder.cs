@@ -147,9 +147,13 @@ internal class ClickHouseUriBuilder
         sb.Append(key).Append('=').Append(HttpUtility.UrlEncode(value));
     }
 
+    // enable_http_compression is sent only to ask for compression, never as "false": a request that
+    // offers no codec gets an uncompressed response anyway, and a readonly user cannot send a setting
+    // value that differs from the one in effect for it.
     private void AppendBaseParameters(StringBuilder sb, ref bool first)
     {
-        AppendParameter(sb, ref first, "enable_http_compression", UseCompression ? "true" : "false");
+        if (UseCompression)
+            AppendParameter(sb, ref first, "enable_http_compression", "true");
         AppendParameter(sb, ref first, "default_format", DefaultFormat);
 
         if (!string.IsNullOrEmpty(Database))
@@ -179,7 +183,8 @@ internal class ClickHouseUriBuilder
     private Dictionary<string, string> BuildDeduplicatedParameters()
     {
         var parameters = new Dictionary<string, string>();
-        parameters.Set("enable_http_compression", UseCompression ? "true" : "false");
+        if (UseCompression)
+            parameters.Set("enable_http_compression", "true");
         parameters.Set("default_format", DefaultFormat);
         parameters.SetOrRemove("database", Database);
         parameters.SetOrRemove("session_id", SessionId);

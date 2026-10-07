@@ -1032,7 +1032,7 @@ or in the connection string, for ORM users who never touch `ClickHouseClientSett
 Host=localhost;AcceptEncoding=br, gzip
 ```
 
-Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends no `Accept-Encoding` at all.
+Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends neither `Accept-Encoding` nor `enable_http_compression`, so a `readonly = 1` user can use it whatever value of `enable_http_compression` is in effect for them.
 
 `Accept-Encoding` can be set in four places. The first of these that names a codec wins:
 
