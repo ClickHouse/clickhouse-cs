@@ -2118,7 +2118,7 @@ Property name matching with column type hints is case-sensitive. A property `Use
 | IPv4 | `IPAddress`, `string` | Must be IPv4; string parsed via `IPAddress.Parse()` |
 | IPv6 | `IPAddress`, `string` | Must be IPv6; string parsed via `IPAddress.Parse()` |
 | Nothing | Any | Writes nothing (no-op) |
-| Dynamic | — | **Not supported** (throws `NotImplementedException`) |
+| Dynamic | Scalar .NET types such as `int`, `string`, `Guid` and `DateTime`; arrays, `List<T>`, `Dictionary<K, V>` and tuples of these; `null`, `DBNull` | The ClickHouse type is inferred from the .NET type of each value. For example, `int` is written as `Int32` and `int[]` as `Array(Int32)`. `DateTime` and `DateTimeOffset` are written as `DateTime`, which has second precision. For `decimal` and `ClickHouseDecimal`, see [Decimal types](#type-map-writing-decimal). `null` and `DBNull` write `NULL`. Other .NET types, including enums and other collection types, throw `ArgumentOutOfRangeException`. For query parameters, see [Not supported for writing](#type-map-writing-not-supported). |
 | Array(T) | `IList`, `null` | Null writes empty array. For nested types (`Array(Array(T))` and deeper) both jagged shapes (`T[][]`, `List<List<T>>`) and rectangular multidimensional CLR arrays (`T[,]`, `T[,,]`, …) are accepted; the CLR rank must match the ClickHouse nesting depth. |
 | Tuple(T1, T2, ...) | `ITuple`, `IList` | Element count must match tuple arity. See [ValueTuple caveat](#valuetuple-caveat) for >7 elements. |
 | Map(K, V) | `IDictionary`, `IEnumerable<KeyValuePair<K, V>>` | A pair sequence (for example the `List<KeyValuePair<K, V>>` produced by `MapReadMode=KeyValuePairs`) is accepted in either read mode, and can repeat a key. Applies to binary inserts and to query parameters |
@@ -2151,7 +2151,7 @@ Property name matching with column type hints is case-sensitive. A property `Use
 
 | ClickHouse Type | Notes |
 |-----------------|-------|
-| Dynamic | Throws `NotImplementedException` |
+| Dynamic | Query parameters only: the default parameter formatter throws `ArgumentException` for a non-null `{name:Dynamic}` value, and for `Dynamic` elements of a container parameter such as `{name:Array(Dynamic)}`. Binary inserts are supported. |
 | AggregateFunction | Throws `AggregateFunctionException` |
 
 ---
