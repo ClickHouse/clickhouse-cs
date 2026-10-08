@@ -513,6 +513,114 @@ public class ClickHouseDecimalTests
         Assert.That(actual, Is.EqualTo(expected));
     }
 
+    // The fractional part is truncated toward zero, then the integer part must fit the target type,
+    // as the server does: toUInt8(toDecimal32(255.9, 1)) is 255, toUInt8(toDecimal32(256.5, 1)) overflows.
+    public static IEnumerable<TestCaseData> NarrowIntegralInRangeCases()
+    {
+        yield return new TestCaseData(new ClickHouseDecimal(-128m), sbyte.MinValue);
+        yield return new TestCaseData(new ClickHouseDecimal(127m), sbyte.MaxValue);
+        yield return new TestCaseData(new ClickHouseDecimal(-128.9m), sbyte.MinValue);
+        yield return new TestCaseData(new ClickHouseDecimal(0m), byte.MinValue);
+        yield return new TestCaseData(new ClickHouseDecimal(255m), byte.MaxValue);
+        yield return new TestCaseData(new ClickHouseDecimal(255.9m), byte.MaxValue);
+        yield return new TestCaseData(new ClickHouseDecimal(-0.5m), byte.MinValue);
+        yield return new TestCaseData(new ClickHouseDecimal(5 * BigInteger.Pow(10, 70), 70), (byte)5);
+        yield return new TestCaseData(new ClickHouseDecimal(-32768m), short.MinValue);
+        yield return new TestCaseData(new ClickHouseDecimal(32767m), short.MaxValue);
+        yield return new TestCaseData(new ClickHouseDecimal(65535m), ushort.MaxValue);
+        yield return new TestCaseData(new ClickHouseDecimal(65535m), char.MaxValue);
+        yield return new TestCaseData(new ClickHouseDecimal(-2147483648m), int.MinValue);
+        yield return new TestCaseData(new ClickHouseDecimal(2147483647m), int.MaxValue);
+        yield return new TestCaseData(new ClickHouseDecimal(100000.00m), 100000);
+    }
+
+    [Test]
+    [TestCaseSource(nameof(NarrowIntegralInRangeCases))]
+    public void ChangeType_NarrowIntegralTypeInRange_ReturnsValue(ClickHouseDecimal value, object expected)
+    {
+        var actual = Convert.ChangeType(value, expected.GetType(), CultureInfo.InvariantCulture);
+        Assert.That(actual, Is.EqualTo(expected).And.TypeOf(expected.GetType()));
+    }
+
+    public static IEnumerable<TestCaseData> NarrowIntegralOutOfRangeCases()
+    {
+        yield return new TestCaseData(new ClickHouseDecimal(-129m), typeof(sbyte));
+        yield return new TestCaseData(new ClickHouseDecimal(128m), typeof(sbyte));
+        yield return new TestCaseData(new ClickHouseDecimal(-1m), typeof(byte));
+        yield return new TestCaseData(new ClickHouseDecimal(256m), typeof(byte));
+        yield return new TestCaseData(new ClickHouseDecimal(256.5m), typeof(byte));
+        yield return new TestCaseData(new ClickHouseDecimal(-32769m), typeof(short));
+        yield return new TestCaseData(new ClickHouseDecimal(32768m), typeof(short));
+        yield return new TestCaseData(new ClickHouseDecimal(-1m), typeof(ushort));
+        yield return new TestCaseData(new ClickHouseDecimal(-1.5m), typeof(ushort));
+        yield return new TestCaseData(new ClickHouseDecimal(65536m), typeof(ushort));
+        yield return new TestCaseData(new ClickHouseDecimal(-1m), typeof(char));
+        yield return new TestCaseData(new ClickHouseDecimal(65536m), typeof(char));
+        yield return new TestCaseData(new ClickHouseDecimal(-2147483649m), typeof(int));
+        yield return new TestCaseData(new ClickHouseDecimal(2147483648m), typeof(int));
+        yield return new TestCaseData(new ClickHouseDecimal(BigInteger.Pow(10, 70), 0), typeof(int));
+    }
+
+    [Test]
+    [TestCaseSource(nameof(NarrowIntegralOutOfRangeCases))]
+    public void ChangeType_NarrowIntegralTypeOutOfRange_ThrowsOverflowException(ClickHouseDecimal value, Type type)
+    {
+        Assert.Throws<OverflowException>(() => Convert.ChangeType(value, type, CultureInfo.InvariantCulture));
+    }
+
+    [Test]
+    [TestCase(typeof(decimal?))]
+    [TestCase(typeof(int?))]
+    [TestCase(typeof(Guid))]
+    [TestCase(typeof(DateTimeOffset))]
+    [TestCase(typeof(TimeSpan))]
+    [TestCase(typeof(DayOfWeek))]
+    [TestCase(typeof(IntPtr))]
+    public void ChangeType_TypeWithoutConversion_ThrowsInvalidCastException(Type type)
+    {
+        var @decimal = new ClickHouseDecimal(5m);
+        Assert.Throws<InvalidCastException>(() => Convert.ChangeType(@decimal, type, CultureInfo.InvariantCulture));
+    }
+
+    [Test]
+    public void ToType_NullType_ThrowsArgumentNullException()
+    {
+        var @decimal = new ClickHouseDecimal(5m);
+        Assert.Throws<ArgumentNullException>(() => @decimal.ToType(null, CultureInfo.InvariantCulture));
+    }
+
+    [Test]
+    [TestCase(typeof(ClickHouseDecimal))]
+    [TestCase(typeof(object))]
+    public void ToType_OwnTypeOrObject_ReturnsSameValue(Type type)
+    {
+        var @decimal = new ClickHouseDecimal(123.45m);
+        Assert.That(@decimal.ToType(type, CultureInfo.InvariantCulture), Is.EqualTo(@decimal));
+    }
+
+    [Test]
+    [TestCase(typeof(bool))]
+    [TestCase(typeof(char))]
+    [TestCase(typeof(byte))]
+    [TestCase(typeof(sbyte))]
+    [TestCase(typeof(short))]
+    [TestCase(typeof(ushort))]
+    [TestCase(typeof(int))]
+    [TestCase(typeof(uint))]
+    [TestCase(typeof(long))]
+    [TestCase(typeof(ulong))]
+    [TestCase(typeof(float))]
+    [TestCase(typeof(double))]
+    [TestCase(typeof(decimal))]
+    [TestCase(typeof(string))]
+    public void ToType_ConvertibleType_MatchesChangeType(Type type)
+    {
+        var @decimal = new ClickHouseDecimal(5.00m);
+        var expected = Convert.ChangeType(@decimal, type, CultureInfo.InvariantCulture);
+        var actual = @decimal.ToType(type, CultureInfo.InvariantCulture);
+        Assert.That(actual, Is.EqualTo(expected).And.TypeOf(type));
+    }
+
     [Test]
     [RequiredFeature(Feature.WideTypes)]
     public async Task ValuesFromClickHouseShouldMatch([ValueSource(typeof(ClickHouseDecimalTests), nameof(DecimalsWithExtremeValues))] decimal value)
