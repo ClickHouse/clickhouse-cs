@@ -3,8 +3,11 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
+using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Numerics;
+using ClickHouse.Driver.Tests.Attributes;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
@@ -444,6 +447,61 @@ public class TupleTypeTests : AbstractConnectionTestFixture
         Assert.That(result, Is.EqualTo("a"));
     }
 
+    public static IEnumerable<TestCaseData> NamedJsonElementColumns()
+    {
+        // The server reports this element type as JSON, an alias of the registered name Json, and
+        // reports a declared Json as JSON too.
+        yield return new TestCaseData("Tuple(x JSON(a Int64))", @"tuple('{""a"":1}')");
+        yield return new TestCaseData("Tuple(`y z` Json)", @"tuple('{""a"":1}')");
+        yield return new TestCaseData("Array(Tuple(x JSON))", @"[tuple('{""a"":1}')]");
+        yield return new TestCaseData("Map(String, Tuple(x JSON))", @"map('k', tuple('{""a"":1}'))");
+        yield return new TestCaseData("Nested(x JSON(a Int64), k Int32)", @"[('{""a"":1}', 2)]");
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    [TestCaseSource(nameof(NamedJsonElementColumns))]
+    public async Task ShouldReadColumn_WithNamedJsonElement_ReturnsJsonObject(string columnType, string value)
+    {
+        var result = await client.ExecuteScalarAsync($"SELECT CAST({value} AS {columnType})");
+
+        Assert.That(FirstJsonObject(result).ToJsonString(), Is.EqualTo(@"{""a"":1}"));
+    }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task ShouldInsertBinary_IntoTupleColumnWithNamedJsonElement_RoundTripsElement()
+    {
+        // The insert path parses the destination column type reported by the server.
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {targetTable} (id Int32, t Tuple(x JSON(a Int64))) ENGINE Memory");
+
+        await client.InsertBinaryAsync(
+            targetTable,
+            ["id", "t"],
+            [[1, Tuple.Create(new JsonObject { ["a"] = 5L })]]);
+
+        var result = await client.ExecuteScalarAsync($"SELECT t.x.a FROM {targetTable}");
+
+        Assert.That(result, Is.EqualTo(5L));
+    }
+
+    [Test]
+    [TestCase("Tuple(x INT, r String)", 1, ExpectedResult = 1)]
+    [TestCase("Tuple(x DOUBLE PRECISION, r String)", 1.5, ExpectedResult = 1.5)]
+    [TestCase("Tuple(`p q` BIGINT UNSIGNED, r String)", ulong.MaxValue, ExpectedResult = ulong.MaxValue)]
+    public async Task<object> ShouldRoundTripTupleParameter_WithAliasedElementTypeInTypeHint_ReturnsElement(string typeHint, object element)
+    {
+        // A type hint is written by hand, so unlike a server-reported type it can spell an element
+        // type with any alias, including one which contains a space itself.
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT tupleElement({{var:{typeHint}}}, 1)";
+        command.AddParameter("var", Tuple.Create(element, "a"));
+
+        return await command.ExecuteScalarAsync();
+    }
+
     [Test]
     [TestCase("Tuple(`a b Int64, c String)")]
     [TestCase("Nested(`a b`, c String)")]
@@ -454,4 +512,13 @@ public class TupleTypeTests : AbstractConnectionTestFixture
         Assert.Throws<ArgumentException>(
             () => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default));
     }
+
+    private static JsonObject FirstJsonObject(object value) => value switch
+    {
+        JsonObject json => json,
+        ITuple tuple => FirstJsonObject(tuple[0]),
+        IDictionary map => FirstJsonObject(map.Values.Cast<object>().First()),
+        IList list => FirstJsonObject(list[0]),
+        _ => throw new AssertionException($"No JSON value in {value?.GetType()}"),
+    };
 }
