@@ -1876,6 +1876,25 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(ex.InnerException.Message, Does.Contain("Circular reference detected"));
     }
 
+    private class ObjectArrayData { public object[] Items { get; set; } }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task Write_UnhintedPathWithSystemObjectElement_ThrowsUnknownType()
+    {
+        using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryClient.RegisterJsonSerializationType<ObjectArrayData>();
+        var targetTable = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (id UInt32, data JSON) ENGINE = Memory");
+
+        var data = new ObjectArrayData { Items = [new object()] };
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(() =>
+            binaryClient.InsertBinaryAsync(targetTable, ["id", "data"], [new object[] { 1u, data }]));
+
+        Assert.That(ex.InnerException, Is.TypeOf<ArgumentOutOfRangeException>());
+        Assert.That(ex.InnerException.Message, Is.EqualTo("Unknown type: System.Object (Parameter 'value')"));
+    }
+
     [Test]
     [RequiredFeature(Feature.Json | Feature.Time)]
     public async Task Write_WithTimeSpan_ShouldWriteAsTime64()

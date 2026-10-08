@@ -46,6 +46,11 @@ internal class DynamicType : ClickHouseType
         else
             inferredType = GetCachedInferredType(value.GetType());
 
+        // System.Object infers as Dynamic (so that object[] infers as Array(Dynamic)), but a value of exactly that
+        // type has no concrete type to write: writing it as Dynamic again would recurse without end.
+        if (inferredType is DynamicType)
+            throw new ArgumentOutOfRangeException(nameof(value), "Unknown type: " + value.GetType());
+
         BinaryTypeDescriptionWriter.WriteTypeHeader(writer, inferredType);
         inferredType.Write(writer, value);
     }
