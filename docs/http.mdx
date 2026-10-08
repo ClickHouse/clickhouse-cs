@@ -685,13 +685,6 @@ SELECT * FROM table WHERE val = {tuple_in_tuple:Tuple(UInt8, Tuple(String, UInt8
 INSERT INTO table VALUES ({val1:Int32}, {val2:Array(UInt8)})
 ```
 
-A type hint can use a type alias, such as `INT`, `BIGINT UNSIGNED` or `DOUBLE PRECISION`. This also
-applies to the type of a named `Tuple` element:
-
-```sql
-SELECT {point:Tuple(x DOUBLE PRECISION, y DOUBLE PRECISION)}
-```
-
 <Note>
 SQL 'bind' parameters are passed as HTTP URI query parameters, so using too many of them may result in a "URL too long" exception. Use `InsertBinaryAsync` for bulk data insertion to avoid this limitation.
 </Note>
@@ -1851,10 +1844,6 @@ Both representations are accepted on the write path in either mode — see [writ
 | Nested(...) | `Tuple[]` |
 | Variant(T1, T2, ...) | See note |
 | QBit(T, dimension) | `T[]` |
-
-A `Tuple` or `Nested` element can have a name, as in `Tuple(id UInt64, data JSON)`. A named element
-reads as the same .NET type as an unnamed element of its type, so a `JSON` element reads as a
-`JsonObject`. `InsertBinaryAsync` also writes to columns with named elements.
 
 <Note>
 The Dynamic and Variant types will be converted to the corresponding type for the actual underlying type in each row.
