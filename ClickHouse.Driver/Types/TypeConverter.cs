@@ -249,8 +249,10 @@ internal static class TypeConverter
     {
         var typeName = node.Value.Trim().Trim('\'');
 
+        // Looked up before the named element check: a multi-word alias such as DOUBLE PRECISION
+        // contains a space too.
         if (Aliases.TryGetValue(typeName.ToUpperInvariant(), out var alias))
-            typeName = alias;
+            return alias;
 
         if (typeName.Contains(' '))
         {
@@ -266,6 +268,10 @@ internal static class TypeConverter
             {
                 throw new ArgumentException($"Cannot parse {node.Value} as type", nameof(node));
             }
+
+            // The element type can be an alias too, e.g. JSON in Tuple(x JSON), as the server reports it.
+            if (Aliases.TryGetValue(typeName.ToUpperInvariant(), out alias))
+                typeName = alias;
         }
 
         return typeName;
