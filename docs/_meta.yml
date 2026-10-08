@@ -14,7 +14,7 @@ rawFormats: true
 ecosystem: [ADO.NET, Dapper, EF Core, linq2db, Serilog, Aspire, Semantic Kernel]
 install:
   dotnet: dotnet add package ClickHouse.Driver
-quickStartCode: /examples/Core/Core_001_BasicUsage.cs
+quickStartCode: /examples/Http/Core/Core_001_BasicUsage.cs
 desc: >-
   Official C#/.NET client for ClickHouse. One NuGet package (ClickHouse.Driver):
   a stable HTTP client (ClickHouseClient + ADO.NET for Dapper, EF Core, linq2db)
