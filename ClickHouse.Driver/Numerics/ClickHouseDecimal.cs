@@ -8,7 +8,8 @@ namespace ClickHouse.Driver.Numerics;
 
 /// <summary>
 /// Arbitrary precision decimal.
-/// All operations are exact, except for division. Division never determines more digits than the given precision.
+/// All operations are exact, except for division. Division truncates the quotient toward zero after at least
+/// <see cref="MaxDivisionPrecision"/> significant digits, and always keeps all digits of its integer part.
 /// Based on: https://gist.github.com/JcBernack/0b4eef59ca97ee931a2f45542b9ff06d
 /// Based on https://stackoverflow.com/a/4524254
 /// Original Author: Jan Christoph Bernack (contact: jc.bernack at gmail.com)
@@ -120,7 +121,21 @@ public readonly struct ClickHouseDecimal
         return Truncate(NumberOfDigits(Mantissa) - Scale);
     }
 
-    public static int NumberOfDigits(BigInteger value) => value == 0 ? 0 : (int)Math.Ceiling(BigInteger.Log10(value * value.Sign));
+    public static int NumberOfDigits(BigInteger value)
+    {
+        if (value.IsZero)
+            return 0;
+
+        var abs = BigInteger.Abs(value);
+        // Log10 is a double: near a power of ten, floor(Log10) + 1 can be one too high or too low
+        var digits = (int)Math.Floor(BigInteger.Log10(abs)) + 1;
+        var lowerBound = BigInteger.Pow(10, digits - 1);
+        if (abs < lowerBound)
+            return digits - 1;
+        if (abs >= lowerBound * 10)
+            return digits + 1;
+        return digits;
+    }
 
     public static implicit operator ClickHouseDecimal(int value) => new ClickHouseDecimal(value, 0);
 
@@ -237,12 +252,17 @@ public readonly struct ClickHouseDecimal
     }
 
     public static ClickHouseDecimal operator /(ClickHouseDecimal dividend, ClickHouseDecimal divisor)
+        => Divide(dividend, divisor, MaxDivisionPrecision);
+
+    internal static ClickHouseDecimal Divide(ClickHouseDecimal dividend, ClickHouseDecimal divisor, int maxDivisionPrecision)
     {
         var dividend_mantissa = dividend.Mantissa;
         var divisor_mantissa = divisor.Mantissa;
 
-        var bias = MaxDivisionPrecision - (NumberOfDigits(dividend_mantissa) - NumberOfDigits(divisor_mantissa));
+        var bias = maxDivisionPrecision - (NumberOfDigits(dividend_mantissa) - NumberOfDigits(divisor_mantissa));
         bias = Math.Max(0, bias);
+        // keep the result scale at 0 or above, so that a quotient wider than MaxDivisionPrecision keeps its integer part
+        bias = Math.Max(bias, divisor.Scale - dividend.Scale);
 
         dividend_mantissa *= BigInteger.Pow(10, bias);
 
