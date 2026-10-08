@@ -8,7 +8,8 @@ namespace ClickHouse.Driver.Numerics;
 
 /// <summary>
 /// Arbitrary precision decimal.
-/// All operations are exact, except for division. Division never determines more digits than the given precision.
+/// All operations are exact, except for division. Division truncates the quotient toward zero after at least
+/// <see cref="MaxDivisionPrecision"/> significant digits, and always keeps all digits of its integer part.
 /// Based on: https://gist.github.com/JcBernack/0b4eef59ca97ee931a2f45542b9ff06d
 /// Based on https://stackoverflow.com/a/4524254
 /// Original Author: Jan Christoph Bernack (contact: jc.bernack at gmail.com)
@@ -251,12 +252,17 @@ public readonly struct ClickHouseDecimal
     }
 
     public static ClickHouseDecimal operator /(ClickHouseDecimal dividend, ClickHouseDecimal divisor)
+        => Divide(dividend, divisor, MaxDivisionPrecision);
+
+    internal static ClickHouseDecimal Divide(ClickHouseDecimal dividend, ClickHouseDecimal divisor, int maxDivisionPrecision)
     {
         var dividend_mantissa = dividend.Mantissa;
         var divisor_mantissa = divisor.Mantissa;
 
-        var bias = MaxDivisionPrecision - (NumberOfDigits(dividend_mantissa) - NumberOfDigits(divisor_mantissa));
+        var bias = maxDivisionPrecision - (NumberOfDigits(dividend_mantissa) - NumberOfDigits(divisor_mantissa));
         bias = Math.Max(0, bias);
+        // keep the result scale at 0 or above, so that a quotient wider than MaxDivisionPrecision keeps its integer part
+        bias = Math.Max(bias, divisor.Scale - dividend.Scale);
 
         dividend_mantissa *= BigInteger.Pow(10, bias);
 
