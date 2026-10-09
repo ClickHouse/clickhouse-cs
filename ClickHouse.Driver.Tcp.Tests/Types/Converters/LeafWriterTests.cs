@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Text;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
@@ -19,6 +20,10 @@ public class LeafWriterTests
 {
     private static readonly ConverterDerivation Derivation = ConverterDerivation.Default;
 
+    // Texts of at most 4 UTF-8 bytes. A lone surrogate encodes as the 3 bytes EF BF BD.
+    private static readonly string[] FixedStringTexts = { string.Empty, "a", "abcd", "é", "\uD800", "ab", "a" };
+
+    // The pairs that a codec writes today, so the current write is the reference.
     public static IEnumerable<TestCaseData> WritePairs()
     {
         foreach (string type in LeafSamples.Types)
@@ -26,7 +31,10 @@ public class LeafWriterTests
             IColumnCodec codec = ConverterHarness.Codec(type);
             foreach (Type clrType in LeafTableTests.LeafOf(type).WriteTypes(codec))
             {
-                yield return new TestCaseData(type, clrType).SetArgDisplayNames(type, clrType.Name);
+                if (codec.CanWriteElementType(clrType))
+                {
+                    yield return new TestCaseData(type, clrType).SetArgDisplayNames(type, clrType.Name);
+                }
             }
         }
     }
@@ -124,6 +132,76 @@ public class LeafWriterTests
         });
     }
 
+    /// <summary>
+    /// <c>FixedString(N)</c> from text writes the UTF-8 bytes padded with zero bytes to N: the bytes of the current
+    /// write of the padded bytes, for a whole column, a slice and marked positions.
+    /// </summary>
+    [Test]
+    public async Task Write_FixedStringFromText_GivesTheBytesOfTheTextPaddedWithZeros()
+    {
+        byte[][] padded = FixedStringTexts.Select(text => Padded(text, 4)).ToArray();
+        ColumnWriter<string> writer = Derivation.Writer<string>("FixedString(4)", ConverterHarness.Context);
+        byte[] marks = Marks(FixedStringTexts.Length);
+
+        byte[] whole = await ConverterHarness.WriteOldAsync("FixedString(4)", padded, 0, padded.Length);
+        byte[] slice = await ConverterHarness.WriteOldAsync("FixedString(4)", padded, 2, padded.Length - 2);
+        byte[] marked = await ConverterHarness.WriteOldAsync(
+            "Nullable(FixedString(4))",
+            padded.Select((value, i) => marks[i] != 0 ? null : value).ToArray(),
+            0,
+            padded.Length);
+        byte[] newWhole = await ConverterHarness.WriteNewAsync(writer, FixedStringTexts, 0, FixedStringTexts.Length);
+        byte[] newSlice = await ConverterHarness.WriteNewAsync(writer, FixedStringTexts, 2, FixedStringTexts.Length - 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(newWhole, Is.EqualTo(whole), "whole column");
+            Assert.That(newSlice, Is.EqualTo(slice), "slice from row 2");
+        });
+        await AssertMarkedWriteAsync("FixedString(4)", FixedStringTexts.Select((value, i) => marks[i] != 0 ? null : value).ToArray(), marks, marked);
+    }
+
+    /// <summary>A text of more than N UTF-8 bytes is refused with its byte count, as a wrong-width byte array is.</summary>
+    [TestCase("abcde", 5)]
+    [TestCase("ééé", 6)]
+    public void Write_FixedStringFromTextLongerThanN_IsRefusedWithItsByteCount(string text, int byteCount)
+    {
+        ColumnWriter<string> writer = Derivation.Writer<string>("FixedString(4)", ConverterHarness.Context);
+        string[] values = { "a", "b", text };
+
+        Exception thrown = ConverterHarness.Catch(
+            () => CodecTestHarness.WriteAsync(w => writer.Write(w, ValueSource<string>.Of(values.AsSpan(1), firstRow: 1), null)).GetAwaiter().GetResult());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.TypeOf<ArgumentException>());
+            Assert.That(
+                thrown?.Message,
+                Does.StartWith($"A FixedString(4) value at row 2 is {byteCount} bytes in UTF-8; a text value can have at most 4 bytes."));
+            Assert.That((thrown as ArgumentException)?.ParamName, Is.EqualTo("value"));
+        });
+    }
+
+    /// <summary>A null, and a refused text in a segment, are named as for raw bytes.</summary>
+    [Test]
+    public void Write_FixedStringFromTextNullOrInASegment_NamesThePositionAsForBytes()
+    {
+        ColumnWriter<string> writer = Derivation.Writer<string>("FixedString(2)", ConverterHarness.Context);
+        string[] withNull = { "a", null };
+        string[][] segments = { new[] { "a" }, new[] { "b", "abc" } };
+
+        Exception nullValue = ConverterHarness.Catch(
+            () => CodecTestHarness.WriteAsync(w => writer.Write(w, ValueSource<string>.Of(withNull), null)).GetAwaiter().GetResult());
+        Exception inSegment = ConverterHarness.Catch(
+            () => CodecTestHarness.WriteAsync(w => writer.Write(w, ValueSource<string>.OfSegments(segments), null)).GetAwaiter().GetResult());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(nullValue?.Message, Does.StartWith("A FixedString(2) column cannot hold a null value (at row 1); wrap the type in Nullable to write nulls."));
+            Assert.That(inSegment?.Message, Does.StartWith("A FixedString(2) value at element 1 is 3 bytes in UTF-8;"));
+        });
+    }
+
     [Test]
     public async Task Write_Json_WritesTheVersionPrefix()
     {
@@ -177,6 +255,7 @@ public class LeafWriterTests
             Assert.That(Canonical(Derivation.Writer<string>("String", ConverterHarness.Context)), Is.EqualTo(string.Empty));
             Assert.That(Canonical(Derivation.Writer<byte[]>("String", ConverterHarness.Context)), Is.EqualTo(string.Empty));
             Assert.That(Canonical(Derivation.Writer<byte[]>("FixedString(3)", ConverterHarness.Context)), Is.EqualTo("000000"));
+            Assert.That(Canonical(Derivation.Writer<string>("FixedString(3)", ConverterHarness.Context)), Is.EqualTo("000000"));
             Assert.That(Canonical(Derivation.Writer<string>("JSON", ConverterHarness.Context)), Is.EqualTo("7B7D"));
         });
     }
@@ -357,6 +436,13 @@ public class LeafWriterTests
             Assert.That(encoded, Is.EqualTo(written), "bulk");
             Assert.That(one, Is.EqualTo(writtenOne), "one value");
         });
+    }
+
+    private static byte[] Padded(string text, int size)
+    {
+        var bytes = new byte[size];
+        Encoding.UTF8.GetBytes(text, bytes);
+        return bytes;
     }
 
     // Every third position, from the second, has no value.

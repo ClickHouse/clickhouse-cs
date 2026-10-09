@@ -318,6 +318,37 @@ public class InternerTests
         Assert.That(actual, Is.EqualTo(expected));
     }
 
+    /// <summary>
+    /// <c>FixedString</c> from text keys on the padded bytes, with the CLR lookup: the bytes of the current write of
+    /// the padded bytes.
+    /// </summary>
+    [Test]
+    public async Task Dictionary_FixedStringFromText_GivesTheBytesOfThePaddedBytes()
+    {
+        string[] values = { "ab", string.Empty, "ab", "é", "\uD800", "\uDBFF", "é" };
+        var leaf = (BytesLeafWriter<string>)Leaf<string>("FixedString(3)");
+        using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: false);
+        int[] keys = values.Select((value, i) => interner.Intern(value, i)).ToArray();
+
+        byte[] expected = await ConverterHarness.WriteOldAsync(
+            "LowCardinality(FixedString(3))",
+            values.Select(text =>
+            {
+                var bytes = new byte[3];
+                Encoding.UTF8.GetBytes(text, bytes);
+                return bytes;
+            }).ToArray(),
+            0,
+            values.Length);
+        byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interner.UsesClrKeys, Is.True);
+            Assert.That(actual, Is.EqualTo(expected));
+        });
+    }
+
     [Test]
     public Task Dictionary_FloatsWithSignedZerosAndNaNPayloads_GiveTheCurrentLowCardinalityBytes()
         => AssertFixedDictionaryAsync(
